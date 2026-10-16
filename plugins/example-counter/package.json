@@ -1,7 +1,7 @@
 {
   "name": "@capybara-hq/plugin-example-counter",
   "version": "0.1.0",
-  "description": "Reference plugin: a multi-replica-safe counter (kv + db + queue + provide)",
+  "description": "Reference plugin: a multi-replica-safe counter (db transaction + idempotent queue job + provide)",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
