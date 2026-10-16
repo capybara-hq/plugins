@@ -1,7 +1,10 @@
 import { fileURLToPath } from "node:url";
 import { createDualReplicaHarness, type Harness, startTestPostgres } from "@capybara-hq/testing";
+import { Kysely, PostgresDialect } from "kysely";
 import pg from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+
+import { applyDelayedInc } from "../src/index.js";
 
 const PLUGIN = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 const BASE = "/plugins/example-counter";
@@ -36,25 +39,25 @@ async function count(h: Harness): Promise<number> {
   return ((await r.json()) as { count: number }).count;
 }
 
-/** 本测试文件内同一时刻只有一个 harness 存活，所以唯一的 cap_* 库就是它的库。 */
-async function eventRows(): Promise<number> {
-  const admin = new pg.Client({ connectionString: pgc.url });
-  await admin.connect();
+// biome-ignore lint/suspicious/noExplicitAny: 插件表结构由迁移定义，测试里不建类型
+type AnyDb = Kysely<any>;
+
+function plugin(h: Harness): AnyDb {
+  return new Kysely<Record<string, never>>({
+    dialect: new PostgresDialect({ pool: new pg.Pool({ connectionString: h.dbUrl, max: 2 }) }),
+  }).withSchema("plugin_example_counter") as AnyDb;
+}
+
+async function eventRows(h: Harness): Promise<number> {
+  const db = plugin(h);
   try {
-    const dbs = await admin.query("SELECT datname FROM pg_database WHERE datname LIKE 'cap_%'");
-    expect(dbs.rows).toHaveLength(1);
-    const url = new URL(pgc.url);
-    url.pathname = `/${dbs.rows[0].datname}`;
-    const client = new pg.Client({ connectionString: url.toString() });
-    await client.connect();
-    try {
-      const r = await client.query("SELECT count(*)::int AS n FROM plugin_example_counter.events");
-      return r.rows[0].n;
-    } finally {
-      await client.end();
-    }
+    const r = await db
+      .selectFrom("events")
+      .select((eb) => eb.fn.countAll<string>().as("n"))
+      .executeTakeFirstOrThrow();
+    return Number(r.n);
   } finally {
-    await admin.end();
+    await db.destroy();
   }
 }
 
@@ -66,7 +69,7 @@ describe("example-counter（双副本）", () => {
       expect(r.status).toBe(200);
     }
     expect(await count(h)).toBe(5);
-    expect(await eventRows()).toBe(5);
+    expect(await eventRows(h)).toBe(5);
   });
 
   it("部署配置 step: 2 时 inc 3 次 → count 为 6", async () => {
@@ -86,5 +89,19 @@ describe("example-counter（双副本）", () => {
       c = await count(h);
     }
     expect(c).toBe(1);
+  });
+
+  it("延迟任务按 jobId 幂等：同一 jobId 处理两次，计数只加一次", async () => {
+    const h = await start();
+    const db = plugin(h);
+    try {
+      expect(await applyDelayedInc(db, "job-1", 1)).toBe(true);
+      expect(await applyDelayedInc(db, "job-1", 1)).toBe(false);
+      expect(await applyDelayedInc(db, "job-2", 1)).toBe(true);
+    } finally {
+      await db.destroy();
+    }
+    expect(await count(h)).toBe(2);
+    expect(await eventRows(h)).toBe(2);
   });
 });

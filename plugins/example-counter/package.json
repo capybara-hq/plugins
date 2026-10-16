@@ -28,6 +28,7 @@
   "devDependencies": {
     "@capybara-hq/testing": "workspace:*",
     "@types/pg": "^8.23.1",
-    "pg": "^8.23.1"
+    "pg": "^8.23.1",
+    "kysely": "^0.29.6"
   }
 }
