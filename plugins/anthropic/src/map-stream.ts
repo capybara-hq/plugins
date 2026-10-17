@@ -75,6 +75,11 @@ type BlockAcc =
 /** 单次调用内的最终消息累积器（请求局部状态）。 */
 class MessageAccumulator {
   model = "";
+  /**
+   * 服务端拒答兜底时最后一个 fallback 块的 `to.model`：真正作答的模型（R39）。
+   * 整条消息的思考块都按它打标签，下一轮不会回放给原模型（原模型校验签名会拒绝）。
+   */
+  fallbackTo: string | null = null;
   stopReason: string | null = null;
   started = false;
   stopped = false;
@@ -106,7 +111,10 @@ class MessageAccumulator {
           this.blocks.set(ev.index, { kind: "redacted_thinking", data: b.data });
         } else if (b.type === "tool_use") {
           this.blocks.set(ev.index, { kind: "tool_use", id: b.id, name: b.name, json: "" });
-        } else this.blocks.set(ev.index, { kind: "other" });
+        } else {
+          if (b.type === "fallback") this.fallbackTo = b.to.model;
+          this.blocks.set(ev.index, { kind: "other" });
+        }
         break;
       }
       case "content_block_delta": {
@@ -145,6 +153,7 @@ class MessageAccumulator {
     if (!this.started || !this.stopped) {
       throw new ModelError("network", "Anthropic stream ended before message_stop");
     }
+    const model = this.fallbackTo ?? this.model;
     const content: ContentBlock[] = [];
     const indices = [...this.blocks.keys()].sort((a, b) => a - b);
     for (const i of indices) {
@@ -159,7 +168,7 @@ class MessageAccumulator {
             text: b.thinking,
             opaque: {
               provider: PROVIDER,
-              model: this.model,
+              model,
               data: { type: "thinking", thinking: b.thinking, signature: b.signature },
             },
           });
@@ -170,7 +179,7 @@ class MessageAccumulator {
             text: "",
             opaque: {
               provider: PROVIDER,
-              model: this.model,
+              model,
               data: { type: "redacted_thinking", data: b.data },
             },
           });

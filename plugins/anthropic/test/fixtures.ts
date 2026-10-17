@@ -5,7 +5,8 @@ import type { FakeRequest, FakeResponse } from "@capybara-hq/testing";
 type Block =
   | { type: "text"; text: string }
   | { type: "thinking"; thinking: string; signature: string }
-  | { type: "tool_use"; id: string; name: string; inputJson: string };
+  | { type: "tool_use"; id: string; name: string; inputJson: string }
+  | { type: "fallback"; from: string; to: string };
 
 interface Usage {
   input_tokens: number;
@@ -91,6 +92,19 @@ export function sseMessage(opts: {
           type: "content_block_delta",
           index,
           delta: { type: "signature_delta", signature: b.signature },
+        }),
+      );
+    } else if (b.type === "fallback") {
+      events.push(
+        ev("content_block_start", {
+          type: "content_block_start",
+          index,
+          content_block: {
+            type: "fallback",
+            from: { model: b.from },
+            to: { model: b.to },
+            trigger: { type: "refusal", category: "cyber" },
+          },
         }),
       );
     } else {

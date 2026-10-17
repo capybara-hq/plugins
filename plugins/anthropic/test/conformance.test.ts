@@ -12,6 +12,7 @@ import {
 } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAnthropicProvider, type Kv } from "../src/index.js";
+import { buildRequest } from "../src/map-request.js";
 import { anthropicRoutes, errorJson, modelObject, sseMessage } from "./fixtures.js";
 
 const memoryKv = (): Kv & { store: Map<string, string>; ttls: number[] } => {
@@ -172,6 +173,143 @@ describe("anthropic: errors and edge cases", () => {
     });
     const e = await streamError(provider());
     expect(isModelError(e) && e.kind).toBe("overloaded");
+  });
+
+  it("server-side fallback: every thinking block is tagged with the model that answered (R39)", async () => {
+    const A = "claude-opus-5-5";
+    const B = "claude-opus-4-8";
+    next = () =>
+      sseMessage({
+        model: A,
+        blocks: [
+          { type: "thinking", thinking: "A thinks", signature: "sig-A" },
+          { type: "fallback", from: A, to: B },
+          { type: "thinking", thinking: "B thinks", signature: "sig-B" },
+          { type: "text", text: "B answers" },
+        ],
+        stopReason: "end_turn",
+        usage: { input_tokens: 10, output_tokens: 5 },
+      });
+    const events = await drain(provider(), req({ model: A }));
+    const last = server.requests.at(-1);
+    expect(last?.path).toContain("beta=true");
+    const done = events.at(-1);
+    expect(done?.type).toBe("message_complete");
+    if (done?.type !== "message_complete") return;
+    const thinking = done.content.filter((b) => b.type === "thinking");
+    expect(thinking).toHaveLength(2);
+    for (const b of thinking) {
+      expect(b.type === "thinking" && b.opaque?.model).toBe(B);
+    }
+    expect(done.content.at(-1)).toEqual({ type: "text", text: "B answers" });
+
+    // 下一轮发给原模型 A：两个思考块都不回放
+    const replay = buildRequest(
+      req({
+        model: A,
+        messages: [
+          { role: "user", content: [{ type: "text", text: "q" }] },
+          { role: "assistant", content: done.content },
+          { role: "user", content: [{ type: "text", text: "q2" }] },
+        ],
+      }),
+      { serverFallbacks: "default" },
+    );
+    expect(replay.params.messages[1]).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "B answers" }],
+    });
+    // 发给 B 时原样回放（含签名）
+    const toB = buildRequest(
+      req({
+        model: B,
+        messages: [
+          { role: "user", content: [{ type: "text", text: "q" }] },
+          { role: "assistant", content: done.content },
+          { role: "user", content: [{ type: "text", text: "q2" }] },
+        ],
+      }),
+      { serverFallbacks: "default" },
+    );
+    expect(JSON.stringify(toB.params.messages[1])).toContain("sig-A");
+    expect(JSON.stringify(toB.params.messages[1])).toContain("sig-B");
+  });
+
+  it("mid-stream error event after deltas -> overloaded (text deltas already yielded)", async () => {
+    next = () => {
+      const full = sseMessage({
+        model: "claude-haiku-5-5",
+        blocks: [{ type: "text", text: "partial answer here" }],
+        stopReason: "end_turn",
+        usage: { input_tokens: 10, output_tokens: 5 },
+      });
+      if (!("sse" in full)) throw new Error("unexpected fixture");
+      return {
+        status: 200,
+        sse: [
+          ...full.sse.slice(0, 4),
+          {
+            event: "error",
+            data: JSON.stringify({
+              type: "error",
+              error: { type: "overloaded_error", message: "Overloaded" },
+            }),
+          },
+        ],
+      };
+    };
+    const seen: ModelStreamEvent[] = [];
+    let err: unknown;
+    try {
+      for await (const e of provider().stream(req(), { signal: new AbortController().signal })) {
+        seen.push(e);
+      }
+    } catch (e) {
+      err = e;
+    }
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((e) => e.type === "text_delta")).toBe(true);
+    expect(isModelError(err) && err.kind).toBe("overloaded");
+  });
+
+  it("abort mid-stream through the raw iterator -> aborted, no message_complete", async () => {
+    next = () =>
+      sseMessage({
+        model: "claude-haiku-5-5",
+        blocks: [{ type: "text", text: "a fairly long answer split into many deltas" }],
+        stopReason: "end_turn",
+        usage: { input_tokens: 10, output_tokens: 5 },
+      });
+    const ac = new AbortController();
+    const it = provider().stream(req(), { signal: ac.signal })[Symbol.asyncIterator]();
+    const first = await it.next();
+    expect(first.done).toBe(false);
+    expect(first.value?.type).toBe("text_delta");
+    ac.abort();
+    let err: unknown;
+    try {
+      for (;;) {
+        const r = await it.next();
+        if (r.done) break;
+        expect(r.value.type).not.toBe("message_complete");
+      }
+    } catch (e) {
+      err = e;
+    }
+    expect(isModelError(err) && err.kind).toBe("aborted");
+  });
+
+  it("abort while waiting on a stalled stream -> aborted", async () => {
+    next = () => ({ stall: true });
+    const ac = new AbortController();
+    const it = provider().stream(req(), { signal: ac.signal })[Symbol.asyncIterator]();
+    const pending = it.next();
+    ac.abort();
+    const err = await pending.then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(isModelError(err) && err.kind).toBe("aborted");
   });
 
   it("network failure -> network", async () => {
