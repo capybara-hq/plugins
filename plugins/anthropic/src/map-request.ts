@@ -134,7 +134,8 @@ export function buildRequest(
     model: req.model,
     max_tokens: req.maxOutputTokens,
     messages: mapMessages(req.messages, req.model),
-    thinking: { type: "adaptive" },
+    // 当前模型默认 display: "omitted"（思考文本为空）；summarized 返回推理摘要供界面流式展示，计费不变（R37）
+    thinking: { type: "adaptive", display: "summarized" },
   };
   if (req.system.length > 0) {
     params.system = req.system.map((s) =>

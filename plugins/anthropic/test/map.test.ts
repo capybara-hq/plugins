@@ -222,7 +222,7 @@ describe("buildRequest: mid-conversation system", () => {
 describe("buildRequest: thinking / effort / max_tokens", () => {
   it("adaptive thinking, never budget_tokens or disabled, effort in output_config", () => {
     const { params } = build(base({ effort: "low" }));
-    expect(params.thinking).toEqual({ type: "adaptive" });
+    expect(params.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(params.output_config).toEqual({ effort: "low" });
     expect(params.max_tokens).toBe(2048);
     const json = JSON.stringify(params);

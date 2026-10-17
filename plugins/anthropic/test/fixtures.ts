@@ -165,7 +165,7 @@ interface Body {
   messages: { role: string; content: string | { type: string; [k: string]: unknown }[] }[];
   tools?: { name: string; eager_input_streaming?: boolean }[];
   output_config?: { effort?: string };
-  thinking?: { type: string };
+  thinking?: { type: string; display?: string };
   tool_choice?: unknown;
   fallbacks?: unknown;
 }
@@ -183,6 +183,7 @@ function protocolViolation(b: Body, headers: Record<string, string>, path: strin
   const json = JSON.stringify(b);
   if (json.includes("budget_tokens")) return "budget_tokens is not supported";
   if (b.thinking?.type !== "adaptive") return "thinking.type must be adaptive";
+  if (b.thinking.display !== "summarized") return "thinking.display must be summarized";
   if (b.tool_choice !== undefined) return "tool_choice must not be set";
   if (b.tools?.some((t) => t.eager_input_streaming !== true))
     return "eager_input_streaming expected";
