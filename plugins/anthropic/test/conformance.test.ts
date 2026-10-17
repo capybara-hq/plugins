@@ -186,6 +186,46 @@ describe("anthropic: errors and edge cases", () => {
     expect(isModelError(e) && e.kind).toBe("network");
   });
 
+  for (const [label, inputJson] of [
+    ["missing colon", '{"a" 1}'],
+    ["unquoted key", "{a:1}"],
+    ["trailing comma", '{"a":1,}'],
+    ["trailing comma in array", '{"a":[1,}'],
+    ["extra closing brace", '{"a":1}}'],
+    ["not JSON", "hello"],
+    ["JSON array", "[1,2]"],
+  ] as const) {
+    it(`malformed (non-truncated) tool input JSON -> invalid_request: ${label}`, async () => {
+      for (const model of ["claude-haiku-5-5", "claude-opus-5-5"]) {
+        // claude-opus-5-5 走 beta 接口（服务端兜底），两条路径都要覆盖
+        next = () =>
+          sseMessage({
+            model,
+            blocks: [{ type: "tool_use", id: "toolu_x", name: "w", inputJson }],
+            stopReason: "tool_use",
+            usage: { input_tokens: 10, output_tokens: 5 },
+          });
+        const e = await streamError(provider(), req({ model }));
+        expect(isModelError(e) && e.kind, `${model}: ${inputJson}`).toBe("invalid_request");
+      }
+    });
+  }
+
+  it("stream cut before message_stop -> network (retryable), not a partial message_complete", async () => {
+    next = () => {
+      const full = sseMessage({
+        model: "claude-haiku-5-5",
+        blocks: [{ type: "text", text: "partial answer" }],
+        stopReason: "end_turn",
+        usage: { input_tokens: 10, output_tokens: 5 },
+      });
+      if (!("sse" in full)) throw new Error("unexpected fixture");
+      return { status: 200, sse: full.sse.slice(0, 4) };
+    };
+    const e = await streamError(provider());
+    expect(isModelError(e) && e.kind).toBe("network");
+  });
+
   it("invalid tool input JSON -> invalid_request", async () => {
     next = () =>
       sseMessage({
@@ -268,12 +308,12 @@ describe("anthropic: errors and edge cases", () => {
         vision: true,
         reasoning: true,
         caching: true,
-        midConversationSystem: true,
+        midConversationSystem: false,
         effort: true,
       },
       streamIdleTimeoutMs: 300_000,
     });
-    expect(models[1]?.capabilities.midConversationSystem).toBe(false);
+    expect(models.every((m) => !m.capabilities.midConversationSystem)).toBe(true);
     expect(kv.ttls).toEqual([3600, 3600]);
     const afterFirst = server.requests.length;
     expect(afterFirst - before).toBe(2);

@@ -205,16 +205,8 @@ function protocolViolation(b: Body, headers: Record<string, string>, path: strin
   } else if (b.fallbacks !== undefined || beta.includes("server-side-fallback")) {
     return "fallbacks not supported for this model";
   }
-  for (let i = 0; i < b.messages.length; i++) {
-    const m = b.messages[i];
-    if (m?.role !== "system") continue;
-    const prev = b.messages[i - 1]?.role;
-    const next = b.messages[i + 1]?.role;
-    if (prev !== "user" && prev !== "system") return "system message must follow a user message";
-    if (next !== undefined && next !== "assistant" && next !== "system") {
-      return "system message must be last or followed by an assistant turn";
-    }
-  }
+  // R38：插件不再发原生 role: "system"，中途 system 一律是 "[system]" user 文本
+  if (b.messages.some((m) => m.role === "system")) return "native system messages are not expected";
   for (const m of b.messages) {
     if (m.role !== "assistant" || typeof m.content === "string") continue;
     for (const c of m.content) {

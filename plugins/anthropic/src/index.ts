@@ -8,7 +8,7 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 import { toModelError } from "./errors.js";
-import { type ServerFallbacks, supportsMidConversationSystem } from "./map-request.js";
+import type { ServerFallbacks } from "./map-request.js";
 import { streamMessages } from "./map-stream.js";
 
 /** 插件用到的 ctx.kv 子集。 */
@@ -44,7 +44,8 @@ function mapModelInfo(m: Anthropic.ModelInfo): ModelInfo {
       vision: caps?.image_input?.supported === true,
       reasoning: caps?.thinking?.supported === true,
       caching: true,
-      midConversationSystem: supportsMidConversationSystem(m.id),
+      // 中途 system 一律转成 "[system]" user 文本，不用原生 role: "system"（R38）
+      midConversationSystem: false,
       effort: true,
     },
     streamIdleTimeoutMs: STREAM_IDLE_TIMEOUT_MS,

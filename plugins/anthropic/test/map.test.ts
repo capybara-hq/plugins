@@ -1,6 +1,6 @@
-import type { ModelRequest } from "@capybara-hq/plugin-sdk";
+import type { ModelMessage, ModelRequest } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
-import { buildRequest, supportsMidConversationSystem } from "../src/map-request.js";
+import { buildRequest } from "../src/map-request.js";
 
 const base = (over: Partial<ModelRequest> = {}): ModelRequest => ({
   model: "claude-opus-5-5",
@@ -142,80 +142,47 @@ describe("buildRequest: tool calls and results", () => {
   });
 });
 
-describe("buildRequest: mid-conversation system", () => {
-  const withSystem = (model: string): ModelRequest =>
-    base({
-      model,
-      messages: [
-        { role: "user", content: [{ type: "text", text: "Say hello." }] },
-        { role: "system", content: "Keep it short." },
-      ],
-    });
+describe("buildRequest: mid-conversation system (R38: always [system] user text, no reordering)", () => {
+  const u = (text: string): ModelMessage => ({ role: "user", content: [{ type: "text", text }] });
+  const a = (text: string): ModelMessage => ({
+    role: "assistant",
+    content: [{ type: "text", text }],
+  });
+  const r: ModelMessage = { role: "system", content: "Reminder." };
+  const rText = { role: "user", content: [{ type: "text", text: "[system] Reminder." }] };
+  const msgs = (messages: ModelMessage[], model = "claude-opus-5-5") =>
+    build(base({ model, messages })).params.messages;
 
-  it("model whitelist", () => {
-    for (const m of [
-      "claude-opus-5-5",
-      "claude-opus-5",
-      "claude-opus-4-8",
-      "claude-sonnet-5-5",
-      "claude-haiku-5-5",
-      "claude-fable-5",
-      "claude-fable-5-1",
-    ]) {
-      expect(supportsMidConversationSystem(m), m).toBe(true);
+  it("every system message becomes a user text block at its own position, for every model", () => {
+    for (const model of ["claude-opus-5-5", "claude-sonnet-5", "claude-haiku-5-5"]) {
+      expect(msgs([u("U1"), a("A1"), r, u("U2")], model), model).toEqual([
+        { role: "user", content: [{ type: "text", text: "U1" }] },
+        { role: "assistant", content: [{ type: "text", text: "A1" }] },
+        rText,
+        { role: "user", content: [{ type: "text", text: "U2" }] },
+      ]);
     }
-    for (const m of [
-      "claude-sonnet-5",
-      "claude-opus-4-7",
-      "claude-haiku-4-5",
-      "claude-sonnet-4-6",
-    ]) {
-      expect(supportsMidConversationSystem(m), m).toBe(false);
-    }
+    expect(JSON.stringify(msgs([u("U1"), r]))).not.toContain('"role":"system"');
   });
 
-  it("supported model: native system message after a user message", () => {
-    const { params } = build(withSystem("claude-opus-5-5"));
-    expect(params.messages[1]).toEqual({ role: "system", content: "Keep it short." });
+  it("[U1, R] -> later [U1, R, U2, ...]: the earlier request is an exact prefix of the later one", () => {
+    const earlier = msgs([u("U1"), r]);
+    const later = msgs([u("U1"), r, u("U2"), a("A2")]);
+    expect(later.slice(0, earlier.length)).toEqual(earlier);
   });
 
-  it("unsupported model: converted to a user text block prefixed with [system]", () => {
-    const { params } = build(withSystem("claude-sonnet-5"));
-    expect(params.messages).toEqual([
-      { role: "user", content: [{ type: "text", text: "Say hello." }] },
-      { role: "user", content: [{ type: "text", text: "[system] Keep it short." }] },
-    ]);
+  it("[U1, A1, R] -> later [U1, A1, R, U2]: the earlier request is an exact prefix of the later one", () => {
+    const earlier = msgs([u("U1"), a("A1"), r]);
+    const later = msgs([u("U1"), a("A1"), r, u("U2")]);
+    expect(earlier.at(-1)).toEqual(rText);
+    expect(later.slice(0, earlier.length)).toEqual(earlier);
   });
 
-  it("supported model: a system message followed by a user message moves after that user message", () => {
-    const { params } = build(
-      base({
-        messages: [
-          { role: "user", content: [{ type: "text", text: "Say hello." }] },
-          { role: "assistant", content: [{ type: "text", text: "Hello." }] },
-          { role: "system", content: "Reminder." },
-          { role: "user", content: [{ type: "text", text: "Say goodbye." }] },
-        ],
-      }),
-    );
-    expect(params.messages.map((m) => m.role)).toEqual(["user", "assistant", "user", "system"]);
-    expect(params.messages[3]).toEqual({ role: "system", content: "Reminder." });
-  });
-
-  it("supported model: a system message that cannot follow a user message falls back to [system] text", () => {
-    const { params } = build(
-      base({
-        messages: [
-          { role: "user", content: [{ type: "text", text: "Say hello." }] },
-          { role: "assistant", content: [{ type: "text", text: "Hello." }] },
-          { role: "system", content: "Reminder." },
-        ],
-      }),
-    );
-    expect(params.messages[2]).toEqual({
-      role: "user",
-      content: [{ type: "text", text: "[system] Reminder." }],
-    });
+  it("repeated reminders keep their positions", () => {
+    const earlier = msgs([u("U1"), r]);
+    const later = msgs([u("U1"), r, u("U2"), r]);
+    expect(later.slice(0, earlier.length)).toEqual(earlier);
+    expect(later.map((m) => m.role)).toEqual(["user", "user", "user", "user"]);
   });
 });
 
