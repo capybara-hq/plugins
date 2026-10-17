@@ -1,7 +1,7 @@
 import type { ModelMessage, ModelRequest } from "@capybara-hq/plugin-sdk";
 import { isModelError } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
-import { buildRequest } from "../src/map-request.js";
+import { buildRequest, type ModelTraits } from "../src/map-request.js";
 
 const base = (over: Partial<ModelRequest> = {}): ModelRequest => ({
   model: "gpt-5.5",
@@ -12,9 +12,9 @@ const base = (over: Partial<ModelRequest> = {}): ModelRequest => ({
   ...over,
 });
 
-const REASONING = { reasoning: true };
-const PLAIN = { reasoning: false };
-const build = (req: ModelRequest, model = REASONING) => buildRequest(req, model);
+const REASONING: ModelTraits = { reasoning: true, reasoningSummary: "auto" };
+const PLAIN: ModelTraits = { reasoning: false, reasoningSummary: "auto" };
+const build = (req: ModelRequest, model: ModelTraits = REASONING) => buildRequest(req, model);
 
 describe("buildRequest: fixed parameters", () => {
   it("store: false, include encrypted reasoning, max_output_tokens, system blocks -> instructions", () => {
@@ -49,16 +49,22 @@ describe("buildRequest: fixed parameters", () => {
 });
 
 describe("buildRequest: effort", () => {
-  it("reasoning models carry reasoning.effort; xhigh and max map to high", () => {
+  it("reasoning models carry reasoning.effort natively, including xhigh and max (R40)", () => {
     expect(build(base({ effort: "low" })).reasoning).toEqual({ effort: "low", summary: "auto" });
-    expect(build(base({ effort: "medium" })).reasoning?.effort).toBe("medium");
-    expect(build(base({ effort: "high" })).reasoning?.effort).toBe("high");
-    expect(build(base({ effort: "xhigh" })).reasoning?.effort).toBe("high");
-    expect(build(base({ effort: "max" })).reasoning?.effort).toBe("high");
+    for (const e of ["low", "medium", "high", "xhigh", "max"] as const) {
+      expect(build(base({ effort: e })).reasoning?.effort, e).toBe(e);
+    }
   });
 
   it("no effort given: summaries still requested, no effort field", () => {
     expect(build(base()).reasoning).toEqual({ summary: "auto" });
+  });
+
+  it('reasoningSummary: "off" omits reasoning.summary but keeps effort and the include', () => {
+    const off = { reasoning: true, reasoningSummary: "off" as const };
+    expect(build(base({ effort: "high" }), off).reasoning).toEqual({ effort: "high" });
+    expect("reasoning" in build(base(), off)).toBe(false);
+    expect(build(base(), off).include).toEqual(["reasoning.encrypted_content"]);
   });
 });
 

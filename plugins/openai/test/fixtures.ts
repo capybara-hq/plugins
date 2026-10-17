@@ -12,6 +12,7 @@ export interface Usage {
   input_tokens: number;
   output_tokens: number;
   cached_tokens?: number;
+  cache_write_tokens?: number;
 }
 
 const chunks = (s: string, n: number): string[] => {
@@ -169,7 +170,10 @@ export function sseResponse(opts: {
   });
   const usage = {
     input_tokens: opts.usage.input_tokens,
-    input_tokens_details: { cached_tokens: opts.usage.cached_tokens ?? 0, cache_write_tokens: 0 },
+    input_tokens_details: {
+      cached_tokens: opts.usage.cached_tokens ?? 0,
+      cache_write_tokens: opts.usage.cache_write_tokens ?? 0,
+    },
     output_tokens: opts.usage.output_tokens,
     output_tokens_details: { reasoning_tokens: 0 },
     total_tokens: opts.usage.input_tokens + opts.usage.output_tokens,

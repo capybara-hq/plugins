@@ -28,6 +28,8 @@ export interface OpenAIProviderOptions {
   organization?: string | undefined;
   /** 至少 1 个；listModels 直接由它生成。 */
   models: ModelConfig[];
+  /** "off" 时不请求推理摘要；默认 "auto"。 */
+  reasoningSummary?: "auto" | "off" | undefined;
 }
 
 function modelInfo(m: ModelConfig): ModelInfo {
@@ -60,6 +62,7 @@ export function createOpenAIProvider(opts: OpenAIProviderOptions): ModelProvider
     maxRetries: 0,
   });
   const models = opts.models;
+  const reasoningSummary = opts.reasoningSummary ?? "auto";
 
   return {
     listModels: async () => models.map(modelInfo),
@@ -68,7 +71,10 @@ export function createOpenAIProvider(opts: OpenAIProviderOptions): ModelProvider
       if (m === undefined) {
         throw new ModelError("invalid_request", `Model "${req.model}" is not configured`);
       }
-      yield* streamResponses(client, req, { signal, traits: { reasoning: m.reasoning } });
+      yield* streamResponses(client, req, {
+        signal,
+        traits: { reasoning: m.reasoning, reasoningSummary },
+      });
     },
   };
 }
@@ -79,6 +85,8 @@ const DeploymentConfig = z.object({
   baseUrl: z.string().url().optional(),
   organization: z.string().min(1).optional(),
   models: z.array(ModelConfigSchema).min(1),
+  /** 推理摘要："off" 时不发 reasoning.summary（未完成组织验证的账号请求摘要会被拒绝）。 */
+  reasoningSummary: z.enum(["auto", "off"]).default("auto"),
 });
 
 /** OpenAI 供应商插件：官方 SDK + 原生 Responses API。 */
@@ -97,6 +105,7 @@ export default definePlugin({
         baseUrl: cfg.baseUrl,
         organization: cfg.organization,
         models: cfg.models,
+        reasoningSummary: cfg.reasoningSummary,
       }),
     );
   },

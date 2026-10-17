@@ -17,6 +17,8 @@ type InputItem = OpenAI.Responses.ResponseInputItem;
 /** 请求映射需要的模型属性（来自部署配置）。 */
 export interface ModelTraits {
   reasoning: boolean;
+  /** 部署配置："off" 时不请求推理摘要（未完成组织验证的账号请求摘要会被拒绝）。 */
+  reasoningSummary: "auto" | "off";
 }
 
 /** function_call 的 opaque.data：原始输出项的 id（与 reasoning 项一同回放）。 */
@@ -32,9 +34,12 @@ export function sameOrigin(
   return opaque?.provider === PROVIDER && opaque.model === model && opaque.data != null;
 }
 
-/** xhigh / max 统一映射为 high。 */
-function mapEffort(e: Effort): "low" | "medium" | "high" {
-  return e === "xhigh" || e === "max" ? "high" : e;
+/**
+ * 契约的 effort 原样传给原生 `reasoning.effort`（R40）：SDK 的 ReasoningEffort 接受全部五个值，
+ * 这里的类型标注保证 SDK 收窄取值时编译失败，届时只为被拒绝的值补映射。
+ */
+function mapEffort(e: Effort): NonNullable<OpenAI.ReasoningEffort> {
+  return e;
 }
 
 function serializeArgs(input: unknown, name: string): string {
@@ -122,10 +127,11 @@ export function buildRequest(req: ModelRequest, traits: ModelTraits): OpenAIPara
   if (instructions !== "") params.instructions = instructions;
   if (traits.reasoning) {
     params.include = ["reasoning.encrypted_content"];
-    params.reasoning = {
+    const reasoning: OpenAI.Reasoning = {
       ...(req.effort !== undefined ? { effort: mapEffort(req.effort) } : {}),
-      summary: "auto",
+      ...(traits.reasoningSummary === "auto" ? { summary: "auto" as const } : {}),
     };
+    if (Object.keys(reasoning).length > 0) params.reasoning = reasoning;
   }
   if (req.tools.length > 0) {
     params.tools = req.tools.map((t) => ({

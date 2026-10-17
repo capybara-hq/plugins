@@ -277,7 +277,7 @@ describe("openai: errors and edge cases", () => {
     });
   }
 
-  it("usage: inputTokens excludes cached tokens (R23); cacheWriteTokens is 0", async () => {
+  it("usage: inputTokens excludes cached and cache-write tokens (R23/R40)", async () => {
     next = () =>
       sseResponse({
         model: "gpt-5.5",
@@ -291,6 +291,59 @@ describe("openai: errors and edge cases", () => {
       cacheReadTokens: 5000,
       cacheWriteTokens: 0,
     });
+
+    next = () =>
+      sseResponse({
+        model: "gpt-5.5",
+        items: [{ type: "message", text: "ok" }],
+        usage: {
+          input_tokens: 9000,
+          output_tokens: 7,
+          cached_tokens: 3000,
+          cache_write_tokens: 5990,
+        },
+      });
+    const d2 = complete(await drain(provider(), req()));
+    expect(d2.usage).toEqual({
+      inputTokens: 10,
+      outputTokens: 7,
+      cacheReadTokens: 3000,
+      cacheWriteTokens: 5990,
+    });
+
+    // 计数不一致时下限为 0
+    next = () =>
+      sseResponse({
+        model: "gpt-5.5",
+        items: [{ type: "message", text: "ok" }],
+        usage: { input_tokens: 100, output_tokens: 7, cached_tokens: 80, cache_write_tokens: 50 },
+      });
+    const d3 = complete(await drain(provider(), req()));
+    expect(d3.usage.inputTokens).toBe(0);
+    expect(d3.usage.cacheWriteTokens).toBe(50);
+  });
+
+  it('reasoningSummary: "off" omits reasoning.summary in the request body', async () => {
+    next = () =>
+      sseResponse({
+        model: "gpt-5.5",
+        items: [{ type: "message", text: "hi" }],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      });
+    const p = createOpenAIProvider({
+      apiKey: "sk-fixture",
+      baseUrl: `${server.url}/v1`,
+      models: [gpt("gpt-5.5")],
+      reasoningSummary: "off",
+    });
+    await drain(p, req({ effort: "max" }));
+    const body = server.requests.at(-1)?.body as Record<string, unknown>;
+    expect(body.reasoning).toEqual({ effort: "max" });
+    expect(body.include).toEqual(["reasoning.encrypted_content"]);
+    // 默认 auto
+    await drain(provider(), req({ effort: "max" }));
+    const body2 = server.requests.at(-1)?.body as Record<string, unknown>;
+    expect(body2.reasoning).toEqual({ effort: "max", summary: "auto" });
   });
 
   it("reasoning -> thinking deltas and thinking block with raw item in opaque, tagged with the requested model", async () => {
@@ -351,7 +404,7 @@ describe("openai: errors and edge cases", () => {
           },
         ],
       }),
-      { reasoning: true },
+      { reasoning: true, reasoningSummary: "auto" },
     );
     const thinkingBlock = done.content[0];
     expect((replay.input as unknown[])[1]).toEqual(
@@ -520,5 +573,14 @@ describe("openai: plugin manifest", () => {
         ],
       }).success,
     ).toBe(true);
+    const models = [
+      { id: "gpt-5.5", contextWindow: 1, maxOutputTokens: 1, reasoning: true, vision: true },
+    ];
+    const parsed = schema.parse({ apiKey: "k", models }) as { reasoningSummary?: unknown };
+    expect(parsed.reasoningSummary).toBe("auto");
+    expect(schema.safeParse({ apiKey: "k", models, reasoningSummary: "off" }).success).toBe(true);
+    expect(schema.safeParse({ apiKey: "k", models, reasoningSummary: "detailed" }).success).toBe(
+      false,
+    );
   });
 });

@@ -112,16 +112,17 @@ export function toComplete(r: Response, model: string): Complete {
   const u = r.usage;
   const input = u?.input_tokens ?? 0;
   const cached = u?.input_tokens_details?.cached_tokens ?? 0;
+  const written = u?.input_tokens_details?.cache_write_tokens ?? 0;
   return {
     type: "message_complete",
     content,
     stopReason: stopReasonOf(r, hasToolCall, hasRefusal),
     usage: {
-      // OpenAI 的 input_tokens 含缓存命中部分；契约里 inputTokens 只是未缓存部分（R23）
-      inputTokens: Math.max(0, input - cached),
+      // OpenAI 的 input_tokens 含缓存读写部分；契约里 inputTokens 只是未缓存部分（R23 / R40）
+      inputTokens: Math.max(0, input - cached - written),
       outputTokens: u?.output_tokens ?? 0,
       cacheReadTokens: cached,
-      cacheWriteTokens: 0,
+      cacheWriteTokens: written,
     },
   };
 }
