@@ -26,6 +26,17 @@ export interface FunctionCallOpaque {
   id: string;
 }
 
+/**
+ * text 块的 opaque.data：产出它的 message 输出项的 id（与 phase）。只在它跟在回放的 reasoning 项之后时
+ * 带 id 回放（推理模型要求 reasoning 项后面紧跟它产出的那个输出项）。
+ */
+export interface MessageOpaque {
+  id: string;
+  phase?: "commentary" | "final_answer";
+  /** 原输出项的状态，只在不是 completed（如被截断的 incomplete）时记录。 */
+  status?: "in_progress" | "incomplete";
+}
+
 /** 只回放给产生它的同一供应商、同一模型。 */
 export function sameOrigin(
   opaque: ProviderOpaque | undefined,
@@ -67,14 +78,32 @@ function mapUserBlock(b: ContentBlock): InputItem | null {
   }
 }
 
-function mapAssistantBlock(b: ContentBlock, model: string): InputItem | null {
+function mapAssistantBlock(
+  b: ContentBlock,
+  model: string,
+  afterReasoning: boolean,
+): InputItem | null {
   switch (b.type) {
-    case "text":
-      // 不带输出项 id：没有对应的 reasoning 项时带 id 会被拒绝
+    case "text": {
+      // 跟在本消息里回放的 reasoning 项之后（同一模型）：按原 message 输出项（带 id）回放，
+      // 否则 reasoning 项缺少它要求的后继项。其余情况不带 id：没有对应的 reasoning 项时带 id 会被拒绝。
+      const data = sameOrigin(b.opaque, model) ? (b.opaque.data as Partial<MessageOpaque>) : null;
+      if (afterReasoning && typeof data?.id === "string") {
+        const item: OpenAI.Responses.ResponseOutputMessage = {
+          type: "message",
+          id: data.id,
+          role: "assistant",
+          status: data.status ?? "completed",
+          ...(data.phase !== undefined ? { phase: data.phase } : {}),
+          content: [{ type: "output_text", text: b.text, annotations: [] }],
+        };
+        return item;
+      }
       return {
         role: "assistant",
         content: [{ type: "output_text", text: b.text }],
       } as unknown as InputItem;
+    }
     case "thinking":
       // reasoning 项（含 encrypted_content）只原样回放给产生它的同一模型
       return sameOrigin(b.opaque, model) ? (b.opaque.data as InputItem) : null;
@@ -105,9 +134,14 @@ function mapMessages(messages: ModelMessage[], model: string): InputItem[] {
       out.push({ role: "developer", content: [{ type: "input_text", text: m.content }] });
       continue;
     }
+    // 本条 assistant 消息里是否已回放过 reasoning 项（只看消息自身，映射仍与后续消息无关）
+    let afterReasoning = false;
     for (const b of m.content) {
-      const item = m.role === "user" ? mapUserBlock(b) : mapAssistantBlock(b, model);
-      if (item !== null) out.push(item);
+      const item =
+        m.role === "user" ? mapUserBlock(b) : mapAssistantBlock(b, model, afterReasoning);
+      if (item === null) continue;
+      if (b.type === "thinking") afterReasoning = true;
+      out.push(item);
     }
   }
   return out;

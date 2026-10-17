@@ -218,11 +218,14 @@ const aborted = () => new ModelError("aborted", "Request aborted");
 export async function* streamMessages(
   client: Anthropic,
   req: ModelRequest,
-  opts: { signal: AbortSignal; serverFallbacks: ServerFallbacks },
+  opts: { signal: AbortSignal; serverFallbacks: ServerFallbacks; thinking?: boolean },
 ): AsyncGenerator<ModelStreamEvent> {
   const { signal } = opts;
   if (signal.aborted) throw aborted();
-  const built = buildRequest(req, { serverFallbacks: opts.serverFallbacks });
+  const built = buildRequest(req, {
+    serverFallbacks: opts.serverFallbacks,
+    ...(opts.thinking !== undefined ? { thinking: opts.thinking } : {}),
+  });
   const acc = new MessageAccumulator();
   let stream: RawStream | undefined;
   try {
@@ -230,6 +233,8 @@ export async function* streamMessages(
     for await (const ev of stream) {
       if (signal.aborted) throw aborted();
       acc.add(ev);
+      // message_stop 之后不再读：服务端（或中间代理）不关连接时，继续读只会等到空闲超时。
+      if (ev.type === "message_stop") break;
       if (ev.type === "content_block_delta") {
         const d = ev.delta;
         if (d.type === "text_delta") yield { type: "text_delta", text: d.text };

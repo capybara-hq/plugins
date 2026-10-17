@@ -13,7 +13,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAnthropicProvider, type Kv } from "../src/index.js";
 import { buildRequest } from "../src/map-request.js";
-import { anthropicRoutes, errorJson, modelObject, sseMessage } from "./fixtures.js";
+import { anthropicRoutes, errorJson, modelObject, NO_THINKING, sseMessage } from "./fixtures.js";
 
 const memoryKv = (): Kv & { store: Map<string, string>; ttls: number[] } => {
   const store = new Map<string, string>();
@@ -108,6 +108,7 @@ describe("anthropic: errors and edge cases", () => {
   beforeAll(async () => {
     server = await startFakeModelServer((r) => {
       const m = /^\/v1\/models\/([^/?]+)/.exec(r.path);
+      if (m?.[1] === "claude-missing") return errorJson(404, "not_found_error", "model not found");
       if (m?.[1] !== undefined) return { status: 200, json: modelObject(m[1]) };
       return next();
     });
@@ -428,6 +429,72 @@ describe("anthropic: errors and edge cases", () => {
     const ev2 = await drain(provider(), req());
     const d2 = ev2.at(-1);
     expect(d2?.type === "message_complete" && d2.stopReason).toBe("other");
+  });
+
+  it("message_stop then the connection stays open -> stops reading and completes promptly", async () => {
+    next = () => {
+      const full = sseMessage({
+        model: "claude-haiku-5-5",
+        blocks: [{ type: "text", text: "done" }],
+        stopReason: "end_turn",
+        usage: { input_tokens: 3, output_tokens: 2 },
+      });
+      if (!("sse" in full)) throw new Error("unexpected fixture");
+      return { ...full, keepOpen: true };
+    };
+    const t0 = Date.now();
+    const events = await Promise.race([
+      drain(provider(), req()),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("stream kept reading after message_stop")), 2_000),
+      ),
+    ]);
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    const done = events.at(-1);
+    expect(done?.type === "message_complete" && done.content).toEqual([
+      { type: "text", text: "done" },
+    ]);
+  });
+
+  it("listModels skips ids the Models API cannot return (warns) and keeps the rest", async () => {
+    const warnings: { msg: string; meta?: Record<string, unknown> }[] = [];
+    const p = createAnthropicProvider({
+      kv: memoryKv(),
+      apiKey: "sk-ant-fixture",
+      baseUrl: server.url,
+      models: ["claude-haiku-5-5", "claude-missing", "claude-sonnet-5"],
+      serverFallbacks: "default",
+      log: { warn: (msg, meta) => warnings.push({ msg, ...(meta ? { meta } : {}) }) },
+    });
+    const models = await p.listModels();
+    expect(models.map((m) => m.id)).toEqual(["claude-haiku-5-5", "claude-sonnet-5"]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.meta).toMatchObject({ model: "claude-missing" });
+  });
+
+  it("models without thinking / effort support: capabilities say so and requests omit thinking", async () => {
+    const id = `claude-${NO_THINKING}-1`;
+    const p = createAnthropicProvider({
+      kv: memoryKv(),
+      apiKey: "sk-ant-fixture",
+      baseUrl: server.url,
+      models: [id],
+      serverFallbacks: "default",
+    });
+    const [info] = await p.listModels();
+    expect(info?.capabilities).toMatchObject({ reasoning: false, effort: false });
+    next = () =>
+      sseMessage({
+        model: id,
+        blocks: [{ type: "text", text: "ok" }],
+        stopReason: "end_turn",
+        usage: { input_tokens: 3, output_tokens: 2 },
+      });
+    const events = await drain(p, req({ model: id, effort: "low" }));
+    expect(events.at(-1)?.type).toBe("message_complete");
+    const body = server.requests.at(-1)?.body as Record<string, unknown>;
+    expect("thinking" in body).toBe(false);
+    expect("output_config" in body).toBe(false);
   });
 
   it("listModels maps the Models API and caches in kv with TTL 3600", async () => {

@@ -2,6 +2,7 @@ import type { ModelMessage, ModelRequest } from "@capybara-hq/plugin-sdk";
 import { isModelError } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { buildRequest, type ModelTraits } from "../src/map-request.js";
+import { toComplete } from "../src/map-stream.js";
 
 const base = (over: Partial<ModelRequest> = {}): ModelRequest => ({
   model: "gpt-5.5",
@@ -120,6 +121,113 @@ describe("buildRequest: reasoning replay", () => {
       ],
     });
     expect(build(req).input).toHaveLength(1);
+  });
+});
+
+describe("assistant message item ids (replayed after their reasoning item)", () => {
+  const rs = {
+    id: "rs_1",
+    type: "reasoning",
+    summary: [{ type: "summary_text", text: "17*23=391" }],
+    encrypted_content: "enc-abc",
+  };
+  const msgOpaque = (model = "gpt-5.5", data: unknown = { id: "msg_1" }) => ({
+    provider: "openai",
+    model,
+    data,
+  });
+  const turn = (content: ModelMessage["content"]): ModelRequest =>
+    base({
+      messages: [
+        { role: "user", content: [{ type: "text", text: "q" }] },
+        { role: "assistant", content } as ModelMessage,
+      ],
+    });
+
+  it("toComplete keeps the message item id (and phase) in the text block's opaque", () => {
+    const done = toComplete(
+      {
+        id: "resp_1",
+        object: "response",
+        created_at: 0,
+        model: "gpt-5.5-2026-01-01",
+        status: "completed",
+        output: [
+          rs,
+          {
+            id: "msg_1",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "391", annotations: [] }],
+          },
+        ],
+        usage: null,
+      } as never,
+      "gpt-5.5",
+    );
+    expect(done.content[1]).toEqual({
+      type: "text",
+      text: "391",
+      opaque: {
+        provider: "openai",
+        model: "gpt-5.5",
+        data: { id: "msg_1", phase: "final_answer" },
+      },
+    });
+  });
+
+  it("after a replayed reasoning item (same model) the text is replayed as the original message item with its id", () => {
+    const { input } = build(
+      turn([
+        { type: "thinking", text: "17*23=391", opaque: msgOpaque("gpt-5.5", rs) },
+        {
+          type: "text",
+          text: "391",
+          opaque: msgOpaque("gpt-5.5", { id: "msg_1", phase: "final_answer" }),
+        },
+      ]),
+    );
+    expect((input as unknown[]).slice(1)).toEqual([
+      rs,
+      {
+        type: "message",
+        id: "msg_1",
+        role: "assistant",
+        status: "completed",
+        phase: "final_answer",
+        content: [{ type: "output_text", text: "391", annotations: [] }],
+      },
+    ]);
+  });
+
+  it("without a replayed reasoning item before it (other model / no reasoning) the text carries no id", () => {
+    const plain = { role: "assistant", content: [{ type: "output_text", text: "391" }] };
+    const otherModel = build(
+      turn([
+        { type: "thinking", text: "x", opaque: msgOpaque("gpt-5.4", rs) },
+        { type: "text", text: "391", opaque: msgOpaque("gpt-5.4") },
+      ]),
+    ).input as unknown[];
+    expect(otherModel.slice(1)).toEqual([plain]);
+    const noReasoning = build(turn([{ type: "text", text: "391", opaque: msgOpaque() }]))
+      .input as unknown[];
+    expect(noReasoning.slice(1)).toEqual([plain]);
+  });
+
+  it("append-only: the earlier input is an exact prefix of the later one", () => {
+    const assistant: ModelMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", text: "t", opaque: msgOpaque("gpt-5.5", rs) },
+        { type: "text", text: "391", opaque: msgOpaque() },
+      ],
+    };
+    const u = (text: string): ModelMessage => ({ role: "user", content: [{ type: "text", text }] });
+    const earlier = build(base({ messages: [u("q"), assistant] })).input as unknown[];
+    const later = build(base({ messages: [u("q"), assistant, u("more")] })).input as unknown[];
+    expect(later.slice(0, earlier.length)).toEqual(earlier);
   });
 });
 

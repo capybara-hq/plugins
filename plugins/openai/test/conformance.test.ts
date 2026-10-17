@@ -154,6 +154,36 @@ describe("openai: errors and edge cases", () => {
     expect(isModelError(e2) && e2.kind).toBe("invalid_request");
   });
 
+  it.each(["completed", "incomplete"] as const)(
+    "response.%s then the connection stays open -> stops reading and completes promptly",
+    async (kind) => {
+      next = () => {
+        const full = sseResponse({
+          model: "gpt-5.5",
+          items: [{ type: "message", text: "done" }],
+          usage: { input_tokens: 10, output_tokens: 5 },
+          ...(kind === "incomplete" ? { incomplete: "max_output_tokens" as const } : {}),
+        });
+        if (!("sse" in full)) throw new Error("unexpected fixture");
+        return { ...full, keepOpen: true };
+      };
+      const t0 = Date.now();
+      const events = await Promise.race([
+        drain(provider(), req()),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("stream kept reading after the terminal event")),
+            2_000,
+          ),
+        ),
+      ]);
+      expect(Date.now() - t0).toBeLessThan(2_000);
+      const done = complete(events);
+      expect(done.content).toMatchObject([{ type: "text", text: "done" }]);
+      expect(done.stopReason).toBe(kind === "incomplete" ? "max_tokens" : "end_turn");
+    },
+  );
+
   it("500 -> server", async () => {
     next = () => errorJson(500, { message: "Internal", type: "server_error" });
     const e = await streamError(provider());
@@ -429,7 +459,13 @@ describe("openai: errors and edge cases", () => {
       });
     const d1 = complete(await drain(provider(), req()));
     expect(d1.stopReason).toBe("max_tokens");
-    expect(d1.content).toEqual([{ type: "text", text: "cut off" }]);
+    expect(d1.content).toEqual([
+      {
+        type: "text",
+        text: "cut off",
+        opaque: { provider: "openai", model: "gpt-5.5", data: { id: "msg_0" } },
+      },
+    ]);
 
     next = () =>
       sseResponse({

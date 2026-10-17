@@ -156,8 +156,26 @@ export const errorJson = (
   ...(headers !== undefined ? { headers } : {}),
 });
 
-/** Models API 的模型对象。 */
+/** 不支持思考与 effort 的测试模型 id（含此片段）。 */
+export const NO_THINKING = "nothink";
+
+/** Models API 的模型对象；id 含 {@link NO_THINKING} 时 thinking / effort 都不支持。 */
 export function modelObject(id: string): unknown {
+  if (id.includes(NO_THINKING)) {
+    return {
+      type: "model",
+      id,
+      display_name: id,
+      created_at: "2026-01-01T00:00:00Z",
+      max_input_tokens: 200_000,
+      max_tokens: 8_192,
+      capabilities: {
+        image_input: { supported: false },
+        thinking: { supported: false, types: { adaptive: { supported: false } } },
+        effort: { supported: false },
+      },
+    };
+  }
   return {
     type: "model",
     id,
@@ -196,8 +214,13 @@ const lastUserBlocks = (b: Body) => {
 function protocolViolation(b: Body, headers: Record<string, string>, path: string): string | null {
   const json = JSON.stringify(b);
   if (json.includes("budget_tokens")) return "budget_tokens is not supported";
-  if (b.thinking?.type !== "adaptive") return "thinking.type must be adaptive";
-  if (b.thinking.display !== "summarized") return "thinking.display must be summarized";
+  if (b.model.includes(NO_THINKING)) {
+    if (b.thinking !== undefined) return "thinking is not supported on this model";
+    if (b.output_config?.effort !== undefined) return "effort is not supported on this model";
+  } else {
+    if (b.thinking?.type !== "adaptive") return "thinking.type must be adaptive";
+    if (b.thinking.display !== "summarized") return "thinking.display must be summarized";
+  }
   if (b.tool_choice !== undefined) return "tool_choice must not be set";
   if (b.tools?.some((t) => t.eager_input_streaming !== true))
     return "eager_input_streaming expected";

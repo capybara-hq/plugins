@@ -1,9 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import {
   definePlugin,
+  type Logger,
   MODEL_PROVIDER_CAPABILITY,
   type ModelInfo,
   type ModelProvider,
+  type ModelRequest,
+  type ModelStreamEvent,
   secret,
 } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
@@ -24,6 +27,8 @@ export interface AnthropicProviderOptions {
   /** 允许的模型 id。 */
   models: string[];
   serverFallbacks: ServerFallbacks;
+  /** listModels 跳过取不到的模型时记 warn。 */
+  log?: Pick<Logger, "warn"> | undefined;
 }
 
 const MODEL_CACHE_TTL_SECONDS = 3600;
@@ -32,6 +37,10 @@ const STREAM_IDLE_TIMEOUT_MS = 300_000;
 const FALLBACK_CONTEXT_WINDOW = 200_000;
 const FALLBACK_MAX_OUTPUT = 32_000;
 
+/**
+ * Models API → ModelInfo。reasoning 取「支持 adaptive 思考」（插件只发 adaptive），effort 取 `effort.supported`；
+ * 没有 capabilities 时两者都按不支持处理（请求里不发 thinking、内核不传 effort）。
+ */
 function mapModelInfo(m: Anthropic.ModelInfo): ModelInfo {
   const caps = m.capabilities;
   return {
@@ -42,11 +51,12 @@ function mapModelInfo(m: Anthropic.ModelInfo): ModelInfo {
     capabilities: {
       tools: true,
       vision: caps?.image_input?.supported === true,
-      reasoning: caps?.thinking?.supported === true,
+      reasoning:
+        caps?.thinking?.supported === true && caps.thinking.types?.adaptive?.supported === true,
       caching: true,
       // 中途 system 一律转成 "[system]" user 文本，不用原生 role: "system"（R38）
       midConversationSystem: false,
-      effort: true,
+      effort: caps?.effort?.supported === true,
     },
     streamIdleTimeoutMs: STREAM_IDLE_TIMEOUT_MS,
   };
@@ -75,10 +85,35 @@ export function createAnthropicProvider(opts: AnthropicProviderOptions): ModelPr
     return info;
   }
 
+  /** 部署配置里的模型逐个取；取不到的（例如 id 写错、账号无权访问）跳过并记 warn，不拖垮整个列表。 */
+  async function listModels(): Promise<ModelInfo[]> {
+    const settled = await Promise.allSettled(opts.models.map(getModel));
+    const out: ModelInfo[] = [];
+    settled.forEach((r, i) => {
+      if (r.status === "fulfilled") out.push(r.value);
+      else
+        opts.log?.warn("cannot load anthropic model; skipping", {
+          model: opts.models[i],
+          err: r.reason,
+        });
+    });
+    return out;
+  }
+
+  /** 先取模型能力（kv 缓存），只对支持 adaptive 思考的模型发 thinking；不支持 effort 的模型丢弃 effort。 */
+  async function* stream(req: ModelRequest, signal: AbortSignal): AsyncGenerator<ModelStreamEvent> {
+    const caps = (await getModel(req.model)).capabilities;
+    const { effort: _effort, ...rest } = req;
+    yield* streamMessages(client, caps.effort ? req : rest, {
+      signal,
+      serverFallbacks: opts.serverFallbacks,
+      thinking: caps.reasoning,
+    });
+  }
+
   return {
-    listModels: () => Promise.all(opts.models.map(getModel)),
-    stream: (req, { signal }) =>
-      streamMessages(client, req, { signal, serverFallbacks: opts.serverFallbacks }),
+    listModels,
+    stream: (req, { signal }) => stream(req, signal),
   };
 }
 
@@ -109,6 +144,7 @@ export default definePlugin({
         baseUrl: cfg.baseUrl,
         models: cfg.models,
         serverFallbacks: cfg.serverFallbacks,
+        log: ctx.log,
       }),
     );
   },

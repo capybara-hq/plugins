@@ -10,6 +10,7 @@ import { kindFromCode, toModelError } from "./errors.js";
 import {
   buildRequest,
   type FunctionCallOpaque,
+  type MessageOpaque,
   type ModelTraits,
   PROVIDER,
 } from "./map-request.js";
@@ -73,14 +74,35 @@ export function toComplete(r: Response, model: string): Complete {
         break;
       case "message": {
         let text = "";
+        let hasRefusalPart = false;
         for (const part of item.content) {
           if (part.type === "output_text") text += part.text;
           else if (part.type === "refusal") {
             text += part.refusal;
-            hasRefusal = true;
+            hasRefusalPart = true;
           }
         }
-        if (text !== "") content.push({ type: "text", text });
+        if (hasRefusalPart) hasRefusal = true;
+        if (text === "") break;
+        // 含拒答的消息按普通文本回放（拒答部分不能原样还原成 output_text，不冒充原输出项）
+        if (hasRefusalPart) {
+          content.push({ type: "text", text });
+          break;
+        }
+        // 输出项 id（与 phase、非 completed 的状态）随 text 块保存：跟在回放的 reasoning 项之后时要按原 id 回放
+        content.push({
+          type: "text",
+          text,
+          opaque: {
+            provider: PROVIDER,
+            model,
+            data: {
+              id: item.id,
+              ...(item.phase != null ? { phase: item.phase } : {}),
+              ...(item.status !== "completed" ? { status: item.status } : {}),
+            } satisfies MessageOpaque,
+          },
+        });
         break;
       }
       case "function_call": {
@@ -148,7 +170,8 @@ export async function* streamResponses(
   try {
     stream = await open();
     let final: Response | null = null;
-    for await (const ev of stream) {
+    // 终止事件之后不再读：服务端（或中间代理）不关连接时，继续读只会等到空闲超时。
+    read: for await (const ev of stream) {
       if (signal.aborted) throw aborted();
       switch (ev.type) {
         case "response.output_text.delta":
@@ -164,7 +187,7 @@ export async function* streamResponses(
         case "response.completed":
         case "response.incomplete":
           final = ev.response;
-          break;
+          break read;
         case "response.failed": {
           const err = ev.response.error;
           throw new ModelError(

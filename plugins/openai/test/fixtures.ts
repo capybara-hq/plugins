@@ -228,9 +228,16 @@ function protocolViolation(b: Body): string | null {
     return "include must contain reasoning.encrypted_content";
   if (typeof b.max_output_tokens !== "number") return "max_output_tokens is required";
   if (b.input.some((i) => i.role === "system")) return "system role items are not expected";
-  for (const i of b.input) {
+  for (const [n, i] of b.input.entries()) {
     if (i.type === "reasoning" && i.encrypted_content !== "enc-fixture-1")
       return "Invalid encrypted_content in reasoning item";
+    // 与真实接口一致：回放的 reasoning 项必须紧跟它产出的输出项（带原 id 的 message）；
+    // 带 msg_ id 的 message 项也不能脱离它的 reasoning 项单独出现
+    const next = b.input[n + 1];
+    if (i.type === "reasoning" && !(next?.type === "message" && /^msg_/.test(String(next.id))))
+      return `Item '${String(i.id)}' of type 'reasoning' was provided without its required following item.`;
+    if (i.type === "message" && typeof i.id === "string" && b.input[n - 1]?.type !== "reasoning")
+      return `Item '${i.id}' of type 'message' was provided without its required 'reasoning' item.`;
   }
   return null;
 }

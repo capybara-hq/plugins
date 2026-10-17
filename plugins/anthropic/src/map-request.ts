@@ -93,24 +93,40 @@ function mapMessages(messages: ModelMessage[], model: string): Anthropic.Message
   return out;
 }
 
-/** model-provider@1 请求 → Anthropic Messages API 请求。纯函数。 */
+/** 一次请求最多的缓存断点数（API 限制）。 */
+const MAX_CACHE_BREAKPOINTS = 4;
+
+/**
+ * model-provider@1 请求 → Anthropic Messages API 请求。纯函数。
+ * `thinking`：模型支持 adaptive 思考时为 true（默认）；false 时不发 thinking 参数（不发 disabled）。
+ */
 export function buildRequest(
   req: ModelRequest,
-  opts: { serverFallbacks: ServerFallbacks },
+  opts: { serverFallbacks: ServerFallbacks; thinking?: boolean },
 ): BuiltRequest {
   const params: AnthropicParams = {
     model: req.model,
     max_tokens: req.maxOutputTokens,
     messages: mapMessages(req.messages, req.model),
-    // 当前模型默认 display: "omitted"（思考文本为空）；summarized 返回推理摘要供界面流式展示，计费不变（R37）
-    thinking: { type: "adaptive", display: "summarized" },
   };
+  if (opts.thinking !== false) {
+    // 当前模型默认 display: "omitted"（思考文本为空）；summarized 返回推理摘要供界面流式展示，计费不变（R37）
+    params.thinking = { type: "adaptive", display: "summarized" };
+  }
+  let breakpoints = 0;
   if (req.system.length > 0) {
-    params.system = req.system.map((s) =>
-      s.cache
-        ? { type: "text", text: s.text, cache_control: { type: "ephemeral" } }
-        : { type: "text", text: s.text },
-    );
+    params.system = req.system.map((s) => {
+      if (!s.cache) return { type: "text", text: s.text };
+      breakpoints++;
+      return { type: "text", text: s.text, cache_control: { type: "ephemeral" } };
+    });
+  }
+  // 历史缓存：用顶层自动 cache_control（API 把断点放在最后一个可缓存的块上），而不是给最后一条消息的
+  // 最后一个块加 cache_control——后者在下一轮会移到新的末尾块，已发送的消息字节随之改变，
+  // 违反「发给模型的历史只追加」（较早请求的 messages 必须是较晚请求的逐字节前缀）。
+  // 顶层断点也占用一个名额：system 已用满 4 个时不加。
+  if (params.messages.length > 0 && breakpoints < MAX_CACHE_BREAKPOINTS) {
+    params.cache_control = { type: "ephemeral" };
   }
   if (req.effort !== undefined) params.output_config = { effort: req.effort };
   if (req.tools.length > 0) {

@@ -31,6 +31,46 @@ describe("buildRequest: system", () => {
   });
 });
 
+describe("buildRequest: history caching (top-level automatic cache_control)", () => {
+  const u = (text: string): ModelMessage => ({ role: "user", content: [{ type: "text", text }] });
+  const a = (text: string): ModelMessage => ({
+    role: "assistant",
+    content: [{ type: "text", text }],
+  });
+
+  it("sets top-level cache_control so the last cacheable block is a breakpoint; message blocks stay unmarked", () => {
+    const { params } = build(base({ messages: [u("U1"), a("A1"), u("U2")] }));
+    expect(params.cache_control).toEqual({ type: "ephemeral" });
+    expect(JSON.stringify(params.messages)).not.toContain("cache_control");
+  });
+
+  it("the earlier request's messages are still an exact prefix of the later request's", () => {
+    const earlier = build(base({ messages: [u("U1"), a("A1"), u("U2")] })).params;
+    const later = build(base({ messages: [u("U1"), a("A1"), u("U2"), a("A2"), u("U3")] })).params;
+    expect(later.messages.slice(0, earlier.messages.length)).toEqual(earlier.messages);
+    expect(later.cache_control).toEqual(earlier.cache_control);
+  });
+
+  it("respects the 4-breakpoint limit: omitted when the system blocks already use 4", () => {
+    const four = Array.from({ length: 4 }, (_, i) => ({ text: `s${i}`, cache: true }));
+    expect("cache_control" in build(base({ system: four })).params).toBe(false);
+    const three = four.slice(0, 3);
+    expect(build(base({ system: three })).params.cache_control).toEqual({ type: "ephemeral" });
+  });
+});
+
+describe("buildRequest: thinking only when the model supports it", () => {
+  it("thinking: false omits the thinking parameter (and never sends disabled)", () => {
+    const { params } = buildRequest(base(), { serverFallbacks: "default", thinking: false });
+    expect("thinking" in params).toBe(false);
+    expect(JSON.stringify(params)).not.toContain('"disabled"');
+  });
+
+  it("thinking defaults to adaptive / summarized", () => {
+    expect(build(base()).params.thinking).toEqual({ type: "adaptive", display: "summarized" });
+  });
+});
+
 describe("buildRequest: thinking replay", () => {
   const raw = { type: "thinking", thinking: "17*23=391", signature: "sig-abc" };
   const history = (provider: string, model: string): ModelRequest =>
