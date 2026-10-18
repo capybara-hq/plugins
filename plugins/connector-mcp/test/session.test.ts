@@ -38,6 +38,7 @@ interface OpenOpts {
   headers?: Record<string, string>;
   signal?: AbortSignal;
   log?: Logger;
+  onToolsChanged?: () => void;
 }
 
 async function open(server: FakeMcpServer, o: OpenOpts = {}): Promise<ConnectorSession> {
@@ -47,6 +48,7 @@ async function open(server: FakeMcpServer, o: OpenOpts = {}): Promise<ConnectorS
     auth: o.auth ?? (async () => ({ headers: {} })),
     onUnauthorized: o.onUnauthorized ?? (async () => {}),
     signal: o.signal ?? new AbortController().signal,
+    ...(o.onToolsChanged && { onToolsChanged: o.onToolsChanged }),
   });
   sessions.push(s);
   return s;
@@ -466,5 +468,55 @@ describe("resources", () => {
     const s = await open(server);
     expect(s.listResources).toBeUndefined();
     expect(s.readResource).toBeUndefined();
+  });
+});
+
+describe("tools/list_changed", () => {
+  const changingServer = () =>
+    fake({
+      sseResponses: true,
+      tools: [
+        {
+          name: "install_plugin",
+          description: "Install a plugin (changes the tool list).",
+          handler: async (_info, ctx) => {
+            await ctx.notifyToolsChanged();
+            return { content: [{ type: "text", text: "installed" }] };
+          },
+        },
+        { name: "noop", description: "Do nothing." },
+      ],
+    });
+
+  it("调用途中收到通知 → 调用 onToolsChanged；结果照常返回", async () => {
+    const server = await changingServer();
+    let changed = 0;
+    const s = await open(server, { onToolsChanged: () => changed++ });
+    const r = await s.callTool("install_plugin", {}, new AbortController().signal);
+    expect(r).toEqual({ content: [{ type: "text", text: "installed" }] });
+    expect(changed).toBe(1);
+    await s.callTool("noop", {}, new AbortController().signal);
+    expect(changed).toBe(1);
+  });
+
+  it("未提供回调（旧内核）：通知被忽略，调用不受影响", async () => {
+    const server = await changingServer();
+    const s = await open(server);
+    const r = await s.callTool("install_plugin", {}, new AbortController().signal);
+    expect(r).toEqual({ content: [{ type: "text", text: "installed" }] });
+  });
+
+  it("回调抛错不影响调用结果", async () => {
+    const server = await changingServer();
+    const log = memLog();
+    const s = await open(server, {
+      log,
+      onToolsChanged: () => {
+        throw new Error("boom");
+      },
+    });
+    const r = await s.callTool("install_plugin", {}, new AbortController().signal);
+    expect(r).toEqual({ content: [{ type: "text", text: "installed" }] });
+    expect(log.lines.some((l) => l.level === "warn" && l.msg.includes("list_changed"))).toBe(true);
   });
 });

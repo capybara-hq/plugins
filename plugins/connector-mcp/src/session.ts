@@ -14,7 +14,11 @@ import {
   StreamableHTTPClientTransport,
   StreamableHTTPError,
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import {
+  ErrorCode,
+  McpError,
+  ToolListChangedNotificationSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 /** 401 刷新重试后仍失败（模型可见，英文）。 */
@@ -286,6 +290,17 @@ async function openSession(
   });
   const client = new Client(CLIENT_INFO, { capabilities: {} });
   client.onerror = () => {};
+  // 服务在本次会话里报告工具清单变了：告诉内核（安排漂移检查）；回调出错只记日志，不影响本次调用
+  const onToolsChanged = args.onToolsChanged;
+  if (onToolsChanged) {
+    client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+      try {
+        onToolsChanged();
+      } catch (err) {
+        log.warn("MCP tools/list_changed callback failed", { err });
+      }
+    });
+  }
   const opts = (signal: AbortSignal = args.signal) => ({ signal, timeout: REQUEST_TIMEOUT_MS });
   try {
     // exactOptionalPropertyTypes 下 SDK 自身的 Transport 类型不兼容（sessionId 可为 undefined），按 SDK 文档用法转型
