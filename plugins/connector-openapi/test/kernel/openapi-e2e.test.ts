@@ -468,6 +468,31 @@ describe("connector-openapi 端到端", () => {
       };
       expect(r.changes.changed).toContain("getPet");
       expect(r.app.tools.find((t) => t.name === "getPet")?.status).toBe("pending_review");
+      // 复核对比可见路由变化（connectorData 新旧两份）；读者视图里不给
+      type ToolJson = {
+        name: string;
+        connectorData: { path?: string } | null;
+        pending: { connectorData: { path?: string } | null } | null;
+      };
+      const viewed = (r.app.tools as unknown as ToolJson[]).find((t) => t.name === "getPet");
+      expect(viewed?.connectorData?.path).toBe("/pets/{petId}");
+      expect(viewed?.pending?.connectorData?.path).toBe("/animals/{petId}");
+      const acc = await new AccountsService(db).createLocal({
+        login: "viewer",
+        password: PW,
+        displayName: "v",
+      });
+      await new MembersService(db).add(orgId, acc.id, "member", ownerId);
+      const asMember = await (await session(k, "viewer"))({
+        method: "GET",
+        url: `/api/v1/orgs/${orgId}/apps/${appId}`,
+      });
+      expect(asMember.statusCode, asMember.body).toBe(200);
+      const memberTool = (asMember.json() as { app: { tools: ToolJson[] } }).app.tools.find(
+        (t) => t.name === "getPet",
+      );
+      expect(memberTool?.connectorData).toBeNull();
+      expect(memberTool?.pending?.connectorData).toBeNull();
       // 快照里生效的定义仍是旧路由
       const row = await db
         .selectFrom("app_tools")
