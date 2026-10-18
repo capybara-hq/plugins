@@ -6,7 +6,7 @@ import {
   startFakeMcpServer,
 } from "@capybara-hq/testing";
 import { afterEach, describe, expect, it } from "vitest";
-import { AUTH_FAILED_TEXT, createMcpConnector } from "../src/session.js";
+import { AUTH_FAILED_TEXT, createMcpConnector, redirectText } from "../src/session.js";
 
 /** 记录日志的 logger。 */
 function memLog(): Logger & { lines: { level: string; msg: string; fields?: unknown }[] } {
@@ -41,7 +41,7 @@ interface OpenOpts {
 }
 
 async function open(server: FakeMcpServer, o: OpenOpts = {}): Promise<ConnectorSession> {
-  const c = createMcpConnector({ log: o.log ?? memLog() });
+  const c = createMcpConnector({ log: o.log ?? memLog(), allowInsecureLoopback: true });
   const s = await c.open({
     endpoint: c.endpointSchema.parse({ url: server.url, headers: o.headers ?? {} }),
     auth: o.auth ?? (async () => ({ headers: {} })),
@@ -53,35 +53,87 @@ async function open(server: FakeMcpServer, o: OpenOpts = {}): Promise<ConnectorS
 }
 
 describe("endpointSchema", () => {
-  const schema = createMcpConnector({ log: memLog() }).endpointSchema;
+  const strict = createMcpConnector({ log: memLog() }).endpointSchema;
+  const loose = createMcpConnector({ log: memLog(), allowInsecureLoopback: true }).endpointSchema;
+  const ok = (schema: typeof strict, url: string) => schema.safeParse({ url }).success;
 
-  it("https 与本机 http 合法；headers 默认 {}", () => {
-    expect(schema.parse({ url: "https://mcp.example.com/mcp" })).toEqual({
+  it("默认只接受 https；headers 默认 {}", () => {
+    expect(strict.parse({ url: "https://mcp.example.com/mcp" })).toEqual({
       url: "https://mcp.example.com/mcp",
       headers: {},
     });
-    expect(schema.safeParse({ url: "http://127.0.0.1:8080/mcp" }).success).toBe(true);
-    expect(schema.safeParse({ url: "http://localhost:3000/mcp" }).success).toBe(true);
-  });
-
-  it("其他 http / 协议 → 英文错误", () => {
-    for (const url of ["http://mcp.example.com/mcp", "ftp://x.example.com", "not a url"]) {
-      const r = schema.safeParse({ url });
-      expect(r.success, url).toBe(false);
+    for (const url of [
+      "http://127.0.0.1:8080/mcp",
+      "http://localhost:3000/mcp",
+      "http://[::1]/mcp",
+    ]) {
+      expect(ok(strict, url), url).toBe(false);
     }
-    const r = schema.safeParse({ url: "http://mcp.example.com/mcp" });
-    expect(r.error?.issues[0]?.message).toBe(
-      "URL must use https (plain http is only allowed for 127.0.0.1 and localhost)",
+    expect(strict.safeParse({ url: "http://127.0.0.1/mcp" }).error?.issues[0]?.message).toBe(
+      "URL must use https",
     );
   });
 
+  it("allowInsecureLoopback：只放行确切的 127.0.0.1 / localhost / [::1]", () => {
+    for (const url of [
+      "http://127.0.0.1:8080/mcp",
+      "http://localhost:3000/mcp",
+      "http://[::1]:9/mcp",
+    ]) {
+      expect(ok(loose, url), url).toBe(true);
+    }
+    for (const url of [
+      "http://localhost.evil.com/mcp",
+      "http://127.0.0.1.nip.io/mcp",
+      "http://localhost./mcp",
+      "http://127.0.0.2/mcp",
+      "http://mcp.example.com/mcp",
+      "ftp://x.example.com",
+      "not a url",
+    ]) {
+      expect(ok(loose, url), url).toBe(false);
+    }
+    expect(
+      loose.safeParse({ url: "http://localhost.evil.com/mcp" }).error?.issues[0]?.message,
+    ).toBe("URL must use https (plain http is only allowed for 127.0.0.1, localhost and [::1])");
+  });
+
   it("固定头里不能放凭据头", () => {
-    const r = schema.safeParse({
+    const r = strict.safeParse({
       url: "https://mcp.example.com/mcp",
       headers: { Authorization: "Bearer x" },
     });
     expect(r.success).toBe(false);
     expect(r.error?.issues[0]?.message).toMatch(/credential/i);
+  });
+});
+
+describe("重定向", () => {
+  it("3xx 不跟随 → ToolError，重定向目标收不到请求与凭据头", async () => {
+    const target = await fake({ tools: [{ name: "t", description: "d" }] });
+    const server = await fake({
+      tools: [{ name: "t", description: "d" }],
+      intercept: (r) =>
+        r.method === "tools/call" ? { status: 307, body: "", location: target.url } : undefined,
+    });
+    const s = await open(server, { auth: async () => ({ headers: { "X-Api-Key": "k-secret" } }) });
+    const err = await s.callTool("t", {}, new AbortController().signal).catch((e) => e);
+    expect(err).toBeInstanceOf(ToolError);
+    expect(err.message).toBe(redirectText(307));
+    expect(err.message).toBe(
+      "The app's server responded with a redirect (HTTP 307); redirects are not followed.",
+    );
+    expect(target.requests).toEqual([]);
+  });
+
+  it("打开会话时的 308 同样拒绝", async () => {
+    const server = await fake({
+      tools: [],
+      intercept: () => ({ status: 308, body: "", location: "http://127.0.0.1:1/elsewhere" }),
+    });
+    const err = await open(server).catch((e) => e);
+    expect(err).toBeInstanceOf(ToolError);
+    expect(err.message).toBe(redirectText(308));
   });
 });
 

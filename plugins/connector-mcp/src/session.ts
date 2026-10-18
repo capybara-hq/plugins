@@ -42,7 +42,11 @@ const CREDENTIAL_HEADERS = new Set(["authorization", "proxy-authorization", "coo
 // capybara:allow-module-state 只读常量表
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
-const isHttpsOrLoopback = (raw: string): boolean => {
+/** 本机 http 只认这三个确切的主机名（`localhost.`、`localhost.evil.com`、`127.0.0.1.nip.io` 等一律不算）。 */
+const isLoopbackHttp = (u: URL): boolean =>
+  u.protocol === "http:" && LOOPBACK_HOSTS.has(u.hostname);
+
+const urlAllowed = (raw: string, allowInsecureLoopback: boolean): boolean => {
   let u: URL;
   try {
     u = new URL(raw);
@@ -50,31 +54,43 @@ const isHttpsOrLoopback = (raw: string): boolean => {
     return true; // 交给 z.url() 报格式错误
   }
   if (u.protocol === "https:") return true;
-  return u.protocol === "http:" && LOOPBACK_HOSTS.has(u.hostname);
+  return allowInsecureLoopback && isLoopbackHttp(u);
 };
 
-/** 端点：url 须为 https（本机 http 例外，供开发与测试）；headers 是非密钥的固定头。 */
-export const EndpointSchema = z.object({
-  url: z.url().refine(isHttpsOrLoopback, {
-    message: "URL must use https (plain http is only allowed for 127.0.0.1 and localhost)",
-  }),
-  headers: z
-    .record(z.string(), z.string())
-    .default({})
-    .superRefine((h, ctx) => {
-      for (const name of Object.keys(h)) {
-        if (CREDENTIAL_HEADERS.has(name.toLowerCase())) {
-          ctx.addIssue({
-            code: "custom",
-            path: [name],
-            message: "Do not put credentials in endpoint headers; configure the app's auth instead",
-          });
-        }
-      }
+/**
+ * 端点：url 须为 https；部署配置 `allowInsecureLoopback` 打开时（仅供开发与测试）本机 http 例外。
+ * headers 是非密钥的固定头。
+ */
+export function endpointSchema(allowInsecureLoopback: boolean) {
+  return z.object({
+    url: z.url().refine((v) => urlAllowed(v, allowInsecureLoopback), {
+      message: allowInsecureLoopback
+        ? "URL must use https (plain http is only allowed for 127.0.0.1, localhost and [::1])"
+        : "URL must use https",
     }),
-});
+    headers: z
+      .record(z.string(), z.string())
+      .default({})
+      .superRefine((h, ctx) => {
+        for (const name of Object.keys(h)) {
+          if (CREDENTIAL_HEADERS.has(name.toLowerCase())) {
+            ctx.addIssue({
+              code: "custom",
+              path: [name],
+              message:
+                "Do not put credentials in endpoint headers; configure the app's auth instead",
+            });
+          }
+        }
+      }),
+  });
+}
 
-export type McpEndpoint = z.infer<typeof EndpointSchema>;
+export type McpEndpoint = z.infer<ReturnType<typeof endpointSchema>>;
+
+/** 服务以 3xx 响应（不跟随，模型可见，英文）。 */
+export const redirectText = (status: number) =>
+  `The app's server responded with a redirect (HTTP ${status}); redirects are not followed.`;
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
@@ -208,14 +224,23 @@ function authedFetch(endpoint: McpEndpoint, args: ConnectorOpenArgs, log: Logger
       for (const [k, v] of Object.entries(endpoint.headers)) if (!headers.has(k)) headers.set(k, v);
       for (const [k, v] of Object.entries(inj.headers)) headers.set(k, v);
       const signal = init?.signal ? AbortSignal.any([init.signal, args.signal]) : args.signal;
-      return fetch(url, { ...init, headers, signal });
+      // 不跟随重定向：跟随会把请求体与注入的凭据头带到别的源（跨源时自定义头不会被剥掉）
+      return fetch(url, { ...init, headers, signal, redirect: "manual" });
+    };
+    const noRedirect = async (r: Response) => {
+      if (r.status >= 300 && r.status < 400) {
+        await r.body?.cancel();
+        throw new ToolError(redirectText(r.status));
+      }
     };
     let res = await send();
+    await noRedirect(res);
     // GET 是可选的独立 SSE 流，失败由 SDK 自己忽略，不触发刷新
     if (res.status === 401 && method !== "GET") {
       await res.body?.cancel();
       await args.onUnauthorized();
       res = await send();
+      await noRedirect(res);
       if (res.status === 401) {
         await res.body?.cancel();
         throw new ToolError(AUTH_FAILED_TEXT);
@@ -317,10 +342,15 @@ async function openSession(
 }
 
 /** 创建 MCP 连接器（`connector@1`，kind = `mcp`）。 */
-export function createMcpConnector(deps: { log: Logger }): Connector {
+export function createMcpConnector(deps: {
+  log: Logger;
+  /** 允许 http://127.0.0.1 / localhost / [::1]（部署配置，默认关闭）。 */
+  allowInsecureLoopback?: boolean;
+}): Connector {
+  const schema = endpointSchema(deps.allowInsecureLoopback === true);
   return {
     kind: "mcp",
-    endpointSchema: EndpointSchema,
-    open: (args) => openSession(EndpointSchema.parse(args.endpoint), args, deps.log),
+    endpointSchema: schema,
+    open: (args) => openSession(schema.parse(args.endpoint), args, deps.log),
   };
 }
