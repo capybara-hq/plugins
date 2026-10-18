@@ -75,6 +75,7 @@ export async function* streamChat(
     let usage: RawUsage | null = null;
     for await (const chunk of stream) {
       if (signal.aborted) throw aborted();
+      const finishedBefore = finish !== null;
       if (chunk.usage != null) usage = chunk.usage as RawUsage;
       for (const choice of chunk.choices ?? []) {
         if (choice.index !== 0) continue;
@@ -91,19 +92,30 @@ export async function* streamChat(
         for (const tc of delta.tool_calls ?? []) {
           const acc = tools.get(tc.index) ?? { id: "", name: "", args: "" };
           if (tc.id) acc.id = tc.id;
-          if (tc.function?.name) acc.name += tc.function.name;
+          // 名字整体赋值：部分服务在每个增量里都重复带上 name
+          if (tc.function?.name) acc.name = tc.function.name;
           if (tc.function?.arguments) acc.args += tc.function.arguments;
           tools.set(tc.index, acc);
         }
         if (choice.finish_reason != null) finish = choice.finish_reason;
       }
       if (signal.aborted) throw aborted();
-      // 拿到 finish_reason 与用量后不再读：服务端（或中间代理）不关连接时，继续读只会等到空闲超时
-      if (finish !== null && usage !== null) break;
+      // 停读规则：拿到 finish_reason 后，有了用量就停；没有用量时最多再读一个 chunk（用量通常紧随其后，
+      // 服务忽略 include_usage 时则不会来），之后不论有没有用量都停。`[DONE]` 由 SDK 结束迭代。
+      // 服务端（或中间代理）不关连接时继续读只会等到空闲超时。finish 之后既无 chunk、也无 [DONE] 且不关连接的服务
+      // 仍会等到内核看门狗超时（无法与「用量还在路上」区分）。
+      if (finish !== null && (usage !== null || finishedBefore)) break;
     }
     if (signal.aborted) throw aborted();
     if (finish === null) {
       throw new ModelError("network", "OpenAI-compatible stream ended before finish_reason");
+    }
+    // DeepSeek：服务端资源不足导致生成中断，内容不完整，按可重试的服务端错误处理
+    if (finish === "insufficient_system_resource") {
+      throw new ModelError(
+        "server",
+        "OpenAI-compatible: generation interrupted (insufficient_system_resource)",
+      );
     }
 
     const content: ContentBlock[] = [];
@@ -124,6 +136,9 @@ export async function* streamChat(
     const calls =
       finish === "length" ? [] : [...tools.entries()].sort(([a], [b]) => a - b).map(([, c]) => c);
     for (const [i, c] of calls.entries()) {
+      if (c.name === "") {
+        throw new ModelError("invalid_request", `Tool call #${i} has no function name`);
+      }
       content.push({
         type: "tool_call",
         // 个别服务不给 id：用稳定的序号兜底（同一条消息里唯一，回放时与 tool_result 对得上）

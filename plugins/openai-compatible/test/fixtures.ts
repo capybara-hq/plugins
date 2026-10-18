@@ -13,8 +13,10 @@ export type RawUsage = Record<string, unknown> & {
 export interface ToolCallFixture {
   id: string;
   name: string;
-  /** 原始参数字符串，按 `argChunk` 切成多段增量。 */
+  /** 原始参数字符串，切成多段增量。 */
   args: string;
+  /** 每个参数增量都重复带上 function.name（部分服务这样发）。 */
+  repeatName?: boolean;
 }
 
 const pieces = (s: string, n: number): string[] => {
@@ -30,14 +32,22 @@ export function sseChat(opts: {
   text?: string;
   toolCalls?: ToolCallFixture[];
   /** null：不发 finish_reason（模拟流被截断）。 */
-  finish: "stop" | "tool_calls" | "length" | "content_filter" | null;
+  finish:
+    | "stop"
+    | "tool_calls"
+    | "length"
+    | "content_filter"
+    | "insufficient_system_resource"
+    | null;
   usage?: RawUsage;
   /** 用量放在带 finish_reason 的 chunk 里（部分服务这样做），而不是单独的末尾 chunk。 */
   usageInFinishChunk?: boolean;
   /** 不发 `data: [DONE]`。 */
   omitDone?: boolean;
-  /** 发完后不关连接。 */
+  /** 发完后不关连接（是否发 `[DONE]` 由 omitDone 决定）。 */
   keepOpen?: boolean;
+  /** finish 之后再发一个不带用量的 chunk（服务忽略 include_usage 时的形态）。 */
+  trailingChunk?: boolean;
   /** 在 finish 之前插入一个带 error 字段的事件（服务端流中途出错）。 */
   midStreamError?: { message: string; type?: string; code?: string };
 }): FakeResponse {
@@ -66,7 +76,11 @@ export function sseChat(opts: {
       ],
     });
     for (const a of pieces(c.args, 4))
-      delta({ tool_calls: [{ index, function: { arguments: a } }] });
+      delta({
+        tool_calls: [
+          { index, function: { arguments: a, ...(c.repeatName ? { name: c.name } : {}) } },
+        ],
+      });
   });
   if (opts.midStreamError !== undefined) {
     data.push(JSON.stringify({ error: opts.midStreamError }));
@@ -77,8 +91,9 @@ export function sseChat(opts: {
       opts.usageInFinishChunk && opts.usage ? { usage: opts.usage } : {},
     );
     if (!opts.usageInFinishChunk && opts.usage) chunk([], { usage: opts.usage });
+    if (opts.trailingChunk) chunk([]);
   }
-  if (!opts.omitDone && !opts.keepOpen) data.push("[DONE]");
+  if (!opts.omitDone) data.push("[DONE]");
   return {
     status: 200,
     sse: data.map((d) => ({ data: d })),

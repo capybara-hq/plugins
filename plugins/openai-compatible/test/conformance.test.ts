@@ -5,9 +5,11 @@ import {
   type ModelStreamEvent,
 } from "@capybara-hq/plugin-sdk";
 import {
+  assertPluginSecretsReachable,
   describeModelProviderConformance,
   type FakeModelServer,
   type FakeResponse,
+  pluginDeploymentSecretValues,
   startFakeModelServer,
 } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -46,11 +48,11 @@ for (const dialect of ["generic", "deepseek", "qwen"] as const) {
           {
             name: dialect,
             baseUrl: `${server.url}/v1`,
-            apiKey: "sk-fixture",
             dialect,
             models: [m],
           },
         ],
+        apiKeys: { [dialect]: "sk-fixture" },
       }),
       model: `${dialect}/${m.id}`,
       expect: { thinking: dialect !== "generic", caching: true },
@@ -84,11 +86,11 @@ describe.skipIf(!liveReady)("live", () => {
           {
             name: "live",
             baseUrl: LIVE.baseUrl ?? "",
-            apiKey: LIVE.apiKey,
             dialect,
             models: [model(LIVE.model ?? "", { reasoning: dialect !== "generic" })],
           },
         ],
+        apiKeys: { live: LIVE.apiKey ?? "" },
       }),
       model: `live/${LIVE.model}`,
       // DeepSeek 的磁盘缓存对重复前缀稳定命中；其余服务的隐式缓存不保证命中
@@ -144,7 +146,6 @@ describe("openai-compatible: stream edge cases and errors", () => {
     {
       name: "ds",
       baseUrl: `${server.url}/v1`,
-      apiKey: "sk-fixture",
       dialect: "deepseek",
       models: [model("deepseek-flash", { reasoning: true })],
       ...over,
@@ -157,7 +158,7 @@ describe("openai-compatible: stream edge cases and errors", () => {
     },
   ];
   const provider = (over: Partial<EndpointConfig> = {}) =>
-    createOpenAICompatibleProvider({ endpoints: endpoints(over) });
+    createOpenAICompatibleProvider({ endpoints: endpoints(over), apiKeys: { ds: "sk-fixture" } });
   const ds = (o: Parameters<typeof sseChat>[0]) => () => sseChat(o);
 
   beforeAll(async () => {
@@ -323,12 +324,70 @@ describe("openai-compatible: stream edge cases and errors", () => {
       finish: "stop",
       usage: usageFor("deepseek", { total: 5, output: 1 }),
       keepOpen: true,
+      omitDone: true,
     });
     const started = Date.now();
     const done = complete(await drain(provider(), req()));
     expect(done.content).toEqual([{ type: "text", text: "Done" }]);
     expect(Date.now() - started).toBeLessThan(3000);
   }, 5000);
+
+  it("server that never sends usage and keeps the connection open: finish + one more chunk ends the read", async () => {
+    next = ds({
+      model: "m",
+      text: "No usage",
+      finish: "stop",
+      trailingChunk: true,
+      keepOpen: true,
+      omitDone: true,
+    });
+    const started = Date.now();
+    const done = complete(await drain(provider(), req()));
+    expect(done.content).toEqual([{ type: "text", text: "No usage" }]);
+    expect(done.usage).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+    expect(Date.now() - started).toBeLessThan(3000);
+    // 收到 [DONE] 也结束（连接保持打开）
+    next = ds({ model: "m", text: "Done", finish: "stop", keepOpen: true });
+    expect(complete(await drain(provider(), req())).stopReason).toBe("end_turn");
+  }, 8000);
+
+  it("tool call name is assigned, not concatenated; a call without a name -> invalid_request", async () => {
+    next = ds({
+      model: "m",
+      toolCalls: [
+        { id: "call_r", name: "get_weather", args: '{"city":"Paris"}', repeatName: true },
+      ],
+      finish: "tool_calls",
+      usage: usageFor("deepseek", { total: 5, output: 1 }),
+    });
+    expect(complete(await drain(provider(), req())).content).toEqual([
+      { type: "tool_call", id: "call_r", name: "get_weather", input: { city: "Paris" } },
+    ]);
+    next = ds({
+      model: "m",
+      toolCalls: [{ id: "call_n", name: "", args: "{}" }],
+      finish: "tool_calls",
+      usage: usageFor("deepseek", { total: 5, output: 1 }),
+    });
+    expect(kindOf(await streamError(provider()))).toBe("invalid_request");
+  });
+
+  it("DeepSeek finish_reason insufficient_system_resource -> retryable server error", async () => {
+    next = ds({
+      model: "m",
+      text: "Cut",
+      finish: "insufficient_system_resource",
+      usage: usageFor("deepseek", { total: 5, output: 1 }),
+    });
+    const e = await streamError(provider());
+    expect(kindOf(e)).toBe("server");
+    expect(isModelError(e) && e.retryable).toBe(true);
+  });
 
   it("stream ending without finish_reason -> network", async () => {
     next = ds({ model: "m", text: "Half", finish: null, omitDone: true });
@@ -419,18 +478,44 @@ describe("openai-compatible: stream edge cases and errors", () => {
         ],
       }).success,
     ).toBe(false);
+    const ok = {
+      endpoints: [
+        {
+          name: "ds",
+          baseUrl: "https://api.deepseek.com",
+          dialect: "deepseek",
+          models: [model("deepseek-flash")],
+        },
+        { name: "local", baseUrl: "http://vllm/v1", dialect: "generic", models: [model("m")] },
+      ],
+      apiKeys: { ds: "sk-deepseek-secret-123" },
+    };
+    expect(schema?.safeParse(ok).success).toBe(true);
+    // 密钥不在 endpoints[] 里
+    expect(schema?.safeParse({ endpoints: [{ ...ok.endpoints[0], apiKey: "sk" }] }).success).toBe(
+      false,
+    );
+    // apiKeys 的键必须是已配置的端点名
+    const bad = schema?.safeParse({ ...ok, apiKeys: { nope: "sk-x" } });
+    expect(bad?.success).toBe(false);
+    expect(JSON.stringify(bad?.error?.issues)).toContain("nope");
+  });
+
+  it("passes the kernel's secret reachability check and apiKeys values are redacted", () => {
+    // 内核 PluginHost 加载插件时执行同一检查；secret() 放在数组元素里会被拒绝加载
+    expect(() => assertPluginSecretsReachable(plugin)).not.toThrow();
     expect(
-      schema?.safeParse({
+      pluginDeploymentSecretValues(plugin, {
         endpoints: [
           {
             name: "ds",
             baseUrl: "https://api.deepseek.com",
-            apiKey: "sk",
             dialect: "deepseek",
-            models: [model("deepseek-flash")],
+            models: [model("m")],
           },
         ],
-      }).success,
-    ).toBe(true);
+        apiKeys: { ds: "sk-deepseek-secret-123" },
+      }),
+    ).toEqual(["sk-deepseek-secret-123"]);
   });
 });

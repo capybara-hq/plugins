@@ -2,6 +2,7 @@ import {
   type ContentBlock,
   ModelError,
   type ModelParameter,
+  type ModelRequest,
   type ModelUsage,
   type ParamValue,
   type ProviderOpaque,
@@ -55,8 +56,10 @@ export interface Dialect {
   applyParams(body: ChatBody, params: Record<string, ParamValue>): void;
   /** 从一个 delta 读出文本 / 思考增量。 */
   readDelta(delta: ChunkDelta): { text?: string; reasoning?: string };
-  /** assistant 消息的回放；只看消息自身与请求模型（只追加）。 */
-  replayAssistant(blocks: ContentBlock[], model: string): AssistantMessage;
+  /**
+   * assistant 消息的回放；只看消息自身与请求级的设定（模型、是否带工具、参数），不看其他消息（只追加）。
+   */
+  replayAssistant(blocks: ContentBlock[], req: ModelRequest): AssistantMessage;
   usage(raw: RawUsage | null | undefined): ModelUsage;
 }
 
@@ -225,15 +228,23 @@ const deepseek: Dialect = {
     if (typeof params.temperature === "number") body.temperature = params.temperature;
   },
   readDelta: readTextAndReasoning,
-  replayAssistant(blocks, model) {
+  replayAssistant(blocks, req) {
     const msg = baseAssistant(blocks);
     // 其他模型 / 供应商的思考块不回放
-    const own = blocks.filter((b) => b.type === "thinking" && sameOrigin(b.opaque, model));
-    if (own.length === 0) return msg;
-    return {
-      ...msg,
-      reasoning_content: own.map((b) => (b.type === "thinking" ? b.text : "")).join(""),
-    };
+    const own = blocks.filter((b) => b.type === "thinking" && sameOrigin(b.opaque, req.model));
+    if (own.length > 0) {
+      return {
+        ...msg,
+        reasoning_content: own.map((b) => (b.type === "thinking" ? b.text : "")).join(""),
+      };
+    }
+    // 带 tools 的思考模式请求要求每个历史 assistant 回合都带 reasoning_content（否则 400，不可重试）：
+    // 别的模型产出的回合（兜底 / 换模型）、关闭思考时产出的回合没有本模型的思考，补空串。
+    // 只取决于本条消息与请求级设定，仍然只追加。DeepSeek 不再要求时（文档变更）可删除。
+    if (req.tools.length > 0 && req.params.thinking !== "off") {
+      return { ...msg, reasoning_content: "" };
+    }
+    return msg;
   },
   usage(raw) {
     const total = num(raw?.prompt_tokens);

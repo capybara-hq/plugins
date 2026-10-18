@@ -45,7 +45,7 @@ function mapMessages(messages: ModelMessage[], req: ModelRequest, t: ChatTarget)
     } else if (m.role === "user") {
       out.push(...mapUser(m.content));
     } else {
-      out.push(t.dialect.replayAssistant(m.content, req.model));
+      out.push(t.dialect.replayAssistant(m.content, req));
     }
   }
   return out;

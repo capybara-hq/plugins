@@ -171,8 +171,8 @@ describe("thinking replay", () => {
     ...(turns[2] ?? []),
     ...(turns[3] ?? []),
   ];
-  const assistants = (d: DialectName) =>
-    buildRequest(req(history), target(d)).messages.filter(
+  const assistants = (d: DialectName, over: Partial<ModelRequest> = {}) =>
+    buildRequest(req(history, over), target(d)).messages.filter(
       (m) => m.role === "assistant",
     ) as unknown as Record<string, unknown>[];
 
@@ -185,8 +185,25 @@ describe("thinking replay", () => {
     expect(a[2]?.content).toBe("Probably rain.");
   });
 
+  it('deepseek with tools (thinking not off): turns without own reasoning send reasoning_content ""', () => {
+    // DeepSeek 带 tools 的思考模式请求要求每个历史 assistant 回合都有 reasoning_content，否则 400
+    for (const params of [{}, { thinking: "on" }]) {
+      const a = assistants("deepseek", { tools: [weather], params });
+      expect(a[0]?.reasoning_content).toBe("Need the tool.");
+      expect(a[1]?.reasoning_content).toBe("Report it.");
+      expect(a[2]?.reasoning_content).toBe("");
+    }
+  });
+
+  it("deepseek with tools but thinking off: no placeholder reasoning_content", () => {
+    const a = assistants("deepseek", { tools: [weather], params: { thinking: "off" } });
+    expect(a[2]).not.toHaveProperty("reasoning_content");
+  });
+
   it.each(["generic", "qwen"] as const)("%s never sends reasoning_content back", (d) => {
     for (const m of assistants(d)) expect(m).not.toHaveProperty("reasoning_content");
+    for (const m of assistants(d, { tools: [weather] }))
+      expect(m).not.toHaveProperty("reasoning_content");
   });
 });
 
