@@ -371,6 +371,18 @@ describe("应用预览", () => {
       },
     });
     expect(created.statusCode, created.body.slice(0, 300)).toBe(201);
+    // 应用视图不回显文档全文（安装响应、详情、列表）
+    const appId = (created.json() as { app: { id: string } }).app.id;
+    const one = await req({ method: "GET", url: `/api/v1/orgs/${orgId}/apps/${appId}` });
+    const list = await req({ method: "GET", url: `/api/v1/orgs/${orgId}/apps` });
+    for (const body of [created.body, one.body, list.body]) {
+      expect(body).not.toContain("ppppp");
+      expect(body.length).toBeLessThan(200_000);
+    }
+    const ep = (one.json() as { app: { endpoint: Record<string, unknown> } }).app.endpoint;
+    expect(ep.specTextBytes).toBe(Buffer.byteLength(endpoint.specText, "utf8"));
+    expect(ep.specTextSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(ep.specText).toBeUndefined();
   });
 });
 
@@ -427,6 +439,70 @@ describe("connector-openapi 端到端", () => {
     expect(r?.payload.toolKey).toBe(key);
     return r?.payload as NonNullable<typeof r>["payload"];
   }
+
+  it("A21：调用按已复核的路由；远端文档改了路径 → 刷新后待复核，复核通过才走新路由", async () => {
+    const appId = await installPets();
+    const agentId = await agentFor(appId);
+    const convId = await createConv(req, orgId, agentId);
+    const moved = defaultFakeOpenApiSpec(api.url, "header") as { paths: Record<string, unknown> };
+    moved.paths["/animals/{petId}"] = moved.paths["/pets/{petId}"];
+    delete moved.paths["/pets/{petId}"];
+    api.setSpec(moved);
+    try {
+      const since = () => api.requests.length;
+      let mark = since();
+      await runTool(convId, 1, "pets__getPet", { path: { petId: 42 } });
+      // 不读文档，按复核过的旧路由
+      expect(api.requests.slice(mark).map((r) => `${r.method} ${r.path}`)).toEqual([
+        "GET /v1/pets/42",
+      ]);
+
+      const refresh = await req({
+        method: "POST",
+        url: `/api/v1/orgs/${orgId}/apps/${appId}/refresh`,
+      });
+      expect(refresh.statusCode, refresh.body).toBe(200);
+      const r = refresh.json() as {
+        app: { tools: { name: string; status: string }[] };
+        changes: { changed: string[] };
+      };
+      expect(r.changes.changed).toContain("getPet");
+      expect(r.app.tools.find((t) => t.name === "getPet")?.status).toBe("pending_review");
+      // 快照里生效的定义仍是旧路由
+      const row = await db
+        .selectFrom("app_tools")
+        .select(["spec", "pending_spec"])
+        .where("app_id", "=", appId)
+        .where("name", "=", "getPet")
+        .executeTakeFirstOrThrow();
+      expect((row.spec as { connectorData: { path: string } }).connectorData.path).toBe(
+        "/pets/{petId}",
+      );
+      expect((row.pending_spec as { connectorData: { path: string } }).connectorData.path).toBe(
+        "/animals/{petId}",
+      );
+
+      // 待复核期间不可调用
+      mark = since();
+      const pending = await runTool(convId, 2, "pets__getPet", { path: { petId: 42 } });
+      expect(pending.isError).toBe(true);
+      expect(api.requests.length).toBe(mark);
+
+      const review = await req({
+        method: "POST",
+        url: `/api/v1/orgs/${orgId}/apps/${appId}/tools/getPet/review`,
+        payload: { action: "approve" },
+      });
+      expect(review.statusCode, review.body).toBe(200);
+      mark = since();
+      await runTool(convId, 3, "pets__getPet", { path: { petId: 42 } });
+      expect(api.requests.slice(mark).map((x) => `${x.method} ${x.path}`)).toEqual([
+        "GET /v1/animals/42",
+      ]);
+    } finally {
+      api.setSpec(defaultFakeOpenApiSpec(api.url, "header"));
+    }
+  });
 
   it("安装后调用只读操作：注入 API key；非 2xx 的正文回显的 key 被打码", async () => {
     const appId = await installPets();

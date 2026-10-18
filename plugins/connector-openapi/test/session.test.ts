@@ -59,6 +59,16 @@ async function failure(p: Promise<unknown>): Promise<ToolError> {
   return e as ToolError;
 }
 
+/** 先 listTools 取该工具的定义（内核会传已复核的快照定义），再带着 ctx.spec 调用。 */
+async function call(s: ConnectorSession, name: string, input: unknown): Promise<ToolResult> {
+  const spec = (await s.listTools()).find((t) => t.name === name);
+  return s.callTool(name, input, signal(), spec ? { spec } : undefined);
+}
+
+/** 取文档发生在 listTools。 */
+const list = (endpoint: Record<string, unknown>, o: OpenOpts = {}) =>
+  withSession(endpoint, (s) => s.listTools(), o);
+
 async function withSession<T>(
   endpoint: Record<string, unknown>,
   fn: (s: ConnectorSession) => Promise<T>,
@@ -83,17 +93,17 @@ describe("取文档", () => {
 
   it("文档地址 3xx → 不跟随，报错", async () => {
     const api = await server({ specRedirect: true });
-    const e = await failure(open({ specUrl: api.specUrl }));
+    const e = await failure(list({ specUrl: api.specUrl }));
     expect(e.message).toMatch(/redirect/i);
     expect(api.requests.map((r) => r.path)).toEqual(["/openapi.json"]);
   });
 
   it("文档地址 404 → error；5xx → unavailable", async () => {
     const api = await server();
-    const e = await failure(open({ specUrl: `${api.url}/missing.json` }));
+    const e = await failure(list({ specUrl: `${api.url}/missing.json` }));
     expect(e.message).toContain("HTTP 404");
     expect(e.kind).toBe("error");
-    const e5 = await failure(open({ specUrl: `${api.url}/v1/boom` }));
+    const e5 = await failure(list({ specUrl: `${api.url}/v1/boom` }));
     expect(e5.kind).toBe("unavailable");
   });
 
@@ -106,7 +116,7 @@ describe("取文档", () => {
       allowInsecureLoopback: true,
       limits: { maxSpecBytes: 4096 },
     });
-    const e = await failure(open({ specUrl: api.specUrl }, { connector: small }));
+    const e = await failure(list({ specUrl: api.specUrl }, { connector: small }));
     expect(e.message).toMatch(/larger than/);
   });
 
@@ -115,8 +125,61 @@ describe("取文档", () => {
     const url = api.specUrl;
     await api.stop();
     servers.splice(servers.indexOf(api), 1);
-    const e = await failure(open({ specUrl: url }));
+    const e = await failure(list({ specUrl: url }));
     expect(e.kind).toBe("unavailable");
+  });
+});
+
+describe("按已复核的定义路由（Ruling A21）", () => {
+  it("listTools 的定义带 connectorData（方法、路径、参数位置、请求体、解析后的服务器地址）", async () => {
+    const api = await server();
+    const tools = await withSession({ specUrl: api.specUrl }, (s) => s.listTools());
+    const get = tools.find((t) => t.name === "getPet");
+    expect(get?.connectorData).toEqual({
+      method: "get",
+      path: "/pets/{petId}",
+      server: `${api.url}/v1`,
+      params: [{ name: "petId", in: "path", style: "simple", explode: false, json: false }],
+    });
+    expect(tools.find((t) => t.name === "createPet")?.connectorData?.body).toEqual({
+      mediaType: "application/json",
+      json: true,
+      required: true,
+    });
+  });
+
+  it("调用只按 ctx.spec 路由、不再取文档：远端把 GET 改成 DELETE / 换路径后仍走复核过的路由", async () => {
+    const api = await server();
+    const reviewed = await withSession({ specUrl: api.specUrl }, (s) => s.listTools());
+    const getPet = reviewed.find((t) => t.name === "getPet");
+    if (!getPet) throw new Error("no getPet");
+    const doc = defaultFakeOpenApiSpec(api.url) as { paths: Record<string, unknown> };
+    doc.paths["/pets/{petId}"] = {
+      parameters: [{ name: "petId", in: "path", required: true, schema: { type: "integer" } }],
+      delete: { operationId: "getPet", summary: "Get a pet by id" },
+    };
+    api.setSpec(doc);
+    const before = api.requests.length;
+    await withSession({ specUrl: api.specUrl }, (s) =>
+      s.callTool("getPet", { path: { petId: 7 } }, signal(), { spec: getPet }),
+    );
+    expect(api.requests.slice(before).map((r) => `${r.method} ${r.path}`)).toEqual([
+      "GET /v1/pets/7",
+    ]);
+    // 重新列出的定义变了（指纹随之变化 → 内核漂移复核）
+    const fresh = await withSession({ specUrl: api.specUrl }, (s) => s.listTools());
+    expect(fresh.find((t) => t.name === "getPet")?.connectorData?.method).toBe("delete");
+  });
+
+  it("没有 ctx.spec / connectorData 不合规 → 提示刷新应用", async () => {
+    const api = await server();
+    await withSession({ specUrl: api.specUrl }, async (s) => {
+      const e = await failure(s.callTool("getPet", { path: { petId: 1 } }, signal()));
+      expect(e.message).toMatch(/refresh/);
+      const spec = { name: "getPet", description: "x", inputSchema: {}, connectorData: { v: 0 } };
+      const bad = await failure(s.callTool("getPet", {}, signal(), { spec }));
+      expect(bad.message).toMatch(/refresh/);
+    });
   });
 });
 
@@ -124,40 +187,28 @@ describe("调用", () => {
   it("CRUD：注入 API key 头，结果带状态、content-type 与美化的 JSON", async () => {
     const api = await server({ apiKey: KEY });
     await withSession({ specUrl: api.specUrl }, async (s) => {
-      const created = await s.callTool(
-        "createPet",
-        { body: { name: "Rex", tag: "dog" } },
-        signal(),
-      );
+      const created = await call(s, "createPet", { body: { name: "Rex", tag: "dog" } });
       expect(created.isError).toBeUndefined();
       expect(text(created)).toContain("HTTP 201");
       expect(text(created)).toContain("content-type: application/json");
       expect(text(created)).toContain('{\n  "id": 1,\n  "name": "Rex",\n  "tag": "dog"\n}');
-      await s.callTool("createPet", { body: { name: "Tom", tag: "cat" } }, signal());
-      await s.callTool("createPet", { body: { name: "Fido", tag: "dog" } }, signal());
+      await call(s, "createPet", { body: { name: "Tom", tag: "cat" } });
+      await call(s, "createPet", { body: { name: "Fido", tag: "dog" } });
 
-      const got = await s.callTool("getPet", { path: { petId: 1 } }, signal());
+      const got = await call(s, "getPet", { path: { petId: 1 } });
       expect(text(got)).toContain('"name": "Rex"');
 
-      const list = await s.callTool(
-        "listPets",
-        { query: { tags: ["dog", "bird"], limit: 5 } },
-        signal(),
-      );
+      const list = await call(s, "listPets", { query: { tags: ["dog", "bird"], limit: 5 } });
       expect(JSON.parse(text(list).split("\n\n").slice(1).join("\n\n"))).toHaveLength(2);
       expect(api.requests.at(-1)?.query).toBe("limit=5&tags=dog&tags=bird");
 
-      const upd = await s.callTool(
-        "updatePet",
-        { path: { petId: 2 }, body: { name: "Tommy" } },
-        signal(),
-      );
+      const upd = await call(s, "updatePet", { path: { petId: 2 }, body: { name: "Tommy" } });
       expect(text(upd)).toContain('"name": "Tommy"');
-      const del = await s.callTool("deletePet", { path: { petId: 1 } }, signal());
+      const del = await call(s, "deletePet", { path: { petId: 1 } });
       expect(text(del)).toContain("HTTP 204");
       expect(api.pets().map((p) => p.name)).toEqual(["Tommy", "Fido"]);
 
-      const gone = await s.callTool("getPet", { path: { petId: 1 } }, signal());
+      const gone = await call(s, "getPet", { path: { petId: 1 } });
       expect(gone.isError).toBe(true);
       expect(text(gone)).toContain("HTTP 404");
       expect(text(gone)).toContain("pet 1 not found");
@@ -173,7 +224,7 @@ describe("调用", () => {
     await withSession(
       { specUrl: api.specUrl },
       async (s) => {
-        const r = await s.callTool("listPets", { query: { limit: 1 } }, signal());
+        const r = await call(s, "listPets", { query: { limit: 1 } });
         expect(r.isError).toBeUndefined();
       },
       { auth: async () => ({ headers: {}, query: { api_key: KEY } }) },
@@ -183,13 +234,11 @@ describe("调用", () => {
 
   it("baseUrl 覆盖 servers；servers 里的变量取默认值", async () => {
     const api = await server();
-    await withSession({ specUrl: api.specUrl }, (s) => s.callTool("boom", {}, signal())).catch(
-      () => {},
-    );
+    await withSession({ specUrl: api.specUrl }, (s) => call(s, "boom", {})).catch(() => {});
     expect(api.requests.at(-1)?.path).toBe("/v1/boom");
     const other = await server();
     await withSession({ specUrl: api.specUrl, baseUrl: `${other.url}/v1` }, (s) =>
-      s.callTool("listPets", {}, signal()),
+      call(s, "listPets", {}),
     );
     expect(other.requests.at(-1)?.path).toBe("/v1/pets");
   });
@@ -197,14 +246,10 @@ describe("调用", () => {
   it("参数序列化：explode=false 逗号拼接、deepObject、声明的头", async () => {
     const api = await server();
     const r = await withSession({ specUrl: api.specUrl }, (s) =>
-      s.callTool(
-        "echo",
-        {
-          query: { ids: [1, 2, 3], filter: { kind: "a b", owner: "me" } },
-          headers: { "X-Trace-Id": "t-1" },
-        },
-        signal(),
-      ),
+      call(s, "echo", {
+        query: { ids: [1, 2, 3], filter: { kind: "a b", owner: "me" } },
+        headers: { "X-Trace-Id": "t-1" },
+      }),
     );
     const req = api.requests.at(-1);
     expect(req?.query).toBe("ids=1%2C2%2C3&filter%5Bkind%5D=a+b&filter%5Bowner%5D=me");
@@ -215,11 +260,11 @@ describe("调用", () => {
   it("路径参数编码；`.` / `..` 拒绝", async () => {
     const api = await server();
     await withSession({ specUrl: api.specUrl }, async (s) => {
-      await s.callTool("getPet", { path: { petId: "a/b?c" } }, signal());
+      await call(s, "getPet", { path: { petId: "a/b?c" } });
       expect(api.requests.at(-1)?.path).toBe("/v1/pets/a%2Fb%3Fc");
-      const e = await failure(s.callTool("getPet", { path: { petId: ".." } }, signal()));
+      const e = await failure(call(s, "getPet", { path: { petId: ".." } }));
       expect(e.message).toContain("petId");
-      const missing = await failure(s.callTool("getPet", {}, signal()));
+      const missing = await failure(call(s, "getPet", {}));
       expect(missing.message).toContain("path.petId");
     });
   });
@@ -228,7 +273,7 @@ describe("调用", () => {
     const api = await server();
     await withSession({ specUrl: api.specUrl }, async (s) => {
       for (const h of ["Authorization", "cookie", "X-Other"]) {
-        const e = await failure(s.callTool("echo", { headers: { [h]: "x" } }, signal()));
+        const e = await failure(call(s, "echo", { headers: { [h]: "x" } }));
         expect(e.message).toContain(h);
       }
     });
@@ -239,7 +284,7 @@ describe("调用", () => {
     const api = await server();
     await withSession({ specUrl: api.specUrl }, async (s) => {
       for (const v of ["a\r\nX-Injected: 1", "中文"]) {
-        const e = await failure(s.callTool("echo", { headers: { "X-Trace-Id": v } }, signal()));
+        const e = await failure(call(s, "echo", { headers: { "X-Trace-Id": v } }));
         expect(e.message).toContain("X-Trace-Id");
       }
     });
@@ -249,11 +294,11 @@ describe("调用", () => {
   it("文本请求体与二进制响应", async () => {
     const api = await server();
     await withSession({ specUrl: api.specUrl }, async (s) => {
-      const note = await s.callTool("createNote", { body: "hello" }, signal());
+      const note = await call(s, "createNote", { body: "hello" });
       expect(api.requests.at(-1)?.headers["content-type"]).toBe("text/plain");
       expect(text(note)).toContain("stored: hello");
-      await s.callTool("createPet", { body: { name: "Rex" } }, signal());
-      const photo = await s.callTool("getPetPhoto", { path: { petId: 1 } }, signal());
+      await call(s, "createPet", { body: { name: "Rex" } });
+      const photo = await call(s, "getPetPhoto", { path: { petId: 1 } });
       expect(text(photo)).toMatch(/Binary response body \(image\/png, \d+ bytes\) omitted/);
     });
   });
@@ -269,18 +314,14 @@ describe("调用", () => {
         key = KEY;
       },
     };
-    const r = await withSession(
-      { specUrl: api.specUrl },
-      (s) => s.callTool("listPets", {}, signal()),
-      opts,
-    );
+    const r = await withSession({ specUrl: api.specUrl }, (s) => call(s, "listPets", {}), opts);
     expect(r.isError).toBeUndefined();
     expect(refreshed).toBe(1);
 
     key = "stale-key-000000";
     const never: OpenOpts = { ...opts, onUnauthorized: async () => void refreshed++ };
     const e = await failure(
-      withSession({ specUrl: api.specUrl }, (s) => s.callTool("listPets", {}, signal()), never),
+      withSession({ specUrl: api.specUrl }, (s) => call(s, "listPets", {}), never),
     );
     expect(e.message).toContain("Authentication failed");
     expect(e.kind).toBe("error");
@@ -290,11 +331,11 @@ describe("调用", () => {
   it("5xx → ToolError unavailable（带状态与截断的正文）；3xx 不跟随", async () => {
     const api = await server();
     await withSession({ specUrl: api.specUrl }, async (s) => {
-      const e = await failure(s.callTool("boom", {}, signal()));
+      const e = await failure(call(s, "boom", {}));
       expect(e.kind).toBe("unavailable");
       expect(e.message).toContain("HTTP 500");
       expect(e.message).toContain("boom");
-      const r = await failure(s.callTool("moved", {}, signal()));
+      const r = await failure(call(s, "moved", {}));
       expect(r.message).toMatch(/redirect/i);
       expect(r.kind).toBe("error");
     });
@@ -308,18 +349,14 @@ describe("调用", () => {
     await dead.stop();
     servers.splice(servers.indexOf(dead), 1);
     const e = await failure(
-      withSession({ specUrl: api.specUrl, baseUrl: `${url}/v1` }, (s) =>
-        s.callTool("listPets", {}, signal()),
-      ),
+      withSession({ specUrl: api.specUrl, baseUrl: `${url}/v1` }, (s) => call(s, "listPets", {})),
     );
     expect(e.kind).toBe("unavailable");
   });
 
   it("未知工具 → 明确错误", async () => {
     const api = await server();
-    const e = await failure(
-      withSession({ specUrl: api.specUrl }, (s) => s.callTool("nope", {}, signal())),
-    );
+    const e = await failure(withSession({ specUrl: api.specUrl }, (s) => call(s, "nope", {})));
     expect(e.message).toContain("nope");
   });
 
@@ -337,7 +374,7 @@ describe("调用", () => {
     });
     await withSession({ specUrl: api.specUrl }, async (s) => {
       expect((await s.listTools()).map((t) => t.name)).toEqual(["pets_list", "pets_list"]);
-      await s.callTool("pets_list", {}, signal());
+      await call(s, "pets_list", {});
     });
     expect(api.requests.at(-1)?.path).toBe("/v1/pets");
   });
@@ -346,7 +383,7 @@ describe("调用", () => {
     const api = await server();
     const e = await failure(
       withSession({ specUrl: api.specUrl, operations: ["listPets"] }, (s) =>
-        s.callTool("deletePet", { path: { petId: 1 } }, signal()),
+        call(s, "deletePet", { path: { petId: 1 } }),
       ),
     );
     expect(e.message).toContain("deletePet");
@@ -359,9 +396,7 @@ describe("调用", () => {
         servers: [{ url: "http://api.example.com/v1" }],
       }),
     });
-    const e = await failure(
-      withSession({ specUrl: api.specUrl }, (s) => s.callTool("listPets", {}, signal())),
-    );
+    const e = await failure(withSession({ specUrl: api.specUrl }, (s) => call(s, "listPets", {})));
     expect(e.message).toMatch(/https/);
   });
 
@@ -369,13 +404,13 @@ describe("调用", () => {
     const api = await server({
       spec: (base) => ({ ...defaultFakeOpenApiSpec(base), servers: [{ url: "/v1" }] }),
     });
-    await withSession({ specUrl: api.specUrl }, (s) => s.callTool("listPets", {}, signal()));
+    await withSession({ specUrl: api.specUrl }, (s) => call(s, "listPets", {}));
     expect(api.requests.at(-1)?.path).toBe("/v1/pets");
 
     const spec = { ...defaultFakeOpenApiSpec(api.url) } as Record<string, unknown>;
     delete spec.servers;
     const e = await failure(
-      withSession({ specText: JSON.stringify(spec) }, (s) => s.callTool("listPets", {}, signal())),
+      withSession({ specText: JSON.stringify(spec) }, (s) => call(s, "listPets", {})),
     );
     expect(e.message).toContain("baseUrl");
   });
@@ -399,11 +434,9 @@ describe("调用", () => {
         servers: [{ url: `http://127.0.0.1:${port}` }],
         paths: { "/big": { get: { operationId: "big" } } },
       };
-      const r = await withSession(
-        { specText: JSON.stringify(spec) },
-        (s) => s.callTool("big", {}, signal()),
-        { connector: c },
-      );
+      const r = await withSession({ specText: JSON.stringify(spec) }, (s) => call(s, "big", {}), {
+        connector: c,
+      });
       expect(text(r)).toContain("z".repeat(1000));
       expect(text(r)).not.toContain("z".repeat(1001));
       expect(text(r)).toMatch(/truncated/i);

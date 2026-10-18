@@ -1,4 +1,5 @@
 import type { ToolAnnotations, ToolSpec } from "@capybara-hq/plugin-sdk";
+import type { Route } from "./route.js";
 import type { Operation, ParamLocation } from "./spec.js";
 
 /** 描述正文（summary + description）的字符上限，超出截断并注明。 */
@@ -56,12 +57,14 @@ export function inputSchemaOf(op: Operation): Record<string, unknown> {
   };
 }
 
-export function toolSpecOf(op: Operation): ToolSpec {
+/** 工具定义；`route` 写进 connectorData（计入内核指纹，调用时交回，不发给模型）。 */
+export function toolSpecOf(op: Operation, route: Route): ToolSpec {
   const annotations = annotationsOf(op);
   return {
     name: op.toolName,
     description: descriptionOf(op),
     inputSchema: inputSchemaOf(op),
     ...(annotations && { annotations }),
+    connectorData: route,
   };
 }

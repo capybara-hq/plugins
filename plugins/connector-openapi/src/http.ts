@@ -5,7 +5,8 @@ import {
   type ToolResult,
 } from "@capybara-hq/plugin-sdk";
 import { serverUrlText, urlAllowed } from "./endpoint.js";
-import { CREDENTIAL_HEADER, type Operation, type Param, RESERVED_HEADERS } from "./spec.js";
+import type { Route, RouteParam } from "./route.js";
+import { CREDENTIAL_HEADER, RESERVED_HEADERS } from "./spec.js";
 
 /** 401 刷新重试后仍失败（模型可见，英文）。 */
 export const AUTH_FAILED_TEXT = "Authentication failed for this app; ask the user to reconnect it.";
@@ -130,41 +131,30 @@ export async function fetchSpec(url: string, signal: AbortSignal, limits: Limits
   return new TextDecoder().decode(body.bytes);
 }
 
-/** 服务器地址：baseUrl 覆盖 → 操作的 servers[0]（变量取默认值）→ 文档地址的根；相对地址按文档地址解析。 */
+/**
+ * 调用的服务器地址：端点的 baseUrl 覆盖，否则用路由里（listTools 时解析好的）服务器地址；
+ * 每次调用都按 https / 本机规则校验（文档里的 server 不受信任）。
+ */
 export function resolveBaseUrl(
-  op: Operation,
+  server: string | null,
   baseUrl: string | undefined,
-  specUrl: string | undefined,
   allowInsecureLoopback: boolean,
 ): URL {
-  const provide = (why: string) =>
-    new ToolError(`${why}; ask an administrator to set the app's baseUrl.`);
-  let raw = baseUrl;
-  if (raw === undefined) {
-    const server = op.servers[0];
-    if (isObj(server) && typeof server.url === "string") {
-      const vars = isObj(server.variables) ? server.variables : {};
-      raw = server.url.replace(/\{([^}]+)\}/g, (m, name: string) => {
-        const v = vars[name];
-        return isObj(v) && typeof v.default === "string" ? v.default : m;
-      });
-      if (/\{[^}]*\}/.test(raw)) throw provide("The API server URL has variables without defaults");
-    } else {
-      raw = "/";
-    }
-  }
-  let u: URL;
+  const raw = baseUrl ?? server;
+  let u: URL | undefined;
   try {
-    u = specUrl === undefined ? new URL(raw) : new URL(raw, specUrl);
+    u = raw === null ? undefined : new URL(raw);
   } catch {
-    throw provide(
-      specUrl === undefined
-        ? "The OpenAPI document declares no absolute server URL"
-        : "The API server URL is invalid",
+    u = undefined;
+  }
+  if (!u) {
+    throw new ToolError(
+      "The OpenAPI document declares no usable absolute server URL; ask an administrator to set the app's baseUrl.",
     );
   }
-  if (!urlAllowed(u, allowInsecureLoopback))
+  if (!urlAllowed(u, allowInsecureLoopback)) {
     throw new ToolError(serverUrlText(allowInsecureLoopback));
+  }
   return u;
 }
 
@@ -172,7 +162,7 @@ const scalar = (v: unknown): string =>
   v === null || v === undefined ? "" : typeof v === "object" ? JSON.stringify(v) : String(v);
 
 /** 路径参数（simple 风格）：数组逗号拼接，对象 `k,v,k,v`（explode 时 `k=v,k=v`）。 */
-function pathValue(p: Param, v: unknown): string {
+function pathValue(p: RouteParam, v: unknown): string {
   if (p.json) return JSON.stringify(v);
   if (Array.isArray(v)) return v.map(scalar).join(",");
   if (isObj(v)) {
@@ -184,7 +174,7 @@ function pathValue(p: Param, v: unknown): string {
 }
 
 /** query 参数：form（默认 explode）、spaceDelimited / pipeDelimited、deepObject。 */
-function appendQuery(q: URLSearchParams, p: Param, v: unknown): void {
+function appendQuery(q: URLSearchParams, p: RouteParam, v: unknown): void {
   if (p.json) {
     q.append(p.name, JSON.stringify(v));
     return;
@@ -224,13 +214,13 @@ interface BuiltRequest {
 }
 
 /** 由工具参数构造请求（不含鉴权）；参数问题 → ToolError（说明哪个参数、怎么改）。 */
-export function buildRequest(op: Operation, input: unknown, base: URL): BuiltRequest {
+export function buildRequest(op: Route, input: unknown, base: URL): BuiltRequest {
   const inp = isObj(input) ? input : {};
   const group = (k: string) => (isObj(inp[k]) ? (inp[k] as Record<string, unknown>) : {});
   const pathArgs = group("path");
   const queryArgs = group("query");
   const headerArgs = group("headers");
-  const byLoc = (loc: Param["in"]) => op.params.filter((p) => p.in === loc);
+  const byLoc = (loc: RouteParam["in"]) => op.params.filter((p) => p.in === loc);
 
   const path = op.path.replace(/\{([^}]+)\}/g, (_m, name: string) => {
     const p = byLoc("path").find((x) => x.name === name);

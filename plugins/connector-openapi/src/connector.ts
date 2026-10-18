@@ -1,12 +1,12 @@
-import {
-  type Connector,
-  type ConnectorOpenArgs,
-  type ConnectorSession,
-  type Logger,
-  ToolError,
+import type {
+  Connector,
+  ConnectorOpenArgs,
+  ConnectorSession,
+  Logger,
 } from "@capybara-hq/plugin-sdk";
 import { endpointSchema, MAX_SPEC_BYTES, type OpenApiEndpoint } from "./endpoint.js";
 import { buildRequest, fetchSpec, type Limits, resolveBaseUrl, send } from "./http.js";
+import { routeFromSpec, routeOf } from "./route.js";
 import {
   authHints,
   loadDocument,
@@ -40,47 +40,25 @@ function selected(doc: OpenApiDocument, endpoint: OpenApiEndpoint): Operation[] 
 }
 
 /**
- * 按工具名索引：同名（工具名规范化 / 截断后撞车）时第一个生效。listTools 照样返回全部同名工具，
- * 内核快照只保留第一个并给后面的写原因（「Duplicate tool name」），两边一致。
+ * 打开一次会话。文档只在 listTools 时读取（安装 / 刷新 / 漂移检查）；调用不读文档，只按内核交回的已复核定义
+ * （`ctx.spec.connectorData` 里的路由，见 route.ts）构造请求——远端文档的变化须先经漂移复核才生效。
+ * 不在进程内缓存任何东西。工具名撞车时 listTools 照样返回全部（内核快照只保留第一个并给后面的写原因）。
  */
-function byToolName(ops: Operation[]): Map<string, Operation> {
-  const out = new Map<string, Operation>();
-  for (const op of ops) if (!out.has(op.toolName)) out.set(op.toolName, op);
-  return out;
-}
-
-const unknownTool = (name: string) =>
-  new ToolError(
-    `Tool "${name}" does not match an enabled operation in the app's OpenAPI document; ask an administrator to refresh the app.`,
-  );
-
-/**
- * 打开一次会话：取文档、整理操作清单（只在本次操作里用，不在进程内缓存——多副本下下一次调用可能在别的副本，
- * 文档也可能已更新；文档更新带来的工具变化由内核的漂移检测复核）。
- */
-async function openSession(
+function openSession(
   endpoint: OpenApiEndpoint,
   args: ConnectorOpenArgs,
   deps: Deps,
-): Promise<ConnectorSession> {
-  const doc = await loadSpec(endpoint, args.signal, deps.limits);
-  const ops = selected(doc, endpoint);
-  const index = byToolName(ops);
+): ConnectorSession {
   return {
     async listTools() {
-      return ops.map(toolSpecOf);
+      const doc = await loadSpec(endpoint, args.signal, deps.limits);
+      return selected(doc, endpoint).map((op) => toolSpecOf(op, routeOf(op, endpoint.specUrl)));
     },
-    async callTool(name, input, signal) {
-      const op = index.get(name);
-      if (!op) throw unknownTool(name);
-      const base = resolveBaseUrl(
-        op,
-        endpoint.baseUrl,
-        endpoint.specUrl,
-        deps.allowInsecureLoopback,
-      );
-      const req = buildRequest(op, input, base);
-      return send(req, op.method, args, signal, deps.limits, deps.log);
+    async callTool(name, input, signal, ctx) {
+      const route = routeFromSpec(name, ctx?.spec);
+      const base = resolveBaseUrl(route.server, endpoint.baseUrl, deps.allowInsecureLoopback);
+      const req = buildRequest(route, input, base);
+      return send(req, route.method, args, signal, deps.limits, deps.log);
     },
     async close() {},
   };
@@ -109,7 +87,7 @@ export function createOpenApiConnector(opts: {
   return {
     kind: "openapi",
     endpointSchema: schema,
-    open: (args) => openSession(schema.parse(args.endpoint), args, deps),
+    open: async (args) => openSession(schema.parse(args.endpoint), args, deps),
     async inspect({ endpoint, signal }) {
       const e = schema.parse(endpoint);
       const doc = await loadSpec(e, signal, deps.limits);
