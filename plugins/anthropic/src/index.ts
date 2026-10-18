@@ -4,9 +4,9 @@ import {
   type Logger,
   MODEL_PROVIDER_CAPABILITY,
   type ModelError,
-  type ModelInfo,
-  type ModelProvider,
-  type ModelRequest,
+  type ModelInfoV1,
+  type ModelProviderV1,
+  type ModelRequestV1,
   type ModelStreamEvent,
   secret,
 } from "@capybara-hq/plugin-sdk";
@@ -39,10 +39,10 @@ const FALLBACK_CONTEXT_WINDOW = 200_000;
 const FALLBACK_MAX_OUTPUT = 32_000;
 
 /**
- * Models API → ModelInfo。reasoning 取「支持 adaptive 思考」（插件只发 adaptive），effort 取 `effort.supported`；
+ * Models API → ModelInfoV1。reasoning 取「支持 adaptive 思考」（插件只发 adaptive），effort 取 `effort.supported`；
  * 没有 capabilities 时两者都按不支持处理（请求里不发 thinking、内核不传 effort）。
  */
-function mapModelInfo(m: Anthropic.ModelInfo): ModelInfo {
+function mapModelInfo(m: Anthropic.ModelInfo): ModelInfoV1 {
   const caps = m.capabilities;
   return {
     id: m.id,
@@ -64,7 +64,7 @@ function mapModelInfo(m: Anthropic.ModelInfo): ModelInfo {
 }
 
 /** 基于官方 SDK 与原生 Messages API 的 model-provider@1 实现。无进程内状态：模型信息缓存在 kv。 */
-export function createAnthropicProvider(opts: AnthropicProviderOptions): ModelProvider {
+export function createAnthropicProvider(opts: AnthropicProviderOptions): ModelProviderV1 {
   const client = new Anthropic({
     apiKey: opts.apiKey,
     ...(opts.baseUrl !== undefined ? { baseURL: opts.baseUrl } : {}),
@@ -72,11 +72,11 @@ export function createAnthropicProvider(opts: AnthropicProviderOptions): ModelPr
     maxRetries: 0,
   });
 
-  async function getModel(id: string): Promise<ModelInfo> {
+  async function getModel(id: string): Promise<ModelInfoV1> {
     const key = `models:${id}`;
     const cached = await opts.kv.get(key);
-    if (cached !== null) return JSON.parse(cached) as ModelInfo;
-    let info: ModelInfo;
+    if (cached !== null) return JSON.parse(cached) as ModelInfoV1;
+    let info: ModelInfoV1;
     try {
       info = mapModelInfo(await client.models.retrieve(id));
     } catch (e) {
@@ -90,9 +90,9 @@ export function createAnthropicProvider(opts: AnthropicProviderOptions): ModelPr
    * 部署配置里的模型逐个取。仅跳过「不可重试」的模型错误（例如 id 写错、账号无权访问）并记 warn；
    * 只要有可重试的失败（网络、5xx、429、过载），或一个 id 都没取到，就抛出，避免内核把残缺结果缓存下来。
    */
-  async function listModels(): Promise<ModelInfo[]> {
+  async function listModels(): Promise<ModelInfoV1[]> {
     const settled = await Promise.allSettled(opts.models.map(getModel));
-    const out: ModelInfo[] = [];
+    const out: ModelInfoV1[] = [];
     let retryable: ModelError | undefined;
     let firstError: ModelError | undefined;
     settled.forEach((r, i) => {
@@ -114,7 +114,10 @@ export function createAnthropicProvider(opts: AnthropicProviderOptions): ModelPr
   }
 
   /** 先取模型能力（kv 缓存），只对支持 adaptive 思考的模型发 thinking；不支持 effort 的模型丢弃 effort。 */
-  async function* stream(req: ModelRequest, signal: AbortSignal): AsyncGenerator<ModelStreamEvent> {
+  async function* stream(
+    req: ModelRequestV1,
+    signal: AbortSignal,
+  ): AsyncGenerator<ModelStreamEvent> {
     const caps = (await getModel(req.model)).capabilities;
     const { effort: _effort, ...rest } = req;
     yield* streamMessages(client, caps.effort ? req : rest, {

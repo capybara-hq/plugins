@@ -2,8 +2,8 @@ import {
   definePlugin,
   MODEL_PROVIDER_CAPABILITY,
   ModelError,
-  type ModelInfo,
-  type ModelProvider,
+  type ModelInfoV1,
+  type ModelProviderV1,
   type ModelStreamEvent,
   secret,
 } from "@capybara-hq/plugin-sdk";
@@ -32,7 +32,7 @@ export interface OpenAIProviderOptions {
   reasoningSummary?: "auto" | "off" | undefined;
 }
 
-function modelInfo(m: ModelConfig): ModelInfo {
+function modelInfo(m: ModelConfig): ModelInfoV1 {
   return {
     id: m.id,
     displayName: m.id,
@@ -53,7 +53,7 @@ function modelInfo(m: ModelConfig): ModelInfo {
 }
 
 /** 基于官方 SDK 与原生 Responses API 的 model-provider@1 实现。无进程内可变状态。 */
-export function createOpenAIProvider(opts: OpenAIProviderOptions): ModelProvider {
+export function createOpenAIProvider(opts: OpenAIProviderOptions): ModelProviderV1 {
   const client = new OpenAI({
     apiKey: opts.apiKey,
     ...(opts.baseUrl !== undefined ? { baseURL: opts.baseUrl } : {}),

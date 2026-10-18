@@ -1,7 +1,7 @@
 import {
   isModelError,
-  type ModelProvider,
-  type ModelRequest,
+  type ModelProviderV1,
+  type ModelRequestV1,
   type ModelStreamEvent,
 } from "@capybara-hq/plugin-sdk";
 import {
@@ -69,7 +69,7 @@ describe.skipIf(!LIVE_KEY)("live", () => {
 });
 
 // ---- 错误映射与边界 ----
-const req = (over: Partial<ModelRequest> = {}): ModelRequest => ({
+const req = (over: Partial<ModelRequestV1> = {}): ModelRequestV1 => ({
   model: "claude-haiku-5-5",
   system: [{ text: "Be brief.", cache: false }],
   messages: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
@@ -78,13 +78,13 @@ const req = (over: Partial<ModelRequest> = {}): ModelRequest => ({
   ...over,
 });
 
-async function drain(p: ModelProvider, r: ModelRequest): Promise<ModelStreamEvent[]> {
+async function drain(p: ModelProviderV1, r: ModelRequestV1): Promise<ModelStreamEvent[]> {
   const out: ModelStreamEvent[] = [];
   for await (const e of p.stream(r, { signal: new AbortController().signal })) out.push(e);
   return out;
 }
 
-async function streamError(p: ModelProvider, r: ModelRequest = req()): Promise<unknown> {
+async function streamError(p: ModelProviderV1, r: ModelRequestV1 = req()): Promise<unknown> {
   try {
     await drain(p, r);
   } catch (e) {

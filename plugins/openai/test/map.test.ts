@@ -1,10 +1,10 @@
-import type { ModelMessage, ModelRequest } from "@capybara-hq/plugin-sdk";
+import type { ModelMessage, ModelRequestV1 } from "@capybara-hq/plugin-sdk";
 import { isModelError } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { buildRequest, type ModelTraits } from "../src/map-request.js";
 import { toComplete } from "../src/map-stream.js";
 
-const base = (over: Partial<ModelRequest> = {}): ModelRequest => ({
+const base = (over: Partial<ModelRequestV1> = {}): ModelRequestV1 => ({
   model: "gpt-5.5",
   system: [{ text: "You are a concise assistant.", cache: true }],
   messages: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
@@ -15,7 +15,7 @@ const base = (over: Partial<ModelRequest> = {}): ModelRequest => ({
 
 const REASONING: ModelTraits = { reasoning: true, reasoningSummary: "auto" };
 const PLAIN: ModelTraits = { reasoning: false, reasoningSummary: "auto" };
-const build = (req: ModelRequest, model: ModelTraits = REASONING) => buildRequest(req, model);
+const build = (req: ModelRequestV1, model: ModelTraits = REASONING) => buildRequest(req, model);
 
 describe("buildRequest: fixed parameters", () => {
   it("store: false, include encrypted reasoning, max_output_tokens, system blocks -> instructions", () => {
@@ -76,7 +76,7 @@ describe("buildRequest: reasoning replay", () => {
     summary: [{ type: "summary_text", text: "17*23=391" }],
     encrypted_content: "enc-abc",
   };
-  const history = (provider: string, model: string, data: unknown = raw): ModelRequest =>
+  const history = (provider: string, model: string, data: unknown = raw): ModelRequestV1 =>
     base({
       messages: [
         { role: "user", content: [{ type: "text", text: "What is 17 * 23?" }] },
@@ -136,7 +136,7 @@ describe("assistant message item ids (replayed after their reasoning item)", () 
     model,
     data,
   });
-  const turn = (content: ModelMessage["content"]): ModelRequest =>
+  const turn = (content: ModelMessage["content"]): ModelRequestV1 =>
     base({
       messages: [
         { role: "user", content: [{ type: "text", text: "q" }] },
@@ -262,7 +262,7 @@ describe("buildRequest: tool calls and results", () => {
   });
 
   it("function_call replays its item id only for the same provider and model", () => {
-    const msg = (model: string): ModelRequest =>
+    const msg = (model: string): ModelRequestV1 =>
       base({
         messages: [
           { role: "user", content: [{ type: "text", text: "q" }] },

@@ -1,7 +1,7 @@
 import {
   type ContentBlock,
   ModelError,
-  type ModelRequest,
+  type ModelRequestV1,
   type ModelStreamEvent,
   type StopReason,
 } from "@capybara-hq/plugin-sdk";
@@ -159,7 +159,7 @@ const aborted = () => new ModelError("aborted", "Request aborted");
  */
 export async function* streamResponses(
   client: OpenAI,
-  req: ModelRequest,
+  req: ModelRequestV1,
   opts: { signal: AbortSignal; traits: ModelTraits },
 ): AsyncGenerator<ModelStreamEvent> {
   const { signal } = opts;

@@ -1,5 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import type { ContentBlock, ModelMessage, ModelRequest } from "@capybara-hq/plugin-sdk";
+import type { ContentBlock, ModelMessage, ModelRequestV1 } from "@capybara-hq/plugin-sdk";
 
 export const PROVIDER = "anthropic";
 export const SERVER_FALLBACK_BETA = "server-side-fallback-2026-07-01";
@@ -101,7 +101,7 @@ const MAX_CACHE_BREAKPOINTS = 4;
  * `thinking`：模型支持 adaptive 思考时为 true（默认）；false 时不发 thinking 参数（不发 disabled）。
  */
 export function buildRequest(
-  req: ModelRequest,
+  req: ModelRequestV1,
   opts: { serverFallbacks: ServerFallbacks; thinking?: boolean },
 ): BuiltRequest {
   const params: AnthropicParams = {

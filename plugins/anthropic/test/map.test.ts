@@ -1,8 +1,8 @@
-import type { ModelMessage, ModelRequest } from "@capybara-hq/plugin-sdk";
+import type { ModelMessage, ModelRequestV1 } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { buildRequest } from "../src/map-request.js";
 
-const base = (over: Partial<ModelRequest> = {}): ModelRequest => ({
+const base = (over: Partial<ModelRequestV1> = {}): ModelRequestV1 => ({
   model: "claude-opus-5-5",
   system: [{ text: "You are a concise assistant.", cache: false }],
   messages: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
@@ -11,7 +11,7 @@ const base = (over: Partial<ModelRequest> = {}): ModelRequest => ({
   ...over,
 });
 
-const build = (req: ModelRequest, serverFallbacks: "default" | "off" = "default") =>
+const build = (req: ModelRequestV1, serverFallbacks: "default" | "off" = "default") =>
   buildRequest(req, { serverFallbacks });
 
 describe("buildRequest: system", () => {
@@ -73,7 +73,7 @@ describe("buildRequest: thinking only when the model supports it", () => {
 
 describe("buildRequest: thinking replay", () => {
   const raw = { type: "thinking", thinking: "17*23=391", signature: "sig-abc" };
-  const history = (provider: string, model: string): ModelRequest =>
+  const history = (provider: string, model: string): ModelRequestV1 =>
     base({
       messages: [
         { role: "user", content: [{ type: "text", text: "What is 17 * 23?" }] },

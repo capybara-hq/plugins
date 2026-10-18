@@ -3,7 +3,7 @@ import {
   type Effort,
   ModelError,
   type ModelMessage,
-  type ModelRequest,
+  type ModelRequestV1,
   type ProviderOpaque,
 } from "@capybara-hq/plugin-sdk";
 import type OpenAI from "openai";
@@ -148,7 +148,7 @@ function mapMessages(messages: ModelMessage[], model: string): InputItem[] {
 }
 
 /** model-provider@1 请求 → OpenAI Responses API 请求。纯函数。 */
-export function buildRequest(req: ModelRequest, traits: ModelTraits): OpenAIParams {
+export function buildRequest(req: ModelRequestV1, traits: ModelTraits): OpenAIParams {
   const params: OpenAIParams = {
     model: req.model,
     input: mapMessages(req.messages, req.model),

@@ -2,7 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import {
   type ContentBlock,
   ModelError,
-  type ModelRequest,
+  type ModelRequestV1,
   type ModelStreamEvent,
   type StopReason,
 } from "@capybara-hq/plugin-sdk";
@@ -217,7 +217,7 @@ const aborted = () => new ModelError("aborted", "Request aborted");
 /** 发起一次流式调用并映射为 model-provider@1 事件；以且仅以一个 message_complete 结束，出错抛 ModelError。 */
 export async function* streamMessages(
   client: Anthropic,
-  req: ModelRequest,
+  req: ModelRequestV1,
   opts: { signal: AbortSignal; serverFallbacks: ServerFallbacks; thinking?: boolean },
 ): AsyncGenerator<ModelStreamEvent> {
   const { signal } = opts;
