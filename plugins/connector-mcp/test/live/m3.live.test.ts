@@ -21,13 +21,15 @@ import {
 } from "../helpers/runs.js";
 
 /**
- * M3 真实服务验收（`pnpm vitest run packages/kernel/test/tools/m3-live.test.ts -t live`）。单副本内核加载
- * model-fake（`tool:` 指令脚本化工具调用）、connector-mcp 与 connector-openapi，全部经 HTTP 安装应用、跑会话。
+ * M3 真实服务验收（`CAPYBARA_TEST_LIVE_TOOLS=1 pnpm vitest run packages/kernel/test/tools/m3-live.test.ts -t live`）。
+ * 单副本内核加载 model-fake（`tool:` 指令脚本化工具调用）、connector-mcp 与 connector-openapi，全部经 HTTP
+ * 安装应用、跑会话。
  *
- * - 开关：加载了测试凭据文件（环境里有任一 `CAPYBARA_TEST_*` 变量）或 `CAPYBARA_TEST_LIVE_TOOLS=1` 时运行
- *   DeepWiki 与 Petstore（公开服务，无需密钥）；普通 `pnpm test` 不访问外网。
+ * - 开关：只在显式设置 `CAPYBARA_TEST_LIVE_TOOLS=1` 时运行 DeepWiki 与 Petstore（公开服务，无需密钥）；
+ *   普通 `pnpm test` 不访问外网。
  * - GitHub：另需 `CAPYBARA_TEST_GITHUB_MCP_TOKEN`（PAT）与 `CAPYBARA_TEST_GITHUB_REPO`（owner/name），值以
- *   「替换为」开头视为未填。会在该仓库开一个 issue 并在结束时关闭。令牌不打印。
+ *   「替换为」开头视为未填。会在该仓库开一个 issue，用例结束时（无论成败）在 finally 里经 GitHub REST 关闭。
+ *   令牌不打印。
  * - Petstore 是公共演示服务，偶有 5xx：每次调用遇 5xx 重试一次。
  */
 
@@ -40,17 +42,13 @@ const CONNECTOR_OPENAPI = fileURLToPath(
 
 const filled = (v: string | undefined): v is string =>
   v !== undefined && v.trim() !== "" && !v.startsWith("替换为");
-const LIVE =
-  process.env.CAPYBARA_TEST_LIVE_TOOLS === "1" ||
-  Object.keys(process.env).some((k) => k.startsWith("CAPYBARA_TEST_"));
+const LIVE = process.env.CAPYBARA_TEST_LIVE_TOOLS === "1";
 const GH_TOKEN = process.env.CAPYBARA_TEST_GITHUB_MCP_TOKEN;
 const GH_REPO = process.env.CAPYBARA_TEST_GITHUB_REPO;
 const GITHUB = LIVE && filled(GH_TOKEN) && filled(GH_REPO) && /^[^/\s]+\/[^/\s]+$/.test(GH_REPO);
 
 if (!LIVE) {
-  console.info(
-    "[m3-live] live tool services skipped (load ~/.capybara-test.env or set CAPYBARA_TEST_LIVE_TOOLS=1)",
-  );
+  console.info("[m3-live] live tool services skipped (set CAPYBARA_TEST_LIVE_TOOLS=1 to run)");
 } else if (!GITHUB) {
   console.info(
     "[m3-live] GitHub MCP skipped: CAPYBARA_TEST_GITHUB_MCP_TOKEN / CAPYBARA_TEST_GITHUB_REPO not filled",
@@ -196,6 +194,73 @@ async function runToolRetry5xx(
   return runTool(convId, key, input, opts);
 }
 
+/**
+ * 从创建 issue 的工具结果里取 issue 号：先按 JSON 解析（`number`，或 `html_url` / `url` 里的 `/issues/<n>`），
+ * 否则在文本里找本仓库的 issue URL。取不到返回 undefined。
+ */
+function issueNumberOf(content: string, owner: string, repo: string): number | undefined {
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const urlRe = new RegExp(`/${esc(owner)}/${esc(repo)}/issues/(\\d+)(?![\\d/])`, "i");
+  const fromUrl = (s: unknown) => {
+    const m = typeof s === "string" ? urlRe.exec(s) : null;
+    return m ? Number(m[1]) : undefined;
+  };
+  try {
+    const j = JSON.parse(content) as Record<string, unknown>;
+    if (typeof j.number === "number" && Number.isInteger(j.number)) return j.number;
+    const n = fromUrl(j.html_url) ?? fromUrl(j.url);
+    if (n !== undefined) return n;
+  } catch {
+    // 不是 JSON：按文本找
+  }
+  return fromUrl(content);
+}
+
+/**
+ * 清理：经 GitHub REST 关闭测试 issue（幂等）。知道 issue 号就直接关；否则按唯一标题在最近的 open issue 里找。
+ * 只打印状态码，不打印令牌；清理失败只告警，不掩盖用例本身的失败。
+ */
+async function closeIssuesViaRest(
+  token: string,
+  owner: string,
+  repo: string,
+  issueNumber: number | undefined,
+  title: string,
+): Promise<void> {
+  const api = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  const headers = {
+    authorization: `Bearer ${token}`,
+    accept: "application/vnd.github+json",
+    "user-agent": "capybara-live-test",
+    "x-github-api-version": "2022-11-28",
+  };
+  try {
+    let numbers: number[] = issueNumber === undefined ? [] : [issueNumber];
+    if (numbers.length === 0) {
+      const res = await fetch(`${api}/issues?state=open&sort=created&direction=desc&per_page=50`, {
+        headers,
+      });
+      if (!res.ok) {
+        console.warn(`[m3-live] cleanup: listing issues failed (HTTP ${res.status})`);
+        return;
+      }
+      const list = (await res.json()) as { number: number; title: string }[];
+      numbers = list.filter((i) => i.title === title).map((i) => i.number);
+    }
+    for (const n of numbers) {
+      const res = await fetch(`${api}/issues/${n}`, {
+        method: "PATCH",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ state: "closed" }),
+      });
+      console.info(`[m3-live] cleanup: closed issue #${n} via REST (HTTP ${res.status})`);
+    }
+    if (numbers.length === 0) console.info("[m3-live] cleanup: no test issue to close");
+  } catch (e) {
+    console.warn(`[m3-live] cleanup failed: ${e instanceof Error ? e.name : "error"}`);
+  }
+}
+
 describe.skipIf(!LIVE)("live", { timeout: 300_000 }, () => {
   it("live DeepWiki MCP（无认证）：安装列出 wiki 工具；read_wiki_structure（未标注 → 审批）返回非错误结果", async () => {
     const app = await install({
@@ -320,41 +385,44 @@ describe.skipIf(!LIVE)("live", { timeout: 300_000 }, () => {
       expect(read.approved).toBe(false);
       expect(read.result.isError, read.result.content.slice(0, 500)).toBe(false);
 
-      // 创建 issue：审批 → 批准 → 创建
-      const title = `capybara live test ${new Date().toISOString()}`;
-      const createArgs =
-        createTool === "issue_write"
-          ? { method: "create", owner, repo, title, body: "Automated test; closed right away." }
-          : { owner, repo, title, body: "Automated test; closed right away." };
-      const created = await runTool(convId, `github__${createTool}`, createArgs, {
-        approve: true,
-      });
-      console.info(
-        `[m3-live] github ${createTool} isError=${created.result.isError} approval=${created.approved}`,
-      );
-      expect(created.approved).toBe(true);
-      expect(created.result.isError, created.result.content.slice(0, 500)).toBe(false);
-      const num = /"number"\s*:\s*(\d+)/.exec(created.result.content)?.[1];
-      const url = /https:\/\/github\.com\/[^\s"]+\/issues\/(\d+)/.exec(created.result.content);
-      const issueNumber = Number(num ?? url?.[1]);
-      expect(Number.isInteger(issueNumber) && issueNumber > 0).toBe(true);
-
-      // 清理：关闭刚建的 issue
-      if (closeTool !== undefined) {
-        const tool = byName.get(closeTool) as ToolView;
-        const stateEnum = tool.inputSchema.properties?.state?.enum ?? [];
-        const closed = (stateEnum.find((s) => /closed/i.test(String(s))) as string) ?? "closed";
-        const closeArgs =
-          closeTool === "issue_write"
-            ? { method: "update", owner, repo, issue_number: issueNumber, state: closed }
-            : { owner, repo, issue_number: issueNumber, state: closed };
-        const close = await runTool(convId, `github__${closeTool}`, closeArgs, { approve: true });
+      // 创建 issue：审批 → 批准 → 创建。无论之后哪一步失败，finally 都经 GitHub REST 关闭它（不依赖 MCP 工具名）
+      const title = `capybara live test ${new Date().toISOString()} ${Math.random().toString(36).slice(2, 8)}`;
+      let issueNumber: number | undefined;
+      try {
+        const createArgs =
+          createTool === "issue_write"
+            ? { method: "create", owner, repo, title, body: "Automated test; closed right away." }
+            : { owner, repo, title, body: "Automated test; closed right away." };
+        const created = await runTool(convId, `github__${createTool}`, createArgs, {
+          approve: true,
+        });
+        issueNumber = issueNumberOf(created.result.content, owner, repo);
         console.info(
-          `[m3-live] github close #${issueNumber} isError=${close.result.isError} approval=${close.approved}`,
+          `[m3-live] github ${createTool} isError=${created.result.isError} approval=${created.approved} issue=#${issueNumber}`,
         );
-        expect(close.result.isError, close.result.content.slice(0, 500)).toBe(false);
-      } else {
-        console.warn(`[m3-live] no close tool: close issue #${issueNumber} by hand`);
+        expect(created.approved).toBe(true);
+        expect(created.result.isError, created.result.content.slice(0, 500)).toBe(false);
+        expect(issueNumber, created.result.content.slice(0, 500)).toBeDefined();
+
+        // 经 MCP 关闭（同样走审批）；REST 关闭在 finally 里兜底
+        if (closeTool !== undefined) {
+          const tool = byName.get(closeTool) as ToolView;
+          const stateEnum = tool.inputSchema.properties?.state?.enum ?? [];
+          const closed = (stateEnum.find((s) => /closed/i.test(String(s))) as string) ?? "closed";
+          const closeArgs =
+            closeTool === "issue_write"
+              ? { method: "update", owner, repo, issue_number: issueNumber, state: closed }
+              : { owner, repo, issue_number: issueNumber, state: closed };
+          const close = await runTool(convId, `github__${closeTool}`, closeArgs, {
+            approve: true,
+          });
+          console.info(
+            `[m3-live] github close #${issueNumber} isError=${close.result.isError} approval=${close.approved}`,
+          );
+          expect(close.result.isError, close.result.content.slice(0, 500)).toBe(false);
+        }
+      } finally {
+        await closeIssuesViaRest(token, owner, repo, issueNumber, title);
       }
 
       // 令牌不出现在事件与日志里
