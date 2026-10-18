@@ -682,6 +682,28 @@ describe("elicitation", () => {
     expect(srv.calls).toHaveLength(1);
   });
 
+  it("-32042 时 onElicit 拒绝（内核为问用户而中止）→ 调用立即以该错误结束，不重试", async () => {
+    const srv = await fake({
+      tools: [
+        {
+          name: "pay",
+          description: "Pays",
+          handler: () => {
+            throw new FakeMcpRpcError(-32042, "Authorization required", {
+              elicitations: [BANK_ELICITATION],
+            });
+          },
+        },
+      ],
+    });
+    const suspended = new Error("suspended");
+    const s = await open(srv, { onElicit: () => Promise.reject(suspended) });
+    const t0 = Date.now();
+    await expect(s.callTool("pay", {}, new AbortController().signal)).rejects.toBe(suspended);
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    expect(srv.calls).toHaveLength(1);
+  });
+
   it("-32042 而没有 onElicit → ToolError 带上需要用户打开的地址", async () => {
     const srv = await fake({
       tools: [
