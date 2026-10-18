@@ -2,7 +2,10 @@ import {
   type Connector,
   type ConnectorOpenArgs,
   type ConnectorSession,
+  type ElicitationRequest,
+  type ElicitationResponse,
   type Logger,
+  type PromptInfo,
   type ToolAnnotations,
   type ToolContent,
   ToolError,
@@ -15,6 +18,8 @@ import {
   StreamableHTTPError,
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
+  ElicitRequestSchema,
+  ElicitRequestURLParamsSchema,
   ErrorCode,
   McpError,
   ToolListChangedNotificationSchema,
@@ -185,6 +190,35 @@ function mapCallResult(r: Record<string, unknown>): ToolResult {
   return { content, ...(r.isError === true && { isError: true }) };
 }
 
+/** 服务要求用户先在浏览器里完成某步（`-32042`），但内核没有提供 onElicit（模型可见，英文）。 */
+export const urlRequiredText = (steps: { message: string; url: string }[]) =>
+  `The app requires the user to complete a step in their browser before this call: ${steps
+    .map((s) => `${s.message} (${s.url})`)
+    .join("; ")}. Ask the user to open the link and complete it, then retry the call.`;
+
+/** 用户没有完成服务要求的浏览器步骤（模型可见，英文）。 */
+export const urlNotCompletedText = (message: string) =>
+  `The user did not complete the step the app required (${message}). Ask the user whether to try again, or try another approach.`;
+
+/** `-32042`（URL elicitation required）错误里的 elicitation；不是该错误或数据畸形 → undefined。 */
+function urlElicitations(e: unknown): Extract<ElicitationRequest, { mode: "url" }>[] | undefined {
+  if (!(e instanceof McpError) || e.code !== ErrorCode.UrlElicitationRequired) return undefined;
+  const raw = (e.data as { elicitations?: unknown } | undefined)?.elicitations;
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const out: Extract<ElicitationRequest, { mode: "url" }>[] = [];
+  for (const r of raw) {
+    const p = ElicitRequestURLParamsSchema.safeParse(r);
+    if (!p.success) return undefined;
+    out.push({
+      mode: "url",
+      message: p.data.message,
+      url: p.data.url,
+      elicitationId: p.data.elicitationId,
+    });
+  }
+  return out;
+}
+
 /** 连不上服务（模型可见，英文）。 */
 export const UNREACHABLE_TEXT =
   "Could not reach the app's server. Retry later, or ask an administrator to check the app.";
@@ -288,8 +322,29 @@ async function openSession(
   const transport = new StreamableHTTPClientTransport(new URL(endpoint.url), {
     fetch: authedFetch(endpoint, args, log),
   });
-  const client = new Client(CLIENT_INFO, { capabilities: {} });
+  // 内核提供 onElicit 才声明 elicitation 能力（表单与 URL 两种模式）；否则服务不会发起
+  const onElicit = args.onElicit;
+  const client = new Client(CLIENT_INFO, {
+    capabilities: onElicit ? { elicitation: { form: {}, url: {} } } : {},
+  });
   client.onerror = () => {};
+  if (onElicit) {
+    client.setRequestHandler(ElicitRequestSchema, async (req) => {
+      const p = req.params;
+      const request: ElicitationRequest =
+        p.mode === "url"
+          ? { mode: "url", message: p.message, url: p.url, elicitationId: p.elicitationId }
+          : {
+              mode: "form",
+              message: p.message,
+              requestedSchema: p.requestedSchema as Record<string, unknown>,
+            };
+      const r: ElicitationResponse = await onElicit(request);
+      return r.action === "accept"
+        ? { action: "accept", ...(r.content !== undefined && { content: r.content }) }
+        : { action: r.action };
+    });
+  }
   // 服务在本次会话里报告工具清单变了：告诉内核（安排漂移检查）；回调出错只记日志，不影响本次调用
   const onToolsChanged = args.onToolsChanged;
   if (onToolsChanged) {
@@ -326,12 +381,27 @@ async function openSession(
       }),
     callTool: (name, input, signal) =>
       guarded(async () => {
-        const r = await client.callTool(
-          { name, arguments: isObj(input) ? input : {} },
-          undefined,
-          opts(AbortSignal.any([signal, args.signal])),
-        );
-        return mapCallResult(r as Record<string, unknown>);
+        const call = async () =>
+          mapCallResult(
+            (await client.callTool(
+              { name, arguments: isObj(input) ? input : {} },
+              undefined,
+              opts(AbortSignal.any([signal, args.signal])),
+            )) as Record<string, unknown>,
+          );
+        try {
+          return await call();
+        } catch (e) {
+          // URL 模式的 elicitation 也可以以错误 -32042 的形式出现：逐个交给内核（用户完成后接受），全部接受后重试一次
+          const steps = urlElicitations(e);
+          if (!steps) throw e;
+          if (!onElicit) throw new ToolError(urlRequiredText(steps));
+          for (const step of steps) {
+            const r = await onElicit(step);
+            if (r.action !== "accept") throw new ToolError(urlNotCompletedText(step.message));
+          }
+          return call();
+        }
       }),
     async close() {
       if (transport.sessionId) await transport.terminateSession().catch(() => {});
@@ -365,6 +435,42 @@ async function openSession(
         const prefix = r.contents.length > 1;
         return {
           content: r.contents.map((c) => mapResourceContents(c as Record<string, unknown>, prefix)),
+        };
+      });
+  }
+  if (client.getServerCapabilities()?.prompts) {
+    session.listPrompts = () =>
+      guarded(async () => {
+        const out: PromptInfo[] = [];
+        let cursor: string | undefined;
+        for (let page = 0; page < MAX_PAGES; page++) {
+          const r = await client.listPrompts(cursor === undefined ? {} : { cursor }, opts());
+          for (const p of r.prompts) {
+            out.push({
+              name: p.name,
+              ...(typeof p.title === "string" && { title: p.title }),
+              ...(typeof p.description === "string" && { description: p.description }),
+              arguments: (p.arguments ?? []).map((a) => ({
+                name: a.name,
+                ...(typeof a.description === "string" && { description: a.description }),
+                ...(typeof a.required === "boolean" && { required: a.required }),
+              })),
+            });
+          }
+          cursor = r.nextCursor;
+          if (!cursor) break;
+        }
+        return out;
+      });
+    session.getPrompt = (name, promptArgs) =>
+      guarded(async () => {
+        const r = await client.getPrompt({ name, arguments: promptArgs }, opts());
+        return {
+          ...(typeof r.description === "string" && { description: r.description }),
+          messages: r.messages.map((m) => ({
+            role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
+            content: [mapContent(m.content)],
+          })),
         };
       });
   }

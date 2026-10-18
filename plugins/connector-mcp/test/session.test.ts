@@ -1,6 +1,14 @@
-import type { AuthInjection, ConnectorSession, Logger } from "@capybara-hq/plugin-sdk";
+import type {
+  AuthInjection,
+  ConnectorSession,
+  ElicitationRequest,
+  ElicitationResponse,
+  Logger,
+} from "@capybara-hq/plugin-sdk";
 import { ToolError } from "@capybara-hq/plugin-sdk";
 import {
+  type FakeMcpHandlerContext,
+  FakeMcpRpcError,
   type FakeMcpServer,
   type FakeMcpServerOptions,
   startFakeMcpServer,
@@ -39,6 +47,7 @@ interface OpenOpts {
   signal?: AbortSignal;
   log?: Logger;
   onToolsChanged?: () => void;
+  onElicit?: (r: ElicitationRequest) => Promise<ElicitationResponse>;
 }
 
 async function open(server: FakeMcpServer, o: OpenOpts = {}): Promise<ConnectorSession> {
@@ -49,6 +58,7 @@ async function open(server: FakeMcpServer, o: OpenOpts = {}): Promise<ConnectorS
     onUnauthorized: o.onUnauthorized ?? (async () => {}),
     signal: o.signal ?? new AbortController().signal,
     ...(o.onToolsChanged && { onToolsChanged: o.onToolsChanged }),
+    ...(o.onElicit && { onElicit: o.onElicit }),
   });
   sessions.push(s);
   return s;
@@ -518,5 +528,229 @@ describe("tools/list_changed", () => {
     const r = await s.callTool("install_plugin", {}, new AbortController().signal);
     expect(r).toEqual({ content: [{ type: "text", text: "installed" }] });
     expect(log.lines.some((l) => l.level === "warn" && l.msg.includes("list_changed"))).toBe(true);
+  });
+});
+
+const FORM_SCHEMA = {
+  type: "object" as const,
+  properties: { name: { type: "string" as const, title: "Name" } },
+  required: ["name"],
+};
+
+const BANK_ELICITATION = {
+  mode: "url" as const,
+  message: "Connect your bank",
+  url: "https://bank.example.com/connect",
+  elicitationId: "el-9",
+};
+
+describe("elicitation", () => {
+  /** 一个在调用中途发起 elicitation 的服务（有状态会话）：答复原样回显到结果。 */
+  async function eliciting(params: Parameters<FakeMcpHandlerContext["elicit"]>[0]) {
+    return fake({
+      sessions: true,
+      tools: [
+        {
+          name: "greet",
+          description: "Greets",
+          handler: async (_info, ctx) => {
+            try {
+              const r = await ctx.elicit(params);
+              return { content: [{ type: "text", text: `answer=${JSON.stringify(r)}` }] };
+            } catch (e) {
+              return { content: [{ type: "text", text: `elicit failed: ${String(e)}` }] };
+            }
+          },
+        },
+      ],
+    });
+  }
+
+  it("form：调用 onElicit，把答复回给服务，调用照常返回", async () => {
+    const srv = await eliciting({ message: "Who are you?", requestedSchema: FORM_SCHEMA });
+    const seen: ElicitationRequest[] = [];
+    const s = await open(srv, {
+      onElicit: async (r) => {
+        seen.push(r);
+        return { action: "accept", content: { name: "Ada" } };
+      },
+    });
+    const r = await s.callTool("greet", {}, new AbortController().signal);
+    expect(seen).toEqual([{ mode: "form", message: "Who are you?", requestedSchema: FORM_SCHEMA }]);
+    expect(r.content).toEqual([
+      { type: "text", text: 'answer={"action":"accept","content":{"name":"Ada"}}' },
+    ]);
+  });
+
+  it("url：onElicit 收到 url 与 elicitationId；decline 原样回给服务", async () => {
+    const srv = await eliciting({
+      mode: "url",
+      message: "Authorize access",
+      url: "https://auth.example.com/start?x=1",
+      elicitationId: "el-1",
+    });
+    const seen: ElicitationRequest[] = [];
+    const s = await open(srv, {
+      onElicit: async (r) => {
+        seen.push(r);
+        return { action: "decline" };
+      },
+    });
+    const r = await s.callTool("greet", {}, new AbortController().signal);
+    expect(seen).toEqual([
+      {
+        mode: "url",
+        message: "Authorize access",
+        url: "https://auth.example.com/start?x=1",
+        elicitationId: "el-1",
+      },
+    ]);
+    expect(r.content).toEqual([{ type: "text", text: 'answer={"action":"decline"}' }]);
+  });
+
+  it("未提供 onElicit（旧内核）：不声明 elicitation 能力，服务端发起即失败", async () => {
+    const srv = await eliciting({ message: "Who?", requestedSchema: FORM_SCHEMA });
+    const s = await open(srv);
+    const r = await s.callTool("greet", {}, new AbortController().signal);
+    expect((r.content[0] as { text: string }).text).toMatch(/elicit failed: .*does not support/);
+  });
+
+  it("onElicit 挂起时中止 signal → 调用及时结束（内核据此暂停运行）", async () => {
+    const srv = await eliciting({ message: "Who?", requestedSchema: FORM_SCHEMA });
+    const ac = new AbortController();
+    const s = await open(srv, {
+      onElicit: () => {
+        ac.abort();
+        return new Promise<ElicitationResponse>(() => {});
+      },
+    });
+    const t0 = Date.now();
+    await expect(s.callTool("greet", {}, ac.signal)).rejects.toBeDefined();
+    expect(Date.now() - t0).toBeLessThan(2_000);
+  });
+
+  it("-32042 URL elicitation required：逐个 onElicit，全部 accept 后重试一次调用", async () => {
+    let n = 0;
+    const srv = await fake({
+      tools: [
+        {
+          name: "pay",
+          description: "Pays",
+          handler: () => {
+            n++;
+            if (n === 1) {
+              throw new FakeMcpRpcError(-32042, "Authorization required", {
+                elicitations: [BANK_ELICITATION],
+              });
+            }
+            return { content: [{ type: "text", text: "paid" }] };
+          },
+        },
+      ],
+    });
+    const seen: ElicitationRequest[] = [];
+    const s = await open(srv, {
+      onElicit: async (r) => {
+        seen.push(r);
+        return { action: "accept" };
+      },
+    });
+    const r = await s.callTool("pay", {}, new AbortController().signal);
+    expect(seen).toEqual([BANK_ELICITATION]);
+    expect(r.content).toEqual([{ type: "text", text: "paid" }]);
+    expect(srv.calls).toHaveLength(2);
+  });
+
+  it("-32042 但用户没有接受 → ToolError 说明需要完成的步骤，不重试", async () => {
+    const srv = await fake({
+      tools: [
+        {
+          name: "pay",
+          description: "Pays",
+          handler: () => {
+            throw new FakeMcpRpcError(-32042, "Authorization required", {
+              elicitations: [BANK_ELICITATION],
+            });
+          },
+        },
+      ],
+    });
+    const s = await open(srv, { onElicit: async () => ({ action: "decline" }) });
+    const err = await s.callTool("pay", {}, new AbortController().signal).catch((e) => e);
+    expect(err).toBeInstanceOf(ToolError);
+    expect((err as ToolError).message).toMatch(/did not complete/);
+    expect(srv.calls).toHaveLength(1);
+  });
+
+  it("-32042 而没有 onElicit → ToolError 带上需要用户打开的地址", async () => {
+    const srv = await fake({
+      tools: [
+        {
+          name: "pay",
+          description: "Pays",
+          handler: () => {
+            throw new FakeMcpRpcError(-32042, "Authorization required", {
+              elicitations: [BANK_ELICITATION],
+            });
+          },
+        },
+      ],
+    });
+    const s = await open(srv);
+    const err = await s.callTool("pay", {}, new AbortController().signal).catch((e) => e);
+    expect(err).toBeInstanceOf(ToolError);
+    expect((err as ToolError).message).toContain("https://bank.example.com/connect");
+  });
+});
+
+describe("prompts", () => {
+  it("服务声明 prompts → listPrompts / getPrompt；内容块映射为 ToolContent", async () => {
+    const srv = await fake({
+      tools: [],
+      prompts: [
+        {
+          name: "summarize",
+          title: "Summarize",
+          description: "Summarize a topic",
+          arguments: [{ name: "topic", description: "What to summarize", required: true }],
+          render: (args) => [
+            { role: "user", content: { type: "text", text: `Summarize ${args.topic}` } },
+            { role: "assistant", content: { type: "text", text: "Sure." } },
+            {
+              role: "user",
+              content: { type: "resource", resource: { uri: "docs://a", text: "A body" } },
+            },
+          ],
+        },
+        { name: "plain" },
+      ],
+    });
+    const s = await open(srv);
+    expect(await s.listPrompts?.()).toEqual([
+      {
+        name: "summarize",
+        title: "Summarize",
+        description: "Summarize a topic",
+        arguments: [{ name: "topic", description: "What to summarize", required: true }],
+      },
+      { name: "plain", arguments: [] },
+    ]);
+    expect(await s.getPrompt?.("summarize", { topic: "MCP" })).toEqual({
+      description: "Summarize a topic",
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Summarize MCP" }] },
+        { role: "assistant", content: [{ type: "text", text: "Sure." }] },
+        { role: "user", content: [{ type: "text", text: "Resource docs://a:\nA body" }] },
+      ],
+    });
+  });
+
+  it("未知提示 → ToolError；服务不支持 prompts → 会话没有这两个方法", async () => {
+    const srv = await fake({ tools: [], prompts: [] });
+    const s = await open(srv);
+    await expect(s.getPrompt?.("nope", {})).rejects.toBeInstanceOf(ToolError);
+    const bare = await open(await fake({ tools: [] }));
+    expect(bare.listPrompts).toBeUndefined();
+    expect(bare.getPrompt).toBeUndefined();
   });
 });
