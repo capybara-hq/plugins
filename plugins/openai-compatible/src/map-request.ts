@@ -1,14 +1,16 @@
 import type { ContentBlock, ModelMessage, ModelRequest } from "@capybara-hq/plugin-sdk";
 import type OpenAI from "openai";
-import type { ChatBody, Dialect } from "./dialects.js";
+import type { ChatBody, Dialect, ModelTraits } from "./dialects.js";
 
 type Message = OpenAI.Chat.ChatCompletionMessageParam;
 
-/** 一次调用的目标：端点上的原始模型 id、方言，以及中途 system 的写法（方言默认，端点可覆盖）。 */
+/** 一次调用的目标：端点上的原始模型 id、方言、模型属性，以及中途 system 的写法（方言默认，端点可覆盖）。 */
 export interface ChatTarget {
   upstreamModel: string;
   dialect: Dialect;
   midConversationSystem: boolean;
+  /** 部署配置里该模型的属性（请求级，对所有消息相同）。 */
+  model: ModelTraits;
 }
 
 /**
@@ -45,7 +47,7 @@ function mapMessages(messages: ModelMessage[], req: ModelRequest, t: ChatTarget)
     } else if (m.role === "user") {
       out.push(...mapUser(m.content));
     } else {
-      out.push(t.dialect.replayAssistant(m.content, req));
+      out.push(t.dialect.replayAssistant(m.content, req, t.model));
     }
   }
   return out;
@@ -71,6 +73,6 @@ export function buildRequest(req: ModelRequest, t: ChatTarget): ChatBody {
       function: { name: tool.name, description: tool.description, parameters: tool.inputSchema },
     }));
   }
-  t.dialect.applyParams(body, req.params);
+  t.dialect.applyParams(body, req.params, t.model);
   return body;
 }

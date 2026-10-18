@@ -150,6 +150,7 @@ export function createOpenAICompatibleProvider(
           upstreamModel,
           dialect: ep.dialect,
           midConversationSystem: ep.midConversationSystem,
+          model: { reasoning: m.reasoning ?? false, maxOutputTokens: m.maxOutputTokens },
         },
       });
     },

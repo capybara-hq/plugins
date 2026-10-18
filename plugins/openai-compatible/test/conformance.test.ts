@@ -206,6 +206,24 @@ describe("openai-compatible: stream edge cases and errors", () => {
     expect(server.requests.at(-1)?.headers.authorization).toBe("Bearer sk-fixture");
   });
 
+  it('deepseek model configured reasoning: false -> request sends thinking { type: "disabled" }', async () => {
+    const reply = () =>
+      ds({
+        model: "x",
+        text: "ok",
+        finish: "stop",
+        usage: usageFor("deepseek", { total: 5, output: 1 }),
+      })();
+    next = reply;
+    await drain(provider({ models: [model("deepseek-flash", { reasoning: false })] }), req());
+    expect((server.requests.at(-1)?.body as { thinking?: unknown } | undefined)?.thinking).toEqual({
+      type: "disabled",
+    });
+    next = reply;
+    await drain(provider(), req());
+    expect(server.requests.at(-1)?.body).not.toHaveProperty("thinking");
+  });
+
   it("unknown model -> invalid_request", async () => {
     expect(kindOf(await streamError(provider(), req({ model: "ds/nope" })))).toBe(
       "invalid_request",

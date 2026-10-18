@@ -15,6 +15,7 @@ const target = (dialect: DialectName, over: Partial<ChatTarget> = {}): ChatTarge
   upstreamModel: "upstream-model",
   dialect: DIALECTS[dialect],
   midConversationSystem: DIALECTS[dialect].midConversationSystem,
+  model: { reasoning: true, maxOutputTokens: 8192 },
   ...over,
 });
 
@@ -171,10 +172,11 @@ describe("thinking replay", () => {
     ...(turns[2] ?? []),
     ...(turns[3] ?? []),
   ];
-  const assistants = (d: DialectName, over: Partial<ModelRequest> = {}) =>
-    buildRequest(req(history, over), target(d)).messages.filter(
-      (m) => m.role === "assistant",
-    ) as unknown as Record<string, unknown>[];
+  const assistants = (d: DialectName, over: Partial<ModelRequest> = {}, reasoning = true) =>
+    buildRequest(
+      req(history, over),
+      target(d, { model: { reasoning, maxOutputTokens: 8192 } }),
+    ).messages.filter((m) => m.role === "assistant") as unknown as Record<string, unknown>[];
 
   it("deepseek replays reasoning_content only for its own endpoint/model", () => {
     const a = assistants("deepseek");
@@ -200,6 +202,11 @@ describe("thinking replay", () => {
     expect(a[2]).not.toHaveProperty("reasoning_content");
   });
 
+  it("deepseek non-reasoning model (reasoning: false) with tools: no placeholder reasoning_content (thinking is disabled)", () => {
+    const a = assistants("deepseek", { tools: [weather] }, false);
+    expect(a[2]).not.toHaveProperty("reasoning_content");
+  });
+
   it.each(["generic", "qwen"] as const)("%s never sends reasoning_content back", (d) => {
     for (const m of assistants(d)) expect(m).not.toHaveProperty("reasoning_content");
     for (const m of assistants(d, { tools: [weather] }))
@@ -213,7 +220,7 @@ describe("dialect params", () => {
   const bodyWith = (d: DialectName, params: Record<string, unknown>, reasoning = true) =>
     buildRequest(
       req(turns[0] ?? [], { params: sanitizeParams(decl(d, reasoning), params).value }),
-      target(d),
+      target(d, { model: { reasoning, maxOutputTokens: 8192 } }),
     ) as unknown as Record<string, unknown>;
 
   it("generic: only temperature and maxOutputTokens", () => {
@@ -245,6 +252,23 @@ describe("dialect params", () => {
     expect(decl("deepseek", false).some((p) => p.key === "thinking" || p.key === "effort")).toBe(
       false,
     );
+  });
+
+  it('deepseek non-reasoning model: sends thinking { type: "disabled" } (the API defaults to enabled)', () => {
+    const b = bodyWith("deepseek", {}, false);
+    expect(b.thinking).toEqual({ type: "disabled" });
+    expect(b).not.toHaveProperty("reasoning_effort");
+    // 未声明的旧键被 sanitizeParams 丢弃，仍是 disabled
+    const stale = bodyWith("deepseek", { thinking: "on", effort: "max", temperature: 0.5 }, false);
+    expect(stale.thinking).toEqual({ type: "disabled" });
+    expect(stale).not.toHaveProperty("reasoning_effort");
+    expect(stale.temperature).toBe(0.5);
+  });
+
+  it.each(["generic", "qwen"] as const)("%s non-reasoning model: no thinking field", (d) => {
+    const b = bodyWith(d, {}, false);
+    expect(b).not.toHaveProperty("thinking");
+    expect(b).not.toHaveProperty("enable_thinking");
   });
 
   it("maxOutputTokens knob is bounded by the model limit (the kernel folds it into max_tokens)", () => {

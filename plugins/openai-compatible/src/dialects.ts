@@ -52,14 +52,17 @@ export interface Dialect {
   caching: boolean;
   /** 该模型声明的参数（须通过 `assertValidDeclarations`）。 */
   parameters(model: ModelTraits): ModelParameter[];
-  /** 把已处理过的参数写进请求体。`maxOutputTokens` 已由内核折算进 `req.maxOutputTokens`，这里不处理。 */
-  applyParams(body: ChatBody, params: Record<string, ParamValue>): void;
+  /**
+   * 把已处理过的参数写进请求体。`maxOutputTokens` 已由内核折算进 `req.maxOutputTokens`，这里不处理。
+   * `model` 是本次请求模型的属性（如非推理模型需要显式关闭服务端默认开启的思考）。
+   */
+  applyParams(body: ChatBody, params: Record<string, ParamValue>, model: ModelTraits): void;
   /** 从一个 delta 读出文本 / 思考增量。 */
   readDelta(delta: ChunkDelta): { text?: string; reasoning?: string };
   /**
-   * assistant 消息的回放；只看消息自身与请求级的设定（模型、是否带工具、参数），不看其他消息（只追加）。
+   * assistant 消息的回放；只看消息自身与请求级的设定（模型及其属性、是否带工具、参数），不看其他消息（只追加）。
    */
-  replayAssistant(blocks: ContentBlock[], req: ModelRequest): AssistantMessage;
+  replayAssistant(blocks: ContentBlock[], req: ModelRequest, model: ModelTraits): AssistantMessage;
   usage(raw: RawUsage | null | undefined): ModelUsage;
 }
 
@@ -189,6 +192,8 @@ const generic: Dialect = {
  * DeepSeek（https://api-docs.deepseek.com/api/create-chat-completion ，
  * https://api-docs.deepseek.com/guides/thinking_mode ，2026-10 核实）：
  * - `thinking: { type: "enabled" | "disabled" }`，默认 enabled；`reasoning_effort: low|high|max`，默认 high；
+ *   部署配置为 `reasoning: false` 的模型不声明思考旋钮，请求总是发 `thinking: { type: "disabled" }`
+ *   （否则服务端按默认开启思考，而界面按非推理模型隐藏思考）；
  * - `temperature` 0–2，默认 1（思考模式下无效）；
  * - 思考增量在 `delta.reasoning_content`；
  * - 用量 `prompt_tokens = prompt_cache_hit_tokens + prompt_cache_miss_tokens`，无缓存写入计数；
@@ -218,8 +223,10 @@ const deepseek: Dialect = {
     temperature(2, 1),
     maxOutput(m),
   ],
-  applyParams(body, params) {
-    if (params.thinking === "on" || params.thinking === "off") {
+  applyParams(body, params, model) {
+    if (!model.reasoning) {
+      body.thinking = { type: "disabled" };
+    } else if (params.thinking === "on" || params.thinking === "off") {
       body.thinking = { type: params.thinking === "on" ? "enabled" : "disabled" };
     }
     if (typeof params.effort === "string" && params.thinking !== "off") {
@@ -228,7 +235,7 @@ const deepseek: Dialect = {
     if (typeof params.temperature === "number") body.temperature = params.temperature;
   },
   readDelta: readTextAndReasoning,
-  replayAssistant(blocks, req) {
+  replayAssistant(blocks, req, model) {
     const msg = baseAssistant(blocks);
     // 其他模型 / 供应商的思考块不回放
     const own = blocks.filter((b) => b.type === "thinking" && sameOrigin(b.opaque, req.model));
@@ -240,8 +247,9 @@ const deepseek: Dialect = {
     }
     // 带 tools 的思考模式请求要求每个历史 assistant 回合都带 reasoning_content（否则 400，不可重试）：
     // 别的模型产出的回合（兜底 / 换模型）、关闭思考时产出的回合没有本模型的思考，补空串。
+    // 非推理模型的请求总是关闭思考（见 applyParams），不补。
     // 只取决于本条消息与请求级设定，仍然只追加。DeepSeek 不再要求时（文档变更）可删除。
-    if (req.tools.length > 0 && req.params.thinking !== "off") {
+    if (model.reasoning && req.tools.length > 0 && req.params.thinking !== "off") {
       return { ...msg, reasoning_content: "" };
     }
     return msg;
