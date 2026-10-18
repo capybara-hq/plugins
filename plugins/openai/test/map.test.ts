@@ -65,9 +65,8 @@ describe("buildRequest: effort", () => {
     expect(build(base()).reasoning).toEqual({ summary: "auto" });
   });
 
-  it("params.thinking overrides the deployment reasoningSummary: summarized -> summary auto, on -> none", () => {
-    const off = { reasoning: true, reasoningSummary: "off" as const };
-    expect(build(base({ params: { thinking: "summarized" } }), off).reasoning).toEqual({
+  it("params.thinking on an auto deployment: summarized -> summary auto, on -> none", () => {
+    expect(build(base({ params: { thinking: "summarized" } })).reasoning).toEqual({
       summary: "auto",
     });
     expect("reasoning" in build(base({ params: { thinking: "on" } }))).toBe(false);
@@ -76,6 +75,11 @@ describe("buildRequest: effort", () => {
     });
     // 非推理模型忽略 thinking
     expect("reasoning" in build(base({ params: { thinking: "summarized" } }), PLAIN)).toBe(false);
+  });
+
+  it('reasoningSummary: "off" never sends reasoning.summary, even if params.thinking is summarized', () => {
+    const off = { reasoning: true, reasoningSummary: "off" as const };
+    expect("reasoning" in build(base({ params: { thinking: "summarized" } }), off)).toBe(false);
   });
 
   it('reasoningSummary: "off" omits reasoning.summary but keeps effort and the include', () => {

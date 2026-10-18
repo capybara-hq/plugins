@@ -18,8 +18,8 @@ type InputItem = OpenAI.Responses.ResponseInputItem;
 export interface ModelTraits {
   reasoning: boolean;
   /**
-   * 部署级默认值："off" 时不请求推理摘要（未完成组织验证的账号请求摘要会被拒绝）。
-   * 请求带 `params.thinking` 时以它为准（`summarized` 请求摘要，`on` 不请求）。
+   * 部署配置："off" 时一律不请求推理摘要（未完成组织验证的账号请求摘要会被拒绝，此时也不声明 thinking 旋钮）。
+   * "auto" 时为默认值，请求带 `params.thinking` 时以它为准（`summarized` 请求摘要，`on` 不请求）。
    */
   reasoningSummary: "auto" | "off";
 }
@@ -150,12 +150,12 @@ function mapMessages(messages: ModelMessage[], model: string): InputItem[] {
   return out;
 }
 
-/** 是否请求推理摘要：`params.thinking` 优先（summarized 请求、on 不请求），未设置时取部署默认。 */
+/** 是否请求推理摘要：部署为 off 时从不请求；否则 `params.thinking` 优先（summarized 请求、on 不请求），未设置时请求。 */
 function wantsSummary(req: ModelRequest, traits: ModelTraits): boolean {
+  if (traits.reasoningSummary === "off") return false;
   const t = req.params.thinking;
   if (t === "summarized") return true;
-  if (t === "on") return false;
-  return traits.reasoningSummary === "auto";
+  return t !== "on";
 }
 
 /** model-provider@2 请求 → OpenAI Responses API 请求。纯函数。非推理模型忽略 effort / thinking。 */

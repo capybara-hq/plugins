@@ -20,6 +20,7 @@ import {
   FEW_EFFORT_LEVELS,
   modelObject,
   NO_THINKING,
+  NULL_EFFORT_LEVELS,
   sseMessage,
 } from "./fixtures.js";
 
@@ -587,6 +588,65 @@ describe("anthropic: errors and edge cases", () => {
       schema: { type: "string", enum: ["low", "medium", "max"] },
     });
     expect(info?.parameters.find((d) => d.key === "effort")).not.toHaveProperty("default");
+  });
+
+  it("an explicitly null tier counts as per-level info: no five-tier fallback", async () => {
+    const id = `claude-${NULL_EFFORT_LEVELS}-1`;
+    const p = createAnthropicProvider({
+      kv: memoryKv(),
+      apiKey: "sk-ant-fixture",
+      baseUrl: server.url,
+      models: [id],
+      serverFallbacks: "default",
+    });
+    const [info] = await p.listModels();
+    // 有逐档信息但一档都不支持 → 不声明 effort
+    expect(info?.parameters.map((d) => d.key)).toEqual(["thinking"]);
+  });
+
+  it("thinking on (display omitted): empty thinking text with a signature replays verbatim next turn", async () => {
+    const p = provider();
+    next = () =>
+      sseMessage({
+        model: "claude-haiku-5-5",
+        blocks: [
+          { type: "thinking", thinking: "", signature: "sig-omitted" },
+          { type: "text", text: "391" },
+        ],
+        stopReason: "end_turn",
+        usage: { input_tokens: 3, output_tokens: 2 },
+      });
+    const first = req({ params: { thinking: "on" } });
+    const done = (await drain(p, first)).at(-1);
+    if (done?.type !== "message_complete") throw new Error("no message_complete");
+    expect(done.content[0]).toMatchObject({
+      type: "thinking",
+      text: "",
+      opaque: { data: { type: "thinking", thinking: "", signature: "sig-omitted" } },
+    });
+    next = () =>
+      sseMessage({
+        model: "claude-haiku-5-5",
+        blocks: [{ type: "text", text: "392" }],
+        stopReason: "end_turn",
+        usage: { input_tokens: 3, output_tokens: 2 },
+      });
+    await drain(
+      p,
+      req({
+        params: { thinking: "on" },
+        messages: [
+          ...first.messages,
+          { role: "assistant", content: done.content },
+          { role: "user", content: [{ type: "text", text: "Add 1." }] },
+        ],
+      }),
+    );
+    const body = server.requests.at(-1)?.body as { messages: { content: unknown }[] };
+    expect(body.messages[1]?.content).toEqual([
+      { type: "thinking", thinking: "", signature: "sig-omitted" },
+      { type: "text", text: "391" },
+    ]);
   });
 
   it("params map to the native request: effort -> output_config, thinking on -> display omitted", async () => {

@@ -47,13 +47,12 @@ const FALLBACK_CONTEXT_WINDOW = 200_000;
 const FALLBACK_MAX_OUTPUT = 32_000;
 
 /**
- * effort 档位：取 Models API 中逐档的 `supported`；API 没给逐档信息（各档字段都缺失）时用五档。
- * 不支持 effort（或一档都不支持）时返回 null。
+ * effort 档位：取 Models API 中逐档的 `supported`；只要出现任一档的字段（含显式 null）就按逐档信息处理，
+ * 各档字段都缺失时才用五档。不支持 effort（或一档都不支持）时返回 null。
  */
 function effortLevels(e: Anthropic.EffortCapability | undefined): Effort[] | null {
   if (e?.supported !== true) return null;
-  const listed = EFFORT_VALUES.filter((v) => e[v] != null);
-  if (listed.length === 0) return [...EFFORT_VALUES];
+  if (!EFFORT_VALUES.some((v) => v in e)) return [...EFFORT_VALUES];
   const levels = EFFORT_VALUES.filter((v) => e[v]?.supported === true);
   return levels.length > 0 ? levels : null;
 }

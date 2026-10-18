@@ -160,6 +160,8 @@ export const errorJson = (
 export const NO_THINKING = "nothink";
 /** id 含此串的模型：effort 带档位信息，只支持 low / medium / max（xhigh 为 null）。 */
 export const FEW_EFFORT_LEVELS = "fewlevels";
+/** id 含此串的模型：effort 只带一个逐档字段且为 null（`xhigh: null`），其余档位字段缺失。 */
+export const NULL_EFFORT_LEVELS = "nulllevels";
 
 /** Models API 的模型对象；id 含 {@link NO_THINKING} 时 thinking / effort 都不支持。 */
 export function modelObject(id: string): unknown {
@@ -197,7 +199,9 @@ export function modelObject(id: string): unknown {
             xhigh: null,
             max: { supported: true },
           }
-        : { supported: true },
+        : id.includes(NULL_EFFORT_LEVELS)
+          ? { supported: true, xhigh: null }
+          : { supported: true },
     },
   };
 }

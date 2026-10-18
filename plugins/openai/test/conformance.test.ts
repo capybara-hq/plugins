@@ -381,12 +381,8 @@ describe("openai: errors and edge cases", () => {
     await drain(provider(), req({ params: { effort: "max" } }));
     const body2 = server.requests.at(-1)?.body as Record<string, unknown>;
     expect(body2.reasoning).toEqual({ effort: "max", summary: "auto" });
-    // thinking 旋钮覆盖部署默认值
+    // auto 部署上 thinking 旋钮覆盖部署默认值：on 不请求摘要
     const lastBody = () => server.requests.at(-1)?.body as Record<string, unknown>;
-    await drain(p, req({ params: { thinking: "summarized" } }));
-    expect(lastBody().reasoning).toEqual({
-      summary: "auto",
-    });
     await drain(provider(), req({ params: { effort: "low", thinking: "on" } }));
     expect(lastBody().reasoning).toEqual({
       effort: "low",
@@ -572,6 +568,17 @@ describe("openai: errors and edge cases", () => {
       (e: unknown) => e,
     );
     expect(isModelError(err) && err.kind).toBe("aborted");
+  });
+
+  it('reasoningSummary: "off" deployment declares only effort (summaries cannot be requested)', async () => {
+    const p = createOpenAIProvider({
+      apiKey: "sk-fixture",
+      baseUrl: `${server.url}/v1`,
+      models: [gpt("gpt-5.5")],
+      reasoningSummary: "off",
+    });
+    const [m] = await p.listModels();
+    expect(m?.parameters.map((d) => d.key)).toEqual(["effort"]);
   });
 
   it("listModels comes straight from config", async () => {
