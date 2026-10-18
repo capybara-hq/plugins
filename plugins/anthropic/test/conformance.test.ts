@@ -1,7 +1,8 @@
 import {
   isModelError,
-  type ModelProviderV1,
-  type ModelRequestV1,
+  MODEL_PROVIDER_CAPABILITY_V2,
+  type ModelProvider,
+  type ModelRequest,
   type ModelStreamEvent,
 } from "@capybara-hq/plugin-sdk";
 import {
@@ -11,9 +12,16 @@ import {
   startFakeModelServer,
 } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createAnthropicProvider, type Kv } from "../src/index.js";
+import plugin, { createAnthropicProvider, type Kv } from "../src/index.js";
 import { buildRequest } from "../src/map-request.js";
-import { anthropicRoutes, errorJson, modelObject, NO_THINKING, sseMessage } from "./fixtures.js";
+import {
+  anthropicRoutes,
+  errorJson,
+  FEW_EFFORT_LEVELS,
+  modelObject,
+  NO_THINKING,
+  sseMessage,
+} from "./fixtures.js";
 
 const memoryKv = (): Kv & { store: Map<string, string>; ttls: number[] } => {
   const store = new Map<string, string>();
@@ -33,6 +41,8 @@ const memoryKv = (): Kv & { store: Map<string, string>; ttls: number[] } => {
 describeModelProviderConformance("anthropic (fixtures)", async () => {
   const server = await startFakeModelServer(anthropicRoutes());
   return {
+    contract: 2,
+    plugin: "anthropic",
     provider: createAnthropicProvider({
       kv: memoryKv(),
       apiKey: "sk-ant-fixture",
@@ -53,8 +63,11 @@ if (!LIVE_KEY) {
     "[plugin-anthropic] CAPYBARA_TEST_ANTHROPIC_API_KEY not set: live conformance (claude-haiku-5-5) skipped",
   );
 }
-describe.skipIf(!LIVE_KEY)("live", () => {
+// 真实接口的思考与缓存用例常超过默认 5 秒
+describe.skipIf(!LIVE_KEY)("live", { timeout: 120_000 }, () => {
   describeModelProviderConformance("anthropic (live, claude-haiku-5-5)", async () => ({
+    contract: 2,
+    plugin: "anthropic",
     provider: createAnthropicProvider({
       kv: memoryKv(),
       apiKey: LIVE_KEY ?? "",
@@ -69,22 +82,23 @@ describe.skipIf(!LIVE_KEY)("live", () => {
 });
 
 // ---- 错误映射与边界 ----
-const req = (over: Partial<ModelRequestV1> = {}): ModelRequestV1 => ({
+const req = (over: Partial<ModelRequest> = {}): ModelRequest => ({
   model: "claude-haiku-5-5",
   system: [{ text: "Be brief.", cache: false }],
   messages: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
   tools: [],
   maxOutputTokens: 256,
+  params: {},
   ...over,
 });
 
-async function drain(p: ModelProviderV1, r: ModelRequestV1): Promise<ModelStreamEvent[]> {
+async function drain(p: ModelProvider, r: ModelRequest): Promise<ModelStreamEvent[]> {
   const out: ModelStreamEvent[] = [];
   for await (const e of p.stream(r, { signal: new AbortController().signal })) out.push(e);
   return out;
 }
 
-async function streamError(p: ModelProviderV1, r: ModelRequestV1 = req()): Promise<unknown> {
+async function streamError(p: ModelProvider, r: ModelRequest = req()): Promise<unknown> {
   try {
     await drain(p, r);
   } catch (e) {
@@ -512,7 +526,7 @@ describe("anthropic: errors and edge cases", () => {
     expect(isModelError(err)).toBe(true);
     expect(isModelError(err) && err.retryable).toBe(true);
     // 成功的 id 仍写入 kv 缓存
-    expect(kv.store.has("models:claude-haiku-5-5")).toBe(true);
+    expect(kv.store.has("models:v2:claude-haiku-5-5")).toBe(true);
     modelFail.clear();
   });
 
@@ -529,7 +543,7 @@ describe("anthropic: errors and edge cases", () => {
     modelFail.clear();
   });
 
-  it("models without thinking / effort support: capabilities say so and requests omit thinking", async () => {
+  it("models without thinking / effort support: no parameters declared and requests omit thinking / effort", async () => {
     const id = `claude-${NO_THINKING}-1`;
     const p = createAnthropicProvider({
       kv: memoryKv(),
@@ -539,7 +553,8 @@ describe("anthropic: errors and edge cases", () => {
       serverFallbacks: "default",
     });
     const [info] = await p.listModels();
-    expect(info?.capabilities).toMatchObject({ reasoning: false, effort: false });
+    expect(info?.capabilities).toMatchObject({ reasoning: false });
+    expect(info?.parameters).toEqual([]);
     next = () =>
       sseMessage({
         model: id,
@@ -547,14 +562,55 @@ describe("anthropic: errors and edge cases", () => {
         stopReason: "end_turn",
         usage: { input_tokens: 3, output_tokens: 2 },
       });
-    const events = await drain(p, req({ model: id, effort: "low" }));
+    const events = await drain(p, req({ model: id, params: { effort: "low", thinking: "on" } }));
     expect(events.at(-1)?.type).toBe("message_complete");
     const body = server.requests.at(-1)?.body as Record<string, unknown>;
     expect("thinking" in body).toBe(false);
     expect("output_config" in body).toBe(false);
   });
 
-  it("listModels maps the Models API and caches in kv with TTL 3600", async () => {
+  it("provides model-provider@2", () => {
+    expect(plugin.provides).toEqual([MODEL_PROVIDER_CAPABILITY_V2]);
+  });
+
+  it("effort tiers come from the Models API level flags (default high only when supported)", async () => {
+    const id = `claude-${FEW_EFFORT_LEVELS}-1`;
+    const p = createAnthropicProvider({
+      kv: memoryKv(),
+      apiKey: "sk-ant-fixture",
+      baseUrl: server.url,
+      models: [id],
+      serverFallbacks: "default",
+    });
+    const [info] = await p.listModels();
+    expect(info?.parameters.find((d) => d.key === "effort")).toMatchObject({
+      schema: { type: "string", enum: ["low", "medium", "max"] },
+    });
+    expect(info?.parameters.find((d) => d.key === "effort")).not.toHaveProperty("default");
+  });
+
+  it("params map to the native request: effort -> output_config, thinking on -> display omitted", async () => {
+    const p = provider();
+    const ok = () =>
+      sseMessage({
+        model: "claude-haiku-5-5",
+        blocks: [{ type: "text", text: "ok" }],
+        stopReason: "end_turn",
+        usage: { input_tokens: 3, output_tokens: 2 },
+      });
+    next = ok;
+    await drain(p, req({ params: { effort: "max", thinking: "on" } }));
+    const body = server.requests.at(-1)?.body as Record<string, unknown>;
+    expect(body.output_config).toEqual({ effort: "max" });
+    expect(body.thinking).toEqual({ type: "adaptive", display: "omitted" });
+    next = ok;
+    await drain(p, req({ params: { thinking: "summarized" } }));
+    const body2 = server.requests.at(-1)?.body as Record<string, unknown>;
+    expect(body2.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect("output_config" in body2).toBe(false);
+  });
+
+  it("listModels maps the Models API and caches in kv (versioned key) with TTL 3600", async () => {
     const kv = memoryKv();
     const p = provider(kv);
     const before = server.requests.length;
@@ -571,10 +627,31 @@ describe("anthropic: errors and edge cases", () => {
         reasoning: true,
         caching: true,
         midConversationSystem: false,
-        effort: true,
       },
       streamIdleTimeoutMs: 300_000,
+      parameters: [
+        {
+          key: "effort",
+          standard: "effort",
+          schema: { type: "string", enum: ["low", "medium", "high", "xhigh", "max"] },
+          default: "high",
+          label: { zh: "思考深度", en: "Effort" },
+          description: expect.any(Object),
+        },
+        {
+          key: "thinking",
+          standard: "thinking",
+          schema: { type: "string", enum: ["on", "summarized"] },
+          default: "summarized",
+          label: { zh: "思考模式", en: "Thinking" },
+          description: expect.any(Object),
+        },
+      ],
     });
+    expect([...kv.store.keys()].sort()).toEqual([
+      "models:v2:claude-haiku-5-5",
+      "models:v2:claude-sonnet-5",
+    ]);
     expect(models.every((m) => !m.capabilities.midConversationSystem)).toBe(true);
     expect(kv.ttls).toEqual([3600, 3600]);
     const afterFirst = server.requests.length;

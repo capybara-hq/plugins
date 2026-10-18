@@ -74,7 +74,8 @@ if (!liveReady) {
     "[plugin-openai-compatible] CAPYBARA_TEST_OAICOMPAT_BASE_URL / _API_KEY / _MODEL / _DIALECT not set: live conformance skipped",
   );
 }
-describe.skipIf(!liveReady)("live", () => {
+// 真实接口的思考与缓存用例常超过默认 5 秒
+describe.skipIf(!liveReady)("live", { timeout: 120_000 }, () => {
   const dialect = LIVE.dialect ?? "generic";
   describeModelProviderConformance(
     `openai-compatible (live, ${dialect}, ${LIVE.model})`,

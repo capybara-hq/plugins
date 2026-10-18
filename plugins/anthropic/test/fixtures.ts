@@ -158,6 +158,8 @@ export const errorJson = (
 
 /** 不支持思考与 effort 的测试模型 id（含此片段）。 */
 export const NO_THINKING = "nothink";
+/** id 含此串的模型：effort 带档位信息，只支持 low / medium / max（xhigh 为 null）。 */
+export const FEW_EFFORT_LEVELS = "fewlevels";
 
 /** Models API 的模型对象；id 含 {@link NO_THINKING} 时 thinking / effort 都不支持。 */
 export function modelObject(id: string): unknown {
@@ -186,7 +188,16 @@ export function modelObject(id: string): unknown {
     capabilities: {
       image_input: { supported: true },
       thinking: { supported: true, types: { adaptive: { supported: true } } },
-      effort: { supported: true },
+      effort: id.includes(FEW_EFFORT_LEVELS)
+        ? {
+            supported: true,
+            low: { supported: true },
+            medium: { supported: true },
+            high: { supported: false },
+            xhigh: null,
+            max: { supported: true },
+          }
+        : { supported: true },
     },
   };
 }
@@ -219,7 +230,8 @@ function protocolViolation(b: Body, headers: Record<string, string>, path: strin
     if (b.output_config?.effort !== undefined) return "effort is not supported on this model";
   } else {
     if (b.thinking?.type !== "adaptive") return "thinking.type must be adaptive";
-    if (b.thinking.display !== "summarized") return "thinking.display must be summarized";
+    if (b.thinking.display !== "summarized" && b.thinking.display !== "omitted")
+      return "thinking.display must be summarized or omitted";
   }
   if (b.tool_choice !== undefined) return "tool_choice must not be set";
   if (b.tools?.some((t) => t.eager_input_streaming !== true))

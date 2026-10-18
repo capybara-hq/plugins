@@ -1,7 +1,7 @@
 {
   "name": "@capybara-hq/plugin-anthropic",
   "version": "0.1.0",
-  "description": "Anthropic model provider (model-provider@1) using the official SDK and the native Messages API",
+  "description": "Anthropic model provider (model-provider@2) using the official SDK and the native Messages API",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",

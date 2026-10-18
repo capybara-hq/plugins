@@ -1,7 +1,8 @@
 import {
   isModelError,
-  type ModelProviderV1,
-  type ModelRequestV1,
+  MODEL_PROVIDER_CAPABILITY_V2,
+  type ModelProvider,
+  type ModelRequest,
   type ModelStreamEvent,
 } from "@capybara-hq/plugin-sdk";
 import {
@@ -28,6 +29,8 @@ const gpt = (id: string, over: Partial<ModelConfig> = {}): ModelConfig => ({
 describeModelProviderConformance("openai (fixtures)", async () => {
   const server = await startFakeModelServer(openaiRoutes());
   return {
+    contract: 2,
+    plugin: "openai",
     provider: createOpenAIProvider({
       apiKey: "sk-fixture",
       baseUrl: `${server.url}/v1`,
@@ -47,8 +50,11 @@ if (!LIVE_KEY || !LIVE_MODEL) {
     "[plugin-openai] CAPYBARA_TEST_OPENAI_API_KEY / CAPYBARA_TEST_OPENAI_MODEL not set: live conformance skipped",
   );
 }
-describe.skipIf(!LIVE_KEY || !LIVE_MODEL)("live", () => {
+// 真实接口的思考与缓存用例常超过默认 5 秒
+describe.skipIf(!LIVE_KEY || !LIVE_MODEL)("live", { timeout: 120_000 }, () => {
   describeModelProviderConformance(`openai (live, ${LIVE_MODEL})`, async () => ({
+    contract: 2,
+    plugin: "openai",
     provider: createOpenAIProvider({
       apiKey: LIVE_KEY ?? "",
       models: [gpt(LIVE_MODEL ?? "")],
@@ -60,22 +66,23 @@ describe.skipIf(!LIVE_KEY || !LIVE_MODEL)("live", () => {
 });
 
 // ---- 错误映射与边界 ----
-const req = (over: Partial<ModelRequestV1> = {}): ModelRequestV1 => ({
+const req = (over: Partial<ModelRequest> = {}): ModelRequest => ({
   model: "gpt-5.5",
   system: [{ text: "Be brief.", cache: false }],
   messages: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
   tools: [],
   maxOutputTokens: 256,
+  params: {},
   ...over,
 });
 
-async function drain(p: ModelProviderV1, r: ModelRequestV1): Promise<ModelStreamEvent[]> {
+async function drain(p: ModelProvider, r: ModelRequest): Promise<ModelStreamEvent[]> {
   const out: ModelStreamEvent[] = [];
   for await (const e of p.stream(r, { signal: new AbortController().signal })) out.push(e);
   return out;
 }
 
-async function streamError(p: ModelProviderV1, r: ModelRequestV1 = req()): Promise<unknown> {
+async function streamError(p: ModelProvider, r: ModelRequest = req()): Promise<unknown> {
   try {
     await drain(p, r);
   } catch (e) {
@@ -366,14 +373,24 @@ describe("openai: errors and edge cases", () => {
       models: [gpt("gpt-5.5")],
       reasoningSummary: "off",
     });
-    await drain(p, req({ effort: "max" }));
+    await drain(p, req({ params: { effort: "max" } }));
     const body = server.requests.at(-1)?.body as Record<string, unknown>;
     expect(body.reasoning).toEqual({ effort: "max" });
     expect(body.include).toEqual(["reasoning.encrypted_content"]);
     // 默认 auto
-    await drain(provider(), req({ effort: "max" }));
+    await drain(provider(), req({ params: { effort: "max" } }));
     const body2 = server.requests.at(-1)?.body as Record<string, unknown>;
     expect(body2.reasoning).toEqual({ effort: "max", summary: "auto" });
+    // thinking 旋钮覆盖部署默认值
+    const lastBody = () => server.requests.at(-1)?.body as Record<string, unknown>;
+    await drain(p, req({ params: { thinking: "summarized" } }));
+    expect(lastBody().reasoning).toEqual({
+      summary: "auto",
+    });
+    await drain(provider(), req({ params: { effort: "low", thinking: "on" } }));
+    expect(lastBody().reasoning).toEqual({
+      effort: "low",
+    });
   });
 
   it("reasoning -> thinking deltas and thinking block with raw item in opaque, tagged with the requested model", async () => {
@@ -386,7 +403,7 @@ describe("openai: errors and edge cases", () => {
         ],
         usage: { input_tokens: 10, output_tokens: 5 },
       });
-    const events = await drain(provider(), req({ effort: "low" }));
+    const events = await drain(provider(), req({ params: { effort: "low" } }));
     const thinking = events
       .filter((e) => e.type === "thinking_delta")
       .map((e) => (e as { text: string }).text)
@@ -501,7 +518,10 @@ describe("openai: errors and edge cases", () => {
         items: [{ type: "message", text: "hi" }],
         usage: { input_tokens: 10, output_tokens: 5 },
       });
-    await drain(provider(), req({ model: "gpt-4.1", effort: "high" }));
+    await drain(
+      provider(),
+      req({ model: "gpt-4.1", params: { effort: "high", thinking: "summarized" } }),
+    );
     const body = server.requests.at(-1)?.body as Record<string, unknown>;
     expect(body.store).toBe(false);
     expect(body.stream).toBe(true);
@@ -568,8 +588,23 @@ describe("openai: errors and edge cases", () => {
           reasoning: true,
           caching: true,
           midConversationSystem: true,
-          effort: true,
         },
+        parameters: [
+          {
+            key: "effort",
+            standard: "effort",
+            schema: { type: "string", enum: ["low", "medium", "high", "xhigh", "max"] },
+            label: { zh: "思考深度", en: "Effort" },
+            description: expect.any(Object),
+          },
+          {
+            key: "thinking",
+            standard: "thinking",
+            schema: { type: "string", enum: ["on", "summarized"] },
+            label: { zh: "思考模式", en: "Thinking" },
+            description: expect.any(Object),
+          },
+        ],
       },
       {
         id: "gpt-4.1",
@@ -582,9 +617,9 @@ describe("openai: errors and edge cases", () => {
           reasoning: false,
           caching: true,
           midConversationSystem: true,
-          effort: false,
         },
         streamIdleTimeoutMs: 60_000,
+        parameters: [],
       },
     ]);
     expect(server.requests.length).toBe(before);
@@ -594,7 +629,7 @@ describe("openai: errors and edge cases", () => {
 describe("openai: plugin manifest", () => {
   it("name, capability, deployment config requires at least one model and a secret apiKey", () => {
     expect(plugin.name).toBe("openai");
-    expect(plugin.provides).toEqual(["model-provider@1"]);
+    expect(plugin.provides).toEqual([MODEL_PROVIDER_CAPABILITY_V2]);
     const schema = plugin.config?.deployment;
     expect(schema).toBeDefined();
     if (schema === undefined) return;

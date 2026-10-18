@@ -3,7 +3,7 @@ import {
   type Effort,
   ModelError,
   type ModelMessage,
-  type ModelRequestV1,
+  type ModelRequest,
   type ProviderOpaque,
 } from "@capybara-hq/plugin-sdk";
 import type OpenAI from "openai";
@@ -17,7 +17,10 @@ type InputItem = OpenAI.Responses.ResponseInputItem;
 /** 请求映射需要的模型属性（来自部署配置）。 */
 export interface ModelTraits {
   reasoning: boolean;
-  /** 部署配置："off" 时不请求推理摘要（未完成组织验证的账号请求摘要会被拒绝）。 */
+  /**
+   * 部署级默认值："off" 时不请求推理摘要（未完成组织验证的账号请求摘要会被拒绝）。
+   * 请求带 `params.thinking` 时以它为准（`summarized` 请求摘要，`on` 不请求）。
+   */
   reasoningSummary: "auto" | "off";
 }
 
@@ -147,8 +150,16 @@ function mapMessages(messages: ModelMessage[], model: string): InputItem[] {
   return out;
 }
 
-/** model-provider@1 请求 → OpenAI Responses API 请求。纯函数。 */
-export function buildRequest(req: ModelRequestV1, traits: ModelTraits): OpenAIParams {
+/** 是否请求推理摘要：`params.thinking` 优先（summarized 请求、on 不请求），未设置时取部署默认。 */
+function wantsSummary(req: ModelRequest, traits: ModelTraits): boolean {
+  const t = req.params.thinking;
+  if (t === "summarized") return true;
+  if (t === "on") return false;
+  return traits.reasoningSummary === "auto";
+}
+
+/** model-provider@2 请求 → OpenAI Responses API 请求。纯函数。非推理模型忽略 effort / thinking。 */
+export function buildRequest(req: ModelRequest, traits: ModelTraits): OpenAIParams {
   const params: OpenAIParams = {
     model: req.model,
     input: mapMessages(req.messages, req.model),
@@ -161,9 +172,10 @@ export function buildRequest(req: ModelRequestV1, traits: ModelTraits): OpenAIPa
   if (instructions !== "") params.instructions = instructions;
   if (traits.reasoning) {
     params.include = ["reasoning.encrypted_content"];
+    const effort = req.params.effort;
     const reasoning: OpenAI.Reasoning = {
-      ...(req.effort !== undefined ? { effort: mapEffort(req.effort) } : {}),
-      ...(traits.reasoningSummary === "auto" ? { summary: "auto" as const } : {}),
+      ...(typeof effort === "string" ? { effort: mapEffort(effort as Effort) } : {}),
+      ...(wantsSummary(req, traits) ? { summary: "auto" as const } : {}),
     };
     if (Object.keys(reasoning).length > 0) params.reasoning = reasoning;
   }

@@ -1,17 +1,18 @@
-import type { ModelMessage, ModelRequestV1 } from "@capybara-hq/plugin-sdk";
+import type { ModelMessage, ModelRequest } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { buildRequest } from "../src/map-request.js";
 
-const base = (over: Partial<ModelRequestV1> = {}): ModelRequestV1 => ({
+const base = (over: Partial<ModelRequest> = {}): ModelRequest => ({
   model: "claude-opus-5-5",
   system: [{ text: "You are a concise assistant.", cache: false }],
   messages: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
   tools: [],
   maxOutputTokens: 2048,
+  params: {},
   ...over,
 });
 
-const build = (req: ModelRequestV1, serverFallbacks: "default" | "off" = "default") =>
+const build = (req: ModelRequest, serverFallbacks: "default" | "off" = "default") =>
   buildRequest(req, { serverFallbacks });
 
 describe("buildRequest: system", () => {
@@ -69,11 +70,30 @@ describe("buildRequest: thinking only when the model supports it", () => {
   it("thinking defaults to adaptive / summarized", () => {
     expect(build(base()).params.thinking).toEqual({ type: "adaptive", display: "summarized" });
   });
+
+  it("params.thinking: on -> display omitted; summarized -> display summarized", () => {
+    expect(build(base({ params: { thinking: "on" } })).params.thinking).toEqual({
+      type: "adaptive",
+      display: "omitted",
+    });
+    expect(build(base({ params: { thinking: "summarized" } })).params.thinking).toEqual({
+      type: "adaptive",
+      display: "summarized",
+    });
+  });
+
+  it("thinking: false ignores params.thinking", () => {
+    const { params } = buildRequest(base({ params: { thinking: "on" } }), {
+      serverFallbacks: "default",
+      thinking: false,
+    });
+    expect("thinking" in params).toBe(false);
+  });
 });
 
 describe("buildRequest: thinking replay", () => {
   const raw = { type: "thinking", thinking: "17*23=391", signature: "sig-abc" };
-  const history = (provider: string, model: string): ModelRequestV1 =>
+  const history = (provider: string, model: string): ModelRequest =>
     base({
       messages: [
         { role: "user", content: [{ type: "text", text: "What is 17 * 23?" }] },
@@ -228,7 +248,7 @@ describe("buildRequest: mid-conversation system (R38: always [system] user text,
 
 describe("buildRequest: thinking / effort / max_tokens", () => {
   it("adaptive thinking, never budget_tokens or disabled, effort in output_config", () => {
-    const { params } = build(base({ effort: "low" }));
+    const { params } = build(base({ params: { effort: "low" } }));
     expect(params.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(params.output_config).toEqual({ effort: "low" });
     expect(params.max_tokens).toBe(2048);

@@ -1,5 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import type { ContentBlock, ModelMessage, ModelRequestV1 } from "@capybara-hq/plugin-sdk";
+import type { ContentBlock, Effort, ModelMessage, ModelRequest } from "@capybara-hq/plugin-sdk";
 
 export const PROVIDER = "anthropic";
 export const SERVER_FALLBACK_BETA = "server-side-fallback-2026-07-01";
@@ -97,11 +97,13 @@ function mapMessages(messages: ModelMessage[], model: string): Anthropic.Message
 const MAX_CACHE_BREAKPOINTS = 4;
 
 /**
- * model-provider@1 请求 → Anthropic Messages API 请求。纯函数。
- * `thinking`：模型支持 adaptive 思考时为 true（默认）；false 时不发 thinking 参数（不发 disabled）。
+ * model-provider@2 请求 → Anthropic Messages API 请求。纯函数。
+ * `thinking`：模型支持 adaptive 思考时为 true（默认）；false 时不发 thinking 参数（不发 disabled），
+ * 也忽略 `params.thinking`。参数映射：`params.thinking` 为 `on` 时 `display: "omitted"`，其余（含未设置）
+ * 为 `display: "summarized"`；`params.effort` → `output_config.effort`。
  */
 export function buildRequest(
-  req: ModelRequestV1,
+  req: ModelRequest,
   opts: { serverFallbacks: ServerFallbacks; thinking?: boolean },
 ): BuiltRequest {
   const params: AnthropicParams = {
@@ -110,8 +112,10 @@ export function buildRequest(
     messages: mapMessages(req.messages, req.model),
   };
   if (opts.thinking !== false) {
-    // 当前模型默认 display: "omitted"（思考文本为空）；summarized 返回推理摘要供界面流式展示，计费不变（R37）
-    params.thinking = { type: "adaptive", display: "summarized" };
+    // 当前模型默认 display: "omitted"（思考文本为空）；summarized 返回推理摘要供界面流式展示，计费不变（R37）。
+    // 旋钮取 on 时按 API 默认的 omitted 发送（显式写出，不依赖默认值）
+    const display = req.params.thinking === "on" ? "omitted" : "summarized";
+    params.thinking = { type: "adaptive", display };
   }
   let breakpoints = 0;
   if (req.system.length > 0) {
@@ -128,7 +132,9 @@ export function buildRequest(
   if (params.messages.length > 0 && breakpoints < MAX_CACHE_BREAKPOINTS) {
     params.cache_control = { type: "ephemeral" };
   }
-  if (req.effort !== undefined) params.output_config = { effort: req.effort };
+  const effort = req.params.effort;
+  // 取值已由内核按声明（Models API 给出的档位）处理过
+  if (typeof effort === "string") params.output_config = { effort: effort as Effort };
   if (req.tools.length > 0) {
     // tool_choice 不设置（默认 auto）：any / tool 在当前模型上会 400
     params.tools = req.tools.map((t) => ({

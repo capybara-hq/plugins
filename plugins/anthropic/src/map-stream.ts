@@ -2,7 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import {
   type ContentBlock,
   ModelError,
-  type ModelRequestV1,
+  type ModelRequest,
   type ModelStreamEvent,
   type StopReason,
 } from "@capybara-hq/plugin-sdk";
@@ -193,7 +193,7 @@ class MessageAccumulator {
           });
           break;
         default:
-          // 服务端工具、fallback 切换标记等不在 model-provider@1 契约内的块不回传
+          // 服务端工具、fallback 切换标记等不在 model-provider 契约内的块不回传
           break;
       }
     }
@@ -214,10 +214,10 @@ class MessageAccumulator {
 
 const aborted = () => new ModelError("aborted", "Request aborted");
 
-/** 发起一次流式调用并映射为 model-provider@1 事件；以且仅以一个 message_complete 结束，出错抛 ModelError。 */
+/** 发起一次流式调用并映射为 model-provider@2 事件；以且仅以一个 message_complete 结束，出错抛 ModelError。 */
 export async function* streamMessages(
   client: Anthropic,
-  req: ModelRequestV1,
+  req: ModelRequest,
   opts: { signal: AbortSignal; serverFallbacks: ServerFallbacks; thinking?: boolean },
 ): AsyncGenerator<ModelStreamEvent> {
   const { signal } = opts;

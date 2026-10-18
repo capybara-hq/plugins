@@ -1,7 +1,7 @@
 import {
   type ContentBlock,
   ModelError,
-  type ModelRequestV1,
+  type ModelRequest,
   type ModelStreamEvent,
   type StopReason,
 } from "@capybara-hq/plugin-sdk";
@@ -127,7 +127,7 @@ export function toComplete(r: Response, model: string): Complete {
         break;
       }
       default:
-        // 内置工具等不在 model-provider@1 契约内的输出项不回传
+        // 内置工具等不在 model-provider@2 契约内的输出项不回传
         break;
     }
   }
@@ -152,14 +152,14 @@ export function toComplete(r: Response, model: string): Complete {
 const aborted = () => new ModelError("aborted", "Request aborted");
 
 /**
- * 发起一次流式调用并映射为 model-provider@1 事件；以且仅以一个 message_complete 结束，出错抛 ModelError。
+ * 发起一次流式调用并映射为 model-provider@2 事件；以且仅以一个 message_complete 结束，出错抛 ModelError。
  * 用原始事件流（`responses.create({ stream: true })`），最终内容取自终止事件里的完整响应。
  * 不用 SDK 的 `responses.stream()`：它在本地累积并校验输出项，失败时抛出不带结构信息的
  * OpenAIError，无法按类型归类；工具参数也由本插件自己解析。
  */
 export async function* streamResponses(
   client: OpenAI,
-  req: ModelRequestV1,
+  req: ModelRequest,
   opts: { signal: AbortSignal; traits: ModelTraits },
 ): AsyncGenerator<ModelStreamEvent> {
   const { signal } = opts;
