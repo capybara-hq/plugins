@@ -72,6 +72,8 @@ export function buildRequest(req: ModelRequest, t: ChatTarget): ChatBody {
       type: "function",
       function: { name: tool.name, description: tool.description, parameters: tool.inputSchema },
     }));
+    // none：照常声明工具但不得调用（收尾调用）；auto 即默认值，不设置
+    if (req.toolChoice === "none") body.tool_choice = "none";
   }
   t.dialect.applyParams(body, req.params, t.model);
   return body;

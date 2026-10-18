@@ -271,6 +271,38 @@ describe("callTool 映射", () => {
     expect(err.message).toBe(
       "The app returned an error: Unknown tool missing (check the arguments and retry, or ask the user if it keeps failing).",
     );
+    // 服务可达：不计入内核的应用熔断
+    expect(err.kind).toBe("error");
+  });
+
+  it("HTTP 4xx（非 401）→ ToolError kind error；连接失败 → ToolError kind unavailable", async () => {
+    const server = await fake({
+      tools: [{ name: "t", description: "d" }],
+      intercept: (r) => (r.method === "tools/call" ? { status: 404, body: "nope" } : undefined),
+    });
+    const s = await open(server);
+    const err = await s.callTool("t", {}, new AbortController().signal).catch((e) => e);
+    expect(err).toBeInstanceOf(ToolError);
+    expect(err.kind).toBe("error");
+
+    const gone = await fake({ tools: [] });
+    const url = gone.url;
+    await gone.stop();
+    servers.splice(servers.indexOf(gone), 1);
+    const c = createMcpConnector({ log: memLog(), allowInsecureLoopback: true });
+    const refused = await c
+      .open({
+        endpoint: c.endpointSchema.parse({ url }),
+        auth: async () => ({ headers: {} }),
+        onUnauthorized: async () => {},
+        signal: new AbortController().signal,
+      })
+      .catch((e) => e);
+    expect(refused).toBeInstanceOf(ToolError);
+    expect(refused.kind).toBe("unavailable");
+    expect(refused.message).toBe(
+      "Could not reach the app's server. Retry later, or ask an administrator to check the app.",
+    );
   });
 
   it("HTTP 5xx → ToolError 只带状态码；正文进插件日志（warn）", async () => {
@@ -286,6 +318,8 @@ describe("callTool 映射", () => {
     expect(err.message).toBe(
       "The app's server responded with HTTP 502. Retry later, or ask an administrator to check the app.",
     );
+    // 5xx 计入内核的应用熔断
+    expect(err.kind).toBe("unavailable");
     const w = log.lines.find((l) => l.msg === "MCP request failed");
     expect(w?.fields).toMatchObject({ status: 502, body: "upstream exploded" });
   });
@@ -364,6 +398,8 @@ describe("认证", () => {
     }).catch((e) => e);
     expect(err).toBeInstanceOf(ToolError);
     expect(err.message).toBe(AUTH_FAILED_TEXT);
+    // 鉴权失败不是服务不可用：不计入熔断
+    expect(err.kind).toBe("error");
     expect(AUTH_FAILED_TEXT).toBe(
       "Authentication failed for this app; ask the user to reconnect it.",
     );

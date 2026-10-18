@@ -181,10 +181,17 @@ function mapCallResult(r: Record<string, unknown>): ToolResult {
   return { content, ...(r.isError === true && { isError: true }) };
 }
 
+/** 连不上服务（模型可见，英文）。 */
+export const UNREACHABLE_TEXT =
+  "Could not reach the app's server. Retry later, or ask an administrator to check the app.";
+
 /**
- * 统一错误：服务端的 JSON-RPC 错误 → ToolError（带服务的说明；回显的凭据由内核打码）；
- * HTTP 非 2xx → ToolError 只带状态码（正文已在 fetch 包装里记日志）；ToolError（认证失败）原样；
- * 本地产生的超时 / 连接关闭 / 中止等原样抛出（内核按错误类名处理）。
+ * 统一错误。`ToolError.kind` 告诉内核是否计入应用熔断：只有远端不可用（连不上、HTTP 5xx）为 `unavailable`；
+ * - 服务端的 JSON-RPC 错误 → ToolError（kind error，带服务的说明；回显的凭据由内核打码）；
+ * - HTTP 5xx → ToolError（kind unavailable）、其他非 2xx → ToolError（kind error），都只带状态码（正文已在 fetch 包装里记日志）；
+ * - 连接失败（fetch 抛 `TypeError: fetch failed`）→ ToolError（kind unavailable）；
+ * - ToolError（认证失败、重定向）原样（kind error）；
+ * - 本地产生的超时 / 连接关闭 / 中止等原样抛出（内核按错误类名处理，计入熔断）。
  */
 function mapError(e: unknown): unknown {
   if (e instanceof ToolError) return e;
@@ -199,7 +206,11 @@ function mapError(e: unknown): unknown {
   if (e instanceof StreamableHTTPError && typeof e.code === "number" && e.code >= 400) {
     return new ToolError(
       `The app's server responded with HTTP ${e.code}. Retry later, or ask an administrator to check the app.`,
+      { kind: e.code >= 500 ? "unavailable" : "error" },
     );
+  }
+  if (e instanceof TypeError && e.message === "fetch failed") {
+    return new ToolError(UNREACHABLE_TEXT, { kind: "unavailable" });
   }
   return e;
 }

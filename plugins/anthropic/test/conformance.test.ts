@@ -82,6 +82,66 @@ describe.skipIf(!LIVE_KEY)("live", { timeout: 120_000 }, () => {
   }));
 });
 
+// 收尾调用的形状：历史里有 tool_use / tool_result，照常声明工具，toolChoice none → API 接受且模型只回文本
+describe.skipIf(!LIVE_KEY)("live toolChoice", { timeout: 60_000 }, () => {
+  it("history with tool_use + tool_result, tools declared, toolChoice none -> text only", async () => {
+    const provider = createAnthropicProvider({
+      kv: memoryKv(),
+      apiKey: LIVE_KEY ?? "",
+      models: ["claude-haiku-5-5"],
+      serverFallbacks: "default",
+    });
+    const events: ModelStreamEvent[] = [];
+    const r: ModelRequest = {
+      model: "claude-haiku-5-5",
+      system: [{ text: "Be brief.", cache: false }],
+      messages: [
+        { role: "user", content: [{ type: "text", text: "What is the weather in Paris?" }] },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_call",
+              id: "toolu_live_1",
+              name: "get_weather",
+              input: { city: "Paris" },
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", callId: "toolu_live_1", content: "Sunny, 21C", isError: false },
+          ],
+        },
+        {
+          role: "system",
+          content: "Step limit reached. Do not call tools. Summarize what you found.",
+        },
+      ],
+      tools: [
+        {
+          name: "get_weather",
+          description: "Get the current weather for a city.",
+          inputSchema: { type: "object", properties: { city: { type: "string" } } },
+        },
+      ],
+      toolChoice: "none",
+      maxOutputTokens: 200,
+      params: {},
+    };
+    for await (const e of provider.stream(r, { signal: new AbortController().signal })) {
+      events.push(e);
+    }
+    const done = events.at(-1);
+    expect(done?.type).toBe("message_complete");
+    if (done?.type !== "message_complete") return;
+    expect(done.content.some((b) => b.type === "tool_call")).toBe(false);
+    expect(done.stopReason).toBe("end_turn");
+    expect(done.content.some((b) => b.type === "text" && b.text.length > 0)).toBe(true);
+  });
+});
+
 // ---- 错误映射与边界 ----
 const req = (over: Partial<ModelRequest> = {}): ModelRequest => ({
   model: "claude-haiku-5-5",
