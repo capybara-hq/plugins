@@ -96,6 +96,7 @@ async function streamError(p: ModelProvider, r: ModelRequest = req()): Promise<u
 describe("anthropic: errors and edge cases", () => {
   let server: FakeModelServer;
   let next: () => FakeResponse;
+  const modelFail = new Map<string, () => FakeResponse>();
   const provider = (kv: Kv = memoryKv()) =>
     createAnthropicProvider({
       kv,
@@ -108,6 +109,8 @@ describe("anthropic: errors and edge cases", () => {
   beforeAll(async () => {
     server = await startFakeModelServer((r) => {
       const m = /^\/v1\/models\/([^/?]+)/.exec(r.path);
+      const fail = m?.[1] !== undefined ? modelFail.get(m[1]) : undefined;
+      if (fail !== undefined) return fail();
       if (m?.[1] === "claude-missing") return errorJson(404, "not_found_error", "model not found");
       if (m?.[1] !== undefined) return { status: 200, json: modelObject(m[1]) };
       return next();
@@ -470,6 +473,60 @@ describe("anthropic: errors and edge cases", () => {
     expect(models.map((m) => m.id)).toEqual(["claude-haiku-5-5", "claude-sonnet-5"]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.meta).toMatchObject({ model: "claude-missing" });
+  });
+
+  const listWith = (ids: string[], fails: Record<string, () => FakeResponse>) => {
+    modelFail.clear();
+    for (const [k, v] of Object.entries(fails)) modelFail.set(k, v);
+    const kv = memoryKv();
+    const warnings: unknown[] = [];
+    const p = createAnthropicProvider({
+      kv,
+      apiKey: "sk-ant-fixture",
+      baseUrl: server.url,
+      models: ids,
+      serverFallbacks: "default",
+      log: { warn: (...a) => warnings.push(a) },
+    });
+    return { p, kv, warnings };
+  };
+
+  it("listModels skips a 403 id (warns) and returns the others", async () => {
+    const { p, warnings } = listWith(["claude-haiku-5-5", "claude-sonnet-5"], {
+      "claude-sonnet-5": () => errorJson(403, "permission_error", "nope"),
+    });
+    expect((await p.listModels()).map((m) => m.id)).toEqual(["claude-haiku-5-5"]);
+    expect(warnings).toHaveLength(1);
+    modelFail.clear();
+  });
+
+  it.each([
+    ["500", () => errorJson(500, "api_error", "Internal")],
+    ["429", () => errorJson(429, "rate_limit_error", "Rate limited")],
+  ])("listModels rejects with a retryable ModelError when one id fails with %s", async (_n, f) => {
+    const { p, kv } = listWith(["claude-haiku-5-5", "claude-sonnet-5"], { "claude-sonnet-5": f });
+    const err = await p.listModels().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(isModelError(err)).toBe(true);
+    expect(isModelError(err) && err.retryable).toBe(true);
+    // 成功的 id 仍写入 kv 缓存
+    expect(kv.store.has("models:claude-haiku-5-5")).toBe(true);
+    modelFail.clear();
+  });
+
+  it("listModels rejects when every id fails non-retryably", async () => {
+    const { p } = listWith(["claude-missing", "claude-missing-2"], {
+      "claude-missing-2": () => errorJson(404, "not_found_error", "model not found"),
+    });
+    const err = await p.listModels().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(isModelError(err)).toBe(true);
+    expect(isModelError(err) && err.retryable).toBe(false);
+    modelFail.clear();
   });
 
   it("models without thinking / effort support: capabilities say so and requests omit thinking", async () => {

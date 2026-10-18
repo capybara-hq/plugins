@@ -3,6 +3,7 @@ import {
   definePlugin,
   type Logger,
   MODEL_PROVIDER_CAPABILITY,
+  type ModelError,
   type ModelInfo,
   type ModelProvider,
   type ModelRequest,
@@ -85,18 +86,30 @@ export function createAnthropicProvider(opts: AnthropicProviderOptions): ModelPr
     return info;
   }
 
-  /** 部署配置里的模型逐个取；取不到的（例如 id 写错、账号无权访问）跳过并记 warn，不拖垮整个列表。 */
+  /**
+   * 部署配置里的模型逐个取。仅跳过「不可重试」的模型错误（例如 id 写错、账号无权访问）并记 warn；
+   * 只要有可重试的失败（网络、5xx、429、过载），或一个 id 都没取到，就抛出，避免内核把残缺结果缓存下来。
+   */
   async function listModels(): Promise<ModelInfo[]> {
     const settled = await Promise.allSettled(opts.models.map(getModel));
     const out: ModelInfo[] = [];
+    let retryable: ModelError | undefined;
+    let firstError: ModelError | undefined;
     settled.forEach((r, i) => {
-      if (r.status === "fulfilled") out.push(r.value);
-      else
-        opts.log?.warn("cannot load anthropic model; skipping", {
-          model: opts.models[i],
-          err: r.reason,
-        });
+      if (r.status === "fulfilled") {
+        out.push(r.value);
+        return;
+      }
+      const e = toModelError(r.reason);
+      firstError ??= e;
+      if (e.retryable) {
+        retryable ??= e;
+        return;
+      }
+      opts.log?.warn("cannot load anthropic model; skipping", { model: opts.models[i], err: e });
     });
+    if (retryable !== undefined) throw retryable;
+    if (out.length === 0 && firstError !== undefined) throw firstError;
     return out;
   }
 
