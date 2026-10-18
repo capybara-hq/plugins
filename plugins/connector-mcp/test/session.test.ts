@@ -121,7 +121,7 @@ describe("重定向", () => {
     expect(err).toBeInstanceOf(ToolError);
     expect(err.message).toBe(redirectText(307));
     expect(err.message).toBe(
-      "The app's server responded with a redirect (HTTP 307); redirects are not followed.",
+      "The app's server responded with a redirect (HTTP 307); redirects are not followed. Ask an administrator to check the app endpoint URL.",
     );
     expect(target.requests).toEqual([]);
   });
@@ -268,7 +268,9 @@ describe("callTool 映射", () => {
     const s = await open(server);
     const err = await s.callTool("missing", {}, new AbortController().signal).catch((e) => e);
     expect(err).toBeInstanceOf(ToolError);
-    expect(err.message).toBe("The app returned an error: Unknown tool missing");
+    expect(err.message).toBe(
+      "The app returned an error: Unknown tool missing (check the arguments and retry, or ask the user if it keeps failing).",
+    );
   });
 
   it("HTTP 5xx → ToolError 只带状态码；正文进插件日志（warn）", async () => {
@@ -281,7 +283,9 @@ describe("callTool 映射", () => {
     const s = await open(server, { log });
     const err = await s.callTool("t", {}, new AbortController().signal).catch((e) => e);
     expect(err).toBeInstanceOf(ToolError);
-    expect(err.message).toBe("The app's server responded with HTTP 502.");
+    expect(err.message).toBe(
+      "The app's server responded with HTTP 502. Retry later, or ask an administrator to check the app.",
+    );
     const w = log.lines.find((l) => l.msg === "MCP request failed");
     expect(w?.fields).toMatchObject({ status: 502, body: "upstream exploded" });
   });

@@ -90,7 +90,7 @@ export type McpEndpoint = z.infer<ReturnType<typeof endpointSchema>>;
 
 /** 服务以 3xx 响应（不跟随，模型可见，英文）。 */
 export const redirectText = (status: number) =>
-  `The app's server responded with a redirect (HTTP ${status}); redirects are not followed.`;
+  `The app's server responded with a redirect (HTTP ${status}); redirects are not followed. Ask an administrator to check the app endpoint URL.`;
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
@@ -192,10 +192,14 @@ function mapError(e: unknown): unknown {
     if (e.code === ErrorCode.RequestTimeout || e.code === ErrorCode.ConnectionClosed) return e;
     // SDK 在服务端与客户端各加一次 "MCP error <code>: " 前缀，去掉后只留服务的说明
     const msg = e.message.replace(/^(MCP error -?\d+: )+/, "");
-    return new ToolError(`The app returned an error: ${msg}`);
+    return new ToolError(
+      `The app returned an error: ${msg} (check the arguments and retry, or ask the user if it keeps failing).`,
+    );
   }
   if (e instanceof StreamableHTTPError && typeof e.code === "number" && e.code >= 400) {
-    return new ToolError(`The app's server responded with HTTP ${e.code}.`);
+    return new ToolError(
+      `The app's server responded with HTTP ${e.code}. Retry later, or ask an administrator to check the app.`,
+    );
   }
   return e;
 }
