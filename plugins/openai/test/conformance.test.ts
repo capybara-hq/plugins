@@ -581,6 +581,18 @@ describe("openai: errors and edge cases", () => {
     expect(m?.parameters.map((d) => d.key)).toEqual(["effort"]);
   });
 
+  it("effortLevels from the model config become the effort enum (order kept, no default)", async () => {
+    const p = createOpenAIProvider({
+      apiKey: "sk-fixture",
+      baseUrl: `${server.url}/v1`,
+      models: [gpt("gpt-5.5", { effortLevels: ["max", "low", "xhigh"] })],
+    });
+    const [m] = await p.listModels();
+    const effort = m?.parameters.find((d) => d.key === "effort");
+    expect(effort?.schema).toEqual({ type: "string", enum: ["max", "low", "xhigh"] });
+    expect(effort).not.toHaveProperty("default");
+  });
+
   it("listModels comes straight from config", async () => {
     const before = server.requests.length;
     expect(await provider().listModels()).toEqual([
@@ -600,7 +612,7 @@ describe("openai: errors and edge cases", () => {
           {
             key: "effort",
             standard: "effort",
-            schema: { type: "string", enum: ["low", "medium", "high", "xhigh", "max"] },
+            schema: { type: "string", enum: ["low", "medium", "high"] },
             label: { zh: "思考深度", en: "Effort" },
             description: expect.any(Object),
           },
@@ -660,5 +672,13 @@ describe("openai: plugin manifest", () => {
     expect(schema.safeParse({ apiKey: "k", models, reasoningSummary: "detailed" }).success).toBe(
       false,
     );
+    // effortLevels：非空、取值属于 low|medium|high|xhigh|max
+    const withLevels = (effortLevels: unknown) =>
+      schema.safeParse({ apiKey: "k", models: [{ ...models[0], effortLevels }] });
+    expect(withLevels(["low", "high"]).success).toBe(true);
+    expect(withLevels([]).success).toBe(false);
+    const bad = withLevels(["low", "minimal"]);
+    expect(bad.success).toBe(false);
+    expect(JSON.stringify(bad.error?.issues)).toMatch(/minimal|low.*medium.*high/);
   });
 });

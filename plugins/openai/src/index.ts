@@ -1,6 +1,7 @@
 import {
   definePlugin,
   EFFORT_VALUES,
+  type Effort,
   MODEL_PROVIDER_CAPABILITY_V2,
   ModelError,
   type ModelInfo,
@@ -13,6 +14,10 @@ import OpenAI from "openai";
 import { z } from "zod";
 import { streamResponses } from "./map-stream.js";
 
+const EffortLevel = z.enum(EFFORT_VALUES as [Effort, ...Effort[]], {
+  error: `effort level must be one of ${EFFORT_VALUES.join(", ")}`,
+});
+
 const ModelConfigSchema = z.object({
   id: z.string().min(1),
   contextWindow: z.number().int().positive(),
@@ -20,6 +25,11 @@ const ModelConfigSchema = z.object({
   reasoning: z.boolean(),
   vision: z.boolean(),
   streamIdleTimeoutMs: z.number().int().positive().optional(),
+  /**
+   * 该模型接受的 effort 档位（按给定顺序声明）；档位因模型而异（如 gpt-5-nano 不接受 max），
+   * 未给时用 low / medium / high。
+   */
+  effortLevels: z.array(EffortLevel).min(1).optional(),
 });
 
 export type ModelConfig = z.infer<typeof ModelConfigSchema>;
@@ -36,16 +46,18 @@ export interface OpenAIProviderOptions {
 
 /**
  * 推理模型声明的参数（非推理模型为空）：
- * - `effort`：五档，原样映射为 `reasoning.effort`；不给默认值（API 默认值因模型而异），未设置时不发送；
+ * - `effort`：档位取模型配置的 `effortLevels`（未给时 low / medium / high），原样映射为 `reasoning.effort`；
+ *   不给默认值（API 默认值因模型而异），未设置时不发送；
  * - `thinking`：`on|summarized`，映射为是否带 `reasoning.summary`；不给默认值，未设置时请求摘要
  *   （部署默认）。部署配置 `reasoningSummary` 为 "off" 时不声明：未完成组织验证的账号请求摘要会被拒绝（不可重试），
  *   不能让 agent 选到。
  */
-function reasoningParameters(reasoningSummary: "auto" | "off"): ModelParameter[] {
+function reasoningParameters(m: ModelConfig, reasoningSummary: "auto" | "off"): ModelParameter[] {
   const effort: ModelParameter = {
     key: "effort",
     standard: "effort",
-    schema: { type: "string", enum: [...EFFORT_VALUES] },
+    // 未配置时用 low / medium / high：所有 OpenAI 推理模型都接受
+    schema: { type: "string", enum: [...(m.effortLevels ?? ["low", "medium", "high"])] },
     label: { zh: "思考深度", en: "Effort" },
     description: {
       zh: "越高思考越充分，耗时与用量越多；未设置时用模型默认值",
@@ -84,7 +96,7 @@ function modelInfo(m: ModelConfig, reasoningSummary: "auto" | "off"): ModelInfo 
       midConversationSystem: true,
     },
     ...(m.streamIdleTimeoutMs !== undefined ? { streamIdleTimeoutMs: m.streamIdleTimeoutMs } : {}),
-    parameters: m.reasoning ? reasoningParameters(reasoningSummary) : [],
+    parameters: m.reasoning ? reasoningParameters(m, reasoningSummary) : [],
   };
 }
 
