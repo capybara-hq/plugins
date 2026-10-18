@@ -1,0 +1,415 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import {
+  type AuthInjection,
+  type Connector,
+  type ConnectorSession,
+  ToolError,
+  type ToolResult,
+} from "@capybara-hq/plugin-sdk";
+import {
+  defaultFakeOpenApiSpec,
+  type FakeOpenApiServer,
+  startFakeOpenApiServer,
+} from "@capybara-hq/testing";
+import { afterEach, describe, expect, it } from "vitest";
+import { createOpenApiConnector } from "../src/connector.js";
+
+/** 对着本地假 OpenAPI 服务的会话用例：取文档、调用、鉴权注入、401 重试、错误分类。 */
+
+const KEY = "fake-api-key-1234567890";
+const log = { info() {}, warn() {}, error() {} };
+const servers: FakeOpenApiServer[] = [];
+
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map((s) => s.stop()));
+});
+
+async function server(opts: Parameters<typeof startFakeOpenApiServer>[0] = {}) {
+  const s = await startFakeOpenApiServer(opts);
+  servers.push(s);
+  return s;
+}
+
+interface OpenOpts {
+  auth?: () => Promise<AuthInjection>;
+  onUnauthorized?: () => Promise<void>;
+  connector?: Connector;
+}
+
+async function open(endpoint: Record<string, unknown>, o: OpenOpts = {}) {
+  const c = o.connector ?? createOpenApiConnector({ log, allowInsecureLoopback: true });
+  return c.open({
+    endpoint: c.endpointSchema.parse(endpoint),
+    auth: o.auth ?? (async () => ({ headers: { "X-API-Key": KEY } })),
+    onUnauthorized: o.onUnauthorized ?? (async () => {}),
+    signal: new AbortController().signal,
+  });
+}
+
+const signal = () => new AbortController().signal;
+const text = (r: ToolResult) => r.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+
+async function failure(p: Promise<unknown>): Promise<ToolError> {
+  const e = await p.then(
+    () => undefined,
+    (err: unknown) => err,
+  );
+  expect(e).toBeInstanceOf(ToolError);
+  return e as ToolError;
+}
+
+async function withSession<T>(
+  endpoint: Record<string, unknown>,
+  fn: (s: ConnectorSession) => Promise<T>,
+  o: OpenOpts = {},
+): Promise<T> {
+  const s = await open(endpoint, o);
+  try {
+    return await fn(s);
+  } finally {
+    await s.close();
+  }
+}
+
+describe("取文档", () => {
+  it("从 specUrl 取文档（不带凭据）并列出工具", async () => {
+    const api = await server({ apiKey: KEY });
+    const tools = await withSession({ specUrl: api.specUrl }, (s) => s.listTools());
+    expect(tools).toHaveLength(10);
+    const specReq = api.requests.find((r) => r.path === "/openapi.json");
+    expect(specReq?.headers["x-api-key"]).toBeUndefined();
+  });
+
+  it("文档地址 3xx → 不跟随，报错", async () => {
+    const api = await server({ specRedirect: true });
+    const e = await failure(open({ specUrl: api.specUrl }));
+    expect(e.message).toMatch(/redirect/i);
+    expect(api.requests.map((r) => r.path)).toEqual(["/openapi.json"]);
+  });
+
+  it("文档地址 404 → error；5xx → unavailable", async () => {
+    const api = await server();
+    const e = await failure(open({ specUrl: `${api.url}/missing.json` }));
+    expect(e.message).toContain("HTTP 404");
+    expect(e.kind).toBe("error");
+    const e5 = await failure(open({ specUrl: `${api.url}/v1/boom` }));
+    expect(e5.kind).toBe("unavailable");
+  });
+
+  it("文档超过大小上限 → 报错", async () => {
+    const api = await server({
+      spec: () => ({ ...defaultFakeOpenApiSpec("http://127.0.0.1:1"), pad: "x".repeat(5000) }),
+    });
+    const small = createOpenApiConnector({
+      log,
+      allowInsecureLoopback: true,
+      limits: { maxSpecBytes: 4096 },
+    });
+    const e = await failure(open({ specUrl: api.specUrl }, { connector: small }));
+    expect(e.message).toMatch(/larger than/);
+  });
+
+  it("连不上文档地址 → unavailable", async () => {
+    const api = await server();
+    const url = api.specUrl;
+    await api.stop();
+    servers.splice(servers.indexOf(api), 1);
+    const e = await failure(open({ specUrl: url }));
+    expect(e.kind).toBe("unavailable");
+  });
+});
+
+describe("调用", () => {
+  it("CRUD：注入 API key 头，结果带状态、content-type 与美化的 JSON", async () => {
+    const api = await server({ apiKey: KEY });
+    await withSession({ specUrl: api.specUrl }, async (s) => {
+      const created = await s.callTool(
+        "createPet",
+        { body: { name: "Rex", tag: "dog" } },
+        signal(),
+      );
+      expect(created.isError).toBeUndefined();
+      expect(text(created)).toContain("HTTP 201");
+      expect(text(created)).toContain("content-type: application/json");
+      expect(text(created)).toContain('{\n  "id": 1,\n  "name": "Rex",\n  "tag": "dog"\n}');
+      await s.callTool("createPet", { body: { name: "Tom", tag: "cat" } }, signal());
+      await s.callTool("createPet", { body: { name: "Fido", tag: "dog" } }, signal());
+
+      const got = await s.callTool("getPet", { path: { petId: 1 } }, signal());
+      expect(text(got)).toContain('"name": "Rex"');
+
+      const list = await s.callTool(
+        "listPets",
+        { query: { tags: ["dog", "bird"], limit: 5 } },
+        signal(),
+      );
+      expect(JSON.parse(text(list).split("\n\n").slice(1).join("\n\n"))).toHaveLength(2);
+      expect(api.requests.at(-1)?.query).toBe("limit=5&tags=dog&tags=bird");
+
+      const upd = await s.callTool(
+        "updatePet",
+        { path: { petId: 2 }, body: { name: "Tommy" } },
+        signal(),
+      );
+      expect(text(upd)).toContain('"name": "Tommy"');
+      const del = await s.callTool("deletePet", { path: { petId: 1 } }, signal());
+      expect(text(del)).toContain("HTTP 204");
+      expect(api.pets().map((p) => p.name)).toEqual(["Tommy", "Fido"]);
+
+      const gone = await s.callTool("getPet", { path: { petId: 1 } }, signal());
+      expect(gone.isError).toBe(true);
+      expect(text(gone)).toContain("HTTP 404");
+      expect(text(gone)).toContain("pet 1 not found");
+    });
+    const apiReqs = api.requests.filter((r) => r.path.startsWith("/v1/"));
+    expect(apiReqs.every((r) => r.headers["x-api-key"] === KEY)).toBe(true);
+    const post = apiReqs.find((r) => r.method === "POST");
+    expect(post?.headers["content-type"]).toBe("application/json");
+  });
+
+  it("API key 在 query 里", async () => {
+    const api = await server({ apiKey: KEY, apiKeyIn: "query" });
+    await withSession(
+      { specUrl: api.specUrl },
+      async (s) => {
+        const r = await s.callTool("listPets", { query: { limit: 1 } }, signal());
+        expect(r.isError).toBeUndefined();
+      },
+      { auth: async () => ({ headers: {}, query: { api_key: KEY } }) },
+    );
+    expect(api.requests.at(-1)?.query).toBe(`limit=1&api_key=${KEY}`);
+  });
+
+  it("baseUrl 覆盖 servers；servers 里的变量取默认值", async () => {
+    const api = await server();
+    await withSession({ specUrl: api.specUrl }, (s) => s.callTool("boom", {}, signal())).catch(
+      () => {},
+    );
+    expect(api.requests.at(-1)?.path).toBe("/v1/boom");
+    const other = await server();
+    await withSession({ specUrl: api.specUrl, baseUrl: `${other.url}/v1` }, (s) =>
+      s.callTool("listPets", {}, signal()),
+    );
+    expect(other.requests.at(-1)?.path).toBe("/v1/pets");
+  });
+
+  it("参数序列化：explode=false 逗号拼接、deepObject、声明的头", async () => {
+    const api = await server();
+    const r = await withSession({ specUrl: api.specUrl }, (s) =>
+      s.callTool(
+        "echo",
+        {
+          query: { ids: [1, 2, 3], filter: { kind: "a b", owner: "me" } },
+          headers: { "X-Trace-Id": "t-1" },
+        },
+        signal(),
+      ),
+    );
+    const req = api.requests.at(-1);
+    expect(req?.query).toBe("ids=1%2C2%2C3&filter%5Bkind%5D=a+b&filter%5Bowner%5D=me");
+    expect(req?.headers["x-trace-id"]).toBe("t-1");
+    expect(text(r)).toContain('"trace": "t-1"');
+  });
+
+  it("路径参数编码；`.` / `..` 拒绝", async () => {
+    const api = await server();
+    await withSession({ specUrl: api.specUrl }, async (s) => {
+      await s.callTool("getPet", { path: { petId: "a/b?c" } }, signal());
+      expect(api.requests.at(-1)?.path).toBe("/v1/pets/a%2Fb%3Fc");
+      const e = await failure(s.callTool("getPet", { path: { petId: ".." } }, signal()));
+      expect(e.message).toContain("petId");
+      const missing = await failure(s.callTool("getPet", {}, signal()));
+      expect(missing.message).toContain("path.petId");
+    });
+  });
+
+  it("工具参数不能设置 Authorization / Cookie 等头，也不能设置未声明的头", async () => {
+    const api = await server();
+    await withSession({ specUrl: api.specUrl }, async (s) => {
+      for (const h of ["Authorization", "cookie", "X-Other"]) {
+        const e = await failure(s.callTool("echo", { headers: { [h]: "x" } }, signal()));
+        expect(e.message).toContain(h);
+      }
+    });
+    expect(api.requests.filter((r) => r.path === "/v1/echo")).toHaveLength(0);
+  });
+
+  it("头值含换行 / 非 Latin-1 字符 → 明确错误", async () => {
+    const api = await server();
+    await withSession({ specUrl: api.specUrl }, async (s) => {
+      for (const v of ["a\r\nX-Injected: 1", "中文"]) {
+        const e = await failure(s.callTool("echo", { headers: { "X-Trace-Id": v } }, signal()));
+        expect(e.message).toContain("X-Trace-Id");
+      }
+    });
+    expect(api.requests.filter((r) => r.path === "/v1/echo")).toHaveLength(0);
+  });
+
+  it("文本请求体与二进制响应", async () => {
+    const api = await server();
+    await withSession({ specUrl: api.specUrl }, async (s) => {
+      const note = await s.callTool("createNote", { body: "hello" }, signal());
+      expect(api.requests.at(-1)?.headers["content-type"]).toBe("text/plain");
+      expect(text(note)).toContain("stored: hello");
+      await s.callTool("createPet", { body: { name: "Rex" } }, signal());
+      const photo = await s.callTool("getPetPhoto", { path: { petId: 1 } }, signal());
+      expect(text(photo)).toMatch(/Binary response body \(image\/png, \d+ bytes\) omitted/);
+    });
+  });
+
+  it("401 → onUnauthorized 一次后用新凭据重试；仍 401 → 认证失败", async () => {
+    const api = await server({ apiKey: KEY });
+    let key = "stale-key-000000";
+    let refreshed = 0;
+    const opts: OpenOpts = {
+      auth: async () => ({ headers: { "X-API-Key": key } }),
+      onUnauthorized: async () => {
+        refreshed++;
+        key = KEY;
+      },
+    };
+    const r = await withSession(
+      { specUrl: api.specUrl },
+      (s) => s.callTool("listPets", {}, signal()),
+      opts,
+    );
+    expect(r.isError).toBeUndefined();
+    expect(refreshed).toBe(1);
+
+    key = "stale-key-000000";
+    const never: OpenOpts = { ...opts, onUnauthorized: async () => void refreshed++ };
+    const e = await failure(
+      withSession({ specUrl: api.specUrl }, (s) => s.callTool("listPets", {}, signal()), never),
+    );
+    expect(e.message).toContain("Authentication failed");
+    expect(e.kind).toBe("error");
+    expect(refreshed).toBe(2);
+  });
+
+  it("5xx → ToolError unavailable（带状态与截断的正文）；3xx 不跟随", async () => {
+    const api = await server();
+    await withSession({ specUrl: api.specUrl }, async (s) => {
+      const e = await failure(s.callTool("boom", {}, signal()));
+      expect(e.kind).toBe("unavailable");
+      expect(e.message).toContain("HTTP 500");
+      expect(e.message).toContain("boom");
+      const r = await failure(s.callTool("moved", {}, signal()));
+      expect(r.message).toMatch(/redirect/i);
+      expect(r.kind).toBe("error");
+    });
+    expect(api.requests.filter((x) => x.path === "/v1/moved")).toHaveLength(1);
+  });
+
+  it("连不上 API → unavailable", async () => {
+    const api = await server();
+    const dead = await server();
+    const url = dead.url;
+    await dead.stop();
+    servers.splice(servers.indexOf(dead), 1);
+    const e = await failure(
+      withSession({ specUrl: api.specUrl, baseUrl: `${url}/v1` }, (s) =>
+        s.callTool("listPets", {}, signal()),
+      ),
+    );
+    expect(e.kind).toBe("unavailable");
+  });
+
+  it("未知工具 → 明确错误", async () => {
+    const api = await server();
+    const e = await failure(
+      withSession({ specUrl: api.specUrl }, (s) => s.callTool("nope", {}, signal())),
+    );
+    expect(e.message).toContain("nope");
+  });
+
+  it("工具名撞车：listTools 照样返回（内核给后者写原因），调用走第一个", async () => {
+    const api = await server({
+      spec: (base) => ({
+        openapi: "3.1.0",
+        info: { title: "x", version: "1" },
+        servers: [{ url: `${base}/v1` }],
+        paths: {
+          "/pets": { get: { operationId: "pets.list" } },
+          "/boom": { get: { operationId: "pets list" } },
+        },
+      }),
+    });
+    await withSession({ specUrl: api.specUrl }, async (s) => {
+      expect((await s.listTools()).map((t) => t.name)).toEqual(["pets_list", "pets_list"]);
+      await s.callTool("pets_list", {}, signal());
+    });
+    expect(api.requests.at(-1)?.path).toBe("/v1/pets");
+  });
+
+  it("未勾选的操作不能调用", async () => {
+    const api = await server();
+    const e = await failure(
+      withSession({ specUrl: api.specUrl, operations: ["listPets"] }, (s) =>
+        s.callTool("deletePet", { path: { petId: 1 } }, signal()),
+      ),
+    );
+    expect(e.message).toContain("deletePet");
+  });
+
+  it("文档里的 server 不是 https（也不是允许的本机 http）→ 拒绝调用", async () => {
+    const api = await server({
+      spec: (base) => ({
+        ...defaultFakeOpenApiSpec(base),
+        servers: [{ url: "http://api.example.com/v1" }],
+      }),
+    });
+    const e = await failure(
+      withSession({ specUrl: api.specUrl }, (s) => s.callTool("listPets", {}, signal())),
+    );
+    expect(e.message).toMatch(/https/);
+  });
+
+  it("相对 server 地址按文档地址解析；specText 且无 server / baseUrl → 提示提供 baseUrl", async () => {
+    const api = await server({
+      spec: (base) => ({ ...defaultFakeOpenApiSpec(base), servers: [{ url: "/v1" }] }),
+    });
+    await withSession({ specUrl: api.specUrl }, (s) => s.callTool("listPets", {}, signal()));
+    expect(api.requests.at(-1)?.path).toBe("/v1/pets");
+
+    const spec = { ...defaultFakeOpenApiSpec(api.url) } as Record<string, unknown>;
+    delete spec.servers;
+    const e = await failure(
+      withSession({ specText: JSON.stringify(spec) }, (s) => s.callTool("listPets", {}, signal())),
+    );
+    expect(e.message).toContain("baseUrl");
+  });
+
+  it("响应正文超过上限 → 截断并注明", async () => {
+    const big = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("z".repeat(10_000));
+    });
+    await new Promise<void>((r) => big.listen(0, "127.0.0.1", r));
+    const port = (big.address() as AddressInfo).port;
+    try {
+      const c = createOpenApiConnector({
+        log,
+        allowInsecureLoopback: true,
+        limits: { maxResponseBytes: 1000 },
+      });
+      const spec = {
+        openapi: "3.1.0",
+        info: { title: "x", version: "1" },
+        servers: [{ url: `http://127.0.0.1:${port}` }],
+        paths: { "/big": { get: { operationId: "big" } } },
+      };
+      const r = await withSession(
+        { specText: JSON.stringify(spec) },
+        (s) => s.callTool("big", {}, signal()),
+        { connector: c },
+      );
+      expect(text(r)).toContain("z".repeat(1000));
+      expect(text(r)).not.toContain("z".repeat(1001));
+      expect(text(r)).toMatch(/truncated/i);
+    } finally {
+      big.closeAllConnections();
+      await new Promise((r) => big.close(r));
+    }
+  });
+});
