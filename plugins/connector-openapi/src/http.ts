@@ -76,6 +76,12 @@ function mapFetchError(e: unknown, outer: AbortSignal): unknown {
   if (e instanceof TypeError && e.message === "fetch failed") {
     return new ToolError(UNREACHABLE_TEXT, { kind: "unavailable" });
   }
+  // 其余 TypeError 是请求构造错误（如 GET 带请求体、非法 URL / 头），说明远端无关：kind error，不计入熔断
+  if (e instanceof TypeError) {
+    return new ToolError(
+      "The request could not be sent because it is malformed; check the arguments, or ask an administrator to refresh the app if it keeps failing.",
+    );
+  }
   if (e instanceof DOMException && e.name === "TimeoutError") {
     return new ToolError(
       "The app's server did not respond in time. Retry later, or ask an administrator to check the app.",
@@ -150,6 +156,11 @@ export function resolveBaseUrl(
   if (!u) {
     throw new ToolError(
       "The OpenAPI document declares no usable absolute server URL; ask an administrator to set the app's baseUrl.",
+    );
+  }
+  if (u.username !== "" || u.password !== "") {
+    throw new ToolError(
+      "The API base URL must not contain a user name or password; ask an administrator to set the app's baseUrl without credentials.",
     );
   }
   if (!urlAllowed(u, allowInsecureLoopback)) {
@@ -229,13 +240,33 @@ export function buildRequest(op: Route, input: unknown, base: URL): BuiltRequest
       throw new ToolError(`Missing path parameter "${name}"; pass it as path.${name} and retry.`);
     }
     const s = pathValue(p, v);
-    if (s === "" || s === "." || s === "..") {
+    if (s === "") {
       throw new ToolError(
-        `Invalid value for path parameter "${name}"; pass a non-empty value other than "." or "..".`,
+        `Invalid value for path parameter "${name}"; pass a non-empty value and retry.`,
       );
     }
     return encodeURIComponent(s);
   });
+
+  // 多个参数拼起来也可能成为 `.` / `..` 段（如 `/{a}{b}`，a = b = "."）；逐段检查，含逐层解码后的 %2e 形式
+  // 取值都经 encodeURIComponent（"/" 被编码），替换前后段数一致，可按下标找回模板段里的参数名
+  const templateSegs = op.path.split("/");
+  for (const [i, seg] of path.split("/").entries()) {
+    let d = seg;
+    for (let round = 0; round < 3; round++) {
+      if (d === "." || d === "..") {
+        const names = [...(templateSegs[i] ?? "").matchAll(/\{([^}]+)\}/g)].map((m) => m[1]);
+        throw new ToolError(
+          `Path parameter ${names.map((n) => `"${n}"`).join(", ") || "values"} form a "." or ".." path segment; pass values that do not combine into "." or "..".`,
+        );
+      }
+      try {
+        d = decodeURIComponent(d);
+      } catch {
+        break;
+      }
+    }
+  }
 
   const url = new URL(base.href);
   url.hash = "";

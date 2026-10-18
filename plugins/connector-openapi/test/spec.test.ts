@@ -127,7 +127,7 @@ describe("工具映射", () => {
     const d = byName(tools, "listPets").description;
     expect(d).toContain("List pets");
     expect(d).toContain("Returns all pets, optionally filtered by tag.");
-    expect(d).toContain("GET /pets");
+    expect(d).toContain("HTTP: GET http://127.0.0.1:9/v1/pets");
     const long = doc();
     (long.paths as Record<string, Record<string, unknown>>)["/boom"] = {
       get: {
@@ -139,7 +139,7 @@ describe("工具映射", () => {
     };
     const t = byName(await listTools(long), "boom");
     expect(t.description).toContain("[Description truncated]");
-    expect(t.description).toContain("GET /boom");
+    expect(t.description).toContain("HTTP: GET http://127.0.0.1:9/v1/boom");
     expect(t.description.length).toBeLessThan(1200);
     // 既无 summary 也无 description：给出方法与路径
     const bare = {
@@ -147,7 +147,74 @@ describe("工具映射", () => {
       info: { title: "x", version: "1" },
       paths: { "/x": { post: { operationId: "doX" } } },
     };
-    expect(byName(await listTools(bare), "doX").description).toContain("POST /x");
+    expect(byName(await listTools(bare), "doX").description).toContain("HTTP: POST /x");
+  });
+
+  it("GET / HEAD 的 requestBody 不生成 body（描述注明）", async () => {
+    const spec = {
+      openapi: "3.1.0",
+      info: { title: "x", version: "1" },
+      paths: {
+        "/q": {
+          get: {
+            operationId: "query",
+            requestBody: { content: { "application/json": { schema: { type: "object" } } } },
+          },
+          head: {
+            operationId: "peek",
+            requestBody: { content: { "text/plain": { schema: { type: "string" } } } },
+          },
+        },
+      },
+    };
+    const tools = await listTools(spec);
+    for (const name of ["query", "peek"]) {
+      const t = byName(tools, name);
+      expect(t.inputSchema.properties).toEqual({});
+      expect(t.description).toMatch(/request body .* not sent/i);
+      expect(t.connectorData?.body).toBeUndefined();
+    }
+  });
+
+  it("参数名：只有头参数不区分大小写；path / query 名原样（id 与 ID 并存，{petId} 与 petid 不混淆）", async () => {
+    const spec = {
+      openapi: "3.1.0",
+      info: { title: "x", version: "1" },
+      paths: {
+        "/x/{petId}": {
+          get: {
+            operationId: "x",
+            parameters: [
+              { name: "id", in: "query", schema: { type: "string" } },
+              { name: "ID", in: "query", schema: { type: "integer" } },
+              { name: "petid", in: "path", required: true, schema: { type: "string" } },
+              { name: "X-Trace", in: "header", schema: { type: "string" } },
+              { name: "x-trace", in: "header", schema: { type: "integer" } },
+            ],
+          },
+        },
+      },
+    };
+    const t = byName(await listTools(spec), "x");
+    const props = t.inputSchema.properties as Record<
+      string,
+      { properties: Record<string, unknown> }
+    >;
+    expect(Object.keys(props.query?.properties ?? {})).toEqual(["id", "ID"]);
+    expect(Object.keys(props.path?.properties ?? {}).sort()).toEqual(["petId", "petid"]);
+    expect(props.headers?.properties).toEqual({ "x-trace": { type: "integer" } });
+  });
+
+  it("文档里带用户信息的 server 不进 connectorData", async () => {
+    const spec = {
+      openapi: "3.1.0",
+      info: { title: "x", version: "1" },
+      servers: [{ url: "https://user:pa55word@api.example.com/v1" }],
+      paths: { "/a": { get: { operationId: "a" } } },
+    };
+    const tools = await listTools(spec);
+    expect(byName(tools, "a").connectorData?.server).toBeNull();
+    expect(JSON.stringify(tools)).not.toContain("pa55word");
   });
 
   it("operations 只保留勾选的操作", async () => {

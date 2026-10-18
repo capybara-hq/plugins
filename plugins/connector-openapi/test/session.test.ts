@@ -269,6 +269,76 @@ describe("调用", () => {
     });
   });
 
+  it("多个参数拼出的 `.` / `..` 段（含 %2e 形式）一律拒绝", async () => {
+    const api = await server({
+      spec: (base) => ({
+        openapi: "3.1.0",
+        info: { title: "x", version: "1" },
+        servers: [{ url: `${base}/v1` }],
+        paths: { "/files/{a}{b}/raw": { get: { operationId: "raw" } } },
+      }),
+    });
+    await withSession({ specUrl: api.specUrl }, async (s) => {
+      for (const [a, b] of [
+        [".", "."],
+        ["%2e", "."],
+        ["%2E", "%2e"],
+      ]) {
+        const e = await failure(call(s, "raw", { path: { a, b } }));
+        expect(e.message).toMatch(/\.\./);
+        expect(e.kind).toBe("error");
+      }
+      await call(s, "raw", { path: { a: "x", b: "." } });
+    });
+    expect(api.requests.filter((r) => r.path.startsWith("/v1/")).map((r) => r.path)).toEqual([
+      "/v1/files/x./raw",
+    ]);
+  });
+
+  it("请求构造错误（如 GET 带请求体）→ ToolError kind error，不计入熔断", async () => {
+    const api = await server();
+    const spec = {
+      name: "listPets",
+      description: "x",
+      inputSchema: {},
+      connectorData: {
+        method: "get",
+        path: "/pets",
+        server: `${api.url}/v1`,
+        params: [],
+        body: { mediaType: "application/json", json: true, required: false },
+      },
+    };
+    const e = await failure(
+      withSession({ specUrl: api.specUrl }, (s) =>
+        s.callTool("listPets", { body: { a: 1 } }, signal(), { spec }),
+      ),
+    );
+    expect(e.kind).toBe("error");
+    expect(e.message).toMatch(/could not be sent/i);
+  });
+
+  it("server / baseUrl 带用户信息 → ToolError，不发请求", async () => {
+    const api = await server();
+    const spec = {
+      name: "listPets",
+      description: "x",
+      inputSchema: {},
+      connectorData: {
+        method: "get",
+        path: "/pets",
+        server: api.url.replace("http://", "http://u:p@"),
+        params: [],
+      },
+    };
+    const e = await failure(
+      withSession({ specUrl: api.specUrl }, (s) => s.callTool("listPets", {}, signal(), { spec })),
+    );
+    expect(e.kind).toBe("error");
+    expect(e.message).toMatch(/user name or password/);
+    expect(e.message).not.toContain("u:p");
+  });
+
   it("工具参数不能设置 Authorization / Cookie 等头，也不能设置未声明的头", async () => {
     const api = await server();
     await withSession({ specUrl: api.specUrl }, async (s) => {

@@ -383,11 +383,12 @@ export function loadDocument(raw: unknown): OpenApiDocument {
       const opParams = Array.isArray(op.parameters) ? op.parameters : [];
       for (const p of [...itemParams, ...opParams]) {
         const m = mapParam(p, v30, notes);
-        if (m) params.set(`${m.in}:${m.name.toLowerCase()}`, m);
+        // 只有头名不区分大小写；path / query 参数名区分大小写（`id` 与 `ID` 是两个参数）
+        if (m) params.set(`${m.in}:${m.in === "header" ? m.name.toLowerCase() : m.name}`, m);
       }
       // 路径模板里有、但没声明的变量：按必填字符串补上
       for (const [, name] of path.matchAll(/\{([^}]+)\}/g)) {
-        const key = `path:${(name as string).toLowerCase()}`;
+        const key = `path:${name as string}`;
         if (!params.has(key)) {
           params.set(key, {
             name: name as string,
@@ -400,7 +401,15 @@ export function loadDocument(raw: unknown): OpenApiDocument {
           });
         }
       }
-      const body = mapBody(op.requestBody, v30, notes);
+      // GET / HEAD 不能带请求体（fetch 会拒绝）：不生成 body，描述里注明
+      let body: RequestBody | undefined;
+      if (method === "get" || method === "head") {
+        if (op.requestBody !== undefined) {
+          notes.push("The request body declared for this GET/HEAD operation is not sent.");
+        }
+      } else {
+        body = mapBody(op.requestBody, v30, notes);
+      }
       const id = str(op.operationId) ?? derivedId(method, path);
       const summary = str(op.summary);
       const description = str(op.description);

@@ -55,7 +55,10 @@ function serverOf(op: Operation, specUrl: string | undefined): string | null {
     }
   }
   try {
-    return (specUrl === undefined ? new URL(raw) : new URL(raw, specUrl)).href;
+    const u = specUrl === undefined ? new URL(raw) : new URL(raw, specUrl);
+    // 带用户信息的地址不存（凭据不进定义与快照；调用时需 baseUrl）
+    if (u.username !== "" || u.password !== "") return null;
+    return u.href;
   } catch {
     return null;
   }

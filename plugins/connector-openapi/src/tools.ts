@@ -16,13 +16,14 @@ export function annotationsOf(op: Operation): ToolAnnotations | undefined {
   return undefined;
 }
 
-/** 描述：summary + description（合计截到 1024 字符并注明），再附上方法与路径、补充说明。 */
-export function descriptionOf(op: Operation): string {
+/** 描述：summary + description（合计截到 1024 字符并注明），再附上方法与完整地址（服务器 + 路径模板）、补充说明。 */
+export function descriptionOf(op: Operation, server: string | null = null): string {
   let text = [op.summary, op.description].filter((x) => x !== undefined).join("\n\n");
   if (text.length > MAX_DESCRIPTION) {
     text = `${text.slice(0, MAX_DESCRIPTION - TRUNCATED.length).trimEnd()}${TRUNCATED}`;
   }
-  const endpoint = `HTTP: ${op.method.toUpperCase()} ${op.path}`;
+  // 带上解析好的服务器地址：换了服务器也会体现在复核对比的描述里
+  const endpoint = `HTTP: ${op.method.toUpperCase()} ${server === null ? "" : server.replace(/\/+$/, "")}${op.path}`;
   return [text, endpoint, ...op.notes].filter((x) => x !== "").join("\n\n");
 }
 
@@ -62,7 +63,7 @@ export function toolSpecOf(op: Operation, route: Route): ToolSpec {
   const annotations = annotationsOf(op);
   return {
     name: op.toolName,
-    description: descriptionOf(op),
+    description: descriptionOf(op, route.server),
     inputSchema: inputSchemaOf(op),
     ...(annotations && { annotations }),
     connectorData: route,
