@@ -1,0 +1,31 @@
+{
+  "name": "@capybara-hq/plugin-openai",
+  "version": "0.1.0",
+  "description": "OpenAI model provider (model-provider@2) using the official SDK and the native Responses API",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@capybara-hq/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@capybara-hq/plugin-sdk": "workspace:*",
+    "openai": "^7.36.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@capybara-hq/testing": "workspace:*"
+  }
+}
