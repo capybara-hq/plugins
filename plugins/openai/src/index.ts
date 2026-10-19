@@ -146,6 +146,8 @@ export default definePlugin({
   version: "0.1.0",
   sdk: "^0.1.0",
   provides: [MODEL_PROVIDER_CAPABILITY_V2],
+  // 默认端点；部署配置 baseUrl 可改指向代理（只展示，平台不拦截）
+  permissions: { network: ["api.openai.com"] },
   config: { deployment: DeploymentConfig },
   setup(ctx) {
     const cfg = DeploymentConfig.parse(ctx.config ?? {});

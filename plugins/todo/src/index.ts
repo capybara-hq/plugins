@@ -124,6 +124,7 @@ export default definePlugin({
   sdk: "^0.1.0",
   provides: [],
   migrations: "../migrations",
+  permissions: { tools: ["write"] },
   setup(ctx) {
     ctx.tools.register(SPEC, writeHandler(ctx.db));
   },

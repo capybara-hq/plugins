@@ -61,6 +61,13 @@ export default definePlugin({
   provides: ["counter@1"],
   config: { deployment: DeploymentConfig },
   migrations: "../migrations",
+  permissions: {
+    http: [
+      { method: "POST", path: "/inc" },
+      { method: "GET", path: "/count" },
+      { method: "POST", path: "/inc-later" },
+    ],
+  },
   setup(ctx) {
     const { step } = DeploymentConfig.parse(ctx.config);
 

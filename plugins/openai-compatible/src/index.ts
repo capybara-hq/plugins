@@ -163,6 +163,7 @@ export default definePlugin({
   version: "0.1.0",
   sdk: "^0.1.0",
   provides: [MODEL_PROVIDER_CAPABILITY_V2],
+  // 不声明 network：访问的端点全部由管理员在部署配置里给出，没有固定域名
   config: { deployment: DeploymentConfig },
   setup(ctx) {
     const cfg = DeploymentConfig.parse(ctx.config ?? {});
