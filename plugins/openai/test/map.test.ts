@@ -338,6 +338,15 @@ describe("buildRequest: tool calls and results", () => {
     ]);
   });
 
+  it('toolChoice none -> tool_choice "none" (tools still sent); auto / unset / no tools -> omitted', () => {
+    const none = build(base({ tools: [weather], toolChoice: "none" }));
+    expect(none.tool_choice).toBe("none");
+    expect(none.tools).toHaveLength(1);
+    expect("tool_choice" in build(base({ tools: [weather], toolChoice: "auto" }))).toBe(false);
+    expect("tool_choice" in build(base({ tools: [weather] }))).toBe(false);
+    expect("tool_choice" in build(base({ toolChoice: "none" }))).toBe(false);
+  });
+
   it("tools map to function tools (non-strict); omitted when there are none", () => {
     expect(build(base({ tools: [weather] })).tools).toEqual([
       {

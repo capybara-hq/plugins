@@ -187,6 +187,8 @@ export function buildRequest(req: ModelRequest, traits: ModelTraits): OpenAIPara
       parameters: t.inputSchema,
       strict: false,
     }));
+    // none：照常声明工具但不得调用（收尾调用）；auto 即默认值，不设置
+    if (req.toolChoice === "none") params.tool_choice = "none";
   }
   return params;
 }

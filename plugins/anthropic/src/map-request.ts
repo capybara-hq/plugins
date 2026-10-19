@@ -136,13 +136,15 @@ export function buildRequest(
   // 取值已由内核按声明（Models API 给出的档位）处理过
   if (typeof effort === "string") params.output_config = { effort: effort as Effort };
   if (req.tools.length > 0) {
-    // tool_choice 不设置（默认 auto）：any / tool 在当前模型上会 400
     params.tools = req.tools.map((t) => ({
       name: t.name,
       description: t.description,
       input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
       eager_input_streaming: true,
     }));
+    // 只映射 none（收尾调用：照常声明工具，历史里有 tool_use 时 API 要求声明，但不得调用）；
+    // auto 即默认值，不设置。any / tool 在当前模型上会 400，内核不使用。
+    if (req.toolChoice === "none") params.tool_choice = { type: "none" };
   }
   const beta =
     opts.serverFallbacks === "default" && supportsServerFallback(req.model)

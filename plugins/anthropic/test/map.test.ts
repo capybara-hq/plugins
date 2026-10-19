@@ -174,7 +174,17 @@ describe("buildRequest: tool calls and results", () => {
     });
   });
 
-  it("client tools carry eager_input_streaming: true and tool_choice is never set", () => {
+  it("toolChoice none -> tool_choice {type: none} (tools still sent); auto / unset -> no tool_choice", () => {
+    const tools = [{ name: "get_weather", description: "d", inputSchema: { type: "object" } }];
+    const none = build(base({ tools, toolChoice: "none" })).params;
+    expect(none.tool_choice).toEqual({ type: "none" });
+    expect(none.tools).toHaveLength(1);
+    expect("tool_choice" in build(base({ tools, toolChoice: "auto" })).params).toBe(false);
+    // 没有工具时不发 tool_choice
+    expect("tool_choice" in build(base({ toolChoice: "none" })).params).toBe(false);
+  });
+
+  it("client tools carry eager_input_streaming: true and tool_choice is unset by default", () => {
     const { params } = build(
       base({
         tools: [

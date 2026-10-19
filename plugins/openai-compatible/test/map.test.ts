@@ -115,6 +115,27 @@ describe.each(["generic", "deepseek", "qwen"] as const)("buildRequest (%s)", (di
     ]);
   });
 
+  it('toolChoice none -> tool_choice "none" (tools still sent); auto / unset / no tools -> omitted', () => {
+    const history = turns[0] ?? [];
+    const none = buildRequest(
+      req(history, { tools: [weather], toolChoice: "none" }),
+      target(dialect),
+    );
+    expect(none.tool_choice).toBe("none");
+    expect(none.tools).toHaveLength(1);
+    const auto = buildRequest(
+      req(history, { tools: [weather], toolChoice: "auto" }),
+      target(dialect),
+    );
+    expect("tool_choice" in auto).toBe(false);
+    expect("tool_choice" in buildRequest(req(history, { tools: [weather] }), target(dialect))).toBe(
+      false,
+    );
+    expect(
+      "tool_choice" in buildRequest(req(history, { toolChoice: "none" }), target(dialect)),
+    ).toBe(false);
+  });
+
   it("maps a tool round trip to assistant tool_calls + role tool", () => {
     const body = buildRequest(req([...(turns[0] ?? []), ...(turns[1] ?? [])]), target(dialect));
     const assistant = body.messages[2] as unknown as Record<string, unknown>;
