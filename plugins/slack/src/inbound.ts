@@ -27,12 +27,19 @@ const unescapeSlack = (s: string) =>
   s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 
 /**
- * 去掉文本里 @ 机器人的部分（`<@UBOT>` 或 `<@UBOT|名字>`）：只把 @ 连同两侧空白换成一个空格，再去掉首尾空白；
- * 用户的缩进与换行（如代码块）保留。
+ * 去掉文本里 @ 机器人的部分（`<@UBOT>` 或 `<@UBOT|名字>`）：@ 连同两侧同一行内的空格 / 制表符换成一个空格
+ * （@ 在行首或行尾时直接去掉），再去掉首尾空白；换行不动，用户的行结构、缩进（如代码块）保留。
  */
 export function stripBotMention(text: string, botUserId: string): string {
   const id = botUserId.replace(/[^A-Za-z0-9]/g, "");
-  return text.replace(new RegExp(`\\s*<@${id}(\\|[^>]*)?>\\s*`, "g"), " ").trim();
+  return text
+    .replace(new RegExp(`[ \\t]*<@${id}(\\|[^>]*)?>[ \\t]*`, "g"), (m, _label, at: number, s) => {
+      const lineStart = at === 0 || s[at - 1] === "\n";
+      const after = s[at + m.length];
+      const lineEnd = after === undefined || after === "\n";
+      return lineStart || lineEnd ? "" : " ";
+    })
+    .trim();
 }
 
 /** 按文本处理的 subtype：带说明文字的文件分享（只取文字）、同时发到频道的话题回复。其余 subtype 忽略。 */

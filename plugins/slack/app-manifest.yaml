@@ -16,6 +16,11 @@ features:
     display_name: capybara
     always_online: true
 oauth_config:
+  # Sign in with Slack (identity-source@1): uncomment and set to <http.publicUrl>/api/v1/auth/sso/slack/callback.
+  # The sign-in flow requests openid / email / profile itself; do not add them as scopes here (Slack wants
+  # Sign in with Slack scopes in a separate OAuth flow, see README.md).
+  # redirect_urls:
+  #   - https://capybara.example.com/api/v1/auth/sso/slack/callback
   scopes:
     bot:
       - chat:write # post and update replies and cards
@@ -23,8 +28,8 @@ oauth_config:
       - app_mentions:read # app_mention: @capybara in channels
       - channels:history # message.channels: thread replies in public channels
       - groups:history # message.groups: thread replies in private channels
-      - users:read # users.info (display name, avatar); team_join / user_change
-      - users:read.email # not used by the bot; for directory@1 sync (T16, same plugin)
+      - users:read # users.info (display name, avatar); team_join / user_change; directory@1 users.list
+      - users:read.email # directory@1: email addresses in users.list (the bot itself does not use it)
 settings:
   event_subscriptions:
     bot_events:

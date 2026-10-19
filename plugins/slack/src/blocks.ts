@@ -117,13 +117,22 @@ const SCOPE_ORDER = { once: 0, session: 1, always: 2 } as const;
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-/** 截到 `n` 个码元以内（末尾加省略号，不拆代理对）。 */
+/**
+ * 截到 `n` 个码元以内（末尾加省略号）：不拆代理对，也不把 `esc()` 产生的实体（`&amp;` / `&lt;` / `&gt;`）
+ * 切成半截——切点落在实体中间时退到该实体之前。mrkdwn 文本里的 `&` 都已转义成实体，故末尾 4 个码元内
+ * 没有 `;` 收尾的 `&` 一定是被切断的实体。
+ */
 function trunc(s: string, n: number): string {
   if (s.length <= n) return s;
   let at = n - 1;
   const c = s.charCodeAt(at - 1);
   if (c >= 0xd800 && c <= 0xdbff) at--;
-  return `${s.slice(0, at)}…`;
+  let head = s.slice(0, at);
+  const amp = head.lastIndexOf("&");
+  if (amp >= 0 && amp >= head.length - 4 && !head.slice(amp).includes(";")) {
+    head = head.slice(0, amp);
+  }
+  return `${head}…`;
 }
 
 const plain = (text: string) => ({

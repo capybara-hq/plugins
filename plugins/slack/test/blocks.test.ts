@@ -111,6 +111,21 @@ describe("renderCard: approval", () => {
       expect(text.length).toBeLessThanOrEqual(SECTION_TEXT_LIMIT);
     }
   });
+
+  it("truncation never cuts an escaped entity (&lt; / &gt; / &amp;) in half", () => {
+    for (const ch of ["<", ">", "&"]) {
+      for (let pad = 0; pad < 6; pad++) {
+        const preview = "a".repeat(pad) + ch.repeat(5000);
+        const blocks = renderCard(approval({ inputPreview: preview }), "en") as Block[];
+        const texts = blocks.map((b) => (b.text as { text?: string } | undefined)?.text ?? "");
+        const body = texts.find((t) => t.includes("```")) ?? "";
+        expect(body.length).toBeLessThanOrEqual(SECTION_TEXT_LIMIT);
+        expect(body).toContain("…");
+        // 每个 & 都是完整实体的开头
+        expect(body, `${ch} pad ${pad}`).not.toMatch(/&(?!amp;|lt;|gt;)/);
+      }
+    }
+  });
 });
 
 describe("renderCard: question", () => {

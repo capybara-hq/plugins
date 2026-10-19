@@ -26,7 +26,14 @@ describe("stripBotMention", () => {
     expect(stripBotMention("<@UBOT>\n```\n  indented  code\n```\n\nnext", BOT)).toBe(
       "```\n  indented  code\n```\n\nnext",
     );
-    expect(stripBotMention("a  b <@UBOT>\n  c", BOT)).toBe("a  b c");
+    expect(stripBotMention("a  b <@UBOT>\n  c", BOT)).toBe("a  b\n  c");
+  });
+
+  it("keeps the newlines next to the mention (line structure preserved)", () => {
+    expect(stripBotMention("line one <@UBOT>\nline two", BOT)).toBe("line one\nline two");
+    expect(stripBotMention("first\n<@UBOT> second\nthird", BOT)).toBe("first\nsecond\nthird");
+    expect(stripBotMention("a\n\n<@UBOT>\n\nb", BOT)).toBe("a\n\n\n\nb");
+    expect(stripBotMention("x <@UBOT>\t y", BOT)).toBe("x y");
   });
 });
 

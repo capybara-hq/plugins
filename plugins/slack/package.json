@@ -1,7 +1,7 @@
 {
   "name": "@capybara-hq/plugin-slack",
   "version": "0.1.0",
-  "description": "Slack channel (channel@1): bot over Socket Mode with Block Kit cards",
+  "description": "Slack (channel@1 bot over Socket Mode with Block Kit cards, identity-source@1 Sign in with Slack, directory@1)",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -25,6 +25,7 @@
     "@capybara-hq/plugin-sdk": "workspace:*",
     "@slack/socket-mode": "^3.1.0",
     "@slack/web-api": "^8.2.0",
+    "jose": "^6.2.12",
     "undici": "^8.12.3",
     "zod": "^4.6.7"
   },

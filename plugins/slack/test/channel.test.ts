@@ -79,8 +79,18 @@ async function connect(onEvent?: (e: InboundEvent) => Promise<void>) {
 describe("plugin manifest", () => {
   it("provides channel@1, declares only network permissions, connection schema validates tokens", () => {
     expect(plugin.name).toBe("slack");
-    expect(plugin.provides).toEqual(["channel@1"]);
+    expect(plugin.provides).toEqual(["channel@1", "identity-source@1", "directory@1"]);
     expect(plugin.permissions).toEqual({ network: ["slack.com", "wss-primary.slack.com"] });
+    // 部署级：登录的 client id / secret 可选（只用机器人时不填）；组织级：通讯录的 teamId / botToken 可选
+    const dep = plugin.config?.deployment;
+    expect(dep?.parse({})).toMatchObject({ apiUrl: "https://slack.com/api/" });
+    expect(dep?.parse({ clientId: "c", clientSecret: "s" })).toMatchObject({ clientId: "c" });
+    expect(plugin.config?.org?.parse({})).toEqual({});
+    expect(plugin.config?.org?.parse({ teamId: "T1", botToken: "xoxb-1" })).toEqual({
+      teamId: "T1",
+      botToken: "xoxb-1",
+    });
+    expect(plugin.config?.org?.safeParse({ teamId: "T1", botToken: "xapp-1" }).success).toBe(false);
     const ch = channel();
     expect(ch.features).toEqual({
       cards: true,
