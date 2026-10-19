@@ -16,6 +16,7 @@ import { AccountsService } from "../../src/identity/accounts.js";
 import { createKernel, type Kernel } from "../../src/kernel.js";
 import { createLogger } from "../../src/log.js";
 import { memState } from "../fixtures/plugins/mem-connector/index.js";
+import { truncateTables } from "../helpers/db.js";
 import { testMembers } from "../helpers/members.js";
 import { MODEL_FAKE } from "../helpers/model-plugins.js";
 import {
@@ -89,7 +90,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await sql`TRUNCATE capybara.accounts, capybara.orgs, capybara.audit_events CASCADE`.execute(raw);
+  await truncateTables(raw, "capybara.accounts, capybara.orgs, capybara.audit_events");
   ownerId = (
     await new AccountsService(db).createLocal({ login: "owner", password: PW, displayName: "O" })
   ).id;
