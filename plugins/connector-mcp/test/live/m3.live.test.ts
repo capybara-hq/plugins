@@ -363,7 +363,7 @@ describe.skipIf(!LIVE)("live", { timeout: 300_000 }, () => {
       const createTool = pick("create_issue", "issue_write");
       const closeTool = pick("update_issue", "issue_write");
       console.info(
-        `[m3-live] github tools=${app.tools.length} read=${readTool} create=${createTool} close=${closeTool}`,
+        `[m3-live] github tools(${app.tools.length})=${[...byName.keys()].join(",")} read=${readTool} create=${createTool} close=${closeTool}`,
       );
       expect(readTool).toBeDefined();
       expect(createTool).toBeDefined();
