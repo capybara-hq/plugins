@@ -67,6 +67,7 @@ beforeAll(async () => {
       { pg: pgc.url, redis: rd.url },
       {
         plugins: [MODEL_FAKE, CONNECTOR_OPENAPI, MEM_CONNECTOR],
+        pluginPermissions: { autoApprove: true },
         // 假服务在 127.0.0.1 上跑 http：测试打开本机 http（默认关闭）
         pluginConfig: { "connector-openapi": { allowInsecureLoopback: true } },
         roles: ["api", "worker"],
