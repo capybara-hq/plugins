@@ -1,0 +1,34 @@
+{
+  "name": "@capybara-hq/plugin-slack",
+  "version": "0.1.0",
+  "description": "Slack channel (channel@1): bot over Socket Mode with Block Kit cards",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@capybara-hq/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "app-manifest.yaml"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@capybara-hq/plugin-sdk": "workspace:*",
+    "@slack/socket-mode": "^3.1.0",
+    "@slack/web-api": "^8.2.0",
+    "undici": "^8.12.3",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@capybara-hq/testing": "workspace:*"
+  }
+}

@@ -1,0 +1,41 @@
+# Slack app manifest for the Capybara Slack plugin (@capybara-hq/plugin-slack).
+# Paste it at https://api.slack.com/apps -> Create New App -> From a manifest.
+# Reference: https://docs.slack.dev/reference/app-manifest (checked 2026-10-20).
+# Socket Mode needs no public request URL; the app-level token (xapp-, scope connections:write)
+# is created separately under Basic Information -> App-Level Tokens (see README.md).
+display_information:
+  name: Capybara
+  description: Chat with your organization's Capybara agents.
+  background_color: "#3d2f24"
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: capybara
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - chat:write # post and update replies and cards
+      - im:history # message.im: direct messages to the bot
+      - app_mentions:read # app_mention: @capybara in channels
+      - channels:history # message.channels: thread replies in public channels
+      - groups:history # message.groups: thread replies in private channels
+      - users:read # users.info (display name, avatar); team_join / user_change
+      - users:read.email # directory sync (Slack login and directory, next plugin part)
+settings:
+  event_subscriptions:
+    bot_events:
+      - message.im
+      - app_mention
+      - message.channels
+      - message.groups
+      - team_join
+      - user_change
+  interactivity:
+    is_enabled: true
+  socket_mode_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false
