@@ -31,7 +31,7 @@ const EndpointSchema = z.strictObject({
     .string()
     .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, "endpoint name must match [A-Za-z0-9][A-Za-z0-9._-]*"),
   baseUrl: z.string().url(),
-  dialect: z.enum(["generic", "deepseek", "qwen"]),
+  dialect: z.enum(["generic", "deepseek", "qwen", "ark"]),
   /** 中途 system 是否以原位置的 system 消息发送；未给时取方言默认。 */
   midConversationSystem: z.boolean().optional(),
   models: z
