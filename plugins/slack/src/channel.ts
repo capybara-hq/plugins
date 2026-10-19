@@ -27,15 +27,22 @@ export interface SlackChannelOptions {
   log: Logger;
   /** 单次 Web API 请求超时（默认 15 秒）。 */
   requestTimeoutMs?: number;
+  /** 重连退避的基数（默认 1000 毫秒；测试调小）。 */
+  reconnectBaseMs?: number;
 }
 
 /**
- * 同一条消息两次编辑的最小间隔。chat.update 属 Tier 3（50+ 次/分钟，按工作区计），chat.postMessage 对同一频道
- * 一般每秒 1 条（https://docs.slack.dev/reference/methods/chat.update 、
- * https://docs.slack.dev/reference/methods/chat.postMessage ，2026-10-20 查阅）。流式草稿 1.2 秒一次，
- * 同时有若干会话在流式回复时仍留出余量。
+ * 同一条消息两次编辑的最小间隔。chat.update 属 Tier 3：约 50 次/分钟、按工作区（同一 app 在该工作区的所有
+ * 会话共享）计（https://docs.slack.dev/reference/methods/chat.update 、
+ * https://docs.slack.dev/apis/web-api/rate-limits ，2026-10-20 查阅）。一条流式草稿 2.5 秒一次约 24 次/分钟，
+ * 两个会话同时流式也不超限；更多并发时由限流（429 → 内核按 Retry-After 退避）兜底。
  */
-export const MIN_EDIT_INTERVAL_MS = 1200;
+export const MIN_EDIT_INTERVAL_MS = 2500;
+
+/** 活不到这么久的连接算「短命」；连续这么多次短命就放弃本轮（抛错，内核记 last_error 并退避）。 */
+const SHORT_LIVED_MS = 10_000;
+const MAX_SHORT_LIVED = 5;
+const MAX_RECONNECT_DELAY_MS = 30_000;
 
 /** users.info 结果的进程内缓存：纯性能缓存（不是共享状态），每个渠道实例最多 1000 项、10 分钟过期。 */
 const PROFILE_TTL_MS = 10 * 60_000;
@@ -99,8 +106,9 @@ interface SocketEnvelope {
  * - 确认：每个信封在 `onEvent` resolve 之后才 ack；`onEvent` reject 时不 ack（Slack 重投：立即、约 1 分钟、
  *   约 5 分钟后共 3 次，https://docs.slack.dev/apis/events-api/ ）；忽略的事件直接 ack。
  * - 重连：关闭 SDK 自带的自动重连（其重连路径里 `apps.connections.open` 失败会成为未处理的 Promise 拒绝），
- *   由本循环负责：Slack 回收连接（`disconnect` 消息）或网络断开后重新 `start()`；`start()` 失败抛错，内核记
- *   `last_error` 并退避重试。
+ *   由本循环负责：Slack 回收连接（`disconnect` 消息）或网络断开后重新 `start()`，连续短命的连接按指数退避
+ *   （带抖动）；`start()` 失败、收到 `link_disabled`（应用关闭了 Socket Mode）或连续 5 次短命时抛错（带原因），
+ *   内核记 `last_error` 并退避重试。
  * - 出站：WebClient 不重试、限流直接拒绝，失败映射为 `ChannelSendError`（见 errors.ts），由内核重试。
  *   Slack 的 chat.postMessage 没有幂等参数，`idempotencyKey` 忽略（内核按事件序号续投，不靠平台去重）。
  * - 超长文本拆成多条按序发送，返回最后一条的 id；编辑超长抛 `too_large`。
@@ -108,6 +116,7 @@ interface SocketEnvelope {
 export function createSlackChannel(opts: SlackChannelOptions): Channel {
   const { apiUrl, log } = opts;
   const timeout = opts.requestTimeoutMs ?? 15_000;
+  const reconnectBase = opts.reconnectBaseMs ?? 1000;
   const slackLogger: SlackLogger = {
     debug() {},
     info: (...m: unknown[]) => log.info(`slack: ${m.map(String).join(" ")}`),
@@ -269,12 +278,15 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
         });
       };
 
-      const aborted = new Promise<void>((r) => {
+      // 中止后最多等 3 秒完成关闭握手（只建一次，不随每轮重连累积计时器）
+      const abortedGrace = new Promise<void>((r) => {
         if (signal.aborted) r();
         else signal.addEventListener("abort", () => r(), { once: true });
-      });
+      }).then(() => pause(3000, new AbortController().signal));
+      let shortLived = 0;
       while (!signal.aborted) {
         const startedAt = Date.now();
+        let disconnectReason: string | undefined;
         const client = new SocketModeClient({
           appToken: c.appToken,
           autoReconnectEnabled: false,
@@ -286,6 +298,17 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
         });
         client.on("slack_event", (env: SocketEnvelope) => {
           void handle(env);
+        });
+        // Slack 的 disconnect 消息（refresh_requested / warning / link_disabled）SDK 不转发，自己从原始帧里读原因
+        client.on("ws_message", (data: unknown) => {
+          if (typeof data !== "string" || !data.includes('"disconnect"')) return;
+          try {
+            const m = JSON.parse(data) as { type?: unknown; reason?: unknown };
+            if (m.type === "disconnect" && typeof m.reason === "string")
+              disconnectReason = m.reason;
+          } catch {
+            // 不是 JSON：SDK 自己会忽略
+          }
         });
         const stop = () => {
           void client.disconnect().catch(() => {});
@@ -299,19 +322,41 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
             await client.disconnect().catch(() => {});
             throw describe(e, "Socket Mode connection");
           }
-          // 中止后最多等 3 秒完成关闭握手
-          await Promise.race([
-            closed,
-            aborted.then(() => pause(3000, new AbortController().signal)),
-          ]);
+          // 中止发生在 apps.connections.open 进行中时，stop() 当时还没有 socket 可关：这里补关
+          if (signal.aborted) {
+            await Promise.race([client.disconnect().catch(() => {}), abortedGrace]);
+            return;
+          }
+          await Promise.race([closed, abortedGrace]);
         } finally {
           signal.removeEventListener("abort", stop);
           client.removeAllListeners("slack_event");
+          client.removeAllListeners("ws_message");
         }
         if (signal.aborted) return;
-        log.info("slack: Socket Mode connection closed; reconnecting", { connectionId });
-        // 连接活得太短时稍等再连，避免空转（apps.connections.open 有频率限制）
-        await pause(Date.now() - startedAt < 10_000 ? 2000 : 100, signal);
+        if (disconnectReason === "link_disabled") {
+          throw new Error(
+            "Slack closed the Socket Mode connection: link_disabled (Socket Mode is off)",
+          );
+        }
+        shortLived = Date.now() - startedAt < SHORT_LIVED_MS ? shortLived + 1 : 0;
+        if (shortLived >= MAX_SHORT_LIVED) {
+          throw new Error(
+            `Slack Socket Mode connection keeps closing (${shortLived} times within ` +
+              `${SHORT_LIVED_MS / 1000}s each${disconnectReason ? `, last reason ${disconnectReason}` : ""})`,
+          );
+        }
+        log.info("slack: Socket Mode connection closed; reconnecting", {
+          connectionId,
+          reason: disconnectReason ?? "closed",
+        });
+        // 正常回收（活得够久）立即重连；短命的按 base·2^(n-1) 指数退避，乘 0.5–1 的抖动
+        const delay =
+          shortLived === 0
+            ? 0
+            : Math.min(MAX_RECONNECT_DELAY_MS, reconnectBase * 2 ** (shortLived - 1)) *
+              (0.5 + Math.random() / 2);
+        if (delay > 0) await pause(Math.round(delay), signal);
       }
     },
 
@@ -332,7 +377,12 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
         } catch (e) {
           throw toChannelSendError(e);
         }
-        if (!r.ts) throw new ChannelSendError("Slack returned no message ts", { retryable: true });
+        if (!r.ts) {
+          throw new ChannelSendError("Slack returned no message ts", {
+            retryable: false,
+            reason: "rejected",
+          });
+        }
         last = `${r.channel ?? target.chatId}:${r.ts}`;
       }
       if (last === undefined) throw new ChannelSendError("nothing to send", { retryable: false });

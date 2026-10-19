@@ -24,7 +24,7 @@ oauth_config:
       - channels:history # message.channels: thread replies in public channels
       - groups:history # message.groups: thread replies in private channels
       - users:read # users.info (display name, avatar); team_join / user_change
-      - users:read.email # directory sync (Slack login and directory, next plugin part)
+      - users:read.email # not used by the bot; for directory@1 sync (T16, same plugin)
 settings:
   event_subscriptions:
     bot_events:

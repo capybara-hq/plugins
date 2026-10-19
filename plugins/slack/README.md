@@ -36,8 +36,10 @@ Slack 官方插件。当前提供 `channel@1`（机器人）：经 [Socket Mode]
 ## 行为
 
 - **私聊**：每条文本消息交给内核；**频道**：只有 @ 机器人的消息（新消息在它下面开话题回复），以及话题里的回复
-  （内核目前只处理 @ 机器人的）。编辑、删除、机器人自己与其他机器人的消息、带 `subtype` 的消息（文件分享等）忽略；
-  M4 只处理文本。文本去掉 @ 机器人并反转义 `&amp;` / `&lt;` / `&gt;`。
+  （内核目前只处理 @ 机器人的）。编辑、删除、机器人自己与其他机器人的消息、其他带 `subtype` 的消息忽略；
+  带说明文字的文件分享（`file_share`，只取文字）与同时发到频道的话题回复（`thread_broadcast`）按文本处理。
+  M4 只处理文本。文本去掉 @ 机器人（只整理 @ 两侧的空白，缩进与换行保留）并反转义 `&amp;` / `&lt;` / `&gt;`。
+  模型回复里的链接地址中的 `<`、`>`、`|` 会被百分号编码，模型文本无法注入 `<!channel>` 之类的控制序列。
 - **id**：消息 id = `<频道 id>:<ts>`（连接内唯一、稳定）；群聊话题 id = `<频道 id>:<thread_ts>`，即话题根消息的
   消息 id；卡片点击的 `eventId` = `<频道>:<卡片消息 ts>:<点击者>:<action_ts>`（重投时负载相同，故稳定）。
   发言人租户 = Slack team id（共享频道的外部成员取 `user_team`），与 `verify`（`auth.test` 的 `team_id`）同一口径。
@@ -46,8 +48,11 @@ Slack 官方插件。当前提供 `channel@1`（机器人）：经 [Socket Mode]
 - **格式**：模型回复的 Markdown 转为 [mrkdwn](https://docs.slack.dev/messaging/formatting-message-text)；
   单条文本上限 4000 字符（`chat.update` 超过即 `msg_too_long`，见 [chat.update](https://docs.slack.dev/reference/methods/chat.update)），
   超长拆成多条；编辑超长时报 `too_large`，由内核改发新消息。
-- **流式编辑**：`minEditIntervalMs = 1200`（`chat.update` 为 Tier 3，50+ 次/分钟；`chat.postMessage` 对同一频道
-  一般每秒 1 条，见 [chat.postMessage](https://docs.slack.dev/reference/methods/chat.postMessage)）。
+- **流式编辑**：`minEditIntervalMs = 2500`（`chat.update` 为 Tier 3，约 50 次/分钟、按工作区计，见
+  [chat.update](https://docs.slack.dev/reference/methods/chat.update) 与
+  [Rate limits](https://docs.slack.dev/apis/web-api/rate-limits)）；更多并发时由 429 + Retry-After 兜底。
+- **重连**：插件自管（关闭 SDK 自动重连）。Slack 正常回收连接时立即重连；连续短命（不到 10 秒）的连接按指数退避
+  （带抖动），连续 5 次或收到 `link_disabled` 时报错，内核记 `last_error` 并退避。
 - **幂等**：`chat.postMessage` 没有幂等参数，`idempotencyKey` 忽略。
 - **资料**：显示名 / 头像取事件自带的 `user_profile`，否则 `users.info`（每个进程内缓存 10 分钟、最多 1000 人，
   1.5 秒超时，查不到就不带）。

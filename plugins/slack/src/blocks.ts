@@ -142,12 +142,41 @@ const actions = (elements: Block[], blockId?: string): Block => ({
   ...(blockId !== undefined && { block_id: blockId }),
   elements,
 });
-const link = (actionId: string, label: string, url: string): Block => ({
-  type: "button",
-  action_id: actionId,
-  text: plain(label),
-  url,
-});
+/** 与 SDK 内部的 isHttpUrl 相同的判断（SDK 未导出）：http(s) 绝对地址，长度不超过按钮 url 的上限 3000。 */
+function isHttpUrl(v: string, max = 3000): boolean {
+  if (v.length > max) return false;
+  try {
+    const u = new URL(v);
+    return u.protocol === "https:" || u.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+/** 占位：不是 http(s) 的链接不做成按钮，由 {@link placeLinkText} 换成纯文本。 */
+const LINK_TEXT = "_capy_link_text";
+
+const link = (actionId: string, label: string, url: string): Block =>
+  isHttpUrl(url)
+    ? { type: "button", action_id: actionId, text: plain(label), url }
+    : { type: LINK_TEXT, text: `${label}: ${esc(url)}` };
+
+/** 把 actions 块里的链接占位挪到紧随其后的 context 块里（纯文本）；actions 块空了就去掉。 */
+function placeLinkText(blocks: Block[]): Block[] {
+  const out: Block[] = [];
+  for (const b of blocks) {
+    const els = b.type === "actions" ? (b.elements as Block[]) : undefined;
+    if (!els?.some((e) => e.type === LINK_TEXT)) {
+      out.push(b);
+      continue;
+    }
+    const rest = els.filter((e) => e.type !== LINK_TEXT);
+    if (rest.length > 0) out.push({ ...b, elements: rest });
+    const texts = els.filter((e) => e.type === LINK_TEXT).map((e) => String(e.text));
+    out.push(context(texts.join("\n")));
+  }
+  return out;
+}
 const button = (
   actionId: string,
   label: string,
@@ -286,6 +315,10 @@ function questionBlocks(c: Extract<ChannelCard, { kind: "question" }>, locale: L
 
 /** 一张卡片 → Block Kit blocks（按钮文字与固定词按 locale）。 */
 export function renderCard(card: ChannelCard, locale: Locale): Block[] {
+  return placeLinkText(cardBlocks(card, locale));
+}
+
+function cardBlocks(card: ChannelCard, locale: Locale): Block[] {
   const t = T[locale] ?? T.en;
   switch (card.kind) {
     case "approval":
@@ -337,7 +370,7 @@ export function renderSend(message: OutboundMessage, locale: Locale): SlackPost[
     if (i > 0) blocks.push({ type: "divider" });
     blocks.push(...renderCard(c, locale));
   });
-  const fallback = last ?? cards.map((c) => renderCardAsText(c, locale)).join("\n\n");
+  const fallback = last ?? esc(cards.map((c) => renderCardAsText(c, locale)).join("\n\n"));
   posts.push({ text: trunc(fallback, TEXT_LIMIT), blocks });
   return posts;
 }

@@ -26,15 +26,17 @@ const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
 const unescapeSlack = (s: string) =>
   s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 
-/** 去掉文本里 @ 机器人的部分（`<@UBOT>` 或 `<@UBOT|名字>`），并整理空白。 */
+/**
+ * 去掉文本里 @ 机器人的部分（`<@UBOT>` 或 `<@UBOT|名字>`）：只把 @ 连同两侧空白换成一个空格，再去掉首尾空白；
+ * 用户的缩进与换行（如代码块）保留。
+ */
 export function stripBotMention(text: string, botUserId: string): string {
   const id = botUserId.replace(/[^A-Za-z0-9]/g, "");
-  return text
-    .replace(new RegExp(`<@${id}(\\|[^>]*)?>`, "g"), " ")
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .trim();
+  return text.replace(new RegExp(`\\s*<@${id}(\\|[^>]*)?>\\s*`, "g"), " ").trim();
 }
+
+/** 按文本处理的 subtype：带说明文字的文件分享（只取文字）、同时发到频道的话题回复。其余 subtype 忽略。 */
+const TEXT_SUBTYPES: Record<string, true> = { file_share: true, thread_broadcast: true };
 
 const mentions = (text: string, botUserId: string) =>
   new RegExp(`<@${botUserId.replace(/[^A-Za-z0-9]/g, "")}(\\|[^>]*)?>`).test(text);
@@ -54,8 +56,9 @@ export function profileOf(p: unknown): SlackProfile | undefined {
 
 /**
  * Events API 负载（`events_api` 信封的 payload）→ 入站事件候选。规则：
- * - `message`（`message.im` 私聊；`message.channels` / `message.groups` / `message.mpim` 群聊）：带 `subtype`
- *   （编辑 `message_changed`、删除 `message_deleted`、文件分享等）、带 `bot_id`、发言人是机器人自己、没有 user、
+ * - `message`（`message.im` 私聊；`message.channels` / `message.groups` 群聊）：带 `subtype` 的（编辑
+ *   `message_changed`、删除 `message_deleted`、入群等）忽略，只有 `file_share`（取说明文字，附件忽略）与
+ *   `thread_broadcast` 按普通文本处理；带 `bot_id`、发言人是机器人自己、没有 user、
  *   去掉 @ 后无文本的一律忽略。群聊里只转发话题回复（`thread_ts` ≠ `ts`）且未 @ 机器人的；@ 机器人的由
  *   `app_mention` 负责（两者消息 id 相同，内核也会去重），频道里未 @ 的顶层消息直接忽略。
  * - `app_mention`：群聊消息，`mentionsBot` 为真；带 `edited`（编辑后补发）的忽略。
@@ -76,7 +79,10 @@ export function eventToInbound(body: unknown, botUserId: string): InboundCandida
     return { kind: "directory", event: { type: "directory_changed", tenantId: teamId } };
   }
   if (type !== "message" && type !== "app_mention") return null;
-  if (e.subtype !== undefined || e.bot_id !== undefined || e.bot_profile !== undefined) return null;
+  if (e.subtype !== undefined && !(typeof e.subtype === "string" && TEXT_SUBTYPES[e.subtype])) {
+    return null;
+  }
+  if (e.bot_id !== undefined || e.bot_profile !== undefined) return null;
   if (type === "app_mention" && e.edited !== undefined) return null;
   const user = str(e.user);
   const channel = str(e.channel);

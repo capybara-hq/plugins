@@ -35,7 +35,7 @@ afterAll(async () => {
   await slack?.stop();
 });
 
-const channel = () => createSlackChannel({ apiUrl: slack.apiUrl, log });
+const channel = () => createSlackChannel({ apiUrl: slack.apiUrl, log, reconnectBaseMs: 20 });
 const config = () => ({ appToken: slack.appToken, botToken: slack.botToken });
 const signal = () => new AbortController().signal;
 const waitFor = async <T>(fn: () => T | undefined, ms = 5000, what = "condition"): Promise<T> => {
@@ -70,7 +70,7 @@ async function connect(onEvent?: (e: InboundEvent) => Promise<void>) {
   );
   const stop = async () => {
     ac.abort();
-    await done;
+    await done.catch(() => {});
   };
   stops.push(stop);
   return { events, stop, done };
@@ -86,7 +86,7 @@ describe("plugin manifest", () => {
       cards: true,
       edit: true,
       threads: true,
-      minEditIntervalMs: 1200,
+      minEditIntervalMs: 2500,
     });
     expect(ch.connectionSchema.safeParse(config()).success).toBe(true);
     expect(
@@ -210,6 +210,8 @@ describe("send / update", () => {
     slack.failNext("chat.postMessage", { error: "msg_too_long" });
     expect(await send()).toMatchObject({ retryable: false, reason: "too_large" });
     slack.failNext("chat.postMessage", { error: "invalid_blocks" });
+    expect(await send()).toMatchObject({ retryable: false, reason: "rejected" });
+    slack.failNext("chat.postMessage", { body: { ok: true, channel: "D1" } });
     expect(await send()).toMatchObject({ retryable: false, reason: "rejected" });
   });
 
@@ -403,6 +405,70 @@ describe("connect (Socket Mode)", () => {
     expect(Date.now() - t).toBeLessThan(4000);
     await waitFor(() => slack.openSockets() === 0 || undefined, 3000, "socket closed");
   });
+
+  it("abort while apps.connections.open is in flight leaves no socket open", async () => {
+    slack.delay("apps.connections.open", 400);
+    try {
+      const calls = slack.calls.filter((c) => c.method === "apps.connections.open").length;
+      const opened = slack.connectionsOpened();
+      const ac = new AbortController();
+      const done = channel().connect({
+        connectionId: "c-abort",
+        config: config(),
+        signal: ac.signal,
+        onEvent: async () => {},
+      });
+      await waitFor(
+        () =>
+          slack.calls.filter((c) => c.method === "apps.connections.open").length > calls ||
+          undefined,
+        5000,
+        "apps.connections.open in flight",
+      );
+      ac.abort();
+      await done;
+      await waitFor(() => slack.connectionsOpened() > opened || undefined, 5000, "open answered");
+      await new Promise((r) => setTimeout(r, 800));
+      expect(slack.openSockets()).toBe(0);
+    } finally {
+      slack.delay("apps.connections.open", 0);
+    }
+  });
+
+  it("link_disabled → connect rejects with the reason (kernel records last_error)", async () => {
+    const { done } = await connect();
+    slack.disconnectAll("link_disabled");
+    const err = await done.then(
+      () => undefined,
+      (e: Error) => e,
+    );
+    expect(err?.message).toMatch(/link_disabled/);
+  });
+
+  it("connections that keep closing right away → backoff, then reject after 5 in a row", async () => {
+    slack.dropNextConnections(100);
+    try {
+      const opened = slack.connectionsOpened();
+      const t = Date.now();
+      const err = await channel()
+        .connect({
+          connectionId: "c-flap",
+          config: config(),
+          signal: AbortSignal.timeout(20_000),
+          onEvent: async () => {},
+        })
+        .then(
+          () => undefined,
+          (e: Error) => e,
+        );
+      expect(err?.message).toMatch(/keeps closing/);
+      expect(slack.connectionsOpened() - opened).toBe(5);
+      // 退避：20 + 40 + 80 + 160 毫秒（各乘 0.5–1 的抖动）≥ 150 毫秒
+      expect(Date.now() - t).toBeGreaterThanOrEqual(150);
+    } finally {
+      slack.dropNextConnections(0);
+    }
+  }, 20_000);
 
   it("invalid app token → connect rejects without leaking the token", async () => {
     const err = await channel()

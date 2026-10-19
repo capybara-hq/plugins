@@ -214,7 +214,8 @@ describe("Slack 插件接内核（双副本）", () => {
       "draft message",
     );
     expect(draft.text.length).toBeLessThan(LONG.length);
-    // 模型回复原样转换为 mrkdwn（这段文本没有需要转换的格式）；草稿定稿时末尾空白被去掉
+    // 模型回复原样转换为 mrkdwn（这段文本没有需要转换的格式）；插件去 @ 时会去掉入站文本首尾的空白，
+    // 所以 model-fake 回显的文本没有末尾空格
     await waitFor(
       async () => slack.finalText(draft) === LONG.trimEnd() || undefined,
       30_000,

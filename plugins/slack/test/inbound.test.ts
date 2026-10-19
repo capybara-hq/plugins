@@ -22,6 +22,11 @@ describe("stripBotMention", () => {
     expect(stripBotMention("<@UBOT> hi", BOT)).toBe("hi");
     expect(stripBotMention("hey <@UBOT|capybara>  there", BOT)).toBe("hey there");
     expect(stripBotMention("<@UOTHER> hi <@UBOT>", BOT)).toBe("<@UOTHER> hi");
+    // 只整理 @ 周围的空白，用户的缩进与换行保留
+    expect(stripBotMention("<@UBOT>\n```\n  indented  code\n```\n\nnext", BOT)).toBe(
+      "```\n  indented  code\n```\n\nnext",
+    );
+    expect(stripBotMention("a  b <@UBOT>\n  c", BOT)).toBe("a  b c");
   });
 });
 
@@ -128,7 +133,8 @@ describe("eventToInbound", () => {
     for (const e of [
       dm({ subtype: "message_changed" }),
       dm({ subtype: "message_deleted" }),
-      dm({ subtype: "file_share" }),
+      dm({ subtype: "file_share", text: "" }),
+      dm({ subtype: "channel_join" }),
       dm({ bot_id: "B1" }),
       dm({ user: BOT }),
       dm({ user: undefined }),
@@ -139,6 +145,28 @@ describe("eventToInbound", () => {
     ]) {
       expect(eventToInbound(body(e), BOT), JSON.stringify(e)).toBeNull();
     }
+  });
+
+  it("file_share with a caption and thread_broadcast pass through as text", () => {
+    const f = eventToInbound(body(dm({ subtype: "file_share", text: "see attached" })), BOT);
+    expect(f?.kind === "message" && f.event.text).toBe("see attached");
+    const tb = eventToInbound(
+      body({
+        type: "message",
+        subtype: "thread_broadcast",
+        channel_type: "channel",
+        channel: "C1",
+        user: "U1",
+        text: "also to channel",
+        ts: "1.9",
+        thread_ts: "1.5",
+      }),
+      BOT,
+    );
+    expect(tb?.kind === "message" && tb.event).toMatchObject({
+      text: "also to channel",
+      target: { chatId: "C1", chatType: "group", threadId: "C1:1.5" },
+    });
   });
 
   it("team_join / user_change → directory_changed for the team", () => {

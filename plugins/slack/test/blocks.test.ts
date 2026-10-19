@@ -175,6 +175,18 @@ describe("renderCard: question", () => {
 });
 
 describe("renderCard: connect and bind", () => {
+  it("non-http(s) link targets are shown as plain text, never as a button", () => {
+    const blocks = renderCard(
+      { kind: "connect", appName: "X", url: "javascript:alert(1)" },
+      "en",
+    ) as Block[];
+    expect(buttons(blocks)).toEqual([]);
+    expect(allText(blocks)).toContain("javascript:alert(1)");
+    const ok = renderCard(approval({ webUrl: "ftp://x.example/a" }), "en") as Block[];
+    expect(buttons(ok).some((b) => b.url !== undefined)).toBe(false);
+    expect(buttons(ok).map((b) => b.text.text)).toContain("Deny");
+  });
+
   it("connect: link button", () => {
     const bs = buttons(
       renderCard(
@@ -223,6 +235,15 @@ describe("renderSend / renderUpdate", () => {
     const p = posts[0];
     expect(p?.text).toBe("Please link first");
     expect(Array.isArray(p?.blocks)).toBe(true);
+  });
+
+  it("card fallback text (no message text) is escaped", () => {
+    const [p] = renderSend(
+      { text: "", cards: [approval({ title: "<!channel> deploy & go" })] },
+      "en",
+    );
+    expect(p?.text).not.toContain("<!");
+    expect(p?.text).toContain("&lt;!channel&gt; deploy &amp; go");
   });
 
   it("text duplicated by the card title is not repeated as its own section", () => {

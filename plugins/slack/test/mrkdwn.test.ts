@@ -26,6 +26,27 @@ describe("markdownToMrkdwn", () => {
     expect(markdownToMrkdwn("[a|b](https://x.example)")).toBe("<https://x.example|a¦b>");
   });
 
+  it("model text cannot inject Slack control sequences through link URLs", () => {
+    for (const md of [
+      "[x](https://a.com|<!channel>)",
+      "<https://x<!here>",
+      "[y](https://a.com/<@U123>)",
+      "see <https://a.com|<!everyone>>",
+    ]) {
+      const out = markdownToMrkdwn(md);
+      expect(out, md).not.toContain("<!");
+      expect(out, md).not.toContain("<@");
+      // 每个链接最多一个分隔符 |
+      for (const link of out.match(/<[^<>]*>/g) ?? []) {
+        expect(link.split("|").length, md).toBeLessThanOrEqual(2);
+      }
+    }
+    expect(markdownToMrkdwn("[x](https://a.com|<!channel>)")).toBe(
+      "<https://a.com%7C%3C!channel%3E|x>",
+    );
+    expect(markdownToMrkdwn("<https://x<!here>")).toBe("<https://x%3C!here>");
+  });
+
   it("headings become bold lines", () => {
     expect(markdownToMrkdwn("# Title\n## **Sub** title")).toBe("*Title*\n*Sub title*");
   });

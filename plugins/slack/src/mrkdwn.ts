@@ -7,6 +7,13 @@
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+/**
+ * 链接地址里的 `<`、`>`、`|` 会截断 / 篡改 `<url|text>` 语法（模型文本可借此注入 `<!channel>` 等控制序列），
+ * 一律百分号编码；`&` 转义为 `&amp;`。
+ */
+const safeUrl = (url: string) =>
+  url.replace(/&/g, "&amp;").replace(/</g, "%3C").replace(/>/g, "%3E").replace(/\|/g, "%7C");
+
 const BOLD = "\u0001";
 const HOLD = "\u0000";
 
@@ -21,11 +28,9 @@ function formatSpan(seg: string): string {
     .replace(
       /\[([^\]\n]+)\]\(((?:https?:\/\/|mailto:)[^\s)]+)\)/g,
       (_m, label: string, url: string) =>
-        hold(`<${url.replace(/&/g, "&amp;")}|${esc(label.replace(/\|/g, "¦"))}>`),
+        hold(`<${safeUrl(url)}|${esc(label.replace(/\|/g, "¦"))}>`),
     )
-    .replace(/<((?:https?:\/\/|mailto:)[^>\s]+)>/g, (_m, url: string) =>
-      hold(`<${url.replace(/&/g, "&amp;")}>`),
-    );
+    .replace(/<((?:https?:\/\/|mailto:)[^>\s]+)>/g, (_m, url: string) => hold(`<${safeUrl(url)}>`));
   s = esc(s)
     .replace(/\*\*\*(?=\S)(.*?\S)\*\*\*/g, `${BOLD}_$1_${BOLD}`)
     .replace(/\*\*(?=\S)(.*?\S)\*\*/g, `${BOLD}$1${BOLD}`)
