@@ -15,8 +15,8 @@ import { createDb } from "../../src/db/pool.js";
 import { AccountsService } from "../../src/identity/accounts.js";
 import { createKernel, type Kernel } from "../../src/kernel.js";
 import { createLogger } from "../../src/log.js";
-import { MembersService } from "../../src/orgs/members.service.js";
 import { memState } from "../fixtures/plugins/mem-connector/index.js";
+import { testMembers } from "../helpers/members.js";
 import { MODEL_FAKE } from "../helpers/model-plugins.js";
 import {
   createConv,
@@ -346,7 +346,7 @@ describe("应用预览", () => {
       password: PW,
       displayName: "m",
     });
-    await new MembersService(db).add(orgId, acc.id, "member", ownerId);
+    await testMembers(db).add(orgId, acc.id, "member", ownerId);
     const memberReq = await session(k, "mem");
     const res = await preview({ connector: "mem", endpoint: { server: "docs" } }, memberReq);
     expect(res.statusCode).toBe(403);
@@ -483,7 +483,7 @@ describe("connector-openapi 端到端", () => {
         password: PW,
         displayName: "v",
       });
-      await new MembersService(db).add(orgId, acc.id, "member", ownerId);
+      await testMembers(db).add(orgId, acc.id, "member", ownerId);
       const asMember = await (await session(k, "viewer"))({
         method: "GET",
         url: `/api/v1/orgs/${orgId}/apps/${appId}`,
