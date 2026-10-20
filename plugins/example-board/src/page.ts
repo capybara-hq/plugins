@@ -58,15 +58,14 @@ export const BOARD_JS = `(function () {
   var STATUSES = ["todo", "doing", "done"];
   var TEXT = {
     en: { todo: "To do", doing: "In progress", done: "Done", add: "Add card", title: "New card title",
-          empty: "No cards", move: "Move to", open: "Open conversation", live: "Live",
+          empty: "No cards", move: "Move to", live: "Live",
           lost: "Reconnecting...", failed: "Could not load cards", added: "Card added", loading: "Loading..." },
     zh: { todo: "待办", doing: "进行中", done: "已完成", add: "添加卡片", title: "新卡片标题",
-          empty: "没有卡片", move: "移到", open: "打开对话", live: "实时", lost: "正在重连...",
+          empty: "没有卡片", move: "移到", live: "实时", lost: "正在重连...",
           failed: "读取卡片失败", added: "已添加卡片", loading: "加载中..." }
   };
   var token = null;
   var locale = "en";
-  var conversationMode = false;
   var started = false;
 
   function t(key) { return (TEXT[locale] || TEXT.en)[key]; }
@@ -143,15 +142,6 @@ export const BOARD_JS = `(function () {
           });
           moves.appendChild(b);
         });
-        if (!conversationMode && card.conversationId) {
-          var open = document.createElement("button");
-          open.type = "button";
-          open.textContent = t("open");
-          open.addEventListener("click", function () {
-            post({ type: "navigate", path: "/chat/" + encodeURIComponent(card.conversationId) });
-          });
-          moves.appendChild(open);
-        }
         el.appendChild(moves);
         section.appendChild(el);
       });
@@ -233,7 +223,6 @@ export const BOARD_JS = `(function () {
       token = m.token;
       locale = m.locale === "zh" ? "zh" : "en";
       document.documentElement.lang = locale;
-      conversationMode = !!(m.context && m.context.conversationId);
       applyTokens(m.tokens, m.theme);
       if (!started) { started = true; start(); }
     } else if (m.type === "token" && typeof m.token === "string") {

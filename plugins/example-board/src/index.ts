@@ -64,12 +64,15 @@ async function body<T>(req: Request, schema: z.ZodType<T>): Promise<T | undefine
   }
 }
 
-/** 令牌的可见范围：对话嵌入只看这个对话的卡片，组织页面看全组织。 */
+/**
+ * 令牌的可见范围：对话嵌入只看这个对话的卡片；组织页面只看不属于任何对话的卡片
+ * （对话里的卡片只能经声明里有该对话的 board-conv 令牌看到，组织页面的令牌看不到也改不了）。
+ */
 // biome-ignore lint/suspicious/noExplicitAny: 插件自带表结构，Kysely 未声明类型
 function scoped(q: any, claims: EmbedClaims): any {
   const byOrg = q.where("org_id", "=", claims.orgId);
   return claims.conversationId === undefined
-    ? byOrg
+    ? byOrg.where("conversation_id", "is", null)
     : byOrg.where("conversation_id", "=", claims.conversationId);
 }
 
@@ -253,11 +256,8 @@ export default definePlugin({
           const u = await ctx.bus.subscribe(cardsTopic(claims.orgId), (m) => {
             const change = parseChange(m);
             if (!change) return;
-            if (
-              claims.conversationId !== undefined &&
-              change.conversationId !== claims.conversationId
-            )
-              return;
+            // 与列表同一可见范围：组织页面只收不属于对话的卡片，对话标签只收本对话的
+            if (change.conversationId !== (claims.conversationId ?? null)) return;
             send(
               `event: cards\ndata: ${JSON.stringify({ cardId: change.cardId, status: change.status })}\n\n`,
             );
