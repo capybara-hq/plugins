@@ -9,7 +9,7 @@ import { createDualReplicaHarness, type Harness, startTestPostgres } from "@capy
 import { Kysely, PostgresDialect } from "kysely";
 import pg from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import todo, { readTodos, renderTodos, writeHandler } from "../src/index.js";
+import todo, { readTodos, renderTodos, tasksView, writeHandler } from "../src/index.js";
 
 const PLUGIN = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 
@@ -49,21 +49,53 @@ const call = (conversationId: string): ToolCallContext => ({
   signal: new AbortController().signal,
 });
 
+const noUi = { invalidate: async () => {} };
+
 const text = (r: Awaited<ReturnType<ToolHandler>>): string =>
   "content" in r && r.content[0]?.type === "text" ? r.content[0].text : "";
 
 describe("todo 插件", () => {
-  it("注册 write 工具，默认策略 allow（模型可见名 todo__write）", () => {
+  it("注册 write 工具（默认策略 allow，模型可见名 todo__write）与对话视图 tasks", () => {
     const registered: { spec: ToolSpec; handler: ToolHandler }[] = [];
+    const views: string[] = [];
     todo.setup({
       db: {},
       tools: {
         register: (spec: ToolSpec, handler: ToolHandler) => registered.push({ spec, handler }),
       },
+      ui: { view: (id: string) => views.push(id) },
     } as unknown as PluginContext);
     expect(registered).toHaveLength(1);
     expect(registered[0]?.spec.name).toBe("write");
     expect(registered[0]?.spec.defaultPolicy).toBe("allow");
+    expect(views).toEqual(["tasks"]);
+    expect(todo.ui).toEqual([
+      { id: "tasks", title: { zh: "任务", en: "Tasks" }, place: "conversation", kind: "view" },
+    ]);
+    expect(todo.permissions?.ui).toEqual({ views: ["tasks"] });
+  });
+
+  it("tasks 视图：badge 为「已完成/总数」，主体是 checklist（进行中显示 activeForm）", () => {
+    expect(
+      tasksView([
+        { content: "Plan", status: "completed", activeForm: "Planning" },
+        { content: "Build", status: "in_progress", activeForm: "Building" },
+        { content: "Ship", status: "pending", activeForm: "Shipping" },
+      ]),
+    ).toEqual({
+      badge: "1/3",
+      blocks: [
+        {
+          type: "checklist",
+          items: [
+            { text: "Plan", status: "completed" },
+            { text: "Building", status: "in_progress" },
+            { text: "Ship", status: "pending" },
+          ],
+        },
+      ],
+    });
+    expect(tasksView([])).toEqual({ badge: "0/0", blocks: [{ type: "checklist", items: [] }] });
   });
 
   it("渲染：[x] / [>] / [ ]，进行中显示 activeForm", () => {
@@ -81,8 +113,10 @@ describe("todo 插件", () => {
     harnesses.push(h);
     const a = replicaDb(h);
     const b = replicaDb(h);
-    const writeA = writeHandler(a);
-    const writeB = writeHandler(b);
+    const invalidated: unknown[] = [];
+    const ui = { invalidate: async (t: unknown) => void invalidated.push(t) };
+    const writeA = writeHandler(a, ui);
+    const writeB = writeHandler(b, ui);
 
     const first = [
       { content: "Plan", status: "in_progress", activeForm: "Planning" },
@@ -90,6 +124,13 @@ describe("todo 插件", () => {
     ];
     const r1 = await writeA({ todos: first }, call("conv-1"));
     expect(text(r1)).toBe("Todo list updated (2 items):\n[>] Planning\n[ ] Build");
+    // 显示摘要（不进模型上下文）与写入后的刷新通知
+    expect("display" in r1 && r1.display).toEqual({
+      summary: { zh: "更新任务清单（2 项）", en: "Updated task list (2 items)" },
+    });
+    expect(invalidated).toEqual([
+      { orgId: "org", conversationId: "conv-1", contribution: "tasks" },
+    ]);
     expect(await readTodos(b, "conv-1")).toEqual(first);
 
     const second = [
@@ -113,8 +154,8 @@ describe("todo 插件", () => {
       { content: `task ${n}`, status: "pending" as const, activeForm: `Doing ${n}` },
     ];
     await Promise.all([
-      writeHandler(a)({ todos: mk(1) }, call("c")),
-      writeHandler(b)({ todos: mk(2) }, call("c")),
+      writeHandler(a, noUi)({ todos: mk(1) }, call("c")),
+      writeHandler(b, noUi)({ todos: mk(2) }, call("c")),
     ]);
     const final = await readTodos(a, "c");
     expect([mk(1), mk(2)]).toContainEqual(final);
@@ -125,7 +166,10 @@ describe("todo 插件", () => {
     harnesses.push(h);
     const a = replicaDb(h);
     await expect(
-      writeHandler(a)({ todos: [{ content: "x", status: "bogus", activeForm: "y" }] }, call("c")),
+      writeHandler(a, noUi)(
+        { todos: [{ content: "x", status: "bogus", activeForm: "y" }] },
+        call("c"),
+      ),
     ).rejects.toThrow(/Invalid todos/);
     expect(await readTodos(a, "c")).toEqual([]);
   });

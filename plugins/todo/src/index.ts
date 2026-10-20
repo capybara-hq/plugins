@@ -4,6 +4,7 @@ import {
   ToolError,
   type ToolHandler,
   type ToolSpec,
+  type UiView,
 } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 
@@ -102,8 +103,28 @@ export async function readTodos(db: Db, conversationId: string): Promise<Todo[]>
   return row === undefined ? [] : (row.items as Todo[]);
 }
 
-/** `todo__write` 的处理函数。 */
-export function writeHandler(db: Db): ToolHandler {
+/** 对话页右侧「任务」标签的贡献 id。 */
+export const TASKS_VIEW = "tasks";
+
+/** 「任务」视图：badge 为「已完成/总数」，主体是一个 checklist（进行中的条目显示 activeForm）。 */
+export function tasksView(todos: Todo[]): UiView {
+  const done = todos.filter((t) => t.status === "completed").length;
+  return {
+    badge: `${done}/${todos.length}`,
+    blocks: [
+      {
+        type: "checklist",
+        items: todos.map((t) => ({
+          text: t.status === "in_progress" ? t.activeForm : t.content,
+          status: t.status,
+        })),
+      },
+    ],
+  };
+}
+
+/** `todo__write` 的处理函数：写入后通知界面刷新「任务」标签（刷新失败不影响写入结果）。 */
+export function writeHandler(db: Db, ui: Pick<PluginContext["ui"], "invalidate">): ToolHandler {
   return async (input, ctx) => {
     const parsed = WriteInput.safeParse(input);
     if (!parsed.success) {
@@ -112,20 +133,46 @@ export function writeHandler(db: Db): ToolHandler {
           "where status is pending, in_progress or completed.",
       );
     }
-    await writeTodos(db, ctx.conversationId, parsed.data.todos);
-    return { content: [{ type: "text", text: renderTodos(parsed.data.todos) }] };
+    const todos = parsed.data.todos;
+    await writeTodos(db, ctx.conversationId, todos);
+    await ui
+      .invalidate({
+        orgId: ctx.orgId,
+        conversationId: ctx.conversationId,
+        contribution: TASKS_VIEW,
+      })
+      .catch(() => {});
+    return {
+      content: [{ type: "text", text: renderTodos(todos) }],
+      display: {
+        summary: {
+          zh: `更新任务清单（${todos.length} 项）`,
+          en: `Updated task list (${todos.length} items)`,
+        },
+      },
+    };
   };
 }
 
-/** todo 插件：一个工具 `write`（模型可见名 `todo__write`），清单存在本插件 schema，各副本读写一致。 */
+/**
+ * todo 插件：一个工具 `write`（模型可见名 `todo__write`），清单存在本插件 schema，各副本读写一致；
+ * 对话页右侧的「任务」标签（视图 `tasks`），写入后经 `ctx.ui.invalidate` 实时刷新。
+ */
 export default definePlugin({
   name: "todo",
   version: "0.1.0",
   sdk: "^0.1.0",
   provides: [],
   migrations: "../migrations",
-  permissions: { tools: ["write"] },
+  ui: [{ id: "tasks", title: { zh: "任务", en: "Tasks" }, place: "conversation", kind: "view" }],
+  permissions: { tools: ["write"], ui: { views: ["tasks"] } },
   setup(ctx) {
-    ctx.tools.register(SPEC, writeHandler(ctx.db));
+    ctx.tools.register(
+      SPEC,
+      writeHandler(ctx.db, { invalidate: (target) => ctx.ui.invalidate(target) }),
+    );
+    ctx.ui.view("tasks", async ({ conversationId }) =>
+      tasksView(conversationId === undefined ? [] : await readTodos(ctx.db, conversationId)),
+    );
   },
 });
