@@ -20,10 +20,12 @@ describe("toCardMarkdown", () => {
     expect(toCardMarkdown(md)).toBe(md);
   });
 
-  it("keeps fenced code blocks and inline code byte-for-byte (generics, HTML, ampersands)", () => {
+  it("keeps fenced code blocks and inline code as written (only invisible U+200B added; no entities)", () => {
     const md =
       "Use `List<String> & co`:\n```ts\nconst a: Map<K, V> = new Map();\nif (a && b) {}\n```";
-    expect(toCardMarkdown(md)).toBe(md);
+    const out = toCardMarkdown(md);
+    expect(out.replace(/\u200b/g, "")).toBe(md);
+    expect(out).not.toContain("&#");
   });
 
   it("escapes < and & outside code so model text cannot inject Lark tags", () => {
@@ -84,7 +86,7 @@ describe("toCardMarkdown: links (only http(s) and mailto become links)", () => {
   it("renders links with other schemes, images and reference links as literal text", () => {
     for (const [input, shown] of [
       ["[x](javascript:alert(1))", "\\[x\\](javascript:alert(1))"],
-      ["[x](lark://applink/open)", "\\[x\\](lark://applink/open)"],
+      ["[x](lark://applink/open)", "\\[x\\](lark:\u200b//applink/open)"],
       ["[x](data:text/html,hi)", "\\[x\\](data:text/html,hi)"],
       ["![img](img_v2_key)", "!\\[img\\](img_v2_key)"],
       ["[x][1]\n[1]: javascript:alert(1)", "\\[x\\]\\[1\\]\n\\[1\\]: javascript:alert(1)"],
@@ -155,7 +157,7 @@ describe("toCardMarkdown: fence tracking follows CommonMark", () => {
     const out = toCardMarkdown(input);
     expect(out).not.toMatch(LIVE);
     expect(out).toContain("&#60;font color=red>");
-    expect(out).toContain("\\[click\\](lark://applink/x)");
+    expect(out).toContain("\\[click\\](lark:\u200b//applink/x)");
   });
 
   it("a shorter fence line does not close a longer fence", () => {
@@ -179,8 +181,8 @@ describe("toCardMarkdown: fence tracking follows CommonMark", () => {
   });
 
   it("a longer closer closes; a tilde info string may contain backticks", () => {
-    expect(toCardMarkdown("```\n<b>\n`````\n<b>")).toBe("```\n<b>\n`````\n&#60;b>");
-    expect(toCardMarkdown("~~~ a`b\n<b>\n~~~\n<b>")).toBe("~~~ a`b\n<b>\n~~~\n&#60;b>");
+    expect(toCardMarkdown("```\n<b>\n`````\n<b>")).toBe("```\n<\u200bb>\n`````\n&#60;b>");
+    expect(toCardMarkdown("~~~ a`b\n<b>\n~~~\n<b>")).toBe("~~~ a`b\n<\u200bb>\n~~~\n&#60;b>");
   });
 
   it("fences nested in a list item or quote (or indented at all) are text: what follows is escaped", () => {
@@ -197,9 +199,9 @@ describe("toCardMarkdown: fence tracking follows CommonMark", () => {
   });
 
   it("a top-level fence keeps its code unescaped (only <at is split); indented closers still close", () => {
-    expect(toCardMarkdown("```\n<font> & [a](lark://x)\n```")).toBe(
-      "```\n<font> & [a](lark://x)\n```",
-    );
+    const code = toCardMarkdown("```\n<font> & [a](https://x)\n```");
+    expect(code.replace(/\u200b/g, "")).toBe("```\n<font> & [a](https://x)\n```");
+    expect(code).not.toContain("&#");
     expect(toCardMarkdown("```\n<at id=all>\n```")).toBe("```\n<​at id=all>\n```");
     // 缩进的收尾行照样收尾（多收尾只会多转义，安全）
     expect(toCardMarkdown("```\ncode\n  ```\n<b>")).toBe("```\ncode\n  ```\n&#60;b>");
@@ -298,5 +300,96 @@ describe("splitMarkdown", () => {
   it("an inline ```a``` line does not make the splitter open a fence", () => {
     const text = `\`\`\`a\`\`\`\n${Array.from({ length: 30 }, (_, i) => `text ${i}`).join("\n")}`;
     for (const p of splitMarkdown(text, 60)) expect(p).not.toMatch(/^[`~]{3,}$/m);
+  });
+});
+
+/**
+ * Ruling A39：分类错了只影响外观。不论某段被当成代码还是文本，输出里都不能出现活的标签、
+ * 非 http(s) / mailto 的 Markdown 链接，或没拆开的 `lark://`。
+ */
+const LIVE_TAG = /<\s*(?:font|a[\s>]|link|text_tag|person|at[\s>/])/i;
+const LIVE_BAD_LINK = /(?<!\\)\]\((?!https?:\/\/|mailto:)/i;
+const LIVE_LARK = /lark:\/\//i;
+const assertInert = (s: string, what: string) => {
+  expect(s, what).not.toMatch(LIVE_TAG);
+  expect(s, what).not.toMatch(LIVE_BAD_LINK);
+  expect(s, what).not.toMatch(LIVE_LARK);
+};
+
+describe("A39: misclassification is cosmetic only", () => {
+  it("probe (a): an indented opener desyncs the tracker, but the misread lines are neutralized", () => {
+    const out = toCardMarkdown(" ```\n```\n<font color='red'>x</font>\n[x](lark://evil)");
+    assertInert(out, out);
+  });
+
+  it("probe (b): inline code needs equal-length backtick runs; unmatched runs are text", () => {
+    for (const v of ["``<font color='red'>x</font>`", "`<font>x</font>``", "``[x](lark://evil)`"]) {
+      const out = toCardMarkdown(v);
+      assertInert(out, `${v} → ${out}`);
+      expect(out, v).toMatch(/&#60;|\\\[/);
+    }
+    // 等长的反引号串照常是行内代码（只加看不见的 U+200B）
+    expect(toCardMarkdown("``a ` <b>``").replace(/\u200b/g, "")).toBe("``a ` <b>``");
+  });
+
+  it("probe (c): a split never leaves a fence run at the start of a chunk", () => {
+    const codeCut = `\`\`\`\n${"a".repeat(110)} \`\`\`\n<font color='red'>x</font>\n\`\`\``;
+    const textCut = `${"b".repeat(115)} \`\`\`js ${"c".repeat(10)}\nhello\n\`\`\`\n<font color='red'>x</font>\n\`\`\``;
+    for (const [md, broken] of [
+      [codeCut, "\u200b```"],
+      [textCut, "\u200b```js"],
+    ] as const) {
+      const parts = splitMarkdown(toCardMarkdown(md), 120);
+      expect(parts.length).toBeGreaterThan(1);
+      for (const p of parts) {
+        expect(p.length).toBeLessThanOrEqual(120);
+        assertInert(p, p);
+      }
+      // 原文里不在行首的那串反引号，切开后落在段首时前面插了 U+200B，不会成为围栏
+      expect(parts.some((p) => p.split("\n").some((l) => l.startsWith(broken)))).toBe(true);
+    }
+  });
+
+  it("property: nasty inputs are inert in toCardMarkdown and in every splitMarkdown chunk", () => {
+    const payloads = [
+      "<font color='red'>x</font>",
+      "<a href='lark://x'>y</a>",
+      "<link url='lark://x'>",
+      "<text_tag color='red'>t</text_tag>",
+      "<person id='ou_1'></person>",
+      "<at id=all></at>",
+      "[x](lark://evil)",
+      "[x](javascript:alert(1))",
+      "lark://applink/raw",
+      "![i](lark://img)",
+    ];
+    const wrappers = [
+      (p: string) => p,
+      (p: string) => `\`${p}\``,
+      (p: string) => `\`\`${p}\``,
+      (p: string) => `\`${p}\`\``,
+      (p: string) => `\`\`\`\n${p}\n\`\`\``,
+      (p: string) => ` \`\`\`\n\`\`\`\n${p}`,
+      (p: string) => `   ~~~\n~~~\n${p}`,
+      (p: string) => `- x\n  \`\`\`\n${p}`,
+      (p: string) => `> \`\`\`\n${p}`,
+      (p: string) => `\`\`\`\`\n\`\`\`\n\`\`\`\`\n${p}`,
+      (p: string) => `\`\`\`a\`\`\`\n${p}`,
+      (p: string) => `~~~ \`x\`\n${p}\n~~~\n${p}`,
+      (p: string) => `\`\`\`\r\n${p}\r\n\`\`\`\r\n${p}`,
+      (p: string) => `${"w ".repeat(55)}\`\`\`\n${p}\n\`\`\`\n${p}`,
+    ];
+    for (const p of payloads) {
+      for (const w of wrappers) {
+        const md = w(p);
+        const out = toCardMarkdown(md);
+        assertInert(out, `${JSON.stringify(md)} → ${JSON.stringify(out)}`);
+        for (const limit of [40, 64, 120]) {
+          for (const chunk of splitMarkdown(out, limit)) {
+            assertInert(chunk, `${JSON.stringify(md)} @${limit} → ${JSON.stringify(chunk)}`);
+          }
+        }
+      }
+    }
   });
 });

@@ -14,7 +14,8 @@
  *   做成链接——地址里会破坏语法的字符（空格、括号、方括号、`<` `>` `"` `\`）百分号编码，地址里不做实体转义；
  *   其余写法（`javascript:`、`lark://`、`data:` 等地址、图片 `![…](…)`、引用式链接 `[x][1]` / `[1]: …`）一律把
  *   `[` `]` 加反斜杠，作为普通文字显示。
- * - 代码之内（行内代码、顶格的 ``` / ~~~ 代码块；列表 / 引用里的围栏当普通文本、照常转义）：CommonMark 不解析其中的标签，为了代码可原样复制不做实体转义；
+ * - 代码之内（行内代码、顶格的 ``` / ~~~ 代码块；列表 / 引用里的围栏当普通文本、照常转义）：见 `neutralizeCode`
+ *   （Ruling A39，误判为代码的文本也拼不出标签 / 链接）；CommonMark 不解析其中的标签，为了代码可原样复制不做实体转义；
  *   但不确定 Lark 的渲染器是否在代码里也认 `<at>`（或先解码实体），所以把 `<at`、`&#60;at`、`&lt;at`、`&#x3c;at`
  *   在 `at` 前插入 U+200B（零宽空格）拆开，其余字符不动。
  * 纯文本里的 `@all` 不会 @ 人（卡片只认 `<at>` 标签），原样保留。
@@ -29,6 +30,17 @@ const ZWSP = "\u200b";
  */
 export const neutralizeAt = (s: string) =>
   s.replace(/(<|&(?:#0*60|#x0*3c|lt);?)(\s*\/?\s*)(at)(?=[\s>/&]|$)/gi, `$1${ZWSP}$2$3`);
+
+/**
+ * 代码区（围栏代码块、行内代码）的中和（Ruling A39）：除 {@link neutralizeAt} 外，在 `<` 与其后的字母或 `/` 之间、
+ * `]` 与 `(` 之间、`://` 的 `:` 之后插入 U+200B。真正的代码只是多了看不见的字符；被误判为代码的文本也拼不出
+ * 标签、Markdown 链接或自动链接——分类错了只影响外观，不会漏过转义。
+ */
+export const neutralizeCode = (s: string) =>
+  neutralizeAt(s)
+    .replace(/<(?=[A-Za-z/])/g, `<${ZWSP}`)
+    .replace(/\](?=\()/g, `]${ZWSP}`)
+    .replace(/:(?=\/\/)/g, `:${ZWSP}`);
 
 const LINK_SCHEME = /^(?:https?:\/\/|mailto:)/i;
 
@@ -106,16 +118,50 @@ function escapeText(s: string): string {
     out += escChar(c);
     i++;
   }
-  return out;
+  // 非 http(s) 的 `scheme://`（`lark://`、`javascript://` 等）拆开，不给渲染器做自动链接的机会
+  return out.replace(/([A-Za-z][A-Za-z0-9+.-]*):(?=\/\/)/g, (m, scheme: string) =>
+    /^https?$/i.test(scheme) ? m : `${m}${ZWSP}`,
+  );
 }
 
-/** 一行（不在代码块里）：行内代码只做 `<at` 拆分，其余转义。 */
+/**
+ * 一行（不在代码块里）：行内代码按 CommonMark 认——开头的反引号串与其后第一个**等长**的反引号串配对，
+ * 配不上的反引号串是普通文字。行内代码只做 {@link neutralizeCode}，其余转义。
+ */
 function convertLine(line: string): string {
+  const runAt = (j: number) => {
+    let n = 0;
+    while (line[j + n] === "`") n++;
+    return n;
+  };
   let out = "";
   let last = 0;
-  for (const m of line.matchAll(/`[^`\n]+`/g)) {
-    out += escapeText(line.slice(last, m.index)) + neutralizeAt(m[0]);
-    last = m.index + m[0].length;
+  let i = 0;
+  while (i < line.length) {
+    if (line[i] !== "`") {
+      i++;
+      continue;
+    }
+    const n = runAt(i);
+    let close = -1;
+    for (let j = i + n; j < line.length; ) {
+      const m = line[j] === "`" ? runAt(j) : 0;
+      if (m === 0) {
+        j++;
+        continue;
+      }
+      if (m === n) {
+        close = j;
+        break;
+      }
+      j += m;
+    }
+    if (close < 0) {
+      i += n;
+      continue;
+    }
+    out += escapeText(line.slice(last, i)) + neutralizeCode(line.slice(i, close + n));
+    i = last = close + n;
   }
   return out + escapeText(line.slice(last));
 }
@@ -158,11 +204,11 @@ export function toCardMarkdown(md: string): string {
   for (const line of md.replace(/\r\n?/g, "\n").split("\n")) {
     if (fence !== undefined) {
       if (fenceCloses(line, fence)) fence = undefined;
-      out.push(neutralizeAt(line));
+      out.push(neutralizeCode(line));
       continue;
     }
     fence = fenceOpener(line);
-    out.push(fence !== undefined ? neutralizeAt(line) : convertLine(line));
+    out.push(fence !== undefined ? neutralizeCode(line) : convertLine(line));
   }
   return out.join("\n");
 }
@@ -181,7 +227,7 @@ export function escapePlain(s: string): string {
 
 /** 代码块内容：拆 `<at`，并打断连续的反引号（不让内容提前收尾代码块）。 */
 export function codeSafe(s: string): string {
-  return neutralizeAt(s).replace(/`(?=`)/g, `\`${ZWSP}`);
+  return neutralizeCode(s).replace(/`(?=`)/g, `\`${ZWSP}`);
 }
 
 const isHigh = (c: number) => c >= 0xd800 && c <= 0xdbff;
@@ -215,7 +261,11 @@ function cut(s: string, max: number): [string, string] {
       skip = spaced ? 1 : 0;
     }
   }
-  return [s.slice(0, at), s.slice(at + skip)];
+  let rest = s.slice(at + skip);
+  // 剩下的部分会成为下一段的行首：0–3 个空格加 3 个以上反引号 / 波浪号会被当成围栏，在串前插 U+200B
+  const lead = /^ {0,3}(?=`{3}|~{3})/.exec(rest);
+  if (lead) rest = `${lead[0]}${ZWSP}${rest.slice(lead[0].length)}`;
+  return [s.slice(0, at), rest];
 }
 
 /**
