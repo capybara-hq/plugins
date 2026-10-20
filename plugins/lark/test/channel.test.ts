@@ -301,9 +301,58 @@ describe("send / update", () => {
     expect(findLarkButton(final, (b) => b.text === "批准一次")).toBeUndefined();
     expect(lark.cardText(final)).toContain("已批准");
   });
+
+  it("concurrent calls on a cold cache share one tenant token fetch", async () => {
+    const ch = channel();
+    const before = lark.tokensIssued();
+    await Promise.all(
+      Array.from({ length: 5 }, (_, i) =>
+        ch.send({
+          config: config(),
+          target: dm,
+          message: { text: `c${i}` },
+          signal: signal(),
+          locale: "en",
+        }),
+      ),
+    );
+    expect(lark.tokensIssued()).toBe(before + 1);
+  });
+
+  it("a group target with a malformed threadId is rejected, not sent to the chat top level", async () => {
+    const before = lark.messages.length;
+    const err = await channel()
+      .send({
+        config: config(),
+        target: { chatId: "oc_group", chatType: "group", threadId: "omt_not_a_message" },
+        message: { text: "x" },
+        signal: signal(),
+        locale: "en",
+      })
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({ retryable: false, reason: "rejected" });
+    expect(lark.messages.length).toBe(before);
+  });
 });
 
 describe("connect (long connection)", () => {
+  it("the profile lookup's token refresh stays within the 1 s budget (event acked promptly)", async () => {
+    const { events } = await connect();
+    lark.revokeTokens();
+    lark.delay("token", 3000);
+    try {
+      const t = Date.now();
+      const id = lark.pushEvent(
+        larkMessageEvent({ openId: "ou_dave", chatId: "oc_dm3", chatType: "p2p", text: "quick" }),
+      );
+      expect((await lark.waitForAck(id, 5000)).code).toBe(200);
+      expect(Date.now() - t).toBeLessThan(2000);
+      expect(events.at(-1)).toMatchObject({ text: "quick", sender: { externalId: "ou_dave" } });
+    } finally {
+      lark.delay("token", 0);
+    }
+  });
+
   it("acks (code 200) only after onEvent resolves; delivers a DM with profile", async () => {
     let release: () => void = () => {};
     const gate = new Promise<void>((r) => {

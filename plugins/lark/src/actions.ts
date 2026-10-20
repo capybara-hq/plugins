@@ -10,8 +10,10 @@ import type { CardAction, ChannelTarget } from "@capybara-hq/plugin-sdk";
  *   提交时从 `form_value[cap_m_select]` 读出勾选的下标再映射回选项值。
  *
  * 会话类型 `d`（私聊）/ `g`（群聊）：卡片回调只带 `open_chat_id` 与 `open_message_id`，不带会话类型（私聊与群聊的
- * chat id 都是 `oc_…`），而内核要按它决定未绑定的人得到什么回复、话题如何回落。卡片由机器人自己发出，回调经
- * 鉴权的长连接到达，值不可伪造，所以把发送时的会话类型放进值里，不必在 3 秒的回调窗口内再查一次会话。
+ * chat id 都是 `oc_…`）。把发送时的会话类型放进值里，作为给内核的**参考值**：用户无法凭空构造回传值，但卡片
+ * 可以被转发到别的会话，值会随之被重放（卡片已设 `enable_forward_interaction: false`，转发后的卡片默认不可交互，
+ * 仍不当作保证）。所以内核以发出该卡片时记下的目标（会话类型、chat、话题）为准，并在 chat 不符时拒绝处理，
+ * 不依赖这里的值；它只免去在 3 秒的回调窗口内再查一次会话。
  * 选项值也放进按钮本身，插件无状态（任一副本都能解析）。Lark 没有写明 value 的上限，这里取 2000 字符，
  * 超出时 {@link encodeActionValue} 抛错，渲染方改为只给网页链接。
  */
@@ -128,7 +130,7 @@ function picked(formValue: unknown, options: string[]): string[] | null {
  * - `messageId` = `context.open_message_id`（卡片所在消息，与发送时返回的 id 相同）；
  * - `eventId` = `header.event_id`（文档：「回调的唯一标识」；平台重投同一次点击时不变，不同点击不同）。没有选
  *   `event.token`：它是更新卡片用的凭证（30 分钟内最多用 2 次），语义上不是事件 id；
- * - `target.chatId` = `context.open_chat_id`，会话类型取自按钮值；不带 `threadId`（回调里没有，内核回落到发卡片时
+ * - `target.chatId` = `context.open_chat_id`，会话类型取自按钮值（参考值，内核以记下的卡片目标为准）；不带 `threadId`（回调里没有，内核回落到发卡片时
  *   记下的话题）；
  * - 点击者 = `operator.open_id`，租户 = `operator.tenant_key`（缺省时取 `header.tenant_key`）。
  */

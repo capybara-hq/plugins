@@ -76,11 +76,22 @@ interface Profile {
 }
 
 /** 可中止的等待（只用于本次连接循环内，随 signal 结束）。 */
+/**
+ * 可中止的等待（只用于本次连接循环内，随 signal 结束）。插件不能用 setTimeout（`pnpm check:plugin-state` 的
+ * plugin-timer 规则），所以用 `AbortSignal.timeout` 计时；不建 `AbortSignal.any` 组合信号（每秒一次的状态轮询会
+ * 不断在 signal 上挂依赖），两个监听都在结束时摘掉。
+ */
 const pause = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve) => {
-    const s = AbortSignal.any([signal, AbortSignal.timeout(ms)]);
-    if (s.aborted) resolve();
-    else s.addEventListener("abort", () => resolve(), { once: true });
+    if (signal.aborted) return resolve();
+    const timer = AbortSignal.timeout(ms);
+    const done = () => {
+      signal.removeEventListener("abort", done);
+      timer.removeEventListener("abort", done);
+      resolve();
+    };
+    signal.addEventListener("abort", done, { once: true });
+    timer.addEventListener("abort", done, { once: true });
   });
 
 const MESSAGE_ID = /^om_[A-Za-z0-9_-]+$/;
@@ -423,12 +434,18 @@ export function createLarkChannel(opts: LarkChannelOptions): Channel {
       const c = creds(parse(config));
       const cards = renderSend(message, locale, chatKind(target));
       for (const card of cards) checkSize(card);
-      const root =
+      // 群聊话题 id 必须是根消息的 message_id（om_…）；不合法时不悄悄改发到群里顶层
+      if (
         target.chatType === "group" &&
         target.threadId !== undefined &&
-        MESSAGE_ID.test(target.threadId)
-          ? target.threadId
-          : undefined;
+        !MESSAGE_ID.test(target.threadId)
+      ) {
+        throw new ChannelSendError("malformed Lark thread id (expected the root message_id om_…)", {
+          retryable: false,
+          reason: "rejected",
+        });
+      }
+      const root = target.chatType === "group" ? target.threadId : undefined;
       let last: string | undefined;
       for (const [i, card] of cards.entries()) {
         const uuid = uuidFor(idempotencyKey, i);

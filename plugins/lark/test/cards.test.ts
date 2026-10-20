@@ -86,6 +86,35 @@ describe("renderSend: text", () => {
     expect(card && "header" in card).toBe(false);
   });
 
+  it("forwarded cards are not interactive (enable_forward_interaction: false on every card)", () => {
+    const cards = [
+      ...renderSend({ text: "Hello" }, "en", "d"),
+      ...renderSend({ text: "", cards: [approval()] }, "en", "g"),
+      ...renderSend({ text: "", cards: [question(true, ["a", "b"])] }, "zh", "d"),
+    ];
+    for (const c of cards) {
+      expect((c.config as Record<string, unknown>).enable_forward_interaction).toBe(false);
+    }
+  });
+
+  it("an unknown locale falls back to English everywhere (cards, labels, phrases)", () => {
+    const loc = "fr" as unknown as "en";
+    const cards = [
+      ...renderSend({ text: "", cards: [approval()] }, loc, "g"),
+      ...renderSend({ text: "", cards: [question(false, ["a"])] }, loc, "d"),
+      ...renderSend(
+        { text: "", cards: [{ kind: "connect", appName: "X", url: "https://x.example" }] },
+        loc,
+        "d",
+      ),
+    ];
+    const [a, q, c] = cards as [LarkCard, LarkCard, LarkCard];
+    expect(a.header).toMatchObject({ title: { content: "Approval: Post an announcement" } });
+    expect(buttons(a).map(label)).toContain("Approve once");
+    expect(q.header).toMatchObject({ title: { content: "Question: Pick an environment" } });
+    expect(markdown(c)).toContain("**X** needs to be connected.");
+  });
+
   it("empty text still renders something", () => {
     expect(markdown(renderSend({ text: "  " }, "en", "d")[0] as LarkCard)).toBe("…");
   });

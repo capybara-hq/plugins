@@ -354,7 +354,7 @@ function question(
 }
 
 function renderOne(card: ChannelCard, locale: Locale, chat: ChatKind): Rendered {
-  const t = T[locale] ?? T.en;
+  const t = T[locale];
   switch (card.kind) {
     case "approval":
       return approval(card, locale, chat);
@@ -381,7 +381,12 @@ const summaryOf = (s: string) =>
 
 const shell = (elements: El[], summary: string, header?: El): LarkCard => ({
   schema: "2.0",
-  config: { update_multi: true, summary: { content: summaryOf(summary) } },
+  config: {
+    update_multi: true,
+    // 转发出去的卡片不可交互（Lark 默认即为 false，显式写明）：按钮回传值可随转发被重放，只能作参考
+    enable_forward_interaction: false,
+    summary: { content: summaryOf(summary) },
+  },
   ...(header !== undefined && { header }),
   body: { elements },
 });
@@ -398,7 +403,13 @@ export function contentBytes(card: LarkCard): number {
  * 卡片挂在最后一张上（发送方返回的就是这条的 id，之后更新卡片编辑的也是它）。只有一张审批 / 提问卡片时用卡片头
  * 显示其标题；随附文本与卡片标题相同时不重复显示。`chat` 写进按钮回传值（见 actions.ts）。
  */
-export function renderSend(message: OutboundMessage, locale: Locale, chat: ChatKind): LarkCard[] {
+export function renderSend(
+  message: OutboundMessage,
+  requested: Locale,
+  chat: ChatKind,
+): LarkCard[] {
+  // 未知的 locale 一律按英文（卡片、按钮、固定词与多语言表单文字同一口径）
+  const locale: Locale = requested === "zh" ? "zh" : "en";
   const text = toCardMarkdown(message.text);
   const cards = message.cards ?? [];
   const chunks = text.trim() === "" ? [] : splitMarkdown(text, TEXT_LIMIT);

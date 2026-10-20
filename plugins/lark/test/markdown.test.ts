@@ -73,6 +73,58 @@ describe("toCardMarkdown", () => {
   });
 });
 
+describe("toCardMarkdown: links (only http(s) and mailto become links)", () => {
+  it("keeps http(s) and mailto links", () => {
+    expect(toCardMarkdown("[docs](https://open.larksuite.com/a?b=1&c=2)")).toBe(
+      "[docs](https://open.larksuite.com/a?b=1&c=2)",
+    );
+    expect(toCardMarkdown("[mail](mailto:a@b.example)")).toBe("[mail](mailto:a@b.example)");
+  });
+
+  it("renders links with other schemes, images and reference links as literal text", () => {
+    for (const [input, shown] of [
+      ["[x](javascript:alert(1))", "\\[x\\](javascript:alert(1))"],
+      ["[x](lark://applink/open)", "\\[x\\](lark://applink/open)"],
+      ["[x](data:text/html,hi)", "\\[x\\](data:text/html,hi)"],
+      ["![img](img_v2_key)", "!\\[img\\](img_v2_key)"],
+      ["[x][1]\n[1]: javascript:alert(1)", "\\[x\\]\\[1\\]\n\\[1\\]: javascript:alert(1)"],
+    ] as const) {
+      const out = toCardMarkdown(input);
+      expect(out, input).toBe(shown);
+      expect(out, input).not.toMatch(/(?<!\\)\]\(/);
+    }
+  });
+
+  it("encodes ) ] spaces and < > in destinations; no entities inside destinations", () => {
+    expect(toCardMarkdown("[w](https://en.wikipedia.org/wiki/Foo_(bar))")).toBe(
+      "[w](https://en.wikipedia.org/wiki/Foo_%28bar%29)",
+    );
+    expect(toCardMarkdown("see <https://a.example/x)y]z?q=1&r=2>")).toBe(
+      "see [https://a.example/x)y\\]z?q=1&#38;r=2](https://a.example/x%29y%5Dz?q=1&r=2)",
+    );
+  });
+
+  it("link labels are escaped like text", () => {
+    expect(toCardMarkdown("[<at id=all></at>](https://a.example)")).toBe(
+      "[&#60;at id=all>&#60;/at>](https://a.example)",
+    );
+  });
+});
+
+describe("toCardMarkdown: entity-encoded <at inside code", () => {
+  it("also neutralizes &#60;at / &lt;at / &#x3c;at in code", () => {
+    for (const input of [
+      "`&#60;at id=all&#62;&#60;/at&#62;`",
+      "```\n&lt;at id=all&gt;&lt;/at&gt;\n```",
+      "`&#x3C;at id=all&#x3E;`",
+    ]) {
+      const out = toCardMarkdown(input);
+      expect(out, input).not.toMatch(/&(#0*60|#x0*3c|lt);?\s*\/?\s*at/i);
+      expect(out.replace(/\u200b/g, ""), input).toBe(input);
+    }
+  });
+});
+
 describe("escapePlain", () => {
   it("renders a value literally (no Markdown, no tags)", () => {
     const out = escapePlain("*x* _y_ <at id=all></at> [a](b) # h 2026-10-20");
@@ -115,5 +167,15 @@ describe("splitMarkdown", () => {
       expect(/[\uD800-\uDBFF]$/.test(p)).toBe(false);
     }
     expect(parts.join("")).toBe(text);
+  });
+
+  it("does not cut inside an inline code span", () => {
+    const line = `${"word ".repeat(30)}\`a code span that must stay whole\` ${"tail ".repeat(30)}`;
+    const parts = splitMarkdown(line, 170);
+    expect(parts.length).toBeGreaterThan(1);
+    for (const p of parts) {
+      expect(p.length).toBeLessThanOrEqual(170);
+      expect((p.match(/`/g) ?? []).length % 2, p).toBe(0);
+    }
   });
 });

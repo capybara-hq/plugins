@@ -56,7 +56,7 @@ export interface LarkCallOptions {
   query?: Record<string, string>;
   body?: unknown;
   signal: AbortSignal;
-  /** 本次请求的超时（默认取客户端的 timeoutMs）。 */
+  /** 整次调用的时限（含取 token 与 token 失效后的重试；默认按单次请求取客户端的 timeoutMs）。 */
   timeoutMs?: number;
 }
 
@@ -75,13 +75,24 @@ export function createLarkApi(opts: { baseUrl: string; timeoutMs?: number }): La
   const base = opts.baseUrl.replace(/\/+$/, "");
   const defaultTimeout = opts.timeoutMs ?? 15_000;
   const tokens = new Map<string, { token: string; expiresAt: number }>();
+  /** 进行中的取 token 请求（同一凭据的并发调用共用一次）。 */
+  const inflight = new Map<string, Promise<string>>();
   const keyOf = (c: LarkCredentials) =>
     `${c.appId}\u0000${createHash("sha256").update(c.appSecret).digest("hex").slice(0, 32)}`;
 
-  async function request<T>(path: string, o: LarkCallOptions, token?: string): Promise<T> {
+  /**
+   * 发一次请求。`budget` 是整次调用的时限（如查资料的 1 秒，含取 token 与重试）；没有时按单次请求超时。
+   * 调用方的 signal 中止时原样抛出中止；时限到了抛 {@link LarkNetworkError}。
+   */
+  async function request<T>(
+    path: string,
+    o: LarkCallOptions,
+    token?: string,
+    budget?: AbortSignal,
+  ): Promise<T> {
     const url = new URL(`${base}${path}`);
     for (const [k, v] of Object.entries(o.query ?? {})) url.searchParams.set(k, v);
-    const signal = AbortSignal.any([o.signal, AbortSignal.timeout(o.timeoutMs ?? defaultTimeout)]);
+    const signal = AbortSignal.any([o.signal, budget ?? AbortSignal.timeout(defaultTimeout)]);
     let res: Response;
     try {
       res = await fetch(url, {
@@ -119,13 +130,15 @@ export function createLarkApi(opts: { baseUrl: string; timeoutMs?: number }): La
     return body as T;
   }
 
-  async function token(creds: LarkCredentials, signal: AbortSignal): Promise<string> {
-    const key = keyOf(creds);
-    const hit = tokens.get(key);
-    if (hit && hit.expiresAt > Date.now()) return hit.token;
+  /** 取一次 token 并写缓存（不跟任何调用方的 signal：同一凭据的并发调用共用这一次请求）。 */
+  async function fetchToken(creds: LarkCredentials, key: string): Promise<string> {
     const r = await request<{ tenant_access_token?: unknown; expire?: unknown }>(
       "/open-apis/auth/v3/tenant_access_token/internal",
-      { method: "POST", body: { app_id: creds.appId, app_secret: creds.appSecret }, signal },
+      {
+        method: "POST",
+        body: { app_id: creds.appId, app_secret: creds.appSecret },
+        signal: new AbortController().signal,
+      },
     );
     if (typeof r.tenant_access_token !== "string" || r.tenant_access_token === "") {
       throw new LarkApiError({ status: 200 });
@@ -142,16 +155,66 @@ export function createLarkApi(opts: { baseUrl: string; timeoutMs?: number }): La
     return r.tenant_access_token;
   }
 
+  /** 等共用的取 token 请求，但只等到调用方中止或时限到（共用的请求本身不受影响）。 */
+  function within<T>(p: Promise<T>, signal: AbortSignal, budget?: AbortSignal): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const stop = () => {
+        signal.removeEventListener("abort", stop);
+        budget?.removeEventListener("abort", stop);
+        if (signal.aborted) reject(signal.reason);
+        else reject(new LarkNetworkError("Lark API request timed out"));
+      };
+      if (signal.aborted || budget?.aborted) return stop();
+      signal.addEventListener("abort", stop, { once: true });
+      budget?.addEventListener("abort", stop, { once: true });
+      p.then(
+        (v) => {
+          signal.removeEventListener("abort", stop);
+          budget?.removeEventListener("abort", stop);
+          resolve(v);
+        },
+        (e: unknown) => {
+          signal.removeEventListener("abort", stop);
+          budget?.removeEventListener("abort", stop);
+          reject(e);
+        },
+      );
+    });
+  }
+
+  async function token(
+    creds: LarkCredentials,
+    signal: AbortSignal,
+    budget?: AbortSignal,
+  ): Promise<string> {
+    const key = keyOf(creds);
+    const hit = tokens.get(key);
+    if (hit && hit.expiresAt > Date.now()) return hit.token;
+    let p = inflight.get(key);
+    if (!p) {
+      p = fetchToken(creds, key);
+      inflight.set(key, p);
+      const mine = p;
+      void mine
+        .finally(() => {
+          if (inflight.get(key) === mine) inflight.delete(key);
+        })
+        .catch(() => {});
+    }
+    return within(p, signal, budget);
+  }
+
   return {
-    token,
+    token: (creds, signal) => token(creds, signal),
     async call<T>(creds: LarkCredentials, path: string, o: LarkCallOptions): Promise<T> {
-      const t = await token(creds, o.signal);
+      const budget = o.timeoutMs !== undefined ? AbortSignal.timeout(o.timeoutMs) : undefined;
+      const t = await token(creds, o.signal, budget);
       try {
-        return await request<T>(path, o, t);
+        return await request<T>(path, o, t, budget);
       } catch (e) {
         if (!(e instanceof LarkApiError) || e.code === undefined || !TOKEN_INVALID[e.code]) throw e;
-        tokens.delete(keyOf(creds));
-        return request<T>(path, o, await token(creds, o.signal));
+        if (tokens.get(keyOf(creds))?.token === t) tokens.delete(keyOf(creds));
+        return request<T>(path, o, await token(creds, o.signal, budget), budget);
       }
     },
   };
