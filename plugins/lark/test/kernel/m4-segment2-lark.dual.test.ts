@@ -434,7 +434,12 @@ describe("M4 第二段验收：Lark（双副本）", () => {
     const holderPid = await pidOwningLocalPort(holderPort, pids);
     const holder = harness.replicas.find((r) => r.pid === holderPid);
     const survivor = harness.replicas.find((r) => r.pid !== holderPid);
-    if (!holder || !survivor) throw new Error("cannot identify the replica holding the connection");
+    if (!holder || !survivor) {
+      throw new Error(
+        `cannot identify the replica holding the connection (platform ${process.platform}, ` +
+          `client port ${holderPort}, replica pids ${pids.join(",")})`,
+      );
+    }
     const killedAt = Date.now();
     await harness.kill(holder.index);
     dead = holder.index;
