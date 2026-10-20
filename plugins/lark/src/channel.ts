@@ -278,6 +278,17 @@ export function createLarkChannel(opts: LarkChannelOptions): Channel {
         if (e instanceof Error && e.message.startsWith("Lark bot info returned")) throw e;
         throw describeError(e, "credentials check");
       }
+      // 部署级登录应用可能在建连接之后才配上 / 换过：每次建长连接前再核对一次「同一租户用同一个应用」，不符就抛错
+      // （内核记 last_error 并退避），不进入重连循环
+      if (opts.loginApp !== undefined && opts.loginApp.appId !== c.appId) {
+        try {
+          const tenant = await tenantKeyOf(api, c, signal);
+          await assertSameApp(api, opts.loginApp, c.appId, tenant, signal);
+        } catch (e) {
+          if (signal.aborted) return;
+          throw e;
+        }
+      }
 
       const toEvent = async (raw: unknown): Promise<InboundEvent | null> => {
         const a = parseCardAction(raw);

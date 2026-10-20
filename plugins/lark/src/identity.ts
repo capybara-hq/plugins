@@ -4,11 +4,6 @@ import { accountsBaseOf, apiBaseOf, LarkDeployment, type LarkDeploymentConfig } 
 import { describeError } from "./errors.js";
 import { tenantKeyOf } from "./tenant.js";
 
-/**
- * 登录时向用户申请的权限：`contact:user.email:readonly`（用户信息里的 `email` 字段需要它）。scope 必须先在开发者
- * 后台为应用开通，否则用户授权时报 20027（README 写明）。
- */
-export const LARK_LOGIN_SCOPES = "contact:user.email:readonly";
 /** 单次请求（换 token、用户信息、企业信息）的超时；内核给的 signal（15 秒）同时生效。 */
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -45,6 +40,9 @@ function loginConfig(config: unknown): LarkDeploymentConfig & { appId: string; a
  *   `enterprise_email`（需 `contact:user.employee:readonly`，且租户启用了 Lark 邮箱）。
  *
  * 选择：
+ * - **不申请 scope**（Ruling A31）：授权地址不带 `scope`。申请应用没开通的 scope 会让所有人授权失败（20027），而登录
+ *   只需要 `open_id` / `tenant_key` / 姓名 / 头像（不需要字段权限）。用户信息里有 `email` / `enterprise_email`（应用
+ *   另有字段权限、用户以前授过）时才带上邮箱，没有就不带。
  * - **用 PKCE**：内核给的 `codeChallenge`（S256）放进授权地址，换 token 时带 `codeVerifier`；旧内核不给时省略。
  * - **没有 id_token / nonce**（Lark 网页授权不是 OIDC），`nonce` 不用。防重放靠：内核的 state（单次有效、绑定浏览器
  *   Cookie、先取后删）+ 授权码单次有效且 5 分钟过期 + PKCE（授权码绑定本次发起的 verifier）+ client secret（机密
@@ -79,7 +77,6 @@ export function createLarkIdentitySource(): IdentitySource {
       const u = new URL(`${accountsBaseOf(c)}/open-apis/authen/v1/authorize`);
       u.searchParams.set("client_id", c.appId);
       u.searchParams.set("redirect_uri", redirectUri);
-      u.searchParams.set("scope", LARK_LOGIN_SCOPES);
       u.searchParams.set("state", state);
       if (codeChallenge !== undefined) {
         u.searchParams.set("code_challenge", codeChallenge);

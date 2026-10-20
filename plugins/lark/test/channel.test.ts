@@ -144,6 +144,19 @@ describe("verify", () => {
     expect((await broken.verify({ config: config(), signal: signal() })).tenantId).toBe("t1");
   });
 
+  it("tenant query is retried on 429; a transient failure of the login-app check fails closed", async () => {
+    lark.failNext("tenant", { status: 429, code: 99991400, retryAfter: 1 });
+    const started = Date.now();
+    expect((await channel().verify({ config: config(), signal: signal() })).tenantId).toBe("t1");
+    expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+    // 本应用的企业信息查询正常、登录应用的那次 503：不放行（只有凭据错误 10014 / 10015 才放行）
+    lark.failNext("tenant", { status: 503, code: 5000 }, 1, 1);
+    const guarded = createLarkChannel({ apiUrl: lark.url, log, loginApp: LOGIN_APP });
+    await expect(guarded.verify({ config: config(), signal: signal() })).rejects.toThrow(
+      /code 5000/,
+    );
+  });
+
   it("wrong secret → error with the code, never the secret", async () => {
     const err = await channel()
       .verify({
@@ -605,6 +618,15 @@ describe("connect (long connection)", () => {
       .catch((e: Error) => e);
     expect((err as Error).message).toMatch(/10015/);
     expect((err as Error).message).not.toContain("nope-nope");
+    expect(lark.endpointCalls()).toBe(before);
+  });
+
+  it("re-checks the same-app rule at connect: different app in the login tenant → throws", async () => {
+    const before = lark.endpointCalls();
+    const err = await createLarkChannel({ apiUrl: lark.url, log, loginApp: LOGIN_APP })
+      .connect({ connectionId: "c", config: config(), signal: signal(), onEvent: async () => {} })
+      .catch((e: Error) => e);
+    expect((err as Error).message).toMatch(/same Lark app/);
     expect(lark.endpointCalls()).toBe(before);
   });
 

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { type FakeLarkServer, startFakeLark } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createLarkIdentitySource, LARK_LOGIN_SCOPES } from "../src/identity.js";
+import { createLarkIdentitySource } from "../src/identity.js";
 
 let lark: FakeLarkServer;
 const REDIRECT = "https://cap.example/api/v1/auth/sso/lark/callback";
@@ -23,6 +23,7 @@ beforeAll(async () => {
     enterpriseEmail: "bob@mail.corp.example",
     avatar72: "javascript:alert(1)",
   });
+  lark.users.set("ou_noemail", { openId: "ou_noemail", name: "No Email" });
   lark.users.set("ou_mallory", { openId: "ou_mallory", name: "Mallory", tenantKey: "t_other" });
 });
 afterAll(async () => {
@@ -69,7 +70,7 @@ const callback = (
   });
 
 describe("Lark login: authorizeUrl", () => {
-  it("builds the web-app authorize URL with PKCE (S256) and the email scope", () => {
+  it("builds the web-app authorize URL with PKCE (S256) and no scope (Ruling A31)", () => {
     const u = new URL(
       source().authorizeUrl({
         config: config(),
@@ -84,12 +85,11 @@ describe("Lark login: authorizeUrl", () => {
     expect(Object.fromEntries(u.searchParams)).toEqual({
       client_id: lark.appId,
       redirect_uri: REDIRECT,
-      scope: LARK_LOGIN_SCOPES,
       state: "st",
       code_challenge: "cc",
       code_challenge_method: "S256",
     });
-    expect(LARK_LOGIN_SCOPES).toBe("contact:user.email:readonly");
+    expect(u.searchParams.has("scope")).toBe(false);
   });
 
   it("defaults to accounts.larksuite.com; omits PKCE when the kernel gives none", () => {
@@ -155,6 +155,17 @@ describe("Lark login: callback", () => {
       email: "bob@mail.corp.example",
       emailVerified: false,
       displayName: "Bob",
+    });
+  });
+
+  it("no email in user info (scope not granted) → identity without email", async () => {
+    const id = await callback(await authorize("ou_noemail"));
+    expect(id).toEqual({
+      source: "lark:t1",
+      externalId: "ou_noemail",
+      tenantId: "t1",
+      emailVerified: false,
+      displayName: "No Email",
     });
   });
 

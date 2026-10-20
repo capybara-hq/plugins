@@ -76,13 +76,17 @@ export function toChannelSendError(e: unknown): ChannelSendError {
 
 /** 校验 / 连接失败的说明（只带步骤与错误码，不带凭据）。 */
 export function describeError(e: unknown, what: string): Error {
+  // `cause` 只放本插件自己的错误（只带错误码 / HTTP 状态），便于调用方按错误码区分，不会带出凭据
   if (e instanceof LarkApiError) {
     return new Error(
       e.code !== undefined
         ? `Lark ${what} failed: code ${e.code} (HTTP ${e.status})`
         : `Lark ${what} failed: HTTP ${e.status}`,
+      { cause: e },
     );
   }
-  if (e instanceof LarkNetworkError) return new Error(`Lark ${what} failed: network error`);
+  if (e instanceof LarkNetworkError) {
+    return new Error(`Lark ${what} failed: network error`, { cause: e });
+  }
   return new Error(`Lark ${what} failed`);
 }

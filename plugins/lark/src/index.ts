@@ -12,7 +12,7 @@ import { createLarkIdentitySource } from "./identity.js";
 export { createLarkChannel, LarkConnection, MIN_EDIT_INTERVAL_MS } from "./channel.js";
 export { LarkDeployment, LarkOrgConfig } from "./config.js";
 export { createLarkDirectory } from "./directory.js";
-export { createLarkIdentitySource, LARK_LOGIN_SCOPES } from "./identity.js";
+export { createLarkIdentitySource } from "./identity.js";
 
 /**
  * Lark（飞书国际版）插件：三种能力共用一个身份键（`identities.source` = `lark:<tenant_key>`，`external_id` = 用户

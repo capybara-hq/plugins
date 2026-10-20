@@ -248,4 +248,73 @@ describe("Lark directory@1", () => {
     });
     expect(ok2.next).toBeUndefined();
   });
+
+  it("visited department swapped with an unvisited one mid-sync → last page throws (digest)", async () => {
+    const flat = await startFakeLark({ tenantKey: "t1" });
+    try {
+      flat.departments.push(
+        { openDepartmentId: "od-1", name: "One", parent: "0" },
+        { openDepartmentId: "od-2", name: "Two", parent: "0" },
+        { openDepartmentId: "od-3", name: "Three", parent: "0" },
+      );
+      for (const [id, d] of [
+        ["ou_1", "od-1"],
+        ["ou_2", "od-2"],
+        ["ou_3", "od-3"],
+      ] as const) {
+        flat.users.set(id, { openId: id, name: id, departments: [d] });
+      }
+      const d = dir(flat);
+      const page = (cursor?: string) =>
+        d.listMembers({
+          orgConfig: cfg(flat),
+          ...(cursor !== undefined && { cursor }),
+          signal: signal(),
+        });
+      const root = await page(); // 根部门（没有直属成员）
+      const p1 = await page(root.next); // od-1（已访问）
+      expect(p1.members.map((m) => m.externalId)).toEqual(["ou_1"]);
+      // od-1（已访问）与 od-3（未访问）对调；od-2 仍在原位，逐页的部门 id 核对发现不了
+      const [a, , c] = flat.departments;
+      flat.departments.splice(0, 3, c as never, flat.departments[1] as never, a as never);
+      const p2 = await page(p1.next); // od-2
+      expect(p2.members.map((m) => m.externalId)).toEqual(["ou_2"]);
+      // 下一个是下标 2 —— 现在是 od-1（又一次），od-3 被跳过；最后一页重列部门、摘要不符 → 抛错
+      await expect(page(p2.next)).rejects.toThrow(/changed/);
+    } finally {
+      await flat.stop();
+    }
+  });
+
+  it("app contact scope is not 'all members' (root department rejected) → page 1 throws", async () => {
+    lark.rejectRootDepartment(true);
+    try {
+      await expect(dir().listMembers({ orgConfig: cfg(), signal: signal() })).rejects.toThrow(
+        /code 40004.*all members|all members.*code 40004/,
+      );
+    } finally {
+      lark.rejectRootDepartment(false);
+    }
+  });
+
+  it("tenant query goes through the same rate-limit backoff", async () => {
+    lark.failNext("tenant", { status: 429, code: 99991400, retryAfter: 1 });
+    const started = Date.now();
+    const r = await dir().listMembers({ orgConfig: cfg(), signal: signal() });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+    expect(r.members.length).toBeGreaterThan(0);
+  });
+
+  it("login-app tenant check: transient failure fails closed; only auth errors fail open", async () => {
+    // 第 1 次企业信息查询（本应用）正常，第 2 次（登录应用）503 → 抛错，不放行
+    lark.failNext("tenant", { status: 503, code: 5000 }, 1, 1);
+    await expect(
+      dir(lark, { loginApp: LOGIN_APP }).listMembers({ orgConfig: cfg(), signal: signal() }),
+    ).rejects.toThrow(/code 5000/);
+    // 登录应用凭据错误（10015）→ 放行
+    const ok = await dir(lark, {
+      loginApp: { appId: LOGIN_APP.appId, appSecret: "wrong" },
+    }).listMembers({ orgConfig: cfg(), signal: signal() });
+    expect(ok.members.length).toBeGreaterThan(0);
+  });
 });

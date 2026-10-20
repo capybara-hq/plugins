@@ -12,8 +12,9 @@ Lark（飞书国际版，`open.larksuite.com`）官方插件。当前提供：
 
 > **登录、机器人、通讯录必须用同一个 Lark 自建应用。** `open_id` 按应用区分（同一个人在不同应用里的 `open_id`
 > 不同），换个应用身份就对不上，同一个人会变成两个账号。部署级登录的 `appId`、各组织渠道连接的 `appId`、组织级
-> 通讯录的 `appId` 填同一个。插件会核对：部署配了登录应用时，同一租户的渠道连接（校验时）或通讯录（同步时）用了
-> 别的应用就报错。登录应用只能是一个，所以 Lark 登录只服务于这个应用所在的租户；其他租户的组织照样可以用机器人
+> 通讯录的 `appId` 填同一个。插件会核对：部署配了登录应用时，同一租户的渠道连接（校验时、以及每次建立长连接前——
+> 登录应用后来才配上或换过也能发现，连接记下错误并停用重连）或通讯录（每页同步时）用了别的应用就报错。只有登录应用的
+> 凭据本身无效（10014 / 10015）时不拦；限流、网络等暂时性错误会报错，稍后重试。登录应用只能是一个，所以 Lark 登录只服务于这个应用所在的租户；其他租户的组织照样可以用机器人
 > （在 IM 里点绑定卡片关联账号）。
 
 文中 Lark 文档均于 2026-10-20 查阅。
@@ -109,8 +110,9 @@ Lark（飞书国际版，`open.larksuite.com`）官方插件。当前提供：
 
 1. **开发配置 → 安全设置 → 重定向 URL** 添加 `<http.publicUrl>/api/v1/auth/sso/lark/callback`（例如
    `https://cap.example.com/api/v1/auth/sso/lark/callback`）。换 token 时 `redirect_uri` 须与授权时**严格**一致。
-2. **权限管理** 开通 `contact:user.email:readonly`（获取用户邮箱信息）：登录时向用户申请这个 scope，以便取邮箱；
-   没开通时用户授权会报 20027。另需 `tenant:tenant:readonly`（机器人已要求）用来核对用户的租户。
+2. 登录**不申请任何 scope**（授权地址不带 `scope`）：申请应用没开通的 scope 会让所有人授权失败（20027），而登录只
+   需要 `open_id`、`tenant_key`、姓名与头像。用户信息里有 `email` / `enterprise_email` 时才带上邮箱（取决于应用的
+   字段权限与用户以前的授权），没有就不带。需要 `tenant:tenant:readonly`（机器人已要求）用来核对用户的租户。
 3. 发布版本，**可用范围**包含要登录的人（不在范围内换 token 报 20010）。
 4. 内核配置 `pluginConfig.lark.appId` / `appSecret`（`appSecret` 走密钥、日志打码），并把 `lark` 加进
    `auth.loginSources`。
@@ -118,7 +120,7 @@ Lark（飞书国际版，`open.larksuite.com`）官方插件。当前提供：
 流程与选择（文档均 2026-10-20 查阅）：
 
 - 授权页 [获取授权码](https://open.larksuite.com/document/common-capabilities/sso/api/obtain-oauth-code)：
-  `https://accounts.larksuite.com/open-apis/authen/v1/authorize`，带 `client_id`、`redirect_uri`、`scope`、`state`
+  `https://accounts.larksuite.com/open-apis/authen/v1/authorize`，带 `client_id`、`redirect_uri`、`state`
   与 **PKCE**（`code_challenge`，`code_challenge_method=S256`）。授权码 5 分钟内有效、只能用一次。
 - 换 token [获取 user_access_token](https://open.larksuite.com/document/uAjLw4CM/ukTMukTMukTM/authentication-management/access-token/get-user-access-token)：
   v2 OAuth 端点 `POST /open-apis/authen/v2/oauth/token`（`client_id` / `client_secret` / `code` / `redirect_uri` /
@@ -149,7 +151,8 @@ Lark（飞书国际版，`open.larksuite.com`）官方插件。当前提供：
 
    也可以用 `contact:contact:readonly_as_app`（以应用身份读取通讯录）代替前三项。缺了状态字段的权限时同步会报错
    （而不是把所有人当在职，否则离职的人永远不会被移除）。
-2. **权限管理 → 数据权限 / 通讯录权限范围** 设为**全部成员**：从根部门遍历需要全员权限（否则报无部门权限）。
+2. **权限管理 → 数据权限 / 通讯录权限范围** 设为**全部成员**：从根部门遍历需要全员权限。只给了部分部门 / 成员时，
+   第一页就报无部门权限（`40004`），同步记为不完整、不移除任何人。
 3. 订阅 `contact.user.created_v3` / `updated_v3` / `deleted_v3`（见上文「创建 Lark 应用」第 5 步），人员变动会触发
    一次同步；此外内核每小时同步一次，管理员也可手动同步。
 
@@ -159,13 +162,15 @@ Lark（飞书国际版，`open.larksuite.com`）官方插件。当前提供：
 
 - Lark 没有「列出全部用户」的接口，只能按部门取直属成员：先根部门（id `0`），再按递归子部门列表逐个部门，每页
   一个部门的最多 50 人。同一人在多个部门时会出现多次（内核按身份去重）。部门列表在同步途中变了就报错、本轮按不完整
-  处理（不移除任何人），下一轮重来。
+  处理（不移除任何人），下一轮重来：每页核对当前部门仍在原位，最后一页再重列全部部门，与按访问顺序累积的部门摘要
+  比对（发现已访问与未访问部门对调之类的变化）。
 - 离职（`is_resigned`）、冻结（`is_frozen`）、主动退出（`is_exited`）→ 不在职；内核只移除由通讯录同步加入的成员。
   **未激活**（受邀未激活）与**未加入**（`is_unjoin`）的人不同步，激活后下一轮加入。机器人 / 应用不在通讯录里。
 - 成员的租户 = 企业信息接口的 `tenant_key`，与机器人、登录同一口径；同一轮里租户变了就报错。
 - 邮箱一律视为未验证（同登录）。
-- 限流：两个接口都是 1000 次/分钟、50 次/秒；遇到 429 / `99991400` 按 `x-ogw-ratelimit-reset` 等待后重试，每页
-  累计等待不超过 30 秒，超出就报「rate limited」，本轮按不完整处理。
+- 限流：两个接口都是 1000 次/分钟、50 次/秒；遇到 429 / `99991400`（含企业信息查询）按 `x-ogw-ratelimit-reset`
+  等待后重试，每页累计等待不超过 30 秒，超出就报「rate limited」，本轮按不完整处理。
+- 同步途中又来了人员变动事件时，内核把这一轮记为不完整（不移除），随后补跑的那一轮再移除（Ruling A32）。
 
 ## 部署级配置
 
