@@ -1,0 +1,171 @@
+/**
+ * Markdown → Lark 卡片 JSON 2.0 富文本（`markdown` 组件）。
+ *
+ * 依据（2026-10-20 查阅）：https://open.larksuite.com/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-components/content-components/rich-text
+ * - JSON 2.0 的富文本支持除 HTMLBlock 外的全部 CommonMark 语法（标题、强调、列表、引用、代码块、表格、链接），
+ *   所以模型回复的 Markdown 基本原样保留；
+ * - 另外解析一组 HTML 风格的标签：`<at>`（**@ 人，`<at id=all></at>` 是 @所有人**）、`<person>`、`<font>`、
+ *   `<a>`、`<link>`、`<text_tag>`、`<raw>`、`<local_datetime>`、`<number_tag>`、`<br>`、`<hr>`；
+ * - 特殊字符用 HTML 实体 `&#编号;` 转义。
+ *
+ * 防注入（与 Slack 的 `<!channel>` 同等关键）：模型文本不能借这些标签 @ 所有人 / 任何人或改写卡片。
+ * - 代码之外：`&` → `&#38;`、`<` → `&#60;`。于是任何 `<tag` 都不成立；模型写的实体（`&#60;at …`）也只会原样显示。
+ *   `<https://…>` 自动链接先改写成 `[url](url)`，免得被转义成乱码。
+ * - 代码之内（行内代码、``` / ~~~ 代码块）：CommonMark 不解析其中的标签，为了代码可原样复制不做实体转义；
+ *   但不确定 Lark 的渲染器是否在代码里也认 `<at>`，所以只把 `<at` 拆成 `<` + U+200B（零宽空格）+ `at`，
+ *   其余字符不动。
+ * 纯文本里的 `@all` 不会 @ 人（卡片只认 `<at>` 标签），原样保留。
+ */
+
+const ZWSP = "​";
+
+/**
+ * 把 `<at` / `</at`（大小写不敏感）拆开，使其不再是标签。用于代码内容，以及纯文本字段（卡片标题、按钮文字、
+ * 摘要：本不解析标签，仍兜底处理）。
+ */
+export const neutralizeAt = (s: string) =>
+  s.replace(/<(\s*\/?\s*)(at)(?=[\s>/]|$)/gi, `<${ZWSP}$1$2`);
+
+/** 代码之外的文本：自动链接改写，再转义 `&` 与 `<`。 */
+function escapeText(s: string): string {
+  const links: string[] = [];
+  const held = s.replace(//g, "").replace(/<(https?:\/\/[^\s<>]+)>/g, (_m, url: string) => {
+    links.push(url);
+    return `${links.length - 1}`;
+  });
+  return held
+    .replace(/&/g, "&#38;")
+    .replace(/</g, "&#60;")
+    .replace(/(\d+)/g, (_m, i: string) => {
+      const url = (links[Number(i)] ?? "").replace(/&/g, "&#38;");
+      return `[${url}](${url})`;
+    });
+}
+
+/** 一行（不在代码块里）：行内代码只做 `<at` 拆分，其余转义。 */
+function convertLine(line: string): string {
+  let out = "";
+  let last = 0;
+  for (const m of line.matchAll(/`[^`\n]+`/g)) {
+    out += escapeText(line.slice(last, m.index)) + neutralizeAt(m[0]);
+    last = m.index + m[0].length;
+  }
+  return out + escapeText(line.slice(last));
+}
+
+/** 把模型回复的 Markdown 转为卡片富文本内容（见文件注释）。 */
+export function toCardMarkdown(md: string): string {
+  const out: string[] = [];
+  let fence: string | undefined;
+  for (const line of md.replace(/\r\n?/g, "\n").split("\n")) {
+    const f = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
+    if (f) {
+      const mark = (f[1] ?? "").slice(0, 3);
+      if (fence === undefined) fence = mark;
+      else if (mark === fence) fence = undefined;
+      out.push(neutralizeAt(line));
+      continue;
+    }
+    out.push(fence !== undefined ? neutralizeAt(line) : convertLine(line));
+  }
+  return out.join("\n");
+}
+
+/**
+ * 把一个值（agent 名、工具名、决定人等）按纯文本显示：行内 Markdown 标点加反斜杠，行首的 `#` / `-` / `+`
+ * （标题、列表）加反斜杠，`&` / `<` 转实体。先加反斜杠再转实体，实体里的 `#` 不会被转义。
+ */
+export function escapePlain(s: string): string {
+  return s
+    .replace(/[\\`*_~[\]()!|>]/g, (c) => `\\${c}`)
+    .replace(/^(\s*)([#+-])/gm, "$1\\$2")
+    .replace(/&/g, "&#38;")
+    .replace(/</g, "&#60;");
+}
+
+/** 代码块内容：拆 `<at`，并打断连续的反引号（不让内容提前收尾代码块）。 */
+export function codeSafe(s: string): string {
+  return neutralizeAt(s).replace(/`(?=`)/g, `\`${ZWSP}`);
+}
+
+const isHigh = (c: number) => c >= 0xd800 && c <= 0xdbff;
+
+/** 硬切点 `at` 落在实体（`&#38;` 之类）或代理对中间时往前退。 */
+function safeCut(s: string, at: number): number {
+  let i = at;
+  if (i > 0 && isHigh(s.charCodeAt(i - 1))) i--;
+  const amp = s.lastIndexOf("&", i - 1);
+  if (amp >= 0 && i - amp <= 8) {
+    const semi = s.indexOf(";", amp);
+    if (semi >= i && /^&#?\w+;$/.test(s.slice(amp, semi + 1))) i = amp;
+  }
+  return i > 0 ? i : at;
+}
+
+/** 在 `max` 以内切下一段：优先在空格处（去掉该空格），否则硬切（不拆实体与代理对）。 */
+function cut(s: string, max: number): [string, string] {
+  const sp = s.lastIndexOf(" ", max);
+  if (sp > max / 2) return [s.slice(0, sp), s.slice(sp + 1)];
+  const at = safeCut(s, max);
+  return [s.slice(0, at), s.slice(at)];
+}
+
+/**
+ * 把（已转换的）卡片 Markdown 拆成每段不超过 `limit` 个 UTF-16 码元：按行装箱（段首 / 段尾的空行去掉），
+ * 单行过长时优先在空格处切；切在代码块中间时本段补上收尾的 ``` 、下一段重新开头。
+ */
+export function splitMarkdown(text: string, limit: number): string[] {
+  if (text.length <= limit) return [text];
+  const out: string[] = [];
+  let cur: string[] = [];
+  let len = 0;
+  let open: string | undefined;
+  const push = (l: string) => {
+    len += (cur.length > 0 ? 1 : 0) + l.length;
+    cur.push(l);
+  };
+  const flush = (final = false) => {
+    const lines = [...cur];
+    while (lines.length > 0 && (lines[0] ?? "").trim() === "") lines.shift();
+    while (lines.length > 0 && (lines.at(-1) ?? "").trim() === "") lines.pop();
+    let s = lines.join("\n");
+    if (open !== undefined && !final) s += `\n${open}`;
+    if (s.trim() !== "" && !/^(```|~~~)\n(```|~~~)$/.test(s)) out.push(s);
+    cur = [];
+    len = 0;
+    if (open !== undefined && !final) push(open);
+  };
+  for (const line of text.split("\n")) {
+    const f = /^\s{0,3}(`{3}|~{3})/.exec(line);
+    const mark = f?.[1];
+    const closes = mark !== undefined && open === mark;
+    const opens = mark !== undefined && open === undefined;
+    // 留出补收尾 fence 的位置（4 = 换行 + 3 个字符）
+    const reserve = (opens ? true : open !== undefined && !closes) ? 4 : 0;
+    const room = () => limit - reserve - (cur.length > 0 ? len + 1 : 0);
+    if (line.length <= room()) {
+      push(line);
+    } else if (cur.length > 0 && line.length <= limit - reserve - (open !== undefined ? 4 : 0)) {
+      flush();
+      push(line);
+    } else {
+      let rest = line;
+      while (rest.length > 0) {
+        if (room() < Math.min(rest.length, 8)) flush();
+        const r = room();
+        if (rest.length <= r) {
+          push(rest);
+          break;
+        }
+        const [piece, remainder] = cut(rest, r);
+        push(piece);
+        rest = remainder;
+        flush();
+      }
+    }
+    if (opens) open = mark;
+    else if (closes) open = undefined;
+  }
+  flush(true);
+  return out;
+}
