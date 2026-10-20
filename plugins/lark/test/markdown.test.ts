@@ -95,6 +95,27 @@ describe("toCardMarkdown: links (only http(s) and mailto become links)", () => {
     }
   });
 
+  it("backslash-prefixed vectors cannot unescape the brackets into a live link", () => {
+    for (const input of [
+      "\\[x\\](javascript:alert(1))",
+      "\\[x\\](lark://applink/open)",
+      "\\\\[x\\\\](javascript:alert(1))",
+      "\\[x](javascript:alert(1))",
+      "[x\\](javascript:alert(1))",
+      "\\![x](data:text/html,hi)",
+      "\\[x\\]\\[1\\]\n\\[1\\]: javascript:alert(1)",
+    ]) {
+      const out = toCardMarkdown(input);
+      // 一个 `]` 前面若有偶数个反斜杠（含 0 个）就是未转义的，后面跟 `(` 即链接
+      const live = [...out.matchAll(/(\\*)\]\(([^)\s]*)/g)].filter(
+        (m) => (m[1] ?? "").length % 2 === 0 && !/^(https?:\/\/|mailto:)/i.test(m[2] ?? ""),
+      );
+      expect(live, `${input} → ${out}`).toEqual([]);
+      expect(out, input).not.toMatch(/(^|[^\\])(\\\\)*\]:/m);
+    }
+    expect(toCardMarkdown("a\\b")).toBe("a&#92;b");
+  });
+
   it("encodes ) ] spaces and < > in destinations; no entities inside destinations", () => {
     expect(toCardMarkdown("[w](https://en.wikipedia.org/wiki/Foo_(bar))")).toBe(
       "[w](https://en.wikipedia.org/wiki/Foo_%28bar%29)",

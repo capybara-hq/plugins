@@ -75,7 +75,6 @@ interface Profile {
   avatarUrl?: string;
 }
 
-/** 可中止的等待（只用于本次连接循环内，随 signal 结束）。 */
 /**
  * 可中止的等待（只用于本次连接循环内，随 signal 结束）。插件不能用 setTimeout（`pnpm check:plugin-state` 的
  * plugin-timer 规则），所以用 `AbortSignal.timeout` 计时；不建 `AbortSignal.any` 组合信号（每秒一次的状态轮询会
