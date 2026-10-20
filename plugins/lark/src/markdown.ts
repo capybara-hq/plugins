@@ -14,7 +14,7 @@
  *   做成链接——地址里会破坏语法的字符（空格、括号、方括号、`<` `>` `"` `\`）百分号编码，地址里不做实体转义；
  *   其余写法（`javascript:`、`lark://`、`data:` 等地址、图片 `![…](…)`、引用式链接 `[x][1]` / `[1]: …`）一律把
  *   `[` `]` 加反斜杠，作为普通文字显示。
- * - 代码之内（行内代码、``` / ~~~ 代码块）：CommonMark 不解析其中的标签，为了代码可原样复制不做实体转义；
+ * - 代码之内（行内代码、顶格的 ``` / ~~~ 代码块；列表 / 引用里的围栏当普通文本、照常转义）：CommonMark 不解析其中的标签，为了代码可原样复制不做实体转义；
  *   但不确定 Lark 的渲染器是否在代码里也认 `<at>`（或先解码实体），所以把 `<at`、`&#60;at`、`&lt;at`、`&#x3c;at`
  *   在 `at` 前插入 U+200B（零宽空格）拆开，其余字符不动。
  * 纯文本里的 `@all` 不会 @ 人（卡片只认 `<at>` 标签），原样保留。
@@ -128,11 +128,13 @@ export interface Fence {
 }
 
 /**
- * 按 CommonMark 判断一行是否打开代码块围栏：至多 3 个空格缩进，3 个以上同种字符；反引号围栏的 info 字符串
- * 不能含反引号（"```a```" 是行内代码，不是围栏）。
+ * 一行是否打开代码块围栏（保守判定，宁可多转义）：只认**顶格**（没有缩进、不在引用 `>` 里）的 3 个以上同种字符；
+ * 反引号围栏的 info 字符串不能含反引号（"```a```" 是行内代码，不是围栏）。列表项、引用里的围栏按 CommonMark
+ * 的容器块规则可能随容器提前结束，这里不追踪容器，一律当普通文本：其后各行照常转义，最坏只是嵌套代码块里
+ * 显示出实体（外观问题），不会让标签漏过转义。
  */
 export function fenceOpener(line: string): Fence | undefined {
-  const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+  const m = /^(`{3,}|~{3,})(.*)$/.exec(line);
   if (!m) return undefined;
   const run = m[1] as string;
   const info = m[2] as string;
@@ -140,9 +142,12 @@ export function fenceOpener(line: string): Fence | undefined {
   return { char: run[0] as "`" | "~", len: run.length, info: info.trim() };
 }
 
-/** 按 CommonMark 判断一行是否收尾 `fence`：同种字符、不短于开头，后面只有空白。 */
+/**
+ * 一行是否收尾 `fence`：同种字符、不短于开头，后面只有空白。收尾从宽：前面有任意空白缩进也算（多收尾只会让
+ * 之后的行多转义，安全）。
+ */
 export function fenceCloses(line: string, fence: Fence): boolean {
-  const m = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+  const m = /^[ \t]*(`{3,}|~{3,})[ \t]*$/.exec(line);
   return m !== null && (m[1] as string)[0] === fence.char && (m[1] as string).length >= fence.len;
 }
 

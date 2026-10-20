@@ -183,6 +183,28 @@ describe("toCardMarkdown: fence tracking follows CommonMark", () => {
     expect(toCardMarkdown("~~~ a`b\n<b>\n~~~\n<b>")).toBe("~~~ a`b\n<b>\n~~~\n&#60;b>");
   });
 
+  it("fences nested in a list item or quote (or indented at all) are text: what follows is escaped", () => {
+    for (const input of [
+      "- x\n  ```\n<font color=red>x</font>",
+      "> ```\n<font color=red>x</font>",
+      "   ```\n<font color=red>x</font>",
+      "1. x\n   ~~~\n<font color=red>x</font>",
+    ]) {
+      const out = toCardMarkdown(input);
+      expect(out, input).not.toMatch(LIVE);
+      expect(out, input).toContain("&#60;font color=red>");
+    }
+  });
+
+  it("a top-level fence keeps its code unescaped (only <at is split); indented closers still close", () => {
+    expect(toCardMarkdown("```\n<font> & [a](lark://x)\n```")).toBe(
+      "```\n<font> & [a](lark://x)\n```",
+    );
+    expect(toCardMarkdown("```\n<at id=all>\n```")).toBe("```\n<​at id=all>\n```");
+    // 缩进的收尾行照样收尾（多收尾只会多转义，安全）
+    expect(toCardMarkdown("```\ncode\n  ```\n<b>")).toBe("```\ncode\n  ```\n&#60;b>");
+  });
+
   it("an indented (4+ spaces) fence-like line is not a fence", () => {
     expect(toCardMarkdown("    ```\n<b>")).toBe("    ```\n&#60;b>");
   });
