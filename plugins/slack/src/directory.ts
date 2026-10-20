@@ -1,5 +1,5 @@
 import type { Directory, DirectoryMember } from "@capybara-hq/plugin-sdk";
-import { SlackDirectoryConfig } from "./config.js";
+import { SlackDirectoryConfig, workspaceTokenProblem } from "./config.js";
 
 export interface SlackDirectoryOptions {
   /** Web API 根地址（默认 https://slack.com/api/；测试指向假 Slack）。 */
@@ -128,16 +128,8 @@ export function createSlackDirectory(opts: SlackDirectoryOptions): Directory {
       const budget = { leftMs: maxWait };
       const auth = await call("auth.test", c.botToken, {}, signal, budget);
       const tokenTeam = str(auth.team_id);
-      if (auth.is_enterprise_install === true) {
-        throw new Error(
-          "Slack bot token comes from an org-wide (enterprise) install; use a workspace bot token",
-        );
-      }
-      if (tokenTeam === undefined || !tokenTeam.startsWith("T")) {
-        throw new Error(
-          `Slack bot token is not a workspace token (team ${tokenTeam ?? "(unknown)"}); use a workspace bot token`,
-        );
-      }
+      const problem = workspaceTokenProblem(auth);
+      if (problem !== undefined) throw new Error(problem);
       if (tokenTeam !== teamId) {
         throw new Error(
           `Slack bot token belongs to team ${tokenTeam ?? "(unknown)"}, not the configured teamId ${teamId}`,

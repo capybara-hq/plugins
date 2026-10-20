@@ -11,6 +11,7 @@ import { type FetchFunction, WebClient } from "@slack/web-api";
 import { z } from "zod";
 import { parseBlockActions } from "./actions.js";
 import { renderSend, renderUpdate } from "./blocks.js";
+import { workspaceTokenProblem } from "./config.js";
 import { platformErrorCode, toChannelSendError } from "./errors.js";
 import { eventToInbound, profileOf, type SlackProfile } from "./inbound.js";
 
@@ -196,17 +197,17 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
 
     async verify({ config, signal }) {
       const c = parse(config);
+      let r: { user_id?: string; user?: string; team_id?: string; is_enterprise_install?: boolean };
       try {
-        const r = (await web(c.botToken, signal).apiCall("auth.test")) as {
-          user_id?: string;
-          user?: string;
-          team_id?: string;
-        };
-        if (!r.user_id || !r.team_id) throw new Error("Slack auth.test returned no bot user");
-        return { botUserId: r.user_id, botName: r.user ?? r.user_id, tenantId: r.team_id };
+        r = (await web(c.botToken, signal).apiCall("auth.test")) as typeof r;
       } catch (e) {
         throw describe(e, "auth.test");
       }
+      if (!r.user_id || !r.team_id) throw new Error("Slack auth.test returned no bot user");
+      // 租户是工作区（Ruling A26）：组织级安装或企业 id 的令牌拒绝（与通讯录同一文案）
+      const problem = workspaceTokenProblem(r);
+      if (problem !== undefined) throw new Error(problem);
+      return { botUserId: r.user_id, botName: r.user ?? r.user_id, tenantId: r.team_id };
     },
 
     async connect({ connectionId, config, onEvent, signal }) {

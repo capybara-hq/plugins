@@ -128,6 +128,27 @@ describe("verify", () => {
     expect((err as Error).message).toMatch(/invalid_auth/);
     expect((err as Error).message).not.toContain("xoxb-wrong");
   });
+
+  it("rejects an enterprise (E…) or org-wide install token like the directory does", async () => {
+    const grid = await startFakeSlack({ teamId: "E1", botUserId: "UBOT" });
+    try {
+      const ch = createSlackChannel({ apiUrl: grid.apiUrl, log });
+      await expect(
+        ch.verify({
+          config: { appToken: grid.appToken, botToken: grid.botToken },
+          signal: signal(),
+        }),
+      ).rejects.toThrow(/not a workspace token \(team E1\); use a workspace bot token/);
+    } finally {
+      await grid.stop();
+    }
+    slack.failNext("auth.test", {
+      body: { ok: true, team_id: "T1", user_id: "UBOT", is_enterprise_install: true },
+    });
+    await expect(channel().verify({ config: config(), signal: signal() })).rejects.toThrow(
+      "Slack bot token comes from an org-wide (enterprise) install; use a workspace bot token",
+    );
+  });
 });
 
 describe("send / update", () => {
