@@ -146,6 +146,48 @@ describe("toCardMarkdown: entity-encoded <at inside code", () => {
   });
 });
 
+describe("toCardMarkdown: fence tracking follows CommonMark", () => {
+  const LIVE = /<font|(?<!\\)\](?:\(lark:|\(javascript:)/i;
+
+  it("a line like ```a``` is an inline code span, not a fence opener", () => {
+    const input =
+      "```a```\n[click](lark://applink/x) <font color=red>hi</font> [j](javascript:alert(1))";
+    const out = toCardMarkdown(input);
+    expect(out).not.toMatch(LIVE);
+    expect(out).toContain("&#60;font color=red>");
+    expect(out).toContain("\\[click\\](lark://applink/x)");
+  });
+
+  it("a shorter fence line does not close a longer fence", () => {
+    const input = "````\n```\n````\n<font color='red'>APPROVED</font> [open](lark://x)";
+    const out = toCardMarkdown(input);
+    expect(out).not.toMatch(LIVE);
+    expect(out.split("\n").slice(0, 3)).toEqual(["````", "```", "````"]);
+  });
+
+  it("a closer must use the opener's character and have only whitespace after it", () => {
+    for (const input of [
+      "~~~\n```\n~~~\n<font color=red>x</font>",
+      "```\n~~~\n```\n<font color=red>x</font>",
+      "~~~~\n~~~\n~~~~  \n<font color=red>x</font>",
+      "```\n```js\n```\n<font color=red>x</font>",
+    ]) {
+      const out = toCardMarkdown(input);
+      expect(out, input).not.toMatch(LIVE);
+      expect(out.split("\n").slice(0, 3), input).toEqual(input.split("\n").slice(0, 3));
+    }
+  });
+
+  it("a longer closer closes; a tilde info string may contain backticks", () => {
+    expect(toCardMarkdown("```\n<b>\n`````\n<b>")).toBe("```\n<b>\n`````\n&#60;b>");
+    expect(toCardMarkdown("~~~ a`b\n<b>\n~~~\n<b>")).toBe("~~~ a`b\n<b>\n~~~\n&#60;b>");
+  });
+
+  it("an indented (4+ spaces) fence-like line is not a fence", () => {
+    expect(toCardMarkdown("    ```\n<b>")).toBe("    ```\n&#60;b>");
+  });
+});
+
 describe("escapePlain", () => {
   it("renders a value literally (no Markdown, no tags)", () => {
     const out = escapePlain("*x* _y_ <at id=all></at> [a](b) # h 2026-10-20");
@@ -198,5 +240,41 @@ describe("splitMarkdown", () => {
       expect(p.length).toBeLessThanOrEqual(170);
       expect((p.match(/`/g) ?? []).length % 2, p).toBe(0);
     }
+  });
+
+  /** 测试自带的 CommonMark 围栏判定：返回每行是否在代码块里（含围栏行本身），以及末尾是否仍未收尾。 */
+  const fenceState = (s: string) => {
+    let open: { c: string; n: number } | undefined;
+    for (const line of s.split("\n")) {
+      if (open === undefined) {
+        const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+        if (m && !(m[1]?.startsWith("`") && m[2]?.includes("`")))
+          open = { c: (m[1] ?? "")[0] ?? "", n: (m[1] ?? "").length };
+      } else {
+        const m = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+        if (m && m[1]?.[0] === open.c && (m[1]?.length ?? 0) >= open.n) open = undefined;
+      }
+    }
+    return open;
+  };
+
+  it("reopens a longer / tilde fence with the same marker and closes it the same way", () => {
+    for (const marker of ["````", "~~~~"]) {
+      const body = Array.from({ length: 40 }, (_, i) => (i % 5 === 0 ? "```" : `line ${i}`));
+      const text = `${marker}md\n${body.join("\n")}\n${marker}\n&#60;font>after`;
+      const parts = splitMarkdown(text, 120);
+      expect(parts.length).toBeGreaterThan(2);
+      for (const [i, p] of parts.entries()) {
+        expect(p.length).toBeLessThanOrEqual(120);
+        expect(fenceState(p), p).toBeUndefined();
+        if (i > 0 && i < parts.length - 1) expect(p.startsWith(`${marker}md\n`), p).toBe(true);
+      }
+      expect(parts.at(-1)?.endsWith(`${marker}\n&#60;font>after`)).toBe(true);
+    }
+  });
+
+  it("an inline ```a``` line does not make the splitter open a fence", () => {
+    const text = `\`\`\`a\`\`\`\n${Array.from({ length: 30 }, (_, i) => `text ${i}`).join("\n")}`;
+    for (const p of splitMarkdown(text, 60)) expect(p).not.toMatch(/^[`~]{3,}$/m);
   });
 });

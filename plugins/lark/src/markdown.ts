@@ -120,19 +120,43 @@ function convertLine(line: string): string {
   return out + escapeText(line.slice(last));
 }
 
+/** 一个已打开的代码块围栏：字符（反引号或波浪号）、长度、开头行的 info 字符串。 */
+export interface Fence {
+  char: "`" | "~";
+  len: number;
+  info: string;
+}
+
+/**
+ * 按 CommonMark 判断一行是否打开代码块围栏：至多 3 个空格缩进，3 个以上同种字符；反引号围栏的 info 字符串
+ * 不能含反引号（"```a```" 是行内代码，不是围栏）。
+ */
+export function fenceOpener(line: string): Fence | undefined {
+  const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+  if (!m) return undefined;
+  const run = m[1] as string;
+  const info = m[2] as string;
+  if (run[0] === "`" && info.includes("`")) return undefined;
+  return { char: run[0] as "`" | "~", len: run.length, info: info.trim() };
+}
+
+/** 按 CommonMark 判断一行是否收尾 `fence`：同种字符、不短于开头，后面只有空白。 */
+export function fenceCloses(line: string, fence: Fence): boolean {
+  const m = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+  return m !== null && (m[1] as string)[0] === fence.char && (m[1] as string).length >= fence.len;
+}
+
 /** 把模型回复的 Markdown 转为卡片富文本内容（见文件注释）。 */
 export function toCardMarkdown(md: string): string {
   const out: string[] = [];
-  let fence: string | undefined;
+  let fence: Fence | undefined;
   for (const line of md.replace(/\r\n?/g, "\n").split("\n")) {
-    const f = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
-    if (f) {
-      const mark = (f[1] ?? "").slice(0, 3);
-      if (fence === undefined) fence = mark;
-      else if (mark === fence) fence = undefined;
+    if (fence !== undefined) {
+      if (fenceCloses(line, fence)) fence = undefined;
       out.push(neutralizeAt(line));
       continue;
     }
+    fence = fenceOpener(line);
     out.push(fence !== undefined ? neutralizeAt(line) : convertLine(line));
   }
   return out.join("\n");
@@ -191,14 +215,17 @@ function cut(s: string, max: number): [string, string] {
 
 /**
  * 把（已转换的）卡片 Markdown 拆成每段不超过 `limit` 个 UTF-16 码元：按行装箱（段首 / 段尾的空行去掉），
- * 单行过长时优先在空格处切；切在代码块中间时本段补上收尾的 ``` 、下一段重新开头。
+ * 单行过长时优先在空格处切；切在代码块中间时本段补上同字符、同长度的收尾围栏，下一段用原开头（含 info）重新打开。
  */
 export function splitMarkdown(text: string, limit: number): string[] {
   if (text.length <= limit) return [text];
   const out: string[] = [];
   let cur: string[] = [];
   let len = 0;
-  let open: string | undefined;
+  // 当前打开的围栏（与 toCardMarkdown 同一套判定）；重开时用同样的字符、长度与 info，收尾用同样的字符与长度
+  let open: Fence | undefined;
+  const opener = (f: Fence) => f.char.repeat(f.len) + f.info;
+  const closer = (f: Fence) => f.char.repeat(f.len);
   const push = (l: string) => {
     len += (cur.length > 0 ? 1 : 0) + l.length;
     cur.push(l);
@@ -207,24 +234,28 @@ export function splitMarkdown(text: string, limit: number): string[] {
     const lines = [...cur];
     while (lines.length > 0 && (lines[0] ?? "").trim() === "") lines.shift();
     while (lines.length > 0 && (lines.at(-1) ?? "").trim() === "") lines.pop();
-    let s = lines.join("\n");
-    if (open !== undefined && !final) s += `\n${open}`;
-    if (s.trim() !== "" && !/^(```|~~~)\n(```|~~~)$/.test(s)) out.push(s);
+    if (open !== undefined && !final) lines.push(closer(open));
+    const s = lines.join("\n");
+    const emptyBlock =
+      open !== undefined && lines.length === 2 && lines[0] === opener(open) && !final;
+    if (s.trim() !== "" && !emptyBlock) out.push(s);
     cur = [];
     len = 0;
-    if (open !== undefined && !final) push(open);
+    if (open !== undefined && !final) push(opener(open));
   };
   for (const line of text.split("\n")) {
-    const f = /^\s{0,3}(`{3}|~{3})/.exec(line);
-    const mark = f?.[1];
-    const closes = mark !== undefined && open === mark;
-    const opens = mark !== undefined && open === undefined;
-    // 留出补收尾 fence 的位置（4 = 换行 + 3 个字符）
-    const reserve = (opens ? true : open !== undefined && !closes) ? 4 : 0;
+    const opens = open === undefined ? fenceOpener(line) : undefined;
+    const closes = open !== undefined && fenceCloses(line, open);
+    const inside = opens ?? (closes ? undefined : open);
+    // 留出补收尾围栏的位置（换行 + 围栏长度）
+    const reserve = inside !== undefined ? inside.len + 1 : 0;
     const room = () => limit - reserve - (cur.length > 0 ? len + 1 : 0);
     if (line.length <= room()) {
       push(line);
-    } else if (cur.length > 0 && line.length <= limit - reserve - (open !== undefined ? 4 : 0)) {
+    } else if (
+      cur.length > 0 &&
+      line.length <= limit - reserve - (open !== undefined ? opener(open).length + 1 : 0)
+    ) {
       flush();
       push(line);
     } else {
@@ -242,7 +273,7 @@ export function splitMarkdown(text: string, limit: number): string[] {
         flush();
       }
     }
-    if (opens) open = mark;
+    if (opens !== undefined) open = opens;
     else if (closes) open = undefined;
   }
   flush(true);
