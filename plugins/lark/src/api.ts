@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 /**
- * Lark OpenAPI 的最小客户端（发 / 回 / 改消息、机器人信息、企业信息、用户资料）。
+ * Lark OpenAPI 的最小客户端（发 / 回 / 改消息、机器人信息、企业信息、用户资料、通讯录；`raw` 用于 OAuth 换 token 与用户信息）。
  *
  * 为什么不用 SDK 的 `Client`：长连接用官方 SDK 的 `WSClient`（D8），但 REST 调用需要逐次的 AbortSignal 与超时、
  * 只带错误码的错误（SDK 的 axios 错误带着请求配置，其中有 `Authorization` 头），以及按凭据隔离、可失效重取的
@@ -60,7 +60,19 @@ export interface LarkCallOptions {
   timeoutMs?: number;
 }
 
+export interface LarkRawOptions extends LarkCallOptions {
+  /** 用这个 token 调（如网页登录拿到的 user_access_token）；不给则不带 Authorization。 */
+  bearer?: string;
+  /**
+   * OAuth 端点（RFC 6749）：成功响应可能不带 `code`（文档示例里 `code` 还是字符串 `"0"`），此时 HTTP 2xx 即成功；
+   * 失败为 HTTP 4xx + `{code, error, error_description}`。
+   */
+  oauth?: boolean;
+}
+
 export interface LarkApi {
+  /** 不带 tenant token 调 OpenAPI（OAuth 换 token、以 user_access_token 调用户信息）。错误同 {@link call}。 */
+  raw<T = Record<string, unknown>>(path: string, opts: LarkRawOptions): Promise<T>;
   /** 带 tenant token 调 OpenAPI，返回响应体（已确认 `code === 0`）。 */
   call<T = Record<string, unknown>>(
     creds: LarkCredentials,
@@ -86,7 +98,7 @@ export function createLarkApi(opts: { baseUrl: string; timeoutMs?: number }): La
    */
   async function request<T>(
     path: string,
-    o: LarkCallOptions,
+    o: LarkCallOptions & { oauth?: boolean },
     token?: string,
     budget?: AbortSignal,
   ): Promise<T> {
@@ -119,8 +131,15 @@ export function createLarkApi(opts: { baseUrl: string; timeoutMs?: number }): La
     } catch {
       body = undefined;
     }
-    const code = typeof body?.code === "number" ? body.code : undefined;
-    if (!res.ok || code !== 0) {
+    const raw = body?.code;
+    const code =
+      typeof raw === "number"
+        ? raw
+        : typeof raw === "string" && /^\d+$/.test(raw)
+          ? Number(raw)
+          : undefined;
+    const ok = code === 0 || (o.oauth === true && code === undefined && body !== undefined);
+    if (!res.ok || !ok) {
       throw new LarkApiError({
         status: res.status,
         ...(code !== undefined && { code }),
@@ -205,6 +224,10 @@ export function createLarkApi(opts: { baseUrl: string; timeoutMs?: number }): La
   }
 
   return {
+    raw<T>(path: string, o: LarkRawOptions): Promise<T> {
+      const budget = o.timeoutMs !== undefined ? AbortSignal.timeout(o.timeoutMs) : undefined;
+      return request<T>(path, o, o.bearer, budget);
+    },
     token: (creds, signal) => token(creds, signal),
     async call<T>(creds: LarkCredentials, path: string, o: LarkCallOptions): Promise<T> {
       const budget = o.timeoutMs !== undefined ? AbortSignal.timeout(o.timeoutMs) : undefined;

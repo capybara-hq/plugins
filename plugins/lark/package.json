@@ -1,7 +1,7 @@
 {
   "name": "@capybara-hq/plugin-lark",
   "version": "0.1.0",
-  "description": "Lark (channel@1 bot over the Lark long connection with interactive cards)",
+  "description": "Lark (channel@1 bot over the Lark long connection with interactive cards, identity-source@1 web login, directory@1)",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",

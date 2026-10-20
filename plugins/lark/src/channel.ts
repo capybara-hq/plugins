@@ -16,17 +16,18 @@ import { z } from "zod";
 import { type ChatKind, parseCardAction } from "./actions.js";
 import { createLarkApi, type LarkCredentials } from "./api.js";
 import { checkSize, renderSend, renderUpdate } from "./cards.js";
+import { LarkAppId } from "./config.js";
 import { describeError, toChannelSendError } from "./errors.js";
 import { eventToInbound } from "./inbound.js";
+import { assertSameApp, tenantKeyOf } from "./tenant.js";
+import { pause } from "./wait.js";
 
 /**
  * 渠道连接配置：自建应用的 App ID 与 App Secret（开发者后台「凭证与基础信息」）。Secret 走密钥存储。
- * App ID 的格式按 SDK `WSClient.start()` 的校验（`cli_` + 16 位十六进制；不符时它只打日志、什么也不做）。
+ * 部署配了网页登录时，同一租户的机器人必须用登录的那个应用（`open_id` 按应用区分），verify 会核对。
  */
 export const LarkConnection = z.object({
-  appId: z
-    .string()
-    .regex(/^cli_[0-9a-fA-F]{16}$/, "must be a Lark App ID such as cli_a1b2c3d4e5f60718"),
+  appId: LarkAppId,
   appSecret: secret(z.string().min(1)),
 });
 type LarkConnectionConfig = z.infer<typeof LarkConnection>;
@@ -35,6 +36,8 @@ export interface LarkChannelOptions {
   /** 开放平台根地址（默认 https://open.larksuite.com；测试指向假 Lark）。 */
   apiUrl: string;
   log: Logger;
+  /** 部署级网页登录的应用（配了时 verify 核对同一租户的机器人用的是同一个应用）。 */
+  loginApp?: LarkCredentials;
   /** 单次 OpenAPI 请求超时（默认 15 秒）。 */
   requestTimeoutMs?: number;
   /** 重连退避的基数（默认 1000 毫秒；测试调小）。 */
@@ -74,24 +77,6 @@ interface Profile {
   displayName?: string;
   avatarUrl?: string;
 }
-
-/**
- * 可中止的等待（只用于本次连接循环内，随 signal 结束）。插件不能用 setTimeout（`pnpm check:plugin-state` 的
- * plugin-timer 规则），所以用 `AbortSignal.timeout` 计时；不建 `AbortSignal.any` 组合信号（每秒一次的状态轮询会
- * 不断在 signal 上挂依赖），两个监听都在结束时摘掉。
- */
-const pause = (ms: number, signal: AbortSignal) =>
-  new Promise<void>((resolve) => {
-    if (signal.aborted) return resolve();
-    const timer = AbortSignal.timeout(ms);
-    const done = () => {
-      signal.removeEventListener("abort", done);
-      timer.removeEventListener("abort", done);
-      resolve();
-    };
-    signal.addEventListener("abort", done, { once: true });
-    timer.addEventListener("abort", done, { once: true });
-  });
 
 const MESSAGE_ID = /^om_[A-Za-z0-9_-]+$/;
 const chatKind = (t: ChannelTarget): ChatKind => (t.chatType === "dm" ? "d" : "g");
@@ -277,20 +262,8 @@ export function createLarkChannel(opts: LarkChannelOptions): Channel {
         if (e instanceof Error && e.message.startsWith("Lark bot info returned")) throw e;
         throw describeError(e, "bot info");
       }
-      let tenantKey: string;
-      try {
-        // https://open.larksuite.com/document/uAjLw4CM/ukTMukTMukTM/tenant-v2/tenant/query （需要权限 tenant:tenant:readonly）
-        const r = await api.call<{ data?: { tenant?: { tenant_key?: unknown } } }>(
-          c,
-          "/open-apis/tenant/v2/tenant/query",
-          { signal },
-        );
-        const k = r.data?.tenant?.tenant_key;
-        if (typeof k !== "string" || k === "") throw new Error("no tenant_key");
-        tenantKey = k;
-      } catch (e) {
-        throw describeError(e, "tenant query (needs scope tenant:tenant:readonly)");
-      }
+      const tenantKey = await tenantKeyOf(api, c, signal);
+      await assertSameApp(api, opts.loginApp, c.appId, tenantKey, signal);
       return { botUserId: bot.openId, botName: bot.name, tenantId: tenantKey };
     },
 

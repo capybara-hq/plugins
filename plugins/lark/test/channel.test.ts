@@ -12,11 +12,17 @@ import { createLarkChannel, MIN_EDIT_INTERVAL_MS } from "../src/channel.js";
 import plugin from "../src/index.js";
 
 let lark: FakeLarkServer;
+const LOGIN_APP = { appId: "cli_0000000000000001", appSecret: "login-app-secret-3c4d" };
 const log = { info() {}, warn() {}, error() {} };
 const stops: (() => Promise<void>)[] = [];
 
 beforeAll(async () => {
-  lark = await startFakeLark({ tenantKey: "t1", botOpenId: "ou_bot", botName: "Capybara" });
+  lark = await startFakeLark({
+    tenantKey: "t1",
+    botOpenId: "ou_bot",
+    botName: "Capybara",
+    extraApps: [LOGIN_APP],
+  });
   lark.users.set("ou_alice", {
     openId: "ou_alice",
     name: "Alice Liddell",
@@ -80,14 +86,25 @@ async function connect(onEvent?: (e: InboundEvent) => Promise<void>) {
 }
 
 describe("plugin manifest", () => {
-  it("provides channel@1, declares only network permissions; region lark only", () => {
+  it("provides channel@1 + identity-source@1 + directory@1; network permissions; region lark only", () => {
     expect(plugin.name).toBe("lark");
-    expect(plugin.provides).toEqual(["channel@1"]);
-    expect(plugin.permissions).toEqual({ network: ["open.larksuite.com"] });
+    expect(plugin.provides).toEqual(["channel@1", "identity-source@1", "directory@1"]);
+    expect(plugin.permissions).toEqual({
+      network: ["open.larksuite.com", "accounts.larksuite.com"],
+    });
     const dep = plugin.config?.deployment;
     expect(dep?.parse({})).toEqual({ region: "lark" });
     expect(dep?.safeParse({ region: "feishu" }).success).toBe(false);
     expect(dep?.safeParse({ region: "mars" }).success).toBe(false);
+    // 登录（部署级）：appId / appSecret 可选，appId 按 cli_ 格式校验
+    expect(dep?.safeParse({ appId: lark.appId, appSecret: "s" }).success).toBe(true);
+    expect(dep?.safeParse({ appId: "nope", appSecret: "s" }).success).toBe(false);
+    expect(dep?.safeParse({ appId: lark.appId, appSecret: "" }).success).toBe(false);
+    // 通讯录（组织级）：两项都可选（只用机器人的组织也能启用插件）
+    const org = plugin.config?.org;
+    expect(org?.parse({})).toEqual({});
+    expect(org?.safeParse({ appId: lark.appId, appSecret: "s" }).success).toBe(true);
+    expect(org?.safeParse({ appId: "nope" }).success).toBe(false);
     const ch = channel();
     expect(ch.features).toEqual({
       cards: true,
@@ -109,6 +126,22 @@ describe("verify", () => {
       botName: "Capybara",
       tenantId: "t1",
     });
+  });
+
+  it("a different app than the deployment login app in the same tenant → refused", async () => {
+    const guarded = createLarkChannel({ apiUrl: lark.url, log, loginApp: LOGIN_APP });
+    await expect(guarded.verify({ config: config(), signal: signal() })).rejects.toThrow(
+      /same Lark app/,
+    );
+    const same = createLarkChannel({ apiUrl: lark.url, log, loginApp: config() });
+    expect((await same.verify({ config: config(), signal: signal() })).tenantId).toBe("t1");
+    // 登录应用凭据无效（查不到它的租户）时不拦机器人
+    const broken = createLarkChannel({
+      apiUrl: lark.url,
+      log,
+      loginApp: { appId: "cli_00000000000000ff", appSecret: "x" },
+    });
+    expect((await broken.verify({ config: config(), signal: signal() })).tenantId).toBe("t1");
   });
 
   it("wrong secret → error with the code, never the secret", async () => {
