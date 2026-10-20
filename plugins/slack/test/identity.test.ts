@@ -198,6 +198,31 @@ describe("Sign in with Slack: callback", () => {
     ).rejects.toThrow(/signature|key/i);
   });
 
+  it("rejects an ID token without exp, or signed with an unknown key id", async () => {
+    let query = await authorize("U1");
+    slack.tamperNextIdToken({ exp: undefined });
+    await expect(
+      source().callback({
+        config: config(),
+        redirectUri: REDIRECT,
+        query,
+        nonce: "nonce-abc",
+        signal: signal(),
+      }),
+    ).rejects.toThrow(/exp/);
+    query = await authorize("U1");
+    slack.tamperNextIdToken({}, { kid: "unknown-kid" });
+    await expect(
+      source().callback({
+        config: config(),
+        redirectUri: REDIRECT,
+        query,
+        nonce: "nonce-abc",
+        signal: signal(),
+      }),
+    ).rejects.toThrow(/key/i);
+  });
+
   it("rejects when userInfo disagrees with the verified ID token", async () => {
     const query = await authorize("U1");
     slack.tamperNextIdToken({ "https://slack.com/team_id": "T9" });

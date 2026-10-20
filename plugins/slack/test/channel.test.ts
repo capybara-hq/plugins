@@ -91,6 +91,8 @@ describe("plugin manifest", () => {
       botToken: "xoxb-1",
     });
     expect(plugin.config?.org?.safeParse({ teamId: "T1", botToken: "xapp-1" }).success).toBe(false);
+    // Ruling A26：租户是工作区（T…），企业 id（E…）会把身份拆开
+    expect(plugin.config?.org?.safeParse({ teamId: "E1", botToken: "xoxb-1" }).success).toBe(false);
     const ch = channel();
     expect(ch.features).toEqual({
       cards: true,

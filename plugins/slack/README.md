@@ -76,15 +76,20 @@ PKCE；Slack 的 [PKCE](https://docs.slack.dev/authentication/using-pkce) 只针
 | `users:read` | [`users.list`](https://docs.slack.dev/reference/methods/users.list) 列出成员 |
 | `users:read.email` | 成员邮箱（没有它 `users.list` 不返回邮箱） |
 
-- 每页先调 `auth.test`：令牌所属工作区必须等于 `teamId`，否则同步报错（避免把别的工作区的人记成本租户）。
-- `users.list` 按游标分页（每页 200，Slack 建议不超过 200）；排除机器人（`is_bot`）与 Slackbot（`USLACKBOT`）；
-  `deleted = true` 的人报为离职（`active = false`），内核只撤销由通讯录同步加入的成员关系。
+- 租户是**工作区**：`teamId` 只收 `T…`；企业 id（`E…`）会把同一个人拆成两行身份。每页先调 `auth.test`：
+  组织级安装的令牌（`is_enterprise_install`）或 `team_id` 不是 `T…` 的令牌都拒绝；令牌所属工作区还必须等于
+  `teamId`，否则同步报错（避免把别的工作区的人记成本租户）。Enterprise Grid 请用各工作区自己的机器人令牌。
+- `users.list` 按游标分页（每页 200，Slack 建议不超过 200）；排除机器人（`is_bot`）、Slackbot（`USLACKBOT`）、
+  **访客**（`is_restricted` 多频道访客、`is_ultra_restricted` 单频道访客——访客不成为组织成员，需要时可手动邀请），
+  以及 Enterprise Grid 下自身 `team_id` 与 `teamId` 不同的其他工作区成员；`deleted = true` 的人报为离职
+  （`active = false`），内核只撤销由通讯录同步加入的成员关系。
 - 邮箱一律报为**未验证**：`users.list` 文档没有说明 `profile.email` 是否经过验证（登录时 OIDC 的
   `email_verified` 才算数）。
 - 限流：`users.list` 为 Tier 2（20+ 次/分钟）。遇到 HTTP 429 在本次同步内按 `Retry-After` 等待后重试，最多 3 次、
-  单次最多等 30 秒；超出就报错，内核把本轮记为不完整（只加人、不移除任何人），下次再同步。
+  每页累计最多等 30 秒；超出就报错，内核把本轮记为不完整（只加人、不移除任何人），下次再同步。
 - 人员变动事件（`team_join`、`user_change`，经渠道连接收到）会触发一次同步。
-- `teamId` / `botToken` 没填时（组织只用机器人），同步报「未配置」而不是当作空通讯录。
+- `teamId` / `botToken` 没填时（组织只用机器人），插件的 `configured()` 返回 false：内核不扫描、不同步、不记审计
+  与警告；手动同步返回 409 `directory.not_configured`。不会被当作空通讯录。
 
 ## 行为
 

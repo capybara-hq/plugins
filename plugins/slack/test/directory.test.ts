@@ -19,6 +19,10 @@ beforeAll(async () => {
   add("UBOT2", { realName: "Some bot", isBot: true });
   add("U4", { realName: "Dave", email: "dave@corp.example", deleted: true });
   add("U5", { realName: "Eve" });
+  // Ruling A29：访客与 Grid 下其他工作区的人不同步
+  add("UGUEST1", { realName: "Guest multi", isRestricted: true });
+  add("UGUEST2", { realName: "Guest single", isUltraRestricted: true });
+  add("UOTHERWS", { realName: "Other workspace", teamId: "T9" });
 });
 afterAll(async () => {
   await Promise.all([slack?.stop(), other?.stop()]);
@@ -95,6 +99,34 @@ describe("Slack directory@1", () => {
     expect(other.calls.some((c) => c.method === "users.list")).toBe(false);
   });
 
+  it("rejects an enterprise (E…) or org-wide install token: the tenant is the workspace team", async () => {
+    const grid = await startFakeSlack({ teamId: "E1" });
+    try {
+      await expect(
+        dir(grid).listMembers({ orgConfig: cfg(grid, "T1"), signal: signal() }),
+      ).rejects.toThrow(/workspace/);
+      expect(grid.calls.some((c) => c.method === "users.list")).toBe(false);
+    } finally {
+      await grid.stop();
+    }
+    slack.failNext("auth.test", {
+      body: { ok: true, team_id: "T1", user_id: "UBOT", is_enterprise_install: true },
+    });
+    await expect(dir().listMembers({ orgConfig: cfg(), signal: signal() })).rejects.toThrow(
+      /enterprise/,
+    );
+  });
+
+  it("configured(): true only when teamId and botToken are both set", () => {
+    const d = dir();
+    expect(d.configured?.(cfg())).toBe(true);
+    expect(d.configured?.({})).toBe(false);
+    expect(d.configured?.({ teamId: "T1" })).toBe(false);
+    expect(d.configured?.({ botToken: "xoxb-1" })).toBe(false);
+    expect(d.configured?.(undefined)).toBe(false);
+    expect(d.configured?.({ teamId: "E1", botToken: "xoxb-1" })).toBe(false);
+  });
+
   it("fails when the directory is not configured", async () => {
     await expect(dir().listMembers({ orgConfig: {}, signal: signal() })).rejects.toThrow(
       /teamId and botToken/,
@@ -127,6 +159,17 @@ describe("Slack directory@1", () => {
       /rate limited/,
     );
     expect(slack.calls.filter((c) => c.method === "users.list").length - before).toBe(4);
+  });
+
+  it("caps the total 429 wait per page (budget), not just each wait", async () => {
+    slack.failNext("users.list", { status: 429, retryAfter: 1 }, 2);
+    const before = slack.calls.filter((c) => c.method === "users.list").length;
+    const t0 = Date.now();
+    await expect(
+      dir(slack, { maxRateLimitWaitMs: 1500 }).listMembers({ orgConfig: cfg(), signal: signal() }),
+    ).rejects.toThrow(/rate limited \(retry after 1s\)/);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(900);
+    expect(slack.calls.filter((c) => c.method === "users.list").length - before).toBe(2);
   });
 
   it("throws at once when Retry-After is longer than it is willing to wait", async () => {

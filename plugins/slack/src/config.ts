@@ -15,12 +15,14 @@ export type SlackDeploymentConfig = z.infer<typeof SlackDeployment>;
 
 /**
  * 组织级配置：通讯录（`directory@1`）的 Slack 工作区 id 与机器人令牌（可与某个渠道连接用同一个令牌，但配置独立）。
- * 两项都可不填：组织只用渠道时启用插件不需要通讯录配置；未配置时同步报错（不当作空通讯录，免得误删成员）。
+ * 两项都可不填：组织只用渠道时启用插件不需要通讯录配置；`Directory.configured` 据此告诉内核通讯录未配置
+ * （Ruling A28，内核静默跳过同步）。`teamId` 只收工作区 id（`T…`）：租户是工作区（Ruling A26），企业 id（`E…`）
+ * 会把同一个人拆成两行身份。
  */
 export const SlackDirectoryConfig = z.object({
   teamId: z
     .string()
-    .regex(/^[TE][A-Z0-9]+$/, "must be a Slack team id such as T0123ABCD")
+    .regex(/^T[A-Z0-9]+$/, "must be a Slack workspace team id such as T0123ABCD")
     .optional(),
   botToken: secret(
     z.string().regex(/^xoxb-/, "must be a bot token starting with xoxb-"),

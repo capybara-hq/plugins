@@ -73,8 +73,8 @@ async function slackPost(
  *   不可逆地变成公开客户端。故忽略内核给的 `codeChallenge` / `codeVerifier`；防护靠内核的 state（单次有效、
  *   绑定浏览器 Cookie）、nonce 与 client secret（机密客户端，`client_secret_post`）。
  * - 回调：`openid.connect.token` 用授权码换 access token 与 `id_token`；**校验 ID token**（jose：JWKS
- *   `<openidUrl>openid/connect/keys` 验 RS256 签名、`iss = https://slack.com`、`aud = clientId`、`exp`，
- *   再核对 `nonce`）；再用 access token 调 `openid.connect.userInfo` 取资料，其用户 / 工作区必须与 ID token 一致。
+ *   `<openidUrl>openid/connect/keys` 验 RS256 签名、`iss = https://slack.com`、`aud = clientId`，必须有
+ *   `exp` / `iat` / `nonce`，时钟容差 60 秒），再核对 `nonce`）；再用 access token 调 `openid.connect.userInfo` 取资料，其用户 / 工作区必须与 ID token 一致。
  * - 身份键：`source = slack:<team_id>`、`externalId` = Slack user id（`https://slack.com/user_id`，即渠道入站的
  *   发言人 id、`users.list` 的 `id`），`tenantId` = team id——与渠道、通讯录同一个键。
  * - `emailVerified` 取 Slack 的 `email_verified`（必须是 true 才算）。
@@ -140,6 +140,8 @@ export function createSlackIdentitySource(): IdentitySource {
             issuer: SLACK_ISSUER,
             audience: c.clientId,
             algorithms: ["RS256"],
+            clockTolerance: 60,
+            requiredClaims: ["exp", "iat", "nonce"],
           })
         ).payload;
       } catch (e) {
