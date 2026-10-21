@@ -5,7 +5,8 @@
 // - 先解析，再检查**解析出的每一个 IP**：私有、回环、链路本地（含 169.254.169.254 元数据）、CGNAT、ULA、
 //   未指定、组播、保留与文档地址一律拒绝（挡 DNS 重绑定，如 10.0.0.1.nip.io），然后直连检查过的那个 IP，
 //   不再二次解析；
-// - HTTPS 走 CONNECT 隧道，HTTP 走绝对 URL 转发；IP 字面量主机名永远不在白名单里；
+// - HTTPS 走 CONNECT 隧道（默认只放行 443、80 端口，ALLOW_CONNECT_PORTS 逗号分隔可改），HTTP 走绝对 URL 转发；
+//   IP 字面量主机名永远不在白名单里；第一个地址连不上时依次试其余检查过的地址；
 // - 仅测试：CAPYBARA_EGRESS_TEST_HOSTS（JSON 对象 主机名 → IP）把主机名固定解析到给定 IP 并豁免私有地址
 //   检查（仍要在白名单里）。插件的部署配置设不了它，只有直接调用 createDockerSandbox 的测试能设。
 //
@@ -115,7 +116,7 @@ class Refused extends Error {
 }
 
 /**
- * 决定连哪个 IP：白名单检查 → 解析 → 每个地址都不能是禁止地址。返回要连的 IP。
+ * 决定能连哪些 IP：白名单检查 → 解析 → 每个地址都不能是禁止地址。返回检查过的全部地址（按解析顺序）。
  * @param {{ allowHosts: string[]; testHosts: Record<string, string>; lookup: (h: string) => Promise<{ address: string }[]> }} opts
  */
 export async function resolveTarget(host, opts) {
@@ -127,7 +128,7 @@ export async function resolveTarget(host, opts) {
     );
   }
   const pinned = Object.hasOwn(opts.testHosts, h) ? opts.testHosts[h] : undefined;
-  if (pinned !== undefined) return pinned;
+  if (pinned !== undefined) return [pinned];
   let addrs;
   try {
     addrs = await opts.lookup(h);
@@ -141,7 +142,29 @@ export async function resolveTarget(host, opts) {
       `Outbound access to ${h} is blocked: it resolves to a private or reserved address.`,
     );
   }
-  return addrs[0].address;
+  return addrs.map((a) => a.address);
+}
+
+/** 依次连接检查过的地址，第一个连上的返回；都连不上抛最后的错误。 */
+export function connectAny(ips, port) {
+  return new Promise((resolve, reject) => {
+    const attempt = (i, lastError) => {
+      if (i >= ips.length) {
+        reject(lastError ?? new Error("no address"));
+        return;
+      }
+      const s = connect({ host: ips[i], port });
+      s.once("connect", () => {
+        s.removeAllListeners("error");
+        resolve(s);
+      });
+      s.once("error", (e) => {
+        s.destroy();
+        attempt(i + 1, e);
+      });
+    };
+    attempt(0, undefined);
+  });
 }
 
 // capybara:allow-module-state 只读常量表（出站代理容器内，不在内核进程里）
@@ -180,9 +203,13 @@ function splitHostPort(s) {
 
 const defaultLookup = (h) => dnsLookup(h, { all: true, verbatim: true });
 
+/** CONNECT 默认只放行这些端口（ALLOW_CONNECT_PORTS 可改）。 */
+// capybara:allow-module-state 只读常量（出站代理容器内，不在内核进程里）
+const DEFAULT_CONNECT_PORTS = [443, 80];
+
 /**
  * 建代理服务器（未监听）。
- * @param {{ allowHosts: string[]; testHosts?: Record<string, string>; lookup?: (h: string) => Promise<{ address: string }[]> }} cfg
+ * @param {{ allowHosts: string[]; testHosts?: Record<string, string>; connectPorts?: number[]; lookup?: (h: string) => Promise<{ address: string }[]> }} cfg
  */
 export function createEgressProxy(cfg) {
   const opts = {
@@ -190,6 +217,7 @@ export function createEgressProxy(cfg) {
     testHosts: cfg.testHosts ?? {},
     lookup: cfg.lookup ?? defaultLookup,
   };
+  const connectPorts = cfg.connectPorts ?? DEFAULT_CONNECT_PORTS;
   const refuse = (res, e) => {
     const status = e instanceof Refused ? e.status : 502;
     const msg = e instanceof Refused ? e.message : "Upstream connection failed.";
@@ -214,18 +242,22 @@ export function createEgressProxy(cfg) {
       refuse(res, new Refused(400, "Only http:// URLs can be proxied; use CONNECT for https."));
       return;
     }
-    let ip;
+    let sock;
     try {
-      ip = await resolveTarget(url.hostname, opts);
+      const ips = await resolveTarget(url.hostname, opts);
+      sock = await connectAny(ips, url.port === "" ? 80 : Number(url.port)).catch(() => {
+        throw new Refused(502, `Cannot connect to ${url.host}.`);
+      });
     } catch (e) {
       refuse(res, e);
       return;
     }
     const headers = forwardHeaders(req.headers);
     headers.host = url.host;
+    // 每个请求一条上游连接（不进连接池，不会被别的主机复用）
+    headers.connection = "close";
     const up = httpRequest({
-      host: ip,
-      port: url.port === "" ? 80 : Number(url.port),
+      createConnection: () => sock,
       method: req.method,
       path: `${url.pathname}${url.search}`,
       headers,
@@ -252,25 +284,33 @@ export function createEgressProxy(cfg) {
       fail(400, "CONNECT needs host:port.");
       return;
     }
-    let ip;
+    if (!connectPorts.includes(hp[1])) {
+      fail(
+        403,
+        `CONNECT to port ${hp[1]} is not allowed (allowed ports: ${connectPorts.join(", ")}).`,
+      );
+      return;
+    }
+    let ips;
     try {
-      ip = await resolveTarget(hp[0], opts);
+      ips = await resolveTarget(hp[0], opts);
     } catch (e) {
       fail(e instanceof Refused ? e.status : 502, e instanceof Refused ? e.message : "Failed.");
       return;
     }
-    const up = connect({ host: ip, port: hp[1] });
-    up.on("connect", () => {
-      socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      if (head.length > 0) up.write(head);
-      up.pipe(socket);
-      socket.pipe(up);
-    });
-    up.on("error", () => {
-      if (up.connecting) fail(502, `Cannot connect to ${hp[0]}:${hp[1]}.`);
-      else socket.destroy();
-    });
+    let up;
+    try {
+      up = await connectAny(ips, hp[1]);
+    } catch {
+      fail(502, `Cannot connect to ${hp[0]}:${hp[1]}.`);
+      return;
+    }
+    up.on("error", () => socket.destroy());
     socket.on("close", () => up.destroy());
+    socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+    if (head.length > 0) up.write(head);
+    up.pipe(socket);
+    socket.pipe(up);
   });
   server.on("clientError", (_e, socket) => socket.destroy());
   return server;
@@ -281,7 +321,10 @@ export function main(env = process.env) {
   const allowHosts = JSON.parse(env.ALLOW_HOSTS ?? "[]");
   const testHosts = JSON.parse(env.CAPYBARA_EGRESS_TEST_HOSTS ?? "{}");
   const port = Number(env.PORT ?? 3128);
-  const server = createEgressProxy({ allowHosts, testHosts });
+  const connectPorts = env.ALLOW_CONNECT_PORTS
+    ? env.ALLOW_CONNECT_PORTS.split(",").map((p) => Number(p.trim()))
+    : undefined;
+  const server = createEgressProxy({ allowHosts, testHosts, connectPorts });
   server.listen(port, () => {
     console.log(`egress proxy listening on ${port}; allow: ${allowHosts.join(", ") || "(none)"}`);
   });

@@ -27,6 +27,11 @@ export interface DockerSandboxConfig {
   egressProxyImage: string;
   /** 工作区卷的驱动；设了就带 `DriverOpts.size` 限制卷大小。 */
   volumeDriver?: string | undefined;
+  /**
+   * 允许 `egress: "open"`（默认 false：open 的沙箱能访问宿主机网络能访问的一切，含宿主机上的服务与云元数据）。
+   * 为 false 时 `create` 收到 open 直接报错。
+   */
+  allowOpenEgress?: boolean | undefined;
 }
 
 /**
@@ -55,6 +60,8 @@ const MIB = 1024 * 1024;
 const STOP_SECONDS = 5;
 /** 中止 / 超时杀掉命令后，最多再等输出流结束这么久（毫秒），之后直接断开。 */
 const KILL_GRACE_MS = 3000;
+/** 没有超时的操作（文件读写）在输出流结束后最多再等退出码这么久（毫秒）。 */
+const EXIT_WAIT_MS = 30_000;
 /** 读文件时额外留给 stderr 的字节。 */
 const STDERR_ROOM = 64 * 1024;
 
@@ -87,12 +94,15 @@ const EXEC_WRAPPER =
   'c=$1; echo $$ > "$c.pid" 2>/dev/null; if [ -e "$c.kill" ]; then exit 137; fi; ' +
   '/bin/bash -c "$2"; s=$?; rm -f "$c.pid"; exit $s';
 
-/** 杀掉 ctl 对应的命令：先留 `.kill` 标记，等会话 id，按进程组与会话 SIGKILL；再按命令行兜底。 */
+/**
+ * 杀掉 ctl 对应的命令：先留 `.kill` 标记，等会话 id，按进程组与会话 SIGKILL；再按命令行兜底。
+ * 找到了会话 id（命令确实已启动）才删 `.kill` 标记；没找到时留着，防止包装稍后才启动。
+ */
 const KILL_SCRIPT =
   'c=$1; : > "$c.kill" 2>/dev/null; i=0; ' +
   'while [ ! -s "$c.pid" ] && [ $i -lt 20 ]; do sleep 0.05; i=$((i+1)); done; ' +
   'p=$(cat "$c.pid" 2>/dev/null); ' +
-  'if [ -n "$p" ]; then kill -9 -"$p" 2>/dev/null; pkill -9 -s "$p" 2>/dev/null; fi; ' +
+  'if [ -n "$p" ]; then kill -9 -"$p" 2>/dev/null; pkill -9 -s "$p" 2>/dev/null; rm -f "$c.kill"; fi; ' +
   'for q in $(pgrep -f -- "capybara-exec $c"); do ' +
   'kill -9 -"$q" 2>/dev/null; pkill -9 -s "$q" 2>/dev/null; kill -9 "$q" 2>/dev/null; done; ' +
   'rm -f "$c.pid"; exit 0';
@@ -349,6 +359,7 @@ export function createDockerSandbox(
   /** 在容器里跑一条命令（劫持连接收多路复用的输出）。容器不在抛 SandboxGoneError。 */
   async function run(container: string, o: RunOpts): Promise<RunResult> {
     o.signal.throwIfAborted();
+    const startedAt = Date.now();
     let execId: string;
     try {
       const r = await api.json<{ Id: string }>("POST", `/containers/${enc(container)}/exec`, {
@@ -422,6 +433,7 @@ export function createDockerSandbox(
     });
 
     let grace: { cancel(): void } | undefined;
+    let killing: Promise<void> | undefined;
     const stop = () => {
       if (stopping) return;
       stopping = true;
@@ -429,7 +441,7 @@ export function createDockerSandbox(
         grace = after(KILL_GRACE_MS, () => socket.destroy());
       };
       if (o.kill)
-        void o
+        killing = o
           .kill()
           .catch(() => undefined)
           .finally(cut);
@@ -452,6 +464,8 @@ export function createDockerSandbox(
     if (o.stdin !== undefined && o.stdin.byteLength > 0) socket.write(o.stdin);
 
     const streamError = await ended;
+    // 杀进程（或退而重启容器）完成后才返回：调用方接着用沙箱时它已可用
+    await killing;
     timer?.cancel();
     grace?.cancel();
     o.signal.removeEventListener("abort", onAbort);
@@ -465,34 +479,56 @@ export function createDockerSandbox(
     if (timedOut || aborted) return { ...result, exitCode: null };
     if (streamError) throw streamError;
 
-    // 输出流结束后取退出码（进程可能还差一点才被记为已退出）
-    const inspectSignal = AbortSignal.any([o.signal, AbortSignal.timeout(10_000)]);
+    // 输出流结束后取退出码（进程可能还差一点才被记为已退出）。一直等到命令的超时为止（没有超时的
+    // 文件操作最多等 EXIT_WAIT_MS）；到点还在跑就杀掉并按超时返回，绝不返回看起来像「被中止」的结果。
+    const deadline =
+      o.timeoutMs !== undefined ? startedAt + o.timeoutMs : Date.now() + EXIT_WAIT_MS;
     try {
-      for (let i = 0; ; i++) {
+      for (;;) {
         const s = await api.json<{ Running: boolean; ExitCode: number | null }>(
           "GET",
           `/exec/${execId}/json`,
-          { signal: inspectSignal },
+          { signal: AbortSignal.any([o.signal, AbortSignal.timeout(10_000)]) },
         );
         if (!s.Running) return { ...result, exitCode: s.ExitCode };
-        if (i >= 40) return { ...result, exitCode: null };
-        await sleep(50, inspectSignal);
+        if (Date.now() >= deadline) {
+          if (!o.kill) throw new Error("sandbox command did not report an exit status");
+          await o.kill().catch(() => undefined);
+          return { ...result, timedOut: true, exitCode: null };
+        }
+        await sleep(50, o.signal);
       }
     } catch (e) {
-      // 输出都收齐了才被中止：按「执行中被中止」返回
-      if (o.signal.aborted) return { ...result, aborted: true, exitCode: null };
+      // 输出都收齐了才被中止：按「执行中被中止」返回（进程若还在就杀掉）
+      if (o.signal.aborted) {
+        await o.kill?.().catch(() => undefined);
+        return { ...result, aborted: true, exitCode: null };
+      }
       throw e;
     }
   }
 
-  const killer = (container: string, ctl: string) => () =>
-    run(container, {
+  /**
+   * 杀掉一条命令。杀进程用的 exec 本身失败时（如进程数已到上限，连 sh 都起不来）退而重启整个容器：
+   * 文件都在卷上，/tmp 清空、沙箱里其余进程也一并结束，这是可以接受的代价。
+   */
+  const killer = (container: string, ctl: string) => async () => {
+    // 杀进程不受调用方 signal 影响（它往往正是已中止的那个）
+    const ok = await run(container, {
       cmd: ["/bin/sh", "-c", KILL_SCRIPT, "capybara-kill", ctl],
       user: SANDBOX_USER,
       maxOutputBytes: 4096,
-      // 杀进程不受调用方 signal 影响（它往往正是已中止的那个）
       signal: AbortSignal.timeout(15_000),
-    }).then(() => undefined);
+    }).then(
+      (r) => r.exitCode === 0,
+      () => false,
+    );
+    if (ok) return;
+    await api.json("POST", `/containers/${enc(container)}/restart`, {
+      query: { t: 0 },
+      signal: AbortSignal.timeout(60_000),
+    });
+  };
 
   /** 文件操作：以沙箱用户（写 /skills 时以 root 经可写挂载）跑一个小脚本。 */
   const fileOp = async (
@@ -514,6 +550,11 @@ export function createDockerSandbox(
       signal.throwIfAborted();
       if (!NAME_RE.test(name)) throw new Error(`invalid sandbox name: ${name}`);
       checkLimits(limits);
+      if (limits.egress === "open" && cfg.allowOpenEgress !== true) {
+        throw new Error(
+          'sandbox egress "open" is disabled for this deployment (sandbox-docker allowOpenEgress is false); use "allowlist" or "none"',
+        );
+      }
       const n = sandboxResourceNames(name);
       // 同名的旧实例（内核在记下句柄前退出等）：整个换掉
       await destroyByName(name, signal);
@@ -615,6 +656,7 @@ export function createDockerSandbox(
         throw e;
       }
       const labels = c.Config.Labels ?? {};
+      if (labels[LABEL_EGRESS] === "open") await ensureSharedNetwork(signal);
       if (labels[LABEL_EGRESS] === "allowlist") {
         await ensureEgressRunning(
           h.id,
@@ -669,8 +711,8 @@ export function createDockerSandbox(
       });
       return {
         exitCode: r.exitCode,
-        stdout: r.stdout.toString("utf8"),
-        stderr: r.stderr.toString("utf8"),
+        stdout: decodeOutput(r.stdout, r.truncated),
+        stderr: decodeOutput(r.stderr, r.truncated),
         truncated: r.truncated,
         timedOut: r.timedOut,
       };
@@ -738,6 +780,25 @@ export function createDockerSandbox(
       return { size: Number(m[1]), isDir: m[2] === "directory" };
     },
   };
+}
+
+/**
+ * 解码命令输出。被截断时先退回到完整的 UTF-8 字符边界（截断点落在多字节字符中间时丢掉残缺的尾巴），
+ * 不在末尾留下替换字符。
+ */
+export function decodeOutput(buf: Buffer, truncated: boolean): string {
+  let end = buf.byteLength;
+  if (truncated) {
+    // 从末尾往回找最后一个非续字节（10xxxxxx 之外），看它要求的长度是否完整
+    for (let i = end - 1; i >= 0 && i >= end - 4; i--) {
+      const b = buf[i] as number;
+      if ((b & 0xc0) === 0x80) continue;
+      const need = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : b >= 0xc0 ? 2 : 1;
+      if (end - i < need) end = i;
+      break;
+    }
+  }
+  return buf.subarray(0, end).toString("utf8");
 }
 
 function checkLimits(l: SandboxLimits): void {

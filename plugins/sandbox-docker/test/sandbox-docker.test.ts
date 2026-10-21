@@ -4,13 +4,7 @@ import {
   type SandboxLimits,
   type SandboxProvider,
 } from "@capybara-hq/plugin-sdk";
-import {
-  GenericContainer,
-  Network,
-  type StartedNetwork,
-  type StartedTestContainer,
-  Wait,
-} from "testcontainers";
+import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDockerSandbox, type DockerSandboxConfig } from "../src/index.js";
 import {
@@ -47,21 +41,22 @@ const limits = (egress: SandboxLimits["egress"], allowHosts: string[] = []): San
 describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => {
   let images: TestImages;
   let proxy: SocketProxy;
-  let net: StartedNetwork;
+  // 共用沙箱网络（socket 代理只放行 cap 开头的网络名）；放行目标也接在上面
+  const netName = `capybara-sandbox-test-${RUN}`;
   let target: StartedTestContainer;
   let targetIp: string;
   let cfg: DockerSandboxConfig;
   let sbx: SandboxProvider;
 
   beforeAll(async () => {
-    [images, proxy, net] = await Promise.all([
+    [images, proxy] = await Promise.all([
       buildTestImages(),
       startSocketProxy(),
-      new Network().start(),
+      docker("network", "create", "--label", `${TEST_LABEL}=${RUN}`, netName),
     ]);
     // 放行目标：与沙箱网络同一个网络上的本地 HTTP 服务（复用出站代理镜像里的 node）
     target = await new GenericContainer(images.egressImage)
-      .withNetwork(net)
+      .withNetworkMode(netName)
       .withUser("root")
       .withCommand([
         "node",
@@ -70,12 +65,13 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       ])
       .withWaitStrategy(Wait.forLogMessage("ready"))
       .start();
-    targetIp = target.getIpAddress(net.getName());
+    targetIp = target.getIpAddress(netName);
     cfg = {
       endpoint: proxy.endpoint,
       runtime: "runc",
-      network: net.getName(),
+      network: netName,
       egressProxyImage: images.egressImage,
+      allowOpenEgress: true,
     };
     sbx = createDockerSandbox(cfg, {
       labels: { [TEST_LABEL]: RUN },
@@ -85,9 +81,8 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
   }, 600_000);
 
   afterAll(async () => {
-    await cleanupTestResources(RUN);
     await target?.stop();
-    await net?.stop();
+    await cleanupTestResources(RUN);
     await proxy?.stop();
     await images?.remove();
   }, 120_000);
@@ -220,7 +215,9 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
         maxOutputBytes: 100,
         signal: sig(),
       });
-      expect(big.stdout).toBe("a".repeat(100));
+      // 上限是 stdout + stderr 合计；Docker 分别转发两路，stderr 的 "done" 可能先到
+      expect(big.stdout).toMatch(/^a+$/);
+      expect(big.stdout.length + big.stderr.length).toBe(100);
       expect(big.truncated).toBe(true);
       expect(big.exitCode).toBe(0);
       // bash 语法可用
@@ -273,6 +270,8 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       await expect(sbx.resume(h, dead)).rejects.toThrow();
 
       expect((await sh(h.id, "echo alive")).stdout).toBe("alive\n");
+      // 杀掉命令后 /tmp 里不留 .kill 标记
+      expect((await sh(h.id, "ls -a /tmp | grep -c 'kill$' || true")).stdout).toBe("0\n");
     } finally {
       await sbx.destroy(h, sig());
     }
@@ -415,7 +414,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       expect(await exists(kind, n), `${kind} ${n}`).toBe(false);
     }
     // 共用的沙箱网络不删
-    expect(await exists("network", net.getName())).toBe(true);
+    expect(await exists("network", netName)).toBe(true);
   });
 
   it("egress none: no network at all", async () => {
@@ -501,6 +500,169 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
     expect(
       (await fetch(`${base}/v1.44/containers/x/archive?path=/`, { method: "PUT" })).status,
     ).toBe(403);
+  });
+
+  describe("socket proxy body and name checks (real HAProxy)", () => {
+    const post = async (path: string, body: unknown) => {
+      const base = proxy.endpoint.replace(/^tcp:/, "http:");
+      const r = await fetch(`${base}/v1.44${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: typeof body === "string" ? body : JSON.stringify(body),
+      });
+      return r.status;
+    };
+    // 镜像不存在：通过代理检查的请求由 Docker 返回 404，不会真的建出容器
+    const NO_IMAGE = "capybara-no-such-image:none";
+    const base = { Image: NO_IMAGE, HostConfig: { NetworkMode: "none" } };
+    const create = (body: unknown, name = `cap-${RUN}-probe`) =>
+      post(`/containers/create?name=${encodeURIComponent(name)}`, body);
+
+    it("lets an ordinary cap- container create through (Docker answers)", async () => {
+      expect(await create(base)).toBe(404);
+    });
+
+    it.each([
+      ["privileged", { ...base, HostConfig: { NetworkMode: "none", Privileged: true } }],
+      [
+        "privileged (other case)",
+        { ...base, hostconfig: { networkmode: "none", PRIVILEGED: true } },
+      ],
+      [
+        "bind mount via Binds",
+        { ...base, HostConfig: { NetworkMode: "none", Binds: ["/:/host"] } },
+      ],
+      [
+        "bind mount via Mounts",
+        {
+          ...base,
+          HostConfig: {
+            NetworkMode: "none",
+            Mounts: [{ Type: "bind", Source: "/", Target: "/h" }],
+          },
+        },
+      ],
+      ["CapAdd", { ...base, HostConfig: { NetworkMode: "none", CapAdd: ["SYS_ADMIN"] } }],
+      ["Devices", { ...base, HostConfig: { NetworkMode: "none", Devices: [] } }],
+      ["host pid namespace", { ...base, HostConfig: { NetworkMode: "none", PidMode: "host" } }],
+      ["host network", { ...base, HostConfig: { NetworkMode: "host" } }],
+      ["foreign network", { ...base, HostConfig: { NetworkMode: "bridge" } }],
+      ["no network mode", { Image: NO_IMAGE, HostConfig: {} }],
+      [
+        "seccomp unconfined",
+        { ...base, HostConfig: { NetworkMode: "none", SecurityOpt: ["seccomp=unconfined"] } },
+      ],
+      [
+        "extra security opt",
+        {
+          ...base,
+          HostConfig: {
+            NetworkMode: "none",
+            SecurityOpt: ["no-new-privileges:true", "label=disable"],
+          },
+        },
+      ],
+      ["unknown runtime", { ...base, HostConfig: { NetworkMode: "none", Runtime: "evil" } }],
+      [
+        "foreign network endpoint",
+        { ...base, NetworkingConfig: { EndpointsConfig: { "kernel-net": {} } } },
+      ],
+    ])("refuses container create with %s", async (_label, body) => {
+      expect(await create(body)).toBe(403);
+    });
+
+    it("refuses unicode escapes, duplicate keys, oversized bodies and non-cap names", async () => {
+      expect(
+        await create('{"Image":"x","HostConfig":{"NetworkMode":"none","Privil\\u0065ged":true}}'),
+      ).toBe(403);
+      expect(
+        await create('{"Image":"x","HostConfig":{"NetworkMode":"none","NetworkMode":"host"}}'),
+      ).toBe(403);
+      expect(await create({ ...base, Env: [`X=${"a".repeat(40_000)}`] })).toBe(403);
+      expect(await create(base, "kernel")).toBe(403);
+      expect(await post("/containers/create", base)).toBe(403);
+    });
+
+    it("refuses exec and lifecycle calls on containers outside the cap- prefix", async () => {
+      expect(await post("/containers/some-kernel/exec", { Cmd: ["id"] })).toBe(403);
+      expect(await post("/containers/0123456789ab/start", {})).toBe(403);
+      // cap- 容器上的特权 exec 也不行
+      expect(
+        await post(`/containers/cap-${RUN}-none/exec`, { Cmd: ["id"], Privileged: true }),
+      ).toBe(403);
+    });
+
+    it("refuses bind-like volumes and non-bridge or non-cap networks", async () => {
+      expect(
+        await post("/volumes/create", {
+          Name: `cap-${RUN}-v`,
+          DriverOpts: { type: "none", o: "bind", device: "/" },
+        }),
+      ).toBe(403);
+      expect(await post("/volumes/create", { Name: "kernel-data" })).toBe(403);
+      expect(await post("/networks/create", { Name: `cap-${RUN}-n`, Driver: "macvlan" })).toBe(403);
+      expect(await post("/networks/create", { Name: "kernel-net", Driver: "bridge" })).toBe(403);
+    });
+  });
+
+  it("egress open is refused unless allowOpenEgress is set", async () => {
+    const strict = createDockerSandbox(
+      { ...cfg, allowOpenEgress: false },
+      { labels: { [TEST_LABEL]: RUN } },
+    );
+    await expect(
+      strict.create({
+        name: sbxName(),
+        image: images.sandboxImage,
+        limits: limits("open"),
+        signal: sig(),
+      }),
+    ).rejects.toThrow(/allowOpenEgress/);
+  });
+
+  it("when the kill exec itself cannot start (pid limit), the container is restarted", async () => {
+    const h = await sbx.create({
+      name: sbxName(),
+      image: images.sandboxImage,
+      limits: limits("none"),
+      signal: sig(),
+    });
+    try {
+      await sbx.writeFile(h, "/workspace/keep.txt", enc.encode("kept"), sig());
+      const r = await sbx.exec(h, {
+        command: "for i in $(seq 1100); do sleep 1000 & done 2>/dev/null; wait",
+        timeoutMs: 4000,
+        maxOutputBytes: 10_000,
+        signal: sig(),
+      });
+      expect(r).toMatchObject({ exitCode: null, timedOut: true });
+      expect((await sh(h.id, "ps -eo args | grep -c '^sleep 1000' || true")).stdout).toBe("0\n");
+      const kept = await sbx.readFile(h, "/workspace/keep.txt", { maxBytes: 10, signal: sig() });
+      expect(kept && dec.decode(kept.data)).toBe("kept");
+    } finally {
+      await sbx.destroy(h, sig());
+    }
+  });
+
+  it("truncated output is cut at a UTF-8 character boundary", async () => {
+    const h = await sbx.create({
+      name: sbxName(),
+      image: images.sandboxImage,
+      limits: limits("none"),
+      signal: sig(),
+    });
+    try {
+      const r = await sbx.exec(h, {
+        command: "printf 'a\\344\\270\\255b'",
+        timeoutMs: 10_000,
+        maxOutputBytes: 3,
+        signal: sig(),
+      });
+      expect(r.truncated).toBe(true);
+      expect(r.stdout).toBe("a");
+    } finally {
+      await sbx.destroy(h, sig());
+    }
   });
 
   it.skipIf(!runscAvailable)("runsc: lifecycle under gVisor", async () => {

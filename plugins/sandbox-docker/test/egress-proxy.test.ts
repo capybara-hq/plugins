@@ -2,7 +2,12 @@ import { createServer, request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { connect } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createEgressProxy, hostAllowed, isForbiddenAddress } from "../egress-proxy/proxy.mjs";
+import {
+  connectAny,
+  createEgressProxy,
+  hostAllowed,
+  isForbiddenAddress,
+} from "../egress-proxy/proxy.mjs";
 
 /** 出站代理（不需要 Docker）：主机名白名单、解析后的 IP 检查（挡 DNS 重绑定）、HTTP 与 CONNECT。 */
 
@@ -85,12 +90,16 @@ describe("proxy server", () => {
       allowHosts: ["allowed.example.com", "*.example.com"],
       // 仅测试：allowed.example.com 固定到本机的目标服务
       testHosts: { "allowed.example.com": "127.0.0.1" },
+      // 目标服务在随机端口上：测试里放行它（默认只放行 443、80）
+      connectPorts: [targetPort, 443],
       lookup,
     });
     await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", r));
     proxyPort = (proxy.address() as AddressInfo).port;
   });
   afterAll(async () => {
+    proxy?.closeAllConnections();
+    target?.closeAllConnections();
     await new Promise((r) => proxy?.close(r));
     await new Promise((r) => target?.close(r));
   });
@@ -164,6 +173,20 @@ describe("proxy server", () => {
     expect(await tunnel(`rebind.example.com:${targetPort}`)).toMatch(/^HTTP\/1\.1 403/);
     expect(await tunnel(`denied.org:443`)).toMatch(/^HTTP\/1\.1 403/);
     expect(await tunnel(`127.0.0.1:${targetPort}`)).toMatch(/^HTTP\/1\.1 403/);
+  });
+
+  it("refuses CONNECT to ports outside the allowed list", async () => {
+    const out = await tunnel("allowed.example.com:25");
+    expect(out).toMatch(/^HTTP\/1\.1 403/);
+    expect(out).toContain("port 25 is not allowed");
+  });
+
+  it("tries the next checked address when one cannot be reached", async () => {
+    // ::1 上没有监听（或没有 IPv6）：连不上就换 127.0.0.1
+    const s = await connectAny(["::1", "127.0.0.1"], targetPort);
+    expect(s.remoteAddress).toBe("127.0.0.1");
+    s.destroy();
+    await expect(connectAny(["::1"], targetPort)).rejects.toThrow();
   });
 
   it("rejects non-proxy requests", async () => {

@@ -1,6 +1,17 @@
 import { SANDBOX_CAPABILITY } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
-import plugin, { DeploymentConfig } from "../src/index.js";
+import plugin, { DeploymentConfig, decodeOutput } from "../src/index.js";
+
+describe("decodeOutput", () => {
+  const zh = Buffer.from("a中", "utf8"); // 61 e4 b8 ad
+  it("drops an incomplete trailing character only when truncated", () => {
+    expect(decodeOutput(zh.subarray(0, 3), true)).toBe("a");
+    expect(decodeOutput(zh.subarray(0, 2), true)).toBe("a");
+    expect(decodeOutput(zh, true)).toBe("a中");
+    expect(decodeOutput(Buffer.from("abc"), true)).toBe("abc");
+    expect(decodeOutput(zh.subarray(0, 3), false)).toBe("a�");
+  });
+});
 
 /** 清单与部署配置（不需要 Docker）。 */
 describe("sandbox-docker manifest", () => {
@@ -17,7 +28,11 @@ describe("sandbox-docker manifest", () => {
       runtime: "runc",
       network: "capybara-sandbox",
       egressProxyImage: "capybara-sandbox-egress:latest",
+      allowOpenEgress: false,
     });
+    expect(() => DeploymentConfig.parse({ endpoint: "tcp://x:1", network: "sandboxes" })).toThrow(
+      /start with 'cap'/,
+    );
     expect(DeploymentConfig.parse({ endpoint: "unix:///run/sandbox-proxy.sock" }).endpoint).toBe(
       "unix:///run/sandbox-proxy.sock",
     );
