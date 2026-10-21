@@ -34,9 +34,10 @@ const fixtureModels: Record<Dialect, EndpointModelConfig> = {
   generic: model("Qwen/Qwen3-8B"),
   deepseek: model("deepseek-flash", { reasoning: true, caching: true }),
   qwen: model("qwen3.8-plus", { reasoning: true, caching: true }),
+  ark: model("doubao-seed-2-0-pro", { reasoning: true, caching: true }),
 };
 
-for (const dialect of ["generic", "deepseek", "qwen"] as const) {
+for (const dialect of ["generic", "deepseek", "qwen", "ark"] as const) {
   describeModelProviderConformance(`openai-compatible ${dialect} (fixtures)`, async () => {
     const server = await startFakeModelServer(chatRoutes(dialect));
     const m = fixtureModels[dialect];

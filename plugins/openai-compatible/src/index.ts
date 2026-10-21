@@ -31,7 +31,7 @@ const EndpointSchema = z.strictObject({
     .string()
     .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, "endpoint name must match [A-Za-z0-9][A-Za-z0-9._-]*"),
   baseUrl: z.string().url(),
-  dialect: z.enum(["generic", "deepseek", "qwen"]),
+  dialect: z.enum(["generic", "deepseek", "qwen", "ark"]),
   /** 中途 system 是否以原位置的 system 消息发送；未给时取方言默认。 */
   midConversationSystem: z.boolean().optional(),
   models: z
@@ -163,6 +163,7 @@ export default definePlugin({
   version: "0.1.0",
   sdk: "^0.1.0",
   provides: [MODEL_PROVIDER_CAPABILITY_V2],
+  // 不声明 network：访问的端点全部由管理员在部署配置里给出，没有固定域名
   config: { deployment: DeploymentConfig },
   setup(ctx) {
     const cfg = DeploymentConfig.parse(ctx.config ?? {});

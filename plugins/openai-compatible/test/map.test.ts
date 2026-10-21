@@ -79,7 +79,7 @@ const turns: ModelMessage[][] = [
   ],
 ];
 
-describe.each(["generic", "deepseek", "qwen"] as const)("buildRequest (%s)", (dialect) => {
+describe.each(["generic", "deepseek", "qwen", "ark"] as const)("buildRequest (%s)", (dialect) => {
   it("is append-only: each request's messages are a prefix of the next (thinking + tools)", () => {
     let history: ModelMessage[] = [];
     let prev: unknown[] | null = null;
@@ -175,10 +175,13 @@ describe("mid-conversation system", () => {
     expect(body.messages.at(-1)).toEqual({ role: "system", content: "Be brief." });
   });
 
-  it.each(["generic", "qwen"] as const)("%s uses a [system] user message by default", (d) => {
-    const body = buildRequest(req(msgs), target(d));
-    expect(body.messages.at(-1)).toEqual({ role: "user", content: "[system] Be brief." });
-  });
+  it.each(["generic", "qwen", "ark"] as const)(
+    "%s uses a [system] user message by default",
+    (d) => {
+      const body = buildRequest(req(msgs), target(d));
+      expect(body.messages.at(-1)).toEqual({ role: "user", content: "[system] Be brief." });
+    },
+  );
 
   it("the endpoint can opt in to native mid-conversation system", () => {
     const body = buildRequest(req(msgs), target("generic", { midConversationSystem: true }));
@@ -228,7 +231,7 @@ describe("thinking replay", () => {
     expect(a[2]).not.toHaveProperty("reasoning_content");
   });
 
-  it.each(["generic", "qwen"] as const)("%s never sends reasoning_content back", (d) => {
+  it.each(["generic", "qwen", "ark"] as const)("%s never sends reasoning_content back", (d) => {
     for (const m of assistants(d)) expect(m).not.toHaveProperty("reasoning_content");
     for (const m of assistants(d, { tools: [weather] }))
       expect(m).not.toHaveProperty("reasoning_content");
@@ -260,6 +263,16 @@ describe("dialect params", () => {
     expect(decl("qwen", false).some((p) => p.key === "thinking")).toBe(false);
   });
 
+  it("ark: thinking -> thinking.type (no default: the docs state none), no effort knob", () => {
+    const d = decl("ark");
+    expect(d.map((p) => p.key)).toEqual(["thinking", "temperature", "maxOutputTokens"]);
+    expect(d.find((p) => p.key === "thinking")?.default).toBeUndefined();
+    expect(bodyWith("ark", { thinking: "on" }).thinking).toEqual({ type: "enabled" });
+    expect(bodyWith("ark", { thinking: "off" }).thinking).toEqual({ type: "disabled" });
+    expect(bodyWith("ark", {})).not.toHaveProperty("thinking");
+    expect(decl("ark", false).some((p) => p.key === "thinking")).toBe(false);
+  });
+
   it("deepseek: thinking -> thinking.type, effort -> reasoning_effort (defaults equal the API's)", () => {
     const d = decl("deepseek");
     expect(d.find((p) => p.key === "thinking")?.default).toBe("on");
@@ -286,7 +299,7 @@ describe("dialect params", () => {
     expect(stale.temperature).toBe(0.5);
   });
 
-  it.each(["generic", "qwen"] as const)("%s non-reasoning model: no thinking field", (d) => {
+  it.each(["generic", "qwen", "ark"] as const)("%s non-reasoning model: no thinking field", (d) => {
     const b = bodyWith(d, {}, false);
     expect(b).not.toHaveProperty("thinking");
     expect(b).not.toHaveProperty("enable_thinking");
@@ -332,6 +345,24 @@ describe("usage", () => {
         prompt_tokens_details: { cached_tokens: 20, cache_creation_input_tokens: 30 } as never,
       }),
     ).toEqual({ inputTokens: 50, outputTokens: 7, cacheReadTokens: 20, cacheWriteTokens: 30 });
+  });
+
+  it("ark: prompt_tokens minus prompt_tokens_details.cached_tokens, no cache write", () => {
+    expect(
+      DIALECTS.ark.usage({
+        prompt_tokens: 100,
+        completion_tokens: 7,
+        total_tokens: 107,
+        prompt_tokens_details: { cached_tokens: 60 },
+      }),
+    ).toEqual({ inputTokens: 40, outputTokens: 7, cacheReadTokens: 60, cacheWriteTokens: 0 });
+  });
+
+  it("ark: reads delta.reasoning_content", () => {
+    expect(DIALECTS.ark.readDelta({ content: "a", reasoning_content: "b" })).toEqual({
+      text: "a",
+      reasoning: "b",
+    });
   });
 
   it("missing usage counts as zero", () => {

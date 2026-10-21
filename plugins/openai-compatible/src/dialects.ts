@@ -16,7 +16,7 @@ import type OpenAI from "openai";
 
 export const PROVIDER = "openai-compatible";
 
-export type DialectName = "generic" | "deepseek" | "qwen";
+export type DialectName = "generic" | "deepseek" | "qwen" | "ark";
 
 /** 请求体：SDK 的流式参数，加上方言的扩展字段（如 DeepSeek `thinking`、Qwen `enable_thinking`）。 */
 export type ChatBody = OpenAI.Chat.ChatCompletionCreateParamsStreaming & Record<string, unknown>;
@@ -302,4 +302,33 @@ const qwen: Dialect = {
   },
 };
 
-export const DIALECTS: Readonly<Record<DialectName, Dialect>> = { generic, deepseek, qwen };
+/**
+ * 火山方舟 Ark（Chat API https://www.volcengine.com/docs/82379/1298454 ，
+ * 深度思考 https://www.volcengine.com/docs/82379/1449737 ，2026-10-19 核实；baseUrl
+ * `https://ark.cn-beijing.volces.com/api/v3`）：
+ * - `thinking: { type: "enabled" | "disabled" | "auto" }`；文档写明默认值与支持情况因模型而异、未给出统一默认，
+ *   所以 thinking 旋钮不给默认值，只映射 on / off（`auto` 不暴露）；未设置时不发该字段；
+ *   部署配置为 `reasoning: false` 的模型不声明旋钮也不发 `thinking`（不支持的模型发该字段可能被拒，保守处理）；
+ * - 思考增量在 `delta.reasoning_content`（seed 系列、deepseek-v4-pro / flash 支持）；
+ * - 用量：`prompt_tokens_details.cached_tokens` 为命中的输入 token，`prompt_tokens` 含之；无缓存写入计数；
+ * - `reasoning_effort`（none…max）的支持模型与默认值文档未能确认，不实现；temperature 默认值未确认，不给默认值；
+ * - 历史 `reasoning_content` 的回放规则、system 消息的位置规则未能确认，保守处理：不回放思考，
+ *   中途 system 转成 user 文本（端点可改）；是否有自动缓存未确认，`caching` 默认 false。
+ */
+const ark: Dialect = {
+  name: "ark",
+  midConversationSystem: false,
+  caching: false,
+  parameters: (m) => [...(m.reasoning ? [thinkingKnob()] : []), temperature(2), maxOutput(m)],
+  applyParams(body, params) {
+    if (params.thinking === "on" || params.thinking === "off") {
+      body.thinking = { type: params.thinking === "on" ? "enabled" : "disabled" };
+    }
+    if (typeof params.temperature === "number") body.temperature = params.temperature;
+  },
+  readDelta: readTextAndReasoning,
+  replayAssistant: (blocks) => baseAssistant(blocks),
+  usage: openaiStyleUsage,
+};
+
+export const DIALECTS: Readonly<Record<DialectName, Dialect>> = { generic, deepseek, qwen, ark };

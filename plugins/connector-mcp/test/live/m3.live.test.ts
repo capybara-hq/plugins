@@ -88,6 +88,7 @@ beforeAll(async () => {
       { pg: pgc.url, redis: rd.url },
       {
         plugins: [MODEL_FAKE, CONNECTOR_MCP, CONNECTOR_OPENAPI],
+        pluginPermissions: { autoApprove: true },
         roles: ["api", "worker"],
         tools: { timeoutMs: 90_000 },
       },

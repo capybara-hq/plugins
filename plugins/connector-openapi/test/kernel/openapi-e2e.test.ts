@@ -15,8 +15,9 @@ import { createDb } from "../../src/db/pool.js";
 import { AccountsService } from "../../src/identity/accounts.js";
 import { createKernel, type Kernel } from "../../src/kernel.js";
 import { createLogger } from "../../src/log.js";
-import { MembersService } from "../../src/orgs/members.service.js";
 import { memState } from "../fixtures/plugins/mem-connector/index.js";
+import { truncateTables } from "../helpers/db.js";
+import { testMembers } from "../helpers/members.js";
 import { MODEL_FAKE } from "../helpers/model-plugins.js";
 import {
   createConv,
@@ -67,6 +68,7 @@ beforeAll(async () => {
       { pg: pgc.url, redis: rd.url },
       {
         plugins: [MODEL_FAKE, CONNECTOR_OPENAPI, MEM_CONNECTOR],
+        pluginPermissions: { autoApprove: true },
         // 假服务在 127.0.0.1 上跑 http：测试打开本机 http（默认关闭）
         pluginConfig: { "connector-openapi": { allowInsecureLoopback: true } },
         roles: ["api", "worker"],
@@ -88,7 +90,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await sql`TRUNCATE capybara.accounts, capybara.orgs, capybara.audit_events CASCADE`.execute(raw);
+  await truncateTables(raw, "capybara.accounts, capybara.orgs, capybara.audit_events");
   ownerId = (
     await new AccountsService(db).createLocal({ login: "owner", password: PW, displayName: "O" })
   ).id;
@@ -345,7 +347,7 @@ describe("应用预览", () => {
       password: PW,
       displayName: "m",
     });
-    await new MembersService(db).add(orgId, acc.id, "member", ownerId);
+    await testMembers(db).add(orgId, acc.id, "member", ownerId);
     const memberReq = await session(k, "mem");
     const res = await preview({ connector: "mem", endpoint: { server: "docs" } }, memberReq);
     expect(res.statusCode).toBe(403);
@@ -482,7 +484,7 @@ describe("connector-openapi 端到端", () => {
         password: PW,
         displayName: "v",
       });
-      await new MembersService(db).add(orgId, acc.id, "member", ownerId);
+      await testMembers(db).add(orgId, acc.id, "member", ownerId);
       const asMember = await (await session(k, "viewer"))({
         method: "GET",
         url: `/api/v1/orgs/${orgId}/apps/${appId}`,

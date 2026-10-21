@@ -2,7 +2,7 @@ import type { FakeRequest, FakeResponse } from "@capybara-hq/testing";
 
 /** 手写的 Chat Completions 夹具：按原生 SSE 格式（`data: <chunk>` … `data: [DONE]`）回放。 */
 
-export type Dialect = "generic" | "deepseek" | "qwen";
+export type Dialect = "generic" | "deepseek" | "qwen" | "ark";
 
 /** 原生用量对象（各方言字段不同，原样写进最后一个 chunk）。 */
 export type RawUsage = Record<string, unknown> & {
@@ -195,7 +195,9 @@ export function chatRoutes(dialect: Dialect): (req: FakeRequest) => FakeResponse
         ? b.thinking?.type !== "disabled"
         : dialect === "qwen"
           ? b.enable_thinking !== false
-          : false;
+          : dialect === "ark"
+            ? b.thinking?.type !== "disabled"
+            : false;
     const violation = protocolViolation(dialect, b, thinks);
     if (violation !== null) return errorJson(400, { message: violation });
     const model = b.model;
