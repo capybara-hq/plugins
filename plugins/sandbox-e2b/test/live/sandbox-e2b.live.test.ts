@@ -23,7 +23,9 @@ import { createE2BSandbox, DeploymentConfig } from "../../src/index.js";
  * - [ ] `/skills` 归 root、0755（同上）；
  * - [ ] 镜像里有 `runuser` / `setsid`（util-linux）、`pkill` / `pgrep`（procps），root 的 PATH 能找到 runuser；
  * - [ ] envd 接受 `Basic root:` 跑 Start、`username=root` 上传；
- * - [ ] create / connect 总是返回 `envdAccessToken`（secure 沙箱）；
+ * - [ ] create（带 `secure: true`）/ connect 总是返回 `envdAccessToken`；没有令牌时插件拒绝连接（fail closed）；
+ * - [ ] 镜像里有 GNU `timeout`（coreutils）：exec 的命令在沙箱里也有时限，`timeout` 自成进程组、杀进程脚本先杀它；
+ * - [ ] 暂停再恢复后，前任留下的 exec 命令还在（内存快照），`killAll` 能杀掉；
  * - [ ] connect：运行中 200、暂停的恢复 201、只延长超时；`memory: false` 冷启动（进程全部结束，文件保留）；
  * - [ ] 暂停 / 过期的沙箱上 envd 回 502（不是 404），插件靠先 connect 判断 gone；
  * - [ ] 长流：几分钟无输出的命令靠 `Keepalive-Ping-Interval` 不被中间代理断开；

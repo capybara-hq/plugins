@@ -7,7 +7,9 @@ export {
   decodeOutput,
   type E2BSandboxConfig,
   type E2BSandboxTestOptions,
+  execArgs,
   exitCodeOf,
+  IN_SANDBOX_GRACE_SECONDS,
   METADATA_NAME,
 } from "./provider.js";
 

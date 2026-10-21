@@ -7,6 +7,8 @@ export {
   type DockerSandboxConfig,
   type DockerSandboxTestOptions,
   decodeOutput,
+  execArgv,
+  IN_SANDBOX_GRACE_SECONDS,
   sandboxResourceNames,
 } from "./provider.js";
 

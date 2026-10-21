@@ -6,7 +6,12 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDockerSandbox, type DockerSandboxConfig } from "../src/index.js";
+import {
+  createDockerSandbox,
+  type DockerSandboxConfig,
+  execArgv,
+  IN_SANDBOX_GRACE_SECONDS,
+} from "../src/index.js";
 import {
   buildTestImages,
   cleanupTestResources,
@@ -368,8 +373,10 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       expect(c.HostConfig.PidsLimit).toBeGreaterThan(0);
       expect(c.HostConfig.Runtime).toBe("runc");
       expect(c.HostConfig.NetworkMode).toBe("none");
-      expect(c.Config.User).toBe("1000:1000");
+      // 容器主进程（init 与 sleep）以 root 运行（能力全部去掉）：沙箱用户发不了信号给它们
+      expect(c.Config.User).toBe("0:0");
       expect((await sh(h.id, "id -u")).stdout).toBe("1000\n");
+      expect((await sh(h.id, "ps -o user= -p 1")).stdout.trim()).toBe("root");
       // 内核工具依赖 GNU find / grep
       expect((await sh(h.id, "find --version | head -1; grep --version | head -1")).stdout).toMatch(
         /GNU findutils[\s\S]*GNU grep/,
@@ -555,6 +562,29 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
           },
         },
       ],
+      [
+        "a volume mount of a non-cap volume",
+        {
+          ...base,
+          HostConfig: {
+            NetworkMode: "none",
+            Mounts: [{ Type: "volume", Source: "kernel-data", Target: "/h" }],
+          },
+        },
+      ],
+      [
+        "a volume mount with a cap- source and a foreign one",
+        {
+          ...base,
+          HostConfig: {
+            NetworkMode: "none",
+            Mounts: [
+              { Type: "volume", Source: `cap-${RUN}-w`, Target: "/w" },
+              { Type: "volume", source: "pgdata", Target: "/h" },
+            ],
+          },
+        },
+      ],
       ["CapAdd", { ...base, HostConfig: { NetworkMode: "none", CapAdd: ["SYS_ADMIN"] } }],
       ["Devices", { ...base, HostConfig: { NetworkMode: "none", Devices: [] } }],
       ["host pid namespace", { ...base, HostConfig: { NetworkMode: "none", PidMode: "host" } }],
@@ -638,6 +668,39 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       ).toBe(404);
     });
 
+    it("lets a create with cap- volume mounts through (Docker answers)", async () => {
+      expect(
+        await create({
+          ...base,
+          HostConfig: {
+            NetworkMode: "none",
+            Mounts: [{ Type: "volume", Source: `cap-${RUN}-w`, Target: "/w" }],
+          },
+        }),
+      ).toBe(404);
+    });
+
+    it("image pull: only fromImage is allowed (no import from a URL or stdin, no tagging)", async () => {
+      const pull = async (query: string) => {
+        const b = proxy.endpoint.replace(/^tcp:/, "http:");
+        return (await fetch(`${b}/v1.44/images/create?${query}`, { method: "POST" })).status;
+      };
+      // 通过代理检查，由 Docker 回答（拉一个连不上的仓库：失败但不是 403）
+      expect(await pull("fromImage=127.0.0.1%3A1%2Fnone%3Alatest")).not.toBe(403);
+      for (const q of [
+        "fromSrc=-",
+        "fromSrc=http%3A%2F%2F127.0.0.1%2Fx.tar",
+        "fromImage=x&fromSrc=-",
+        "fromImage=x&repo=cap-evil",
+        "fromImage=x&message=m",
+        "fromImage=x&changes=CMD%20id",
+        "fromImage=x&fromImage=y",
+        "",
+      ]) {
+        expect(await pull(q), q).toBe(403);
+      }
+    });
+
     it("refuses bind-like volumes and non-bridge or non-cap networks", async () => {
       expect(
         await post("/volumes/create", {
@@ -709,6 +772,123 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
     } finally {
       await sbx.destroy(h, sig());
     }
+  });
+
+  describe("stopped behind the kernel's back (fix wave S2 I1)", () => {
+    it("exec / readFile / writeFile / stat start a stopped container again, files and egress intact", async () => {
+      const name = sbxName();
+      const h = await sbx.create({
+        name,
+        image: images.sandboxImage,
+        limits: limits("allowlist", ["allowed.example.com"]),
+        signal: sig(),
+      });
+      try {
+        await sbx.writeFile(h, "/workspace/keep.txt", enc.encode("kept"), sig());
+        // 守护进程重启 / 宿主机重启 / 休眠扫描停了容器却没记下 suspended：内核仍以为它在运行
+        await docker("stop", "-t", "1", name, `${name}-egress`);
+        const r = await sh(h.id, "cat /workspace/keep.txt");
+        expect(r).toMatchObject({ exitCode: 0, stdout: "kept" });
+        expect((await inspect(name)).State.Running).toBe(true);
+        // 出站代理也一起起来了
+        expect((await sh(h.id, "curl -sS --max-time 10 http://allowed.example.com/")).stdout).toBe(
+          "hello-egress",
+        );
+
+        await docker("stop", "-t", "1", name);
+        const f = await sbx.readFile(h, "/workspace/keep.txt", { maxBytes: 10, signal: sig() });
+        expect(f && dec.decode(f.data)).toBe("kept");
+        await docker("stop", "-t", "1", name);
+        await sbx.writeFile(h, "/workspace/b.txt", enc.encode("b"), sig());
+        await docker("stop", "-t", "1", name);
+        expect(await sbx.stat(h, "/workspace/b.txt", sig())).toEqual({ size: 1, isDir: false });
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+    });
+
+    it("the sandbox user cannot stop the container (kill 1, pkill sleep, kill -9 -1)", async () => {
+      const name = sbxName();
+      const h = await sbx.create({
+        name,
+        image: images.sandboxImage,
+        limits: limits("none"),
+        signal: sig(),
+      });
+      try {
+        await sh(h.id, "kill 1; kill -TERM 1; pkill sleep; pkill -9 sleep; true");
+        await sh(h.id, "kill -9 -1; true");
+        // 给 init 一点时间：若它被停掉，容器会在这期间退出
+        await new Promise((r) => setTimeout(r, 1000));
+        expect((await inspect(name)).State.Running).toBe(true);
+        expect((await sh(h.id, "echo alive")).stdout).toBe("alive\n");
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+    });
+  });
+
+  describe("commands left behind by a crashed kernel replica (fix wave S2 I2)", () => {
+    /** 以 exec 的命令行在容器里启动一条命令、不等它（模拟发起它的内核副本崩溃：没有人再按 timeoutMs 杀它）。 */
+    const orphan = async (id: string, command: string, timeoutMs: number) => {
+      const ctl = `/tmp/.capybara-exec-${randomUUID()}`;
+      await docker("exec", "-d", "-u", "1000:1000", id, ...execArgv(ctl, command, timeoutMs));
+    };
+    const count = async (id: string, pattern: string) =>
+      Number((await sh(id, `pgrep -fc -- ${JSON.stringify(pattern)} || true`)).stdout.trim());
+    const waitUntil = async (cond: () => Promise<boolean>, ms: number) => {
+      const end = Date.now() + ms;
+      while (!(await cond())) {
+        if (Date.now() > end) throw new Error("condition not met in time");
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    };
+
+    it("the command is killed inside the sandbox at its deadline even with nobody watching", async () => {
+      const h = await sbx.create({
+        name: sbxName(),
+        image: images.sandboxImage,
+        limits: limits("none"),
+        signal: sig(),
+      });
+      try {
+        const started = Date.now();
+        await orphan(h.id, "sleep 101 & sleep 102; echo never > /workspace/never", 1000);
+        await waitUntil(async () => (await count(h.id, "^sleep 10[12]")) === 2, 10_000);
+        await waitUntil(async () => (await count(h.id, "^sleep 10[12]")) === 0, 20_000);
+        const elapsed = Date.now() - started;
+        expect(elapsed).toBeGreaterThanOrEqual(1000);
+        expect(elapsed).toBeLessThan((1 + IN_SANDBOX_GRACE_SECONDS + 5) * 1000);
+        expect(await sbx.stat(h, "/workspace/never", sig())).toBeNull();
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+    });
+
+    it("killAll stops every leftover exec command; the sandbox stays usable", async () => {
+      const h = await sbx.create({
+        name: sbxName(),
+        image: images.sandboxImage,
+        limits: limits("none"),
+        signal: sig(),
+      });
+      try {
+        await sbx.writeFile(h, "/workspace/keep.txt", enc.encode("kept"), sig());
+        await orphan(h.id, "sleep 201 & sleep 202", 600_000);
+        await orphan(h.id, "sleep 203", 600_000);
+        await waitUntil(async () => (await count(h.id, "^sleep 20[123]")) === 3, 10_000);
+        await sbx.killAll?.(h, sig());
+        expect(await count(h.id, "^sleep 20[123]")).toBe(0);
+        expect((await sh(h.id, "cat /workspace/keep.txt")).stdout).toBe("kept");
+        // 停着的容器：killAll 先把它启动
+        await docker("stop", "-t", "1", h.id);
+        await sbx.killAll?.(h, sig());
+        expect((await inspect(h.id)).State.Running).toBe(true);
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+      await expect(sbx.killAll?.(h, sig())).rejects.toSatisfy(isSandboxGoneError);
+    });
   });
 
   it.skipIf(!runscAvailable)("runsc: lifecycle under gVisor", async () => {

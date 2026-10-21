@@ -31,6 +31,9 @@ export CAPYBARA_PLUGIN_CONFIG='{"sandbox-docker":{"endpoint":"tcp://127.0.0.1:23
 - 多架构（amd64 + arm64）：`docker buildx build --platform linux/amd64,linux/arm64 -t <仓库>/<名>:<标签> --push <目录>`。
 - 本地开发：`docker compose -f docker/compose.dev.yaml --profile sandbox up -d` 构建两个镜像并起 socket 代理
   （`127.0.0.1:2375`，**只供本机开发**，见下面的部署要求）。镜像不在本地时插件会尝试拉取一次。
+- **部署时在每个 Docker 节点上预先拉好 `sandbox.image` 与 `egressProxyImage`**（`docker pull …`）：镜像不在本地时
+  插件在对话第一次用沙箱时才拉取，几百 MB 的拉取会占用那次工具调用的时限（`tools.timeoutMs` 加等锁与 3 分钟余量），
+  慢的时候这次调用失败，下一次再试。
 
 ## socket 代理（`docker/sandbox-proxy/haproxy.cfg`）
 
@@ -38,13 +41,14 @@ HAProxy（官方镜像，按摘要固定），代理以 root 运行（读 socket
 
 1. **路径与名字**：只放行插件实际调用的接口（容器 create / inspect / start / stop / kill / restart / remove、
    exec create / start / inspect、卷 create / inspect / remove、网络 create / inspect / remove、镜像 inspect / pull、
-   `_ping` / `version`），其余 403。容器与卷只认 `cap-` 开头的名字（建容器要求 `?name=cap-…`），网络只认 `cap`
+   `_ping` / `version`），其余 403。拉镜像（`POST /images/create`）的查询串只能是一个 `fromImage`：`fromSrc`
+   （从 URL 或请求体导入任意文件系统）、`repo` / `tag`（改名覆盖镜像）、`message` / `changes` 一律 403。容器与卷只认 `cap-` 开头的名字（建容器要求 `?name=cap-…`），网络只认 `cap`
    开头的名字；插件一律按名字访问容器，从不用 id。exec 实例（`/exec/{id}/…`）无法按名字过滤，但建 exec 已要求
    `cap-` 容器。
 2. **请求体（纵深防御）**：带体的接口必须是 JSON、带 Content-Length、≤ 32 KiB 且已整个缓冲（大于缓冲区的请求体
    一律拒绝，不能靠超长请求体绕过）。拒绝（不区分大小写）：特权、`Binds` / `CapAdd` / `Devices` /
    `VolumesFrom` / `CgroupParent` / `Sysctls` / `Annotations` / `MaskedPaths` / `PortBindings` 等键、`volume` /
-   `tmpfs` 以外的挂载类型、host / container 命名空间模式、`no-new-privileges` 以外的 `SecurityOpt`、runc / runsc
+   `tmpfs` 以外的挂载类型、`Source` 不以 `cap-` 开头的挂载（不能挂内核或别的服务的卷）、host / container 命名空间模式、`no-new-privileges` 以外的 `SecurityOpt`、runc / runsc
    以外的运行时、`none` / `cap…` 以外的网络、任何 `\u` 转义与非 ASCII 字节（Go 的 JSON 解码按 Unicode 折叠键名，
    `"Bindſ"` 会被当成 `Binds`；exec 的命令可以有中文，只拒绝键名里的 `\u` 与非 ASCII）、会绕过「必须是某值」检查的
    重复键；卷不能带 local 驱动的 `device` / `o` / `type`（可做成 bind），网络只能是 bridge。插件自己生成的建容器 / 卷 /
@@ -61,10 +65,12 @@ HAProxy（官方镜像，按摘要固定），代理以 root 运行（读 socket
 | 操作 | 做什么 |
 |---|---|
 | `create` | 先删掉同名旧实例（内核可能在记下句柄前退出），再建卷、（allowlist 时）内部网络与出站代理、沙箱容器并启动；句柄 id 就是 name |
-| `suspend` | 停止沙箱容器与出站代理（文件留在卷上） |
+| `suspend` | 停止沙箱容器与出站代理（文件留在卷上）。**进程不保留**：沙箱里的后台进程全部结束，`/tmp`（tmpfs）清空；E2B 的暂停则连内存一起保留 |
 | `resume` | 启动；容器不存在返回 `gone`。allowlist 的出站代理或内部网络丢了按容器标签里记下的白名单重建 |
+| 自动启动 | `exec` / `readFile` / `writeFile` / `stat` / `killAll` 遇到容器还在但没在运行（Docker 返回 409：宿主机或守护进程重启、休眠扫描停了容器却没来得及记下 `suspended`……）时，按 `resume` 的做法（出站代理、网络就位）启动后重试一次（`sandbox@1` 契约：内核只信自己记的 `running`） |
+| `killAll` | 杀掉经 `exec` 启动、仍在运行的全部命令（按命令行找到包装，按进程组与会话 SIGKILL）；内核接手崩溃的前任持锁方时调用。命令自己另起会话（`setsid`）放到后台的进程不保证被杀 |
 | `destroy` / `destroyByName` | 删容器、出站代理、内部网络、两个卷；不存在也算成功 |
-| `exec` | `docker exec`（沙箱用户、bash）；超时或中止时按会话 SIGKILL 命令及其派生的全部进程。杀进程用的 exec 本身起不来时（如进程数已到上限）退而重启整个容器（`restart?t=0`）：文件都在卷上，`/tmp` 清空、沙箱里其余进程一并结束。输出被截断时退回到完整的 UTF-8 字符边界 |
+| `exec` | `docker exec`（沙箱用户、bash）；超时或中止时按会话 SIGKILL 命令及其派生的全部进程。命令经 `timeout -s KILL <超时 + 5 秒>` 运行：内核副本崩溃（插件这边的计时没了，断开连接也不结束命令）时由沙箱里的时限兜底。杀进程用的 exec 本身起不来时（如进程数已到上限）退而重启整个容器（`restart?t=0`）：文件都在卷上，`/tmp` 清空、沙箱里其余进程一并结束。输出被截断时退回到完整的 UTF-8 字符边界 |
 | `readFile` / `writeFile` / `stat` | 在容器里以沙箱用户跑 `head` / `stat` 小脚本（权限、符号链接都按沙箱用户解析，不经守护进程以 root 写卷） |
 
 每个对话的资源：容器 `<name>`、出站代理 `<name>-egress`、内部网络 `<name>-net`、卷 `<name>-workspace`
@@ -72,8 +78,10 @@ HAProxy（官方镜像，按摘要固定），代理以 root 运行（读 socket
 
 ## 隔离与限制
 
-- 非 root（uid 1000）、`CapDrop: ALL`、`no-new-privileges`、根文件系统只读、`Init`（回收僵尸进程）、
-  `PidsLimit` 1024、私有 IPC。
+- 命令与文件操作以非 root（uid 1000）运行；容器主进程（`Init` 的 tini 与 `sleep infinity`）以 root 运行
+  （`User: 0:0`，能力同样全部去掉）：沙箱用户发不了信号给它们，`kill 1`、`pkill sleep`、`kill -9 -1` 都停不掉
+  容器。每个 exec 都显式指定用户；手工 `docker exec` 不带 `-u` 时是 root（无能力）。
+- `CapDrop: ALL`、`no-new-privileges`、根文件系统只读、`Init`（回收僵尸进程）、`PidsLimit` 1024、私有 IPC。
 - cpu → `NanoCpus`；内存 → `Memory`（`MemorySwap` 同值，不用 swap）。
 - `/tmp` 是 tmpfs（`nosuid,nodev`），大小取内存的一半且不超过 `diskMb`，计入内存配额；挂起后清空。
 - `/skills` **只读挂载**；同一个卷另以可写方式挂在 `/opt/capybara/skills`（`/opt/capybara` 归 root、0700，
@@ -82,6 +90,10 @@ HAProxy（官方镜像，按摘要固定），代理以 root 运行（读 socket
   对只读根文件系统没有意义，所以不用。工作区卷的大小只在设了 `volumeDriver` 且该驱动支持 `size` 选项时生效；
   **默认的 local 驱动不限制卷大小**（`diskMb` 不生效），需要硬限制时用支持配额的卷驱动，或在宿主机上
   给 Docker 卷目录配 XFS project quota 等。
+
+**限制只在创建时生效**：`sandbox.limits` 的 `cpu` / `memoryMb` / `diskMb` / `egress` / `allowHosts` 写进容器、
+卷与出站代理（白名单记在容器标签里），改配置只影响之后新建的沙箱；已有的沙箱（含休眠后恢复的）沿用创建时的
+限制，直到被销毁重建（不活跃销毁，或删掉 `cap-<对话>` 系列资源）。
 
 ## 出站（`limits.egress`）
 

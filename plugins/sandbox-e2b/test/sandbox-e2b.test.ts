@@ -10,7 +10,14 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import { type FakeE2BCall, type FakeE2BServer, startFakeE2B } from "@capybara-hq/testing";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createE2BSandbox, type E2BSandboxConfig, METADATA_NAME } from "../src/index.js";
+import { envdStart } from "../src/e2b-api.js";
+import {
+  createE2BSandbox,
+  type E2BSandboxConfig,
+  execArgs,
+  IN_SANDBOX_GRACE_SECONDS,
+  METADATA_NAME,
+} from "../src/index.js";
 
 /**
  * sandbox@1 的 E2B 实现，对着假 E2B（@capybara-hq/testing 的 startFakeE2B：控制面 API + envd，命令在本机跑）：
@@ -531,6 +538,108 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
         .exec(g, { command: "true", timeoutMs: 1000, maxOutputBytes: 10, signal: sig() })
         .catch((x: unknown) => x);
       expect(isSandboxGoneError(e2)).toBe(true);
+    });
+  });
+
+  describe("envd access token (fix wave S2 minor 1)", () => {
+    beforeAll(() => {
+      sbx = make();
+    });
+    afterEach(() => {
+      fake.withholdAccessToken = false;
+    });
+
+    it("create asks for a secured envd; without an access token nothing is sent to envd", async () => {
+      const h = await sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
+      expect(createdBody().secure).toBe(true);
+      fake.withholdAccessToken = true;
+      const before = fake.calls.filter((c) => c.sandboxId !== undefined).length;
+      const call = (p: Promise<unknown>) => expect(p).rejects.toThrow(/no envd access token/);
+      await call(
+        sbx.exec(h, { command: "true", timeoutMs: 1000, maxOutputBytes: 10, signal: sig() }),
+      );
+      await call(sbx.readFile(h, "/workspace/a", { maxBytes: 1, signal: sig() }));
+      await call(sbx.writeFile(h, "/workspace/a", enc.encode("x"), sig()));
+      await call(sbx.stat(h, "/workspace/a", sig()));
+      expect(fake.calls.filter((c) => c.sandboxId !== undefined).length).toBe(before);
+    });
+  });
+
+  describe("commands left behind by a crashed kernel replica (fix wave S2 I2)", () => {
+    let h: { id: string };
+    beforeAll(async () => {
+      sbx = make();
+      h = await sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
+    });
+
+    /** 经 envd 以 exec 的命令行启动一条命令，收到 start 事件就断开（模拟发起它的内核副本崩溃）。 */
+    const orphan = async (command: string, timeoutMs: number): Promise<void> => {
+      const s = fake.sandboxes.get(h.id);
+      if (!s) throw new Error("no sandbox");
+      const conn = new AbortController();
+      const t = { url: fake.url, sandboxId: h.id, accessToken: s.envdAccessToken };
+      const ctl = `/tmp/.capybara-exec-${randomUUID()}`;
+      await envdStart(
+        t,
+        "sandbox",
+        { cmd: "setsid", args: execArgs(ctl, command, timeoutMs), cwd: "/workspace" },
+        (e) => {
+          if ("start" in e) conn.abort();
+        },
+        conn.signal,
+      ).catch(() => undefined);
+    };
+
+    it("the command is killed inside the sandbox at its deadline even with nobody watching", async () => {
+      const started = Date.now();
+      await orphan("sleep 31 & sleep 32; echo never > /workspace/never", 1000);
+      await waitFor(() => fake.running(h.id).length === 1);
+      const pids = fake.running(h.id).map((p) => p.pid);
+      await waitFor(
+        () => fake.running(h.id).length === 0 && pids.every((p) => !fake.alive(p)),
+        15_000,
+      );
+      const elapsed = Date.now() - started;
+      expect(elapsed).toBeGreaterThanOrEqual(1000);
+      expect(elapsed).toBeLessThan((1 + IN_SANDBOX_GRACE_SECONDS + 5) * 1000);
+      expect(await sbx.stat(h, "/workspace/never", sig())).toBeNull();
+    });
+
+    it("killAll stops every leftover exec command (also after pause), gone → SandboxGoneError", async () => {
+      await orphan("sleep 41 & sleep 42", 600_000);
+      await orphan("sleep 43", 600_000);
+      await waitFor(() => fake.running(h.id).length === 2);
+      const pids = fake.running(h.id).map((p) => p.pid);
+      await sbx.killAll?.(h, sig());
+      await waitFor(() => pids.every((pid) => !fake.alive(pid)));
+      // 进程的输出管道全部关闭（孙进程也都结束）才会从 running 里消失
+      await waitFor(() => fake.running(h.id).length === 0);
+      const kill = fake.calls.filter((c) => c.path === "/process.Process/Start").at(-1);
+      expect(kill?.user).toBe("sandbox");
+      expect(argsOf(kill as FakeE2BCall)).toContain("capybara-killall");
+
+      // 暂停的沙箱（内存里的进程保留）：killAll 先 connect 恢复再杀
+      await orphan("sleep 44", 600_000);
+      await waitFor(() => fake.running(h.id).length === 1);
+      const pid = fake.running(h.id)[0]?.pid as number;
+      await sbx.suspend(h, sig());
+      await sbx.killAll?.(h, sig());
+      await waitFor(() => !fake.alive(pid) && fake.running(h.id).length === 0);
+      expect(fake.sandboxes.get(h.id)?.state).toBe("running");
+      // 沙箱照常可用
+      expect(
+        (
+          await sbx.exec(h, {
+            command: "echo ok",
+            timeoutMs: 5000,
+            maxOutputBytes: 100,
+            signal: sig(),
+          })
+        ).stdout,
+      ).toBe("ok\n");
+
+      await fake.expire(h.id);
+      await expect(sbx.killAll?.(h, sig())).rejects.toSatisfy(isSandboxGoneError);
     });
   });
 

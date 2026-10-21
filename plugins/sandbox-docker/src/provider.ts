@@ -49,9 +49,14 @@ export interface DockerSandboxTestOptions {
   egressTestHosts?: Record<string, string>;
 }
 
-/** 沙箱用户（镜像里的 sandbox）。 */
+/** 沙箱用户（镜像里的 sandbox）：命令与文件操作以它运行。 */
 const SANDBOX_USER = "1000:1000";
 const ROOT_USER = "0:0";
+/**
+ * 容器主进程（init 与 `sleep infinity`）的用户：root（能力全部去掉）。沙箱用户发不了信号给它们，
+ * `kill 1`、`pkill sleep`、`kill -9 -1` 都停不掉容器。每个 exec 都显式指定用户，不会以它运行命令。
+ */
+const INIT_USER = ROOT_USER;
 /** 出站代理监听端口。 */
 const PROXY_PORT = 3128;
 /** 沙箱内的进程数上限。 */
@@ -88,24 +93,63 @@ export function sandboxResourceNames(name: string) {
 }
 
 /**
+ * 沙箱里的硬时限比 `timeoutMs` 多出的秒数：正常情况下插件这边先按 `timeoutMs` 杀掉命令；内核副本崩溃
+ * （插件这边的计时随之消失、断开连接也不结束命令）时由沙箱里的 `timeout` 兜底。
+ */
+export const IN_SANDBOX_GRACE_SECONDS = 5;
+
+/**
  * 命令包装：在新会话里跑（setsid），先把会话 id 写到 `<ctl>.pid`，再看有没有 `<ctl>.kill`（杀的请求先到）；
- * 中止时按会话杀掉命令派生的全部进程。`$0` 是标记、`$1` 是 ctl、`$2` 是命令。
+ * 中止时按会话杀掉命令派生的全部进程。命令经 `timeout -s KILL` 运行：到沙箱里的时限即杀掉它所在的进程组。
+ * `$0` 是标记、`$1` 是 ctl、`$2` 是命令、`$3` 是沙箱里的时限（秒）。
  */
 const EXEC_WRAPPER =
   'c=$1; echo $$ > "$c.pid" 2>/dev/null; if [ -e "$c.kill" ]; then exit 137; fi; ' +
-  '/bin/bash -c "$2"; s=$?; rm -f "$c.pid"; exit $s';
+  'timeout -s KILL "$3" /bin/bash -c "$2"; s=$?; rm -f "$c.pid"; exit $s';
+
+/** `exec` 在容器里实际运行的命令行（导出供测试直接以 `docker exec -d` 模拟「内核崩溃后无人看管」）。 */
+export function execArgv(ctl: string, command: string, timeoutMs: number): string[] {
+  const seconds = Math.ceil(timeoutMs / 1000) + IN_SANDBOX_GRACE_SECONDS;
+  return [
+    "setsid",
+    "-w",
+    "/bin/sh",
+    "-c",
+    EXEC_WRAPPER,
+    "capybara-exec",
+    ctl,
+    command,
+    String(seconds),
+  ];
+}
+
+/**
+ * 杀进程用的 shell 函数 `k <会话首进程>`：先按进程组杀它的直接子进程（`timeout` 自成一个进程组），再杀它自己的
+ * 进程组与会话（没有 `pkill -s` 的系统上——只在测试机上——靠前两步）。
+ */
+const KILL_TREE =
+  'k() { for t in $(pgrep -P "$1"); do kill -9 -"$t" 2>/dev/null; done; ' +
+  'kill -9 -"$1" 2>/dev/null; pkill -9 -s "$1" 2>/dev/null; }; ';
+
+/**
+ * 杀掉经 exec 启动、仍在运行的全部命令（接手崩溃的前任时）：按命令行找到每个包装（会话首进程），
+ * 按进程组与会话 SIGKILL。模式里的 `[.]` 让它匹配不到这个脚本自己的命令行。
+ */
+const KILL_ALL_SCRIPT =
+  `${KILL_TREE}for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-"); do ` +
+  'k "$q"; kill -9 "$q" 2>/dev/null; done; exit 0';
 
 /**
  * 杀掉 ctl 对应的命令：先留 `.kill` 标记，等会话 id，按进程组与会话 SIGKILL；再按命令行兜底。
  * 找到了会话 id（命令确实已启动）才删 `.kill` 标记；没找到时留着，防止包装稍后才启动。
  */
 const KILL_SCRIPT =
-  'c=$1; : > "$c.kill" 2>/dev/null; i=0; ' +
+  `${KILL_TREE}c=$1; : > "$c.kill" 2>/dev/null; i=0; ` +
   'while [ ! -s "$c.pid" ] && [ $i -lt 20 ]; do sleep 0.05; i=$((i+1)); done; ' +
   'p=$(cat "$c.pid" 2>/dev/null); ' +
-  'if [ -n "$p" ]; then kill -9 -"$p" 2>/dev/null; pkill -9 -s "$p" 2>/dev/null; rm -f "$c.kill"; fi; ' +
+  'if [ -n "$p" ]; then k "$p"; rm -f "$c.kill"; fi; ' +
   'for q in $(pgrep -f -- "capybara-exec $c"); do ' +
-  'kill -9 -"$q" 2>/dev/null; pkill -9 -s "$q" 2>/dev/null; kill -9 "$q" 2>/dev/null; done; ' +
+  'k "$q"; kill -9 "$q" 2>/dev/null; done; ' +
   'rm -f "$c.pid"; exit 0';
 
 const READ_SCRIPT =
@@ -153,6 +197,14 @@ interface RunOpts {
   signal: AbortSignal;
   /** 超时 / 中止时杀进程（不给则只断开连接）。 */
   kill?: () => Promise<void>;
+}
+
+/** 容器还在但没在运行（exec 返回 409）：由契约层先启动再重试一次。 */
+class NotRunningError extends Error {
+  constructor(container: string, opts: { cause: unknown }) {
+    super(`sandbox container ${container} is not running`, opts);
+    this.name = "NotRunningError";
+  }
 }
 
 interface RunResult {
@@ -392,9 +444,7 @@ export function createDockerSandbox(
       if (isStatus(e, 404)) {
         throw new SandboxGoneError(`sandbox container ${container} no longer exists`, { cause: e });
       }
-      if (isStatus(e, 409)) {
-        throw new Error(`sandbox container ${container} is not running`, { cause: e });
-      }
+      if (isStatus(e, 409)) throw new NotRunningError(container, { cause: e });
       throw e;
     }
 
@@ -405,6 +455,8 @@ export function createDockerSandbox(
       if (isStatus(e, 404)) {
         throw new SandboxGoneError(`sandbox container ${container} no longer exists`, { cause: e });
       }
+      // exec 建好之后、启动之前容器停了
+      if (isStatus(e, 409)) throw new NotRunningError(container, { cause: e });
       if (!o.signal.aborted) throw e;
       // 启动请求已发出才被中止：命令可能已经在跑，照样杀掉
       await o.kill?.().catch(() => undefined);
@@ -524,10 +576,13 @@ export function createDockerSandbox(
    * 杀掉一条命令。杀进程用的 exec 本身失败时（如进程数已到上限，连 sh 都起不来）退而重启整个容器：
    * 文件都在卷上，/tmp 清空、沙箱里其余进程也一并结束，这是可以接受的代价。
    */
-  const killer = (container: string, ctl: string) => async () => {
+  const killer = (container: string, ctl: string) => () =>
     // 杀进程不受调用方 signal 影响（它往往正是已中止的那个）
+    killOrRestart(container, ["/bin/sh", "-c", KILL_SCRIPT, "capybara-kill", ctl]);
+
+  const killOrRestart = async (container: string, cmd: string[]) => {
     const ok = await run(container, {
-      cmd: ["/bin/sh", "-c", KILL_SCRIPT, "capybara-kill", ctl],
+      cmd,
       user: SANDBOX_USER,
       maxOutputBytes: 4096,
       signal: AbortSignal.timeout(15_000),
@@ -548,10 +603,51 @@ export function createDockerSandbox(
     o: Omit<RunOpts, "signal" | "kill">,
     signal: AbortSignal,
   ): Promise<RunResult> => {
-    const r = await run(h.id, { ...o, signal });
+    const r = await autoStart(h, signal, () => run(h.id, { ...o, signal }));
     if (r.aborted) throw abortReason(signal);
     return r;
   };
+
+  /**
+   * 契约的「自动启动」：容器还在但被停了（宿主机 / 守护进程重启、休眠扫描停了它却没记下 suspended……）时，
+   * 先按 resume 的做法（出站代理、网络就位）启动，再重试一次。已不在 → SandboxGoneError。
+   */
+  async function autoStart<T>(h: SandboxHandle, signal: AbortSignal, fn: () => Promise<T>) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (!(e instanceof NotRunningError)) throw e;
+      if ((await resume(h, signal)) === "gone") {
+        throw new SandboxGoneError(`sandbox container ${h.id} no longer exists`, { cause: e });
+      }
+      return await fn();
+    }
+  }
+
+  async function resume(h: SandboxHandle, signal: AbortSignal): Promise<"resumed" | "gone"> {
+    signal.throwIfAborted();
+    let c: { State: { Running: boolean }; Config: { Labels: Record<string, string> | null } };
+    try {
+      c = await api.json("GET", `/containers/${enc(h.id)}/json`, { signal });
+    } catch (e) {
+      if (isStatus(e, 404)) return "gone";
+      throw e;
+    }
+    const labels = c.Config.Labels ?? {};
+    if (labels[LABEL_EGRESS] === "open") await ensureSharedNetwork(signal);
+    if (labels[LABEL_EGRESS] === "allowlist") {
+      await ensureEgressRunning(h.id, JSON.parse(labels[LABEL_ALLOW] ?? "[]") as string[], signal);
+    }
+    if (!c.State.Running) {
+      try {
+        await start(h.id, signal);
+      } catch (e) {
+        if (isStatus(e, 404)) return "gone";
+        throw e;
+      }
+    }
+    return "resumed";
+  }
 
   const stderrOf = (r: RunResult) => r.stderr.toString("utf8").trim().slice(0, 500);
 
@@ -615,7 +711,7 @@ export function createDockerSandbox(
           n.container,
           {
             Image: image,
-            User: SANDBOX_USER,
+            User: INIT_USER,
             WorkingDir: "/workspace",
             Cmd: ["sleep", "infinity"],
             Env: env,
@@ -658,34 +754,7 @@ export function createDockerSandbox(
       return { id: name };
     },
 
-    async resume(h, signal) {
-      signal.throwIfAborted();
-      let c: { State: { Running: boolean }; Config: { Labels: Record<string, string> | null } };
-      try {
-        c = await api.json("GET", `/containers/${enc(h.id)}/json`, { signal });
-      } catch (e) {
-        if (isStatus(e, 404)) return "gone";
-        throw e;
-      }
-      const labels = c.Config.Labels ?? {};
-      if (labels[LABEL_EGRESS] === "open") await ensureSharedNetwork(signal);
-      if (labels[LABEL_EGRESS] === "allowlist") {
-        await ensureEgressRunning(
-          h.id,
-          JSON.parse(labels[LABEL_ALLOW] ?? "[]") as string[],
-          signal,
-        );
-      }
-      if (!c.State.Running) {
-        try {
-          await start(h.id, signal);
-        } catch (e) {
-          if (isStatus(e, 404)) return "gone";
-          throw e;
-        }
-      }
-      return "resumed";
-    },
+    resume,
 
     async suspend(h, signal) {
       signal.throwIfAborted();
@@ -703,6 +772,15 @@ export function createDockerSandbox(
 
     destroyByName,
 
+    async killAll(h, signal) {
+      signal.throwIfAborted();
+      // 先确认容器在跑（停了就启动；不在抛 SandboxGoneError），再杀；杀进程的 exec 起不来时重启容器
+      await autoStart(h, signal, () =>
+        run(h.id, { cmd: ["true"], user: SANDBOX_USER, maxOutputBytes: 1024, signal }),
+      );
+      await killOrRestart(h.id, ["/bin/sh", "-c", KILL_ALL_SCRIPT, "capybara-killall"]);
+    },
+
     async exec(h, args): Promise<ExecResult> {
       args.signal.throwIfAborted();
       const env: string[] = [];
@@ -711,16 +789,18 @@ export function createDockerSandbox(
         env.push(`${k}=${v}`);
       }
       const ctl = `/tmp/.capybara-exec-${randomUUID()}`;
-      const r = await run(h.id, {
-        cmd: ["setsid", "-w", "/bin/sh", "-c", EXEC_WRAPPER, "capybara-exec", ctl, args.command],
-        user: SANDBOX_USER,
-        env,
-        cwd: args.cwd ?? "/workspace",
-        maxOutputBytes: args.maxOutputBytes,
-        timeoutMs: args.timeoutMs,
-        signal: args.signal,
-        kill: killer(h.id, ctl),
-      });
+      const r = await autoStart(h, args.signal, () =>
+        run(h.id, {
+          cmd: execArgv(ctl, args.command, args.timeoutMs),
+          user: SANDBOX_USER,
+          env,
+          cwd: args.cwd ?? "/workspace",
+          maxOutputBytes: args.maxOutputBytes,
+          timeoutMs: args.timeoutMs,
+          signal: args.signal,
+          kill: killer(h.id, ctl),
+        }),
+      );
       return {
         exitCode: r.exitCode,
         stdout: decodeOutput(r.stdout, r.truncated),

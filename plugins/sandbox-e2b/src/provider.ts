@@ -75,24 +75,53 @@ export const HOSTNAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*
 const SANDBOX_ID_RE = /^[a-zA-Z0-9-]{1,128}$/;
 
 /**
+ * 沙箱里的硬时限比 `timeoutMs` 多出的秒数：正常情况下插件这边先按 `timeoutMs` 杀掉命令；内核副本崩溃
+ * （插件这边的计时随之消失；断开 envd 的流不结束进程，暂停再恢复也保留内存里的进程）时由沙箱里的 `timeout` 兜底。
+ */
+export const IN_SANDBOX_GRACE_SECONDS = 5;
+
+/**
  * 命令包装：在新会话里跑（setsid），先把会话 id 写到 `<ctl>.pid`，再看有没有 `<ctl>.kill`（杀的请求先到）；
- * 中止时按会话杀掉命令派生的全部进程。`$0` 是标记、`$1` 是 ctl、`$2` 是命令。与 sandbox-docker 相同。
+ * 中止时按会话杀掉命令派生的全部进程。命令经 `timeout -s KILL` 运行：到沙箱里的时限即杀掉它所在的进程组。
+ * `$0` 是标记、`$1` 是 ctl、`$2` 是命令、`$3` 是沙箱里的时限（秒）。与 sandbox-docker 相同。
  */
 const EXEC_WRAPPER =
   'c=$1; echo $$ > "$c.pid" 2>/dev/null; if [ -e "$c.kill" ]; then exit 137; fi; ' +
-  '/bin/bash -c "$2"; s=$?; rm -f "$c.pid"; exit $s';
+  'timeout -s KILL "$3" /bin/bash -c "$2"; s=$?; rm -f "$c.pid"; exit $s';
+
+/** `exec` 交给 envd 的 `setsid` 参数（导出供测试直接经 envd 启动，模拟「内核崩溃后无人看管」）。 */
+export function execArgs(ctl: string, command: string, timeoutMs: number): string[] {
+  const seconds = Math.ceil(timeoutMs / 1000) + IN_SANDBOX_GRACE_SECONDS;
+  return ["-w", "/bin/sh", "-c", EXEC_WRAPPER, "capybara-exec", ctl, command, String(seconds)];
+}
+
+/**
+ * 杀进程用的 shell 函数 `k <会话首进程>`：先按进程组杀它的直接子进程（`timeout` 自成一个进程组），再杀它自己的
+ * 进程组与会话（没有 `pkill -s` 的系统上——只在测试机上——靠前两步）。
+ */
+const KILL_TREE =
+  'k() { for t in $(pgrep -P "$1"); do kill -9 -"$t" 2>/dev/null; done; ' +
+  'kill -9 -"$1" 2>/dev/null; pkill -9 -s "$1" 2>/dev/null; }; ';
+
+/**
+ * 杀掉经 exec 启动、仍在运行的全部命令（接手崩溃的前任时）：按命令行找到每个包装（会话首进程），
+ * 按进程组与会话 SIGKILL。模式里的 `[.]` 让它匹配不到这个脚本自己的命令行。与 sandbox-docker 相同。
+ */
+const KILL_ALL_SCRIPT =
+  `${KILL_TREE}for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-"); do ` +
+  'k "$q"; kill -9 "$q" 2>/dev/null; done; exit 0';
 
 /**
  * 杀掉 ctl 对应的命令：先留 `.kill` 标记，等会话 id，按进程组与会话 SIGKILL；再按命令行兜底。
  * 找到了会话 id（命令确实已启动）才删 `.kill` 标记；没找到时留着，防止包装稍后才启动。
  */
 const KILL_SCRIPT =
-  'c=$1; : > "$c.kill" 2>/dev/null; i=0; ' +
+  `${KILL_TREE}c=$1; : > "$c.kill" 2>/dev/null; i=0; ` +
   'while [ ! -s "$c.pid" ] && [ $i -lt 20 ]; do sleep 0.05; i=$((i+1)); done; ' +
   'p=$(cat "$c.pid" 2>/dev/null); ' +
-  'if [ -n "$p" ]; then kill -9 -"$p" 2>/dev/null; pkill -9 -s "$p" 2>/dev/null; rm -f "$c.kill"; fi; ' +
+  'if [ -n "$p" ]; then k "$p"; rm -f "$c.kill"; fi; ' +
   'for q in $(pgrep -f -- "capybara-exec $c"); do ' +
-  'kill -9 -"$q" 2>/dev/null; pkill -9 -s "$q" 2>/dev/null; kill -9 "$q" 2>/dev/null; done; ' +
+  'k "$q"; kill -9 "$q" 2>/dev/null; done; ' +
   'rm -f "$c.pid"; exit 0';
 
 const READ_SCRIPT =
@@ -180,10 +209,16 @@ export function createE2BSandbox(
         `E2B returned an invalid sandbox domain: ${JSON.stringify(domain).slice(0, 100)}`,
       );
     }
+    // 没有访问令牌的 envd 谁都能调用：建沙箱时要求了 secure，拿不到令牌就不连（fail closed）
+    if (typeof info.envdAccessToken !== "string" || info.envdAccessToken === "") {
+      throw new Error(
+        "E2B returned no envd access token for the sandbox; refusing to use an unauthenticated sandbox",
+      );
+    }
     return {
       url: test.envdUrl ?? `https://${ENVD_PORT}-${info.sandboxID}.${domain}`,
       sandboxId: info.sandboxID,
-      accessToken: info.envdAccessToken ?? undefined,
+      accessToken: info.envdAccessToken,
     };
   };
 
@@ -450,6 +485,8 @@ export function createE2BSandbox(
           timeout: cfg.timeoutSeconds,
           // 到点自动暂停而不是删除：内核来不及 suspend（如内核整个挂了）时文件也不丢
           autoPause: true,
+          // envd 要求访问令牌（与 e2b SDK 的默认一致）；没拿到令牌时 targetOf 拒绝连接
+          secure: true,
           ...network,
         },
         signal,
@@ -487,6 +524,22 @@ export function createE2BSandbox(
 
     destroyByName,
 
+    async killAll(h, signal) {
+      signal.throwIfAborted();
+      // connect 会恢复暂停的沙箱（内存里的进程也一起回来）；不在抛 SandboxGoneError
+      const t = await attach(h.id, signal);
+      const r = await fileOp(
+        t,
+        {
+          user: SANDBOX_USER,
+          args: ["-c", KILL_ALL_SCRIPT, "capybara-killall"],
+          maxOutputBytes: STDERR_ROOM,
+        },
+        signal,
+      );
+      if (r.exitCode !== 0) throw new Error(`cannot stop leftover commands: ${stderrOf(r)}`);
+    },
+
     async exec(h, args): Promise<ExecResult> {
       args.signal.throwIfAborted();
       const env: Record<string, string> = { HOME: "/workspace", LANG: "C.UTF-8" };
@@ -503,7 +556,7 @@ export function createE2BSandbox(
       const r = await run(t, {
         user: SANDBOX_USER,
         cmd: "setsid",
-        args: ["-w", "/bin/sh", "-c", EXEC_WRAPPER, "capybara-exec", ctl, args.command],
+        args: execArgs(ctl, args.command, args.timeoutMs),
         env,
         cwd: args.cwd ?? "/workspace",
         maxOutputBytes: args.maxOutputBytes,

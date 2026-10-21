@@ -51,21 +51,27 @@ node build.mjs <仓库路径>/plugins/sandbox-docker/image/Dockerfile
 
 | 操作 | E2B 调用 |
 |---|---|
-| `create` | 先按元数据 `capybara-sandbox-name=<name>` 列出（`GET /v2/sandboxes?metadata=…&state=running,paused`，分页）并删掉同名旧实例（内核可能在记下句柄前退出），再 `POST /v2/sandboxes`（`templateID`、`metadata`、`timeout`、`autoPause: true`、出站设置）；句柄 id 是 E2B 的沙箱 id |
+| `create` | 先按元数据 `capybara-sandbox-name=<name>` 列出（`GET /v2/sandboxes?metadata=…&state=running,paused`，分页）并删掉同名旧实例（内核可能在记下句柄前退出），再 `POST /v2/sandboxes`（`templateID`、`metadata`、`timeout`、`autoPause: true`、`secure: true`、出站设置）；句柄 id 是 E2B 的沙箱 id |
 | `resume` | `POST /v2/sandboxes/{id}/connect`（暂停的会被恢复，运行中的把超时往后推）；404 → `gone` |
-| `suspend` | `POST /sandboxes/{id}/pause`（文件与内存都保留）；不存在（404）或已暂停（409）也算成功 |
+| `suspend` | `POST /sandboxes/{id}/pause`（文件与内存都保留：后台进程、`/tmp` 在恢复后都还在；Docker 插件的休眠则会结束进程、清空 `/tmp`）；不存在（404）或已暂停（409）也算成功 |
+| `killAll` | connect（暂停的先恢复，内存里的进程也一起回来）后以沙箱用户跑脚本，杀掉经 `exec` 启动、仍在运行的全部命令（按进程组与会话 SIGKILL）；内核接手崩溃的前任持锁方时调用 |
 | `destroy` / `destroyByName` | `DELETE /sandboxes/{id}`（不存在也算成功）；按名字时先按元数据列出 |
-| `exec` / 文件操作 | 先 connect（取 envd 访问令牌；超时至少推到「命令超时 + 120 秒」，不超过 24 小时），再调 envd；connect 返回 E2B 格式的 404（`{code: 404, …}`）→ `SandboxGoneError`；裸 404（代理、错配的 `apiUrl`）、401 / 5xx / 网络错误 → 普通错误。pause / delete 也只把 E2B 格式的 404 当「不存在」 |
+| `exec` / 文件操作 | 先 connect（暂停的会被恢复，即契约的「自动启动」；取 envd 访问令牌——**拿不到令牌就报错，不发出不带令牌的请求**；超时至少推到「命令超时 + 120 秒」，不超过 24 小时），再调 envd；connect 返回 E2B 格式的 404（`{code: 404, …}`）→ `SandboxGoneError`；裸 404（代理、错配的 `apiUrl`）、401 / 5xx / 网络错误 → 普通错误。pause / delete 也只把 E2B 格式的 404 当「不存在」 |
 
 - **超时**：E2B 沙箱到点（`timeoutSeconds`）会被处理；本插件建沙箱时设 `autoPause: true`，到点**暂停**而不是删除，
   所以内核来不及 `suspend`（例如内核整个挂了）时文件也不丢。每次使用都经 connect 往后推（只延长不缩短）。
   空闲休眠、过期销毁由内核的维护任务负责。E2B 的连续运行上限（Pro 24 小时、Hobby 1 小时）在暂停 / 恢复后重新计算。
+- **Hobby 套餐**：connect / create 的 `timeout` 最多 1 小时，所以部署配置 `timeoutSeconds` 要 ≤ 3600，且单条命令实际
+  最长约 1 小时减 2 分钟——`sandbox_bash` 的 `timeoutSeconds`（上限 `sandbox.limits.maxCommandSeconds`，默认 7200）
+  再大也会在沙箱到点时被暂停打断。用 Hobby 时把 `sandbox.limits.maxCommandSeconds` 调到 3480 以下。
 - 暂停的沙箱 E2B 无限期保留，直到被删除（内核按 `destroyAfterInactiveDays` 删）。
 
 ## exec 与文件
 
 - **exec**：envd 的 `process.Process/Start`（Connect 协议的服务端流），以 `sandbox` 用户运行
-  `setsid -w /bin/sh -c <包装> … /bin/bash -c <命令>`；包装先把会话 id 写到 `/tmp/.capybara-exec-<uuid>.pid`。
+  `setsid -w /bin/sh -c <包装> … timeout -s KILL <超时 + 5 秒> /bin/bash -c <命令>`；包装先把会话 id 写到
+  `/tmp/.capybara-exec-<uuid>.pid`。沙箱里的 `timeout` 是兜底：内核副本崩溃时插件这边的计时没了，断开 envd 的流也不结束
+  进程，暂停再恢复还会把进程带回来；到点它杀掉命令所在的进程组。
   超时或中止时：以沙箱用户跑杀进程脚本，按进程组与会话 `SIGKILL` 命令派生的全部进程（与 Docker 插件相同），
   再用 envd 的 `SendSignal` 按 pid 兜底（只结束会话首进程）；杀完才返回，宽限 3 秒后断开连接（断开连接本身不会
   结束沙箱里的进程）。
@@ -116,6 +122,9 @@ E2B 的出站控制（[文档](https://docs.e2b.dev/sandbox/internet-access)，2
 - 被拒的 TCP 连接在沙箱里可能看起来「连上了」，要看应用层（HTTP 状态、TLS 握手）才知道被拒。
 - `*.example.com` 匹配子域（与 Docker 插件一致，不含 `example.com` 本身）。
 - 自托管 E2B 不支持按域名过滤时设 `domainAllowlist: false`：`allowlist` 退化为 `none` 并打告警（不会悄悄放开）。
+
+**限制只在创建时生效**：`sandbox.limits.egress` / `allowHosts` 写进建沙箱请求，改配置只影响之后新建的沙箱；已有的
+沙箱（含暂停后恢复的）沿用创建时的出站设置，直到被销毁重建。
 
 ## 资源（`limits.cpu` / `memoryMb` / `diskMb`）
 

@@ -137,7 +137,8 @@ export interface EnvdTarget {
   /** envd 基址（不带结尾斜杠）。 */
   url: string;
   sandboxId: string;
-  accessToken?: string | undefined;
+  /** envd 访问令牌（建沙箱时要求 secure；拿不到时提供方拒绝连接，不会发出不带令牌的请求）。 */
+  accessToken: string;
 }
 
 /** envd 的进程事件（Connect JSON：字段按 proto3 JSON 规则，取默认值的字段省略）。 */
@@ -160,7 +161,7 @@ function envdHeaders(t: EnvdTarget, extra: Record<string, string> = {}): Record<
   return {
     "E2b-Sandbox-Id": t.sandboxId,
     "E2b-Sandbox-Port": String(ENVD_PORT),
-    ...(t.accessToken && { "X-Access-Token": t.accessToken }),
+    "X-Access-Token": t.accessToken,
     ...extra,
   };
 }
