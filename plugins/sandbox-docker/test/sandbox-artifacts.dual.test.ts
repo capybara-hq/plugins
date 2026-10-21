@@ -47,8 +47,9 @@ import { eventsOf, PW, waitFor, waitForTerminal } from "../helpers/runs.js";
  * 1. 预签名直传附件（CSV）→ finalize；
  * 2. 带附件发消息，agent 用 `sandbox_bash` 处理 /workspace/attachments 里的附件（首次使用，创建沙箱）；
  * 3. `sandbox_deliver` 交付产物 → `artifact_created` → 下载路由 302 到预签名地址，内容一致；
- * 4. `sandbox_bash` 执行中杀掉执行这次运行的副本 → 存活副本接手运行（结果未知），之后的调用等被杀副本
- *    持有的沙箱锁过期（TTL 60 秒）后复用同一个容器，文件还在、没有「重建」提示；
+ * 4. `sandbox_bash` 执行中（命令比锁的 TTL 长）杀掉执行这次运行的副本 → 存活副本接手运行（结果未知），之后的
+ *    调用等被杀副本持有的沙箱锁过期（TTL 60 秒）后复用同一个容器，文件还在、没有「重建」提示；接手时先杀掉
+ *    被杀副本留在沙箱里的命令（fix wave S2 I2），新命令单独运行；
  * 5. 空闲到期（把 last_used_at 拨回去）后由维护任务休眠 → 状态 suspended、容器已停止 → 下一次调用
  *    透明恢复，文件还在、没有提示，状态回到 running。
  *
@@ -319,8 +320,9 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     expect(await got.text()).toBe(`${TOTAL}\n`);
 
     // ---- 4. sandbox_bash 执行中杀掉执行这次运行的副本，另一个副本续跑 ----
+    // 命令比锁的 TTL（60 秒）长、在默认超时（120 秒）之内：接手时它还在跑，必须由接手方杀掉
     await send(0, convId, "sandbox_bash", {
-      command: "touch /workspace/step4-started && sleep 30 && echo finished",
+      command: "touch /workspace/step4-started && sleep 300 && touch /workspace/step4-finished",
     });
     // 命令确实在容器里跑起来了（沙箱锁在执行副本手里）
     await waitFor(
@@ -363,7 +365,8 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
 
     // 存活副本上的下一次调用：等被杀副本的沙箱锁过期，然后复用同一个容器
     await send(survivor, convId, "sandbox_bash", {
-      command: "cat /workspace/out/summary.txt && ls /workspace",
+      command:
+        "cat /workspace/out/summary.txt && ls /workspace && echo leftover=$(pgrep -fc '^sleep 300' || true)",
     });
     const r4b = await finished(convId, 5, 150_000);
     const reuseMs = Date.now() - killedAt;
@@ -373,6 +376,9 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     expect(r4b.result.content.startsWith(`${TOTAL}\n`)).toBe(true);
     expect(r4b.result.content).toContain("step4-started");
     expect(r4b.result.content).toContain("attachments");
+    // 被杀副本留下的 sleep 300 在接手时已被杀掉：新命令单独运行，旧命令也不会再跑完
+    expect(r4b.result.content).toContain("leftover=0");
+    expect(r4b.result.content).not.toContain("step4-finished");
     // 锁要等到 TTL 过期才能拿到（被杀副本最后一次续租后最多 TTL）
     expect(reuseMs).toBeLessThan(SANDBOX_LOCK_TTL_MS + 30_000);
     const c4 = await containerOf(convId);
