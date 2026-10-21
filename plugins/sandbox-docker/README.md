@@ -1,0 +1,98 @@
+# @capybara-hq/plugin-sandbox-docker
+
+对话沙箱（`sandbox@1`）的 Docker 实现：每个对话一个容器（`cap-<对话 id>`），运行时可选 runc 或 gVisor 的 runsc。
+插件**只经 endpoint 访问 Docker**（`docker/sandbox-proxy` 的 socket 代理），自己不挂 `docker.sock`。
+
+## 部署配置
+
+| 键 | 默认值 | 说明 |
+|---|---|---|
+| `endpoint` | （必填） | socket 代理地址：`tcp://sandbox-proxy:2375` 或 `unix:///path` |
+| `runtime` | `runc` | `runc` 或 `runsc`（runsc 须先在 Docker 守护进程里登记） |
+| `network` | `capybara-sandbox` | 共用的沙箱网络名；不存在时插件按 bridge、`enable_icc=false`（容器互不相通）创建 |
+| `egressProxyImage` | `capybara-sandbox-egress:latest` | 出站代理镜像（`egress-proxy/Dockerfile`） |
+| `volumeDriver` | （不填，用 local） | 工作区卷的驱动；设了就带 `DriverOpts.size=<diskMb>M` |
+
+```bash
+export CAPYBARA_PLUGIN_CONFIG='{"sandbox-docker":{"endpoint":"tcp://127.0.0.1:2375"}}'
+```
+
+部署配置 schema 是 strict：多出的键直接报错。
+
+## 镜像
+
+- 沙箱镜像 `image/Dockerfile`（Docker 插件与 E2B 模板共用）。标签与内核配置 `sandbox.image` 的默认值一致：
+  `docker build -t capybara-sandbox:latest plugins/sandbox-docker/image`。
+  Debian trixie-slim（按摘要固定），带 bash、coreutils、GNU find / grep（内核的 `sandbox_glob` / `sandbox_grep`
+  依赖）、procps、util-linux（`setsid`）、curl、git、jq、python3（含 pip / venv）等；以非 root 用户 `sandbox`
+  （uid 1000）运行，HOME 与工作目录是 `/workspace`。
+- 出站代理镜像 `egress-proxy/Dockerfile`：`docker build -t capybara-sandbox-egress:latest plugins/sandbox-docker/egress-proxy`。
+- 多架构（amd64 + arm64）：`docker buildx build --platform linux/amd64,linux/arm64 -t <仓库>/<名>:<标签> --push <目录>`。
+- 本地开发：`docker compose -f docker/compose.dev.yaml --profile sandbox up -d` 构建两个镜像并起 socket 代理
+  （`127.0.0.1:2375`）。镜像不在本地时插件会尝试拉取一次。
+
+## socket 代理（`docker/sandbox-proxy/haproxy.cfg`）
+
+HAProxy（官方镜像，按摘要固定），只放行插件实际调用的接口（容器 create / inspect / start / stop / kill / remove、
+exec create / start / inspect、卷 create / inspect / remove、网络 create / inspect / remove、镜像 inspect / pull、
+`_ping` / `version`），其余返回 403。代理以 root 运行（读 socket）。
+
+**路径白名单不检查请求体**：能访问代理就能创建任意容器（含特权容器），等同宿主机 root。只让内核访问到它
+（内部网络、不映射到公网），沙箱网络上的容器访问不到它（沙箱不在内核网络上）。
+
+## 生命周期
+
+| 操作 | 做什么 |
+|---|---|
+| `create` | 先删掉同名旧实例（内核可能在记下句柄前退出），再建卷、（allowlist 时）内部网络与出站代理、沙箱容器并启动；句柄 id 就是 name |
+| `suspend` | 停止沙箱容器与出站代理（文件留在卷上） |
+| `resume` | 启动；容器不存在返回 `gone`。allowlist 的出站代理或内部网络丢了按容器标签里记下的白名单重建 |
+| `destroy` / `destroyByName` | 删容器、出站代理、内部网络、两个卷；不存在也算成功 |
+| `exec` | `docker exec`（沙箱用户、bash）；超时或中止时按会话 SIGKILL 命令及其派生的全部进程 |
+| `readFile` / `writeFile` / `stat` | 在容器里以沙箱用户跑 `head` / `stat` 小脚本（权限、符号链接都按沙箱用户解析，不经守护进程以 root 写卷） |
+
+每个对话的资源：容器 `<name>`、出站代理 `<name>-egress`、内部网络 `<name>-net`、卷 `<name>-workspace`
+（`/workspace`）与 `<name>-skills`（`/skills`）。都带标签 `dev.capybara.sandbox=1`、`dev.capybara.sandbox.name=<name>`。
+
+## 隔离与限制
+
+- 非 root（uid 1000）、`CapDrop: ALL`、`no-new-privileges`、根文件系统只读、`Init`（回收僵尸进程）、
+  `PidsLimit` 1024、私有 IPC。
+- cpu → `NanoCpus`；内存 → `Memory`（`MemorySwap` 同值，不用 swap）。
+- `/tmp` 是 tmpfs（`nosuid,nodev`），大小取内存的一半且不超过 `diskMb`，计入内存配额；挂起后清空。
+- `/skills` **只读挂载**；同一个卷另以可写方式挂在 `/opt/capybara/skills`（`/opt/capybara` 归 root、0700，
+  沙箱用户进不去，也无法经符号链接绕进去），插件 `writeFile("/skills/…")` 以容器内 root 经它写入。
+- **磁盘**：根文件系统只读，所有写入都落在工作区卷与 `/tmp`。`--storage-opt size` 只限制容器可写层，
+  对只读根文件系统没有意义，所以不用。工作区卷的大小只在设了 `volumeDriver` 且该驱动支持 `size` 选项时生效；
+  **默认的 local 驱动不限制卷大小**（`diskMb` 不生效），需要硬限制时用支持配额的卷驱动，或在宿主机上
+  给 Docker 卷目录配 XFS project quota 等。
+
+## 出站（`limits.egress`）
+
+- `none`：`NetworkMode: none`，只有回环。
+- `open`：接到共用网络 `network`（普通 bridge）。**能访问宿主机与内网**（含云元数据地址），只在可信环境用。
+- `allowlist`（默认）：沙箱只接一个 `Internal` 的内部网络，上面只有它的出站代理；代理另一只脚接共用网络。
+  `HTTP_PROXY` / `HTTPS_PROXY`（及小写）已设好，`NO_PROXY` 为回环。代理（`egress-proxy/proxy.mjs`，无依赖的 Node）：
+  - 主机名精确匹配 `allowHosts`，或 `*.example.com` 匹配任意子域（**不含** `example.com` 本身）；IP 字面量永远不放行；
+  - 先解析，**解析出的每个 IP** 都不能是私有、回环、链路本地（含 169.254.169.254）、CGNAT（100.64/10）、ULA
+    （fc00::/7）、未指定、组播、保留或文档地址（IPv4 映射 / NAT64 / 6to4 按内嵌 IPv4 判断），否则 403——挡住
+    DNS 重绑定（如 `10.0.0.1.nip.io`）；然后直连检查过的那个 IP，不再二次解析；
+  - HTTPS 走 CONNECT，HTTP 走绝对 URL 转发；不走代理的直连不通（内部网络没有出口）。
+  - 内部网络没有默认路由，Docker 内置 DNS 也不替它解析外部域名（Docker 29 上验证）；不经 HTTP 代理的协议
+    （ssh、git://）不可用。
+  - 已知局限：旧版 Docker 的 Linux 宿主机上，内部网络里的容器可能连得到宿主机在该网桥地址上监听的服务；
+    宿主机上的服务不要监听 0.0.0.0，或用防火墙挡掉来自沙箱网段的入站。
+
+## 仅测试的选项
+
+`createDockerSandbox(config, testOptions)` 的第二个参数只有直接调用它的代码能传，插件配置设不了：
+
+- `labels`：给所有资源额外打标签（测试按标签清理）；
+- `egressTestHosts`：出站代理把这些主机名固定到给定 IP，并豁免私有地址检查（仍须在白名单里），
+  用于把测试里的本地 HTTP 服务当作放行目标。经代理容器的环境变量 `CAPYBARA_EGRESS_TEST_HOSTS` 传入。
+
+## 测试
+
+`test/egress-proxy.test.ts` 不需要 Docker；`test/sandbox-docker.test.ts` 需要 Docker（没有时整组跳过），
+构建唯一标签的测试镜像、起 socket 代理，结束时按标签清理；runsc 用例只在守护进程登记了 runsc 时运行。
+内核的冒烟用例在 `packages/kernel/test/tools/sandbox/sandbox-docker.smoke.test.ts`。
