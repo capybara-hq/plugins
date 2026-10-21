@@ -91,6 +91,9 @@ HAProxy（官方镜像，按摘要固定），代理以 root 运行（读 socket
   **默认的 local 驱动不限制卷大小**（`diskMb` 不生效），需要硬限制时用支持配额的卷驱动，或在宿主机上
   给 Docker 卷目录配 XFS project quota 等。
 
+**命令时限**：单条命令最长 `sandbox.limits.maxCommandSeconds`，同时不超过所属运行剩下的时间（`runtime.maxRunSeconds`，
+默认 900 秒，Ruling M20）。要跑长命令把 `runtime.maxRunSeconds` 调到不小于 `maxCommandSeconds`。
+
 **限制只在创建时生效**：`sandbox.limits` 的 `cpu` / `memoryMb` / `diskMb` / `egress` / `allowHosts` 写进容器、
 卷与出站代理（白名单记在容器标签里），改配置只影响之后新建的沙箱；已有的沙箱（含休眠后恢复的）沿用创建时的
 限制，直到被销毁重建（不活跃销毁，或删掉 `cap-<对话>` 系列资源）。
@@ -113,6 +116,15 @@ HAProxy（官方镜像，按摘要固定），代理以 root 运行（读 socket
     （ssh、git://）不可用。
   - 已知局限：旧版 Docker 的 Linux 宿主机上，内部网络里的容器可能连得到宿主机在该网桥地址上监听的服务；
     宿主机上的服务不要监听 0.0.0.0，或用防火墙挡掉来自沙箱网段的入站。
+
+**白名单防的是什么、不防什么**：它挡住内网、宿主机与云元数据地址，也挡住白名单之外的主机；但**挡不住把数据发到
+白名单里的主机**——`git push` 到 github.com、往 npm / PyPI 发包、往 raw / release 地址之外的 GitHub 接口上传，
+都在白名单之内。代理只看主机名与目的 IP，看不到请求内容。对话里的附件、agent 读到的数据都可能这样流出。
+处理敏感数据的组织：在组织设置里把 `sandboxToolPolicy` 设为 `ask`（执行、写入、交付需要审批），和 / 或把沙箱网络
+`sandboxEgress` 设为 `none`；部署层面也可以收窄 `sandbox.limits.allowHosts`。
+
+**组织级出站**（组织设置 `sandboxEgress`，Ruling M19）：组织可以换一份白名单（替换部署的清单）或断网，内核在
+`create` 时把组织实际生效的 `egress` / `allowHosts` 传给插件；组织不能设 `open`，部署为 `none` 时组织也只能是 `none`。
 
 ## 仅测试的选项
 

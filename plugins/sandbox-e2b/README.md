@@ -122,9 +122,15 @@ E2B 的出站控制（[文档](https://docs.e2b.dev/sandbox/internet-access)，2
 - 被拒的 TCP 连接在沙箱里可能看起来「连上了」，要看应用层（HTTP 状态、TLS 握手）才知道被拒。
 - `*.example.com` 匹配子域（与 Docker 插件一致，不含 `example.com` 本身）。
 - 自托管 E2B 不支持按域名过滤时设 `domainAllowlist: false`：`allowlist` 退化为 `none` 并打告警（不会悄悄放开）。
+- **白名单挡不住发往白名单主机的数据**（Docker 版同样如此）：`git push` 到 github.com、往 npm / PyPI 发包都在白名单
+  之内，对话里的附件与 agent 读到的数据可能这样流出。处理敏感数据的组织在组织设置里把 `sandboxToolPolicy` 设为
+  `ask`，和 / 或把沙箱网络 `sandboxEgress` 设为 `none`（组织级出站，Ruling M19：组织可替换白名单或断网，不能设 `open`）。
 
 **限制只在创建时生效**：`sandbox.limits.egress` / `allowHosts` 写进建沙箱请求，改配置只影响之后新建的沙箱；已有的
 沙箱（含暂停后恢复的）沿用创建时的出站设置，直到被销毁重建。
+
+**命令时限**：单条命令最长 `sandbox.limits.maxCommandSeconds`，同时不超过所属运行剩下的时间（`runtime.maxRunSeconds`，
+默认 900 秒，Ruling M20）；长命令要把 `runtime.maxRunSeconds` 调到不小于 `maxCommandSeconds`。
 
 ## 资源（`limits.cpu` / `memoryMb` / `diskMb`）
 
