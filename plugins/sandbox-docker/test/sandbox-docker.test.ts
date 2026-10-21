@@ -200,6 +200,19 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       expect(r.exitCode).toBe(3);
       expect(r.stdout).toBe("out\n");
       expect(r.stderr).toBe("err\n");
+      // 命令与输出里的中文照常通过（exec 只拒绝键名里的非 ASCII）
+      expect(
+        (await sh(h.id, "echo \u4e2d\u6587 > /tmp/\u6587.txt; cat /tmp/\u6587.txt")).stdout,
+      ).toBe("\u4e2d\u6587\n");
+      // 建容器的值里有非 ASCII：插件自己先拒绝（不转义）
+      await expect(
+        sbx.create({
+          name: sbxName(),
+          image: "capybara-sandbox:\u955c\u50cf",
+          limits: limits("none"),
+          signal: sig(),
+        }),
+      ).rejects.toThrow(/non-ASCII/);
       const e = await sbx.exec(h, {
         command: 'echo "$FOO"; pwd',
         cwd: "/tmp",
@@ -590,6 +603,39 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       expect(
         await post(`/containers/cap-${RUN}-none/exec`, { Cmd: ["id"], Privileged: true }),
       ).toBe(403);
+    });
+
+    it("refuses non-ASCII keys that Go case-folds onto forbidden ones (ſ U+017F, K U+212A)", async () => {
+      // Go 的 encoding/json 按 Unicode 简单大小写折叠匹配键名："Bindſ" → Binds，"Mas\u212AedPaths" → MaskedPaths
+      expect(
+        await create('{"Image":"x","HostConfig":{"NetworkMode":"none","Bind\u017f":["/:/host"]}}'),
+      ).toBe(403);
+      expect(
+        await create('{"Image":"x","HostConfig":{"NetworkMode":"none","Mas\u212aedPaths":[]}}'),
+      ).toBe(403);
+      expect(
+        await create('{"Image":"x","HostConfig":{"NetworkMode":"none","Device\u017f":[]}}'),
+      ).toBe(403);
+    });
+
+    it("refuses non-ASCII values in create bodies", async () => {
+      expect(await create({ ...base, Env: ["X=\u4e2d\u6587"] })).toBe(403);
+      expect(await post("/volumes/create", { Name: `cap-${RUN}-v`, Labels: { a: "\u00e9" } })).toBe(
+        403,
+      );
+      expect(
+        await post("/networks/create", { Name: `cap-${RUN}-n`, Labels: { a: "\u00e9" } }),
+      ).toBe(403);
+    });
+
+    it("exec: refuses non-ASCII keys but lets a command with Chinese text through", async () => {
+      expect(await post(`/containers/cap-${RUN}-none/exec`, '{"Cmd":["id"],"U\u017fer":"0"}')).toBe(
+        403,
+      );
+      // 通过代理检查，由 Docker 回答（容器不存在 → 404）
+      expect(
+        await post(`/containers/cap-${RUN}-none/exec`, { Cmd: ["echo", "\u4e2d\u6587.txt"] }),
+      ).toBe(404);
     });
 
     it("refuses bind-like volumes and non-bridge or non-cap networks", async () => {

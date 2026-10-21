@@ -45,8 +45,11 @@ HAProxy（官方镜像，按摘要固定），代理以 root 运行（读 socket
    一律拒绝，不能靠超长请求体绕过）。拒绝（不区分大小写）：特权、`Binds` / `CapAdd` / `Devices` /
    `VolumesFrom` / `CgroupParent` / `Sysctls` / `Annotations` / `MaskedPaths` / `PortBindings` 等键、`volume` /
    `tmpfs` 以外的挂载类型、host / container 命名空间模式、`no-new-privileges` 以外的 `SecurityOpt`、runc / runsc
-   以外的运行时、`none` / `cap…` 以外的网络、任何 `\u` 转义（exec 只拒绝键名里的）、会绕过「必须是某值」检查的重复键；
-   卷不能带 local 驱动的 `device` / `o` / `type`（可做成 bind），网络只能是 bridge。正则不是完整的 JSON 解析，只作兜底。
+   以外的运行时、`none` / `cap…` 以外的网络、任何 `\u` 转义与非 ASCII 字节（Go 的 JSON 解码按 Unicode 折叠键名，
+   `"Bindſ"` 会被当成 `Binds`；exec 的命令可以有中文，只拒绝键名里的 `\u` 与非 ASCII）、会绕过「必须是某值」检查的
+   重复键；卷不能带 local 驱动的 `device` / `o` / `type`（可做成 bind），网络只能是 bridge。插件自己生成的建容器 / 卷 /
+   网络请求体全是 ASCII，值里出现非 ASCII（镜像名、标签、白名单主机名须用 punycode）在插件里就报英文错误。
+   **这只是正则兜底，不是 JSON 解析；主要防线是网络位置**（见下面的部署要求）。
 
 **部署要求**：能访问代理就几乎能控制 Docker（第二道只是兜底）。**绝不要把它发布到宿主机的任何地址上**——包括
 `127.0.0.1`：Docker Desktop 上普通 bridge 网络里的容器经 `host.docker.internal` 就能访问宿主机回环；Linux 上

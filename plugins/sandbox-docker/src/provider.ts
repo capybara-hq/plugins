@@ -14,6 +14,7 @@ import {
   createDockerClient,
   type DockerClient,
   isStatus,
+  type RequestOpts,
   StreamDemuxer,
 } from "./docker-api.js";
 
@@ -179,6 +180,21 @@ export function createDockerSandbox(
 
   // ---------- 资源 ----------
 
+  /**
+   * 建容器 / 卷 / 网络。socket 代理拒绝请求体里的任何非 ASCII 字节（Go 的 JSON 解码按 Unicode 折叠键名大小写，
+   * `"Bindſ"` 会被当成 `Binds`），所以这里先把关：值里出现非 ASCII 直接报错，不转义（`\u` 同样被拒）。
+   */
+  const postCreate = async (path: string, opts: RequestOpts) => {
+    const text = JSON.stringify(opts.body ?? null);
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: 正是要按 ASCII 范围判断
+    if (/[^\x00-\x7f]/.test(text)) {
+      throw new Error(
+        `sandbox-docker: ${path} request contains non-ASCII characters (image, names, labels, environment and allowHosts must be ASCII; use punycode for hostnames)`,
+      );
+    }
+    return api.json("POST", path, opts);
+  };
+
   const ignore =
     (...status: number[]) =>
     (e: unknown) => {
@@ -226,7 +242,7 @@ export function createDockerSandbox(
     body: Record<string, unknown>,
     signal: AbortSignal,
   ) => {
-    const go = () => api.json("POST", "/containers/create", { query: { name }, body, signal });
+    const go = () => postCreate("/containers/create", { query: { name }, body, signal });
     try {
       await go();
     } catch (e) {
@@ -244,18 +260,16 @@ export function createDockerSandbox(
       await api.json("GET", `/networks/${enc(cfg.network)}`, { signal });
     } catch (e) {
       if (!isStatus(e, 404)) throw e;
-      await api
-        .json("POST", "/networks/create", {
-          body: {
-            Name: cfg.network,
-            Driver: "bridge",
-            // 共用网络上的容器（open 的沙箱、各出站代理）互相不通
-            Options: { "com.docker.network.bridge.enable_icc": "false" },
-            Labels: { ...test.labels, [LABEL]: "1", [LABEL_ROLE]: "shared-network" },
-          },
-          signal,
-        })
-        .catch(ignore(409));
+      await postCreate("/networks/create", {
+        body: {
+          Name: cfg.network,
+          Driver: "bridge",
+          // 共用网络上的容器（open 的沙箱、各出站代理）互相不通
+          Options: { "com.docker.network.bridge.enable_icc": "false" },
+          Labels: { ...test.labels, [LABEL]: "1", [LABEL_ROLE]: "shared-network" },
+        },
+        signal,
+      }).catch(ignore(409));
     }
   };
 
@@ -265,17 +279,15 @@ export function createDockerSandbox(
       await api.json("GET", `/networks/${enc(n.network)}`, { signal });
     } catch (e) {
       if (!isStatus(e, 404)) throw e;
-      await api
-        .json("POST", "/networks/create", {
-          body: {
-            Name: n.network,
-            Driver: "bridge",
-            Internal: true,
-            Labels: baseLabels(name, "network"),
-          },
-          signal,
-        })
-        .catch(ignore(409));
+      await postCreate("/networks/create", {
+        body: {
+          Name: n.network,
+          Driver: "bridge",
+          Internal: true,
+          Labels: baseLabels(name, "network"),
+        },
+        signal,
+      }).catch(ignore(409));
     }
   };
 
@@ -559,7 +571,7 @@ export function createDockerSandbox(
       // 同名的旧实例（内核在记下句柄前退出等）：整个换掉
       await destroyByName(name, signal);
       try {
-        await api.json("POST", "/volumes/create", {
+        await postCreate("/volumes/create", {
           body: {
             Name: n.workspace,
             Labels: baseLabels(name, "workspace"),
@@ -570,7 +582,7 @@ export function createDockerSandbox(
           },
           signal,
         });
-        await api.json("POST", "/volumes/create", {
+        await postCreate("/volumes/create", {
           body: { Name: n.skills, Labels: baseLabels(name, "skills") },
           signal,
         });
