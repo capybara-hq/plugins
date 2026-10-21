@@ -269,6 +269,40 @@ describe("S3 ObjectStore（SeaweedFS）", () => {
     expect(await store.head("t8/b.txt")).toBeNull();
   });
 
+  it("presignPut：篡改 Policy（放宽大小上限）或 Signature 都被存储拒绝", async () => {
+    const u = await store.presignPut("t9/p.txt", {
+      contentType: "text/plain",
+      maxSize: 4,
+      ttlSeconds: 60,
+    });
+    const fields = u.fields ?? {};
+    const policy = JSON.parse(Buffer.from(fields.Policy ?? "", "base64").toString("utf8")) as {
+      conditions: unknown[];
+    };
+    // 把 content-length-range 放宽到 1 MiB、沿用原签名：签名对不上
+    const widened = {
+      ...policy,
+      conditions: policy.conditions.map((c) =>
+        Array.isArray(c) && c[0] === "content-length-range" ? [c[0], 0, 1_048_576] : c,
+      ),
+    };
+    const badPolicy = {
+      ...u,
+      fields: { ...fields, Policy: Buffer.from(JSON.stringify(widened)).toString("base64") },
+    };
+    expect(
+      (await upload(badPolicy, bytes("too long"), "text/plain")).status,
+    ).toBeGreaterThanOrEqual(400);
+    const sigKey = Object.keys(fields).find((k) => k.toLowerCase() === "x-amz-signature") as string;
+    const sig = fields[sigKey] as string;
+    const flipped = `${sig.slice(0, -1)}${sig.endsWith("0") ? "1" : "0"}`;
+    const badSig = { ...u, fields: { ...fields, [sigKey]: flipped } };
+    expect((await upload(badSig, bytes("ok"), "text/plain")).status).toBeGreaterThanOrEqual(400);
+    expect(await store.head("t9/p.txt")).toBeNull();
+    // 原样的表单可以上传（证明上面的失败来自篡改）
+    expect((await upload(u, bytes("ok"), "text/plain")).status).toBeLessThan(300);
+  });
+
   it("presignPut：拒绝含模板变量起始符的键（如 filename 变量，存储端会替换成上传方给的文件名）", async () => {
     for (const key of [`t8/${DB}filename}`, `t8/${DB}x`]) {
       await expect(
