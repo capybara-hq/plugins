@@ -150,8 +150,6 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
         runtime: { jobLockMs: 1000, stalledIntervalMs: 500 },
         sandbox: {
           image: images.sandboxImage,
-          // 被杀副本持有的沙箱锁最多 60 秒后过期：存活副本的调用要能等过去
-          lockWaitSeconds: 90,
           limits: { memoryMb: 512, egress: "none", suspendAfterIdleMinutes: 1 },
         },
       },
