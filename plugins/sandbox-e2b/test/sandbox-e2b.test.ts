@@ -49,13 +49,17 @@ const waitFor = async (cond: () => boolean, ms = 5000) => {
 describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
   let fake: FakeE2BServer;
   let warns: string[];
+  const warnFields: (Record<string, unknown> | undefined)[] = [];
   let sbx: SandboxProvider;
   let cfg: E2BSandboxConfig;
 
   const make = (over: Partial<E2BSandboxConfig> = {}) => {
     const log: Logger = {
       info: () => undefined,
-      warn: (m) => warns.push(m),
+      warn: (m, f) => {
+        warns.push(m);
+        warnFields.push(f);
+      },
       error: () => undefined,
     };
     return createE2BSandbox({ ...cfg, ...over }, { log }, { envdUrl: fake.url });
@@ -451,6 +455,44 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       expect(warns.join("\n")).toMatch(/rebooting/);
       await waitFor(() => fake.running(h.id).length === 0);
       expect((await run("echo ok")).stdout).toBe("ok\n");
+    });
+
+    it("reboot failure during the fallback is logged and the exec result is still returned", async () => {
+      for (const failing of [/\/pause$/, /\/connect$/]) {
+        warns = [];
+        fake.failNext(
+          { path: /^\/process\.Process\/Start$/, when: (c) => argsOf(c).includes("capybara-kill") },
+          503,
+          "envd busy",
+        );
+        // exec 自己的 connect 先过，之后的 pause / connect（重启）失败
+        let skip = failing.source.includes("connect") ? 1 : 0;
+        fake.failNext(
+          {
+            path: failing,
+            when: () => {
+              if (skip > 0) {
+                skip--;
+                return false;
+              }
+              return true;
+            },
+          },
+          500,
+          "control plane down",
+        );
+        const r = await run("echo go; sleep 2", { timeoutMs: 300 });
+        expect(r).toMatchObject({ timedOut: true, exitCode: null, stdout: "go\n" });
+        const log = warns.join("\n");
+        expect(log).toMatch(/reboot failed/);
+        expect(log).not.toContain(fake.apiKey);
+        expect(log).not.toContain(fake.sandboxes.get(h.id)?.envdAccessToken ?? "-");
+        expect(warnFields.at(-1)).toMatchObject({
+          sandboxId: h.id,
+          err: expect.stringMatching(/500/),
+        });
+        await waitFor(() => fake.running(h.id).length === 0);
+      }
     });
 
     it("output stream still open after the kill grace period → reboots the sandbox", async () => {

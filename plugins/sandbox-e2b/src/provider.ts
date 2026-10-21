@@ -510,7 +510,17 @@ export function createE2BSandbox(
         timeoutMs: args.timeoutMs,
         signal: args.signal,
         kill: killer(t, ctl),
-        recover: () => reboot(h.id),
+        // 重启也失败时只记日志（错误信息来自 API 正文与状态码，不含 apiKey 与访问令牌），照常返回本次结果
+        recover: () =>
+          reboot(h.id).catch((e: unknown) => {
+            deps.log.warn(
+              "sandbox-e2b: sandbox reboot failed; the stuck command may still be running",
+              {
+                sandboxId: h.id,
+                err: (e instanceof Error ? e.message : String(e)).slice(0, 500),
+              },
+            );
+          }),
       });
       return {
         exitCode: r.exitCode,

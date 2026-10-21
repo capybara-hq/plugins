@@ -19,7 +19,8 @@ import { createE2BSandbox, DeploymentConfig } from "../../src/index.js";
  *
  * 只能在真实 E2B 上确认的假设（第一次跑时逐条核对，失败时先看这里）：
  * - [ ] 模板里有 uid 1000 的 `sandbox` 用户（E2B 自带的是 `user`），envd 接受 `Authorization: Basic sandbox:`；
- * - [ ] `/opt/capybara` 归 root、0700，`/skills` 归 root、0755（`fromDockerfile` 后属主与权限保留）；
+ * - [ ] `/opt/capybara` 归 root、0700（`fromDockerfile` 后属主与权限保留）；
+ * - [ ] `/skills` 归 root、0755（同上）；
  * - [ ] 镜像里有 `runuser` / `setsid`（util-linux）、`pkill` / `pgrep`（procps），root 的 PATH 能找到 runuser；
  * - [ ] envd 接受 `Basic root:` 跑 Start、`username=root` 上传；
  * - [ ] create / connect 总是返回 `envdAccessToken`（secure 沙箱）；
