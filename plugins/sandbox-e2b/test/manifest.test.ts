@@ -1,7 +1,7 @@
 import { SANDBOX_CAPABILITY } from "@capybara-hq/plugin-sdk";
 import { assertPluginSecretsReachable, pluginDeploymentSecretValues } from "@capybara-hq/testing";
 import { describe, expect, it } from "vitest";
-import plugin, { DeploymentConfig, decodeOutput } from "../src/index.js";
+import plugin, { DeploymentConfig, decodeOutput, exitCodeOf } from "../src/index.js";
 
 describe("decodeOutput", () => {
   const zh = Buffer.from("a中", "utf8"); // 61 e4 b8 ad
@@ -11,6 +11,20 @@ describe("decodeOutput", () => {
     expect(decodeOutput(zh, true)).toBe("a中");
     expect(decodeOutput(Buffer.from("abc"), true)).toBe("abc");
     expect(decodeOutput(zh.subarray(0, 3), false)).toBe("a�");
+  });
+});
+
+describe("exitCodeOf", () => {
+  it("maps envd end events", () => {
+    expect(exitCodeOf({ exited: true, exitCode: 3, status: "exit status 3" })).toBe(3);
+    expect(exitCodeOf({ exited: true, status: "exit status 0" })).toBe(0);
+    expect(exitCodeOf({ exitCode: -1, status: "signal: killed" })).toBe(137);
+    expect(exitCodeOf({ exitCode: -1, status: "signal: segmentation fault (core dumped)" })).toBe(
+      139,
+    );
+    expect(exitCodeOf({ exitCode: -1, status: "signal: terminated" })).toBe(143);
+    expect(exitCodeOf({ exitCode: -1, status: "signal: something new" })).toBeNull();
+    expect(exitCodeOf({})).toBeNull();
   });
 });
 

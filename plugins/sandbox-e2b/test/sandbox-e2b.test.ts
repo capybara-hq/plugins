@@ -36,6 +36,8 @@ const limits = (
 const procOf = (c: FakeE2BCall | undefined) =>
   (c?.body as { process?: { cwd?: string; args?: string[] } } | undefined)?.process;
 
+const argsOf = (c: FakeE2BCall) => (procOf(c)?.args ?? []).join(" ");
+
 const waitFor = async (cond: () => boolean, ms = 5000) => {
   const end = Date.now() + ms;
   while (!cond()) {
@@ -191,6 +193,38 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       await expect(
         bad.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() }),
       ).rejects.toThrow(/401/);
+    });
+
+    it("a bare 404 (not E2B's error shape) is a plain error, never gone", async () => {
+      const h = await sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
+      fake.failNext({ path: /\/connect$/ }, 404, "404 page not found", { raw: true });
+      await expect(sbx.resume(h, sig())).rejects.toThrow(/404/);
+      fake.failNext({ path: /\/connect$/ }, 404, "Not Found", { raw: true });
+      const e = await sbx.stat(h, "/workspace", sig()).catch((x: unknown) => x);
+      expect(e).toBeInstanceOf(Error);
+      expect(isSandboxGoneError(e)).toBe(false);
+      fake.failNext({ method: "DELETE", path: /^\/sandboxes\// }, 404, "nope", { raw: true });
+      await expect(sbx.destroy(h, sig())).rejects.toThrow(/404/);
+      fake.failNext({ path: /\/pause$/ }, 404, "nope", { raw: true });
+      await expect(sbx.suspend(h, sig())).rejects.toThrow(/404/);
+      // E2B 格式的 404 才是 gone
+      fake.failNext({ path: /\/connect$/ }, 404, "sandbox not found");
+      expect(await sbx.resume(h, sig())).toBe("gone");
+    });
+
+    it("rejects an invalid sandbox domain returned by the API", async () => {
+      const p = await startFakeE2B({ apiKey: fake.apiKey, domain: "evil.com/x?" });
+      try {
+        const s2 = createE2BSandbox(
+          { ...cfg, apiUrl: p.url },
+          { log: console },
+          { envdUrl: p.url },
+        );
+        const h = await s2.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
+        await expect(s2.stat(h, "/workspace", sig())).rejects.toThrow(/invalid sandbox domain/);
+      } finally {
+        await p.close();
+      }
     });
 
     it("every method rejects immediately when already aborted", async () => {
@@ -399,6 +433,47 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       const r = await p;
       expect(r).toMatchObject({ exitCode: null, timedOut: false, stdout: "begin\n" });
       await waitFor(() => pids.every((pid) => !fake.alive(pid)));
+    });
+
+    it("kill script cannot run → reboots the sandbox (pause + connect memory:false), all processes die", async () => {
+      const r0 = fake.reboots.get(h.id) ?? 0;
+      fake.failNext(
+        { path: /^\/process\.Process\/Start$/, when: (c) => argsOf(c).includes("capybara-kill") },
+        503,
+        "envd busy",
+      );
+      const started = Date.now();
+      const r = await run("echo go; sleep 30 & sleep 30", { timeoutMs: 500 });
+      expect(r).toMatchObject({ timedOut: true, exitCode: null, stdout: "go\n" });
+      expect(Date.now() - started).toBeLessThan(8000);
+      expect(fake.reboots.get(h.id)).toBe(r0 + 1);
+      expect(fake.sandboxes.get(h.id)?.state).toBe("running");
+      expect(warns.join("\n")).toMatch(/rebooting/);
+      await waitFor(() => fake.running(h.id).length === 0);
+      expect((await run("echo ok")).stdout).toBe("ok\n");
+    });
+
+    it("output stream still open after the kill grace period → reboots the sandbox", async () => {
+      const r0 = fake.reboots.get(h.id) ?? 0;
+      const pidFile = fake.hostPath(h.id, "/tmp/escaped.pid");
+      // 逃出会话的子进程（杀进程脚本按会话杀不到它）拿着 stdout 不放
+      const escaped = `perl -MPOSIX -e 'POSIX::setsid(); open(my $f, ">", $ARGV[0]); print $f $$; close $f; exec "sleep", "20"' ${pidFile} &`;
+      try {
+        const r = await run(`${escaped} sleep 20`, { timeoutMs: 1500 });
+        expect(r.timedOut).toBe(true);
+        expect(fake.reboots.get(h.id)).toBe(r0 + 1);
+      } finally {
+        try {
+          process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL");
+        } catch {
+          // 已结束
+        }
+      }
+    }, 15_000);
+
+    it("a command killed by a signal it did not get from us reports 128 + signal", async () => {
+      const r = await run("echo x; kill -9 $PPID; sleep 1");
+      expect(r).toMatchObject({ exitCode: 137, timedOut: false });
     });
 
     it("gone sandbox → SandboxGoneError; envd 502 on a live sandbox is a plain error", async () => {

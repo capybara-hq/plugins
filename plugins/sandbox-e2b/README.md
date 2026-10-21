@@ -55,7 +55,7 @@ node build.mjs <仓库路径>/plugins/sandbox-docker/image/Dockerfile
 | `resume` | `POST /v2/sandboxes/{id}/connect`（暂停的会被恢复，运行中的把超时往后推）；404 → `gone` |
 | `suspend` | `POST /sandboxes/{id}/pause`（文件与内存都保留）；不存在（404）或已暂停（409）也算成功 |
 | `destroy` / `destroyByName` | `DELETE /sandboxes/{id}`（不存在也算成功）；按名字时先按元数据列出 |
-| `exec` / 文件操作 | 先 connect（取 envd 访问令牌；超时至少推到「命令超时 + 120 秒」，不超过 24 小时），再调 envd；connect 404 → `SandboxGoneError`，401 / 5xx / 网络错误 → 普通错误 |
+| `exec` / 文件操作 | 先 connect（取 envd 访问令牌；超时至少推到「命令超时 + 120 秒」，不超过 24 小时），再调 envd；connect 返回 E2B 格式的 404（`{code: 404, …}`）→ `SandboxGoneError`；裸 404（代理、错配的 `apiUrl`）、401 / 5xx / 网络错误 → 普通错误。pause / delete 也只把 E2B 格式的 404 当「不存在」 |
 
 - **超时**：E2B 沙箱到点（`timeoutSeconds`）会被处理；本插件建沙箱时设 `autoPause: true`，到点**暂停**而不是删除，
   所以内核来不及 `suspend`（例如内核整个挂了）时文件也不丢。每次使用都经 connect 往后推（只延长不缩短）。
@@ -67,7 +67,17 @@ node build.mjs <仓库路径>/plugins/sandbox-docker/image/Dockerfile
 - **exec**：envd 的 `process.Process/Start`（Connect 协议的服务端流），以 `sandbox` 用户运行
   `setsid -w /bin/sh -c <包装> … /bin/bash -c <命令>`；包装先把会话 id 写到 `/tmp/.capybara-exec-<uuid>.pid`。
   超时或中止时：以沙箱用户跑杀进程脚本，按进程组与会话 `SIGKILL` 命令派生的全部进程（与 Docker 插件相同），
-  再用 envd 的 `SendSignal` 按 pid 兜底；杀完才返回，宽限 3 秒后断开连接（断开连接本身不会结束沙箱里的进程）。
+  再用 envd 的 `SendSignal` 按 pid 兜底（只结束会话首进程）；杀完才返回，宽限 3 秒后断开连接（断开连接本身不会
+  结束沙箱里的进程）。
+  **最后手段：重启沙箱**。杀进程脚本没跑完（起不来——如进程数耗尽、超时、连不上），或杀完 3 秒后输出流仍未结束
+  （有进程逃出了会话还拿着输出）时：先 pause，再 `POST /v2/sandboxes/{id}/connect` `{timeout, memory: false}`
+  （即 SDK `e2b@2.58.0` 的 `Sandbox.connect(id, { onResume: "reboot" })`）从磁盘状态冷启动——内存里的进程全部结束，
+  `/workspace` 等文件保留，暂停前没刷盘的写入可能丢失，`/tmp` 里的东西保留与否取决于它是否在磁盘上。打一条 warn 日志；
+  调用照常返回 `timedOut: true` 或中止结果。SDK 注明：要求控制面支持 connect 的 `memory` 字段（E2B 云；自托管须是
+  2026-08-20 之后的 `e2b-dev/runtime`），旧控制面会**忽略该字段**并恢复内存快照（进程仍在），未启用「只恢复文件系统」
+  的环境会拒绝该请求；两种情况下兜底都失效（只记日志）。
+  命令被不是我们发的信号结束（envd 结束事件 `exited: false`，如 OOM）：按 shell 惯例返回 `128 + 信号编号`
+  （认得出 Go 的信号名时），认不出时返回 `exitCode: null, timedOut: false`（内核提示「命令没跑完、结果可能不完整」）。
   超时 resolve `timedOut: true, exitCode: null`；启动后被中止 resolve `exitCode: null, timedOut: false`（带已收集
   输出）；调用时已中止立即 reject。stdout + stderr 合计按 `maxOutputBytes` 截断并置 `truncated`，截断时退回到完整的
   UTF-8 字符边界。envd 每 50 秒发一次保活事件，长时间无输出的命令不会被中间代理断开。
@@ -95,7 +105,14 @@ E2B 的出站控制（[文档](https://docs.e2b.dev/sandbox/internet-access)，2
 - 按域名过滤只作用于 **80 端口的 HTTP（看 Host 头）与 443 端口的 TLS（看 SNI）**；其他端口只按 IP / CIDR 过滤，
   白名单里只有域名时一律不通。UDP（QUIC / HTTP3）不支持按域名过滤。
 - 用了域名白名单时 E2B 自动放行到 `8.8.8.8` 的 DNS（53 端口），DNS 查询本身可被用来外传少量数据。
-- 过滤看的是沙箱自报的 Host / SNI：同一 CDN / 对象存储上的其他站点可能一并被放行（E2B 文档也这么提示）。
+- **E2B 只看 Host 头 / SNI，文档没有说会核对目的 IP**：沙箱可以连任意 IP 的 80 / 443 端口、把 Host / SNI 写成白名单里的
+  域名（如 `curl --resolve pypi.org:443:<任意 IP> https://pypi.org`），从而**可能到达白名单之外的任意地址**（含内网、云
+  元数据地址，取决于 E2B 网络本身放不放行）。Docker 插件的出站代理会解析域名并检查每个目的 IP，E2B 版做不到这一点。
+- 同一 CDN / 对象存储上的其他站点也可能一并被放行（E2B 文档也这么提示）。
+- **自托管 E2B 的网络隔离由运维负责**：沙箱节点能访问到的内网服务、云元数据地址（169.254.169.254 等）要在 E2B 的节点 /
+  网络层挡掉，本插件无法替你做。
+- 以后若要「解析后检查目的 IP」的出站，可走 E2B 的 `network.egressProxy`（SOCKS5，见 SDK 2.58 `buildEgressProxyBody`）：
+  把沙箱出站全部转到我们自己的代理（如 Docker 插件出站代理的同款检查），本插件目前未用。
 - 被拒的 TCP 连接在沙箱里可能看起来「连上了」，要看应用层（HTTP 状态、TLS 握手）才知道被拒。
 - `*.example.com` 匹配子域（与 Docker 插件一致，不含 `example.com` 本身）。
 - 自托管 E2B 不支持按域名过滤时设 `domainAllowlist: false`：`allowlist` 退化为 `none` 并打告警（不会悄悄放开）。
@@ -131,7 +148,8 @@ E2B 的套餐 / 模板决定。所以 `limits` 的 cpu / memoryMb / diskMb 本�
 
 - `test/sandbox-e2b.test.ts`：对着 `@capybara-hq/testing` 的 `startFakeE2B`（控制面 API + envd，Connect 流协议，
   命令在本机临时目录里真的跑），覆盖各方法、错误映射（404 → gone，401 / 5xx → 普通错误）、中止、超时杀进程、
-  文件读写与 `/skills` 的写法、出站映射。
+  文件读写与 `/skills` 的写法、出站映射、杀进程失败 / 输出流不结束时的重启兜底（假服务的 `memory: false` connect 结束全部进程）。
 - `test/live`：真实 E2B，只在设了 `CAPYBARA_TEST_E2B_API_KEY` 与 `CAPYBARA_TEST_E2B_TEMPLATE` 时运行（可选
   `CAPYBARA_TEST_E2B_API_URL` / `CAPYBARA_TEST_E2B_DOMAIN`），否则跳过：沙箱用户、文件、`/skills` 只读（含经符号链接写入
-  被拒）、出站白名单、超时杀进程、暂停 / 恢复、销毁后 gone。
+  被拒）、出站白名单、输出截断、超时杀进程（含 nohup 子进程）、中止、长时间无输出、逃出会话的子进程触发重启兜底、同名替换、
+  暂停 / 恢复、销毁后 gone。文件头列出了「只能在真实 E2B 上确认的假设」清单，第一次跑时逐条核对。

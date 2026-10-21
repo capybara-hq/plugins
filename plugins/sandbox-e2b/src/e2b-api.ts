@@ -35,6 +35,8 @@ export class E2BHttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** 正文是 E2B / envd 自己的错误格式（控制面 `{code: <状态码>, message}`、envd `{code: "<connect 码>"}`）。 */
+    readonly code?: number | string,
   ) {
     super(message);
     this.name = "E2BHttpError";
@@ -43,6 +45,14 @@ export class E2BHttpError extends Error {
 
 export function isStatus(e: unknown, ...status: number[]): boolean {
   return e instanceof E2BHttpError && status.includes(e.status);
+}
+
+/**
+ * 控制面确认的「不存在」：404 且正文是 E2B 的错误格式（`{code: 404, …}`）。代理、错配的 apiUrl 回的裸 404
+ * 不算——那样会把暂时性的配置 / 网络问题当成沙箱已不在。
+ */
+export function isE2BNotFound(e: unknown): boolean {
+  return e instanceof E2BHttpError && e.status === 404 && e.code === 404;
 }
 
 /** 调用方 signal 的中止原因（没有原因时给一个英文的 AbortError）。 */
@@ -58,11 +68,13 @@ function rethrow(e: unknown, signal: AbortSignal): never {
 
 async function errorOf(res: Response, what: string): Promise<E2BHttpError> {
   let message = "";
+  let code: number | string | undefined;
   try {
     const text = await res.text();
     try {
-      const j = JSON.parse(text) as { message?: unknown };
+      const j = JSON.parse(text) as { message?: unknown; code?: unknown };
       message = typeof j.message === "string" ? j.message : text;
+      if (typeof j.code === "number" || typeof j.code === "string") code = j.code;
     } catch {
       message = text;
     }
@@ -72,6 +84,7 @@ async function errorOf(res: Response, what: string): Promise<E2BHttpError> {
   return new E2BHttpError(
     res.status,
     `E2B ${what} failed: HTTP ${res.status}${message ? `: ${message.slice(0, 300)}` : ""}`,
+    code,
   );
 }
 
@@ -208,11 +221,12 @@ export async function envdKill(t: EnvdTarget, pid: number, signal: AbortSignal):
   } catch (e) {
     rethrow(e, signal);
   }
-  if (res.status === 404) {
-    await res.body?.cancel().catch(() => undefined);
-    return;
+  if (!res.ok) {
+    const e = await errorOf(res, "process signal");
+    // envd 的「进程不存在」：Connect 错误码 not_found
+    if (e.status === 404 && e.code === "not_found") return;
+    throw e;
   }
-  if (!res.ok) throw await errorOf(res, "process signal");
   await res.body?.cancel().catch(() => undefined);
 }
 

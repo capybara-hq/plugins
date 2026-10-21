@@ -1,12 +1,13 @@
 import { definePlugin, SANDBOX_CAPABILITY, secret } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
-import { createE2BSandbox } from "./provider.js";
+import { createE2BSandbox, HOSTNAME_RE } from "./provider.js";
 
 export {
   createE2BSandbox,
   decodeOutput,
   type E2BSandboxConfig,
   type E2BSandboxTestOptions,
+  exitCodeOf,
   METADATA_NAME,
 } from "./provider.js";
 
@@ -26,7 +27,7 @@ export const DeploymentConfig = z
     /** 沙箱域名（envd 地址为 `https://49983-<沙箱 id>.<domain>`）；API 返回了沙箱自己的域名时以返回的为准。 */
     domain: z
       .string()
-      .regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/, {
+      .regex(HOSTNAME_RE, {
         message: "domain must be a lowercase hostname such as e2b.app",
       })
       .default("e2b.app"),

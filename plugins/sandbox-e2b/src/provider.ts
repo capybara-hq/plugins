@@ -16,6 +16,7 @@ import {
   envdKill,
   envdStart,
   envdUpload,
+  isE2BNotFound,
   isStatus,
   type StartRequest,
 } from "./e2b-api.js";
@@ -68,6 +69,8 @@ const LIST_LIMIT = 100;
 
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,100}$/;
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** 小写主机名（部署配置的 domain 与 API 返回的沙箱 domain 都按它校验）。 */
+export const HOSTNAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 /** E2B 沙箱 id（拼进 envd 主机名与 API 路径前先校验）。 */
 const SANDBOX_ID_RE = /^[a-zA-Z0-9-]{1,128}$/;
 
@@ -135,8 +138,10 @@ interface RunOpts {
   maxOutputBytes: number;
   timeoutMs?: number;
   signal: AbortSignal;
-  /** 超时 / 中止时杀进程（不给则只断开连接）。 */
-  kill?: (pid: number | undefined) => Promise<void>;
+  /** 超时 / 中止时杀进程（不给则只断开连接）；返回杀进程脚本是否确实跑完。 */
+  kill?: (pid: number | undefined) => Promise<boolean>;
+  /** 最后手段：杀进程失败，或杀完宽限期过了流还没结束时调用（重启沙箱）。 */
+  recover?: () => Promise<void>;
 }
 
 interface RunResult {
@@ -170,6 +175,11 @@ export function createE2BSandbox(
   const targetOf = (info: SandboxInfo): EnvdTarget => {
     checkId(info.sandboxID);
     const domain = info.domain || cfg.domain;
+    if (!HOSTNAME_RE.test(domain)) {
+      throw new Error(
+        `E2B returned an invalid sandbox domain: ${JSON.stringify(domain).slice(0, 100)}`,
+      );
+    }
     return {
       url: test.envdUrl ?? `https://${ENVD_PORT}-${info.sandboxID}.${domain}`,
       sandboxId: info.sandboxID,
@@ -192,7 +202,7 @@ export function createE2BSandbox(
       });
       return targetOf({ ...r.data, sandboxID: r.data?.sandboxID ?? id });
     } catch (e) {
-      if (isStatus(e, 404)) {
+      if (isE2BNotFound(e)) {
         throw new SandboxGoneError(`E2B sandbox ${id} no longer exists`, { cause: e });
       }
       throw e;
@@ -231,7 +241,7 @@ export function createE2BSandbox(
     try {
       await api.json("DELETE", `/sandboxes/${enc(id)}`, { signal });
     } catch (e) {
-      if (!isStatus(e, 404)) throw e;
+      if (!isE2BNotFound(e)) throw e;
     }
   };
 
@@ -248,7 +258,7 @@ export function createE2BSandbox(
     let aborted = false;
     let stopping = false;
     let pid: number | undefined;
-    let exitCode: number | undefined;
+    let exitCode: number | null | undefined;
     const collect = (kind: "out" | "err", b64: string) => {
       const data = Buffer.from(b64, "base64");
       const room = o.maxOutputBytes - used;
@@ -263,18 +273,28 @@ export function createE2BSandbox(
     const conn = new AbortController();
     let grace: { cancel(): void } | undefined;
     let killing: Promise<void> | undefined;
+    // 杀进程失败，或杀完宽限期过了流还没结束（还有进程拿着输出）：需要重启沙箱
+    let wedged = false;
     const stop = () => {
       if (stopping) return;
       stopping = true;
-      const cut = () => {
-        grace = after(KILL_GRACE_MS, () => conn.abort());
-      };
-      if (o.kill)
-        killing = o
-          .kill(pid)
-          .catch(() => undefined)
-          .finally(cut);
-      else conn.abort();
+      const kill = o.kill;
+      if (!kill) {
+        conn.abort();
+        return;
+      }
+      killing = (async () => {
+        const ok = await kill(pid).catch(() => false);
+        if (!ok) {
+          wedged = true;
+          conn.abort();
+          return;
+        }
+        grace = after(KILL_GRACE_MS, () => {
+          wedged = true;
+          conn.abort();
+        });
+      })();
     };
     const timer =
       o.timeoutMs === undefined
@@ -306,17 +326,18 @@ export function createE2BSandbox(
           else if ("data" in e) {
             if (e.data.stdout) collect("out", e.data.stdout);
             if (e.data.stderr) collect("err", e.data.stderr);
-          } else if ("end" in e) exitCode = e.end.exitCode ?? 0;
+          } else if ("end" in e) exitCode = exitCodeOf(e.end);
         },
         conn.signal,
       );
     } catch (e) {
       streamError = e;
     }
-    // 杀进程完成后才返回：调用方接着用沙箱时它已结束
+    // 杀进程（必要时重启沙箱）完成后才返回：调用方接着用沙箱时它已结束
     await killing;
-    timer?.cancel();
     grace?.cancel();
+    if (wedged && o.recover) await o.recover().catch(() => undefined);
+    timer?.cancel();
     o.signal.removeEventListener("abort", onAbort);
     const result = {
       stdout: Buffer.concat(out),
@@ -333,28 +354,62 @@ export function createE2BSandbox(
 
   /**
    * 杀掉一条命令：以沙箱用户跑杀进程脚本（按会话杀掉它派生的全部进程），再按 pid 让 envd 发 SIGKILL 兜底
-   * （脚本起不来时，至少结束会话首进程）。不受调用方 signal 影响（它往往正是已中止的那个）。
+   * （只结束会话首进程）。不受调用方 signal 影响（它往往正是已中止的那个）。返回脚本是否确实跑完；
+   * 没跑完（起不来、超时、连不上）时由 {@link reboot} 兜底。
    */
   const killer = (t: EnvdTarget, ctl: string) => async (pid: number | undefined) => {
-    await run(t, {
+    const ok = await run(t, {
       user: SANDBOX_USER,
       cmd: "/bin/sh",
       args: ["-c", KILL_SCRIPT, "capybara-kill", ctl],
+      cwd: "/",
       maxOutputBytes: 4096,
       timeoutMs: 15_000,
       signal: AbortSignal.timeout(20_000),
-    }).catch(() => undefined);
+    }).then(
+      (r) => r.exitCode === 0,
+      () => false,
+    );
     if (pid !== undefined)
       await envdKill(t, pid, AbortSignal.timeout(15_000)).catch(() => undefined);
+    return ok;
+  };
+
+  /**
+   * 最后手段：重启沙箱——先 pause，再以 `memory: false` connect（SDK `e2b@2.58.0` 的
+   * `Sandbox.connect(id, { onResume: "reboot" })` 即发 `POST /v2/sandboxes/{id}/connect`
+   * `{timeout, memory: false}`：从磁盘状态冷启动，内存里的进程全部结束，/workspace 保留；没写盘的数据可能丢失）。
+   * 只在杀进程脚本没跑完、或杀完宽限期过了命令的输出流还没结束时用。不受调用方 signal 影响。
+   */
+  const reboot = async (id: string) => {
+    deps.log.warn("sandbox-e2b: could not stop a command cleanly; rebooting the sandbox", {
+      sandboxId: id,
+    });
+    const signal = AbortSignal.timeout(120_000);
+    try {
+      await api.json("POST", `/sandboxes/${enc(id)}/pause`, { body: {}, signal });
+    } catch (e) {
+      if (!isStatus(e, 409)) throw e;
+    }
+    await api.json("POST", `/v2/sandboxes/${enc(id)}/connect`, {
+      body: { timeout: cfg.timeoutSeconds, memory: false },
+      signal,
+    });
   };
 
   /** 文件操作：connect 后跑一个小脚本；被中止就以中止原因失败。 */
   const fileOp = async (
     t: EnvdTarget,
-    o: Omit<RunOpts, "signal" | "kill" | "cmd" | "timeoutMs">,
+    o: Omit<RunOpts, "signal" | "kill" | "recover" | "cmd" | "cwd" | "timeoutMs">,
     signal: AbortSignal,
   ): Promise<RunResult> => {
-    const r = await run(t, { ...o, cmd: "/bin/sh", timeoutMs: FILE_OP_TIMEOUT_MS, signal });
+    const r = await run(t, {
+      ...o,
+      cmd: "/bin/sh",
+      cwd: "/",
+      timeoutMs: FILE_OP_TIMEOUT_MS,
+      signal,
+    });
     if (r.aborted) throw abortReason(signal);
     if (r.timedOut) throw new Error("sandbox file operation timed out");
     return r;
@@ -420,8 +475,8 @@ export function createE2BSandbox(
       try {
         await api.json("POST", `/sandboxes/${enc(h.id)}/pause`, { body: {}, signal });
       } catch (e) {
-        // 不存在（404）、已暂停（409）都算成功
-        if (!isStatus(e, 404, 409)) throw e;
+        // 不存在（E2B 的 404）、已暂停（409）都算成功
+        if (!isE2BNotFound(e) && !isStatus(e, 409)) throw e;
       }
     },
 
@@ -455,6 +510,7 @@ export function createE2BSandbox(
         timeoutMs: args.timeoutMs,
         signal: args.signal,
         kill: killer(t, ctl),
+        recover: () => reboot(h.id),
       });
       return {
         exitCode: r.exitCode,
@@ -531,6 +587,42 @@ export function createE2BSandbox(
       return { size: Number(m[1]), isDir: m[2] === "directory" };
     },
   };
+}
+
+/** Go `syscall.Signal.String()`（envd 结束事件的 `status` 形如 `signal: killed`）→ 信号编号。 */
+const SIGNALS: Readonly<Record<string, number>> = {
+  hangup: 1,
+  interrupt: 2,
+  quit: 3,
+  "illegal instruction": 4,
+  "trace/breakpoint trap": 5,
+  aborted: 6,
+  "bus error": 7,
+  "floating point exception": 8,
+  killed: 9,
+  "user defined signal 1": 10,
+  "segmentation fault": 11,
+  "user defined signal 2": 12,
+  "broken pipe": 13,
+  "alarm clock": 14,
+  terminated: 15,
+};
+
+/**
+ * envd 结束事件 → 退出码：正常退出取 `exitCode`（proto3 JSON 省略 0）；被信号结束（`exited` 为 false，不是我们
+ * 超时 / 中止杀的）按 shell 惯例给 128 + 信号编号（如 OOM 的 SIGKILL → 137）；认不出信号时给 null（内核据此
+ * 告诉模型「命令没跑完、结果可能不完整」）。
+ */
+export function exitCodeOf(end: {
+  exitCode?: number;
+  exited?: boolean;
+  status?: string;
+}): number | null {
+  const status = end.status ?? "";
+  if (end.exited === true || status.startsWith("exit status ")) return end.exitCode ?? 0;
+  const m = /^signal: (.+?)(?: \(core dumped\))?$/.exec(status);
+  const n = m ? SIGNALS[m[1] as string] : undefined;
+  return n !== undefined ? 128 + n : null;
 }
 
 /**
