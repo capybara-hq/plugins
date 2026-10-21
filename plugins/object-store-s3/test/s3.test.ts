@@ -2,32 +2,34 @@ import { OBJECT_STORE_CAPABILITY, type ObjectStore } from "@capybara-hq/plugin-s
 import {
   assertPluginSecretsReachable,
   pluginDeploymentSecretValues,
-  startTestMinio,
-  type TestMinio,
+  startTestS3,
+  type TestS3,
 } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import plugin, { createS3ObjectStore, type S3StoreConfig } from "../src/index.js";
 
-let minio: TestMinio;
+let s3: TestS3;
 let store: ObjectStore;
 let config: S3StoreConfig;
 
 beforeAll(async () => {
-  minio = await startTestMinio();
+  s3 = await startTestS3();
   config = {
-    endpoint: minio.endpoint,
-    region: minio.region,
-    bucket: minio.bucket,
-    accessKeyId: minio.accessKey,
-    secretAccessKey: minio.secretKey,
+    endpoint: s3.endpoint,
+    region: s3.region,
+    bucket: s3.bucket,
+    accessKeyId: s3.accessKey,
+    secretAccessKey: s3.secretKey,
     forcePathStyle: true,
   };
   store = createS3ObjectStore(config);
 }, 180_000);
 afterAll(async () => {
-  await minio?.stop();
+  await s3?.stop();
 });
 
+/** 字面的 `${`（直接写在字符串里会被 lint 当成误写的模板占位符）。 */
+const DB = "\u0024\u007b";
 const bytes = (s: string) => new TextEncoder().encode(s);
 const text = async (body: ReadableStream<Uint8Array>) => new Response(body).text();
 const streamOf = (chunks: string[]) =>
@@ -58,7 +60,7 @@ describe("清单", () => {
     expect(plugin.provides).toEqual([OBJECT_STORE_CAPABILITY]);
     assertPluginSecretsReachable(plugin);
     expect(pluginDeploymentSecretValues(plugin, config).sort()).toEqual(
-      [minio.secretKey, minio.accessKey].sort(),
+      [s3.secretKey, s3.accessKey].sort(),
     );
   });
 
@@ -75,7 +77,7 @@ describe("清单", () => {
   });
 });
 
-describe("S3 ObjectStore（MinIO）", () => {
+describe("S3 ObjectStore（SeaweedFS）", () => {
   it("put / head / get（含范围）/ delete", async () => {
     const h = await store.put("t1/a.txt", bytes("hello world"), { contentType: "text/plain" });
     expect(h).toMatchObject({ key: "t1/a.txt", size: 11, contentType: "text/plain" });
@@ -211,6 +213,41 @@ describe("S3 ObjectStore（MinIO）", () => {
     const wrongType = { ...u, fields: { ...u.fields, "Content-Type": "text/html" } };
     expect((await upload(wrongType, bytes("x"), "text/html")).status).toBeGreaterThanOrEqual(400);
     expect(await store.head("t6/other.txt")).toBeNull();
+  });
+
+  it("presignPut：策略里显式带 key 条件；改成别的键被存储拒绝", async () => {
+    const u = await store.presignPut("t8/a.txt", {
+      contentType: "text/plain",
+      maxSize: 10,
+      ttlSeconds: 60,
+    });
+    const policy = JSON.parse(Buffer.from(u.fields?.Policy ?? "", "base64").toString("utf8")) as {
+      conditions: unknown[];
+    };
+    expect(policy.conditions).toContainEqual({ key: "t8/a.txt" });
+    expect(policy.conditions).toContainEqual(["content-length-range", 0, 10]);
+    expect(policy.conditions).toContainEqual(["eq", "$Content-Type", "text/plain"]);
+    const other = { ...u, fields: { ...u.fields, key: "t8/b.txt" } };
+    expect((await upload(other, bytes("x"), "text/plain")).status).toBeGreaterThanOrEqual(400);
+    expect(await store.head("t8/b.txt")).toBeNull();
+  });
+
+  it("presignPut：拒绝含模板变量起始符的键（如 filename 变量，存储端会替换成上传方给的文件名）", async () => {
+    for (const key of [`t8/${DB}filename}`, `t8/${DB}x`]) {
+      await expect(
+        store.presignPut(key, { contentType: "text/plain", maxSize: 1, ttlSeconds: 60 }),
+      ).rejects.toThrow(/\$\{/);
+    }
+  });
+
+  it("预签名的 ttlSeconds 必须是 1..604800 的整数", async () => {
+    for (const ttlSeconds of [0, -1, 604_801, 1.5, Number.NaN]) {
+      await expect(store.presignGet("t8/a.txt", { ttlSeconds })).rejects.toThrow(RangeError);
+      await expect(
+        store.presignPut("t8/a.txt", { contentType: "text/plain", maxSize: 1, ttlSeconds }),
+      ).rejects.toThrow(RangeError);
+    }
+    await expect(store.presignGet("t8/a.txt", { ttlSeconds: 604_800 })).resolves.toMatch(/^http/);
   });
 
   it("publicEndpoint：预签名 URL 用浏览器可达的地址", async () => {

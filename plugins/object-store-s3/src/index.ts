@@ -44,6 +44,20 @@ export type S3StoreConfig = z.input<typeof DeploymentConfig>;
 
 /** S3 单次列举 / 批量删除的上限。 */
 const PAGE_MAX = 1000;
+/** SigV4 预签名的最长有效期（7 天）。 */
+const MAX_TTL_SECONDS = 604_800;
+/** 字面的 `${`（POST 策略的变量起始符）。 */
+const TEMPLATE_START = "${";
+
+/** 预签名有效期必须是 1..7 天（秒）的整数。 */
+const checkTtl = (ttlSeconds: number): number => {
+  if (!Number.isInteger(ttlSeconds) || ttlSeconds < 1 || ttlSeconds > MAX_TTL_SECONDS) {
+    throw new RangeError(
+      `object-store-s3: ttlSeconds must be an integer between 1 and ${MAX_TTL_SECONDS}`,
+    );
+  }
+  return ttlSeconds;
+};
 
 const isNotFound = (e: unknown): boolean =>
   e instanceof S3ServiceException &&
@@ -243,21 +257,28 @@ export function createS3ObjectStore(input: S3StoreConfig): ObjectStore {
             ResponseContentDisposition: contentDisposition(opts.downloadName),
           }),
         }),
-        { expiresIn: opts.ttlSeconds },
+        { expiresIn: checkTtl(opts.ttlSeconds) },
       );
     },
 
     async presignPut(key, opts): Promise<PresignedUpload> {
-      // POST 策略：键与类型精确匹配，大小由存储端按 content-length-range 校验（预签名 PUT 做不到）
+      const Expires = checkTtl(opts.ttlSeconds);
+      // POST 表单里键中的 ${filename} 会被存储端换成上传方给的文件名：键就不再是签名时的那个
+      if (key.includes(TEMPLATE_START)) {
+        throw new Error(`object-store-s3: presignPut key must not contain '${TEMPLATE_START}'`);
+      }
+      // POST 策略：键（显式条件，不依赖 SDK 默认）与类型精确匹配，
+      // 大小由存储端按 content-length-range 校验（预签名 PUT 做不到）
       const { url, fields } = await createPresignedPost(signer, {
         Bucket,
         Key: key,
         Conditions: [
+          { key },
           ["content-length-range", 0, opts.maxSize],
           ["eq", "$Content-Type", opts.contentType],
         ],
         Fields: { "Content-Type": opts.contentType },
-        Expires: opts.ttlSeconds,
+        Expires,
       });
       return { method: "POST", url, headers: {}, fields };
     },
