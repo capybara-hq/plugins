@@ -56,7 +56,7 @@ node build.mjs <仓库路径>/plugins/sandbox-docker/image/Dockerfile
 | `suspend` | `POST /sandboxes/{id}/pause`（文件与内存都保留：后台进程、`/tmp` 在恢复后都还在；Docker 插件的休眠则会结束进程、清空 `/tmp`）；不存在（404）或已暂停（409）也算成功 |
 | `killAll` | connect（暂停的先恢复，内存里的进程也一起回来）后以沙箱用户跑脚本，杀掉经 `exec` 启动、仍在运行的全部命令（按进程组与会话 SIGKILL）；内核接手崩溃的前任持锁方时调用 |
 | `destroy` / `destroyByName` | `DELETE /sandboxes/{id}`（不存在也算成功）；按名字时先按元数据列出 |
-| `exec` / 文件操作 | 先 connect（暂停的会被恢复，即契约的「自动启动」；取 envd 访问令牌——**拿不到令牌就报错，不发出不带令牌的请求**；超时至少推到「命令超时 + 120 秒」，不超过 24 小时），再调 envd；connect 返回 E2B 格式的 404（`{code: 404, …}`）→ `SandboxGoneError`；裸 404（代理、错配的 `apiUrl`）、401 / 5xx / 网络错误 → 普通错误。pause / delete 也只把 E2B 格式的 404 当「不存在」 |
+| `exec` / 文件操作 | 先 connect（暂停的会被恢复，即契约的「自动启动」；取 envd 访问令牌——**拿不到令牌就不连、不发出不带令牌的请求，按 `SandboxGoneError` 报（`resume` 返回 `gone`），内核据此重建一个带令牌的沙箱——加 `secure: true` 之前建的沙箱永远没有令牌**；超时至少推到「命令超时 + 120 秒」，不超过 24 小时），再调 envd；connect 返回 E2B 格式的 404（`{code: 404, …}`）→ `SandboxGoneError`；裸 404（代理、错配的 `apiUrl`）、401 / 5xx / 网络错误 → 普通错误。pause / delete 也只把 E2B 格式的 404 当「不存在」 |
 
 - **超时**：E2B 沙箱到点（`timeoutSeconds`）会被处理；本插件建沙箱时设 `autoPause: true`，到点**暂停**而不是删除，
   所以内核来不及 `suspend`（例如内核整个挂了）时文件也不丢。每次使用都经 connect 往后推（只延长不缩短）。

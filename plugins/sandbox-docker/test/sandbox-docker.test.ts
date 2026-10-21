@@ -807,6 +807,35 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       }
     });
 
+    it("a docker-paused container (Running but frozen) is unpaused by resume and by exec / file calls", async () => {
+      const name = sbxName();
+      const h = await sbx.create({
+        name,
+        image: images.sandboxImage,
+        limits: limits("allowlist", ["allowed.example.com"]),
+        signal: sig(),
+      });
+      try {
+        await sbx.writeFile(h, "/workspace/keep.txt", enc.encode("kept"), sig());
+        await docker("pause", name, `${name}-egress`);
+        expect((await sh(h.id, "cat /workspace/keep.txt")).stdout).toBe("kept");
+        const st = JSON.parse(await docker("inspect", name, `${name}-egress`)) as {
+          State: { Paused: boolean };
+        }[];
+        expect(st.map((c) => c.State.Paused)).toEqual([false, false]);
+        expect((await sh(h.id, "curl -sS --max-time 10 http://allowed.example.com/")).stdout).toBe(
+          "hello-egress",
+        );
+        await docker("pause", name);
+        expect(await sbx.stat(h, "/workspace/keep.txt", sig())).toEqual({ size: 4, isDir: false });
+        await docker("pause", name);
+        expect(await sbx.resume(h, sig())).toBe("resumed");
+        expect((await sh(h.id, "echo ok")).stdout).toBe("ok\n");
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+    });
+
     it("the sandbox user cannot stop the container (kill 1, pkill sleep, kill -9 -1)", async () => {
       const name = sbxName();
       const h = await sbx.create({
@@ -884,6 +913,10 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
         await docker("stop", "-t", "1", h.id);
         await sbx.killAll?.(h, sig());
         expect((await inspect(h.id)).State.Running).toBe(true);
+        // 持锁方的 signal 已中止（锁丢失）：不再杀、也不重启
+        const lost = new AbortController();
+        lost.abort(new Error("lock lost"));
+        await expect(sbx.killAll?.(h, lost.signal)).rejects.toThrow("lock lost");
       } finally {
         await sbx.destroy(h, sig());
       }

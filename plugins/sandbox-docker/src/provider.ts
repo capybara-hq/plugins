@@ -307,6 +307,10 @@ export function createDockerSandbox(
   const start = (container: string, signal: AbortSignal) =>
     api.json("POST", `/containers/${enc(container)}/start`, { signal }).catch(ignore(304));
 
+  /** 恢复被 `docker pause` 冻结的容器（已经不是暂停状态时 Docker 回 409，算成功）。 */
+  const unpause = (container: string, signal: AbortSignal) =>
+    api.json("POST", `/containers/${enc(container)}/unpause`, { signal }).catch(ignore(409));
+
   const ensureSharedNetwork = async (signal: AbortSignal) => {
     try {
       await api.json("GET", `/networks/${enc(cfg.network)}`, { signal });
@@ -401,11 +405,12 @@ export function createDockerSandbox(
     await ensureInternalNetwork(name, signal);
     let running: boolean;
     try {
-      const c = await api.json<{ State: { Running: boolean } }>(
+      const c = await api.json<{ State: { Running: boolean; Paused?: boolean } }>(
         "GET",
         `/containers/${enc(n.egress)}/json`,
         { signal },
       );
+      if (c.State.Paused) await unpause(n.egress, signal);
       running = c.State.Running;
     } catch (e) {
       if (!isStatus(e, 404)) throw e;
@@ -580,20 +585,28 @@ export function createDockerSandbox(
     // 杀进程不受调用方 signal 影响（它往往正是已中止的那个）
     killOrRestart(container, ["/bin/sh", "-c", KILL_SCRIPT, "capybara-kill", ctl]);
 
-  const killOrRestart = async (container: string, cmd: string[]) => {
+  /**
+   * 跑杀进程脚本；脚本起不来就重启容器。`signal`（给了时）与自己的超时合并：接手前任时（killAll）传持锁方的
+   * signal，锁丢失就停下，不与新的持锁方同时动这个容器；单条命令超时 / 中止后的杀进程不传（那个 signal 往往
+   * 正是已中止的）。
+   */
+  const killOrRestart = async (container: string, cmd: string[], signal?: AbortSignal) => {
+    const within = (ms: number) =>
+      signal ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms);
     const ok = await run(container, {
       cmd,
       user: SANDBOX_USER,
       maxOutputBytes: 4096,
-      signal: AbortSignal.timeout(15_000),
+      signal: within(15_000),
     }).then(
-      (r) => r.exitCode === 0,
+      (r) => r.exitCode === 0 && !r.aborted,
       () => false,
     );
     if (ok) return;
+    signal?.throwIfAborted();
     await api.json("POST", `/containers/${enc(container)}/restart`, {
       query: { t: 0 },
-      signal: AbortSignal.timeout(60_000),
+      signal: within(60_000),
     });
   };
 
@@ -626,7 +639,10 @@ export function createDockerSandbox(
 
   async function resume(h: SandboxHandle, signal: AbortSignal): Promise<"resumed" | "gone"> {
     signal.throwIfAborted();
-    let c: { State: { Running: boolean }; Config: { Labels: Record<string, string> | null } };
+    let c: {
+      State: { Running: boolean; Paused?: boolean };
+      Config: { Labels: Record<string, string> | null };
+    };
     try {
       c = await api.json("GET", `/containers/${enc(h.id)}/json`, { signal });
     } catch (e) {
@@ -638,13 +654,13 @@ export function createDockerSandbox(
     if (labels[LABEL_EGRESS] === "allowlist") {
       await ensureEgressRunning(h.id, JSON.parse(labels[LABEL_ALLOW] ?? "[]") as string[], signal);
     }
-    if (!c.State.Running) {
-      try {
-        await start(h.id, signal);
-      } catch (e) {
-        if (isStatus(e, 404)) return "gone";
-        throw e;
-      }
+    try {
+      // `docker pause` 过的：Running 仍为 true，exec 却回 409，要 unpause
+      if (c.State.Paused) await unpause(h.id, signal);
+      else if (!c.State.Running) await start(h.id, signal);
+    } catch (e) {
+      if (isStatus(e, 404)) return "gone";
+      throw e;
     }
     return "resumed";
   }
@@ -778,7 +794,7 @@ export function createDockerSandbox(
       await autoStart(h, signal, () =>
         run(h.id, { cmd: ["true"], user: SANDBOX_USER, maxOutputBytes: 1024, signal }),
       );
-      await killOrRestart(h.id, ["/bin/sh", "-c", KILL_ALL_SCRIPT, "capybara-killall"]);
+      await killOrRestart(h.id, ["/bin/sh", "-c", KILL_ALL_SCRIPT, "capybara-killall"], signal);
     },
 
     async exec(h, args): Promise<ExecResult> {

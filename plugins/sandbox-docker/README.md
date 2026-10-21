@@ -39,7 +39,7 @@ export CAPYBARA_PLUGIN_CONFIG='{"sandbox-docker":{"endpoint":"tcp://127.0.0.1:23
 
 HAProxy（官方镜像，按摘要固定），代理以 root 运行（读 socket）。两道检查：
 
-1. **路径与名字**：只放行插件实际调用的接口（容器 create / inspect / start / stop / kill / restart / remove、
+1. **路径与名字**：只放行插件实际调用的接口（容器 create / inspect / start / stop / kill / restart / unpause / remove、
    exec create / start / inspect、卷 create / inspect / remove、网络 create / inspect / remove、镜像 inspect / pull、
    `_ping` / `version`），其余 403。拉镜像（`POST /images/create`）的查询串只能是一个 `fromImage`：`fromSrc`
    （从 URL 或请求体导入任意文件系统）、`repo` / `tag`（改名覆盖镜像）、`message` / `changes` 一律 403。容器与卷只认 `cap-` 开头的名字（建容器要求 `?name=cap-…`），网络只认 `cap`
@@ -66,8 +66,8 @@ HAProxy（官方镜像，按摘要固定），代理以 root 运行（读 socket
 |---|---|
 | `create` | 先删掉同名旧实例（内核可能在记下句柄前退出），再建卷、（allowlist 时）内部网络与出站代理、沙箱容器并启动；句柄 id 就是 name |
 | `suspend` | 停止沙箱容器与出站代理（文件留在卷上）。**进程不保留**：沙箱里的后台进程全部结束，`/tmp`（tmpfs）清空；E2B 的暂停则连内存一起保留 |
-| `resume` | 启动；容器不存在返回 `gone`。allowlist 的出站代理或内部网络丢了按容器标签里记下的白名单重建 |
-| 自动启动 | `exec` / `readFile` / `writeFile` / `stat` / `killAll` 遇到容器还在但没在运行（Docker 返回 409：宿主机或守护进程重启、休眠扫描停了容器却没来得及记下 `suspended`……）时，按 `resume` 的做法（出站代理、网络就位）启动后重试一次（`sandbox@1` 契约：内核只信自己记的 `running`） |
+| `resume` | 启动（被 `docker pause` 的 unpause）；容器不存在返回 `gone`。allowlist 的出站代理或内部网络丢了按容器标签里记下的白名单重建 |
+| 自动启动 | `exec` / `readFile` / `writeFile` / `stat` / `killAll` 遇到容器还在但没在运行（Docker 返回 409：宿主机或守护进程重启、休眠扫描停了容器却没来得及记下 `suspended`、有人 `docker pause` 了它……）时，按 `resume` 的做法（出站代理、网络就位；暂停的 unpause、停止的 start）恢复后重试一次（`sandbox@1` 契约：内核只信自己记的 `running`） |
 | `killAll` | 杀掉经 `exec` 启动、仍在运行的全部命令（按命令行找到包装，按进程组与会话 SIGKILL）；内核接手崩溃的前任持锁方时调用。命令自己另起会话（`setsid`）放到后台的进程不保证被杀 |
 | `destroy` / `destroyByName` | 删容器、出站代理、内部网络、两个卷；不存在也算成功 |
 | `exec` | `docker exec`（沙箱用户、bash）；超时或中止时按会话 SIGKILL 命令及其派生的全部进程。命令经 `timeout -s KILL <超时 + 5 秒>` 运行：内核副本崩溃（插件这边的计时没了，断开连接也不结束命令）时由沙箱里的时限兜底。杀进程用的 exec 本身起不来时（如进程数已到上限）退而重启整个容器（`restart?t=0`）：文件都在卷上，`/tmp` 清空、沙箱里其余进程一并结束。输出被截断时退回到完整的 UTF-8 字符边界 |

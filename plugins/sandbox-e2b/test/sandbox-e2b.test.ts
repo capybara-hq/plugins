@@ -554,13 +554,22 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       expect(createdBody().secure).toBe(true);
       fake.withholdAccessToken = true;
       const before = fake.calls.filter((c) => c.sandboxId !== undefined).length;
-      const call = (p: Promise<unknown>) => expect(p).rejects.toThrow(/no envd access token/);
+      // 当作「已不在」（SandboxGoneError）：内核据此重建带令牌的沙箱（加 secure 之前建的沙箱永远没有令牌）
+      const call = async (p: Promise<unknown>) => {
+        const e = await p.then(
+          () => null,
+          (x: unknown) => x,
+        );
+        expect(String(e)).toMatch(/no envd access token/);
+        expect(isSandboxGoneError(e)).toBe(true);
+      };
       await call(
         sbx.exec(h, { command: "true", timeoutMs: 1000, maxOutputBytes: 10, signal: sig() }),
       );
       await call(sbx.readFile(h, "/workspace/a", { maxBytes: 1, signal: sig() }));
       await call(sbx.writeFile(h, "/workspace/a", enc.encode("x"), sig()));
       await call(sbx.stat(h, "/workspace/a", sig()));
+      expect(await sbx.resume(h, sig())).toBe("gone");
       expect(fake.calls.filter((c) => c.sandboxId !== undefined).length).toBe(before);
     });
   });

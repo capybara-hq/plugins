@@ -209,10 +209,13 @@ export function createE2BSandbox(
         `E2B returned an invalid sandbox domain: ${JSON.stringify(domain).slice(0, 100)}`,
       );
     }
-    // 没有访问令牌的 envd 谁都能调用：建沙箱时要求了 secure，拿不到令牌就不连（fail closed）
+    // 没有访问令牌的 envd 谁都能调用：建沙箱时要求了 secure，拿不到令牌就不连（fail closed）。
+    // 报 SandboxGoneError 而不是普通错误：加上 `secure: true` 之前建的沙箱永远没有令牌，报普通错误会让这个对话的
+    // 沙箱一直不可用；当作「已不在」，内核就会销毁同名旧实例（create 先 destroyByName）并重建一个带令牌的。
+    // 代价：E2B 若对所有沙箱都不再返回令牌，每次使用都会重建（文件丢失），而不是静默地不带令牌连接。
     if (typeof info.envdAccessToken !== "string" || info.envdAccessToken === "") {
-      throw new Error(
-        "E2B returned no envd access token for the sandbox; refusing to use an unauthenticated sandbox",
+      throw new SandboxGoneError(
+        `E2B returned no envd access token for sandbox ${info.sandboxID}; refusing to use an unauthenticated sandbox (it will be recreated)`,
       );
     }
     return {
