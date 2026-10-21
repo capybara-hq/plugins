@@ -69,10 +69,21 @@ const totalFromRange = (range: string | undefined): number | undefined => {
   return m ? Number(m[1]) : undefined;
 };
 
-/** RFC 6266 / 5987：带非 ASCII 文件名的附件下载头。 */
-const contentDisposition = (name: string): string => {
-  const ascii = name.replace(/[^\x20-\x7e]|["\\]/g, "_");
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+/** RFC 5987 的 `attr-char` 之外的字符一律百分号编码（`encodeURIComponent` 不编码 `'()*!`）。 */
+const encodeRfc5987 = (s: string): string =>
+  encodeURIComponent(s).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+
+/**
+ * RFC 6266 的 `Content-Disposition`：`attachment`（缺省）或 `inline`；有文件名时带 ASCII 兜底的 `filename`
+ * 与 UTF-8 的 `filename*`。
+ */
+export const contentDisposition = (
+  disposition: "attachment" | "inline",
+  name: string | undefined,
+): string => {
+  if (name === undefined) return disposition;
+  const ascii = name.replace(/[^\x20-\x7e]|["\\%]/g, "_");
+  return `${disposition}; filename="${ascii}"; filename*=UTF-8''${encodeRfc5987(name)}`;
 };
 
 /** 计数经过的字节（未知大小的流上传后得到对象大小）。 */
@@ -253,8 +264,12 @@ export function createS3ObjectStore(input: S3StoreConfig): ObjectStore {
         new GetObjectCommand({
           Bucket,
           Key: key,
-          ...(opts.downloadName !== undefined && {
-            ResponseContentDisposition: contentDisposition(opts.downloadName),
+          ResponseContentDisposition: contentDisposition(
+            opts.disposition ?? "attachment",
+            opts.downloadName,
+          ),
+          ...(opts.responseContentType !== undefined && {
+            ResponseContentType: opts.responseContentType,
           }),
         }),
         { expiresIn: checkTtl(opts.ttlSeconds) },

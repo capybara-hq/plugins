@@ -6,7 +6,11 @@ import {
   type TestS3,
 } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import plugin, { createS3ObjectStore, type S3StoreConfig } from "../src/index.js";
+import plugin, {
+  contentDisposition,
+  createS3ObjectStore,
+  type S3StoreConfig,
+} from "../src/index.js";
 
 let s3: TestS3;
 let store: ObjectStore;
@@ -54,6 +58,18 @@ async function upload(
   form.append("file", new Blob([data], { type: contentType }), "upload.bin");
   return fetch(u.url, { method: "POST", headers: u.headers, body: form });
 }
+
+describe("contentDisposition", () => {
+  it("filename* 按 RFC 5987 编码 '()*，ASCII 兜底替换引号、反斜杠与 %", () => {
+    expect(contentDisposition("inline", "a'b (1)*.png")).toBe(
+      `inline; filename="a'b (1)*.png"; filename*=UTF-8''a%27b%20%281%29%2A.png`,
+    );
+    expect(contentDisposition("attachment", 'x"\\%.txt')).toBe(
+      `attachment; filename="x___.txt"; filename*=UTF-8''x%22%5C%25.txt`,
+    );
+    expect(contentDisposition("attachment", undefined)).toBe("attachment");
+  });
+});
 
 describe("清单", () => {
   it("提供 object-store@1；密钥字段可达、会被打码", () => {
@@ -176,6 +192,27 @@ describe("S3 ObjectStore（SeaweedFS）", () => {
     const cd = res.headers.get("content-disposition") ?? "";
     expect(cd).toContain("attachment");
     expect(cd).toContain(encodeURIComponent("报告 1.txt"));
+  });
+
+  it("presignGet：disposition inline 与 responseContentType 进响应头（RFC 6266 filename*）", async () => {
+    await store.put("t5/pic", bytes("png"), { contentType: "application/octet-stream" });
+    const inline = await fetch(
+      await store.presignGet("t5/pic", {
+        ttlSeconds: 60,
+        downloadName: "图 1.png",
+        disposition: "inline",
+        responseContentType: "image/png",
+      }),
+    );
+    expect(inline.status).toBe(200);
+    expect(inline.headers.get("content-type")).toBe("image/png");
+    const cd = inline.headers.get("content-disposition") ?? "";
+    expect(cd).toMatch(/^inline;/);
+    expect(cd).toContain(`filename*=UTF-8''${encodeURIComponent("图 1.png")}`);
+
+    // 缺省 disposition 为 attachment；没有文件名时也给出 attachment
+    const def = await fetch(await store.presignGet("t5/pic", { ttlSeconds: 60 }));
+    expect(def.headers.get("content-disposition") ?? "").toMatch(/^attachment/);
   });
 
   it("presignPut：maxSize 以内可上传；超过 maxSize 被存储拒绝", async () => {
