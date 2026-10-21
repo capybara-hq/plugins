@@ -676,7 +676,7 @@ export function createDockerSandbox(
       checkLimits(limits);
       if (limits.egress === "open" && cfg.allowOpenEgress !== true) {
         throw new Error(
-          'sandbox egress "open" is disabled for this deployment (sandbox-docker allowOpenEgress is false); use "allowlist" or "none"',
+          'Sandbox egress "open" (sandbox.limits.egress) is refused: the sandbox-docker plugin setting allowOpenEgress is false. Set pluginConfig."sandbox-docker".allowOpenEgress to true (trusted environments only), or set sandbox.limits.egress to "allowlist" or "none".',
         );
       }
       const n = sandboxResourceNames(name);

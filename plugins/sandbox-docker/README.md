@@ -12,7 +12,7 @@
 | `network` | `capybara-sandbox` | 共用的沙箱网络名，须以 `cap` 开头（socket 代理只放行这样的网络）；不存在时插件按 bridge、`enable_icc=false`（容器互不相通）创建 |
 | `egressProxyImage` | `capybara-sandbox-egress:latest` | 出站代理镜像（`egress-proxy/Dockerfile`） |
 | `volumeDriver` | （不填，用 local） | 工作区卷的驱动；设了就带 `DriverOpts.size=<diskMb>M` |
-| `allowOpenEgress` | `false` | 允许 `sandbox.limits.egress = "open"`；为 false 时 `create` 收到 open 直接报错（英文错误） |
+| `allowOpenEgress` | `false` | 允许 `sandbox.limits.egress = "open"`；为 false 时 `create` 收到 open 直接报错（英文错误，点名 `pluginConfig."sandbox-docker".allowOpenEgress`），内核启动时也打 warn |
 
 ```bash
 export CAPYBARA_PLUGIN_CONFIG='{"sandbox-docker":{"endpoint":"tcp://127.0.0.1:2375"}}'

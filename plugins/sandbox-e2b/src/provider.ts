@@ -464,7 +464,7 @@ export function createE2BSandbox(
       checkLimits(limits);
       if (limits.egress === "open" && !cfg.allowOpenEgress) {
         throw new Error(
-          'sandbox egress "open" is disabled for this deployment (sandbox-e2b allowOpenEgress is false); use "allowlist" or "none"',
+          'Sandbox egress "open" (sandbox.limits.egress) is refused: the sandbox-e2b plugin setting allowOpenEgress is false. Set pluginConfig."sandbox-e2b".allowOpenEgress to true (trusted environments only), or set sandbox.limits.egress to "allowlist" or "none".',
         );
       }
       let egress = limits.egress;

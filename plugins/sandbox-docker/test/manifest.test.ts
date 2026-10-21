@@ -1,6 +1,6 @@
 import { SANDBOX_CAPABILITY } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
-import plugin, { DeploymentConfig, decodeOutput } from "../src/index.js";
+import plugin, { createDockerSandbox, DeploymentConfig, decodeOutput } from "../src/index.js";
 
 describe("decodeOutput", () => {
   const zh = Buffer.from("a中", "utf8"); // 61 e4 b8 ad
@@ -51,5 +51,19 @@ describe("sandbox-docker manifest", () => {
         egressTestHosts: { "a.example.com": "10.0.0.1" },
       }),
     ).toThrow();
+  });
+});
+
+describe("egress open without allowOpenEgress (no Docker needed)", () => {
+  it("create refuses before touching Docker, naming the plugin setting", async () => {
+    const sbx = createDockerSandbox(DeploymentConfig.parse({ endpoint: "tcp://127.0.0.1:9" }));
+    await expect(
+      sbx.create({
+        name: "cap-00000000-0000-4000-8000-000000000001",
+        image: "capybara-sandbox:latest",
+        limits: { cpu: 1, memoryMb: 256, diskMb: 256, egress: "open", allowHosts: [] },
+        signal: AbortSignal.timeout(5000),
+      }),
+    ).rejects.toThrow(/pluginConfig\."sandbox-docker"\.allowOpenEgress/);
   });
 });
