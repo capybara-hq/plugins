@@ -1,5 +1,6 @@
 import {
   type ContentBlock,
+  clipMediaName,
   ModelError,
   type ModelMessage,
   type ModelRequest,
@@ -32,10 +33,13 @@ function base64Of(b: MediaBlock): string {
   return b.source.data;
 }
 
-/** PDF 的 filename：沿用附件名，没有 `.pdf` 后缀时补上（没有名字时为 `document.pdf`）。 */
+/**
+ * PDF 的 filename：沿用附件名，没有 `.pdf` 后缀时补上（没有名字时为 `document.pdf`）；过长的按
+ * `clipMediaName` 截短（补后缀之后再截，保留 `.pdf`）。
+ */
 function pdfFilename(name: string | undefined): string {
   const n = name ?? "document";
-  return /\.pdf$/i.test(n) ? n : `${n}.pdf`;
+  return clipMediaName(/\.pdf$/i.test(n) ? n : `${n}.pdf`);
 }
 
 /**

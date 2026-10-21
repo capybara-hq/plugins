@@ -1,6 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import {
   type ContentBlock,
+  clipMediaName,
   type Effort,
   ModelError,
   type ModelMessage,
@@ -58,14 +59,15 @@ function base64Of(b: MediaBlock): string {
  *   模型 100 页）；
  * - `text/*`：纯文本文档 `{type: "document", source: {type: "text", media_type: "text/plain", data}}`，
  *   markdown / csv 也按 text/plain 发（API 的纯文本源只认 text/plain），字节按 UTF-8 解码；
- * - 有文件名时带 `title`（模型可见，便于在回答里指代）。
+ * - 有文件名时带 `title`（模型可见，便于在回答里指代），过长的按 `clipMediaName` 截短；
+ * - 空的纯文本文档不发 document 块（API 拒绝空的文本源），换成一行英文说明。
  */
 function mapMedia(b: MediaBlock): Anthropic.ContentBlockParam {
   const data = base64Of(b);
   if (b.type === "image") {
     return { type: "image", source: { type: "base64", media_type: b.mediaType, data } };
   }
-  const title = b.name !== undefined ? { title: b.name } : {};
+  const title = b.name !== undefined ? { title: clipMediaName(b.name) } : {};
   if (b.mediaType === "application/pdf") {
     return {
       type: "document",
@@ -74,6 +76,12 @@ function mapMedia(b: MediaBlock): Anthropic.ContentBlockParam {
     };
   }
   const text = Buffer.from(data, "base64").toString("utf8");
+  if (text === "") {
+    return {
+      type: "text",
+      text: `[Attached file ${JSON.stringify(b.name ?? "document")} (${b.mediaType}) is empty.]`,
+    };
+  }
   return {
     type: "document",
     source: { type: "text", media_type: "text/plain", data: text },
@@ -88,6 +96,8 @@ function mapUserBlock(b: ContentBlock): Anthropic.ContentBlockParam | null {
     case "image":
     case "document":
       return mapMedia(b);
+    // 内核把 tool_result 放在 user 消息的最前面（同一回合的其他块在后），API 要求 tool_result 紧跟在
+    // tool_use 之后、位于 user 内容的开头；这里只按原顺序映射，不重排（重排会改写已发送的前缀）。
     case "tool_result":
       return {
         type: "tool_result",

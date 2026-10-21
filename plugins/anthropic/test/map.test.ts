@@ -379,6 +379,44 @@ describe("buildRequest: media blocks", () => {
     ]);
   });
 
+  it("an empty text document is sent as a short text note, not an empty document block", () => {
+    const { params } = build(
+      base({
+        messages: [
+          user({
+            type: "document",
+            mediaType: "text/plain",
+            name: "empty.txt",
+            source: { kind: "base64", data: "" },
+          }),
+        ],
+      }),
+    );
+    expect(params.messages[0]?.content).toEqual([
+      { type: "text", text: '[Attached file "empty.txt" (text/plain) is empty.]' },
+    ]);
+  });
+
+  it("a very long file name is clipped in the title, keeping the extension", () => {
+    const name = `${"a".repeat(250)}.pdf`;
+    const { params } = build(
+      base({
+        messages: [
+          user({
+            type: "document",
+            mediaType: "application/pdf",
+            name,
+            source: { kind: "base64", data: PDF },
+          }),
+        ],
+      }),
+    );
+    const content = (params.messages[0]?.content ?? []) as { title?: string }[];
+    const title = content[0]?.title ?? "";
+    expect([...title]).toHaveLength(200);
+    expect(title.endsWith("….pdf")).toBe(true);
+  });
+
   it("a ref source reaching the plugin is a non-retryable ModelError", () => {
     const req = base({
       messages: [
