@@ -34,7 +34,7 @@ describeModelProviderConformance("openai (fixtures)", async () => {
     provider: createOpenAIProvider({
       apiKey: "sk-fixture",
       baseUrl: `${server.url}/v1`,
-      models: [gpt("gpt-5.5")],
+      models: [gpt("gpt-5.5", { documents: true })],
     }),
     model: "gpt-5.5",
     expect: { thinking: true, caching: true },
@@ -57,7 +57,8 @@ describe.skipIf(!LIVE_KEY || !LIVE_MODEL)("live", { timeout: 120_000 }, () => {
     plugin: "openai",
     provider: createOpenAIProvider({
       apiKey: LIVE_KEY ?? "",
-      models: [gpt(LIVE_MODEL ?? "")],
+      // 当前 GPT-5 系列都接受图片与 PDF（input_file）
+      models: [gpt(LIVE_MODEL ?? "", { documents: true })],
     }),
     model: LIVE_MODEL ?? "",
     expect: { thinking: true, caching: true },
@@ -607,6 +608,7 @@ describe("openai: errors and edge cases", () => {
           reasoning: true,
           caching: true,
           midConversationSystem: true,
+          documents: false,
         },
         parameters: [
           {
@@ -636,12 +638,24 @@ describe("openai: errors and edge cases", () => {
           reasoning: false,
           caching: true,
           midConversationSystem: true,
+          documents: false,
         },
         streamIdleTimeoutMs: 60_000,
         parameters: [],
       },
     ]);
     expect(server.requests.length).toBe(before);
+  });
+
+  it("documents comes from the model config (default false)", async () => {
+    const p = createOpenAIProvider({
+      apiKey: "sk-fixture",
+      baseUrl: `${server.url}/v1`,
+      models: [gpt("a", { documents: true }), gpt("b", { vision: false })],
+    });
+    const caps = (await p.listModels()).map((m) => m.capabilities);
+    expect(caps[0]).toMatchObject({ vision: true, documents: true });
+    expect(caps[1]).toMatchObject({ vision: false, documents: false });
   });
 });
 
@@ -676,6 +690,12 @@ describe("openai: plugin manifest", () => {
     const withLevels = (effortLevels: unknown) =>
       schema.safeParse({ apiKey: "k", models: [{ ...models[0], effortLevels }] });
     expect(withLevels(["low", "high"]).success).toBe(true);
+    expect(
+      schema.safeParse({ apiKey: "k", models: [{ ...models[0], documents: true }] }).success,
+    ).toBe(true);
+    expect(
+      schema.safeParse({ apiKey: "k", models: [{ ...models[0], documents: "yes" }] }).success,
+    ).toBe(false);
     expect(withLevels([]).success).toBe(false);
     const bad = withLevels(["low", "minimal"]);
     expect(bad.success).toBe(false);

@@ -70,10 +70,72 @@ function userText(text: string): InputItem {
   return { role: "user", content: [{ type: "input_text", text }] };
 }
 
+type MediaBlock = Extract<ContentBlock, { type: "image" | "document" }>;
+
+/** 媒体块的 base64 数据。内核只发 `base64`；收到 `ref` 是内核的缺陷，按不可重试的请求错误报出。 */
+function base64Of(b: MediaBlock): string {
+  if (b.source.kind !== "base64") {
+    throw new ModelError(
+      "invalid_request",
+      `The ${b.type} block has an unresolved attachment reference; the kernel must send base64 data`,
+    );
+  }
+  return b.source.data;
+}
+
+/** PDF 的 filename：沿用附件名，没有 `.pdf` 后缀时补上（没有名字时为 `document.pdf`）。 */
+function pdfFilename(name: string | undefined): string {
+  const n = name ?? "document";
+  return /\.pdf$/i.test(n) ? n : `${n}.pdf`;
+}
+
+/**
+ * 媒体块 → Responses API 输入项（https://developers.openai.com/api/docs/guides/images-vision ，
+ * https://developers.openai.com/api/docs/guides/pdf-files ，2026-10-21 核实）：
+ * - 图片：`input_image`，`image_url` 为 `data:<type>;base64,…`，`detail: "auto"`（即默认值；SDK 类型要求给出）；
+ *   png / jpeg / webp / 非动图 gif；单次请求总负载 512 MB、最多 1500 张；
+ * - PDF：`input_file`，`file_data` 为 `data:application/pdf;base64,…`，带 `filename`；单个文件与单次请求
+ *   合计都不超过 50 MB；页面图像需要支持视觉的模型（gpt-4o 及以后）；
+ * - `text/*`：按 UTF-8 解码成 `input_text`，开头一行标出文件名与类型（与内核内联文本的写法一致）。
+ *   Responses API 的 `input_file` 也收纯文本类文件，但类型按文件名后缀识别，附件名不一定带后缀；
+ *   内联文本行为确定，不依赖文件名。
+ * 每个块一个 user 输入项（与文本块相同），映射只看块自身。
+ */
+function mapMedia(b: MediaBlock): InputItem {
+  const data = base64Of(b);
+  if (b.type === "image") {
+    return {
+      role: "user",
+      content: [
+        { type: "input_image", image_url: `data:${b.mediaType};base64,${data}`, detail: "auto" },
+      ],
+    };
+  }
+  if (b.mediaType === "application/pdf") {
+    return {
+      role: "user",
+      content: [
+        {
+          type: "input_file",
+          filename: pdfFilename(b.name),
+          file_data: `data:application/pdf;base64,${data}`,
+        },
+      ],
+    };
+  }
+  const text = Buffer.from(data, "base64").toString("utf8");
+  return userText(
+    `[Attached file ${JSON.stringify(b.name ?? "document")} (${b.mediaType})]\n${text}`,
+  );
+}
+
 function mapUserBlock(b: ContentBlock): InputItem | null {
   switch (b.type) {
     case "text":
       return userText(b.text);
+    case "image":
+    case "document":
+      return mapMedia(b);
     case "tool_result":
       return { type: "function_call_output", call_id: b.callId, output: b.content };
     default:
@@ -81,6 +143,7 @@ function mapUserBlock(b: ContentBlock): InputItem | null {
   }
 }
 
+/** assistant 消息只回放文本、推理项与工具调用；媒体块只出现在 user 消息里，出现在这里也不发。 */
 function mapAssistantBlock(
   b: ContentBlock,
   model: string,

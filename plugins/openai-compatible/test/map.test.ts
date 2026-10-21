@@ -1,6 +1,7 @@
 import {
   assertValidDeclarations,
   type ContentBlock,
+  isModelError,
   type ModelMessage,
   type ModelRequest,
   sanitizeParams,
@@ -372,5 +373,163 @@ describe("usage", () => {
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
     });
+  });
+});
+
+describe("media blocks", () => {
+  const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
+  const PNG = "iVBORw0KGgo=";
+  const PDF = b64("%PDF-1.4 fake");
+  const user = (...content: ContentBlock[]): ModelMessage => ({ role: "user", content });
+  const image: ContentBlock = {
+    type: "image",
+    mediaType: "image/jpeg",
+    name: "cat.jpg",
+    source: { kind: "base64", data: PNG },
+  };
+  const pdf = (name?: string): ContentBlock => ({
+    type: "document",
+    mediaType: "application/pdf",
+    ...(name !== undefined ? { name } : {}),
+    source: { kind: "base64", data: PDF },
+  });
+  const errorOf = (f: () => unknown): unknown => {
+    try {
+      f();
+    } catch (e) {
+      return e;
+    }
+    return undefined;
+  };
+
+  it.each(["generic", "deepseek", "qwen", "ark"] as const)(
+    "%s: image -> image_url content part with a data URL, in block order with the text",
+    (dialect) => {
+      const body = buildRequest(
+        req([user({ type: "text", text: "Look:" }, image, { type: "text", text: "What is it?" })]),
+        target(dialect),
+      );
+      expect(body.messages.at(-1)).toEqual({
+        role: "user",
+        content: [
+          { type: "text", text: "Look:" },
+          { type: "image_url", image_url: { url: `data:image/jpeg;base64,${PNG}` } },
+          { type: "text", text: "What is it?" },
+        ],
+      });
+    },
+  );
+
+  it("text-only user messages keep the plain string content", () => {
+    const body = buildRequest(
+      req([user({ type: "text", text: "a" }, { type: "text", text: "b" })]),
+      target("generic"),
+    );
+    expect(body.messages.at(-1)).toEqual({ role: "user", content: "a\n\nb" });
+  });
+
+  it.each(["generic", "qwen"] as const)(
+    "%s: PDF -> file content part (file_data data URL + .pdf filename)",
+    (dialect) => {
+      const body = buildRequest(
+        req([user(pdf("report.pdf"), pdf("scan"), pdf())]),
+        target(dialect),
+      );
+      const part = (filename: string) => ({
+        type: "file",
+        file: { filename, file_data: `data:application/pdf;base64,${PDF}` },
+      });
+      expect(body.messages.at(-1)).toEqual({
+        role: "user",
+        content: [part("report.pdf"), part("scan.pdf"), part("document.pdf")],
+      });
+    },
+  );
+
+  it.each(["deepseek", "ark"] as const)(
+    "%s: a PDF reaching a dialect that cannot take PDFs is a non-retryable ModelError",
+    (dialect) => {
+      const err = errorOf(() => buildRequest(req([user(pdf("a.pdf"))]), target(dialect)));
+      expect(isModelError(err) && err.kind).toBe("invalid_request");
+      expect(isModelError(err) && err.retryable).toBe(false);
+    },
+  );
+
+  it.each(["generic", "deepseek", "qwen", "ark"] as const)(
+    "%s: text/* document -> text part labelled with the file name (decoded UTF-8)",
+    (dialect) => {
+      const body = buildRequest(
+        req([
+          user({
+            type: "document",
+            mediaType: "text/markdown",
+            name: "notes.md",
+            source: { kind: "base64", data: b64("# Héllo\n") },
+          }),
+        ]),
+        target(dialect),
+      );
+      // 只有文本片段时仍是字符串内容（不收内容数组的服务也能用）
+      expect(body.messages.at(-1)).toEqual({
+        role: "user",
+        content: '[Attached file "notes.md" (text/markdown)]\n# Héllo\n',
+      });
+    },
+  );
+
+  it("tool results still come first as role tool messages, media follow in the user message", () => {
+    const body = buildRequest(
+      req([user({ type: "tool_result", callId: "c1", content: "ok", isError: false }, image)]),
+      target("generic"),
+    );
+    expect(body.messages.slice(-2)).toEqual([
+      { role: "tool", tool_call_id: "c1", content: "ok" },
+      {
+        role: "user",
+        content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${PNG}` } }],
+      },
+    ]);
+  });
+
+  it("a ref source reaching the plugin is a non-retryable ModelError", () => {
+    const err = errorOf(() =>
+      buildRequest(
+        req([
+          user({
+            type: "image",
+            mediaType: "image/png",
+            source: { kind: "ref", attachmentId: "3f2b9a52-1c1e-4b7e-9d0a-2f7c1e0b6a11" },
+          }),
+        ]),
+        target("generic"),
+      ),
+    );
+    expect(isModelError(err) && err.kind).toBe("invalid_request");
+    expect(isModelError(err) && err.retryable).toBe(false);
+  });
+
+  it("media blocks in assistant messages are never sent", () => {
+    const body = buildRequest(
+      req([
+        user({ type: "text", text: "Hi" }),
+        { role: "assistant", content: [{ type: "text", text: "Hello" }, image] },
+      ]),
+      target("generic"),
+    );
+    expect(JSON.stringify(body.messages.at(-1))).not.toContain("image");
+  });
+
+  it("an earlier request with media is an exact prefix of a later one", () => {
+    const first = [user(image, { type: "text", text: "What is it?" })];
+    const earlier = buildRequest(req(first), target("qwen")).messages;
+    const later = buildRequest(
+      req([
+        ...first,
+        { role: "assistant", content: [{ type: "text", text: "A cat." }] },
+        user({ type: "text", text: "Thanks" }),
+      ]),
+      target("qwen"),
+    ).messages;
+    expect(later.slice(0, earlier.length)).toEqual(earlier);
   });
 });

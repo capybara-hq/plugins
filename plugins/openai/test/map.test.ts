@@ -1,4 +1,4 @@
-import type { ModelMessage, ModelRequest } from "@capybara-hq/plugin-sdk";
+import type { ContentBlock, ModelMessage, ModelRequest } from "@capybara-hq/plugin-sdk";
 import { isModelError } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { buildRequest, type ModelTraits } from "../src/map-request.js";
@@ -416,5 +416,142 @@ describe("buildRequest: tool_call input that cannot be serialized", () => {
       err = e;
     }
     expect(isModelError(err) && err.kind).toBe("invalid_request");
+  });
+});
+
+describe("buildRequest: media blocks", () => {
+  const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
+  const PNG = "iVBORw0KGgo=";
+  const PDF = b64("%PDF-1.4 fake");
+  const user = (...content: ContentBlock[]): ModelMessage => ({ role: "user", content });
+
+  it("image -> input_image with a data URL", () => {
+    const params = build(
+      base({
+        messages: [
+          user(
+            { type: "image", mediaType: "image/webp", source: { kind: "base64", data: PNG } },
+            { type: "text", text: "What is this?" },
+          ),
+        ],
+      }),
+    );
+    expect(params.input).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "input_image", image_url: `data:image/webp;base64,${PNG}`, detail: "auto" },
+        ],
+      },
+      { role: "user", content: [{ type: "input_text", text: "What is this?" }] },
+    ]);
+  });
+
+  it("PDF -> input_file with file_data (data URL) and a .pdf filename", () => {
+    const pdf = (name?: string): ContentBlock => ({
+      type: "document",
+      mediaType: "application/pdf",
+      ...(name !== undefined ? { name } : {}),
+      source: { kind: "base64", data: PDF },
+    });
+    const params = build(base({ messages: [user(pdf("report.PDF"), pdf("scan"), pdf())] }));
+    const file = (filename: string) => ({
+      role: "user",
+      content: [{ type: "input_file", filename, file_data: `data:application/pdf;base64,${PDF}` }],
+    });
+    expect(params.input).toEqual([file("report.PDF"), file("scan.pdf"), file("document.pdf")]);
+  });
+
+  it("text/* document -> input_text labelled with the file name (decoded UTF-8)", () => {
+    const params = build(
+      base({
+        messages: [
+          user(
+            {
+              type: "document",
+              mediaType: "text/csv",
+              name: "data.csv",
+              source: { kind: "base64", data: b64("a,b\n1,2 ü\n") },
+            },
+            {
+              type: "document",
+              mediaType: "text/plain",
+              source: { kind: "base64", data: b64("x") },
+            },
+          ),
+        ],
+      }),
+    );
+    expect(params.input).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: '[Attached file "data.csv" (text/csv)]\na,b\n1,2 ü\n' },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "input_text", text: '[Attached file "document" (text/plain)]\nx' }],
+      },
+    ]);
+  });
+
+  it("a ref source reaching the plugin is a non-retryable ModelError", () => {
+    let err: unknown;
+    try {
+      build(
+        base({
+          messages: [
+            user({
+              type: "document",
+              mediaType: "application/pdf",
+              source: { kind: "ref", attachmentId: "3f2b9a52-1c1e-4b7e-9d0a-2f7c1e0b6a11" },
+            }),
+          ],
+        }),
+      );
+    } catch (e) {
+      err = e;
+    }
+    expect(isModelError(err)).toBe(true);
+    if (isModelError(err)) {
+      expect(err.kind).toBe("invalid_request");
+      expect(err.retryable).toBe(false);
+    }
+  });
+
+  it("media blocks in assistant messages are never sent", () => {
+    const params = build(
+      base({
+        messages: [
+          user({ type: "text", text: "Hi" }),
+          {
+            role: "assistant",
+            content: [
+              { type: "image", mediaType: "image/png", source: { kind: "base64", data: PNG } },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(params.input).toEqual([{ role: "user", content: [{ type: "input_text", text: "Hi" }] }]);
+  });
+
+  it("an earlier request with media is an exact prefix of a later one", () => {
+    const img = user(
+      { type: "image", mediaType: "image/png", source: { kind: "base64", data: PNG } },
+      { type: "text", text: "What is this?" },
+    );
+    const earlier = build(base({ messages: [img] })).input as unknown[];
+    const later = build(
+      base({
+        messages: [
+          img,
+          { role: "assistant", content: [{ type: "text", text: "A dot." }] },
+          user({ type: "text", text: "Thanks" }),
+        ],
+      }),
+    ).input as unknown[];
+    expect(later.slice(0, earlier.length)).toEqual(earlier);
   });
 });

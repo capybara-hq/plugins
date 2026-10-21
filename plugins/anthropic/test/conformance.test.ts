@@ -587,7 +587,7 @@ describe("anthropic: errors and edge cases", () => {
     expect(isModelError(err)).toBe(true);
     expect(isModelError(err) && err.retryable).toBe(true);
     // 成功的 id 仍写入 kv 缓存
-    expect(kv.store.has("models:v2:claude-haiku-5-5")).toBe(true);
+    expect(kv.store.has("models:v3:claude-haiku-5-5")).toBe(true);
     modelFail.clear();
   });
 
@@ -747,6 +747,7 @@ describe("anthropic: errors and edge cases", () => {
         reasoning: true,
         caching: true,
         midConversationSystem: false,
+        documents: true,
       },
       streamIdleTimeoutMs: 300_000,
       parameters: [
@@ -769,8 +770,8 @@ describe("anthropic: errors and edge cases", () => {
       ],
     });
     expect([...kv.store.keys()].sort()).toEqual([
-      "models:v2:claude-haiku-5-5",
-      "models:v2:claude-sonnet-5",
+      "models:v3:claude-haiku-5-5",
+      "models:v3:claude-sonnet-5",
     ]);
     expect(models.every((m) => !m.capabilities.midConversationSystem)).toBe(true);
     expect(kv.ttls).toEqual([3600, 3600]);
@@ -778,5 +779,18 @@ describe("anthropic: errors and edge cases", () => {
     expect(afterFirst - before).toBe(2);
     await p.listModels();
     expect(server.requests.length).toBe(afterFirst);
+  });
+
+  it("vision / documents come from the Models API image_input / pdf_input", async () => {
+    const p = createAnthropicProvider({
+      kv: memoryKv(),
+      apiKey: "sk-ant-fixture",
+      baseUrl: server.url,
+      models: ["claude-haiku-5-5", "claude-nothink"],
+      serverFallbacks: "off",
+    });
+    const caps = Object.fromEntries((await p.listModels()).map((m) => [m.id, m.capabilities]));
+    expect(caps["claude-haiku-5-5"]).toMatchObject({ vision: true, documents: true });
+    expect(caps["claude-nothink"]).toMatchObject({ vision: false, documents: false });
   });
 });

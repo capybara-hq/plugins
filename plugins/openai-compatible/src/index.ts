@@ -17,7 +17,13 @@ const EndpointModelSchema = z.object({
   id: z.string().min(1),
   contextWindow: z.number().int().positive(),
   maxOutputTokens: z.number().int().positive(),
+  /** 是否接受图片（`image_url`）；缺省 false。各方言的出处见 `dialects.ts`。 */
   vision: z.boolean().optional(),
+  /**
+   * 是否接受 PDF（`file` 内容）；缺省 false。只有 `pdfInput` 的方言（generic、qwen）能开启，其余方言配置校验拒绝。
+   * 开启后内核也把 `text/*` 附件作为文档块发来，插件解码成文本片段。
+   */
+  documents: z.boolean().optional(),
   reasoning: z.boolean().optional(),
   /** 未给时取方言默认（服务是否有自动前缀缓存）。 */
   caching: z.boolean().optional(),
@@ -57,6 +63,17 @@ const DeploymentConfig = z
     apiKeys: secret(z.record(z.string(), z.string().min(1))).default({}),
   })
   .superRefine((cfg, ctx) => {
+    cfg.endpoints.forEach((e, i) => {
+      if (DIALECTS[e.dialect].pdfInput) return;
+      e.models.forEach((m, j) => {
+        if (m.documents !== true) return;
+        ctx.addIssue({
+          code: "custom",
+          path: ["endpoints", i, "models", j, "documents"],
+          message: `dialect "${e.dialect}" does not accept PDF documents; documents must be false`,
+        });
+      });
+    });
     const names = new Set(cfg.endpoints.map((e) => e.name));
     for (const key of Object.keys(cfg.apiKeys)) {
       if (!names.has(key)) {
@@ -107,6 +124,8 @@ function modelInfo(ep: Endpoint, m: EndpointModelConfig): ModelInfo {
     capabilities: {
       tools: true,
       vision: m.vision ?? false,
+      // 配置校验已拒绝在不收 PDF 的方言上开启；直接构造时这里再兜一层
+      documents: (m.documents ?? false) && ep.dialect.pdfInput,
       reasoning,
       caching: m.caching ?? ep.dialect.caching,
       midConversationSystem: ep.midConversationSystem,

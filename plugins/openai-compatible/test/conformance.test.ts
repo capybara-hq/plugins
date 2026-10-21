@@ -30,11 +30,13 @@ const model = (id: string, over: Partial<EndpointModelConfig> = {}): EndpointMod
 });
 
 // ---- 夹具模式：三种方言各跑一遍 ----
+// vision / documents 按各家文档：deepseek-flash 收图片不收 PDF；qwen3.8-flash 两者都收；
+// ark 的 Chat API 不收 PDF（文档理解只走 Responses API）；generic 按 OpenAI 规格都可开启
 const fixtureModels: Record<Dialect, EndpointModelConfig> = {
-  generic: model("Qwen/Qwen3-8B"),
-  deepseek: model("deepseek-flash", { reasoning: true, caching: true }),
-  qwen: model("qwen3.8-plus", { reasoning: true, caching: true }),
-  ark: model("doubao-seed-2-0-pro", { reasoning: true, caching: true }),
+  generic: model("Qwen/Qwen3-8B", { vision: true, documents: true }),
+  deepseek: model("deepseek-flash", { reasoning: true, caching: true, vision: true }),
+  qwen: model("qwen3.8-flash", { reasoning: true, caching: true, vision: true, documents: true }),
+  ark: model("doubao-seed-2-0-pro", { reasoning: true, caching: true, vision: true }),
 };
 
 for (const dialect of ["generic", "deepseek", "qwen", "ark"] as const) {
@@ -68,6 +70,9 @@ const LIVE = {
   apiKey: process.env.CAPYBARA_TEST_OAICOMPAT_API_KEY,
   model: process.env.CAPYBARA_TEST_OAICOMPAT_MODEL,
   dialect: process.env.CAPYBARA_TEST_OAICOMPAT_DIALECT as Dialect | undefined,
+  /** 可选：设为 1 时声明该模型 vision / documents，跑图片 / PDF 用例（模型须真的支持）。 */
+  vision: process.env.CAPYBARA_TEST_OAICOMPAT_VISION === "1",
+  documents: process.env.CAPYBARA_TEST_OAICOMPAT_DOCUMENTS === "1",
 };
 const liveReady = Boolean(LIVE.baseUrl && LIVE.apiKey && LIVE.model && LIVE.dialect);
 if (!liveReady) {
@@ -89,7 +94,13 @@ describe.skipIf(!liveReady)("live", { timeout: 120_000 }, () => {
             name: "live",
             baseUrl: LIVE.baseUrl ?? "",
             dialect,
-            models: [model(LIVE.model ?? "", { reasoning: dialect !== "generic" })],
+            models: [
+              model(LIVE.model ?? "", {
+                reasoning: dialect !== "generic",
+                vision: LIVE.vision,
+                documents: LIVE.documents,
+              }),
+            ],
           },
         ],
         apiKeys: { live: LIVE.apiKey ?? "" },
@@ -180,6 +191,7 @@ describe("openai-compatible: stream edge cases and errors", () => {
       reasoning: false,
       caching: false,
       midConversationSystem: false,
+      documents: false,
     });
     expect(local?.streamIdleTimeoutMs).toBe(120_000);
     expect(models[0]?.capabilities.midConversationSystem).toBe(true);
@@ -519,6 +531,44 @@ describe("openai-compatible: stream edge cases and errors", () => {
     const bad = schema?.safeParse({ ...ok, apiKeys: { nope: "sk-x" } });
     expect(bad?.success).toBe(false);
     expect(JSON.stringify(bad?.error?.issues)).toContain("nope");
+    // documents 只能在接受 PDF 的方言上开启（generic、qwen）
+    const docs = (dialect: string) =>
+      schema?.safeParse({
+        endpoints: [
+          { name: "e", baseUrl: "http://x/v1", dialect, models: [model("m", { documents: true })] },
+        ],
+      });
+    expect(docs("generic")?.success).toBe(true);
+    expect(docs("qwen")?.success).toBe(true);
+    for (const d of ["deepseek", "ark"]) {
+      const r = docs(d);
+      expect(r?.success, d).toBe(false);
+      expect(JSON.stringify(r?.error?.issues)).toContain("documents");
+    }
+  });
+
+  it("documents is declared per configured model (default false) and only where the dialect takes PDFs", async () => {
+    const p = createOpenAICompatibleProvider({
+      endpoints: [
+        {
+          name: "q",
+          baseUrl: `${server.url}/v1`,
+          dialect: "qwen",
+          models: [model("a", { vision: true, documents: true }), model("b")],
+        },
+        // 不经配置校验直接构造时也不会对不收 PDF 的方言声明 documents
+        {
+          name: "d",
+          baseUrl: `${server.url}/v1`,
+          dialect: "deepseek",
+          models: [model("c", { vision: true, documents: true })],
+        },
+      ],
+    });
+    const caps = Object.fromEntries((await p.listModels()).map((m) => [m.id, m.capabilities]));
+    expect(caps["q/a"]).toMatchObject({ vision: true, documents: true });
+    expect(caps["q/b"]).toMatchObject({ vision: false, documents: false });
+    expect(caps["d/c"]).toMatchObject({ vision: true, documents: false });
   });
 
   it("passes the kernel's secret reachability check and apiKeys values are redacted", () => {

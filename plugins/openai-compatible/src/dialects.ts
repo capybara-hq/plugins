@@ -50,6 +50,12 @@ export interface Dialect {
   midConversationSystem: boolean;
   /** 未配置 `caching` 时的默认值（服务是否有自动前缀缓存）。 */
   caching: boolean;
+  /**
+   * Chat Completions 是否接受 PDF 的 `file` 内容（`{type: "file", file: {filename, file_data}}`）。
+   * 为 false 的方言不能给模型开启 `documents`（配置校验拒绝）。图片一律用 `image_url`（data URL），
+   * 是否支持按模型在部署配置里声明 `vision`。
+   */
+  pdfInput: boolean;
   /** 该模型声明的参数（须通过 `assertValidDeclarations`）。 */
   parameters(model: ModelTraits): ModelParameter[];
   /**
@@ -173,12 +179,18 @@ function openaiStyleUsage(raw: RawUsage | null | undefined): ModelUsage {
 
 // ---- 方言 ----
 
-/** 通用：标准旋钮只有 temperature、maxOutputTokens；不处理 `reasoning_content`。 */
+/**
+ * 通用：标准旋钮只有 temperature、maxOutputTokens；不处理 `reasoning_content`。
+ * 媒体按 OpenAI Chat Completions 规格（https://developers.openai.com/api/docs/guides/images-vision ，
+ * https://developers.openai.com/api/docs/guides/pdf-files ，2026-10-21 核实）：图片 `image_url` 收 data URL；
+ * `file` 内容只收 PDF。兼容服务（vLLM 等）多半不收 `file`，所以 `documents` 由部署按模型开启（缺省 false）。
+ */
 const generic: Dialect = {
   name: "generic",
   // 许多开源模型的 chat template（如 Qwen3）在 system 不在开头时直接报错，默认转成 user 文本；端点可改
   midConversationSystem: false,
   caching: false,
+  pdfInput: true,
   parameters: (m) => [temperature(2), maxOutput(m)],
   applyParams(body, params) {
     if (typeof params.temperature === "number") body.temperature = params.temperature;
@@ -200,6 +212,9 @@ const generic: Dialect = {
  * - 回放：带 `tools` 的请求必须把之前每一轮的 `reasoning_content` 原样带回，否则 400；不带 tools 时
  *   带回会被忽略。所以同一端点同一模型产出的思考块总是作为 `reasoning_content` 回放（与较早的
  *   deepseek-reasoner「带回即 400」相反；该模型名已于 2026-07-24 下线）。
+ * - 图片（https://api-docs.deepseek.com/guides/vision ，2026-10-21 核实）：`image_url` 收 data URL，
+ *   jpeg / png / gif / webp，单张 32 MiB、请求体 48 MiB，只在 user 消息里；文档只写了 deepseek-flash 收图片。
+ *   文档没有 PDF 输入，`pdfInput: false`。
  */
 const deepseek: Dialect = {
   name: "deepseek",
@@ -207,6 +222,7 @@ const deepseek: Dialect = {
   midConversationSystem: true,
   // 磁盘缓存自动生效
   caching: true,
+  pdfInput: false,
   parameters: (m) => [
     ...(m.reasoning
       ? [
@@ -274,12 +290,18 @@ const deepseek: Dialect = {
  * - 用量：`prompt_tokens` 含 `prompt_tokens_details.cached_tokens`（命中）与 `cache_creation_input_tokens`（显式缓存写入）；
  * - temperature 默认值因模型而异，不给默认值；
  * - system 消息的位置规则文档未写明，按保守做法转成 user 文本（端点可改）。
+ * - 媒体（https://www.alibabacloud.com/help/en/model-studio/vision ，
+ *   https://www.alibabacloud.com/help/ja/model-studio/pdf-understanding ，2026-10-21 核实）：图片 `image_url`
+ *   收 `data:image/<fmt>;base64,…`（Qwen-VL / QVQ 等视觉模型）；PDF 用 OpenAI 同款
+ *   `{type: "file", file: {file_data, filename}}`，文档列出 qwen3.8-max / qwen3.8-flash / qwen3.8-27b，
+ *   单个 150 MB、256 页，目前仅北京地域；Responses API 不收 PDF（插件也不用）。
  */
 const qwen: Dialect = {
   name: "qwen",
   midConversationSystem: false,
   // 隐式缓存自动生效（不保证命中）
   caching: true,
+  pdfInput: true,
   parameters: (m) => [...(m.reasoning ? [thinkingKnob()] : []), temperature(2), maxOutput(m)],
   applyParams(body, params) {
     if (params.thinking === "on" || params.thinking === "off") {
@@ -314,11 +336,16 @@ const qwen: Dialect = {
  * - `reasoning_effort`（none…max）的支持模型与默认值文档未能确认，不实现；temperature 默认值未确认，不给默认值；
  * - 历史 `reasoning_content` 的回放规则、system 消息的位置规则未能确认，保守处理：不回放思考，
  *   中途 system 转成 user 文本（端点可改）；是否有自动缓存未确认，`caching` 默认 false。
+ * - 媒体（2026-10-21 核实）：视觉模型的图片走 Chat API 的 `image_url`；文档理解（PDF）只见于
+ *   Responses API 的 `input_file`（https://docs.byteplus.com/docs/ModelArk/1902647 ），Chat API 收 PDF
+ *   未能确认，`pdfInput: false`。图片收 base64 data URL 的写法官方页面未能直接读到（页面由脚本渲染），
+ *   按 OpenAI 规格发送，需真实接口验证。
  */
 const ark: Dialect = {
   name: "ark",
   midConversationSystem: false,
   caching: false,
+  pdfInput: false,
   parameters: (m) => [...(m.reasoning ? [thinkingKnob()] : []), temperature(2), maxOutput(m)],
   applyParams(body, params) {
     if (params.thinking === "on" || params.thinking === "off") {

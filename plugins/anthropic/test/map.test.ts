@@ -1,4 +1,9 @@
-import type { ModelMessage, ModelRequest } from "@capybara-hq/plugin-sdk";
+import {
+  type ContentBlock,
+  isModelError,
+  type ModelMessage,
+  type ModelRequest,
+} from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { buildRequest } from "../src/map-request.js";
 
@@ -291,5 +296,145 @@ describe("buildRequest: server-side fallbacks", () => {
 
   it("serverFallbacks: off disables it for whitelisted models", () => {
     expect(build(base({ model: "claude-opus-5-5" }), "off").beta).toBeNull();
+  });
+});
+
+describe("buildRequest: media blocks", () => {
+  const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
+  const PNG = "iVBORw0KGgo=";
+  const PDF = b64("%PDF-1.4 fake");
+  const user = (...content: ContentBlock[]): ModelMessage => ({ role: "user", content });
+
+  it("image -> image block with a base64 source", () => {
+    const { params } = build(
+      base({
+        messages: [
+          user(
+            {
+              type: "image",
+              mediaType: "image/png",
+              name: "a.png",
+              source: { kind: "base64", data: PNG },
+            },
+            { type: "text", text: "What is this?" },
+          ),
+        ],
+      }),
+    );
+    expect(params.messages[0]?.content).toEqual([
+      { type: "image", source: { type: "base64", media_type: "image/png", data: PNG } },
+      { type: "text", text: "What is this?" },
+    ]);
+  });
+
+  it("PDF -> document block with a base64 source, titled with the file name", () => {
+    const { params } = build(
+      base({
+        messages: [
+          user({
+            type: "document",
+            mediaType: "application/pdf",
+            name: "report.pdf",
+            source: { kind: "base64", data: PDF },
+          }),
+        ],
+      }),
+    );
+    expect(params.messages[0]?.content).toEqual([
+      {
+        type: "document",
+        source: { type: "base64", media_type: "application/pdf", data: PDF },
+        title: "report.pdf",
+      },
+    ]);
+  });
+
+  it("text/* document -> plain-text document block (decoded UTF-8), titled with the file name", () => {
+    const { params } = build(
+      base({
+        messages: [
+          user(
+            {
+              type: "document",
+              mediaType: "text/markdown",
+              name: "notes.md",
+              source: { kind: "base64", data: b64("# Héllo\n") },
+            },
+            {
+              type: "document",
+              mediaType: "text/csv",
+              source: { kind: "base64", data: b64("a,b\n") },
+            },
+          ),
+        ],
+      }),
+    );
+    expect(params.messages[0]?.content).toEqual([
+      {
+        type: "document",
+        source: { type: "text", media_type: "text/plain", data: "# Héllo\n" },
+        title: "notes.md",
+      },
+      { type: "document", source: { type: "text", media_type: "text/plain", data: "a,b\n" } },
+    ]);
+  });
+
+  it("a ref source reaching the plugin is a non-retryable ModelError", () => {
+    const req = base({
+      messages: [
+        user({
+          type: "image",
+          mediaType: "image/png",
+          source: { kind: "ref", attachmentId: "3f2b9a52-1c1e-4b7e-9d0a-2f7c1e0b6a11" },
+        }),
+      ],
+    });
+    let err: unknown;
+    try {
+      build(req);
+    } catch (e) {
+      err = e;
+    }
+    expect(isModelError(err)).toBe(true);
+    if (isModelError(err)) {
+      expect(err.kind).toBe("invalid_request");
+      expect(err.retryable).toBe(false);
+    }
+  });
+
+  it("media blocks in assistant messages are never sent", () => {
+    const { params } = build(
+      base({
+        messages: [
+          user({ type: "text", text: "Hi" }),
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Hello" },
+              { type: "image", mediaType: "image/png", source: { kind: "base64", data: PNG } },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(params.messages[1]?.content).toEqual([{ type: "text", text: "Hello" }]);
+  });
+
+  it("an earlier request with media is an exact prefix of a later one", () => {
+    const img = user(
+      { type: "image", mediaType: "image/png", source: { kind: "base64", data: PNG } },
+      { type: "text", text: "What is this?" },
+    );
+    const earlier = build(base({ messages: [img] })).params;
+    const later = build(
+      base({
+        messages: [
+          img,
+          { role: "assistant", content: [{ type: "text", text: "A dot." }] },
+          user({ type: "text", text: "Thanks" }),
+        ],
+      }),
+    ).params;
+    expect(later.messages.slice(0, earlier.messages.length)).toEqual(earlier.messages);
   });
 });

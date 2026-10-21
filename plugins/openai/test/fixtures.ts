@@ -1,4 +1,9 @@
-import type { FakeRequest, FakeResponse } from "@capybara-hq/testing";
+import {
+  type FakeRequest,
+  type FakeResponse,
+  isPngBase64,
+  pdfSampleWord,
+} from "@capybara-hq/testing";
 
 /** 手写的 OpenAI Responses API 夹具：按原生 SSE 事件格式回放。 */
 
@@ -243,6 +248,39 @@ function protocolViolation(b: Body): string | null {
 }
 
 /** 一致性测试用的路由：按请求内容挑场景。 */
+/** data URL → [媒体类型, base64]；不是 base64 data URL 时返回 null。 */
+function parseDataUrl(v: unknown): [string, string] | null {
+  const m = typeof v === "string" ? /^data:([^;,]+);base64,(.*)$/.exec(v) : null;
+  return m?.[1] !== undefined && m[2] !== undefined ? [m[1], m[2]] : null;
+}
+
+/**
+ * 媒体样本的回答：只认 Responses API 原生形状（`input_image` 的 data URL、带 filename 的 `input_file`、
+ * 文本附件的 `input_text`），并从内容里读出答案。不是样本时返回 null。
+ */
+function mediaAnswer(input: InputItem[]): string | null {
+  for (const item of input) {
+    const content = (item as { role?: string; content?: unknown }).content;
+    if ((item as { role?: string }).role !== "user" || !Array.isArray(content)) continue;
+    for (const part of content as Record<string, unknown>[]) {
+      if (part.type === "input_image") {
+        const d = parseDataUrl(part.image_url);
+        if (d?.[0] === "image/png" && isPngBase64(d[1])) return "Red.";
+      }
+      if (part.type === "input_file" && typeof part.filename === "string") {
+        const d = parseDataUrl(part.file_data);
+        const word = d?.[0] === "application/pdf" ? pdfSampleWord(d[1]) : null;
+        if (word !== null) return word;
+      }
+      if (part.type === "input_text") {
+        const word = /secret word is (\w+)/.exec(String(part.text))?.[1];
+        if (word !== undefined) return word;
+      }
+    }
+  }
+  return null;
+}
+
 export function openaiRoutes(): (req: FakeRequest) => FakeResponse {
   const cachedPrefixes = new Set<string>();
   return (req) => {
@@ -269,6 +307,8 @@ export function openaiRoutes(): (req: FakeRequest) => FakeResponse {
         cached_tokens: seen ? 5000 : 0,
       });
     }
+    const media = mediaAnswer(b.input);
+    if (media !== null) return text(media);
     if (b.input.at(-1)?.type === "function_call_output") {
       return text("It is sunny and 22C in Paris.");
     }

@@ -1,5 +1,11 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import type { ContentBlock, Effort, ModelMessage, ModelRequest } from "@capybara-hq/plugin-sdk";
+import {
+  type ContentBlock,
+  type Effort,
+  ModelError,
+  type ModelMessage,
+  type ModelRequest,
+} from "@capybara-hq/plugin-sdk";
 
 export const PROVIDER = "anthropic";
 export const SERVER_FALLBACK_BETA = "server-side-fallback-2026-07-01";
@@ -28,10 +34,60 @@ export function supportsServerFallback(model: string): boolean {
   }
 }
 
+type MediaBlock = Extract<ContentBlock, { type: "image" | "document" }>;
+
+/** 媒体块的 base64 数据。内核只发 `base64`；收到 `ref` 是内核的缺陷，按不可重试的请求错误报出。 */
+function base64Of(b: MediaBlock): string {
+  if (b.source.kind !== "base64") {
+    throw new ModelError(
+      "invalid_request",
+      `The ${b.type} block has an unresolved attachment reference; the kernel must send base64 data`,
+    );
+  }
+  return b.source.data;
+}
+
+/**
+ * 媒体块 → Messages API 原生块（https://platform.claude.com/docs/en/build-with-claude/vision ，
+ * https://platform.claude.com/docs/en/build-with-claude/pdf-support ，
+ * https://platform.claude.com/docs/en/build-with-claude/citations ，2026-10-21 核实）：
+ * - 图片：`{type: "image", source: {type: "base64", media_type, data}}`，jpeg / png / gif / webp；
+ *   直连 API 单张 base64 不超过 10 MB、8000×8000 px，单次请求不超过 32 MB；
+ * - PDF：`{type: "document", source: {type: "base64", media_type: "application/pdf", data}}`，所有在售模型
+ *   都支持（是否支持以 Models API 的 `pdf_input` 为准）；单次请求 32 MB、最多 600 页（上下文窗口不足 1M 的
+ *   模型 100 页）；
+ * - `text/*`：纯文本文档 `{type: "document", source: {type: "text", media_type: "text/plain", data}}`，
+ *   markdown / csv 也按 text/plain 发（API 的纯文本源只认 text/plain），字节按 UTF-8 解码；
+ * - 有文件名时带 `title`（模型可见，便于在回答里指代）。
+ */
+function mapMedia(b: MediaBlock): Anthropic.ContentBlockParam {
+  const data = base64Of(b);
+  if (b.type === "image") {
+    return { type: "image", source: { type: "base64", media_type: b.mediaType, data } };
+  }
+  const title = b.name !== undefined ? { title: b.name } : {};
+  if (b.mediaType === "application/pdf") {
+    return {
+      type: "document",
+      source: { type: "base64", media_type: "application/pdf", data },
+      ...title,
+    };
+  }
+  const text = Buffer.from(data, "base64").toString("utf8");
+  return {
+    type: "document",
+    source: { type: "text", media_type: "text/plain", data: text },
+    ...title,
+  };
+}
+
 function mapUserBlock(b: ContentBlock): Anthropic.ContentBlockParam | null {
   switch (b.type) {
     case "text":
       return { type: "text", text: b.text };
+    case "image":
+    case "document":
+      return mapMedia(b);
     case "tool_result":
       return {
         type: "tool_result",
@@ -44,6 +100,7 @@ function mapUserBlock(b: ContentBlock): Anthropic.ContentBlockParam | null {
   }
 }
 
+/** assistant 消息只回放文本、思考与工具调用；媒体块只出现在 user 消息里，出现在这里也不发。 */
 function mapAssistantBlock(b: ContentBlock, model: string): Anthropic.ContentBlockParam | null {
   switch (b.type) {
     case "text":
