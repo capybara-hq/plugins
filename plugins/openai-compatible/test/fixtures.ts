@@ -1,4 +1,9 @@
-import type { FakeRequest, FakeResponse } from "@capybara-hq/testing";
+import {
+  type FakeRequest,
+  type FakeResponse,
+  isPngBase64,
+  pdfSampleWord,
+} from "@capybara-hq/testing";
 
 /** 手写的 Chat Completions 夹具：按原生 SSE 格式（`data: <chunk>` … `data: [DONE]`）回放。 */
 
@@ -177,6 +182,61 @@ function protocolViolation(dialect: Dialect, b: Body, thinks: boolean): string |
   }
   if (dialect !== "deepseek" && b.messages.some((m) => m.reasoning_content !== undefined))
     return "reasoning_content is not expected for this dialect";
+  for (const m of b.messages) {
+    if (!Array.isArray(m.content)) continue;
+    for (const part of m.content as Record<string, unknown>[]) {
+      if (m.role !== "user") return "content parts are only expected in user messages";
+      if (part.type === "image_url") {
+        const url = (part.image_url as { url?: unknown } | undefined)?.url;
+        if (parseDataUrl(url)?.[0].startsWith("image/") !== true)
+          return "image_url.url must be an image data URL";
+      } else if (part.type === "file") {
+        // 只有 generic（OpenAI Chat Completions 规格）与 qwen 接受 PDF 的 file 内容
+        if (dialect === "deepseek" || dialect === "ark") return "file content is not supported";
+        const f = part.file as { filename?: unknown; file_data?: unknown } | undefined;
+        if (typeof f?.filename !== "string") return "file.filename is required with file_data";
+        if (parseDataUrl(f.file_data)?.[0] !== "application/pdf")
+          return "file.file_data must be a PDF data URL";
+      } else if (part.type !== "text") {
+        return `unknown content part type ${String(part.type)}`;
+      }
+    }
+  }
+  return null;
+}
+
+/** data URL → [媒体类型, base64]；不是 base64 data URL 时返回 null。 */
+function parseDataUrl(v: unknown): [string, string] | null {
+  const m = typeof v === "string" ? /^data:([^;,]+);base64,(.*)$/.exec(v) : null;
+  return m?.[1] !== undefined && m[2] !== undefined ? [m[1], m[2]] : null;
+}
+
+/**
+ * 媒体样本的回答：只认 Chat Completions 的 `image_url`（data URL）、`file`（PDF）与文本附件，
+ * 并从内容里读出答案。不是样本时返回 null。
+ */
+function mediaAnswer(messages: Msg[]): string | null {
+  for (const m of messages) {
+    if (m.role !== "user") continue;
+    const parts = Array.isArray(m.content)
+      ? (m.content as Record<string, unknown>[])
+      : [{ type: "text", text: m.content }];
+    for (const part of parts) {
+      if (part.type === "image_url") {
+        const d = parseDataUrl((part.image_url as { url?: unknown }).url);
+        if (d?.[0] === "image/png" && isPngBase64(d[1])) return "Red.";
+      }
+      if (part.type === "file") {
+        const d = parseDataUrl((part.file as { file_data?: unknown }).file_data);
+        const word = d !== null ? pdfSampleWord(d[1]) : null;
+        if (word !== null) return word;
+      }
+      if (part.type === "text") {
+        const word = /secret word is (\w+)/.exec(String(part.text))?.[1];
+        if (word !== undefined) return word;
+      }
+    }
+  }
   return null;
 }
 
@@ -216,6 +276,10 @@ export function chatRoutes(dialect: Dialect): (req: FakeRequest) => FakeResponse
         finish: "stop",
         usage: usage(5010, 3, seen ? 5000 : 0),
       });
+    }
+    const media = mediaAnswer(b.messages);
+    if (media !== null) {
+      return sseChat({ model, reasoning, text: media, finish: "stop", usage: usage(1600, 2) });
     }
     if (b.messages.at(-1)?.role === "tool") {
       return sseChat({

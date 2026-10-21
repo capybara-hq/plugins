@@ -24,6 +24,11 @@ const ModelConfigSchema = z.object({
   maxOutputTokens: z.number().int().positive(),
   reasoning: z.boolean(),
   vision: z.boolean(),
+  /**
+   * 是否接受 PDF（`input_file`）。缺省 false：由部署按模型开启。文档未列出逐模型清单，PDF 的页面图像需要
+   * 支持视觉的模型（gpt-4o 及以后；https://developers.openai.com/api/docs/guides/pdf-files ，2026-10-21 核实）。
+   */
+  documents: z.boolean().optional(),
   streamIdleTimeoutMs: z.number().int().positive().optional(),
   /**
    * 该模型接受的 effort 档位（按给定顺序声明）；档位因模型而异（如 gpt-5-nano 不接受 max），
@@ -94,6 +99,7 @@ function modelInfo(m: ModelConfig, reasoningSummary: "auto" | "off"): ModelInfo 
       caching: true,
       // 中途 system 以 developer 输入项实现
       midConversationSystem: true,
+      documents: m.documents ?? false,
     },
     ...(m.streamIdleTimeoutMs !== undefined ? { streamIdleTimeoutMs: m.streamIdleTimeoutMs } : {}),
     parameters: m.reasoning ? reasoningParameters(m, reasoningSummary) : [],

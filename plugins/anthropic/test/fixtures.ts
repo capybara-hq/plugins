@@ -1,4 +1,9 @@
-import type { FakeRequest, FakeResponse } from "@capybara-hq/testing";
+import {
+  type FakeRequest,
+  type FakeResponse,
+  isPngBase64,
+  pdfSampleWord,
+} from "@capybara-hq/testing";
 
 /** 手写的 Anthropic Messages API 夹具：按原生 SSE 格式回放。 */
 
@@ -175,6 +180,7 @@ export function modelObject(id: string): unknown {
       max_tokens: 8_192,
       capabilities: {
         image_input: { supported: false },
+        pdf_input: { supported: false },
         thinking: { supported: false, types: { adaptive: { supported: false } } },
         effort: { supported: false },
       },
@@ -189,6 +195,7 @@ export function modelObject(id: string): unknown {
     max_tokens: 128_000,
     capabilities: {
       image_input: { supported: true },
+      pdf_input: { supported: true },
       thinking: { supported: true, types: { adaptive: { supported: true } } },
       effort: id.includes(FEW_EFFORT_LEVELS)
         ? {
@@ -270,6 +277,28 @@ function protocolViolation(b: Body, headers: Record<string, string>, path: strin
   return null;
 }
 
+/**
+ * 媒体样本的回答：只认 Anthropic 原生形状（image / document 的 base64 源、纯文本 document），
+ * 并从内容里读出答案，所以一致性用例通过即证明映射正确。不是样本时返回 null。
+ */
+function mediaAnswer(blocks: { type: string; [k: string]: unknown }[]): string | null {
+  for (const c of blocks) {
+    const src = c.source as { type?: string; media_type?: string; data?: unknown } | undefined;
+    if (c.type === "image" && src?.type === "base64" && src.media_type === "image/png") {
+      if (isPngBase64(src.data)) return "Red.";
+    }
+    if (c.type === "document" && src?.type === "base64" && src.media_type === "application/pdf") {
+      const word = pdfSampleWord(src.data);
+      if (word !== null) return word;
+    }
+    if (c.type === "document" && src?.type === "text" && src.media_type === "text/plain") {
+      const word = /secret word is (\w+)/.exec(String(src.data))?.[1];
+      if (word !== undefined) return word;
+    }
+  }
+  return null;
+}
+
 /** 一致性测试用的路由：按请求内容挑场景。 */
 export function anthropicRoutes(): (req: FakeRequest) => FakeResponse {
   const cachedPrefixes = new Set<string>();
@@ -298,6 +327,8 @@ export function anthropicRoutes(): (req: FakeRequest) => FakeResponse {
         cache_creation_input_tokens: cached && !seen ? 5000 : 0,
       });
     }
+    const media = mediaAnswer(last);
+    if (media !== null) return text(media);
     if (last.some((c) => c.type === "tool_result")) return text("It is sunny and 22C in Paris.");
     if ((b.tools?.length ?? 0) > 0) {
       return sseMessage({

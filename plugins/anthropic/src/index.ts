@@ -37,10 +37,10 @@ export interface AnthropicProviderOptions {
 
 const MODEL_CACHE_TTL_SECONDS = 3600;
 /**
- * kv 里模型信息缓存的键。缓存的是映射后的 ModelInfo，形状随契约变化，所以键带契约主版本：
- * 升级后不会读到旧版本写入的 `@1` 形状（旧键按 TTL 自然过期）。
+ * kv 里模型信息缓存的键。缓存的是映射后的 ModelInfo，形状变化时键里的版本号随之加一：
+ * 升级后不会读到旧版本写入的形状（旧键按 TTL 自然过期）。v3：`capabilities.documents`。
  */
-const modelCacheKey = (id: string) => `models:v2:${id}`;
+const modelCacheKey = (id: string) => `models:v3:${id}`;
 /** 思考阶段可能长时间不发事件。 */
 const STREAM_IDLE_TIMEOUT_MS = 300_000;
 const FALLBACK_CONTEXT_WINDOW = 200_000;
@@ -97,8 +97,10 @@ function parametersOf(levels: Effort[] | null, adaptive: boolean): ModelParamete
 }
 
 /**
- * Models API → ModelInfo。reasoning 取「支持 adaptive 思考」（插件只发 adaptive）；没有 capabilities 时
- * 按不支持处理（不声明 effort / thinking，请求里不发 thinking 与 effort）。
+ * Models API → ModelInfo。`vision` / `documents` 取 `capabilities.image_input` / `pdf_input`（SDK 0.135
+ * `ModelCapabilities`：是否接受 image / PDF 内容块；https://platform.claude.com/docs/en/build-with-claude/pdf-support
+ * 写明所有在售模型都支持 PDF，2026-10-21 核实）。reasoning 取「支持 adaptive 思考」（插件只发 adaptive）；
+ * 没有 capabilities 时按不支持处理（不声明 effort / thinking，请求里不发 thinking 与 effort）。
  */
 function mapModelInfo(m: Anthropic.ModelInfo): ModelInfo {
   const caps = m.capabilities;
@@ -112,6 +114,8 @@ function mapModelInfo(m: Anthropic.ModelInfo): ModelInfo {
     capabilities: {
       tools: true,
       vision: caps?.image_input?.supported === true,
+      // PDF 文档块（纯文本文档块所有模型都收，但内核按 documents 一并把关）
+      documents: caps?.pdf_input?.supported === true,
       reasoning: adaptive,
       caching: true,
       // 中途 system 一律转成 "[system]" user 文本，不用原生 role: "system"（R38）
