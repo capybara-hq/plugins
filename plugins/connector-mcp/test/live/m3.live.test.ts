@@ -23,7 +23,7 @@ import {
 /**
  * M3 真实服务验收（`CAPYBARA_TEST_LIVE_TOOLS=1 pnpm vitest run packages/kernel/test/tools/m3-live.test.ts -t live`）。
  * 单副本内核加载 model-fake（`tool:` 指令脚本化工具调用）、connector-mcp 与 connector-openapi，全部经 HTTP
- * 安装应用、跑会话。
+ * 安装连接器、跑会话。
  *
  * - 开关：只在显式设置 `CAPYBARA_TEST_LIVE_TOOLS=1` 时运行 DeepWiki 与 Petstore（公开服务，无需密钥）；
  *   普通 `pnpm test` 不访问外网。
@@ -110,12 +110,12 @@ afterAll(async () => {
 });
 
 async function install(payload: Record<string, unknown>): Promise<AppView> {
-  const res = await req({ method: "POST", url: `/api/v1/orgs/${orgId}/apps`, payload });
+  const res = await req({ method: "POST", url: `/api/v1/orgs/${orgId}/connectors`, payload });
   expect(res.statusCode, res.body.slice(0, 2000)).toBe(201);
-  return (res.json() as { app: AppView }).app;
+  return (res.json() as { connector: AppView }).connector;
 }
 
-async function agentFor(appId: string, tools: "all" | string[]): Promise<string> {
+async function agentFor(connectorId: string, tools: "all" | string[]): Promise<string> {
   const res = await req({
     method: "POST",
     url: `/api/v1/orgs/${orgId}/agents`,
@@ -124,7 +124,7 @@ async function agentFor(appId: string, tools: "all" | string[]): Promise<string>
         name: "Live",
         instructions: "Be helpful.",
         model: { provider: "model-fake", model: "fake-1" },
-        tools: [{ kind: "app", appId, tools }],
+        tools: [{ kind: "connector", connectorId, tools }],
       },
       visibility: "org",
     },

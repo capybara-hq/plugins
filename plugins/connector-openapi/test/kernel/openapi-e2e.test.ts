@@ -32,7 +32,7 @@ import {
 } from "../helpers/runs.js";
 
 /**
- * Task 18：应用预览（`POST /apps/preview`，Ruling A20）与 connector-openapi 端到端。
+ * Task 18：连接器预览（`POST /connectors/preview`，Ruling A20）与 connector-openapi 端到端。
  * 预览不落库：只读端点描述（connector.inspect）与工具清单（能认证或无需认证时）。
  */
 
@@ -116,7 +116,7 @@ beforeEach(async () => {
   st.auths = [];
 });
 
-const countRows = async (table: "apps" | "app_tools" | "secrets" | "audit_events") =>
+const countRows = async (table: "connectors" | "connector_tools" | "secrets" | "audit_events") =>
   Number(
     (
       await sql<{
@@ -126,7 +126,7 @@ const countRows = async (table: "apps" | "app_tools" | "secrets" | "audit_events
   );
 
 const preview = (payload: Record<string, unknown>, r: Req = req) =>
-  r({ method: "POST", url: `/api/v1/orgs/${orgId}/apps/preview`, payload });
+  r({ method: "POST", url: `/api/v1/orgs/${orgId}/connectors/preview`, payload });
 
 interface PreviewJson {
   tools:
@@ -148,10 +148,10 @@ interface PreviewJson {
 const errOf = (res: { json(): unknown }) =>
   (res.json() as { error: { code: string; message: string } }).error;
 
-describe("应用预览", () => {
+describe("连接器预览", () => {
   it("只给端点：返回认证提示与操作清单，不列工具；什么都不写", async () => {
     const before = {
-      apps: await countRows("apps"),
+      connectors: await countRows("connectors"),
       secrets: await countRows("secrets"),
       audit: await countRows("audit_events"),
     };
@@ -169,7 +169,7 @@ describe("应用预览", () => {
       path: "/pets",
       summary: "List pets",
     });
-    expect(await countRows("apps")).toBe(before.apps);
+    expect(await countRows("connectors")).toBe(before.connectors);
     expect(await countRows("secrets")).toBe(before.secrets);
     expect(await countRows("audit_events")).toBe(before.audit);
   });
@@ -192,9 +192,9 @@ describe("应用预览", () => {
     expect(body.tools?.[0]?.annotations).toEqual({ readOnlyHint: true });
     expect(body.tools?.[0]?.inputSchema).toMatchObject({ type: "object" });
     expect(res.body).not.toContain(KEY);
-    expect(await countRows("apps")).toBe(0);
+    expect(await countRows("connectors")).toBe(0);
     expect(await countRows("secrets")).toBe(0);
-    expect(await countRows("app_tools")).toBe(0);
+    expect(await countRows("connector_tools")).toBe(0);
   });
 
   it("auth none：直接列工具；slug 用于 key 与问题（超长 key）", async () => {
@@ -242,20 +242,20 @@ describe("应用预览", () => {
     ]);
   });
 
-  it("文档错误 → 502 app.connect_failed 带说明（Swagger 2.0）", async () => {
+  it("文档错误 → 502 connector.connect_failed 带说明（Swagger 2.0）", async () => {
     const res = await preview({
       connector: "openapi",
       endpoint: { specText: JSON.stringify({ swagger: "2.0", info: {}, paths: {} }) },
     });
     expect(res.statusCode).toBe(502);
-    expect(errOf(res).code).toBe("app.connect_failed");
+    expect(errOf(res).code).toBe("connector.connect_failed");
     expect(errOf(res).message).toContain("Swagger 2.0");
   });
 
   it("安装时文档错误同样带说明", async () => {
     const res = await req({
       method: "POST",
-      url: `/api/v1/orgs/${orgId}/apps`,
+      url: `/api/v1/orgs/${orgId}/connectors`,
       payload: {
         name: "Old",
         connector: "openapi",
@@ -275,7 +275,7 @@ describe("应用预览", () => {
       credential: { token: `wrong-${MEM_TOKEN}` },
     });
     expect(res.statusCode).toBe(502);
-    expect(errOf(res).code).toBe("app.connect_failed");
+    expect(errOf(res).code).toBe("connector.connect_failed");
     expect(res.body).not.toContain(MEM_TOKEN);
   });
 
@@ -363,7 +363,7 @@ describe("应用预览", () => {
     expect(res.statusCode, res.body.slice(0, 300)).toBe(200);
     const created = await req({
       method: "POST",
-      url: `/api/v1/orgs/${orgId}/apps`,
+      url: `/api/v1/orgs/${orgId}/connectors`,
       payload: {
         name: "Big",
         connector: "openapi",
@@ -373,15 +373,19 @@ describe("应用预览", () => {
       },
     });
     expect(created.statusCode, created.body.slice(0, 300)).toBe(201);
-    // 应用视图不回显文档全文（安装响应、详情、列表）
-    const appId = (created.json() as { app: { id: string } }).app.id;
-    const one = await req({ method: "GET", url: `/api/v1/orgs/${orgId}/apps/${appId}` });
-    const list = await req({ method: "GET", url: `/api/v1/orgs/${orgId}/apps` });
+    // 连接器视图不回显文档全文（安装响应、详情、列表）
+    const connectorId = (created.json() as { connector: { id: string } }).connector.id;
+    const one = await req({
+      method: "GET",
+      url: `/api/v1/orgs/${orgId}/connectors/${connectorId}`,
+    });
+    const list = await req({ method: "GET", url: `/api/v1/orgs/${orgId}/connectors` });
     for (const body of [created.body, one.body, list.body]) {
       expect(body).not.toContain("ppppp");
       expect(body.length).toBeLessThan(200_000);
     }
-    const ep = (one.json() as { app: { endpoint: Record<string, unknown> } }).app.endpoint;
+    const ep = (one.json() as { connector: { endpoint: Record<string, unknown> } }).connector
+      .endpoint;
     expect(ep.specTextBytes).toBe(Buffer.byteLength(endpoint.specText, "utf8"));
     expect(ep.specTextSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(ep.specText).toBeUndefined();
@@ -392,7 +396,7 @@ describe("connector-openapi 端到端", () => {
   async function installPets(): Promise<string> {
     const res = await req({
       method: "POST",
-      url: `/api/v1/orgs/${orgId}/apps`,
+      url: `/api/v1/orgs/${orgId}/connectors`,
       payload: {
         name: "Pets",
         slug: "pets",
@@ -404,8 +408,8 @@ describe("connector-openapi 端到端", () => {
     });
     expect(res.statusCode, res.body).toBe(201);
     const app = (
-      res.json() as { app: { id: string; tools: { name: string; defaultPolicy: string }[] } }
-    ).app;
+      res.json() as { connector: { id: string; tools: { name: string; defaultPolicy: string }[] } }
+    ).connector;
     const byName = Object.fromEntries(app.tools.map((t) => [t.name, t.defaultPolicy]));
     expect(byName).toMatchObject({
       listPets: "allow",
@@ -416,7 +420,7 @@ describe("connector-openapi 端到端", () => {
     return app.id;
   }
 
-  async function agentFor(appId: string): Promise<string> {
+  async function agentFor(connectorId: string): Promise<string> {
     const res = await req({
       method: "POST",
       url: `/api/v1/orgs/${orgId}/agents`,
@@ -425,7 +429,7 @@ describe("connector-openapi 端到端", () => {
           name: "Helper",
           instructions: "Be helpful.",
           model: { provider: "model-fake", model: "fake-1" },
-          tools: [{ kind: "app", appId, tools: "all" }],
+          tools: [{ kind: "connector", connectorId, tools: "all" }],
         },
         visibility: "org",
       },
@@ -443,8 +447,8 @@ describe("connector-openapi 端到端", () => {
   }
 
   it("A21：调用按已复核的路由；远端文档改了路径 → 刷新后待复核，复核通过才走新路由", async () => {
-    const appId = await installPets();
-    const agentId = await agentFor(appId);
+    const connectorId = await installPets();
+    const agentId = await agentFor(connectorId);
     const convId = await createConv(req, orgId, agentId);
     const moved = defaultFakeOpenApiSpec(api.url, "header") as { paths: Record<string, unknown> };
     moved.paths["/animals/{petId}"] = moved.paths["/pets/{petId}"];
@@ -461,22 +465,22 @@ describe("connector-openapi 端到端", () => {
 
       const refresh = await req({
         method: "POST",
-        url: `/api/v1/orgs/${orgId}/apps/${appId}/refresh`,
+        url: `/api/v1/orgs/${orgId}/connectors/${connectorId}/refresh`,
       });
       expect(refresh.statusCode, refresh.body).toBe(200);
       const r = refresh.json() as {
-        app: { tools: { name: string; status: string }[] };
+        connector: { tools: { name: string; status: string }[] };
         changes: { changed: string[] };
       };
       expect(r.changes.changed).toContain("getPet");
-      expect(r.app.tools.find((t) => t.name === "getPet")?.status).toBe("pending_review");
+      expect(r.connector.tools.find((t) => t.name === "getPet")?.status).toBe("pending_review");
       // 复核对比可见路由变化（connectorData 新旧两份）；读者视图里不给
       type ToolJson = {
         name: string;
         connectorData: { path?: string } | null;
         pending: { connectorData: { path?: string } | null } | null;
       };
-      const viewed = (r.app.tools as unknown as ToolJson[]).find((t) => t.name === "getPet");
+      const viewed = (r.connector.tools as unknown as ToolJson[]).find((t) => t.name === "getPet");
       expect(viewed?.connectorData?.path).toBe("/pets/{petId}");
       expect(viewed?.pending?.connectorData?.path).toBe("/animals/{petId}");
       const acc = await new AccountsService(db).createLocal({
@@ -487,19 +491,19 @@ describe("connector-openapi 端到端", () => {
       await testMembers(db).add(orgId, acc.id, "member", ownerId);
       const asMember = await (await session(k, "viewer"))({
         method: "GET",
-        url: `/api/v1/orgs/${orgId}/apps/${appId}`,
+        url: `/api/v1/orgs/${orgId}/connectors/${connectorId}`,
       });
       expect(asMember.statusCode, asMember.body).toBe(200);
-      const memberTool = (asMember.json() as { app: { tools: ToolJson[] } }).app.tools.find(
-        (t) => t.name === "getPet",
-      );
+      const memberTool = (
+        asMember.json() as { connector: { tools: ToolJson[] } }
+      ).connector.tools.find((t) => t.name === "getPet");
       expect(memberTool?.connectorData).toBeNull();
       expect(memberTool?.pending?.connectorData).toBeNull();
       // 快照里生效的定义仍是旧路由
       const row = await db
-        .selectFrom("app_tools")
+        .selectFrom("connector_tools")
         .select(["spec", "pending_spec"])
-        .where("app_id", "=", appId)
+        .where("connector_id", "=", connectorId)
         .where("name", "=", "getPet")
         .executeTakeFirstOrThrow();
       expect((row.spec as { connectorData: { path: string } }).connectorData.path).toBe(
@@ -517,7 +521,7 @@ describe("connector-openapi 端到端", () => {
 
       const review = await req({
         method: "POST",
-        url: `/api/v1/orgs/${orgId}/apps/${appId}/tools/getPet/review`,
+        url: `/api/v1/orgs/${orgId}/connectors/${connectorId}/tools/getPet/review`,
         payload: { action: "approve" },
       });
       expect(review.statusCode, review.body).toBe(200);
@@ -532,8 +536,8 @@ describe("connector-openapi 端到端", () => {
   });
 
   it("安装后调用只读操作：注入 API key；非 2xx 的正文回显的 key 被打码", async () => {
-    const appId = await installPets();
-    const agentId = await agentFor(appId);
+    const connectorId = await installPets();
+    const agentId = await agentFor(connectorId);
     const convId = await createConv(req, orgId, agentId);
 
     const list = await runTool(convId, 1, "pets__listPets", { query: { limit: 5 } });
