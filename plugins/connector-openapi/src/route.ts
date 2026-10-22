@@ -83,7 +83,7 @@ export function routeOf(op: Operation, specUrl: string | undefined): Route {
   };
 }
 
-/** 从内核交回的已复核定义里取路由；没有或不合规 → ToolError（提示刷新应用）。 */
+/** 从内核交回的已复核定义里取路由；没有或不合规 → ToolError（提示刷新连接器）。 */
 export function routeFromSpec(name: string, spec: ToolSpec | undefined): Route {
   const r = RouteSchema.safeParse(spec?.connectorData);
   if (!r.success) {

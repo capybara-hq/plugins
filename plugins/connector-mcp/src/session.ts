@@ -44,7 +44,7 @@ const MAX_PAGES = 100;
 /** 写进日志的上游错误正文最多字符数。 */
 const MAX_LOGGED_BODY = 1_000;
 
-/** 端点固定头里不允许出现的凭据头（凭据走应用的认证设置，加密存储）。 */
+/** 端点固定头里不允许出现的凭据头（凭据走连接器的认证设置，加密存储）。 */
 // capybara:allow-module-state 只读常量表
 const CREDENTIAL_HEADERS = new Set(["authorization", "proxy-authorization", "cookie"]);
 
@@ -224,7 +224,7 @@ export const UNREACHABLE_TEXT =
   "Could not reach the app's server. Retry later, or ask an administrator to check the app.";
 
 /**
- * 统一错误。`ToolError.kind` 告诉内核是否计入应用熔断：只有远端不可用（连不上、HTTP 5xx）为 `unavailable`；
+ * 统一错误。`ToolError.kind` 告诉内核是否计入连接器熔断：只有远端不可用（连不上、HTTP 5xx）为 `unavailable`；
  * - 服务端的 JSON-RPC 错误 → ToolError（kind error，带服务的说明；回显的凭据由内核打码）；
  * - HTTP 5xx → ToolError（kind unavailable）、其他非 2xx → ToolError（kind error），都只带状态码（正文已在 fetch 包装里记日志）；
  * - 连接失败（fetch 抛 `TypeError: fetch failed`）→ ToolError（kind unavailable）；

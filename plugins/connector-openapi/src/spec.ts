@@ -20,7 +20,7 @@ const str = (v: unknown): string | undefined =>
 // capybara:allow-module-state 只读常量表
 export const METHODS = ["get", "put", "post", "delete", "options", "head", "patch"] as const;
 
-/** 工具名上限（与插件工具名一致；加上应用前缀后的 key 由内核再校验 ≤ 64）。 */
+/** 工具名上限（与插件工具名一致；加上连接器前缀后的 key 由内核再校验 ≤ 64）。 */
 export const TOOL_NAME_MAX = 40;
 
 /** 展开 `$ref` 的节点预算与深度上限（防引用炸弹与病态嵌套）。 */
@@ -257,7 +257,7 @@ const derivedId = (method: string, path: string): string =>
     .replace(/_{2,}/g, "_")
     .replace(/^_+|_+$/g, "");
 
-/** 不能经工具参数设置的头（凭据走应用认证；协议头由连接器决定）。OpenAPI 也规定 Accept / Content-Type / Authorization 头参数被忽略。 */
+/** 不能经工具参数设置的头（凭据走连接器认证；协议头由连接器决定）。OpenAPI 也规定 Accept / Content-Type / Authorization 头参数被忽略。 */
 // capybara:allow-module-state 只读常量表
 export const RESERVED_HEADERS = new Set([
   "authorization",
@@ -274,7 +274,7 @@ export const RESERVED_HEADERS = new Set([
 /** HTTP 头名（RFC 9110 token）；不合法的头参数不生成。 */
 const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
 
-/** 凭据样式的头名：不进工具参数（凭据走应用认证）。 */
+/** 凭据样式的头名：不进工具参数（凭据走连接器认证）。 */
 export const CREDENTIAL_HEADER = /^(?:x-)?api-?key$|^x-auth-token$|-token$|-secret$/;
 
 const JSON_MEDIA = /^application\/(?:[\w.+-]*\+)?json$/i;
@@ -434,7 +434,7 @@ const scopesOf = (flow: Record<string, unknown>): string[] =>
   isObj(flow.scopes) ? Object.keys(flow.scopes) : [];
 
 /**
- * `components.securitySchemes` → AuthHint（内核 AppAuth 的形状）：apiKey（header / query）、http bearer / basic、
+ * `components.securitySchemes` → AuthHint（内核 ConnectorAuth 的形状）：apiKey（header / query）、http bearer / basic、
  * oauth2 的 clientCredentials / authorizationCode 流。cookie 里的 API key、其他 http scheme、OpenID Connect、
  * implicit / password 流不支持，略过。
  */

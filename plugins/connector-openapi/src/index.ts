@@ -9,7 +9,7 @@ const DeploymentConfig = z.object({
 });
 
 /**
- * OpenAPI 连接器：把一个 OpenAPI 3.0 / 3.1 描述的 HTTP API 作为应用接入，每个 operation 一个工具。
+ * OpenAPI 连接器：把一个 OpenAPI 3.0 / 3.1 描述的 HTTP API 作为连接器接入，每个 operation 一个工具。
  * 文档按次读取（specText 或不带凭据去取 specUrl），不在进程内缓存；鉴权由内核在每个请求前注入。
  */
 export default definePlugin({
