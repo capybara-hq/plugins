@@ -61,7 +61,8 @@ async function eventRows(h: Harness): Promise<number> {
   }
 }
 
-describe("example-counter（双副本）", () => {
+// 每个用例都起两个副本子进程：全量并行跑时 5s 的本地默认值不够
+describe("example-counter（双副本）", { timeout: 60_000 }, () => {
   it("交替 inc 5 次 → count 为 5，events 表 5 行", async () => {
     const h = await start();
     for (let i = 0; i < 5; i++) {

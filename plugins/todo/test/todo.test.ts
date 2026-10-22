@@ -54,7 +54,8 @@ const noUi = { invalidate: async () => {} };
 const text = (r: Awaited<ReturnType<ToolHandler>>): string =>
   "content" in r && r.content[0]?.type === "text" ? r.content[0].text : "";
 
-describe("todo 插件", () => {
+// 双副本用例在用例里起两个副本子进程：全量并行跑时 5s 的本地默认值不够
+describe("todo 插件", { timeout: 60_000 }, () => {
   it("注册 write 工具（默认策略 allow，模型可见名 todo__write）与对话视图 tasks", () => {
     const registered: { spec: ToolSpec; handler: ToolHandler }[] = [];
     const views: string[] = [];
