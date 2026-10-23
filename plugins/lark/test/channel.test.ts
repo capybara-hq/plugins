@@ -387,12 +387,13 @@ describe("connect (long connection)", () => {
     lark.revokeTokens();
     lark.delay("token", 3000);
     try {
-      const t = Date.now();
+      const issued = lark.tokensIssued();
       const id = lark.pushEvent(
         larkMessageEvent({ openId: "ou_dave", chatId: "oc_dm3", chatType: "p2p", text: "quick" }),
       );
       expect((await lark.waitForAck(id, 5000)).code).toBe(200);
-      expect(Date.now() - t).toBeLessThan(2000);
+      // 不比墙钟（CI 负载下不稳）：确认时那次推迟 3 秒的取 token 还没完成，说明确认没有等它，是 1 秒时限放的行
+      expect(lark.tokensIssued()).toBe(issued);
       expect(events.at(-1)).toMatchObject({ text: "quick", sender: { externalId: "ou_dave" } });
     } finally {
       lark.delay("token", 0);
