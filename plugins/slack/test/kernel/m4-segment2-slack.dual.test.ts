@@ -22,7 +22,7 @@ import { createDb } from "../../src/db/pool.js";
 import { AccountsService } from "../../src/identity/accounts.js";
 import { MODEL_FAKE } from "../helpers/model-plugins.js";
 import { pidOwningLocalPort } from "../helpers/port-owner.js";
-import { eventsOf, PW, sleep, waitFor } from "../helpers/runs.js";
+import { cardRecorded, eventsOf, PW, sleep, waitFor } from "../helpers/runs.js";
 
 /**
  * M4 第二段验收（双副本，假 Slack）：官方 Slack 插件（`plugins/slack`，按源码路径加载）的三种能力接内核，
@@ -376,6 +376,7 @@ describe("M4 第二段验收：Slack（双副本）", () => {
     expect(im.posts).toEqual([]);
     const approve = findSlackButton(cardMsg.blocks, (b) => b.action_id === "cap_a_once");
     if (!approve) throw new Error("no approve button");
+    await cardRecorded(db, { kind: "approval" });
 
     // ================= 6. 非审批人 bob 点批准 → 被拒并说明 =================
     const beforeBob = postedTo("COPS").length;

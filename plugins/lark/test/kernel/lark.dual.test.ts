@@ -19,7 +19,7 @@ import { type KernelDb, kernelDb } from "../../src/db/kernel-schema.js";
 import { createDb } from "../../src/db/pool.js";
 import { AccountsService } from "../../src/identity/accounts.js";
 import { MODEL_FAKE } from "../helpers/model-plugins.js";
-import { PW, sleep, waitFor } from "../helpers/runs.js";
+import { cardRecorded, PW, sleep, waitFor } from "../helpers/runs.js";
 
 /**
  * 官方 Lark 插件（`plugins/lark`，按路径加载，内核不依赖插件包）接内核的双副本验收：插件连假 Lark
@@ -258,6 +258,7 @@ describe("Lark 插件接内核（双副本）", () => {
 
     const approve = findLarkButton(cardMsg.card, (b) => b.text === "Approve once");
     if (!approve) throw new Error("no approve button");
+    await cardRecorded(db, { kind: "approval" });
     const click = await lark.waitForAck(
       push(
         lark.pushEvent(larkCardAction({ openId: "ou_alice", tenantKey: "t1" }, cardMsg, approve)),
