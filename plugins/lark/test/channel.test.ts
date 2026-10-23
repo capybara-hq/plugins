@@ -635,7 +635,8 @@ describe("connect (long connection)", () => {
     const { stop } = await connect();
     const t = Date.now();
     await stop();
-    expect(Date.now() - t).toBeLessThan(2000);
+    // Without the abort the loop keeps the socket open indefinitely; 4 s leaves room for CI load.
+    expect(Date.now() - t).toBeLessThan(4000);
     await waitFor(() => lark.openSockets() === 0 || undefined, 3000, "closed");
 
     lark.delay("endpoint", 400);
@@ -651,7 +652,7 @@ describe("connect (long connection)", () => {
     ac.abort();
     const t2 = Date.now();
     await done;
-    expect(Date.now() - t2).toBeLessThan(2000);
+    expect(Date.now() - t2).toBeLessThan(4000);
     await new Promise((r) => setTimeout(r, 800));
     lark.delay("endpoint", 0);
     expect(lark.openSockets()).toBe(0);

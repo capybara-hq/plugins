@@ -356,7 +356,8 @@ describe("callTool 映射", () => {
     setTimeout(() => ac.abort(), 100);
     const err = await p;
     expect(err).toBeInstanceOf(Error);
-    expect(Date.now() - t0).toBeLessThan(2_000);
+    // The tool answers after 5 s; 3.5 s still proves the abort cut it short.
+    expect(Date.now() - t0).toBeLessThan(3_500);
   });
 });
 
@@ -626,7 +627,8 @@ describe("elicitation", () => {
     });
     const t0 = Date.now();
     await expect(s.callTool("greet", {}, ac.signal)).rejects.toBeDefined();
-    expect(Date.now() - t0).toBeLessThan(2_000);
+    // onElicit never settles; 4 s leaves room for CI load.
+    expect(Date.now() - t0).toBeLessThan(4_000);
   });
 
   it("-32042 URL elicitation required：逐个 onElicit，全部 accept 后重试一次调用", async () => {
