@@ -39,6 +39,24 @@ Slack 官方插件，提供三种能力：
 （[Using Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode)）。Capybara 每个渠道连接
 任一时刻只由一个副本持有一条连接。
 
+## Webhook inbound mode (optional)
+
+Socket Mode is the default. A connection can instead receive events over HTTPS webhooks, when the
+deployment exposes a gateway replica and sets `channels.webhookBaseUrl` (see
+[Deploying: webhook](https://github.com/capybara-hq/core/blob/main/docs/deploy/README.md#webhook-optional)). Switch the connection to webhook mode in the web app (Channels →
+connection → Overview → Inbound mode); the connection page then shows its webhook URL.
+
+1. Copy **Basic Information → App Credentials → Signing Secret** into the connection's
+   `signingSecret`. Every request is verified with it (HMAC-SHA256 over `v0:<timestamp>:<body>`)
+   and must be at most 5 minutes old; without it every webhook request is refused.
+2. In the app settings, turn **Socket Mode** off, then use the webhook URL as the **Event
+   Subscriptions → Request URL** (Slack verifies it with a `url_verification` challenge, which the
+   plugin answers) and as the **Interactivity & Shortcuts → Request URL** (card buttons).
+3. `appToken` is optional in webhook mode: only Socket Mode uses it.
+
+Both modes parse events the same way (same message and card-click ids), so the kernel's dedupe
+still drops a redelivery that arrives across a mode switch.
+
 ## Sign in with Slack（登录）
 
 [Sign in with Slack](https://docs.slack.dev/authentication/sign-in-with-slack/) 基于 OpenID Connect。
@@ -118,6 +136,14 @@ PKCE；Slack 的 [PKCE](https://docs.slack.dev/authentication/using-pkce) 只针
   `slack.com`。Socket Mode 的 WSS 主机由
   Slack 分配、并不固定（如 `wss-primary.slack.com`、`wss-backup.slack.com`、`wss-111.slack.com`），清单的域名
   校验不支持通配，故只列主要的一个。
+
+## 渠道连接配置
+
+| 字段 | 说明 |
+|---|---|
+| `botToken` | Bot token (`xoxb-…`, secret) |
+| `appToken` | App-level token (`xapp-…`, secret); required for Socket Mode, unused in webhook mode |
+| `signingSecret` | Signing Secret (secret); required in webhook mode, unused with Socket Mode |
 
 ## 部署级配置
 

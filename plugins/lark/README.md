@@ -104,6 +104,25 @@ Lark（飞书国际版，`open.larksuite.com`）官方插件。当前提供：
   长连接的 WebSocket 地址由接入点在连接时下发（文档没有写明固定主机），清单的域名不支持通配，故不列出。卡片交互时
   Lark 客户端还可能访问 `*.feishu.cn`（与服务端无关）。
 
+## Webhook inbound mode (optional)
+
+The long connection is the default. A connection can instead receive events over HTTPS webhooks,
+when the deployment exposes a gateway replica and sets `channels.webhookBaseUrl` (see
+[Deploying: webhook](https://github.com/capybara-hq/core/blob/main/docs/deploy/README.md#webhook-optional)). Switch the connection to webhook mode in the web app (Channels →
+connection → Overview → Inbound mode); the connection page then shows its webhook URL.
+
+1. In the developer console, under **Events & Callbacks**, set the subscription method to send
+   events to your server and enter the webhook URL (Lark verifies it with a challenge, which the
+   plugin answers). Configure **card callbacks there too**, with the same URL.
+2. Set an **Encrypt Key** (recommended) and copy it to the connection's `encryptKey`: requests must
+   then be encrypted and signed, which also protects against replays.
+3. Copy the **Verification Token** to `verificationToken`. Without `encryptKey`, only plaintext
+   requests with a matching token are accepted; that mode is weaker (the token is static and there
+   is no replay protection). With neither secret set, every webhook request is refused.
+
+Both modes parse events the same way (same message and card-click ids), so the kernel's dedupe
+still drops a redelivery that arrives across a mode switch.
+
 ## 网页登录（identity-source）
 
 用同一个自建应用（见上）：
@@ -197,3 +216,5 @@ Lark（飞书国际版，`open.larksuite.com`）官方插件。当前提供：
 |---|---|
 | `appId` | 自建应用的 App ID（`cli_` + 16 位十六进制） |
 | `appSecret` | 自建应用的 App Secret（密钥） |
+| `encryptKey` | Encrypt Key (secret); webhook mode only, recommended |
+| `verificationToken` | Verification Token (secret); webhook mode only |
