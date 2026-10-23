@@ -22,8 +22,6 @@
   },
   "files": [
     "dist",
-    "image",
-    "egress-proxy",
     "README.md"
   ],
   "scripts": {
