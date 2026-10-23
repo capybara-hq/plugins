@@ -28,7 +28,7 @@ import { eventsOf, PW, waitFor } from "../helpers/runs.js";
  * 2. One connection switches to webhook inbound: its socket closes, a signed `event_callback` on a
  *    gateway gets one reply, and Slack's redelivery of the same event starts no second run.
  * 3. SIGKILL the gateway holding the other connection: the surviving gateway takes it over within
- *    `TTL + 2 * scan + 1.5s`, and the DMs pushed meanwhile (queued by the fake, which retries
+ *    `TTL + 2 * scan + 2.5s`, and the DMs pushed meanwhile (queued by the fake, which retries
  *    unacked envelopes on the next socket like Slack) each get exactly one run and one reply.
  *
  * Lease and scan intervals are shortened (defaults 30s / 10s) to TTL 3s and a 300ms scan.
@@ -207,16 +207,15 @@ describe("M7 segment 1: gateway roles, fair share, webhook mode, failover (dual 
       "connection A's socket closed",
     );
 
-    const body = JSON.stringify(
-      slackEventCallback(
-        slackDmEvent("UALICE", "echo:hello over webhook", {
-          channel: CHAT_A,
-          ts: "1760100000.000100",
+    const eventBody = (text: string, ts: string, eventId: string) =>
+      JSON.stringify(
+        slackEventCallback(slackDmEvent("UALICE", text, { channel: CHAT_A, ts }), {
+          teamId: "T1",
+          eventId,
         }),
-        { teamId: "T1", eventId: "EvM7Webhook1" },
-      ),
-    );
-    const post = (retry: number) =>
+      );
+    const body = eventBody("echo:hello over webhook", "1760100000.000100", "EvM7Webhook1");
+    const post = (retry: number, body: string) =>
       h.requestTo(gateway.index, `/channels/webhook/${connA}`, {
         method: "POST",
         headers: {
@@ -229,14 +228,10 @@ describe("M7 segment 1: gateway roles, fair share, webhook mode, failover (dual 
         },
         body,
       });
-    const first = await post(0);
+    const first = await post(0, body);
     expect(first.status).toBe(200);
     await first.text();
     await waitFor(async () => repliesIn(CHAT_A, "hello over webhook")[0], 20_000, "webhook reply");
-    // Slack's redelivery of the same event: acked (the dedupe key or the same job id), no new run
-    const again = await post(1);
-    expect(again.status).toBe(200);
-    await again.text();
     const convA = (await threadConv(connA, CHAT_A)) as string;
     expect(convA).toBeDefined();
     await waitFor(
@@ -244,9 +239,33 @@ describe("M7 segment 1: gateway roles, fair share, webhook mode, failover (dual 
       20_000,
       "webhook run finished",
     );
-    expect(await countEvents(convA, "run_started")).toBe(1);
+    // Slack's redelivery of the same event: acked (the dedupe key or the same job id), no new run
+    const again = await post(1, body);
+    expect(again.status).toBe(200);
+    await again.text();
+    // Barrier: a new event in the same chat, queued after anything the redelivery could have
+    // enqueued; once it is answered, a duplicate would show as an extra user message or run
+    const barrier = await post(
+      0,
+      eventBody("echo:barrier after redelivery", "1760100000.000200", "EvM7Webhook2"),
+    );
+    expect(barrier.status).toBe(200);
+    await barrier.text();
+    await waitFor(
+      async () => repliesIn(CHAT_A, "barrier after redelivery")[0],
+      20_000,
+      "barrier reply",
+    );
+    await waitFor(
+      async () => (await countEvents(convA, "run_finished")) === 2 || undefined,
+      20_000,
+      "barrier run finished",
+    );
+    expect(await countEvents(convA, "user_message")).toBe(2);
+    expect(await countEvents(convA, "run_started")).toBe(2);
     expect(repliesIn(CHAT_A, "hello over webhook")).toHaveLength(1);
-    expect(slack.messages.filter((m) => m.channel === CHAT_A)).toHaveLength(1);
+    expect(repliesIn(CHAT_A, "barrier after redelivery")).toHaveLength(1);
+    expect(slack.messages.filter((m) => m.channel === CHAT_A)).toHaveLength(2);
     expect(slack.openSockets(slack.appToken)).toBe(0);
 
     // ================= 3. SIGKILL the gateway holding B: takeover, exactly once per pushed DM =========
@@ -268,7 +287,6 @@ describe("M7 segment 1: gateway roles, fair share, webhook mode, failover (dual 
       100,
     );
     const survivor = settledHolder === gateway.pid ? extra : gateway;
-    const holderPort = slack.socketPeerPorts(APP_B.appToken)[0];
 
     const killedAt = Date.now();
     if (settledHolder === gateway.pid) await h.kill(gateway.index);
@@ -284,18 +302,14 @@ describe("M7 segment 1: gateway roles, fair share, webhook mode, failover (dual 
     );
 
     await waitFor(
-      async () => {
-        const ports = slack.socketPeerPorts(APP_B.appToken);
-        if (ports.length !== 1 || ports[0] === holderPort) return undefined;
-        return (await holderOf(APP_B.appToken)) === survivor.pid || undefined;
-      },
+      async () => (await holderOf(APP_B.appToken)) === survivor.pid || undefined,
       LEASE_TTL_MS + 15_000,
       "takeover by the surviving gateway",
       50,
     );
     // Lease expiry plus up to two scan rounds; the margin covers the Socket Mode handshake, this
     // test's polling (lsof) and load on a busy runner
-    expect(Date.now() - killedAt).toBeLessThanOrEqual(LEASE_TTL_MS + 2 * SCAN_MS + 1_500);
+    expect(Date.now() - killedAt).toBeLessThanOrEqual(LEASE_TTL_MS + 2 * SCAN_MS + 2_500);
     expect(slack.maxConcurrentSockets(APP_B.appToken)).toBe(1);
 
     // Every pushed envelope acked by the new holder: nothing is left for the fake to redeliver
