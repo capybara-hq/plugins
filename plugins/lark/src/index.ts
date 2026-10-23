@@ -20,6 +20,8 @@ export { createLarkIdentitySource } from "./identity.js";
  * 同步通讯录时，发现同一租户用了与部署级登录不同的应用就报错。
  * - `channel@1`（机器人）：经 Lark 长连接（官方 SDK 的 `WSClient`，无需公网回调地址）收消息事件与卡片回调，
  *   经 OpenAPI 发消息，所有消息与审批 / 提问 / 连接 / 绑定卡片都渲染为交互卡片（JSON 2.0）。凭据按渠道连接配置传入。
+ *   Webhook inbound mode (event and card callback Request URLs, decrypted / verified with the
+ *   connection's `encryptKey` or `verificationToken`) is the alternative to the long connection.
  * - `identity-source@1`（网页登录，OAuth 授权码 + PKCE）：部署级 `appId` / `appSecret`，经 `auth.loginSources` 启用。
  * - `directory@1`（通讯录，按部门遍历）：组织级 `appId` / `appSecret`。
  * 凭据都由内核按配置传入，故不需要 `secrets` 权限。
@@ -41,7 +43,7 @@ export default definePlugin({
     const loginApp = loginAppOf(dep);
     ctx.provide(
       CHANNEL_CAPABILITY,
-      createLarkChannel({ apiUrl, log: ctx.log, ...(loginApp && { loginApp }) }),
+      createLarkChannel({ apiUrl, log: ctx.log, kv: ctx.kv, ...(loginApp && { loginApp }) }),
     );
     ctx.provide(IDENTITY_SOURCE_CAPABILITY, createLarkIdentitySource());
     ctx.provide(
