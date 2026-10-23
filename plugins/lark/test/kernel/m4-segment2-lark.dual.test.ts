@@ -21,7 +21,7 @@ import { createDb } from "../../src/db/pool.js";
 import { AccountsService } from "../../src/identity/accounts.js";
 import { MODEL_FAKE } from "../helpers/model-plugins.js";
 import { pidOwningLocalPort } from "../helpers/port-owner.js";
-import { eventsOf, PW, sleep, waitFor } from "../helpers/runs.js";
+import { cardRecorded, eventsOf, PW, sleep, waitFor } from "../helpers/runs.js";
 
 /**
  * M4 第二段验收（双副本，假 Lark）：官方 Lark 插件（`plugins/lark`，按源码路径加载；长连接跑真实 SDK `WSClient`，
@@ -376,6 +376,7 @@ describe("M4 第二段验收：Lark（双副本）", () => {
     expect(im.posts).toEqual([]);
     const approve = findLarkButton(cardMsg.card, (b) => b.text === "Approve once");
     if (!approve) throw new Error("no approve button");
+    await cardRecorded(db, { kind: "approval" });
 
     // ================= 6. 非审批人 bob 点批准 → 被拒并说明 =================
     const beforeBob = postedTo("oc_ops").length;
