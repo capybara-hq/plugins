@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "description": "OpenAI model provider (model-provider@2) using the official SDK and the native Responses API",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/capybara-hq/core.git",
+    "directory": "plugins/openai"
+  },
+  "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/openai#readme",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

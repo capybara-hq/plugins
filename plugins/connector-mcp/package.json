@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "description": "MCP connector (connector@1): tools and resources of remote MCP servers over Streamable HTTP",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/capybara-hq/core.git",
+    "directory": "plugins/connector-mcp"
+  },
+  "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/connector-mcp#readme",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

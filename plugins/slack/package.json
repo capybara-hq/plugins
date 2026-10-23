@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "description": "Slack (channel@1 bot over Socket Mode with Block Kit cards, identity-source@1 Sign in with Slack, directory@1)",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/capybara-hq/core.git",
+    "directory": "plugins/slack"
+  },
+  "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/slack#readme",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

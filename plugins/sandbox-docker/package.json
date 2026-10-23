@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "description": "Conversation sandboxes (sandbox@1) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with an egress allowlist proxy",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/capybara-hq/core.git",
+    "directory": "plugins/sandbox-docker"
+  },
+  "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/sandbox-docker#readme",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
