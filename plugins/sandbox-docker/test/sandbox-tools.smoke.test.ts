@@ -16,6 +16,7 @@ import { type KernelDb, kernelDb } from "../../../src/db/kernel-schema.js";
 import { createDb } from "../../../src/db/pool.js";
 import { AccountsService } from "../../../src/identity/accounts.js";
 import type { Kernel } from "../../../src/kernel.js";
+import { createLogger } from "../../../src/log.js";
 import { truncateTables } from "../../helpers/db.js";
 import { MODEL_FAKE } from "../../helpers/model-plugins.js";
 import {
@@ -66,6 +67,12 @@ describe.skipIf(!dockerAvailable)(
     let owner: Req;
     let orgId: string;
     const conversations: string[] = [];
+    // Kernel warnings (the pipeline logs the real cause of a failed tool call, which the model only
+    // sees as "failed (DockerApiError)"). This test failed once under full-suite load without a
+    // reproduction (M-11), so failures print them instead of only the tool's generic text.
+    const warnings: string[] = [];
+    const why = (content: string) =>
+      [content, ...warnings.filter((l) => l.includes("tool call failed"))].join("\n");
 
     beforeAll(async () => {
       [pgc, rd, images, proxy] = await Promise.all([
@@ -93,6 +100,10 @@ describe.skipIf(!dockerAvailable)(
             sandbox: { image: images.sandboxImage, limits: { memoryMb: 512 } },
           },
         ),
+        // startKernel's options leave the logger out (silent by default); this file wants warnings
+        {
+          logger: createLogger("warn", { write: (line) => warnings.push(line) }),
+        } as Parameters<typeof startKernel>[1],
       );
     }, 600_000);
 
@@ -165,7 +176,7 @@ describe.skipIf(!dockerAvailable)(
         { command: "pwd && id -un && echo $HTTPS_PROXY" },
         1,
       );
-      expect(r.isError, r.content).toBe(false);
+      expect(r.isError, why(r.content)).toBe(false);
       expect(r.content).toMatch(/^Sandbox started/);
       expect(r.content).toMatch(/\/workspace\nsandbox\nhttp:\/\/cap-[0-9a-f-]+-egress:3128/);
 
@@ -200,7 +211,7 @@ describe.skipIf(!dockerAvailable)(
       const r = await call(conv, "sandbox_bash", { command: "sleep 60", timeoutSeconds: 1 }, 1);
       expect(Date.now() - t0).toBeLessThan(45_000);
       expect(r.isError).toBe(true);
-      expect(r.content).toContain("timedOut");
+      expect(r.content, why(r.content)).toContain("timedOut");
       const ok = await call(
         conv,
         "sandbox_bash",
