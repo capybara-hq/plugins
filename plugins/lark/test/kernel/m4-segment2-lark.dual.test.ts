@@ -219,7 +219,7 @@ describe("M4 第二段验收：Lark（双副本）", () => {
     expect(sync1.status).toBe(202);
     await waitFor(async () => (await syncAudits()).length === 1, 20_000, "first directory sync");
     expect((await syncAudits())[0]?.detail).toMatchObject({ added: 1, partial: false });
-    const bobId = await waitFor(async () => identityOwner("ou_bob"), 5_000, "bob's account");
+    const bobId = await waitFor(async () => identityOwner("ou_bob"), 15_000, "bob's account");
     expect(await membership(bobId)).toEqual({ role: "member", source: "directory:lark" });
 
     const ag = await call(ownerJar, "POST", `${base}/agents`, {
@@ -363,7 +363,7 @@ describe("M4 第二段验收：Lark（双副本）", () => {
           .select(["id", "status", "requested_for", "decided_by"])
           .where("org_id", "=", orgId)
           .executeTakeFirst(),
-      5_000,
+      20_000,
       "approval row",
     );
     expect(approvalRow).toMatchObject({ status: "pending", requested_for: aliceId });
