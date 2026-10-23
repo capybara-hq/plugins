@@ -446,6 +446,9 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
       },
     },
 
+    // Ruling R5: chat.postMessage has no idempotency parameter, so `idempotencyKey` is ignored. If a
+    // replica dies between this send and the kernel's advance, the resend after recovery shows a
+    // second copy of the card; a decision made on the first copy is not reflected back onto it.
     async send({ config, target, message, signal, locale }) {
       const c = parse(config);
       const client = web(c.botToken, signal);
