@@ -139,7 +139,8 @@ export function readLarkWebhook(
   }
 
   if (payload.type === "url_verification") {
-    // A request that decrypted with our key is genuine; the token is checked when configured
+    // Unsigned by design: decryption alone vouches for it, and we only echo the caller's challenge
+    // (the token is still checked when configured)
     if (verificationToken !== undefined) {
       if (typeof payload.token !== "string" || !sameText(payload.token, verificationToken)) {
         return { kind: "reject", status: 401 };

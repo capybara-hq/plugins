@@ -20,11 +20,17 @@ import { handleSlackWebhook, type SlackEnvelope } from "./webhook.js";
 
 /**
  * 渠道连接配置：应用级令牌（Socket Mode，`connections:write`）与机器人令牌。都走密钥存储。
- * `signingSecret` (Basic Information → Signing Secret) is only needed in webhook inbound mode;
+ * `appToken` is optional because webhook mode doesn't use it; `connect` (Socket Mode) refuses to
+ * start without one. `signingSecret` (Basic Information → Signing Secret) is only needed in webhook inbound mode;
  * without it every webhook request is rejected with 401.
  */
 export const SlackConnection = z.object({
-  appToken: secret(z.string().regex(/^xapp-/, "must be an app-level token starting with xapp-")),
+  appToken: secret(
+    z
+      .string()
+      .regex(/^xapp-/, "must be an app-level token starting with xapp-")
+      .optional(),
+  ),
   botToken: secret(z.string().regex(/^xoxb-/, "must be a bot token starting with xoxb-")),
   signingSecret: secret(z.string().min(1).optional()),
 });
@@ -44,6 +50,10 @@ export interface SlackChannelOptions {
    */
   kv?: PluginContext["kv"];
 }
+
+/** `connect` error for a connection without an app-level token. */
+export const SOCKET_MODE_NEEDS_APP_TOKEN =
+  "Socket Mode needs an app-level token (xapp-…); set one or switch this connection to webhook mode";
 
 /** TTL of the cached bot user id (webhook mode), in seconds. */
 export const BOT_USER_CACHE_TTL_SECONDS = 3600;
@@ -285,6 +295,9 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
 
     async connect({ connectionId, config, onEvent, signal }) {
       const c = parse(config);
+      // A plain Error: the supervisor records it as last_error and backs off
+      if (c.appToken === undefined) throw new Error(SOCKET_MODE_NEEDS_APP_TOKEN);
+      const appToken = c.appToken;
       let botUserId: string;
       try {
         const r = (await web(c.botToken, signal).apiCall("auth.test")) as { user_id?: string };
@@ -338,7 +351,7 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
         const startedAt = Date.now();
         let disconnectReason: string | undefined;
         const client = new SocketModeClient({
-          appToken: c.appToken,
+          appToken,
           autoReconnectEnabled: false,
           logger: slackLogger,
           clientOptions: { ...clientOptions },

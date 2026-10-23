@@ -215,6 +215,28 @@ describe("Slack webhook inbound", () => {
     expect(authTests()).toBe(before);
   });
 
+  it("appToken is optional; Socket Mode without it fails clearly without calling Slack", async () => {
+    const noApp = { botToken: slack.botToken, signingSecret: SIGNING_SECRET };
+    expect(SlackConnection.parse(noApp)).not.toHaveProperty("appToken");
+    expect(SlackConnection.safeParse({ ...noApp, appToken: "xoxb-1" }).success).toBe(false);
+    const ch = createSlackChannel({ apiUrl: slack.apiUrl, log });
+    const before = slack.calls.length;
+    await expect(
+      ch.connect({
+        connectionId: "conn-1",
+        config: noApp,
+        signal: new AbortController().signal,
+        onEvent: async () => {},
+      }),
+    ).rejects.toThrow(
+      "Socket Mode needs an app-level token (xapp-…); set one or switch this connection to webhook mode",
+    );
+    expect(slack.calls.length).toBe(before);
+    // Webhook mode works without it
+    const body = JSON.stringify({ challenge: "c1", type: "url_verification" });
+    expect((await handle(ch, request(body), noApp)).kind).toBe("respond");
+  });
+
   it("url_verification → responds with the original challenge", async () => {
     const ch = createSlackChannel({ apiUrl: slack.apiUrl, log });
     const challenge = "3eZbrw1aBm2rZgRNFdxV2595E9CY3gmdALWMmHkvFXO7tYXAYM8P";
