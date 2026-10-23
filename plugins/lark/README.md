@@ -104,6 +104,10 @@ only one replica hold one long connection per channel connection at any moment; 
   The long connection's WebSocket address is issued by the endpoint at connect time (the docs do not state a fixed host), and the manifest's domains do not support wildcards, so it is not listed. During card interaction
   the Lark client may also access `*.feishu.cn` (unrelated to the server side).
 
+In long-connection mode the connection is held by one `gateway` replica; with several gateways the
+connections are spread by fair share (`channels.shareSlack`, see
+[Roles and scaling](https://github.com/capybara-hq/core/blob/main/docs/deploy/README.md#roles-and-scaling)).
+
 ## Webhook inbound mode (optional)
 
 The long connection is the default. A connection can instead receive events over HTTPS webhooks,

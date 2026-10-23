@@ -40,6 +40,10 @@ Note: apps that use Socket Mode cannot currently be listed in the public Slack M
 Socket Mode connections ([Using Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode)). At any moment Capybara has only one
 replica hold one connection per channel connection.
 
+In long-connection mode the connection is held by one `gateway` replica; with several gateways the
+connections are spread by fair share (`channels.shareSlack`, see
+[Roles and scaling](https://github.com/capybara-hq/core/blob/main/docs/deploy/README.md#roles-and-scaling)).
+
 ## Webhook inbound mode (optional)
 
 Socket Mode is the default. A connection can instead receive events over HTTPS webhooks, when the
