@@ -9,7 +9,7 @@ const DeploymentConfig = z.object({
 });
 
 /**
- * MCP 连接器：把远端 MCP 服务（Streamable HTTP）作为应用接入。工具清单由内核快照进 `app_tools`，
+ * MCP 连接器：把远端 MCP 服务（Streamable HTTP）作为连接器接入。工具清单由内核快照进 `connector_tools`，
  * 每次调用打开一个会话、用完关闭；鉴权由内核在每个请求前注入（静态凭据 / 之后的 OAuth）。
  * 部署级配置只有 `allowInsecureLoopback`；无进程内状态。
  */
