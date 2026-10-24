@@ -137,7 +137,7 @@ Use the same self-built app (see above):
    needs `open_id`, `tenant_key`, the name and the avatar. The email is included only when the user info has `email` / `enterprise_email` (depending on the app's
    field permissions and the user's earlier authorization), and left out otherwise. It needs `tenant:tenant:readonly` (already required by the bot) to check the user's tenant.
 3. Publish a version whose **availability scope** (可用范围) includes the people who will sign in (outside the scope, the token exchange fails with 20010).
-4. In the kernel config set `pluginConfig.lark.appId` / `appSecret` (`appSecret` goes through the secret store and is masked in logs), and add `lark` to
+4. In the kernel config set `extensionConfig.lark.appId` / `appSecret` (`appSecret` goes through the secret store and is masked in logs), and add `lark` to
    `auth.loginSources`.
 
 Flow and choices (docs consulted 2026-10-20):
@@ -205,7 +205,7 @@ Behavior (docs: [Get the list of child departments](https://open.larksuite.com/d
 | `appId` | — | App ID of the self-built app used for web login (the same app as the bot and directory); leave empty if you only use the bot |
 | `appSecret` | — | That app's App Secret (secret) |
 
-The deployment-level config lives under the kernel config `pluginConfig.lark`.
+The deployment-level config lives under the kernel config `extensionConfig.lark`.
 
 ## Org-level config
 

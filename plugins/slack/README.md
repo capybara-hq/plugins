@@ -159,7 +159,7 @@ channel connection uses, but the config is stored separately and goes through th
 | `clientId` | — | Client ID for Sign in with Slack; leave empty if you don't use login |
 | `clientSecret` | — | Client Secret for Sign in with Slack (secret, masked in logs); leave empty if you don't use login |
 
-The deployment-level config lives under the kernel config `pluginConfig.slack`.
+The deployment-level config lives under the kernel config `extensionConfig.slack`.
 
 ## Org-level config
 
