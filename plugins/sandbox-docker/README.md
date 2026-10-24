@@ -12,10 +12,10 @@ The plugin **reaches Docker only through the endpoint** (the socket proxy in `do
 | `network` | `capybara-sandbox` | Name of the shared sandbox network; it must start with `cap` (the socket proxy only allows such networks); if it does not exist the plugin creates it as a bridge with `enable_icc=false` (containers cannot reach each other) |
 | `egressProxyImage` | `capybara-sandbox-egress:latest` | Egress proxy image (`egress-proxy/Dockerfile`) |
 | `volumeDriver` | (unset, uses local) | Driver for the workspace volume; when set, `DriverOpts.size=<diskMb>M` is passed |
-| `allowOpenEgress` | `false` | Allow `sandbox.limits.egress = "open"`; when false, `create` fails immediately on open (an English error naming `pluginConfig."sandbox-docker".allowOpenEgress`), and the kernel also logs a warn at startup |
+| `allowOpenEgress` | `false` | Allow `sandbox.limits.egress = "open"`; when false, `create` fails immediately on open (an English error naming `extensionConfig."sandbox-docker".allowOpenEgress`), and the kernel also logs a warn at startup |
 
 ```bash
-export CAPYBARA_PLUGIN_CONFIG='{"sandbox-docker":{"endpoint":"tcp://127.0.0.1:2375"}}'
+export CAPYBARA_EXTENSION_CONFIG='{"sandbox-docker":{"endpoint":"tcp://127.0.0.1:2375"}}'
 ```
 
 The deployment config schema is strict: extra keys are errors.

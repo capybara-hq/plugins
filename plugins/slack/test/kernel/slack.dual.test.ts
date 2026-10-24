@@ -83,10 +83,10 @@ const blocksText = (m: FakeSlackMessage) => JSON.stringify(slack.finalBlocks(m) 
 describe("Slack 插件接内核（双副本）", () => {
   it("建连接 → 绑定卡片 → 流式回复 → 话题里的审批卡片 → 点击批准 → 卡片更新与最终回复", async () => {
     h = await createDualReplicaHarness({
-      plugins: [MODEL_FAKE, FAKE_IM, SLACK],
+      extensions: [MODEL_FAKE, FAKE_IM, SLACK],
       pgUrl: pgc.url,
       redisUrl: rdc.url,
-      pluginConfig: {
+      extensionConfig: {
         "fake-im": {
           platformUrl: im.url,
           tenant: "t1",
@@ -148,7 +148,7 @@ describe("Slack 插件接内核（双副本）", () => {
       ["fake-im", { enabled: true, config: { url: book.url } }],
       ["slack", { enabled: true }],
     ] as const) {
-      const en = await call(ownerJar, "PUT", `${base}/plugins/${plugin}`, body);
+      const en = await call(ownerJar, "PUT", `${base}/extensions/${plugin}`, body);
       expect(en.status, JSON.stringify(en.json)).toBe(200);
     }
     const ag = await call(ownerJar, "POST", `${base}/agents`, {

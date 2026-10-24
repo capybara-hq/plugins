@@ -102,10 +102,10 @@ const finalText = (m: FakeLarkMessage) => lark.cardText(lark.finalCard(m));
 describe("M4 第二段验收：Lark（双副本）", () => {
   it("渠道 → 绑定 → 流式对话 → 审批卡片 → 杀副本接管 → Lark 登录 → 通讯录加入与离职", async () => {
     h = await createDualReplicaHarness({
-      plugins: [MODEL_FAKE, FAKE_IM, LARK],
+      extensions: [MODEL_FAKE, FAKE_IM, LARK],
       pgUrl: pgc.url,
       redisUrl: rdc.url,
-      pluginConfig: {
+      extensionConfig: {
         "fake-im": {
           platformUrl: im.url,
           tenant: "t1",
@@ -211,11 +211,11 @@ describe("M4 第二段验收：Lark（双副本）", () => {
       ["fake-im", { enabled: true, config: { url: book.url } }],
       ["lark", { enabled: true, config: { appId: lark.appId, appSecret: SECRET } }],
     ] as const) {
-      const en = await call(ownerJar, "PUT", `${base}/plugins/${plugin}`, body);
+      const en = await call(ownerJar, "PUT", `${base}/extensions/${plugin}`, body);
       expect(en.status, JSON.stringify(en.json)).toBe(200);
       expect(JSON.stringify(en.json)).not.toContain(SECRET);
     }
-    const sync1 = await call(ownerJar, "POST", `${base}/plugins/lark/directory/sync`);
+    const sync1 = await call(ownerJar, "POST", `${base}/extensions/lark/directory/sync`);
     expect(sync1.status).toBe(202);
     await waitFor(async () => (await syncAudits()).length === 1, 20_000, "first directory sync");
     expect((await syncAudits())[0]?.detail).toMatchObject({ added: 1, partial: false });
@@ -566,7 +566,7 @@ describe("M4 第二段验收：Lark（双副本）", () => {
     const carolUser = lark.users.get("ou_carol");
     if (!carolUser) throw new Error("carol is not a Lark user");
     lark.users.set("ou_carol", { ...carolUser, status: { isResigned: true } });
-    const sync3 = await call(ownerJar, "POST", `${base}/plugins/lark/directory/sync`);
+    const sync3 = await call(ownerJar, "POST", `${base}/extensions/lark/directory/sync`);
     expect(sync3.status).toBe(202);
     await waitFor(async () => (await syncAudits()).length === 3, 20_000, "sync after removal");
     expect((await syncAudits())[2]?.detail).toMatchObject({

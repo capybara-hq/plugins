@@ -1,6 +1,6 @@
 import {
   isModelError,
-  MODEL_PROVIDER_CAPABILITY_V2,
+  MODEL_PROVIDER_EXTENSION_POINT_V2,
   type ModelProvider,
   type ModelRequest,
   type ModelStreamEvent,
@@ -631,7 +631,7 @@ describe("anthropic: errors and edge cases", () => {
   });
 
   it("provides model-provider@2", () => {
-    expect(plugin.provides).toEqual([MODEL_PROVIDER_CAPABILITY_V2]);
+    expect(plugin.provides).toEqual([MODEL_PROVIDER_EXTENSION_POINT_V2]);
   });
 
   it("effort tiers come from the Models API level flags (default high only when supported)", async () => {

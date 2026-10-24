@@ -16,8 +16,8 @@ and connect for resume. It is an either-or choice with `@capybara-hq/plugin-sand
 | `allowOpenEgress` | `false` | Allow `sandbox.limits.egress = "open"`; when false, `create` fails immediately on open (an English error) |
 
 ```bash
-export CAPYBARA_PLUGINS='["@capybara-hq/plugin-sandbox-e2b"]'
-export CAPYBARA_PLUGIN_CONFIG='{"sandbox-e2b":{"apiKey":"e2b_…","template":"capybara-sandbox"}}'
+export CAPYBARA_EXTENSIONS='["@capybara-hq/plugin-sandbox-e2b"]'
+export CAPYBARA_EXTENSION_CONFIG='{"sandbox-e2b":{"apiKey":"e2b_…","template":"capybara-sandbox"}}'
 ```
 
 The deployment config schema is strict: extra keys are errors. The kernel config `sandbox.image` has no effect on this plugin (the image is decided by the template).

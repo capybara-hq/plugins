@@ -33,9 +33,9 @@ let raw: ReturnType<typeof createDb>;
 beforeAll(async () => {
   slack = await startFakeSlack({ teamId: "T1", botUserId: "UBOT" });
   h = await createDualReplicaHarness({
-    plugins: [MODEL_FAKE, SLACK],
+    extensions: [MODEL_FAKE, SLACK],
     roles: [["api", "worker"], ["gateway"]],
-    pluginConfig: { slack: { apiUrl: slack.apiUrl } },
+    extensionConfig: { slack: { apiUrl: slack.apiUrl } },
     config: {
       auth: { cookieSecure: false },
       http: { publicUrl: "https://cap.example" },
@@ -106,7 +106,7 @@ describe("Slack webhook inbound (dual replica, real plugin)", () => {
     await sql`INSERT INTO capybara.identities (source, external_id, account_id)
       VALUES ('slack:T1', 'UALICE', ${ownerId})`.execute(raw);
     slack.users.set("UALICE", { id: "UALICE", teamId: "T1", name: "alice", displayName: "Alice" });
-    const en = await call("PUT", `${base}/plugins/slack`, { enabled: true });
+    const en = await call("PUT", `${base}/extensions/slack`, { enabled: true });
     expect(en.status, JSON.stringify(en.json)).toBe(200);
     const ch = await call("POST", `${base}/channels`, {
       plugin: "slack",

@@ -1,6 +1,6 @@
 import {
   isModelError,
-  MODEL_PROVIDER_CAPABILITY_V2,
+  MODEL_PROVIDER_EXTENSION_POINT_V2,
   type ModelProvider,
   type ModelRequest,
   type ModelStreamEvent,
@@ -662,7 +662,7 @@ describe("openai: errors and edge cases", () => {
 describe("openai: plugin manifest", () => {
   it("name, capability, deployment config requires at least one model and a secret apiKey", () => {
     expect(plugin.name).toBe("openai");
-    expect(plugin.provides).toEqual([MODEL_PROVIDER_CAPABILITY_V2]);
+    expect(plugin.provides).toEqual([MODEL_PROVIDER_EXTENSION_POINT_V2]);
     const schema = plugin.config?.deployment;
     expect(schema).toBeDefined();
     if (schema === undefined) return;

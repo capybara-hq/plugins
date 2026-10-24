@@ -1,8 +1,8 @@
 import {
-  CHANNEL_CAPABILITY,
-  DIRECTORY_CAPABILITY,
-  definePlugin,
-  IDENTITY_SOURCE_CAPABILITY,
+  CHANNEL_EXTENSION_POINT,
+  DIRECTORY_EXTENSION_POINT,
+  defineExtension,
+  IDENTITY_SOURCE_EXTENSION_POINT,
 } from "@capybara-hq/plugin-sdk";
 import { createSlackChannel } from "./channel.js";
 import { SlackDeployment, SlackDirectoryConfig } from "./config.js";
@@ -27,17 +27,17 @@ export { createSlackIdentitySource } from "./identity.js";
  * `slack.com`；Socket Mode 的 WSS 主机由 Slack 分配（如 `wss-primary.slack.com`、`wss-backup.slack.com`、
  * `wss-111.slack.com`），清单不支持通配，列出主要的一个。
  */
-export default definePlugin({
+export default defineExtension({
   name: "slack",
   version: "0.1.0",
   sdk: "^0.1.0",
-  provides: [CHANNEL_CAPABILITY, IDENTITY_SOURCE_CAPABILITY, DIRECTORY_CAPABILITY],
+  provides: [CHANNEL_EXTENSION_POINT, IDENTITY_SOURCE_EXTENSION_POINT, DIRECTORY_EXTENSION_POINT],
   permissions: { network: ["slack.com", "wss-primary.slack.com"] },
   config: { deployment: SlackDeployment, org: SlackDirectoryConfig },
   setup(ctx) {
     const { apiUrl } = SlackDeployment.parse(ctx.config ?? {});
-    ctx.provide(CHANNEL_CAPABILITY, createSlackChannel({ apiUrl, log: ctx.log, kv: ctx.kv }));
-    ctx.provide(IDENTITY_SOURCE_CAPABILITY, createSlackIdentitySource());
-    ctx.provide(DIRECTORY_CAPABILITY, createSlackDirectory({ apiUrl }));
+    ctx.provide(CHANNEL_EXTENSION_POINT, createSlackChannel({ apiUrl, log: ctx.log, kv: ctx.kv }));
+    ctx.provide(IDENTITY_SOURCE_EXTENSION_POINT, createSlackIdentitySource());
+    ctx.provide(DIRECTORY_EXTENSION_POINT, createSlackDirectory({ apiUrl }));
   },
 });

@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import type {
-  PluginContext,
+  ExtensionContext,
   ToolCallContext,
   ToolHandler,
   ToolSpec,
@@ -32,12 +32,12 @@ afterAll(async () => {
 });
 
 /** 一个「副本」的 db：独立连接池指向同一个 plugin_todo schema（与真实副本里的 ctx.db 等价）。 */
-function replicaDb(h: Harness): PluginContext["db"] {
+function replicaDb(h: Harness): ExtensionContext["db"] {
   const db = new Kysely<never>({
     dialect: new PostgresDialect({ pool: new pg.Pool({ connectionString: h.dbUrl, max: 2 }) }),
   });
   pools.push(db);
-  return db.withSchema("plugin_todo") as unknown as PluginContext["db"];
+  return db.withSchema("plugin_todo") as unknown as ExtensionContext["db"];
 }
 
 const call = (conversationId: string): ToolCallContext => ({
@@ -65,7 +65,7 @@ describe("todo 插件", { timeout: 60_000 }, () => {
         register: (spec: ToolSpec, handler: ToolHandler) => registered.push({ spec, handler }),
       },
       ui: { view: (id: string) => views.push(id) },
-    } as unknown as PluginContext);
+    } as unknown as ExtensionContext);
     expect(registered).toHaveLength(1);
     expect(registered[0]?.spec.name).toBe("write");
     expect(registered[0]?.spec.defaultPolicy).toBe("allow");
@@ -110,7 +110,7 @@ describe("todo 插件", { timeout: 60_000 }, () => {
   });
 
   it("双副本：副本 A 写、副本 B 读一致；B 覆盖写后 A 读到新清单；会话互相隔离", async () => {
-    const h = await createDualReplicaHarness({ plugins: [PLUGIN], pgUrl: pgc.url });
+    const h = await createDualReplicaHarness({ extensions: [PLUGIN], pgUrl: pgc.url });
     harnesses.push(h);
     const a = replicaDb(h);
     const b = replicaDb(h);
@@ -147,7 +147,7 @@ describe("todo 插件", { timeout: 60_000 }, () => {
   });
 
   it("并发写同一会话：整表覆盖，最终是某一次完整的清单", async () => {
-    const h = await createDualReplicaHarness({ plugins: [PLUGIN], pgUrl: pgc.url });
+    const h = await createDualReplicaHarness({ extensions: [PLUGIN], pgUrl: pgc.url });
     harnesses.push(h);
     const a = replicaDb(h);
     const b = replicaDb(h);
@@ -163,7 +163,7 @@ describe("todo 插件", { timeout: 60_000 }, () => {
   });
 
   it("参数不合法 -> ToolError，写入不发生", async () => {
-    const h = await createDualReplicaHarness({ plugins: [PLUGIN], pgUrl: pgc.url });
+    const h = await createDualReplicaHarness({ extensions: [PLUGIN], pgUrl: pgc.url });
     harnesses.push(h);
     const a = replicaDb(h);
     await expect(

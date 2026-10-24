@@ -1,4 +1,4 @@
-import { definePlugin, SANDBOX_CAPABILITY, secret } from "@capybara-hq/plugin-sdk";
+import { defineExtension, SANDBOX_EXTENSION_POINT, secret } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 import { createE2BSandbox, HOSTNAME_RE } from "./provider.js";
 
@@ -51,17 +51,17 @@ export const DeploymentConfig = z
   .strict();
 
 /** `sandbox@1`：每个对话一个 E2B 沙箱，休眠用 E2B 的 pause，恢复用 connect。 */
-export default definePlugin({
+export default defineExtension({
   name: "sandbox-e2b",
   version: "0.1.0",
   sdk: "^0.1.0",
-  provides: [SANDBOX_CAPABILITY],
+  provides: [SANDBOX_EXTENSION_POINT],
   // 只用部署配置与 E2B 的 API，不用任何需要声明的平台能力
   permissions: {},
   config: { deployment: DeploymentConfig },
   setup(ctx) {
     ctx.provide(
-      SANDBOX_CAPABILITY,
+      SANDBOX_EXTENSION_POINT,
       createE2BSandbox(ctx.config as z.output<typeof DeploymentConfig>, { log: ctx.log }),
     );
   },

@@ -24,11 +24,11 @@ afterAll(async () => {
   await pgc?.stop();
 });
 
-async function start(pluginConfig?: Record<string, unknown>): Promise<Harness> {
+async function start(extensionConfig?: Record<string, unknown>): Promise<Harness> {
   const h = await createDualReplicaHarness({
-    plugins: [PLUGIN],
+    extensions: [PLUGIN],
     pgUrl: pgc.url,
-    ...(pluginConfig ? { pluginConfig } : {}),
+    ...(extensionConfig ? { extensionConfig } : {}),
   });
   harnesses.push(h);
   return h;

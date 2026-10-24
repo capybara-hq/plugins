@@ -3,9 +3,9 @@ import {
   type Channel,
   ChannelSendError,
   type ChannelTarget,
+  type ExtensionContext,
   type InboundEvent,
   type Logger,
-  type PluginContext,
   secret,
 } from "@capybara-hq/plugin-sdk";
 import {
@@ -61,7 +61,7 @@ export interface LarkChannelOptions {
    * Plugin kv (`ctx.kv`) for the per-connection bot open_id cache used by webhook mode. Without it
    * every webhook message event calls the bot info API.
    */
-  kv?: PluginContext["kv"];
+  kv?: ExtensionContext["kv"];
 }
 
 /** TTL of the cached bot open_id (webhook mode), in seconds. */

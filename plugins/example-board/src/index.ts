@@ -1,8 +1,8 @@
-import { definePlugin, type EmbedClaims, type PluginContext } from "@capybara-hq/plugin-sdk";
+import { defineExtension, type EmbedClaims, type ExtensionContext } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 import { BOARD_HTML, BOARD_JS } from "./page.js";
 
-type Db = PluginContext["db"];
+type Db = ExtensionContext["db"];
 
 // capybara:allow-module-state 只读常量：卡片状态的固定取值
 const STATUSES = ["todo", "doing", "done"] as const;
@@ -103,7 +103,7 @@ const sleep = (ms: number, signal: AbortSignal) =>
  * - `/ui/events`（SSE）按请求订阅 `ctx.bus`，客户端断开或令牌过期时退订、结束（网页用续期后的令牌重连）；
  * - 不用定时器、不放模块级可变状态：跨副本的刷新全靠 bus。
  */
-export default definePlugin({
+export default defineExtension({
   name: "example-board",
   version: "0.1.0",
   sdk: "^0.1.0",

@@ -89,8 +89,8 @@ describe.skipIf(!dockerAvailable)(
           { pg: pgc.url, redis: rd.url },
           {
             roles: ["api", "worker"],
-            plugins: [MODEL_FAKE, SANDBOX_DOCKER],
-            pluginConfig: {
+            extensions: [MODEL_FAKE, SANDBOX_DOCKER],
+            extensionConfig: {
               "sandbox-docker": {
                 endpoint: proxy.endpoint,
                 network,

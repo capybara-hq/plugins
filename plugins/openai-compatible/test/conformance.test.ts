@@ -5,11 +5,11 @@ import {
   type ModelStreamEvent,
 } from "@capybara-hq/plugin-sdk";
 import {
-  assertPluginSecretsReachable,
+  assertExtensionSecretsReachable,
   describeModelProviderConformance,
+  extensionDeploymentSecretValues,
   type FakeModelServer,
   type FakeResponse,
-  pluginDeploymentSecretValues,
   startFakeModelServer,
 } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -572,10 +572,10 @@ describe("openai-compatible: stream edge cases and errors", () => {
   });
 
   it("passes the kernel's secret reachability check and apiKeys values are redacted", () => {
-    // 内核 PluginHost 加载插件时执行同一检查；secret() 放在数组元素里会被拒绝加载
-    expect(() => assertPluginSecretsReachable(plugin)).not.toThrow();
+    // The kernel's ExtensionHost runs the same check when loading an extension; a secret() inside an array element is refused at load
+    expect(() => assertExtensionSecretsReachable(plugin)).not.toThrow();
     expect(
-      pluginDeploymentSecretValues(plugin, {
+      extensionDeploymentSecretValues(plugin, {
         endpoints: [
           {
             name: "ds",

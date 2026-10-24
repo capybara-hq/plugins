@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { definePlugin, type PluginContext } from "@capybara-hq/plugin-sdk";
+import { defineExtension, type ExtensionContext } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 
 /** 部署级配置：每次递增的步长，默认 1。 */
@@ -7,7 +7,7 @@ const DeploymentConfig = z.object({
   step: z.number().int().positive().default(1),
 });
 
-type Db = PluginContext["db"];
+type Db = ExtensionContext["db"];
 
 /** counters 行 `default` 加 step 并返回新值。调用方须已处于事务中。 */
 async function bump(db: Db, step: number): Promise<number> {
@@ -54,7 +54,7 @@ export async function applyDelayedInc(db: Db, jobId: string, step: number): Prom
  * - 延迟任务走 ctx.queue，handler 用 jobId + 唯一约束保证幂等；
  * - 通过 provide 对外暴露 counter@1 能力。
  */
-export default definePlugin({
+export default defineExtension({
   name: "example-counter",
   version: "0.1.0",
   sdk: "^0.1.0",

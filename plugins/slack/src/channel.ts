@@ -3,9 +3,9 @@ import {
   type Channel,
   ChannelSendError,
   type ChannelTarget,
+  type ExtensionContext,
   type InboundEvent,
   type Logger,
-  type PluginContext,
   secret,
 } from "@capybara-hq/plugin-sdk";
 import { LogLevel, type Logger as SlackLogger, SocketModeClient } from "@slack/socket-mode";
@@ -48,7 +48,7 @@ export interface SlackChannelOptions {
    * Plugin kv (`ctx.kv`) for the per-connection bot user id cache used by webhook mode. Without
    * it every webhook event calls `auth.test`.
    */
-  kv?: PluginContext["kv"];
+  kv?: ExtensionContext["kv"];
 }
 
 /** `connect` error for a connection without an app-level token. */

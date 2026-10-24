@@ -1,4 +1,4 @@
-import { definePlugin, SANDBOX_CAPABILITY } from "@capybara-hq/plugin-sdk";
+import { defineExtension, SANDBOX_EXTENSION_POINT } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 import { createDockerSandbox } from "./provider.js";
 
@@ -50,17 +50,17 @@ export const DeploymentConfig = z
   .strict();
 
 /** `sandbox@1`：每个对话一个 Docker 容器，经 socket 代理访问 Docker，插件不挂 docker.sock。 */
-export default definePlugin({
+export default defineExtension({
   name: "sandbox-docker",
   version: "0.1.0",
   sdk: "^0.1.0",
-  provides: [SANDBOX_CAPABILITY],
+  provides: [SANDBOX_EXTENSION_POINT],
   // 只用部署配置与 Docker endpoint，不用任何需要声明的平台能力
   permissions: {},
   config: { deployment: DeploymentConfig },
   setup(ctx) {
     ctx.provide(
-      SANDBOX_CAPABILITY,
+      SANDBOX_EXTENSION_POINT,
       createDockerSandbox(ctx.config as z.output<typeof DeploymentConfig>),
     );
   },

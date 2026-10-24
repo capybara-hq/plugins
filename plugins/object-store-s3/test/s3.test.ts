@@ -1,7 +1,7 @@
-import { OBJECT_STORE_CAPABILITY, type ObjectStore } from "@capybara-hq/plugin-sdk";
+import { OBJECT_STORE_EXTENSION_POINT, type ObjectStore } from "@capybara-hq/plugin-sdk";
 import {
-  assertPluginSecretsReachable,
-  pluginDeploymentSecretValues,
+  assertExtensionSecretsReachable,
+  extensionDeploymentSecretValues,
   startTestS3,
   type TestS3,
 } from "@capybara-hq/testing";
@@ -73,9 +73,9 @@ describe("contentDisposition", () => {
 
 describe("清单", () => {
   it("提供 object-store@1；密钥字段可达、会被打码", () => {
-    expect(plugin.provides).toEqual([OBJECT_STORE_CAPABILITY]);
-    assertPluginSecretsReachable(plugin);
-    expect(pluginDeploymentSecretValues(plugin, config).sort()).toEqual(
+    expect(plugin.provides).toEqual([OBJECT_STORE_EXTENSION_POINT]);
+    assertExtensionSecretsReachable(plugin);
+    expect(extensionDeploymentSecretValues(plugin, config).sort()).toEqual(
       [s3.secretKey, s3.accessKey].sort(),
     );
   });
