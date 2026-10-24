@@ -1,5 +1,8 @@
 import { SANDBOX_EXTENSION_POINT } from "@capybara-hq/plugin-sdk";
-import { assertPluginSecretsReachable, pluginDeploymentSecretValues } from "@capybara-hq/testing";
+import {
+  assertExtensionSecretsReachable,
+  extensionDeploymentSecretValues,
+} from "@capybara-hq/testing";
 import { describe, expect, it } from "vitest";
 import plugin, { DeploymentConfig, decodeOutput, exitCodeOf } from "../src/index.js";
 
@@ -71,9 +74,9 @@ describe("sandbox-e2b manifest", () => {
   });
 
   it("apiKey is a secret the kernel can reach and redact", () => {
-    assertPluginSecretsReachable(plugin);
+    assertExtensionSecretsReachable(plugin);
     expect(
-      pluginDeploymentSecretValues(plugin, { apiKey: "e2b_secret_value", template: "t" }),
+      extensionDeploymentSecretValues(plugin, { apiKey: "e2b_secret_value", template: "t" }),
     ).toEqual(["e2b_secret_value"]);
   });
 
