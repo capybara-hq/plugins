@@ -1,8 +1,10 @@
 /**
- * 可中止的等待：`ms` 到或 signal 中止时 resolve（调用方按需再 `signal.throwIfAborted()`）。只用于本次调用内
- * （长连接循环、通讯录限流退避），随 signal 结束。插件不能用 setTimeout（`pnpm check:plugin-state` 的
- * plugin-timer 规则），所以用 `AbortSignal.timeout` 计时；不建 `AbortSignal.any` 组合信号（每秒一次的状态轮询会
- * 不断在 signal 上挂依赖），两个监听都在结束时摘掉。
+ * Abortable wait: resolves when `ms` elapses or the signal aborts (callers call
+ * `signal.throwIfAborted()` as needed). Used only within one call (the long-connection loop,
+ * directory rate-limit backoff) and ends with the signal. Extensions may not use setTimeout (the
+ * plugin-timer rule of `pnpm check:extension-state`), so `AbortSignal.timeout` does the timing; no
+ * `AbortSignal.any` combined signal is built (the once-a-second status poll would keep adding
+ * dependants to the signal), and both listeners are removed at the end.
  */
 export const pause = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve) => {
