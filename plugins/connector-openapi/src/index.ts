@@ -1,4 +1,4 @@
-import { CONNECTOR_CAPABILITY, definePlugin } from "@capybara-hq/plugin-sdk";
+import { CONNECTOR_EXTENSION_POINT, defineExtension } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 import { createOpenApiConnector } from "./connector.js";
 
@@ -12,16 +12,16 @@ const DeploymentConfig = z.object({
  * OpenAPI 连接器：把一个 OpenAPI 3.0 / 3.1 描述的 HTTP API 作为连接器接入，每个 operation 一个工具。
  * 文档按次读取（specText 或不带凭据去取 specUrl），不在进程内缓存；鉴权由内核在每个请求前注入。
  */
-export default definePlugin({
+export default defineExtension({
   name: "connector-openapi",
   version: "0.1.0",
   sdk: "^0.1.0",
-  provides: [CONNECTOR_CAPABILITY],
+  provides: [CONNECTOR_EXTENSION_POINT],
   config: { deployment: DeploymentConfig },
   setup(ctx) {
     const { allowInsecureLoopback } = DeploymentConfig.parse(ctx.config ?? {});
     ctx.provide(
-      CONNECTOR_CAPABILITY,
+      CONNECTOR_EXTENSION_POINT,
       createOpenApiConnector({ log: ctx.log, allowInsecureLoopback }),
     );
   },

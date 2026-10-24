@@ -1,6 +1,6 @@
 import {
-  definePlugin,
-  type PluginContext,
+  defineExtension,
+  type ExtensionContext,
   ToolError,
   type ToolHandler,
   type ToolSpec,
@@ -8,7 +8,7 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 
-type Db = PluginContext["db"];
+type Db = ExtensionContext["db"];
 
 const TodoItem = z.object({
   content: z.string().min(1),
@@ -124,7 +124,7 @@ export function tasksView(todos: Todo[]): UiView {
 }
 
 /** `todo__write` 的处理函数：写入后通知界面刷新「任务」标签（刷新失败不影响写入结果）。 */
-export function writeHandler(db: Db, ui: Pick<PluginContext["ui"], "invalidate">): ToolHandler {
+export function writeHandler(db: Db, ui: Pick<ExtensionContext["ui"], "invalidate">): ToolHandler {
   return async (input, ctx) => {
     const parsed = WriteInput.safeParse(input);
     if (!parsed.success) {
@@ -158,7 +158,7 @@ export function writeHandler(db: Db, ui: Pick<PluginContext["ui"], "invalidate">
  * todo 插件：一个工具 `write`（模型可见名 `todo__write`），清单存在本插件 schema，各副本读写一致；
  * 对话页右侧的「任务」标签（视图 `tasks`），写入后经 `ctx.ui.invalidate` 实时刷新。
  */
-export default definePlugin({
+export default defineExtension({
   name: "todo",
   version: "0.1.0",
   sdk: "^0.1.0",

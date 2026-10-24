@@ -1,6 +1,6 @@
 import {
-  definePlugin,
-  MODEL_PROVIDER_CAPABILITY_V2,
+  defineExtension,
+  MODEL_PROVIDER_EXTENSION_POINT_V2,
   ModelError,
   type ModelInfo,
   type ModelProvider,
@@ -177,15 +177,15 @@ export function createOpenAICompatibleProvider(
 }
 
 /** OpenAI 兼容（Chat Completions）供应商插件：vLLM、DeepSeek、Qwen 等，方言差异只在本插件内。 */
-export default definePlugin({
+export default defineExtension({
   name: PROVIDER,
   version: "0.1.0",
   sdk: "^0.1.0",
-  provides: [MODEL_PROVIDER_CAPABILITY_V2],
+  provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
   // 不声明 network：访问的端点全部由管理员在部署配置里给出，没有固定域名
   config: { deployment: DeploymentConfig },
   setup(ctx) {
     const cfg = DeploymentConfig.parse(ctx.config ?? {});
-    ctx.provide(MODEL_PROVIDER_CAPABILITY_V2, createOpenAICompatibleProvider(cfg));
+    ctx.provide(MODEL_PROVIDER_EXTENSION_POINT_V2, createOpenAICompatibleProvider(cfg));
   },
 });

@@ -1,4 +1,8 @@
-import { CONNECTOR_CAPABILITY, type Connector, type PluginContext } from "@capybara-hq/plugin-sdk";
+import {
+  CONNECTOR_EXTENSION_POINT,
+  type Connector,
+  type ExtensionContext,
+} from "@capybara-hq/plugin-sdk";
 import { expect, it } from "vitest";
 import plugin from "../src/index.js";
 
@@ -9,13 +13,13 @@ async function setup(config: unknown): Promise<Connector> {
     provide: (cap: string, impl: unknown) => provided.set(cap, impl),
     log,
     config,
-  } as unknown as PluginContext);
-  return provided.get(CONNECTOR_CAPABILITY) as Connector;
+  } as unknown as ExtensionContext);
+  return provided.get(CONNECTOR_EXTENSION_POINT) as Connector;
 }
 
 it("清单：connector-openapi 提供 connector@1", () => {
   expect(plugin.name).toBe("connector-openapi");
-  expect(plugin.provides).toEqual([CONNECTOR_CAPABILITY]);
+  expect(plugin.provides).toEqual([CONNECTOR_EXTENSION_POINT]);
   expect(plugin.config?.deployment?.parse({})).toEqual({ allowInsecureLoopback: false });
 });
 

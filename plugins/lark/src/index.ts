@@ -1,8 +1,8 @@
 import {
-  CHANNEL_CAPABILITY,
-  DIRECTORY_CAPABILITY,
-  definePlugin,
-  IDENTITY_SOURCE_CAPABILITY,
+  CHANNEL_EXTENSION_POINT,
+  DIRECTORY_EXTENSION_POINT,
+  defineExtension,
+  IDENTITY_SOURCE_EXTENSION_POINT,
 } from "@capybara-hq/plugin-sdk";
 import { createLarkChannel } from "./channel.js";
 import { apiBaseOf, LarkDeployment, LarkOrgConfig, loginAppOf } from "./config.js";
@@ -30,11 +30,11 @@ export { createLarkIdentitySource } from "./identity.js";
  * 网页授权页在 `accounts.larksuite.com`（浏览器跳转过去，服务端不请求它）。长连接的 WebSocket 地址由接入点在连接时
  * 下发（文档没有写明固定主机），清单不支持通配，故不列出。
  */
-export default definePlugin({
+export default defineExtension({
   name: "lark",
   version: "0.1.0",
   sdk: "^0.1.0",
-  provides: [CHANNEL_CAPABILITY, IDENTITY_SOURCE_CAPABILITY, DIRECTORY_CAPABILITY],
+  provides: [CHANNEL_EXTENSION_POINT, IDENTITY_SOURCE_EXTENSION_POINT, DIRECTORY_EXTENSION_POINT],
   permissions: { network: ["open.larksuite.com", "accounts.larksuite.com"] },
   config: { deployment: LarkDeployment, org: LarkOrgConfig },
   setup(ctx) {
@@ -42,12 +42,12 @@ export default definePlugin({
     const apiUrl = apiBaseOf(dep);
     const loginApp = loginAppOf(dep);
     ctx.provide(
-      CHANNEL_CAPABILITY,
+      CHANNEL_EXTENSION_POINT,
       createLarkChannel({ apiUrl, log: ctx.log, kv: ctx.kv, ...(loginApp && { loginApp }) }),
     );
-    ctx.provide(IDENTITY_SOURCE_CAPABILITY, createLarkIdentitySource());
+    ctx.provide(IDENTITY_SOURCE_EXTENSION_POINT, createLarkIdentitySource());
     ctx.provide(
-      DIRECTORY_CAPABILITY,
+      DIRECTORY_EXTENSION_POINT,
       createLarkDirectory({ apiUrl, ...(loginApp && { loginApp }) }),
     );
   },

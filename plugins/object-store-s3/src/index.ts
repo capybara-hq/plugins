@@ -14,8 +14,8 @@ import { Upload } from "@aws-sdk/lib-storage";
 import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import {
-  definePlugin,
-  OBJECT_STORE_CAPABILITY,
+  defineExtension,
+  OBJECT_STORE_EXTENSION_POINT,
   type ObjectHead,
   type ObjectStore,
   type PresignedUpload,
@@ -325,13 +325,13 @@ function abortFrom(signal: AbortSignal): AbortController {
  * 以及提供 S3 兼容接口的阿里云 OSS、火山引擎 TOS 等。单选、中转能力：插件经内核的 `ctx.storage` 使用，
  * 键前缀与组织隔离由内核负责。
  */
-export default definePlugin({
+export default defineExtension({
   name: "object-store-s3",
   version: "0.1.0",
   sdk: "^0.1.0",
-  provides: [OBJECT_STORE_CAPABILITY],
+  provides: [OBJECT_STORE_EXTENSION_POINT],
   config: { deployment: DeploymentConfig },
   setup(ctx) {
-    ctx.provide(OBJECT_STORE_CAPABILITY, createS3ObjectStore(ctx.config as S3StoreConfig));
+    ctx.provide(OBJECT_STORE_EXTENSION_POINT, createS3ObjectStore(ctx.config as S3StoreConfig));
   },
 });

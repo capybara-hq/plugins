@@ -1,4 +1,4 @@
-import { SANDBOX_CAPABILITY } from "@capybara-hq/plugin-sdk";
+import { SANDBOX_EXTENSION_POINT } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import plugin, { createDockerSandbox, DeploymentConfig, decodeOutput } from "../src/index.js";
 
@@ -17,7 +17,7 @@ describe("decodeOutput", () => {
 describe("sandbox-docker manifest", () => {
   it("provides sandbox@1 and declares no platform permissions", () => {
     expect(plugin.name).toBe("sandbox-docker");
-    expect(plugin.provides).toEqual([SANDBOX_CAPABILITY]);
+    expect(plugin.provides).toEqual([SANDBOX_EXTENSION_POINT]);
     expect(plugin.permissions).toEqual({});
   });
 
