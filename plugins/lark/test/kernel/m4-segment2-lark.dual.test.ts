@@ -127,7 +127,7 @@ describe("M4 第二段验收：Lark（双副本）", () => {
     const db: KernelDb = kernelDb(raw);
 
     // ---- HTTP：杀副本前严格交替发往两个副本；之后只发往幸存的副本 ----
-    let dead: 0 | 1 | undefined;
+    let dead: number | undefined;
     const send = async (path: string, init: RequestInit) => {
       if (dead === undefined) return harness.request(path, init);
       const r = harness.replicas[dead === 0 ? 1 : 0];

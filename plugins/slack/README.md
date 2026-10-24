@@ -1,138 +1,169 @@
 # @capybara-hq/plugin-slack
 
-Slack 官方插件，提供三种能力：
+The official Slack plugin. It provides three capabilities:
 
-- `channel@1`（机器人）：经 [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode)
-  收事件（不需要公网回调地址），经 Web API 发消息，审批 / 提问 / 连接 / 绑定卡片渲染为 Block Kit。
-- `identity-source@1`（Sign in with Slack，OpenID Connect）：用 Slack 账号登录 Capybara。
-- `directory@1`（通讯录）：把 Slack 工作区成员同步为组织成员。
+- `channel@1` (bot): receives events over [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode)
+  (no public callback URL needed), sends messages through the Web API, and renders approval / question /
+  connection / binding cards as Block Kit.
+- `identity-source@1` (Sign in with Slack, OpenID Connect): sign in to Capybara with a Slack account.
+- `directory@1` (directory sync): syncs Slack workspace members into org members.
 
-三处用同一个身份键：`identities.source` = `slack:<team id>`，`external_id` = Slack user id（`U…`）。
-同一个人经登录、私聊机器人、通讯录同步出现时只对应一行身份、一个账号。
+All three use the same identity key: `identities.source` = `slack:<team id>`, `external_id` = the Slack user id (`U…`).
+When the same person appears through sign-in, a DM to the bot and directory sync, it maps to one identity row and one account.
 
-文中 Slack 文档均于 2026-10-20 查阅。
+The Slack docs cited here were consulted on 2026-10-20.
 
-## 创建 Slack 应用
+## Create the Slack app
 
-1. 打开 <https://api.slack.com/apps> → **Create New App** → **From a manifest**，选工作区，粘贴本目录的
-   [`app-manifest.yaml`](./app-manifest.yaml)（格式见 [App manifest 参考](https://docs.slack.dev/reference/app-manifest)）。
-   它开启 Socket Mode 与交互（Interactivity），订阅事件 `message.im`、`app_mention`、`message.channels`、
-   `message.groups`、`team_join`、`user_change`，申请机器人权限：
+1. Open <https://api.slack.com/apps> → **Create New App** → **From a manifest**, pick the workspace, and paste this directory's
+   [`app-manifest.yaml`](./app-manifest.yaml) (format: [App manifest reference](https://docs.slack.dev/reference/app-manifest)).
+   It turns on Socket Mode and Interactivity, subscribes to the events `message.im`, `app_mention`, `message.channels`,
+   `message.groups`, `team_join` and `user_change`, and requests these bot scopes:
 
-   | scope | 用途 |
+   | scope | Purpose |
    |---|---|
-   | `chat:write` | 发送与更新回复、卡片 |
-   | `im:history` | 收私聊消息 |
-   | `app_mentions:read` | 收频道里 @ 机器人的消息 |
-   | `channels:history` / `groups:history` | 收公开 / 私有频道里的话题回复 |
-   | `users:read` | 查发言人显示名与头像；人员变动事件；通讯录 `users.list` |
-   | `users:read.email` | 通讯录同步时取邮箱（机器人本身不用） |
+   | `chat:write` | Send and update replies and cards |
+   | `im:history` | Receive DM messages |
+   | `app_mentions:read` | Receive messages that @-mention the bot in channels |
+   | `channels:history` / `groups:history` | Receive thread replies in public / private channels |
+   | `users:read` | Look up the speaker's display name and avatar; people-change events; directory `users.list` |
+   | `users:read.email` | Read emails during directory sync (the bot itself does not use it) |
 
-2. **Basic Information → App-Level Tokens → Generate Token and Scopes**：加 scope `connections:write`，
-   得到应用级令牌 `xapp-…`（Socket Mode 用它调 `apps.connections.open`）。
-3. **Install App → Install to Workspace**，得到机器人令牌 `xoxb-…`。
-4. 在 Capybara 组织设置里启用 `slack` 插件，然后**新建渠道连接**：插件选 Slack，填 `appToken`（`xapp-…`）与
-   `botToken`（`xoxb-…`），绑定 agent。两者都存进密钥存储，接口只回「已设置」。
-5. 在 Slack 里私聊机器人，或把机器人拉进频道后 @ 它。第一次对话会收到绑定卡片，点按钮到网页上确认绑定。
+2. **Basic Information → App-Level Tokens → Generate Token and Scopes**: add the scope `connections:write`
+   to get the app-level token `xapp-…` (Socket Mode uses it to call `apps.connections.open`).
+3. **Install App → Install to Workspace** to get the bot token `xoxb-…`.
+4. In the Capybara org settings, enable the `slack` plugin, then **create a new channel connection**: pick Slack as the plugin, fill in `appToken` (`xapp-…`) and
+   `botToken` (`xoxb-…`), and bind an agent. Both are stored in the secret store, and the API only returns "set".
+5. In Slack, DM the bot, or add the bot to a channel and @-mention it. The first conversation gets a binding card; click the button to confirm the binding on the web page.
 
-注意：Socket Mode 的应用目前不能上架公开的 Slack Marketplace；同一应用最多同时 10 条 Socket Mode 连接
-（[Using Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode)）。Capybara 每个渠道连接
-任一时刻只由一个副本持有一条连接。
+Note: apps that use Socket Mode cannot currently be listed in the public Slack Marketplace, and one app can hold at most 10 concurrent
+Socket Mode connections ([Using Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode)). At any moment Capybara has only one
+replica hold one connection per channel connection.
 
-## Sign in with Slack（登录）
+In long-connection mode the connection is held by one `gateway` replica; with several gateways the
+connections are spread by fair share (`channels.shareSlack`, see
+[Roles and scaling](https://github.com/capybara-hq/core/blob/main/docs/deploy/README.md#roles-and-scaling)).
 
-[Sign in with Slack](https://docs.slack.dev/authentication/sign-in-with-slack/) 基于 OpenID Connect。
+## Webhook inbound mode (optional)
 
-1. 在应用设置 **OAuth & Permissions → Redirect URLs** 加入
-   `<http.publicUrl>/api/v1/auth/sso/slack/callback`（如 `https://capybara.example.com/api/v1/auth/sso/slack/callback`；
-   内核发出的 `redirect_uri` 必须与它相同或是它的子路径）。
-2. 登录流程在授权地址里申请 scope `openid`、`email`、`profile`（`openid` 必需；`email` 给出邮箱与
-   `email_verified`，`profile` 给出姓名与头像）。**不要**把它们加进应用的 Bot / User Token Scopes：Slack 要求
-   Sign in with Slack 的 scope 与其他 scope 在不同的 OAuth 流程里申请，安装应用（机器人）与登录是两条流程。
-3. **Basic Information → App Credentials** 里的 Client ID 与 Client Secret 写进部署级配置（见下），并把 `slack`
-   加入内核配置 `auth.loginSources`。登录页随即出现「Slack」。
+Socket Mode is the default. A connection can instead receive events over HTTPS webhooks, when the
+deployment exposes a gateway replica and sets `channels.webhookBaseUrl` (see
+[Deploying: webhook](https://github.com/capybara-hq/core/blob/main/docs/deploy/README.md#webhook-optional)). Switch the connection to webhook mode in the web app (Channels →
+connection → Overview → Inbound mode); the connection page then shows its webhook URL.
 
-插件的做法：授权地址 `https://slack.com/openid/connect/authorize`（`response_type=code`、`state`、`nonce`）；
-回调用授权码调 `openid.connect.token`（`client_secret_post`），**校验 ID token**（JWKS
-`https://slack.com/openid/connect/keys` 验 RS256 签名，`iss = https://slack.com`、`aud = clientId`、未过期、
-`nonce` 与发起时一致），再用 access token 调 `openid.connect.userInfo` 取邮箱、姓名、头像（其用户 / 工作区必须与
-ID token 一致）。`email_verified` 原样作为邮箱是否已验证。
+1. Copy **Basic Information → App Credentials → Signing Secret** into the connection's
+   `signingSecret`. Every request is verified with it (HMAC-SHA256 over `v0:<timestamp>:<body>`)
+   and must be at most 5 minutes old; without it every webhook request is refused.
+2. In the app settings, turn **Socket Mode** off, then use the webhook URL as the **Event
+   Subscriptions → Request URL** (Slack verifies it with a `url_verification` challenge, which the
+   plugin answers) and as the **Interactivity & Shortcuts → Request URL** (card buttons).
+3. `appToken` is optional in webhook mode: only Socket Mode uses it.
 
-**不用 PKCE**：Slack 的 OIDC 文档与 [discovery](https://slack.com/.well-known/openid-configuration) 都没有声明
-PKCE；Slack 的 [PKCE](https://docs.slack.dev/authentication/using-pkce) 只针对 `oauth.v2.*`，且启用后应用不可逆地
-变成公开客户端。插件忽略内核给的 PKCE 参数；登录的防护靠内核的 state（单次有效、绑定发起登录的浏览器）、nonce
-（在已验签的 ID token 里核对）与 client secret。
+Both modes parse events the same way (same message and card-click ids), so the kernel's dedupe
+still drops a redelivery that arrives across a mode switch.
 
-注意：任何 Slack 工作区的用户都能完成 Sign in with Slack（与其他身份源一样，登录只建账号，不加入任何组织；
-组织成员关系来自邀请或通讯录同步）。按已验证邮箱合并既有账号只对管理员信任的身份源租户生效。
+## Sign in with Slack (login)
 
-## 通讯录（directory@1）
+[Sign in with Slack](https://docs.slack.dev/authentication/sign-in-with-slack/) is based on OpenID Connect.
 
-在组织设置里启用 `slack` 插件时填组织级配置 `teamId`（工作区 id，`T…`）与 `botToken`（`xoxb-…`，可以与某个
-渠道连接用同一个机器人令牌，但配置独立存放、走密钥存储）。机器人令牌需要：
+1. In the app settings, add
+   `<http.publicUrl>/api/v1/auth/sso/slack/callback` under **OAuth & Permissions → Redirect URLs** (for example `https://capybara.example.com/api/v1/auth/sso/slack/callback`;
+   the `redirect_uri` the kernel sends must equal it or be a sub-path of it).
+2. The login flow requests the scopes `openid`, `email` and `profile` in the authorization URL (`openid` is required; `email` gives the email and
+   `email_verified`, `profile` gives the name and avatar). Do **not** add them to the app's Bot / User Token Scopes: Slack requires the
+   Sign in with Slack scopes to be requested in a different OAuth flow from the other scopes; installing the app (bot) and signing in are two separate flows.
+3. Put the Client ID and Client Secret from **Basic Information → App Credentials** into the deployment-level config (see below), and add `slack`
+   to the kernel config `auth.loginSources`. "Slack" then appears on the login page.
 
-| scope | 用途 |
+How the plugin works: the authorization URL is `https://slack.com/openid/connect/authorize` (`response_type=code`, `state`, `nonce`);
+the callback exchanges the authorization code at `openid.connect.token` (`client_secret_post`) and **verifies the ID token** (JWKS
+`https://slack.com/openid/connect/keys` verifies the RS256 signature, `iss = https://slack.com`, `aud = clientId`, not expired,
+`nonce` matches the one sent at the start), then calls `openid.connect.userInfo` with the access token to get the email, name and avatar (its user / workspace must match
+the ID token). `email_verified` is used as-is as the email-verified flag.
+
+**No PKCE**: neither Slack's OIDC docs nor its [discovery](https://slack.com/.well-known/openid-configuration) declare
+PKCE; Slack's [PKCE](https://docs.slack.dev/authentication/using-pkce) applies only to `oauth.v2.*`, and once enabled the app irreversibly
+becomes a public client. The plugin ignores the PKCE parameters the kernel supplies; login is protected by the kernel's state (single use, bound to the browser that started the login), the nonce
+(checked inside the verified ID token) and the client secret.
+
+Note: users from any Slack workspace can complete Sign in with Slack (as with other identity sources, login only creates an account and does not join any org;
+org membership comes from invitations or directory sync). Merging into an existing account by verified email applies only to identity-source tenants the admin trusts.
+
+## Directory (directory@1)
+
+When enabling the `slack` plugin in the org settings, fill in the org-level config `teamId` (the workspace id, `T…`) and `botToken` (`xoxb-…`; it may be the same bot token as a
+channel connection uses, but the config is stored separately and goes through the secret store). The bot token needs:
+
+| scope | Purpose |
 |---|---|
-| `users:read` | [`users.list`](https://docs.slack.dev/reference/methods/users.list) 列出成员 |
-| `users:read.email` | 成员邮箱（没有它 `users.list` 不返回邮箱） |
+| `users:read` | [`users.list`](https://docs.slack.dev/reference/methods/users.list) lists members |
+| `users:read.email` | Member emails (without it `users.list` returns no emails) |
 
-- 租户是**工作区**：`teamId` 只收 `T…`；企业 id（`E…`）会把同一个人拆成两行身份。每页先调 `auth.test`：
-  组织级安装的令牌（`is_enterprise_install`）或 `team_id` 不是 `T…` 的令牌都拒绝；令牌所属工作区还必须等于
-  `teamId`，否则同步报错（避免把别的工作区的人记成本租户）。Enterprise Grid 请用各工作区自己的机器人令牌。
-- `users.list` 按游标分页（每页 200，Slack 建议不超过 200）；排除机器人（`is_bot`）、Slackbot（`USLACKBOT`）、
-  **访客**（`is_restricted` 多频道访客、`is_ultra_restricted` 单频道访客——访客不成为组织成员，需要时可手动邀请），
-  以及 Enterprise Grid 下自身 `team_id` 与 `teamId` 不同的其他工作区成员；`deleted = true` 的人报为离职
-  （`active = false`），内核只撤销由通讯录同步加入的成员关系。
-- 邮箱一律报为**未验证**：`users.list` 文档没有说明 `profile.email` 是否经过验证（登录时 OIDC 的
-  `email_verified` 才算数）。
-- 限流：`users.list` 为 Tier 2（20+ 次/分钟）。遇到 HTTP 429 在本次同步内按 `Retry-After` 等待后重试，最多 3 次、
-  每页累计最多等 30 秒；超出就报错，内核把本轮记为不完整（只加人、不移除任何人），下次再同步。
-- 人员变动事件（`team_join`、`user_change`，经渠道连接收到）会触发一次同步。
-- `teamId` / `botToken` 没填时（组织只用机器人），插件的 `configured()` 返回 false：内核不扫描、不同步、不记审计
-  与警告；手动同步返回 409 `directory.not_configured`。不会被当作空通讯录。
+- The tenant is the **workspace**: `teamId` accepts only `T…`; an enterprise id (`E…`) would split one person into two identity rows. Each page first calls `auth.test`:
+  a token from an org-level install (`is_enterprise_install`) or a token whose `team_id` is not `T…` is rejected; the workspace the token belongs to must also equal
+  `teamId`, otherwise the sync errors (to avoid recording another workspace's people as this tenant). For Enterprise Grid, use each workspace's own bot token.
+- `users.list` paginates by cursor (200 per page; Slack recommends at most 200); it excludes bots (`is_bot`), Slackbot (`USLACKBOT`),
+  **guests** (`is_restricted` multi-channel guests, `is_ultra_restricted` single-channel guests; guests do not become org members and can be invited manually if needed),
+  and, under Enterprise Grid, members of other workspaces whose own `team_id` differs from `teamId`; people with `deleted = true` are reported as departed
+  (`active = false`), and the kernel only revokes memberships that were added by directory sync.
+- Emails are always reported as **unverified**: the `users.list` docs do not say whether `profile.email` is verified (only OIDC's
+  `email_verified` at login counts).
+- Rate limits: `users.list` is Tier 2 (20+ requests/minute). On HTTP 429 the sync waits per `Retry-After` and retries within the same sync, at most 3 times and
+  at most 30 seconds cumulative per page; beyond that it errors, the kernel records the run as incomplete (it only adds people and removes no one), and the next sync tries again.
+- People-change events (`team_join`, `user_change`, received through the channel connection) trigger a sync.
+- When `teamId` / `botToken` are not filled in (the org only uses the bot), the plugin's `configured()` returns false: the kernel does not scan or sync, and records no audit
+  or warning; a manual sync returns 409 `directory.not_configured`. It is not treated as an empty directory.
 
-## 行为
+## Behavior
 
-- **私聊**：每条文本消息交给内核；**频道**：只有 @ 机器人的消息（新消息在它下面开话题回复），以及话题里的回复
-  （内核目前只处理 @ 机器人的）。编辑、删除、机器人自己与其他机器人的消息、其他带 `subtype` 的消息忽略；
-  带说明文字的文件分享（`file_share`，只取文字）与同时发到频道的话题回复（`thread_broadcast`）按文本处理。
-  M4 只处理文本。文本去掉 @ 机器人（只整理 @ 两侧的空白，缩进与换行保留）并反转义 `&amp;` / `&lt;` / `&gt;`。
-  模型回复里的链接地址中的 `<`、`>`、`|` 会被百分号编码，模型文本无法注入 `<!channel>` 之类的控制序列。
-- **id**：消息 id = `<频道 id>:<ts>`（连接内唯一、稳定）；群聊话题 id = `<频道 id>:<thread_ts>`，即话题根消息的
-  消息 id；卡片点击的 `eventId` = `<频道>:<卡片消息 ts>:<点击者>:<action_ts>`（重投时负载相同，故稳定）。
-  发言人租户 = Slack team id（共享频道的外部成员取 `user_team`），与 `verify`（`auth.test` 的 `team_id`）同一口径。
-- **确认**：内核 `onEvent` resolve 之后才 ack；reject 不 ack，Slack 会重投（Events API 立即、约 1 分钟、约 5 分钟后
-  共三次，见 [Events API](https://docs.slack.dev/apis/events-api/)）。
-- **格式**：模型回复的 Markdown 转为 [mrkdwn](https://docs.slack.dev/messaging/formatting-message-text)；
-  单条文本上限 4000 字符（`chat.update` 超过即 `msg_too_long`，见 [chat.update](https://docs.slack.dev/reference/methods/chat.update)），
-  超长拆成多条；编辑超长时报 `too_large`，由内核改发新消息。
-- **流式编辑**：`minEditIntervalMs = 2500`（`chat.update` 为 Tier 3，约 50 次/分钟、按工作区计，见
-  [chat.update](https://docs.slack.dev/reference/methods/chat.update) 与
-  [Rate limits](https://docs.slack.dev/apis/web-api/rate-limits)）；更多并发时由 429 + Retry-After 兜底。
-- **重连**：插件自管（关闭 SDK 自动重连）。Slack 正常回收连接时立即重连；连续短命（不到 10 秒）的连接按指数退避
-  （带抖动），连续 5 次或收到 `link_disabled` 时报错，内核记 `last_error` 并退避。
-- **幂等**：`chat.postMessage` 没有幂等参数，`idempotencyKey` 忽略。
-- **资料**：显示名 / 头像取事件自带的 `user_profile`，否则 `users.info`（每个进程内缓存 10 分钟、最多 1000 人，
-  1.5 秒超时，查不到就不带）。
-- **权限清单**：`network: ["slack.com", "wss-primary.slack.com"]`，只展示不拦截；登录（OIDC）与通讯录也都在
-  `slack.com`。Socket Mode 的 WSS 主机由
-  Slack 分配、并不固定（如 `wss-primary.slack.com`、`wss-backup.slack.com`、`wss-111.slack.com`），清单的域名
-  校验不支持通配，故只列主要的一个。
+- **DMs**: every text message goes to the kernel. **Channels**: only messages that @-mention the bot (a new message gets a thread reply under it), and replies inside threads
+  (the kernel currently handles only those that @-mention the bot). Edits, deletions, messages from the bot itself and other bots, and other messages with a `subtype` are ignored;
+  file shares with a caption (`file_share`, only the text is taken) and thread replies also sent to the channel (`thread_broadcast`) are handled as text.
+  M4 handles text only. The text has the bot @-mention removed (only the whitespace on both sides of the @ is tidied; indentation and line breaks are kept) and `&amp;` / `&lt;` / `&gt;` are unescaped.
+  In link addresses inside model replies, `<`, `>` and `|` are percent-encoded, so model text cannot inject control sequences such as `<!channel>`.
+- **ids**: message id = `<channel id>:<ts>` (unique and stable within a connection); group-chat thread id = `<channel id>:<thread_ts>`, which is the message id of the thread's root message;
+  the card-click `eventId` = `<channel>:<card message ts>:<clicker>:<action_ts>` (the payload is the same on redelivery, so it is stable).
+  The speaker's tenant = the Slack team id (for an external member of a shared channel, `user_team`), on the same basis as `verify` (the `team_id` of `auth.test`).
+- **Ack**: the kernel acks only after `onEvent` resolves; a reject is not acked, and Slack redelivers (three times in total: immediately, after about 1 minute and after about 5 minutes,
+  see [Events API](https://docs.slack.dev/apis/events-api/)).
+- **Format**: the model reply's Markdown is converted to [mrkdwn](https://docs.slack.dev/messaging/formatting-message-text);
+  a single text is capped at 4000 characters (beyond that `chat.update` returns `msg_too_long`, see [chat.update](https://docs.slack.dev/reference/methods/chat.update)),
+  and longer text is split into several messages; when an edit is too long it reports `too_large` and the kernel sends a new message instead.
+- **Streaming edits**: `minEditIntervalMs = 2500` (`chat.update` is Tier 3, about 50 per minute, counted per workspace, see
+  [chat.update](https://docs.slack.dev/reference/methods/chat.update) and
+  [Rate limits](https://docs.slack.dev/apis/web-api/rate-limits)); under more concurrency, 429 + Retry-After is the backstop.
+- **Reconnect**: managed by the plugin (SDK auto-reconnect is turned off). When Slack recycles a connection normally it reconnects immediately; consecutive short-lived (under 10 seconds) connections back off exponentially
+  (with jitter), and after 5 in a row, or on receiving `link_disabled`, it reports an error; the kernel records `last_error` and backs off.
+- **Idempotency**: `chat.postMessage` has no idempotency parameter, so `idempotencyKey` is ignored.
+- **Profile**: the display name / avatar come from the `user_profile` carried by the event, otherwise from `users.info` (cached per process for 10 minutes, at most 1000 people,
+  1.5 second timeout; if the lookup fails it is left out).
+- **Permission manifest**: `network: ["slack.com", "wss-primary.slack.com"]`, shown only and not enforced; login (OIDC) and the directory also use
+  `slack.com`. The WSS host for Socket Mode is
+  assigned by Slack and is not fixed (for example `wss-primary.slack.com`, `wss-backup.slack.com`, `wss-111.slack.com`); the manifest's domain
+  validation does not support wildcards, so only the main one is listed.
 
-## 部署级配置
+## Channel connection config
 
-| 字段 | 默认 | 说明 |
+| Field | Description |
+|---|---|
+| `botToken` | Bot token (`xoxb-…`, secret) |
+| `appToken` | App-level token (`xapp-…`, secret); required for Socket Mode, unused in webhook mode |
+| `signingSecret` | Signing Secret (secret); required in webhook mode, unused with Socket Mode |
+
+## Deployment-level config
+
+| Field | Default | Description |
 |---|---|---|
-| `apiUrl` | `https://slack.com/api/` | Web API 根地址；只在测试或经代理时改写 |
-| `openidUrl` | `https://slack.com/` | OIDC 授权页与 JWKS 的根地址；只在测试或经代理时改写（ID token 的 `iss` 固定为 `https://slack.com`） |
-| `clientId` | — | Sign in with Slack 的 Client ID；不用登录时不填 |
-| `clientSecret` | — | Sign in with Slack 的 Client Secret（密钥，日志打码）；不用登录时不填 |
+| `apiUrl` | `https://slack.com/api/` | Web API root URL; change it only in tests or when going through a proxy |
+| `openidUrl` | `https://slack.com/` | Root URL for the OIDC authorization page and JWKS; change it only in tests or when going through a proxy (the ID token's `iss` is fixed at `https://slack.com`) |
+| `clientId` | — | Client ID for Sign in with Slack; leave empty if you don't use login |
+| `clientSecret` | — | Client Secret for Sign in with Slack (secret, masked in logs); leave empty if you don't use login |
 
-部署级配置写在内核配置 `pluginConfig.slack` 下。
+The deployment-level config lives under the kernel config `pluginConfig.slack`.
 
-## 组织级配置
+## Org-level config
 
-| 字段 | 说明 |
+| Field | Description |
 |---|---|
-| `teamId` | 通讯录同步的 Slack 工作区 id（`T…`） |
-| `botToken` | 通讯录同步用的机器人令牌（`xoxb-…`，密钥） |
+| `teamId` | The Slack workspace id for directory sync (`T…`) |
+| `botToken` | The bot token for directory sync (`xoxb-…`, secret) |

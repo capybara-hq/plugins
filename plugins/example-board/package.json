@@ -1,6 +1,7 @@
 {
   "name": "@capybara-hq/plugin-example-board",
   "version": "0.1.0",
+  "private": true,
   "description": "Reference plugin for embedded apps: a workflow progress board (embed token, SSE over ctx.bus)",
   "license": "Apache-2.0",
   "type": "module",

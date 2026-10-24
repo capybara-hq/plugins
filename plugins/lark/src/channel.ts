@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import {
   type Channel,
   ChannelSendError,
   type ChannelTarget,
   type InboundEvent,
   type Logger,
+  type PluginContext,
   secret,
 } from "@capybara-hq/plugin-sdk";
 import {
@@ -21,6 +23,7 @@ import { describeError, toChannelSendError } from "./errors.js";
 import { eventToInbound } from "./inbound.js";
 import { assertSameApp, tenantKeyOf } from "./tenant.js";
 import { pause } from "./wait.js";
+import { handleLarkWebhook } from "./webhook.js";
 
 /**
  * 渠道连接配置：自建应用的 App ID 与 App Secret（开发者后台「凭证与基础信息」）。Secret 走密钥存储。
@@ -29,6 +32,14 @@ import { pause } from "./wait.js";
 export const LarkConnection = z.object({
   appId: LarkAppId,
   appSecret: secret(z.string().min(1)),
+  /**
+   * Webhook inbound mode only (developer console → Events & Callbacks → Encryption Strategy).
+   * With `encryptKey` requests must be encrypted and signed; without it, only plaintext requests
+   * carrying a matching `verificationToken` are accepted; with neither, every webhook request is
+   * rejected with 401.
+   */
+  encryptKey: secret(z.string().min(1).optional()),
+  verificationToken: secret(z.string().min(1).optional()),
 });
 type LarkConnectionConfig = z.infer<typeof LarkConnection>;
 
@@ -46,7 +57,15 @@ export interface LarkChannelOptions {
   statusPollMs?: number;
   /** 等待一次连接建立（取接入点 + 握手）的上限（默认 30 秒）。 */
   connectTimeoutMs?: number;
+  /**
+   * Plugin kv (`ctx.kv`) for the per-connection bot open_id cache used by webhook mode. Without it
+   * every webhook message event calls the bot info API.
+   */
+  kv?: PluginContext["kv"];
 }
+
+/** TTL of the cached bot open_id (webhook mode), in seconds. */
+export const BOT_OPEN_ID_CACHE_TTL_SECONDS = 3600;
 
 /**
  * 同一条消息两次编辑的最小间隔。更新卡片（PATCH）的频控：单条消息 5 QPS，接口整体每应用每租户
@@ -241,6 +260,62 @@ export function createLarkChannel(opts: LarkChannelOptions): Channel {
     ...(p?.avatarUrl !== undefined && { avatarUrl: p.avatarUrl }),
   });
 
+  /**
+   * Long-connection / webhook payload → inbound event (one parser for both inbound modes, so the
+   * same payload yields the same event and dedupe works across a mode switch).
+   */
+  const toEvent = async (
+    c: LarkCredentials,
+    connectionId: string,
+    botOpenId: string,
+    raw: unknown,
+    signal: AbortSignal,
+  ): Promise<InboundEvent | null> => {
+    const a = parseCardAction(raw);
+    if (a) {
+      const p = await lookupProfile(c, connectionId, a.sender.externalId, signal);
+      return {
+        type: "card_action",
+        messageId: a.messageId,
+        ...(a.eventId !== undefined && { eventId: a.eventId }),
+        target: a.target,
+        sender: withProfile(a.sender, p),
+        action: a.action,
+      };
+    }
+    const cand = eventToInbound(raw, botOpenId);
+    if (!cand) return null;
+    if (cand.kind === "directory") return cand.event;
+    const p = await lookupProfile(c, connectionId, cand.openId, signal);
+    return { ...cand.event, sender: withProfile(cand.event.sender, p) };
+  };
+
+  /** kv key of a connection's bot open_id; includes a credentials hash so a new app misses. */
+  const botKey = (connectionId: string, c: LarkCredentials) =>
+    `bot-open-id/${connectionId}/${createHash("sha256")
+      .update(`${c.appId}\u0000${c.appSecret}`)
+      .digest("hex")
+      .slice(0, 16)}`;
+  const rememberBot = async (connectionId: string, c: LarkCredentials, openId: string) => {
+    await opts.kv
+      ?.set(botKey(connectionId, c), openId, { ttlSeconds: BOT_OPEN_ID_CACHE_TTL_SECONDS })
+      .catch(() => {});
+  };
+  /** The bot open_id from the kv cache, or the bot info API on a miss (then cached for an hour). */
+  const botOpenIdOf = async (connectionId: string, c: LarkCredentials, signal: AbortSignal) => {
+    const hit = await opts.kv?.get(botKey(connectionId, c)).catch(() => null);
+    if (hit) return hit;
+    let openId: string;
+    try {
+      openId = (await botInfo(c, signal)).openId;
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith("Lark bot info returned")) throw e;
+      throw describeError(e, "bot info");
+    }
+    await rememberBot(connectionId, c, openId);
+    return openId;
+  };
+
   const uuidFor = (key: string | undefined, i: number) =>
     key === undefined ? undefined : i === 0 ? key : `${key}-${i}`.slice(0, 50);
 
@@ -278,6 +353,7 @@ export function createLarkChannel(opts: LarkChannelOptions): Channel {
         if (e instanceof Error && e.message.startsWith("Lark bot info returned")) throw e;
         throw describeError(e, "credentials check");
       }
+      await rememberBot(connectionId, c, botOpenId);
       // 部署级登录应用可能在建连接之后才配上 / 换过：每次建长连接前再核对一次「同一租户用同一个应用」，不符就抛错
       // （内核记 last_error 并退避），不进入重连循环
       if (opts.loginApp !== undefined && opts.loginApp.appId !== c.appId) {
@@ -290,32 +366,12 @@ export function createLarkChannel(opts: LarkChannelOptions): Channel {
         }
       }
 
-      const toEvent = async (raw: unknown): Promise<InboundEvent | null> => {
-        const a = parseCardAction(raw);
-        if (a) {
-          const p = await lookupProfile(c, connectionId, a.sender.externalId, signal);
-          return {
-            type: "card_action",
-            messageId: a.messageId,
-            ...(a.eventId !== undefined && { eventId: a.eventId }),
-            target: a.target,
-            sender: withProfile(a.sender, p),
-            action: a.action,
-          };
-        }
-        const cand = eventToInbound(raw, botOpenId);
-        if (!cand) return null;
-        if (cand.kind === "directory") return cand.event;
-        const p = await lookupProfile(c, connectionId, cand.openId, signal);
-        return { ...cand.event, sender: withProfile(cand.event.sender, p) };
-      };
-
       /** SDK 事件处理入口：resolve = 确认（code 200），throw = 不确认（code 500，Lark 重推）。 */
       const dispatcher = {
         invoke: async (raw: unknown): Promise<undefined> => {
           let event: InboundEvent | null = null;
           try {
-            event = await toEvent(raw);
+            event = await toEvent(c, connectionId, botOpenId, raw, signal);
           } catch (e) {
             log.warn("lark: could not read an event; acknowledging and skipping it", {
               connectionId,
@@ -411,6 +467,29 @@ export function createLarkChannel(opts: LarkChannelOptions): Channel {
               (0.5 + Math.random() / 2);
         if (delay > 0) await pause(Math.round(delay), signal);
       }
+    },
+
+    webhook: {
+      async handle({ connectionId, config, request, signal }) {
+        const conf = parse(config);
+        const c = creds(conf);
+        return handleLarkWebhook({
+          config: conf,
+          request,
+          botOpenId: () => botOpenIdOf(connectionId, c, signal),
+          toEvent: async (payload, botOpenId) => {
+            try {
+              return await toEvent(c, connectionId, botOpenId, payload, signal);
+            } catch (e) {
+              log.warn("lark: could not read a webhook event; acknowledging and skipping it", {
+                connectionId,
+                error: errorText(e),
+              });
+              return null;
+            }
+          },
+        });
+      },
     },
 
     async send({ config, target, message, signal, locale, idempotencyKey }) {

@@ -17,6 +17,8 @@ export { createSlackIdentitySource } from "./identity.js";
 /**
  * Slack 插件：三种能力共用一个身份键（`slack:<team id>` + Slack user id）。
  * - `channel@1`（机器人）：经 Socket Mode 收事件（无需公网回调地址）、经 Web API 发消息，卡片渲染为 Block Kit。
+ *   Webhook inbound mode (Events API / Interactivity Request URLs, signed with the connection's
+ *   `signingSecret`) is the alternative to Socket Mode.
  *   凭据（应用级令牌、机器人令牌）由内核按渠道连接配置传入。
  * - `identity-source@1`（Sign in with Slack，OpenID Connect）：部署级 `clientId` / `clientSecret`，
  *   经 `auth.loginSources` 启用。
@@ -34,7 +36,7 @@ export default definePlugin({
   config: { deployment: SlackDeployment, org: SlackDirectoryConfig },
   setup(ctx) {
     const { apiUrl } = SlackDeployment.parse(ctx.config ?? {});
-    ctx.provide(CHANNEL_CAPABILITY, createSlackChannel({ apiUrl, log: ctx.log }));
+    ctx.provide(CHANNEL_CAPABILITY, createSlackChannel({ apiUrl, log: ctx.log, kv: ctx.kv }));
     ctx.provide(IDENTITY_SOURCE_CAPABILITY, createSlackIdentitySource());
     ctx.provide(DIRECTORY_CAPABILITY, createSlackDirectory({ apiUrl }));
   },

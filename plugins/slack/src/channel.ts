@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import {
   type Channel,
   ChannelSendError,
   type ChannelTarget,
   type InboundEvent,
   type Logger,
+  type PluginContext,
   secret,
 } from "@capybara-hq/plugin-sdk";
 import { LogLevel, type Logger as SlackLogger, SocketModeClient } from "@slack/socket-mode";
@@ -14,11 +16,23 @@ import { renderSend, renderUpdate } from "./blocks.js";
 import { workspaceTokenProblem } from "./config.js";
 import { platformErrorCode, toChannelSendError } from "./errors.js";
 import { eventToInbound, profileOf, type SlackProfile } from "./inbound.js";
+import { handleSlackWebhook, type SlackEnvelope } from "./webhook.js";
 
-/** 渠道连接配置：应用级令牌（Socket Mode，`connections:write`）与机器人令牌。都走密钥存储。 */
+/**
+ * 渠道连接配置：应用级令牌（Socket Mode，`connections:write`）与机器人令牌。都走密钥存储。
+ * `appToken` is optional because webhook mode doesn't use it; `connect` (Socket Mode) refuses to
+ * start without one. `signingSecret` (Basic Information → Signing Secret) is only needed in webhook inbound mode;
+ * without it every webhook request is rejected with 401.
+ */
 export const SlackConnection = z.object({
-  appToken: secret(z.string().regex(/^xapp-/, "must be an app-level token starting with xapp-")),
+  appToken: secret(
+    z
+      .string()
+      .regex(/^xapp-/, "must be an app-level token starting with xapp-")
+      .optional(),
+  ),
   botToken: secret(z.string().regex(/^xoxb-/, "must be a bot token starting with xoxb-")),
+  signingSecret: secret(z.string().min(1).optional()),
 });
 type SlackConnectionConfig = z.infer<typeof SlackConnection>;
 
@@ -30,7 +44,19 @@ export interface SlackChannelOptions {
   requestTimeoutMs?: number;
   /** 重连退避的基数（默认 1000 毫秒；测试调小）。 */
   reconnectBaseMs?: number;
+  /**
+   * Plugin kv (`ctx.kv`) for the per-connection bot user id cache used by webhook mode. Without
+   * it every webhook event calls `auth.test`.
+   */
+  kv?: PluginContext["kv"];
 }
+
+/** `connect` error for a connection without an app-level token. */
+export const SOCKET_MODE_NEEDS_APP_TOKEN =
+  "Socket Mode needs an app-level token (xapp-…); set one or switch this connection to webhook mode";
+
+/** TTL of the cached bot user id (webhook mode), in seconds. */
+export const BOT_USER_CACHE_TTL_SECONDS = 3600;
 
 /**
  * 同一条消息两次编辑的最小间隔。chat.update 属 Tier 3：约 50 次/分钟、按工作区（同一 app 在该工作区的所有
@@ -191,6 +217,63 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
     ...(p?.avatarUrl !== undefined && { avatarUrl: p.avatarUrl }),
   });
 
+  /**
+   * Socket Mode envelope / webhook payload → inbound event (one parser for both inbound modes, so
+   * the same payload yields the same event and dedupe works across a mode switch).
+   */
+  const toEvent = async (
+    c: SlackConnectionConfig,
+    connectionId: string,
+    botUserId: string,
+    { type, body }: SlackEnvelope,
+    signal: AbortSignal,
+  ): Promise<InboundEvent | null> => {
+    if (type === "events_api") {
+      const cand = eventToInbound(body, botUserId);
+      if (!cand) return null;
+      if (cand.kind === "directory") return cand.event;
+      const p =
+        cand.profile ?? (await lookupProfile(c.botToken, connectionId, cand.userId, signal));
+      return { ...cand.event, sender: withProfile(cand.event.sender, p) };
+    }
+    const a = parseBlockActions(body);
+    if (!a) return null;
+    const p =
+      (await lookupProfile(c.botToken, connectionId, a.sender.externalId, signal)) ??
+      (a.username !== undefined ? { displayName: a.username } : undefined);
+    return {
+      type: "card_action",
+      messageId: a.messageId,
+      eventId: a.eventId,
+      target: a.target,
+      sender: withProfile(a.sender, p),
+      action: a.action,
+    };
+  };
+
+  /** kv key of a connection's bot user id; includes a token hash so a new token misses. */
+  const botUserKey = (connectionId: string, botToken: string) =>
+    `bot-user/${connectionId}/${createHash("sha256").update(botToken).digest("hex").slice(0, 16)}`;
+  const rememberBotUser = async (connectionId: string, botToken: string, id: string) => {
+    await opts.kv
+      ?.set(botUserKey(connectionId, botToken), id, { ttlSeconds: BOT_USER_CACHE_TTL_SECONDS })
+      .catch(() => {});
+  };
+  /** The bot user id from the kv cache, or `auth.test` on a miss (then cached for an hour). */
+  const botUserIdOf = async (connectionId: string, botToken: string, signal: AbortSignal) => {
+    const hit = await opts.kv?.get(botUserKey(connectionId, botToken)).catch(() => null);
+    if (hit) return hit;
+    let id: string | undefined;
+    try {
+      id = ((await web(botToken, signal).apiCall("auth.test")) as { user_id?: string }).user_id;
+    } catch (e) {
+      throw describe(e, "auth.test");
+    }
+    if (!id) throw new Error("Slack auth.test returned no bot user");
+    await rememberBotUser(connectionId, botToken, id);
+    return id;
+  };
+
   return {
     connectionSchema: SlackConnection,
     features: { cards: true, edit: true, threads: true, minEditIntervalMs: MIN_EDIT_INTERVAL_MS },
@@ -212,6 +295,9 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
 
     async connect({ connectionId, config, onEvent, signal }) {
       const c = parse(config);
+      // A plain Error: the supervisor records it as last_error and backs off
+      if (c.appToken === undefined) throw new Error(SOCKET_MODE_NEEDS_APP_TOKEN);
+      const appToken = c.appToken;
       let botUserId: string;
       try {
         const r = (await web(c.botToken, signal).apiCall("auth.test")) as { user_id?: string };
@@ -221,38 +307,14 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
         if (signal.aborted) return;
         throw describe(e, "auth.test");
       }
-
-      const toEvent = async (type: string, body: unknown): Promise<InboundEvent | null> => {
-        if (type === "events_api") {
-          const cand = eventToInbound(body, botUserId);
-          if (!cand) return null;
-          if (cand.kind === "directory") return cand.event;
-          const p =
-            cand.profile ?? (await lookupProfile(c.botToken, connectionId, cand.userId, signal));
-          return { ...cand.event, sender: withProfile(cand.event.sender, p) };
-        }
-        if (type === "interactive") {
-          const a = parseBlockActions(body);
-          if (!a) return null;
-          const p =
-            (await lookupProfile(c.botToken, connectionId, a.sender.externalId, signal)) ??
-            (a.username !== undefined ? { displayName: a.username } : undefined);
-          return {
-            type: "card_action",
-            messageId: a.messageId,
-            eventId: a.eventId,
-            target: a.target,
-            sender: withProfile(a.sender, p),
-            action: a.action,
-          };
-        }
-        return null;
-      };
+      await rememberBotUser(connectionId, c.botToken, botUserId);
 
       const handle = async ({ ack, type, body }: SocketEnvelope) => {
         let event: InboundEvent | null = null;
         try {
-          event = await toEvent(type, body);
+          if (type === "events_api" || type === "interactive") {
+            event = await toEvent(c, connectionId, botUserId, { type, body }, signal);
+          }
         } catch (e) {
           log.warn("slack: could not read an event; acknowledging and skipping it", {
             connectionId,
@@ -289,7 +351,7 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
         const startedAt = Date.now();
         let disconnectReason: string | undefined;
         const client = new SocketModeClient({
-          appToken: c.appToken,
+          appToken,
           autoReconnectEnabled: false,
           logger: slackLogger,
           clientOptions: { ...clientOptions },
@@ -361,6 +423,32 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
       }
     },
 
+    webhook: {
+      async handle({ connectionId, config, request, signal }) {
+        const c = parse(config);
+        return handleSlackWebhook({
+          config: c,
+          request,
+          botUserId: () => botUserIdOf(connectionId, c.botToken, signal),
+          toEvent: async (envelope, botUserId) => {
+            try {
+              return await toEvent(c, connectionId, botUserId, envelope, signal);
+            } catch (e) {
+              log.warn("slack: could not read a webhook event; acknowledging and skipping it", {
+                connectionId,
+                type: envelope.type,
+                error: e instanceof Error ? e.message : String(e),
+              });
+              return null;
+            }
+          },
+        });
+      },
+    },
+
+    // Ruling R5: chat.postMessage has no idempotency parameter, so `idempotencyKey` is ignored. If a
+    // replica dies between this send and the kernel's advance, the resend after recovery shows a
+    // second copy of the card; a decision made on the first copy is not reflected back onto it.
     async send({ config, target, message, signal, locale }) {
       const c = parse(config);
       const client = web(c.botToken, signal);

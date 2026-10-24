@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "description": "Conversation sandboxes (sandbox@1) as E2B sandboxes (E2B cloud or self-hosted), with pause / resume and E2B egress controls",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/capybara-hq/core.git",
+    "directory": "plugins/sandbox-e2b"
+  },
+  "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/sandbox-e2b#readme",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
