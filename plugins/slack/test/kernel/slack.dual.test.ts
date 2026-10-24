@@ -148,7 +148,7 @@ describe("Slack 插件接内核（双副本）", () => {
       ["fake-im", { enabled: true, config: { url: book.url } }],
       ["slack", { enabled: true }],
     ] as const) {
-      const en = await call(ownerJar, "PUT", `${base}/plugins/${plugin}`, body);
+      const en = await call(ownerJar, "PUT", `${base}/extensions/${plugin}`, body);
       expect(en.status, JSON.stringify(en.json)).toBe(200);
     }
     const ag = await call(ownerJar, "POST", `${base}/agents`, {

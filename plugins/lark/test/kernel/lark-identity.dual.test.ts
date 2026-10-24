@@ -187,13 +187,13 @@ describe("Lark 登录与通讯录接内核（双副本）", () => {
     expect(replay.location).toContain("sso.state_invalid");
 
     // ================= 2. 通讯录同步：同一个人加入组织 =================
-    const en = await call(ownerJar, "PUT", `${base}/plugins/lark`, {
+    const en = await call(ownerJar, "PUT", `${base}/extensions/lark`, {
       enabled: true,
       config: { appId: lark.appId, appSecret: SECRET },
     });
     expect(en.status, JSON.stringify(en.json)).toBe(200);
     expect(JSON.stringify(en.json)).not.toContain(SECRET);
-    const sync = await call(ownerJar, "POST", `${base}/plugins/lark/directory/sync`);
+    const sync = await call(ownerJar, "POST", `${base}/extensions/lark/directory/sync`);
     expect(sync.status).toBe(202);
     const audit = await waitFor(
       async () =>

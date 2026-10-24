@@ -179,13 +179,13 @@ describe("Slack 登录与通讯录接内核（双副本）", () => {
     expect(await membership(carolId)).toBeUndefined();
 
     // ================= 2. 通讯录同步：同一个人加入组织 =================
-    const en = await call(ownerJar, "PUT", `${base}/plugins/slack`, {
+    const en = await call(ownerJar, "PUT", `${base}/extensions/slack`, {
       enabled: true,
       config: { teamId: "T1", botToken: slack.botToken },
     });
     expect(en.status, JSON.stringify(en.json)).toBe(200);
     expect(JSON.stringify(en.json)).not.toContain(slack.botToken);
-    const sync = await call(ownerJar, "POST", `${base}/plugins/slack/directory/sync`);
+    const sync = await call(ownerJar, "POST", `${base}/extensions/slack/directory/sync`);
     expect(sync.status).toBe(202);
     const audit = await waitFor(
       async () =>

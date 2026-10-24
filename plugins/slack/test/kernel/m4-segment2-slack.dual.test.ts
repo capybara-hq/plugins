@@ -215,10 +215,10 @@ describe("M4 第二段验收：Slack（双副本）", () => {
       ["fake-im", { enabled: true, config: { url: book.url } }],
       ["slack", { enabled: true, config: { teamId: "T1", botToken: slack.botToken } }],
     ] as const) {
-      const en = await call(ownerJar, "PUT", `${base}/plugins/${plugin}`, body);
+      const en = await call(ownerJar, "PUT", `${base}/extensions/${plugin}`, body);
       expect(en.status, JSON.stringify(en.json)).toBe(200);
     }
-    const sync1 = await call(ownerJar, "POST", `${base}/plugins/slack/directory/sync`);
+    const sync1 = await call(ownerJar, "POST", `${base}/extensions/slack/directory/sync`);
     expect(sync1.status).toBe(202);
     await waitFor(async () => (await syncAudits()).length === 1, 20_000, "first directory sync");
     expect((await syncAudits())[0]?.detail).toMatchObject({ added: 1, partial: false });
@@ -566,7 +566,7 @@ describe("M4 第二段验收：Slack（双副本）", () => {
     const carolUser = slack.users.get("UCAROL");
     if (!carolUser) throw new Error("carol is not a Slack user");
     slack.users.set("UCAROL", { ...carolUser, deleted: true });
-    const sync3 = await call(ownerJar, "POST", `${base}/plugins/slack/directory/sync`);
+    const sync3 = await call(ownerJar, "POST", `${base}/extensions/slack/directory/sync`);
     expect(sync3.status).toBe(202);
     await waitFor(async () => (await syncAudits()).length === 3, 20_000, "sync after removal");
     expect((await syncAudits())[2]?.detail).toMatchObject({
