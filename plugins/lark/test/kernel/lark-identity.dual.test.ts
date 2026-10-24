@@ -69,10 +69,10 @@ const cookieHeader = (jar: Jar) => [...jar].map(([k, v]) => `${k}=${v}`).join(";
 describe("Lark 登录与通讯录接内核（双副本）", () => {
   it("Lark 登录 → 通讯录同步加入同一账号 → 私聊机器人被识别为该账号", async () => {
     h = await createDualReplicaHarness({
-      plugins: [MODEL_FAKE, LARK],
+      extensions: [MODEL_FAKE, LARK],
       pgUrl: pgc.url,
       redisUrl: rdc.url,
-      pluginConfig: {
+      extensionConfig: {
         lark: { apiUrl: lark.url, accountsUrl: lark.url, appId: lark.appId, appSecret: SECRET },
       },
       config: {

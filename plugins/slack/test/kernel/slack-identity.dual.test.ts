@@ -73,10 +73,10 @@ const cookieHeader = (jar: Jar) => [...jar].map(([k, v]) => `${k}=${v}`).join(";
 describe("Slack 登录与通讯录接内核（双副本）", () => {
   it("Sign in with Slack → 通讯录同步加入同一账号 → 私聊机器人被识别为该账号", async () => {
     h = await createDualReplicaHarness({
-      plugins: [MODEL_FAKE, SLACK],
+      extensions: [MODEL_FAKE, SLACK],
       pgUrl: pgc.url,
       redisUrl: rdc.url,
-      pluginConfig: {
+      extensionConfig: {
         slack: {
           apiUrl: slack.apiUrl,
           openidUrl: `${slack.url}/`,

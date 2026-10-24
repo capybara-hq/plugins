@@ -64,6 +64,6 @@ describe("egress open without allowOpenEgress (no Docker needed)", () => {
         limits: { cpu: 1, memoryMb: 256, diskMb: 256, egress: "open", allowHosts: [] },
         signal: AbortSignal.timeout(5000),
       }),
-    ).rejects.toThrow(/pluginConfig\."sandbox-docker"\.allowOpenEgress/);
+    ).rejects.toThrow(/extensionConfig\."sandbox-docker"\.allowOpenEgress/);
   });
 });

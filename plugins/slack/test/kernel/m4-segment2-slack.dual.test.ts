@@ -103,10 +103,10 @@ const blocksText = (m: FakeSlackMessage) => JSON.stringify(slack.finalBlocks(m) 
 describe("M4 第二段验收：Slack（双副本）", () => {
   it("渠道 → 绑定 → 流式对话 → 审批卡片 → 杀副本接管 → Sign in with Slack → 通讯录加入与离职", async () => {
     h = await createDualReplicaHarness({
-      plugins: [MODEL_FAKE, FAKE_IM, SLACK],
+      extensions: [MODEL_FAKE, FAKE_IM, SLACK],
       pgUrl: pgc.url,
       redisUrl: rdc.url,
-      pluginConfig: {
+      extensionConfig: {
         "fake-im": {
           platformUrl: im.url,
           tenant: "t1",

@@ -127,10 +127,10 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     redis = new Redis(rdc.url);
     await redis.flushdb();
     h = await createDualReplicaHarness({
-      plugins: [MODEL_FAKE, S3_PLUGIN, SANDBOX_DOCKER],
+      extensions: [MODEL_FAKE, S3_PLUGIN, SANDBOX_DOCKER],
       pgUrl: pgc.url,
       redisUrl: rdc.url,
-      pluginConfig: {
+      extensionConfig: {
         "object-store-s3": {
           endpoint: s3.endpoint,
           region: s3.region,

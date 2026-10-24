@@ -83,10 +83,10 @@ const finalText = (m: FakeLarkMessage) => lark.cardText(lark.finalCard(m));
 describe("Lark 插件接内核（双副本）", () => {
   it("建连接 → 绑定卡片 → 流式回复 → 话题里的审批卡片 → 点击批准 → 卡片更新与最终回复", async () => {
     h = await createDualReplicaHarness({
-      plugins: [MODEL_FAKE, FAKE_IM, LARK],
+      extensions: [MODEL_FAKE, FAKE_IM, LARK],
       pgUrl: pgc.url,
       redisUrl: rdc.url,
-      pluginConfig: {
+      extensionConfig: {
         "fake-im": {
           platformUrl: im.url,
           tenant: "t1",

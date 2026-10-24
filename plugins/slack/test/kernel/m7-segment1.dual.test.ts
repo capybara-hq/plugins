@@ -62,9 +62,9 @@ beforeAll(async () => {
     redeliverUnacked: true,
   });
   h = await createDualReplicaHarness({
-    plugins: [MODEL_FAKE, SLACK],
+    extensions: [MODEL_FAKE, SLACK],
     roles: [["api", "worker"], ["gateway"]],
-    pluginConfig: { slack: { apiUrl: slack.apiUrl } },
+    extensionConfig: { slack: { apiUrl: slack.apiUrl } },
     config: {
       auth: { cookieSecure: false },
       http: { publicUrl: "https://cap.example" },

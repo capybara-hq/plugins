@@ -110,7 +110,7 @@ describe("todo 插件", { timeout: 60_000 }, () => {
   });
 
   it("双副本：副本 A 写、副本 B 读一致；B 覆盖写后 A 读到新清单；会话互相隔离", async () => {
-    const h = await createDualReplicaHarness({ plugins: [PLUGIN], pgUrl: pgc.url });
+    const h = await createDualReplicaHarness({ extensions: [PLUGIN], pgUrl: pgc.url });
     harnesses.push(h);
     const a = replicaDb(h);
     const b = replicaDb(h);
@@ -147,7 +147,7 @@ describe("todo 插件", { timeout: 60_000 }, () => {
   });
 
   it("并发写同一会话：整表覆盖，最终是某一次完整的清单", async () => {
-    const h = await createDualReplicaHarness({ plugins: [PLUGIN], pgUrl: pgc.url });
+    const h = await createDualReplicaHarness({ extensions: [PLUGIN], pgUrl: pgc.url });
     harnesses.push(h);
     const a = replicaDb(h);
     const b = replicaDb(h);
@@ -163,7 +163,7 @@ describe("todo 插件", { timeout: 60_000 }, () => {
   });
 
   it("参数不合法 -> ToolError，写入不发生", async () => {
-    const h = await createDualReplicaHarness({ plugins: [PLUGIN], pgUrl: pgc.url });
+    const h = await createDualReplicaHarness({ extensions: [PLUGIN], pgUrl: pgc.url });
     harnesses.push(h);
     const a = replicaDb(h);
     await expect(

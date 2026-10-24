@@ -33,9 +33,9 @@ let raw: ReturnType<typeof createDb>;
 beforeAll(async () => {
   slack = await startFakeSlack({ teamId: "T1", botUserId: "UBOT" });
   h = await createDualReplicaHarness({
-    plugins: [MODEL_FAKE, SLACK],
+    extensions: [MODEL_FAKE, SLACK],
     roles: [["api", "worker"], ["gateway"]],
-    pluginConfig: { slack: { apiUrl: slack.apiUrl } },
+    extensionConfig: { slack: { apiUrl: slack.apiUrl } },
     config: {
       auth: { cookieSecure: false },
       http: { publicUrl: "https://cap.example" },
