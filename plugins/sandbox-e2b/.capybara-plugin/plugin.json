@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "name": "sandbox-e2b",
+  "version": "0.1.0",
+  "publisher": "Capybara",
+  "description": "Conversation sandboxes (sandbox@1) as E2B sandboxes (E2B cloud or self-hosted), with pause / resume and E2B egress controls",
+  "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/sandbox-e2b#readme"
+}

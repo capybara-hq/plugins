@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "name": "example-counter",
+  "version": "0.1.0",
+  "publisher": "Capybara",
+  "description": "Reference plugin: a multi-replica-safe counter (db transaction + idempotent queue job + provide)"
+}
