@@ -209,6 +209,26 @@ describe("listTools 映射", () => {
     expect(tools[2]).not.toHaveProperty("title");
   });
 
+  it("cleans control, bidi and invisible characters from the MCP title, like the kernel", async () => {
+    const server = await fake({
+      tools: [
+        { name: "spoof", title: "Read\u202E elif\u2066x\u2069", description: "Spoof" },
+        { name: "lines", title: "a\nb\t c", description: "Lines" },
+        {
+          name: "invisible",
+          title: "\u200B",
+          annotations: { title: "Fallback" },
+          description: "I",
+        },
+        { name: "zw", title: "\u200B\uFEFF", description: "Zero width" },
+      ],
+    });
+    const s = await open(server);
+    const tools = await s.listTools();
+    expect(tools.map((t) => t.title)).toEqual(["Read elifx", "a b c", "Fallback", undefined]);
+    expect(tools[3]).not.toHaveProperty("title");
+  });
+
   it("缺 description → 用 title 或 name，并 warn", async () => {
     const server = await fake({
       tools: [{ name: "a", title: "Tool A" }, { name: "b" }],
