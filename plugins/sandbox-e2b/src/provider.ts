@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   type ExecResult,
   type Logger,
+  SANDBOX_TAG_RE,
   SandboxGoneError,
   type SandboxLimits,
   type SandboxProvider,
@@ -64,6 +65,9 @@ const KILL_GRACE_MS = 3000;
 const STDERR_ROOM = 64 * 1024;
 /** 文件操作脚本的超时（毫秒）。 */
 const FILE_OP_TIMEOUT_MS = 120_000;
+/** Retries of a connect answered 409 (another caller's resume in flight) and the wait between. */
+const CONNECT_CONFLICT_RETRIES = 5;
+const CONNECT_CONFLICT_WAIT_MS = 500;
 /** 列出同名沙箱时每页条数。 */
 const LIST_LIMIT = 100;
 
@@ -112,6 +116,24 @@ const KILL_ALL_SCRIPT =
   'k "$q"; kill -9 "$q" 2>/dev/null; done; exit 0';
 
 /**
+ * Kills the exec commands of the holders whose tags are the script's arguments (`killTagged`),
+ * matching their control files `/tmp/.capybara-exec-<tag>-<uuid>`; other commands keep running.
+ * Tags are checked against `SANDBOX_TAG_RE` first. Same as sandbox-docker.
+ */
+const KILL_TAGGED_SCRIPT =
+  `${KILL_TREE}for t in "$@"; do ` +
+  'for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-$t-"); do ' +
+  'k "$q"; kill -9 "$q" 2>/dev/null; done; done; exit 0';
+
+/** The control file of one exec: carries the holder's tag when there is one. */
+export function execControlPath(tag?: string): string {
+  if (tag !== undefined && !SANDBOX_TAG_RE.test(tag)) throw new Error("invalid sandbox tag");
+  return tag === undefined
+    ? `/tmp/.capybara-exec-${randomUUID()}`
+    : `/tmp/.capybara-exec-${tag}-${randomUUID()}`;
+}
+
+/**
  * 杀掉 ctl 对应的命令：先留 `.kill` 标记，等会话 id，按进程组与会话 SIGKILL；再按命令行兜底。
  * 找到了会话 id（命令确实已启动）才删 `.kill` 标记；没找到时留着，防止包装稍后才启动。
  */
@@ -149,6 +171,25 @@ function after(ms: number, fn: () => void): { cancel(): void } {
   const t = AbortSignal.timeout(ms);
   t.addEventListener("abort", fn, { once: true });
   return { cancel: () => t.removeEventListener("abort", fn) };
+}
+
+/** Waits `ms` (within one call), rejecting with the signal's reason when it aborts. */
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = () => {
+      timer.cancel();
+      reject(signal.reason);
+    };
+    const timer = after(ms, () => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    });
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function checkPath(p: string): void {
@@ -233,17 +274,22 @@ export function createE2BSandbox(
     signal.throwIfAborted();
     checkId(id);
     const timeout = Math.min(MAX_TIMEOUT_SECONDS, Math.max(cfg.timeoutSeconds, minSeconds));
-    try {
-      const r = await api.json<SandboxInfo>("POST", `/v2/sandboxes/${enc(id)}/connect`, {
-        body: { timeout },
-        signal,
-      });
-      return targetOf({ ...r.data, sandboxID: r.data?.sandboxID ?? id });
-    } catch (e) {
-      if (isE2BNotFound(e)) {
-        throw new SandboxGoneError(`E2B sandbox ${id} no longer exists`, { cause: e });
+    for (let i = 0; ; i++) {
+      try {
+        const r = await api.json<SandboxInfo>("POST", `/v2/sandboxes/${enc(id)}/connect`, {
+          body: { timeout },
+          signal,
+        });
+        return targetOf({ ...r.data, sandboxID: r.data?.sandboxID ?? id });
+      } catch (e) {
+        if (isE2BNotFound(e)) {
+          throw new SandboxGoneError(`E2B sandbox ${id} no longer exists`, { cause: e });
+        }
+        // concurrent auto-starts (parallel sub-agents): a connect that conflicts with another
+        // caller's resume in flight is retried briefly (live-only assumption, see test/live)
+        if (!isStatus(e, 409) || i >= CONNECT_CONFLICT_RETRIES) throw e;
+        await sleep(CONNECT_CONFLICT_WAIT_MS, signal);
       }
-      throw e;
     }
   };
 
@@ -458,6 +504,9 @@ export function createE2BSandbox(
   // ---------- 契约 ----------
 
   return {
+    // envd runs every process.Start independently; connect on a running sandbox only extends its
+    // timeout, so concurrent auto-starts are idempotent (a 409 from a resume in flight is retried)
+    concurrentExec: true,
     async create({ name, limits, signal }) {
       signal.throwIfAborted();
       if (!NAME_RE.test(name)) throw new Error(`invalid sandbox name: ${name}`);
@@ -543,8 +592,30 @@ export function createE2BSandbox(
       if (r.exitCode !== 0) throw new Error(`cannot stop leftover commands: ${stderrOf(r)}`);
     },
 
+    async killTagged(h, tags, signal) {
+      signal.throwIfAborted();
+      for (const t of tags) {
+        if (!SANDBOX_TAG_RE.test(t)) throw new Error("invalid sandbox tag");
+      }
+      if (tags.length === 0) return;
+      // like killAll: connect resumes a paused sandbox; a missing one throws SandboxGoneError
+      const t = await attach(h.id, signal);
+      const r = await fileOp(
+        t,
+        {
+          user: SANDBOX_USER,
+          args: ["-c", KILL_TAGGED_SCRIPT, "capybara-killtagged", ...tags],
+          maxOutputBytes: STDERR_ROOM,
+        },
+        signal,
+      );
+      if (r.exitCode !== 0)
+        throw new Error(`cannot stop crashed holders' commands: ${stderrOf(r)}`);
+    },
+
     async exec(h, args): Promise<ExecResult> {
       args.signal.throwIfAborted();
+      const ctl = execControlPath(args.tag);
       const env: Record<string, string> = { HOME: "/workspace", LANG: "C.UTF-8" };
       for (const [k, v] of Object.entries(args.env ?? {})) {
         if (!ENV_KEY_RE.test(k)) throw new Error(`invalid environment variable name: ${k}`);
@@ -555,7 +626,6 @@ export function createE2BSandbox(
         args.signal,
         Math.ceil(args.timeoutMs / 1000) + TIMEOUT_MARGIN_SECONDS,
       );
-      const ctl = `/tmp/.capybara-exec-${randomUUID()}`;
       const r = await run(t, {
         user: SANDBOX_USER,
         cmd: "setsid",

@@ -652,6 +652,98 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     });
   });
 
+  describe("concurrent exec (sub-agents spec §10.6, §10.7)", () => {
+    let h: { id: string };
+    beforeAll(async () => {
+      sbx = make();
+      h = await sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
+    });
+    const run = (
+      command: string,
+      o: { tag?: string; timeoutMs?: number; signal?: AbortSignal } = {},
+    ) =>
+      sbx.exec(h, {
+        command,
+        timeoutMs: o.timeoutMs ?? 15_000,
+        maxOutputBytes: 1000,
+        signal: o.signal ?? sig(),
+        ...(o.tag === undefined ? {} : { tag: o.tag }),
+      });
+
+    it("declares concurrent exec with killTagged; the control file carries the tag", async () => {
+      expect(sbx.concurrentExec).toBe(true);
+      expect(typeof sbx.killTagged).toBe("function");
+      const tag = randomUUID();
+      await run("true", { tag });
+      const start = fake.calls.filter((c) => c.path === "/process.Process/Start").at(-1);
+      expect(argsOf(start as FakeE2BCall)).toContain(`/tmp/.capybara-exec-${tag}-`);
+    });
+
+    it("two sleep 2; date commands overlap", async () => {
+      const t0 = Date.now();
+      const [a, b] = await Promise.all([
+        run("sleep 2; date +%s", { tag: randomUUID() }),
+        run("sleep 2; date +%s", { tag: randomUUID() }),
+      ]);
+      expect(a.exitCode).toBe(0);
+      expect(b.exitCode).toBe(0);
+      expect(Math.abs(Number(a.stdout) - Number(b.stdout))).toBeLessThanOrEqual(1);
+      expect(Date.now() - t0).toBeLessThan(3900);
+    });
+
+    it("killTagged kills one tag's process tree and leaves the other running", async () => {
+      const [ta, tb] = [randomUUID(), randomUUID()];
+      const bStop = new AbortController();
+      const a = run("sleep 51 & sleep 52", { tag: ta });
+      const b = run("sleep 53; echo never", { tag: tb, signal: bStop.signal });
+      await waitFor(() => fake.running(h.id).length === 2);
+      const before = fake.running(h.id).map((p) => p.pid);
+      await sbx.killTagged?.(h, [ta], sig());
+      const ra = await a;
+      expect(ra.exitCode).not.toBe(0);
+      await waitFor(() => fake.running(h.id).length === 1);
+      expect(before.filter((p) => fake.alive(p))).toHaveLength(1);
+      const kill = fake.calls.filter((c) => c.path === "/process.Process/Start").at(-1);
+      expect(kill?.user).toBe("sandbox");
+      expect(argsOf(kill as FakeE2BCall)).toContain("capybara-killtagged");
+      bStop.abort();
+      expect(await b).toMatchObject({ exitCode: null, timedOut: false });
+    });
+
+    it("a timed-out command kills only itself", async () => {
+      const [a, b] = await Promise.all([
+        run("sleep 30", { tag: randomUUID(), timeoutMs: 1000 }),
+        run("sleep 3; echo b", { tag: randomUUID() }),
+      ]);
+      expect(a).toMatchObject({ timedOut: true, exitCode: null });
+      expect(b).toMatchObject({ exitCode: 0, stdout: "b\n" });
+    });
+
+    it("concurrent auto-start of a paused sandbox succeeds for every call", async () => {
+      await sbx.suspend(h, sig());
+      expect(fake.sandboxes.get(h.id)?.state).toBe("paused");
+      const [a, b, st] = await Promise.all([
+        run("echo a", { tag: randomUUID() }),
+        run("echo b", { tag: randomUUID() }),
+        sbx.stat(h, "/workspace", sig()),
+      ]);
+      expect(a).toMatchObject({ exitCode: 0, stdout: "a\n" });
+      expect(b).toMatchObject({ exitCode: 0, stdout: "b\n" });
+      expect(st).toMatchObject({ isDir: true });
+      expect(fake.sandboxes.get(h.id)?.state).toBe("running");
+    });
+
+    it("a connect answered 409 (a concurrent resume in flight) is retried", async () => {
+      fake.failNext({ path: /\/connect$/ }, 409, "sandbox is resuming");
+      expect((await run("echo ok")).stdout).toBe("ok\n");
+    });
+
+    it("killTagged and exec reject a tag outside SANDBOX_TAG_RE", async () => {
+      await expect(sbx.killTagged?.(h, ["bad tag; rm -rf /"], sig())).rejects.toThrow(/tag/);
+      await expect(run("true", { tag: "UPPER" })).rejects.toThrow(/tag/);
+    });
+  });
+
   describe("files", () => {
     let h: { id: string };
     beforeAll(async () => {

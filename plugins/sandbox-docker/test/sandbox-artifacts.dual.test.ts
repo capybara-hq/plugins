@@ -52,9 +52,11 @@ import {
  * 1. 预签名直传附件（CSV）→ finalize；
  * 2. 带附件发消息，agent 用 `sandbox_bash` 处理 /workspace/attachments 里的附件（首次使用，创建沙箱）；
  * 3. `sandbox_deliver` 交付产物 → `artifact_created` → 下载路由 302 到预签名地址，内容一致；
- * 4. `sandbox_bash` 执行中（命令比锁的 TTL 长）杀掉执行这次运行的副本 → 存活副本接手运行（结果未知），之后的
- *    调用等被杀副本持有的沙箱锁过期（TTL 60 秒）后复用同一个容器，文件还在、没有「重建」提示；接手时先杀掉
- *    被杀副本留在沙箱里的命令（fix wave S2 I2），新命令单独运行；
+ * 4. the replica running a `sandbox_bash` call (a command longer than the lease TTL) is killed ->
+ *    the survivor takes over the run (result unknown); the next call runs at once under a shared
+ *    lease beside the dead replica's command, reusing the same container (files kept, no
+ *    "recreated" notice); once the dead replica's lease has expired (TTL 60 s), the next call finds
+ *    its holder record and kills only its command by its tag (`killTagged`, phase C);
  * 5. 空闲到期（把 last_used_at 拨回去）后由维护任务休眠 → 状态 suspended、容器已停止 → 下一次调用
  *    透明恢复，文件还在、没有提示，状态回到 running。
  *
@@ -368,7 +370,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     expect(ofType(r4.evs, "tool_call_started")).toHaveLength(1);
     const takeoverMs = Date.now() - killedAt;
 
-    // 存活副本上的下一次调用：等被杀副本的沙箱锁过期，然后复用同一个容器
+    // the next call on the survivor runs at once (shared lease) in the same container
     await send(survivor, convId, "sandbox_bash", {
       command:
         "cat /workspace/out/summary.txt && ls /workspace && echo leftover=$(pgrep -fc '^sleep 300' || true)",
@@ -381,11 +383,20 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     expect(r4b.result.content.startsWith(`${TOTAL}\n`)).toBe(true);
     expect(r4b.result.content).toContain("step4-started");
     expect(r4b.result.content).toContain("attachments");
-    // 被杀副本留下的 sleep 300 在接手时已被杀掉：新命令单独运行，旧命令也不会再跑完
-    expect(r4b.result.content).toContain("leftover=0");
+    // the dead replica's sleep 300 still runs beside it: its lease has not expired yet
+    expect(r4b.result.content).toContain("leftover=1");
     expect(r4b.result.content).not.toContain("step4-finished");
-    // 锁要等到 TTL 过期才能拿到（被杀副本最后一次续租后最多 TTL）
-    expect(reuseMs).toBeLessThan(SANDBOX_LOCK_TTL_MS + 30_000);
+    expect(reuseMs).toBeLessThan(SANDBOX_LOCK_TTL_MS);
+    // after the dead replica's lease expired, the next acquirer kills its command by its tag
+    await new Promise((r) =>
+      setTimeout(r, Math.max(0, killedAt + SANDBOX_LOCK_TTL_MS + 2000 - Date.now())),
+    );
+    await send(survivor, convId, "sandbox_bash", {
+      command: "echo leftover=$(pgrep -fc '^sleep 300' || true)",
+    });
+    const r4c = await finished(convId, 6, 60_000);
+    expect(r4c.result.isError, r4c.result.content).toBe(false);
+    expect(r4c.result.content).toContain("leftover=0");
     const c4 = await containerOf(convId);
     expect(c4.Id).toBe(c2.Id);
     const row4 = await sandboxRow(convId);
@@ -406,7 +417,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     expect((await containerOf(convId)).State.Running).toBe(false);
 
     await send(survivor, convId, "sandbox_read", { path: "/workspace/out/summary.txt" });
-    const r5 = await finished(convId, 6);
+    const r5 = await finished(convId, 7);
     expect(r5.result.isError, r5.result.content).toBe(false);
     expect(r5.result.content).not.toContain(SANDBOX_STARTED_NOTICE);
     expect(r5.result.content).not.toContain(SANDBOX_RECREATED_NOTICE);

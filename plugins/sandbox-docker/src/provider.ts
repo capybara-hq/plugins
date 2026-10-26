@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Duplex } from "node:stream";
 import {
   type ExecResult,
+  SANDBOX_TAG_RE,
   SandboxGoneError,
   type SandboxHandle,
   type SandboxLimits,
@@ -138,6 +139,25 @@ const KILL_TREE =
 const KILL_ALL_SCRIPT =
   `${KILL_TREE}for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-"); do ` +
   'k "$q"; kill -9 "$q" 2>/dev/null; done; exit 0';
+
+/**
+ * Kills the exec commands of the holders whose tags are the script's arguments (`killTagged`):
+ * their control files are `/tmp/.capybara-exec-<tag>-<uuid>`, so the wrapper's command line
+ * matches `capybara-exec /tmp/[.]capybara-exec-<tag>-` (tags are checked against
+ * `SANDBOX_TAG_RE` before they get here). Other holders' commands keep running.
+ */
+const KILL_TAGGED_SCRIPT =
+  `${KILL_TREE}for t in "$@"; do ` +
+  'for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-$t-"); do ' +
+  'k "$q"; kill -9 "$q" 2>/dev/null; done; done; exit 0';
+
+/** The control file of one exec: carries the holder's tag when there is one. */
+export function execControlPath(tag?: string): string {
+  if (tag !== undefined && !SANDBOX_TAG_RE.test(tag)) throw new Error("invalid sandbox tag");
+  return tag === undefined
+    ? `/tmp/.capybara-exec-${randomUUID()}`
+    : `/tmp/.capybara-exec-${tag}-${randomUUID()}`;
+}
 
 /**
  * 杀掉 ctl 对应的命令：先留 `.kill` 标记，等会话 id，按进程组与会话 SIGKILL；再按命令行兜底。
@@ -367,13 +387,18 @@ export function createDockerSandbox(
   };
 
   /** 建并启动出站代理（接共用网络与沙箱的内部网络）。 */
-  const createEgress = async (name: string, allowHosts: string[], signal: AbortSignal) => {
+  const createEgress = async (
+    name: string,
+    allowHosts: string[],
+    signal: AbortSignal,
+    mayExist = false,
+  ) => {
     const n = sandboxResourceNames(name);
     const env = [`ALLOW_HOSTS=${JSON.stringify(allowHosts)}`, `PORT=${PROXY_PORT}`];
     if (test.egressTestHosts) {
       env.push(`CAPYBARA_EGRESS_TEST_HOSTS=${JSON.stringify(test.egressTestHosts)}`);
     }
-    await createContainer(
+    const made = createContainer(
       n.egress,
       {
         Image: cfg.egressProxyImage,
@@ -394,6 +419,7 @@ export function createDockerSandbox(
       },
       signal,
     );
+    await (mayExist ? made.catch(ignore(409)) : made);
     await start(n.egress, signal);
     await waitEgressReady(n.egress, signal);
   };
@@ -414,7 +440,8 @@ export function createDockerSandbox(
       running = c.State.Running;
     } catch (e) {
       if (!isStatus(e, 404)) throw e;
-      await createEgress(name, allowHosts, signal);
+      // a concurrent auto-start may create it at the same moment: a name conflict is fine
+      await createEgress(name, allowHosts, signal, true);
       return;
     }
     if (!running) {
@@ -670,6 +697,9 @@ export function createDockerSandbox(
   // ---------- 契约 ----------
 
   return {
+    // docker exec instances are independent; auto-start tolerates concurrent starts (304 / 409)
+    concurrentExec: true,
+
     async create({ name, image, limits, signal }) {
       signal.throwIfAborted();
       if (!NAME_RE.test(name)) throw new Error(`invalid sandbox name: ${name}`);
@@ -797,14 +827,32 @@ export function createDockerSandbox(
       await killOrRestart(h.id, ["/bin/sh", "-c", KILL_ALL_SCRIPT, "capybara-killall"], signal);
     },
 
+    async killTagged(h, tags, signal) {
+      signal.throwIfAborted();
+      for (const t of tags) {
+        if (!SANDBOX_TAG_RE.test(t)) throw new Error("invalid sandbox tag");
+      }
+      if (tags.length === 0) return;
+      // like killAll: the container must run first (started when stopped, SandboxGoneError when
+      // missing); when the kill exec cannot start, the container restarts (siblings end too)
+      await autoStart(h, signal, () =>
+        run(h.id, { cmd: ["true"], user: SANDBOX_USER, maxOutputBytes: 1024, signal }),
+      );
+      await killOrRestart(
+        h.id,
+        ["/bin/sh", "-c", KILL_TAGGED_SCRIPT, "capybara-killtagged", ...tags],
+        signal,
+      );
+    },
+
     async exec(h, args): Promise<ExecResult> {
       args.signal.throwIfAborted();
+      const ctl = execControlPath(args.tag);
       const env: string[] = [];
       for (const [k, v] of Object.entries(args.env ?? {})) {
         if (!ENV_KEY_RE.test(k)) throw new Error(`invalid environment variable name: ${k}`);
         env.push(`${k}=${v}`);
       }
-      const ctl = `/tmp/.capybara-exec-${randomUUID()}`;
       const r = await autoStart(h, args.signal, () =>
         run(h.id, {
           cmd: execArgv(ctl, args.command, args.timeoutMs),
