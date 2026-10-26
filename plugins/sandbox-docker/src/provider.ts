@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Duplex } from "node:stream";
 import {
   type ExecResult,
+  type Logger,
   SANDBOX_TAG_RE,
   SandboxGoneError,
   type SandboxHandle,
@@ -143,12 +144,14 @@ const KILL_ALL_SCRIPT =
 /**
  * Kills the exec commands of the holders whose tags are the script's arguments (`killTagged`):
  * their control files are `/tmp/.capybara-exec-<tag>-<uuid>`, so the wrapper's command line
- * matches `capybara-exec /tmp/[.]capybara-exec-<tag>-` (tags are checked against
- * `SANDBOX_TAG_RE` before they get here). Other holders' commands keep running.
+ * matches `capybara-exec /tmp/[.]capybara-exec-<tag>-<uuid> ` with the UUID's exact shape: a tag
+ * that is a prefix of another (`ab` of `ab-cd`) never matches the other's commands, nor an
+ * untagged command's UUID (tags are checked against `SANDBOX_TAG_RE` before they get here).
+ * Other holders' commands keep running.
  */
 const KILL_TAGGED_SCRIPT =
-  `${KILL_TREE}for t in "$@"; do ` +
-  'for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-$t-"); do ' +
+  `${KILL_TREE}u='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; for t in "$@"; do ` +
+  'for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-$t-$u( |$)"); do ' +
   'k "$q"; kill -9 "$q" 2>/dev/null; done; done; exit 0';
 
 /** The control file of one exec: carries the holder's tag when there is one. */
@@ -236,10 +239,14 @@ interface RunResult {
   aborted: boolean;
 }
 
-/** 按 Docker sandbox@1 的约定建提供方（插件 setup 与测试共用）。 */
+/**
+ * 按 Docker sandbox@1 的约定建提供方（插件 setup 与测试共用）。`log` (the extension's `ctx.log`)
+ * gets a warn when a kill falls back to restarting the container, which ends every command in it.
+ */
 export function createDockerSandbox(
   cfg: DockerSandboxConfig,
   test: DockerSandboxTestOptions = {},
+  log?: Pick<Logger, "warn">,
 ): SandboxProvider {
   const api: DockerClient = createDockerClient(cfg.endpoint);
   const baseLabels = (name: string, role: string): Record<string, string> => ({
@@ -631,6 +638,10 @@ export function createDockerSandbox(
     );
     if (ok) return;
     signal?.throwIfAborted();
+    log?.warn(
+      "sandbox-docker: the kill command could not run; restarting the container, which also ends other commands in it",
+      { container },
+    );
     await api.json("POST", `/containers/${enc(container)}/restart`, {
       query: { t: 0 },
       signal: within(60_000),

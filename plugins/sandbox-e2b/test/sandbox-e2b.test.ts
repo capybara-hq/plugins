@@ -710,6 +710,18 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       expect(await b).toMatchObject({ exitCode: null, timedOut: false });
     });
 
+    it("killTagged matches whole tags: a tag that is a prefix of another kills only its own", async () => {
+      const stop = new AbortController();
+      const short = run("sleep 61", { tag: "deadbeef" });
+      const long = run("sleep 62", { tag: "deadbeef-1", signal: stop.signal });
+      await waitFor(() => fake.running(h.id).length === 2);
+      await sbx.killTagged?.(h, ["deadbeef"], sig());
+      expect((await short).exitCode).not.toBe(0);
+      await waitFor(() => fake.running(h.id).length === 1);
+      stop.abort();
+      expect(await long).toMatchObject({ exitCode: null, timedOut: false });
+    });
+
     it("a timed-out command kills only itself", async () => {
       const [a, b] = await Promise.all([
         run("sleep 30", { tag: randomUUID(), timeoutMs: 1000 }),

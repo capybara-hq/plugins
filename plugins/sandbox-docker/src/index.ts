@@ -61,7 +61,7 @@ export default defineExtension({
   setup(ctx) {
     ctx.provide(
       SANDBOX_EXTENSION_POINT,
-      createDockerSandbox(ctx.config as z.output<typeof DeploymentConfig>),
+      createDockerSandbox(ctx.config as z.output<typeof DeploymentConfig>, {}, ctx.log),
     );
   },
 });

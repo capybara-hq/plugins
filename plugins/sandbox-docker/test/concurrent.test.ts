@@ -136,6 +136,24 @@ describe.skipIf(!dockerAvailable)("sandbox-docker concurrent exec", { timeout: 1
     }
   });
 
+  it("killTagged matches whole tags: a tag that is a prefix of another kills only its own", async () => {
+    const h = await create();
+    try {
+      const stop = new AbortController();
+      const short = exec(h, "sleep 311", { tag: "deadbeef" });
+      const long = exec(h, "sleep 312", { tag: "deadbeef-1", signal: stop.signal });
+      await waitUntil(async () => (await count(h, "^sleep 31[12]")) === 2, 15_000);
+      await sbx.killTagged?.(h, ["deadbeef"], sig());
+      expect((await short).exitCode).not.toBe(0);
+      expect(await count(h, "^sleep 311")).toBe(0);
+      expect(await count(h, "^sleep 312")).toBe(1);
+      stop.abort();
+      await long;
+    } finally {
+      await sbx.destroy(h, sig());
+    }
+  });
+
   it("a timed-out command kills only itself", async () => {
     const h = await create();
     try {

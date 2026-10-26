@@ -117,12 +117,13 @@ const KILL_ALL_SCRIPT =
 
 /**
  * Kills the exec commands of the holders whose tags are the script's arguments (`killTagged`),
- * matching their control files `/tmp/.capybara-exec-<tag>-<uuid>`; other commands keep running.
- * Tags are checked against `SANDBOX_TAG_RE` first. Same as sandbox-docker.
+ * matching their control files `/tmp/.capybara-exec-<tag>-<uuid>` with the UUID's exact shape, so
+ * a tag that is a prefix of another never matches the other's commands; other commands keep
+ * running. Tags are checked against `SANDBOX_TAG_RE` first. Same as sandbox-docker.
  */
 const KILL_TAGGED_SCRIPT =
-  `${KILL_TREE}for t in "$@"; do ` +
-  'for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-$t-"); do ' +
+  `${KILL_TREE}u='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; for t in "$@"; do ` +
+  'for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-$t-$u( |$)"); do ' +
   'k "$q"; kill -9 "$q" 2>/dev/null; done; done; exit 0';
 
 /** The control file of one exec: carries the holder's tag when there is one. */
