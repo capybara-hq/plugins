@@ -104,19 +104,25 @@ export const redirectText = (status: number) =>
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-/** MCP 工具清单项 → ToolSpec（只取 name / description / inputSchema / annotations）。 */
+/** Longest display title kept from an MCP tool (`ToolSpec.title`), in code points. */
+const TITLE_MAX = 80;
+
+/**
+ * MCP 工具清单项 → ToolSpec（只取 name / description / inputSchema / annotations，以及仅供显示的
+ * title：MCP 的 `title`，没有时 `annotations.title`，去掉首尾空白、截到 80）。
+ */
 function mapTool(raw: Record<string, unknown>, log: Logger): ToolSpec {
   const name = String(raw.name);
   const ann = isObj(raw.annotations) ? raw.annotations : {};
+  const mcpTitle =
+    typeof raw.title === "string" && raw.title.trim() !== ""
+      ? raw.title.trim()
+      : typeof ann.title === "string" && ann.title.trim() !== ""
+        ? ann.title.trim()
+        : undefined;
   let description = typeof raw.description === "string" ? raw.description.trim() : "";
   if (description === "") {
-    const title =
-      typeof raw.title === "string" && raw.title.trim() !== ""
-        ? raw.title.trim()
-        : typeof ann.title === "string" && ann.title.trim() !== ""
-          ? ann.title.trim()
-          : name;
-    description = title;
+    description = mcpTitle ?? name;
     log.warn("MCP tool has no description; using its title or name", { tool: name });
   }
   const annotations: ToolAnnotations = {};
@@ -131,6 +137,8 @@ function mapTool(raw: Record<string, unknown>, log: Logger): ToolSpec {
     description,
     inputSchema: isObj(raw.inputSchema) ? raw.inputSchema : {},
     ...(Object.keys(annotations).length > 0 && { annotations }),
+    // Display only: not sent to the model and outside the kernel's definition fingerprint.
+    ...(mcpTitle !== undefined && { title: [...mcpTitle].slice(0, TITLE_MAX).join("") }),
   };
 }
 
