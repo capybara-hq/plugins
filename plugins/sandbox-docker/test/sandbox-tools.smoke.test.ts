@@ -1,8 +1,28 @@
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { startTestPostgres, startTestRedis, type TestContainer } from "@capybara-hq/testing";
+import {
+  type ConversationEvent,
+  createConversation as createConv,
+  createDb,
+  createLocalAccount,
+  createOrg,
+  eventsOf,
+  type Kernel,
+  type KernelDb,
+  kernelDb,
+  postMessage,
+  type KernelRequest as Req,
+  login as session,
+  startTestKernel,
+  startTestPostgres,
+  startTestRedis,
+  type TestContainer,
+  testKernelConfig,
+  truncateTables,
+  waitForTerminal,
+} from "@capybara-hq/testing";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createDockerSandbox } from "../../../../../plugins/sandbox-docker/src/index.js";
+import { createDockerSandbox } from "../src/index.js";
 import {
   buildTestImages,
   docker,
@@ -10,36 +30,18 @@ import {
   type SocketProxy,
   startSocketProxy,
   type TestImages,
-} from "../../../../../plugins/sandbox-docker/test/docker-env.js";
-import type { ConversationEvent } from "../../../src/conversations/events.js";
-import { type KernelDb, kernelDb } from "../../../src/db/kernel-schema.js";
-import { createDb } from "../../../src/db/pool.js";
-import { AccountsService } from "../../../src/identity/accounts.js";
-import type { Kernel } from "../../../src/kernel.js";
-import { createLogger } from "../../../src/log.js";
-import { truncateTables } from "../../helpers/db.js";
-import { MODEL_FAKE } from "../../helpers/model-plugins.js";
-import {
-  createConv,
-  createOrg,
-  eventsOf,
-  PW,
-  postMessage,
-  type Req,
-  runConfig,
-  session,
-  startKernel,
-  waitForTerminal,
-} from "../../helpers/runs.js";
+} from "./docker-env.js";
 
 /**
- * M5 T9 冒烟：真实内核 + model-fake + 真实的 sandbox-docker 插件（经 docker/sandbox-proxy 的 socket 代理），
- * 跑一小组 T8 的沙箱工具用例（出站用默认的 allowlist，顺带走一遍出站代理的创建）。没有 Docker 时跳过。
+ * Smoke test (M5 T9): a real kernel + model-fake + this plugin (through the socket proxy of
+ * docker/sandbox-proxy) run a few of the kernel's sandbox tool cases (default allowlist egress, so
+ * the egress proxy is created too). Skipped without Docker.
  */
 
-const SANDBOX_DOCKER = fileURLToPath(
-  new URL("../../../../../plugins/sandbox-docker/src/index.ts", import.meta.url),
-);
+const PLUGIN_DIR = fileURLToPath(new URL("../", import.meta.url));
+const SANDBOX_DOCKER = fileURLToPath(new URL("../src/index.ts", import.meta.url));
+/** The scripted model provider (a devDependency): `tool:<key>:<json>` makes it call a tool. */
+const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 
 const SANDBOX_TOOLS = [
   "sandbox_bash",
@@ -84,8 +86,8 @@ describe.skipIf(!dockerAvailable)(
       const raw = createDb(pgc.url, 3);
       db = kernelDb(raw);
       destroyDb = () => raw.destroy();
-      k = await startKernel(
-        runConfig(
+      k = await startTestKernel(
+        testKernelConfig(
           { pg: pgc.url, redis: rd.url },
           {
             roles: ["api", "worker"],
@@ -100,10 +102,8 @@ describe.skipIf(!dockerAvailable)(
             sandbox: { image: images.sandboxImage, limits: { memoryMb: 512 } },
           },
         ),
-        // startKernel's options leave the logger out (silent by default); this file wants warnings
-        {
-          logger: createLogger("warn", { write: (line) => warnings.push(line) }),
-        } as Parameters<typeof startKernel>[1],
+        // this file wants the warnings
+        { resolveFrom: PLUGIN_DIR, log: { level: "warn", write: (line) => warnings.push(line) } },
       );
     }, 600_000);
 
@@ -131,7 +131,7 @@ describe.skipIf(!dockerAvailable)(
         db,
         "capybara.sandboxes, capybara.tool_outputs, capybara.conversation_events, capybara.runs, capybara.conversations, capybara.agent_versions, capybara.agent_members, capybara.agents, capybara.memberships, capybara.orgs, capybara.sessions, capybara.local_passwords, capybara.identities, capybara.accounts",
       );
-      await new AccountsService(db).createLocal({ login: "owner", password: PW, displayName: "O" });
+      await createLocalAccount(db, "owner", "O");
       owner = await session(k, "owner");
       orgId = await createOrg(owner);
     });

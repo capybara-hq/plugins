@@ -32,6 +32,8 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@capybara-hq/testing": "workspace:*"
+    "@capybara-hq/plugin-model-fake": "workspace:*",
+    "@capybara-hq/testing": "workspace:*",
+    "kysely": "^0.29.6"
   }
 }

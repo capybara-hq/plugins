@@ -12,7 +12,6 @@ import { GenericContainer, Wait } from "testcontainers";
 
 const run = promisify(execFile);
 
-const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const pluginRoot = fileURLToPath(new URL("../", import.meta.url));
 
 /** 本机能用 Docker（`docker info` 成功）。 */
@@ -65,7 +64,10 @@ export interface SocketProxy {
   stop(): Promise<void>;
 }
 
-/** 起 docker/sandbox-proxy/haproxy.cfg 的 socket 代理（只有它挂 docker.sock）。 */
+/**
+ * Starts the socket proxy (the only container that mounts docker.sock) with this directory's copy
+ * of docker/sandbox-proxy/haproxy.cfg (`pnpm check` keeps the copy identical).
+ */
 export async function startSocketProxy(): Promise<SocketProxy> {
   const c = await new GenericContainer(SOCKET_PROXY_IMAGE)
     .withUser("root")
@@ -74,7 +76,7 @@ export async function startSocketProxy(): Promise<SocketProxy> {
     ])
     .withCopyFilesToContainer([
       {
-        source: `${repoRoot}docker/sandbox-proxy/haproxy.cfg`,
+        source: `${pluginRoot}test/sandbox-proxy/haproxy.cfg`,
         target: "/usr/local/etc/haproxy/haproxy.cfg",
       },
     ])

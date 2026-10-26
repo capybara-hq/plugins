@@ -1,20 +1,26 @@
 import { fileURLToPath } from "node:url";
 import {
+  createDb,
   createDualReplicaHarness,
+  createLocalAccount,
   type FakeSlackServer,
   type Harness,
+  type KernelDb,
+  kernelDb,
+  TEST_PASSWORD as PW,
   slackDmEvent,
   startFakeSlack,
   startTestPostgres,
   startTestRedis,
   type TestContainer,
+  waitFor,
 } from "@capybara-hq/testing";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { type KernelDb, kernelDb } from "../../src/db/kernel-schema.js";
-import { createDb } from "../../src/db/pool.js";
-import { AccountsService } from "../../src/identity/accounts.js";
-import { MODEL_FAKE } from "../helpers/model-plugins.js";
-import { PW, waitFor } from "../helpers/runs.js";
+
+/** The plugin's directory: extensions named by package resolve from here. */
+const PLUGIN_DIR = fileURLToPath(new URL("../../", import.meta.url));
+/** The scripted model provider (a devDependency) that drives the agent runs. */
+const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 
 /**
  * 官方 Slack 插件的登录（`identity-source@1`）与通讯录（`directory@1`）接内核的双副本验收（插件按路径加载，
@@ -25,7 +31,7 @@ import { PW, waitFor } from "../helpers/runs.js";
  *  3. 同一个 Slack 用户私聊机器人：被识别为该账号（不发绑定卡片）——渠道、登录、通讯录三处的身份键一致。
  */
 
-const SLACK = fileURLToPath(new URL("../../../../plugins/slack/src/index.ts", import.meta.url));
+const SLACK = fileURLToPath(new URL("../../src/index.ts", import.meta.url));
 const PUBLIC = "https://cap.example";
 
 let pgc: TestContainer;
@@ -73,6 +79,7 @@ const cookieHeader = (jar: Jar) => [...jar].map(([k, v]) => `${k}=${v}`).join(";
 describe("Slack 登录与通讯录接内核（双副本）", () => {
   it("Sign in with Slack → 通讯录同步加入同一账号 → 私聊机器人被识别为该账号", async () => {
     h = await createDualReplicaHarness({
+      resolveFrom: PLUGIN_DIR,
       extensions: [MODEL_FAKE, SLACK],
       pgUrl: pgc.url,
       redisUrl: rdc.url,
@@ -130,7 +137,7 @@ describe("Slack 登录与通讯录接内核（双副本）", () => {
     slack.users.set("UHELPER", { id: "UHELPER", teamId: "T1", name: "helper", isBot: true });
 
     const ownerJar: Jar = new Map();
-    await new AccountsService(db).createLocal({ login: "owner", password: PW, displayName: "O" });
+    await createLocalAccount(db, "owner", "O");
     expect(
       (await call(ownerJar, "POST", "/api/v1/auth/login", { login: "owner", password: PW })).status,
     ).toBe(200);

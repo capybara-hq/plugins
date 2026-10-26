@@ -1,20 +1,37 @@
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
+  type ConversationEvent,
+  createDb,
   createDualReplicaHarness,
+  createLocalAccount,
+  eventsOf,
+  fakeExtensionEntry,
   type Harness,
+  type KernelDb,
+  kernelDb,
+  MAINTENANCE_QUEUE_NAME,
+  TEST_PASSWORD as PW,
   replicaOf,
+  runJobId,
+  SANDBOX_LOCK_TTL_MS,
+  SANDBOX_RECREATED_NOTICE,
+  SANDBOX_STARTED_NOTICE,
+  SANDBOX_SUSPEND_JOB,
   startTestPostgres,
   startTestRedis,
   startTestS3,
   type TestContainer,
   type TestS3,
+  UNKNOWN_RESULT_TEXT,
+  waitFor,
+  waitForTerminal,
 } from "@capybara-hq/testing";
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDockerSandbox } from "../../../../plugins/sandbox-docker/src/index.js";
+import { createDockerSandbox } from "../src/index.js";
 import {
   buildTestImages,
   docker,
@@ -22,27 +39,15 @@ import {
   type SocketProxy,
   startSocketProxy,
   type TestImages,
-} from "../../../../plugins/sandbox-docker/test/docker-env.js";
-import type { ConversationEvent } from "../../src/conversations/events.js";
-import { type KernelDb, kernelDb } from "../../src/db/kernel-schema.js";
-import { createDb } from "../../src/db/pool.js";
-import { AccountsService } from "../../src/identity/accounts.js";
-import { UNKNOWN_RESULT_TEXT } from "../../src/runtime/context/pairing.js";
-import { MAINTENANCE_QUEUE_NAME } from "../../src/runtime/maintenance.js";
-import { runJobId } from "../../src/runtime/run-queue.js";
-import { SANDBOX_SUSPEND_JOB } from "../../src/sandbox/lifecycle.js";
-import { SANDBOX_LOCK_TTL_MS } from "../../src/sandbox/sandbox.service.js";
-import {
-  SANDBOX_RECREATED_NOTICE,
-  SANDBOX_STARTED_NOTICE,
-} from "../../src/tools/builtins/sandbox/common.js";
-import { MODEL_FAKE } from "../helpers/model-plugins.js";
-import { eventsOf, PW, waitFor, waitForTerminal } from "../helpers/runs.js";
+} from "./docker-env.js";
 
 /**
- * M5 第二段验收（双副本）：两个独立进程的内核副本（api / worker）共享 PG / Redis，加载 model-fake、
- * object-store-s3（SeaweedFS）与真实的 sandbox-docker 插件（runc，经 docker/sandbox-proxy 的 socket 代理，
- * 出站 none），全部经 HTTP 操作：
+ * The M5 segment 2 acceptance on this plugin (dual replica): two kernel processes (api / worker)
+ * share PG / Redis, with model-fake, the object store fake `fake-object-store` (SeaweedFS) and the
+ * real Docker sandbox (runc, through the socket proxy of docker/sandbox-proxy, egress none), all over
+ * HTTP. The same flow on the kernel's fake sandbox is core's `sandbox-artifacts.dual.test.ts`; here it
+ * checks the real container (same container after the takeover, the dead replica's command killed
+ * inside it, stopped on suspend and started again on resume):
  *
  * 1. 预签名直传附件（CSV）→ finalize；
  * 2. 带附件发消息，agent 用 `sandbox_bash` 处理 /workspace/attachments 里的附件（首次使用，创建沙箱）；
@@ -53,15 +58,14 @@ import { eventsOf, PW, waitFor, waitForTerminal } from "../helpers/runs.js";
  * 5. 空闲到期（把 last_used_at 拨回去）后由维护任务休眠 → 状态 suspended、容器已停止 → 下一次调用
  *    透明恢复，文件还在、没有提示，状态回到 running。
  *
- * 没有 Docker 时整组跳过。
+ * Skipped without Docker.
  */
 
-const SANDBOX_DOCKER = fileURLToPath(
-  new URL("../../../../plugins/sandbox-docker/src/index.ts", import.meta.url),
-);
-const S3_PLUGIN = fileURLToPath(
-  new URL("../../../../plugins/object-store-s3/src/index.ts", import.meta.url),
-);
+const PLUGIN_DIR = fileURLToPath(new URL("../", import.meta.url));
+const SANDBOX_DOCKER = fileURLToPath(new URL("../src/index.ts", import.meta.url));
+const OBJECT_STORE = fakeExtensionEntry("fake-object-store");
+/** The scripted model provider (a devDependency): `tool:<key>:<json>` makes it call a tool. */
+const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 
 const SANDBOX_TOOLS = ["sandbox_bash", "sandbox_read", "sandbox_deliver"];
 const CSV = "fruit,qty\napple,3\npear,5\nplum,7\n";
@@ -127,11 +131,12 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     redis = new Redis(rdc.url);
     await redis.flushdb();
     h = await createDualReplicaHarness({
-      extensions: [MODEL_FAKE, S3_PLUGIN, SANDBOX_DOCKER],
+      resolveFrom: PLUGIN_DIR,
+      extensions: [MODEL_FAKE, OBJECT_STORE, SANDBOX_DOCKER],
       pgUrl: pgc.url,
       redisUrl: rdc.url,
       extensionConfig: {
-        "object-store-s3": {
+        "fake-object-store": {
           endpoint: s3.endpoint,
           region: s3.region,
           bucket: s3.bucket,
@@ -159,7 +164,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     db = kernelDb(raw);
     maint = new Queue(MAINTENANCE_QUEUE_NAME, { connection: new Redis(rdc.url) });
 
-    await new AccountsService(db).createLocal({ login: "owner", password: PW, displayName: "O" });
+    await createLocalAccount(db, "owner", "O");
     const login = await at(0, "POST", "/api/v1/auth/login", { login: "owner", password: PW });
     expect(login.status).toBe(200);
     const org = await at(1, "POST", "/api/v1/orgs", { name: "Acme" });

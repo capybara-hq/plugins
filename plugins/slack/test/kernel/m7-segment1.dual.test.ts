@@ -1,23 +1,29 @@
 import { fileURLToPath } from "node:url";
 import {
+  createDb,
   createDualReplicaHarness,
+  createLocalAccount,
+  eventsOf,
   type FakeSlackServer,
+  gatewayReplicasKey,
   type Harness,
+  kernelDb,
+  TEST_PASSWORD as PW,
+  pidOwningLocalPort,
   signSlackWebhook,
   slackDmEvent,
   slackEventCallback,
   startFakeSlack,
+  waitFor,
 } from "@capybara-hq/testing";
 import { Redis } from "ioredis";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { gatewayReplicasKey } from "../../src/channels/supervisor.js";
-import { kernelDb } from "../../src/db/kernel-schema.js";
-import { createDb } from "../../src/db/pool.js";
-import { AccountsService } from "../../src/identity/accounts.js";
-import { MODEL_FAKE } from "../helpers/model-plugins.js";
-import { pidOwningLocalPort } from "../helpers/port-owner.js";
-import { eventsOf, PW, waitFor } from "../helpers/runs.js";
+
+/** The plugin's directory: extensions named by package resolve from here. */
+const PLUGIN_DIR = fileURLToPath(new URL("../../", import.meta.url));
+/** The scripted model provider (a devDependency) that drives the agent runs. */
+const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 
 /**
  * M7 segment 1 acceptance, end to end over HTTP with the real Slack plugin (loaded by path):
@@ -34,7 +40,7 @@ import { eventsOf, PW, waitFor } from "../helpers/runs.js";
  * Lease and scan intervals are shortened (defaults 30s / 10s) to TTL 3s and a 300ms scan.
  */
 
-const SLACK = fileURLToPath(new URL("../../../../plugins/slack/src/index.ts", import.meta.url));
+const SLACK = fileURLToPath(new URL("../../src/index.ts", import.meta.url));
 const SIGNING_SECRET = "m7-seg1-signing-secret-4c2d";
 const LEASE_TTL_MS = 3000;
 const SCAN_MS = 300;
@@ -62,6 +68,7 @@ beforeAll(async () => {
     redeliverUnacked: true,
   });
   h = await createDualReplicaHarness({
+    resolveFrom: PLUGIN_DIR,
     extensions: [MODEL_FAKE, SLACK],
     roles: [["api", "worker"], ["gateway"]],
     extensionConfig: { slack: { apiUrl: slack.apiUrl } },
@@ -125,9 +132,7 @@ describe("M7 segment 1: gateway roles, fair share, webhook mode, failover (dual 
     };
 
     // ---------- setup: owner, org, agent, the Slack user bound to the owner ----------
-    const ownerId = (
-      await new AccountsService(db).createLocal({ login: "owner", password: PW, displayName: "O" })
-    ).id;
+    const ownerId = await createLocalAccount(db, "owner", "O");
     expect(
       (await call("POST", "/api/v1/auth/login", { login: "owner", password: PW })).status,
     ).toBe(200);

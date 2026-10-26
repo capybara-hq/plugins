@@ -138,4 +138,4 @@ The second parameter of `createDockerSandbox(config, testOptions)` can be passed
 
 `test/egress-proxy.test.ts` does not need Docker; `test/sandbox-docker.test.ts` needs Docker (the whole group is skipped without it),
 builds a uniquely tagged test image, starts the socket proxy, and cleans up by label at the end; the runsc cases run only when the daemon has runsc registered.
-The kernel's smoke test is at `packages/kernel/test/tools/sandbox/sandbox-docker.smoke.test.ts`.
+Through a real kernel: `test/sandbox-tools.smoke.test.ts` (the kernel's sandbox tools in one process) and `test/sandbox-artifacts.dual.test.ts` (the M5 segment 2 flow across two replicas: attachments, delivery, takeover after a killed replica, idle suspend and resume). The socket proxy starts from `test/sandbox-proxy/haproxy.cfg`, an exact copy of `docker/sandbox-proxy/haproxy.cfg` (`pnpm check` compares them).

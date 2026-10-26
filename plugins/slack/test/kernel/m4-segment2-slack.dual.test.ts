@@ -1,28 +1,38 @@
 import { fileURLToPath } from "node:url";
 import {
+  cardRecorded,
+  createDb,
   createDualReplicaHarness,
+  createLocalAccount,
+  eventsOf,
   type FakeChannelServer,
   type FakeSlackMessage,
   type FakeSlackServer,
+  fakeExtensionEntry,
   findSlackButton,
   type Harness,
+  type KernelDb,
+  kernelDb,
+  TEST_PASSWORD as PW,
+  pidOwningLocalPort,
   replicaOf,
   slackBlockAction,
   slackDmEvent,
   slackMentionEvent,
+  sleep,
   startFakeChannelServer,
   startFakeSlack,
   startTestPostgres,
   startTestRedis,
   type TestContainer,
+  waitFor,
 } from "@capybara-hq/testing";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { type KernelDb, kernelDb } from "../../src/db/kernel-schema.js";
-import { createDb } from "../../src/db/pool.js";
-import { AccountsService } from "../../src/identity/accounts.js";
-import { MODEL_FAKE } from "../helpers/model-plugins.js";
-import { pidOwningLocalPort } from "../helpers/port-owner.js";
-import { cardRecorded, eventsOf, PW, sleep, waitFor } from "../helpers/runs.js";
+
+/** The plugin's directory: extensions named by package resolve from here. */
+const PLUGIN_DIR = fileURLToPath(new URL("../../", import.meta.url));
+/** The scripted model provider (a devDependency) that drives the agent runs. */
+const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 
 /**
  * M4 第二段验收（双副本，假 Slack）：官方 Slack 插件（`plugins/slack`，按源码路径加载）的三种能力接内核，
@@ -46,8 +56,8 @@ import { cardRecorded, eventsOf, PW, sleep, waitFor } from "../helpers/runs.js";
  * 且每个推送的信封都被确认。
  */
 
-const SLACK = fileURLToPath(new URL("../../../../plugins/slack/src/index.ts", import.meta.url));
-const FAKE_IM = fileURLToPath(new URL("../fixtures/plugins/fake-im/index.ts", import.meta.url));
+const SLACK = fileURLToPath(new URL("../../src/index.ts", import.meta.url));
+const FAKE_IM = fakeExtensionEntry("fake-im");
 const PUBLIC = "https://cap.example";
 const SOURCE = "slack:T1";
 const LEASE_TTL_MS = 3000;
@@ -103,6 +113,7 @@ const blocksText = (m: FakeSlackMessage) => JSON.stringify(slack.finalBlocks(m) 
 describe("M4 第二段验收：Slack（双副本）", () => {
   it("渠道 → 绑定 → 流式对话 → 审批卡片 → 杀副本接管 → Sign in with Slack → 通讯录加入与离职", async () => {
     h = await createDualReplicaHarness({
+      resolveFrom: PLUGIN_DIR,
       extensions: [MODEL_FAKE, FAKE_IM, SLACK],
       pgUrl: pgc.url,
       redisUrl: rdc.url,
@@ -165,7 +176,7 @@ describe("M4 第二段验收：Slack（双副本）", () => {
 
     const ownerJar: Jar = new Map();
     const aliceJar: Jar = new Map();
-    await new AccountsService(db).createLocal({ login: "owner", password: PW, displayName: "O" });
+    await createLocalAccount(db, "owner", "O");
     expect(
       (await call(ownerJar, "POST", "/api/v1/auth/login", { login: "owner", password: PW })).status,
     ).toBe(200);
@@ -199,14 +210,18 @@ describe("M4 第二段验收：Slack（双副本）", () => {
           .where("external_id", "=", externalId)
           .executeTakeFirst()
       )?.account_id;
-    const syncAudits = () =>
-      db
-        .selectFrom("audit_events")
-        .select("detail")
-        .where("org_id", "=", orgId)
-        .where("action", "=", "org.directory.synced")
-        .orderBy("id")
-        .execute();
+    // The hourly scan's first run fires when the replicas start; under load it can run after the
+    // plugin is enabled and add a `schedule` sync, so only the syncs this test triggers are counted.
+    const syncAudits = async () =>
+      (
+        await db
+          .selectFrom("audit_events")
+          .select("detail")
+          .where("org_id", "=", orgId)
+          .where("action", "=", "org.directory.synced")
+          .orderBy("id")
+          .execute()
+      ).filter((a) => (a.detail as { trigger?: string } | null)?.trigger !== "schedule");
 
     // ================= 1. 启用插件、首轮通讯录同步、建 Slack 渠道连接 =================
     slack.users.set("UBOB", { id: "UBOB", teamId: "T1", name: "bob", realName: "Bob" });

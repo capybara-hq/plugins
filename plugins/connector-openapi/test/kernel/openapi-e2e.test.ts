@@ -1,50 +1,48 @@
 import { fileURLToPath } from "node:url";
 import {
+  type ConversationEvent,
+  createConversation as createConv,
+  createDb,
+  createLocalAccount,
+  createOrg,
   defaultFakeOpenApiSpec,
+  eventsOf,
   type FakeOpenApiServer,
+  joinOrg,
+  type Kernel,
+  type KernelDb,
+  kernelDb,
+  postMessage,
+  type KernelRequest as Req,
+  login as session,
   startFakeOpenApiServer,
+  startTestKernel,
   startTestPostgres,
   startTestRedis,
   type TestContainer,
+  testKernelConfig,
+  truncateTables,
+  waitForTerminal,
 } from "@capybara-hq/testing";
 import { sql } from "kysely";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { ConversationEvent } from "../../src/conversations/events.js";
-import { type KernelDb, kernelDb } from "../../src/db/kernel-schema.js";
-import { createDb } from "../../src/db/pool.js";
-import { AccountsService } from "../../src/identity/accounts.js";
-import { createKernel, type Kernel } from "../../src/kernel.js";
-import { createLogger } from "../../src/log.js";
-import { memState } from "../fixtures/plugins/mem-connector/index.js";
-import { truncateTables } from "../helpers/db.js";
-import { testMembers } from "../helpers/members.js";
-import { MODEL_FAKE } from "../helpers/model-plugins.js";
-import {
-  createConv,
-  createOrg,
-  eventsOf,
-  PW,
-  postMessage,
-  type Req,
-  runConfig,
-  session,
-  waitForTerminal,
-} from "../helpers/runs.js";
+
+/** The plugin's directory: extensions named by package resolve from here. */
+const PLUGIN_DIR = fileURLToPath(new URL("../../", import.meta.url));
+/** The scripted model provider (a devDependency): `tool:<key>:<json>` makes it call a tool. */
+const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 
 /**
- * Task 18：连接器预览（`POST /connectors/preview`，Ruling A20）与 connector-openapi 端到端。
+ * connector-openapi through a real kernel (moved from the kernel's tests): the connector preview
+ * (`POST /connectors/preview`, Ruling A20) of an OpenAPI document and the end-to-end calls. The
+ * kernel side of the preview on a connector without `inspect` stays in core
+ * (`connector-preview.test.ts`). Task 18：连接器预览与 connector-openapi 端到端。
  * 预览不落库：只读端点描述（connector.inspect）与工具清单（能认证或无需认证时）。
  */
 
-const CONNECTOR_OPENAPI = fileURLToPath(
-  new URL("../../../../plugins/connector-openapi/src/index.ts", import.meta.url),
-);
-const MEM_CONNECTOR = fileURLToPath(
-  new URL("../fixtures/plugins/mem-connector/index.ts", import.meta.url),
-);
+const CONNECTOR_OPENAPI = fileURLToPath(new URL("../../src/index.ts", import.meta.url));
 
 const KEY = "openapi-org-key-5c1d9e7a3b";
-const MEM_TOKEN = "mem_secret_value_0123456789";
 
 let pgc: TestContainer;
 let rd: TestContainer;
@@ -54,7 +52,6 @@ let db: KernelDb;
 let api: FakeOpenApiServer;
 let req: Req;
 let orgId: string;
-let ownerId: string;
 const logLines: string[] = [];
 
 const ofType = <T extends ConversationEvent["type"]>(evs: ConversationEvent[], type: T) =>
@@ -63,11 +60,11 @@ const ofType = <T extends ConversationEvent["type"]>(evs: ConversationEvent[], t
 beforeAll(async () => {
   [pgc, rd] = await Promise.all([startTestPostgres(), startTestRedis()]);
   api = await startFakeOpenApiServer({ apiKey: KEY, echoKey: true });
-  k = await createKernel(
-    runConfig(
+  k = await startTestKernel(
+    testKernelConfig(
       { pg: pgc.url, redis: rd.url },
       {
-        extensions: [MODEL_FAKE, CONNECTOR_OPENAPI, MEM_CONNECTOR],
+        extensions: [MODEL_FAKE, CONNECTOR_OPENAPI],
         extensionPermissions: { autoApprove: true },
         // 假服务在 127.0.0.1 上跑 http：测试打开本机 http（默认关闭）
         extensionConfig: { "connector-openapi": { allowInsecureLoopback: true } },
@@ -75,9 +72,8 @@ beforeAll(async () => {
         tools: { timeoutMs: 5_000 },
       },
     ),
-    { env: {}, logger: createLogger("info", { write: (l) => logLines.push(l) }) },
+    { resolveFrom: PLUGIN_DIR, log: { level: "info", write: (l) => logLines.push(l) } },
   );
-  await k.start();
   raw = createDb(pgc.url, 5);
   db = kernelDb(raw);
 }, 120_000);
@@ -91,29 +87,9 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await truncateTables(raw, "capybara.accounts, capybara.orgs, capybara.audit_events");
-  ownerId = (
-    await new AccountsService(db).createLocal({ login: "owner", password: PW, displayName: "O" })
-  ).id;
+  await createLocalAccount(db, "owner", "O");
   req = await session(k, "owner");
   orgId = await createOrg(req);
-  const st = memState();
-  st.servers = {
-    docs: {
-      tools: [
-        {
-          name: "search",
-          description: "Search documents.",
-          inputSchema: { type: "object" },
-          annotations: { readOnlyHint: true },
-        },
-        { name: "bad name!", description: "Bad.", inputSchema: { type: "object" } },
-      ],
-      requireAuth: `Bearer ${MEM_TOKEN}`,
-    },
-  };
-  st.opened = 0;
-  st.closed = 0;
-  st.auths = [];
 });
 
 const countRows = async (table: "connectors" | "connector_tools" | "secrets" | "audit_events") =>
@@ -267,60 +243,7 @@ describe("连接器预览", () => {
     expect(errOf(res).message).toContain("Swagger 2.0");
   });
 
-  it("凭据错误的列工具失败 → 502，凭据不出现在响应里", async () => {
-    const res = await preview({
-      connector: "mem",
-      endpoint: { server: "docs" },
-      auth: { type: "bearer", ownership: "org" },
-      credential: { token: `wrong-${MEM_TOKEN}` },
-    });
-    expect(res.statusCode).toBe(502);
-    expect(errOf(res).code).toBe("connector.connect_failed");
-    expect(res.body).not.toContain(MEM_TOKEN);
-  });
-
-  it("没有 inspect 的连接器：authHints 为空、没有 operations；有凭据时列工具并关闭会话", async () => {
-    const res = await preview({
-      connector: "mem",
-      endpoint: { server: "docs" },
-      auth: { type: "bearer", ownership: "org" },
-      credential: { token: MEM_TOKEN },
-    });
-    expect(res.statusCode, res.body).toBe(200);
-    const body = res.json() as PreviewJson;
-    expect(body.authHints).toEqual([]);
-    expect(body.operations).toBeUndefined();
-    // 没给 slug / name：key 用占位 slug `app`
-    expect(body.tools?.map((t) => [t.key, t.issue === null])).toEqual([
-      ["app__search", true],
-      ["app__bad name!", false],
-    ]);
-    expect(memState().opened).toBe(1);
-    expect(memState().closed).toBe(1);
-  });
-
-  it("需要凭据但没给 / OAuth 授权码 → 不列工具", async () => {
-    for (const auth of [
-      { type: "bearer", ownership: "org" },
-      {
-        type: "oauth_code",
-        ownership: "personal",
-        discovery: "manual",
-        authorizationUrl: "https://auth.example.com/a",
-        tokenUrl: "https://auth.example.com/t",
-        client: "manual",
-      },
-    ]) {
-      const res = await preview({ connector: "mem", endpoint: { server: "docs" }, auth });
-      expect(res.statusCode, res.body).toBe(200);
-      expect((res.json() as PreviewJson).tools).toBeNull();
-    }
-    expect(memState().opened).toBe(0);
-  });
-
-  it("校验：未知连接器 / 端点里的凭据 / 凭据形状 → 400", async () => {
-    const unknown = await preview({ connector: "nope", endpoint: {} });
-    expect(unknown.statusCode).toBe(400);
+  it("validation: a credential in specUrl or baseUrl -> 400", async () => {
     const leak = await preview({
       connector: "openapi",
       endpoint: { specUrl: `${api.specUrl}?api_key=${KEY}` },
@@ -332,25 +255,6 @@ describe("连接器预览", () => {
       endpoint: { specUrl: api.specUrl, baseUrl: "https://u:p@api.example.com" },
     });
     expect(leakBase.statusCode).toBe(400);
-    const shape = await preview({
-      connector: "mem",
-      endpoint: { server: "docs" },
-      auth: { type: "basic", ownership: "org" },
-      credential: { token: "x" },
-    });
-    expect(shape.statusCode).toBe(400);
-  });
-
-  it("权限：member → 403", async () => {
-    const acc = await new AccountsService(db).createLocal({
-      login: "mem",
-      password: PW,
-      displayName: "m",
-    });
-    await testMembers(db).add(orgId, acc.id, "member", ownerId);
-    const memberReq = await session(k, "mem");
-    const res = await preview({ connector: "mem", endpoint: { server: "docs" } }, memberReq);
-    expect(res.statusCode).toBe(403);
   });
 
   it("大文档（> 1 MB 的 specText）可以预览与安装", async () => {
@@ -483,13 +387,8 @@ describe("connector-openapi 端到端", () => {
       const viewed = (r.connector.tools as unknown as ToolJson[]).find((t) => t.name === "getPet");
       expect(viewed?.connectorData?.path).toBe("/pets/{petId}");
       expect(viewed?.pending?.connectorData?.path).toBe("/animals/{petId}");
-      const acc = await new AccountsService(db).createLocal({
-        login: "viewer",
-        password: PW,
-        displayName: "v",
-      });
-      await testMembers(db).add(orgId, acc.id, "member", ownerId);
-      const asMember = await (await session(k, "viewer"))({
+      const viewer = (await joinOrg(k, req, orgId, "viewer")).req;
+      const asMember = await viewer({
         method: "GET",
         url: `/api/v1/orgs/${orgId}/connectors/${connectorId}`,
       });
