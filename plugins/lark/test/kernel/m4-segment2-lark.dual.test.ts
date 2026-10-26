@@ -204,14 +204,18 @@ describe("M4 第二段验收：Lark（双副本）", () => {
           .where("external_id", "=", externalId)
           .executeTakeFirst()
       )?.account_id;
-    const syncAudits = () =>
-      db
-        .selectFrom("audit_events")
-        .select("detail")
-        .where("org_id", "=", orgId)
-        .where("action", "=", "org.directory.synced")
-        .orderBy("id")
-        .execute();
+    // The hourly scan's first run fires when the replicas start; under load it can run after the
+    // plugin is enabled and add a `schedule` sync, so only the syncs this test triggers are counted.
+    const syncAudits = async () =>
+      (
+        await db
+          .selectFrom("audit_events")
+          .select("detail")
+          .where("org_id", "=", orgId)
+          .where("action", "=", "org.directory.synced")
+          .orderBy("id")
+          .execute()
+      ).filter((a) => (a.detail as { trigger?: string } | null)?.trigger !== "schedule");
 
     // ================= 1. 启用插件、首轮通讯录同步、建 Lark 渠道连接 =================
     // bob 在根部门（通讯录里）；alice 在 Lark 上有资料、能登录，但不在应用的通讯录范围里
