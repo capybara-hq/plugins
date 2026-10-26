@@ -1,35 +1,38 @@
 import { fileURLToPath } from "node:url";
-import { startTestPostgres, startTestRedis, type TestContainer } from "@capybara-hq/testing";
-import { Redis } from "ioredis";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { type KernelDb, kernelDb } from "../../src/db/kernel-schema.js";
-import { createDb } from "../../src/db/pool.js";
-import { AccountsService } from "../../src/identity/accounts.js";
-import { createKernel, type Kernel } from "../../src/kernel.js";
-import { createLogger } from "../../src/log.js";
-import { truncateTables } from "../helpers/db.js";
-import { testMembers } from "../helpers/members.js";
 import {
   createAgent,
-  createConv,
+  createConversation,
+  createDb,
+  createLocalAccount,
   createOrg,
-  PW,
-  type Req,
-  runConfig,
-  session,
-} from "../helpers/runs.js";
+  joinOrg,
+  type Kernel,
+  type KernelDb,
+  type KernelRequest,
+  kernelDb,
+  login,
+  startTestKernel,
+  startTestPostgres,
+  startTestRedis,
+  type TestContainer,
+  testKernelConfig,
+  truncateTables,
+} from "@capybara-hq/testing";
+import { Redis } from "ioredis";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 /**
- * example-board's own behaviour behind embed tokens (single replica, official plugin example-board):
- * card CRUD with a page token, isolation between orgs, and the split between conversation cards and
- * org-wide cards. The kernel side of embeds (token issue and verification) is in
- * `embed.http.test.ts` on the fake `fake-embed`. This file moves into the plugin with Task 3 of
- * phase A3a.
+ * example-board's own behaviour behind embed tokens (one in-process kernel): card CRUD with a page
+ * token, isolation between orgs, and the split between conversation cards and org-wide cards. The
+ * kernel side of embeds (token issue and verification) is tested in core on the fake `fake-embed`.
  */
 
-const BOARD = fileURLToPath(
-  new URL("../../../../plugins/example-board/src/index.ts", import.meta.url),
-);
+const PLUGIN_DIR = fileURLToPath(new URL("../", import.meta.url));
+const BOARD = fileURLToPath(new URL("../src/index.ts", import.meta.url));
+/** The scripted model provider (a devDependency): the conversations need an agent. */
+const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
+
+type Req = KernelRequest;
 
 let pgc: TestContainer;
 let rd: TestContainer;
@@ -43,12 +46,13 @@ beforeAll(async () => {
   raw = createDb(pgc.url, 5);
   db = kernelDb(raw);
   redis = new Redis(rd.url);
-  const base = runConfig({ pg: pgc.url, redis: rd.url }, { roles: ["api", "worker"] });
-  k = await createKernel(
-    { ...base, extensions: [...base.extensions, BOARD] },
-    { env: {}, logger: createLogger("error", { write: () => {} }) },
+  k = await startTestKernel(
+    testKernelConfig(
+      { pg: pgc.url, redis: rd.url },
+      { extensions: [MODEL_FAKE, BOARD], roles: ["api", "worker"] },
+    ),
+    { resolveFrom: PLUGIN_DIR },
   );
-  await k.start();
 }, 120_000);
 afterAll(async () => {
   await k?.stop();
@@ -56,12 +60,6 @@ afterAll(async () => {
   await raw?.destroy();
   await Promise.all([pgc?.stop(), rd?.stop()]);
 });
-
-async function account(name: string): Promise<string> {
-  return (
-    await new AccountsService(db).createLocal({ login: name, password: PW, displayName: name })
-  ).id;
-}
 
 const enable = async (req: Req, orgId: string, plugin: string) => {
   const r = await req({
@@ -77,7 +75,6 @@ type Issued = { token: string; src: string; expiresAt: string; expiresIn: number
 describe("example-board behind embed tokens", () => {
   let owner: Req;
   let other: Req;
-  let ownerId: string;
   let orgId: string;
   let convId: string;
   let ui: string;
@@ -107,15 +104,13 @@ describe("example-board behind embed tokens", () => {
       "capybara.accounts, capybara.orgs, capybara.audit_events, capybara.deployment_settings, plugin_example_board.cards",
     );
     await redis.flushdb();
-    ownerId = await account("owner");
-    const otherId = await account("other");
-    owner = await session(k, "owner");
-    other = await session(k, "other");
+    await createLocalAccount(db, "owner");
+    owner = await login(k, "owner");
     orgId = await createOrg(owner);
-    await testMembers(db).add(orgId, otherId, "member", ownerId);
+    other = (await joinOrg(k, owner, orgId, "other")).req;
     const agentId = await createAgent(owner, orgId);
-    convId = await createConv(owner, orgId, agentId);
-    await createConv(other, orgId, agentId);
+    convId = await createConversation(owner, orgId, agentId);
+    await createConversation(other, orgId, agentId);
     ui = `/api/v1/orgs/${orgId}/ui`;
   });
 
@@ -137,7 +132,7 @@ describe("example-board behind embed tokens", () => {
       (await asPlugin("POST", `/ui/cards/${card.id}`, token, { status: "bad" })).statusCode,
     ).toBe(400);
 
-    // 另一个组织的令牌看不到也改不了这张卡
+    // Another org's token neither sees nor changes this card
     const org2 = await createOrg(owner, "Other");
     await enable(owner, org2, "example-board");
     const { token: t2 } = (
@@ -155,7 +150,7 @@ describe("example-board behind embed tokens", () => {
     ).toBe(404);
   });
 
-  it("对话嵌入的令牌只看得到、只改得了这个对话的卡片；组织页面看不到、改不了对话里的卡片", async () => {
+  it("a conversation token sees and changes only that conversation's cards; the org page sees none of them", async () => {
     await enable(owner, orgId, "example-board");
     const { token: orgToken } = (await issue(owner, "example-board", "board")).json() as Issued;
     const { token: convToken } = (

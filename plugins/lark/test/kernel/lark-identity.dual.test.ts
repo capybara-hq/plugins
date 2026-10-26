@@ -1,20 +1,26 @@
 import { fileURLToPath } from "node:url";
 import {
+  createDb,
   createDualReplicaHarness,
+  createLocalAccount,
   type FakeLarkServer,
   type Harness,
+  type KernelDb,
+  kernelDb,
   larkMessageEvent,
+  TEST_PASSWORD as PW,
   startFakeLark,
   startTestPostgres,
   startTestRedis,
   type TestContainer,
+  waitFor,
 } from "@capybara-hq/testing";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { type KernelDb, kernelDb } from "../../src/db/kernel-schema.js";
-import { createDb } from "../../src/db/pool.js";
-import { AccountsService } from "../../src/identity/accounts.js";
-import { MODEL_FAKE } from "../helpers/model-plugins.js";
-import { PW, waitFor } from "../helpers/runs.js";
+
+/** The plugin's directory: extensions named by package resolve from here. */
+const PLUGIN_DIR = fileURLToPath(new URL("../../", import.meta.url));
+/** The scripted model provider (a devDependency) that drives the agent runs. */
+const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 
 /**
  * 官方 Lark 插件的网页登录（`identity-source@1`）与通讯录（`directory@1`）接内核的双副本验收（插件按路径加载，
@@ -25,7 +31,7 @@ import { PW, waitFor } from "../helpers/runs.js";
  *  3. 同一个 Lark 用户私聊机器人：被识别为该账号（不发绑定卡片）——登录、通讯录、渠道三处落到同一行身份。
  */
 
-const LARK = fileURLToPath(new URL("../../../../plugins/lark/src/index.ts", import.meta.url));
+const LARK = fileURLToPath(new URL("../../src/index.ts", import.meta.url));
 const PUBLIC = "https://cap.example";
 const SECRET = "lark-app-secret-1f2e3d";
 
@@ -69,6 +75,7 @@ const cookieHeader = (jar: Jar) => [...jar].map(([k, v]) => `${k}=${v}`).join(";
 describe("Lark 登录与通讯录接内核（双副本）", () => {
   it("Lark 登录 → 通讯录同步加入同一账号 → 私聊机器人被识别为该账号", async () => {
     h = await createDualReplicaHarness({
+      resolveFrom: PLUGIN_DIR,
       extensions: [MODEL_FAKE, LARK],
       pgUrl: pgc.url,
       redisUrl: rdc.url,
@@ -130,7 +137,7 @@ describe("Lark 登录与通讯录接内核（双副本）", () => {
     });
 
     const ownerJar: Jar = new Map();
-    await new AccountsService(db).createLocal({ login: "owner", password: PW, displayName: "O" });
+    await createLocalAccount(db, "owner", "O");
     expect(
       (await call(ownerJar, "POST", "/api/v1/auth/login", { login: "owner", password: PW })).status,
     ).toBe(200);

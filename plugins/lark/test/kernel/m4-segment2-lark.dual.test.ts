@@ -1,27 +1,37 @@
 import { fileURLToPath } from "node:url";
 import {
+  cardRecorded,
+  createDb,
   createDualReplicaHarness,
+  createLocalAccount,
+  eventsOf,
   type FakeChannelServer,
   type FakeLarkMessage,
   type FakeLarkServer,
+  fakeExtensionEntry,
   findLarkButton,
   type Harness,
+  type KernelDb,
+  kernelDb,
   larkCardAction,
   larkMessageEvent,
+  TEST_PASSWORD as PW,
+  pidOwningLocalPort,
   replicaOf,
+  sleep,
   startFakeChannelServer,
   startFakeLark,
   startTestPostgres,
   startTestRedis,
   type TestContainer,
+  waitFor,
 } from "@capybara-hq/testing";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { type KernelDb, kernelDb } from "../../src/db/kernel-schema.js";
-import { createDb } from "../../src/db/pool.js";
-import { AccountsService } from "../../src/identity/accounts.js";
-import { MODEL_FAKE } from "../helpers/model-plugins.js";
-import { pidOwningLocalPort } from "../helpers/port-owner.js";
-import { cardRecorded, eventsOf, PW, sleep, waitFor } from "../helpers/runs.js";
+
+/** The plugin's directory: extensions named by package resolve from here. */
+const PLUGIN_DIR = fileURLToPath(new URL("../../", import.meta.url));
+/** The scripted model provider (a devDependency) that drives the agent runs. */
+const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 
 /**
  * M4 第二段验收（双副本，假 Lark）：官方 Lark 插件（`plugins/lark`，按源码路径加载；长连接跑真实 SDK `WSClient`，
@@ -44,8 +54,8 @@ import { cardRecorded, eventsOf, PW, sleep, waitFor } from "../helpers/runs.js";
  * （没有发送需要靠平台去重，内核自己就没有重发），且每个推送的事件都以 code 200 确认。
  */
 
-const LARK = fileURLToPath(new URL("../../../../plugins/lark/src/index.ts", import.meta.url));
-const FAKE_IM = fileURLToPath(new URL("../fixtures/plugins/fake-im/index.ts", import.meta.url));
+const LARK = fileURLToPath(new URL("../../src/index.ts", import.meta.url));
+const FAKE_IM = fakeExtensionEntry("fake-im");
 const PUBLIC = "https://cap.example";
 const SOURCE = "lark:t1";
 const LEASE_TTL_MS = 3000;
@@ -102,6 +112,7 @@ const finalText = (m: FakeLarkMessage) => lark.cardText(lark.finalCard(m));
 describe("M4 第二段验收：Lark（双副本）", () => {
   it("渠道 → 绑定 → 流式对话 → 审批卡片 → 杀副本接管 → Lark 登录 → 通讯录加入与离职", async () => {
     h = await createDualReplicaHarness({
+      resolveFrom: PLUGIN_DIR,
       extensions: [MODEL_FAKE, FAKE_IM, LARK],
       pgUrl: pgc.url,
       redisUrl: rdc.url,
@@ -159,7 +170,7 @@ describe("M4 第二段验收：Lark（双副本）", () => {
 
     const ownerJar: Jar = new Map();
     const aliceJar: Jar = new Map();
-    await new AccountsService(db).createLocal({ login: "owner", password: PW, displayName: "O" });
+    await createLocalAccount(db, "owner", "O");
     expect(
       (await call(ownerJar, "POST", "/api/v1/auth/login", { login: "owner", password: PW })).status,
     ).toBe(200);

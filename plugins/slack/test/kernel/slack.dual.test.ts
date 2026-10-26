@@ -1,26 +1,35 @@
 import { fileURLToPath } from "node:url";
 import {
+  cardRecorded,
+  createDb,
   createDualReplicaHarness,
+  createLocalAccount,
   type FakeChannelServer,
   type FakeSlackMessage,
   type FakeSlackServer,
+  fakeExtensionEntry,
   findSlackButton,
   type Harness,
+  type KernelDb,
+  kernelDb,
+  TEST_PASSWORD as PW,
   slackBlockAction,
   slackDmEvent,
   slackMentionEvent,
+  sleep,
   startFakeChannelServer,
   startFakeSlack,
   startTestPostgres,
   startTestRedis,
   type TestContainer,
+  waitFor,
 } from "@capybara-hq/testing";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { type KernelDb, kernelDb } from "../../src/db/kernel-schema.js";
-import { createDb } from "../../src/db/pool.js";
-import { AccountsService } from "../../src/identity/accounts.js";
-import { MODEL_FAKE } from "../helpers/model-plugins.js";
-import { cardRecorded, PW, sleep, waitFor } from "../helpers/runs.js";
+
+/** The plugin's directory: extensions named by package resolve from here. */
+const PLUGIN_DIR = fileURLToPath(new URL("../../", import.meta.url));
+/** The scripted model provider (a devDependency) that drives the agent runs. */
+const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 
 /**
  * 官方 Slack 插件（`plugins/slack`，按路径加载，内核不依赖插件包）接内核的双副本验收：插件连假 Slack
@@ -34,8 +43,8 @@ import { cardRecorded, PW, sleep, waitFor } from "../helpers/runs.js";
  * 写工具来自 fake-im 测试插件（默认策略 ask）。
  */
 
-const SLACK = fileURLToPath(new URL("../../../../plugins/slack/src/index.ts", import.meta.url));
-const FAKE_IM = fileURLToPath(new URL("../fixtures/plugins/fake-im/index.ts", import.meta.url));
+const SLACK = fileURLToPath(new URL("../../src/index.ts", import.meta.url));
+const FAKE_IM = fakeExtensionEntry("fake-im");
 const PUBLIC = "https://cap.example";
 const LONG =
   "Streaming replies reach Slack as a draft that keeps growing until it is final. ".repeat(2);
@@ -83,6 +92,7 @@ const blocksText = (m: FakeSlackMessage) => JSON.stringify(slack.finalBlocks(m) 
 describe("Slack 插件接内核（双副本）", () => {
   it("建连接 → 绑定卡片 → 流式回复 → 话题里的审批卡片 → 点击批准 → 卡片更新与最终回复", async () => {
     h = await createDualReplicaHarness({
+      resolveFrom: PLUGIN_DIR,
       extensions: [MODEL_FAKE, FAKE_IM, SLACK],
       pgUrl: pgc.url,
       redisUrl: rdc.url,
@@ -126,7 +136,7 @@ describe("Slack 插件接内核（双副本）", () => {
 
     const ownerJar: Jar = new Map();
     const aliceJar: Jar = new Map();
-    await new AccountsService(db).createLocal({ login: "owner", password: PW, displayName: "O" });
+    await createLocalAccount(db, "owner", "O");
     expect(
       (await call(ownerJar, "POST", "/api/v1/auth/login", { login: "owner", password: PW })).status,
     ).toBe(200);

@@ -1,20 +1,26 @@
 import { fileURLToPath } from "node:url";
 import {
+  createDb,
   createDualReplicaHarness,
+  createLocalAccount,
   type FakeSlackServer,
   type Harness,
+  kernelDb,
+  TEST_PASSWORD as PW,
   signSlackWebhook,
   slackDmEvent,
   slackEventCallback,
+  sleep,
   startFakeSlack,
+  waitFor,
 } from "@capybara-hq/testing";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { kernelDb } from "../../src/db/kernel-schema.js";
-import { createDb } from "../../src/db/pool.js";
-import { AccountsService } from "../../src/identity/accounts.js";
-import { MODEL_FAKE } from "../helpers/model-plugins.js";
-import { PW, sleep, waitFor } from "../helpers/runs.js";
+
+/** The plugin's directory: extensions named by package resolve from here. */
+const PLUGIN_DIR = fileURLToPath(new URL("../../", import.meta.url));
+/** The scripted model provider (a devDependency) that drives the agent runs. */
+const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 
 /**
  * The real Slack plugin (`plugins/slack`, loaded by path) in webhook inbound mode, end to end:
@@ -23,7 +29,7 @@ import { PW, sleep, waitFor } from "../helpers/runs.js";
  * (`x-slack-retry-num: 1`) of the same event starts no second run.
  */
 
-const SLACK = fileURLToPath(new URL("../../../../plugins/slack/src/index.ts", import.meta.url));
+const SLACK = fileURLToPath(new URL("../../src/index.ts", import.meta.url));
 const SIGNING_SECRET = "dual-slack-signing-secret-9a1b";
 
 let slack: FakeSlackServer;
@@ -33,6 +39,7 @@ let raw: ReturnType<typeof createDb>;
 beforeAll(async () => {
   slack = await startFakeSlack({ teamId: "T1", botUserId: "UBOT" });
   h = await createDualReplicaHarness({
+    resolveFrom: PLUGIN_DIR,
     extensions: [MODEL_FAKE, SLACK],
     roles: [["api", "worker"], ["gateway"]],
     extensionConfig: { slack: { apiUrl: slack.apiUrl } },
@@ -80,13 +87,7 @@ describe("Slack webhook inbound (dual replica, real plugin)", () => {
       return { status: res.status, json: (text === "" ? {} : JSON.parse(text)) as Json };
     };
 
-    const ownerId = (
-      await new AccountsService(kernelDb(raw)).createLocal({
-        login: "owner",
-        password: PW,
-        displayName: "O",
-      })
-    ).id;
+    const ownerId = await createLocalAccount(kernelDb(raw), "owner", "O");
     expect(
       (await call("POST", "/api/v1/auth/login", { login: "owner", password: PW })).status,
     ).toBe(200);

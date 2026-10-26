@@ -25,5 +25,10 @@
   "dependencies": {
     "@capybara-hq/plugin-sdk": "workspace:*",
     "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@capybara-hq/plugin-model-fake": "workspace:*",
+    "@capybara-hq/testing": "workspace:*",
+    "ioredis": "^6.0.0"
   }
 }

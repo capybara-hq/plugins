@@ -1,44 +1,42 @@
 import { fileURLToPath } from "node:url";
-import { startTestPostgres, startTestRedis, type TestContainer } from "@capybara-hq/testing";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { ConversationEvent } from "../../src/conversations/events.js";
-import { type KernelDb, kernelDb } from "../../src/db/kernel-schema.js";
-import { createDb } from "../../src/db/pool.js";
-import { AccountsService } from "../../src/identity/accounts.js";
-import { createKernel, type Kernel } from "../../src/kernel.js";
-import { createLogger } from "../../src/log.js";
-import { MODEL_FAKE } from "../helpers/model-plugins.js";
 import {
-  createConv,
+  type ConversationEvent,
+  createConversation as createConv,
+  createDb,
+  createLocalAccount,
   createOrg,
   eventsOf,
-  PW,
+  type Kernel,
+  type KernelDb,
+  kernelDb,
   postMessage,
-  type Req,
-  runConfig,
-  session,
+  type KernelRequest as Req,
+  login as session,
+  startTestKernel,
+  startTestPostgres,
+  startTestRedis,
+  type TestContainer,
+  testKernelConfig,
   waitFor,
-} from "../helpers/runs.js";
+} from "@capybara-hq/testing";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
- * M3 真实服务验收（`CAPYBARA_TEST_LIVE_TOOLS=1 pnpm vitest run packages/kernel/test/tools/m3-live.test.ts -t live`）。
- * 单副本内核加载 model-fake（`tool:` 指令脚本化工具调用）、connector-mcp 与 connector-openapi，全部经 HTTP
- * 安装连接器、跑会话。
+ * M3 真实服务验收（`CAPYBARA_TEST_LIVE_TOOLS=1 pnpm exec vitest run plugins/connector-mcp/test/live/m3.live.test.ts -t live`）。
+ * 单副本内核加载 model-fake（`tool:` 指令脚本化工具调用）与 connector-mcp，全部经 HTTP 安装连接器、跑会话。
+ * (Moved from the kernel's tests: DeepWiki and GitHub.)
  *
- * - 开关：只在显式设置 `CAPYBARA_TEST_LIVE_TOOLS=1` 时运行 DeepWiki 与 Petstore（公开服务，无需密钥）；
+ * - 开关：只在显式设置 `CAPYBARA_TEST_LIVE_TOOLS=1` 时运行 DeepWiki（公开服务，无需密钥）；
  *   普通 `pnpm test` 不访问外网。
  * - GitHub：另需 `CAPYBARA_TEST_GITHUB_MCP_TOKEN`（PAT）与 `CAPYBARA_TEST_GITHUB_REPO`（owner/name），值以
  *   「替换为」开头视为未填。会在该仓库开一个 issue，用例结束时（无论成败）在 finally 里经 GitHub REST 关闭。
  *   令牌不打印。
- * - Petstore 是公共演示服务，偶有 5xx：每次调用遇 5xx 重试一次。
  */
 
-const CONNECTOR_MCP = fileURLToPath(
-  new URL("../../../../plugins/connector-mcp/src/index.ts", import.meta.url),
-);
-const CONNECTOR_OPENAPI = fileURLToPath(
-  new URL("../../../../plugins/connector-openapi/src/index.ts", import.meta.url),
-);
+const PLUGIN_DIR = fileURLToPath(new URL("../../", import.meta.url));
+const CONNECTOR = fileURLToPath(new URL("../../src/index.ts", import.meta.url));
+/** The scripted model provider (a devDependency): `tool:<key>:<json>` makes it call a tool. */
+const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 
 const filled = (v: string | undefined): v is string =>
   v !== undefined && v.trim() !== "" && !v.startsWith("替换为");
@@ -83,22 +81,21 @@ const logLines: string[] = [];
 beforeAll(async () => {
   if (!LIVE) return;
   [pgc, rd] = await Promise.all([startTestPostgres(), startTestRedis()]);
-  k = await createKernel(
-    runConfig(
+  k = await startTestKernel(
+    testKernelConfig(
       { pg: pgc.url, redis: rd.url },
       {
-        plugins: [MODEL_FAKE, CONNECTOR_MCP, CONNECTOR_OPENAPI],
+        extensions: [MODEL_FAKE, CONNECTOR],
         extensionPermissions: { autoApprove: true },
         roles: ["api", "worker"],
         tools: { timeoutMs: 90_000 },
       },
     ),
-    { env: {}, logger: createLogger("info", { write: (l) => logLines.push(l) }) },
+    { resolveFrom: PLUGIN_DIR, log: { level: "info", write: (l) => logLines.push(l) } },
   );
-  await k.start();
   raw = createDb(pgc.url, 3);
   db = kernelDb(raw);
-  await new AccountsService(db).createLocal({ login: "owner", password: PW, displayName: "O" });
+  await createLocalAccount(db, "owner", "O");
   req = await session(k, "owner");
   orgId = await createOrg(req);
 }, 180_000);
@@ -176,23 +173,6 @@ async function runTool(
   const result = ofType(done, "tool_result").at(-1)?.payload;
   expect(result?.toolKey).toBe(key);
   return { result: result as ToolResult, approved, evs: done };
-}
-
-/** 公共演示服务：结果是 HTTP 5xx（或连接失败）时重试一次，并记下重试。 */
-const flaky: string[] = [];
-async function runToolRetry5xx(
-  convId: string,
-  key: string,
-  input: unknown,
-  opts: { approve?: boolean } = {},
-) {
-  const first = await runTool(convId, key, input, opts);
-  const transient =
-    first.result.isError && /HTTP 5\d\d|timed out|ECONN|fetch failed/i.test(first.result.content);
-  if (!transient) return first;
-  flaky.push(`${key}: ${first.result.content.slice(0, 200)}`);
-  console.warn(`[m3-live] ${key} transient failure, retrying once`);
-  return runTool(convId, key, input, opts);
 }
 
 /**
@@ -296,54 +276,6 @@ describe.skipIf(!LIVE)("live", { timeout: 300_000 }, () => {
     );
     expect(r.result.isError, r.result.content.slice(0, 500)).toBe(false);
     expect(r.result.content.length).toBeGreaterThan(0);
-  });
-
-  it("live Petstore OpenAPI（specUrl）：GET findByStatus 直接执行；POST addPet 审批后执行", async () => {
-    const app = await install({
-      name: "Petstore",
-      slug: "petstore",
-      connector: "openapi",
-      endpoint: {
-        specUrl: "https://petstore3.swagger.io/api/v3/openapi.json",
-        // 文档里的 servers 是相对路径 `/api/v3`
-        baseUrl: "https://petstore3.swagger.io/api/v3",
-        operations: ["findPetsByStatus", "addPet", "getPetById"],
-      },
-      auth: { type: "api_key", ownership: "org", in: "header", name: "api_key" },
-      credential: { token: "special-key" },
-    });
-    const policies = Object.fromEntries(app.tools.map((t) => [t.name, t.defaultPolicy]));
-    expect(policies).toEqual({ findPetsByStatus: "allow", addPet: "ask", getPetById: "allow" });
-    const agentId = await agentFor(app.id, "all");
-    const convId = await createConv(req, orgId, agentId);
-
-    const list = await runToolRetry5xx(convId, "petstore__findPetsByStatus", {
-      query: { status: "available" },
-    });
-    console.info(
-      `[m3-live] petstore findPetsByStatus isError=${list.result.isError} approval=${list.approved} head=${JSON.stringify(list.result.content.slice(0, 120))}`,
-    );
-    expect(list.approved).toBe(false);
-    expect(list.result.isError, list.result.content.slice(0, 500)).toBe(false);
-    expect(list.result.content).toContain("HTTP 200");
-
-    const id = 9_000_000 + Math.floor(Math.random() * 999_999);
-    const add = await runToolRetry5xx(
-      convId,
-      "petstore__addPet",
-      { body: { id, name: "capybara-live", photoUrls: [], status: "available" } },
-      { approve: true },
-    );
-    console.info(
-      `[m3-live] petstore addPet isError=${add.result.isError} approval=${add.approved} head=${JSON.stringify(add.result.content.slice(0, 160))}`,
-    );
-    expect(add.approved).toBe(true);
-    expect(ofType(add.evs, "approval_decided").map((e) => e.payload.decision)).toContain(
-      "approved",
-    );
-    expect(add.result.isError, add.result.content.slice(0, 500)).toBe(false);
-    expect(add.result.content).toContain("capybara-live");
-    if (flaky.length > 0) console.warn(`[m3-live] petstore retries: ${flaky.join(" | ")}`);
   });
 
   describe.skipIf(!GITHUB)("GitHub", () => {
