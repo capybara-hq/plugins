@@ -210,9 +210,8 @@ describe("M4 第二段验收：Slack（双副本）", () => {
           .where("external_id", "=", externalId)
           .executeTakeFirst()
       )?.account_id;
-    // The hourly scan's first run fires when the replicas start; under load it can run after the
-    // plugin is enabled and add a `schedule` sync, so only the syncs this test triggers are counted.
-    const syncAudits = async () =>
+    type SyncDetail = { trigger?: string; added?: number; removed?: number };
+    const allSyncAudits = async () =>
       (
         await db
           .selectFrom("audit_events")
@@ -221,7 +220,35 @@ describe("M4 第二段验收：Slack（双副本）", () => {
           .where("action", "=", "org.directory.synced")
           .orderBy("id")
           .execute()
-      ).filter((a) => (a.detail as { trigger?: string } | null)?.trigger !== "schedule");
+      ).map((a) => a.detail as SyncDetail);
+    // The hourly scan's first run fires when a replica starts (here also the one that takes over);
+    // under load its `schedule` sync can run at any step after the plugin is enabled and do part of
+    // the work, so the syncs this test triggers are found without it, and what was added and removed
+    // is checked over every sync, the scan's included.
+    const syncAudits = async () => (await allSyncAudits()).filter((d) => d.trigger !== "schedule");
+    const syncTotals = async () =>
+      (await allSyncAudits()).reduce<{ added: number; removed: number }>(
+        (t, d) => ({ added: t.added + (d.added ?? 0), removed: t.removed + (d.removed ?? 0) }),
+        { added: 0, removed: 0 },
+      );
+    /**
+     * Waits until a sync this test triggered has run after the first `after` ones and all syncs
+     * together have added and removed `totals`. The totals are the convergence condition, not one
+     * sync's counts: a scan sync can do the work first, and a sync that overlaps another leaves its
+     * removals to the follow-up `changed` sync (the dirty flag).
+     */
+    const syncsReach = (after: number, totals: { added: number; removed: number }, what: string) =>
+      waitFor(
+        async () => {
+          if ((await syncAudits()).length <= after) return false;
+          const t = await syncTotals();
+          return t.added === totals.added && t.removed === totals.removed;
+        },
+        20_000,
+        what,
+      ).catch(async (err: Error) => {
+        throw new Error(`${err.message}; the syncs: ${JSON.stringify(await allSyncAudits())}`);
+      });
 
     // ================= 1. 启用插件、首轮通讯录同步、建 Slack 渠道连接 =================
     slack.users.set("UBOB", { id: "UBOB", teamId: "T1", name: "bob", realName: "Bob" });
@@ -235,8 +262,7 @@ describe("M4 第二段验收：Slack（双副本）", () => {
     }
     const sync1 = await call(ownerJar, "POST", `${base}/extensions/slack/directory/sync`);
     expect(sync1.status).toBe(202);
-    await waitFor(async () => (await syncAudits()).length === 1, 20_000, "first directory sync");
-    expect((await syncAudits())[0]?.detail).toMatchObject({ added: 1, partial: false });
+    await syncsReach(0, { added: 1, removed: 0 }, "first directory sync");
     const bobId = await waitFor(async () => identityOwner("UBOB"), 15_000, "bob's account");
     expect(await membership(bobId)).toEqual({ role: "member", source: "directory:slack" });
     // alice 在 Slack 上（资料可查、可登录），首轮同步之后才出现在工作区里
@@ -547,16 +573,12 @@ describe("M4 第二段验收：Slack（双副本）", () => {
     expect(await membership(carol.accountId)).toBeUndefined();
 
     // ================= 10. team_join → 同步加入；Slack 停用 carol → 离职处理 =================
+    const before2 = (await syncAudits()).length;
     await slack.waitForAck(
       push(slack.pushEvent({ type: "team_join", user: { id: "UCAROL", team_id: "T1" } })),
     );
-    await waitFor(async () => (await syncAudits()).length === 2, 20_000, "sync on team_join");
-    expect((await syncAudits())[1]?.detail).toMatchObject({
-      trigger: "changed",
-      added: 1,
-      removed: 0,
-      partial: false,
-    });
+    await syncsReach(before2, { added: 2, removed: 0 }, "sync on team_join");
+    expect((await syncAudits()).slice(before2).map((d) => d.trigger)).toContain("changed");
     expect(await membership(carol.accountId)).toEqual({
       role: "member",
       source: "directory:slack",
@@ -581,15 +603,10 @@ describe("M4 第二段验收：Slack（双副本）", () => {
     const carolUser = slack.users.get("UCAROL");
     if (!carolUser) throw new Error("carol is not a Slack user");
     slack.users.set("UCAROL", { ...carolUser, deleted: true });
+    const before3 = (await syncAudits()).length;
     const sync3 = await call(ownerJar, "POST", `${base}/extensions/slack/directory/sync`);
     expect(sync3.status).toBe(202);
-    await waitFor(async () => (await syncAudits()).length === 3, 20_000, "sync after removal");
-    expect((await syncAudits())[2]?.detail).toMatchObject({
-      trigger: "manual",
-      added: 0,
-      removed: 1,
-      partial: false,
-    });
+    await syncsReach(before3, { added: 2, removed: 1 }, "sync after removal");
     expect(await membership(carol.accountId)).toBeUndefined();
     expect(await membership(bobId)).toEqual({ role: "member", source: "directory:slack" });
     expect(await membership(aliceId)).toMatchObject({ role: "member" });
