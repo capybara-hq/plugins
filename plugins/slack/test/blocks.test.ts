@@ -104,6 +104,13 @@ describe("renderCard: approval", () => {
     expect(buttons(zh).map((b) => b.text.text)).toEqual(["详情"]);
   });
 
+  it("a denied card shows the person's reason, escaped", () => {
+    const en = renderCard(approval({ state: "denied", denyReason: "Use <b> & co" }), "en");
+    expect(allText(en as Block[])).toContain("Reason: Use &lt;b&gt; &amp; co");
+    const ok = renderCard(approval({ state: "approved", denyReason: "x" }), "en") as Block[];
+    expect(allText(ok)).not.toContain("Reason");
+  });
+
   it("long input previews are truncated to fit a section block", () => {
     const blocks = renderCard(approval({ inputPreview: "x".repeat(10_000) }), "en") as Block[];
     for (const b of blocks) {

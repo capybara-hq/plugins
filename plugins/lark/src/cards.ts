@@ -55,6 +55,7 @@ const T = {
     agent: "Agent",
     input: "Input",
     status: "Status",
+    reason: "Reason",
     expires: "Expires",
     answer: "Answer",
     approve: {
@@ -93,6 +94,7 @@ const T = {
     agent: "Agent",
     input: "输入",
     status: "状态",
+    reason: "原因",
     expires: "过期时间",
     answer: "回答",
     approve: { once: "批准一次", session: "本会话内批准", always: "始终批准" },
@@ -242,6 +244,8 @@ function approval(
     const state = t.approvalStates[c.state];
     const by = c.decidedBy ? ` (${escapePlain(c.decidedBy)})` : "";
     elements.push(md(`${t.status}${escapePlain(t.sep)}${state}${by}`));
+    if (c.state === "denied" && c.denyReason)
+      elements.push(md(`${t.reason}${escapePlain(t.sep)}${escapePlain(c.denyReason)}`));
     elements.push(...actions([], link(t.details, c.webUrl)));
   } else {
     elements.push(md(`${t.expires}${escapePlain(t.sep)}${escapePlain(c.expiresAt)}`));

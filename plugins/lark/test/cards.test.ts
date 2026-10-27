@@ -213,6 +213,21 @@ describe("renderSend: approval card", () => {
     expect(markdown(denied as LarkCard)).toContain("状态：已拒绝");
   });
 
+  it("a denied card shows the person's reason, escaped", () => {
+    const [card] = renderSend(
+      { text: "", cards: [approval({ state: "denied", denyReason: "Not *this* one" })] },
+      "en",
+      "g",
+    );
+    expect(markdown(card as LarkCard)).toContain("Reason: Not \\*this\\* one");
+    const [approved] = renderSend(
+      { text: "", cards: [approval({ state: "approved", denyReason: "x" })] },
+      "en",
+      "g",
+    );
+    expect(markdown(approved as LarkCard)).not.toContain("Reason");
+  });
+
   it("does not repeat a text identical to the card title", () => {
     const [card] = renderSend({ text: "Post an announcement", cards: [approval()] }, "en", "g");
     expect(markdown(card as LarkCard).split("Post an announcement").length - 1).toBe(0);

@@ -49,6 +49,7 @@ const T = {
     agent: "Agent",
     input: "Input",
     status: "Status",
+    reason: "Reason",
     expires: "Expires",
     answer: "Answer",
     approve: {
@@ -86,6 +87,7 @@ const T = {
     agent: "Agent",
     input: "输入",
     status: "状态",
+    reason: "原因",
     expires: "过期时间",
     answer: "回答",
     approve: { once: "批准一次", session: "本会话内批准", always: "始终批准" },
@@ -232,6 +234,8 @@ function approvalBlocks(c: Extract<ChannelCard, { kind: "approval" }>, locale: L
     const state = t.approvalStates[c.state];
     const by = c.decidedBy ? ` (${esc(c.decidedBy)})` : "";
     blocks.push(context(`${t.status}${t.sep}${state}${by}`));
+    if (c.state === "denied" && c.denyReason)
+      blocks.push(context(`${t.reason}${t.sep}${esc(c.denyReason)}`));
     blocks.push(actions([link("cap_link_web", t.details, c.webUrl)]));
     return blocks;
   }
