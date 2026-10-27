@@ -474,6 +474,21 @@ describe("connect (long connection)", () => {
     });
   });
 
+  it("@bot /name args → the text starts with the slash command (phase D skill invocation)", async () => {
+    const { events } = await connect();
+    const id = lark.pushEvent(
+      larkMessageEvent({
+        openId: "ou_alice",
+        chatId: "oc_g",
+        chatType: "group",
+        text: "@_user_1 /fix-issue 7",
+        mentions: [{ key: "@_user_1", openId: "ou_bot", name: "Capybara" }],
+      }),
+    );
+    await lark.waitForAck(id);
+    expect(events[0]).toMatchObject({ type: "message", text: "/fix-issue 7", mentionsBot: true });
+  });
+
   it("caches profile lookups per connection (3 messages → 1 contact call)", async () => {
     await connect();
     const before = lark.calls.filter((c) => c.api === "user").length;
