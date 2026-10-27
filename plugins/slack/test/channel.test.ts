@@ -330,6 +330,15 @@ describe("connect (Socket Mode)", () => {
     expect(events[1]).toEqual({ type: "directory_changed", tenantId: "T1" });
   });
 
+  it("@bot /name args → the text starts with the slash command (phase D skill invocation)", async () => {
+    const { events } = await connect();
+    const e = slack.pushEvent(
+      slackMentionEvent("U1", "UBOT", "/fix-issue 7", { ts: "2.2", channel: "C9" }),
+    );
+    await slack.waitForAck(e);
+    expect(events[0]).toMatchObject({ type: "message", text: "/fix-issue 7", mentionsBot: true });
+  });
+
   it("button click → card_action (eventId, card message id), then ack", async () => {
     const ch = channel();
     await ch.send({
