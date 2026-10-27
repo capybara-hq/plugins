@@ -103,17 +103,47 @@ export async function readTodos(db: Db, conversationId: string): Promise<Todo[]>
   return row === undefined ? [] : (row.items as Todo[]);
 }
 
-/** Stores the list as of one call; returns the snapshot id (the inline card's key). */
+/**
+ * Snapshots kept per conversation: each write drops the older ones, so the table stays bounded
+ * (an older call's card then shows the current list).
+ */
+export const SNAPSHOTS_PER_CONVERSATION = 50;
+
+/**
+ * Stores the list as of one call and drops the conversation's snapshots beyond the latest
+ * {@link SNAPSHOTS_PER_CONVERSATION}; returns the snapshot id (the inline card's key).
+ */
 export async function writeSnapshot(
   db: Db,
+  orgId: string,
   conversationId: string,
   todos: Todo[],
 ): Promise<string> {
   const id = globalThis.crypto.randomUUID();
-  await db
-    .insertInto("snapshots")
-    .values({ id, conversation_id: conversationId, items: JSON.stringify(todos) })
-    .execute();
+  await db.transaction().execute(async (t) => {
+    await t
+      .insertInto("snapshots")
+      .values({ id, org_id: orgId, conversation_id: conversationId, items: JSON.stringify(todos) })
+      .execute();
+    const older = await t
+      .selectFrom("snapshots")
+      .select("id")
+      .where("conversation_id", "=", conversationId)
+      .orderBy("created_at", "desc")
+      .orderBy("id", "desc")
+      .offset(SNAPSHOTS_PER_CONVERSATION)
+      .execute();
+    if (older.length > 0) {
+      await t
+        .deleteFrom("snapshots")
+        .where(
+          "id",
+          "in",
+          older.map((r) => r.id),
+        )
+        .execute();
+    }
+  });
   return id;
 }
 
@@ -208,7 +238,7 @@ export function writeHandler(db: Db, ui: Pick<ExtensionContext["ui"], "invalidat
     }
     const todos = parsed.data.todos;
     await writeTodos(db, ctx.conversationId, todos);
-    const snapshot = await writeSnapshot(db, ctx.conversationId, todos);
+    const snapshot = await writeSnapshot(db, ctx.orgId, ctx.conversationId, todos);
     for (const contribution of TASKS_ALL) {
       await ui
         .invalidate({ orgId: ctx.orgId, conversationId: ctx.conversationId, contribution })

@@ -14,6 +14,7 @@ import todo, {
   readSnapshot,
   readTodos,
   renderTodos,
+  SNAPSHOTS_PER_CONVERSATION,
   tasksCardView,
   tasksSectionView,
   tasksView,
@@ -214,6 +215,39 @@ describe("todo 插件", { timeout: 60_000 }, () => {
     expect(await readTodos(a, "conv-2")).toEqual([]);
     await writeA({ todos: [] }, call("conv-1"));
     expect(await readTodos(b, "conv-1")).toEqual([]);
+  });
+
+  it(`keeps the last ${SNAPSHOTS_PER_CONVERSATION} snapshots per conversation, with the org (final review m4)`, async () => {
+    const h = await createDualReplicaHarness({ extensions: [PLUGIN], pgUrl: pgc.url });
+    harnesses.push(h);
+    const a = replicaDb(h);
+    const write = writeHandler(a, noUi);
+    const keys: string[] = [];
+    for (let i = 0; i < SNAPSHOTS_PER_CONVERSATION + 3; i++) {
+      const r = await write(
+        { todos: [{ content: `t${i}`, status: "pending", activeForm: `T${i}` }] },
+        call("capped"),
+      );
+      keys.push(("card" in r ? r.card?.key : undefined) as string);
+    }
+    await write({ todos: [] }, call("other"));
+    const rows = (await (a as unknown as Kysely<Record<string, Record<string, unknown>>>)
+      .selectFrom("snapshots")
+      .select(["id", "org_id", "conversation_id"])
+      .execute()) as { id: string; org_id: string; conversation_id: string }[];
+    const capped = rows.filter((r) => r.conversation_id === "capped");
+    expect(capped).toHaveLength(SNAPSHOTS_PER_CONVERSATION);
+    expect(rows.every((r) => r.org_id === "org")).toBe(true);
+    // the oldest are gone (their cards fall back to the current list), the newest stay
+    expect(await readSnapshot(a, "capped", keys[0] as string)).toBeNull();
+    expect(await readSnapshot(a, "capped", keys.at(-1) as string)).toEqual([
+      {
+        content: `t${SNAPSHOTS_PER_CONVERSATION + 2}`,
+        status: "pending",
+        activeForm: `T${SNAPSHOTS_PER_CONVERSATION + 2}`,
+      },
+    ]);
+    expect(rows.filter((r) => r.conversation_id === "other")).toHaveLength(1);
   });
 
   it("并发写同一会话：整表覆盖，最终是某一次完整的清单", async () => {
