@@ -104,19 +104,45 @@ export const redirectText = (status: number) =>
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-/** MCP 工具清单项 → ToolSpec（只取 name / description / inputSchema / annotations）。 */
+/** Longest display title kept from an MCP tool (`ToolSpec.title`), in code points. */
+const TITLE_MAX = 80;
+
+/**
+ * An MCP title cleaned for display, the same way the kernel does it (the kernel is the authority
+ * and cleans again): format characters (Cf: bidi overrides and isolates, zero-width) removed,
+ * control characters (Cc, newlines included) turned into spaces, whitespace runs collapsed, trimmed
+ * and cut to 80 code points; undefined when nothing is left.
+ */
+function displayTitle(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const clean = raw
+    // format characters except ZWNJ / ZWJ (scripts and emoji sequences need them)
+    .replace(/(?![\u200C\u200D])\p{Cf}/gu, "")
+    .replace(/\p{Cc}/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  const cut = [...clean].slice(0, TITLE_MAX).join("").trimEnd();
+  return cut === "" ? undefined : cut;
+}
+
+/**
+ * An MCP tool list item -> ToolSpec: only name / description / inputSchema / annotations, plus the
+ * display-only title (the MCP `title`, else `annotations.title`, cleaned by {@link displayTitle}).
+ */
 function mapTool(raw: Record<string, unknown>, log: Logger): ToolSpec {
   const name = String(raw.name);
   const ann = isObj(raw.annotations) ? raw.annotations : {};
+  // The description fallback keeps the raw (trimmed) MCP title, as before.
+  const mcpTitle =
+    typeof raw.title === "string" && raw.title.trim() !== ""
+      ? raw.title.trim()
+      : typeof ann.title === "string" && ann.title.trim() !== ""
+        ? ann.title.trim()
+        : undefined;
+  const title = displayTitle(raw.title) ?? displayTitle(ann.title);
   let description = typeof raw.description === "string" ? raw.description.trim() : "";
   if (description === "") {
-    const title =
-      typeof raw.title === "string" && raw.title.trim() !== ""
-        ? raw.title.trim()
-        : typeof ann.title === "string" && ann.title.trim() !== ""
-          ? ann.title.trim()
-          : name;
-    description = title;
+    description = mcpTitle ?? name;
     log.warn("MCP tool has no description; using its title or name", { tool: name });
   }
   const annotations: ToolAnnotations = {};
@@ -131,6 +157,8 @@ function mapTool(raw: Record<string, unknown>, log: Logger): ToolSpec {
     description,
     inputSchema: isObj(raw.inputSchema) ? raw.inputSchema : {},
     ...(Object.keys(annotations).length > 0 && { annotations }),
+    // Display only: not sent to the model and outside the kernel's definition fingerprint.
+    ...(title !== undefined && { title }),
   };
 }
 

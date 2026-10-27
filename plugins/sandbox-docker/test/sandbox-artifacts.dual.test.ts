@@ -289,6 +289,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
 
     // ---- 2. sandbox_bash 处理附件（首次使用：创建沙箱，附件同步到 /workspace/attachments） ----
     await send(0, convId, "sandbox_bash", {
+      description: "Test step",
       command:
         "mkdir -p /workspace/out && awk -F, 'NR>1{s+=$2} END{print \"total=\" s}' " +
         "/workspace/attachments/fruit.csv | tee /workspace/out/summary.txt",
@@ -329,6 +330,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     // ---- 4. sandbox_bash 执行中杀掉执行这次运行的副本，另一个副本续跑 ----
     // 命令比锁的 TTL（60 秒）长、在默认超时（120 秒）之内：接手时它还在跑，必须由接手方杀掉
     await send(0, convId, "sandbox_bash", {
+      description: "Test step",
       command: "touch /workspace/step4-started && sleep 300 && touch /workspace/step4-finished",
     });
     // 命令确实在容器里跑起来了（沙箱锁在执行副本手里）
@@ -372,6 +374,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
 
     // the next call on the survivor runs at once (shared lease) in the same container
     await send(survivor, convId, "sandbox_bash", {
+      description: "Test step",
       command:
         "cat /workspace/out/summary.txt && ls /workspace && echo leftover=$(pgrep -fc '^sleep 300' || true)",
     });
@@ -392,6 +395,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
       setTimeout(r, Math.max(0, killedAt + SANDBOX_LOCK_TTL_MS + 2000 - Date.now())),
     );
     await send(survivor, convId, "sandbox_bash", {
+      description: "Test step",
       command: "echo leftover=$(pgrep -fc '^sleep 300' || true)",
     });
     const r4c = await finished(convId, 6, 60_000);

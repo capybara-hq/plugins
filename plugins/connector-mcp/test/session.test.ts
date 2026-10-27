@@ -171,6 +171,8 @@ describe("listTools 映射", () => {
     expect(await s.listTools()).toEqual([
       {
         name: "search",
+        // annotations.title is the MCP display title when the tool has no top-level title
+        title: "Search",
         description: "Search docs",
         inputSchema: { type: "object", properties: { q: { type: "string" } }, required: ["q"] },
         annotations: { readOnlyHint: true, openWorldHint: false },
@@ -186,6 +188,52 @@ describe("listTools 映射", () => {
         },
       },
     ]);
+  });
+
+  it("keeps the MCP title as the display title: top-level first, trimmed, cut to 80", async () => {
+    const server = await fake({
+      tools: [
+        {
+          name: "search",
+          title: "  Search messages  ",
+          description: "Search messages",
+          annotations: { title: "Ignored" },
+        },
+        { name: "long", title: "x".repeat(100), description: "Long" },
+        { name: "blank", title: "   ", description: "Blank" },
+      ],
+    });
+    const s = await open(server);
+    const tools = await s.listTools();
+    expect(tools.map((t) => t.title)).toEqual(["Search messages", "x".repeat(80), undefined]);
+    expect(tools[2]).not.toHaveProperty("title");
+  });
+
+  it("cleans control, bidi and invisible characters from the MCP title, like the kernel", async () => {
+    const server = await fake({
+      tools: [
+        { name: "spoof", title: "Read\u202E elif\u2066x\u2069", description: "Spoof" },
+        { name: "lines", title: "a\nb\t c", description: "Lines" },
+        {
+          name: "invisible",
+          title: "\u200B",
+          annotations: { title: "Fallback" },
+          description: "I",
+        },
+        { name: "zw", title: "\u200B\uFEFF\u200E", description: "Zero width" },
+        { name: "joiners", title: "می\u200Cخواهم 👨\u200D👩", description: "ZWNJ / ZWJ kept" },
+      ],
+    });
+    const s = await open(server);
+    const tools = await s.listTools();
+    expect(tools.map((t) => t.title)).toEqual([
+      "Read elifx",
+      "a b c",
+      "Fallback",
+      undefined,
+      "می\u200Cخواهم 👨\u200D👩",
+    ]);
+    expect(tools[3]).not.toHaveProperty("title");
   });
 
   it("缺 description → 用 title 或 name，并 warn", async () => {

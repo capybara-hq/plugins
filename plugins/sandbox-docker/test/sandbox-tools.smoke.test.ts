@@ -173,7 +173,7 @@ describe.skipIf(!dockerAvailable)(
       const r = await call(
         conv,
         "sandbox_bash",
-        { command: "pwd && id -un && echo $HTTPS_PROXY" },
+        { description: "Test step", command: "pwd && id -un && echo $HTTPS_PROXY" },
         1,
       );
       expect(r.isError, why(r.content)).toBe(false);
@@ -201,21 +201,31 @@ describe.skipIf(!dockerAvailable)(
       const gr = await call(conv, "sandbox_grep", { pattern: "beta", ignoreCase: true }, 6);
       expect(gr.content).toContain("/workspace/src/a.txt:2:BETA");
       // /skills 对命令只读
-      const ro = await call(conv, "sandbox_bash", { command: "touch /skills/x" }, 7);
+      const ro = await call(
+        conv,
+        "sandbox_bash",
+        { description: "Test step", command: "touch /skills/x" },
+        7,
+      );
       expect(ro.content).toContain("Read-only file system");
     });
 
     it("a timed-out command is stopped and the sandbox stays usable", async () => {
       const conv = await sandboxConversation();
       const t0 = Date.now();
-      const r = await call(conv, "sandbox_bash", { command: "sleep 60", timeoutSeconds: 1 }, 1);
+      const r = await call(
+        conv,
+        "sandbox_bash",
+        { description: "Test step", command: "sleep 60", timeoutSeconds: 1 },
+        1,
+      );
       expect(Date.now() - t0).toBeLessThan(45_000);
       expect(r.isError).toBe(true);
       expect(r.content, why(r.content)).toContain("timedOut");
       const ok = await call(
         conv,
         "sandbox_bash",
-        { command: "ps -eo args | grep -c '^sleep 60' || true" },
+        { description: "Test step", command: "ps -eo args | grep -c '^sleep 60' || true" },
         2,
       );
       expect(ok.isError, ok.content).toBe(false);
