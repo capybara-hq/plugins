@@ -34,6 +34,11 @@ import { createE2BSandbox, DeploymentConfig } from "../../src/index.js";
  * - [ ] 列表接口的 `metadata` 过滤（`k=v` 经 URL 编码后作为 query 值）与 `x-next-token` 分页；
  * - [ ] SendSignal 对不存在的 pid 回 404 `not_found`；
  * - [ ] pause 已暂停回 409，DELETE 不存在回 404（均为 `{code, message}` 格式）。
+ * - [ ] concurrent processes (phase C): envd runs several `process.Start` streams of one sandbox
+ *   side by side; `killTagged` (pgrep on `/tmp/.capybara-exec-<tag>-`) kills only that holder's;
+ * - [ ] concurrent `connect` calls on a paused sandbox all succeed (or a 409 while one resume is in
+ *   flight, which the plugin retries briefly), and concurrent uploads to the staging directory
+ *   (UUID names) do not interfere.
  */
 
 const filled = (v: string | undefined): v is string =>
@@ -179,6 +184,65 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
     } finally {
       await sbx.destroyByName?.(other, sig());
     }
+  });
+
+  it("concurrent processes and uploads (phase C)", async () => {
+    const [ta, tb] = [randomUUID(), randomUUID()];
+    const t0 = Date.now();
+    const [a, b] = await Promise.all([
+      sbx.exec(h, {
+        command: "sleep 2; echo a",
+        timeoutMs: 30_000,
+        maxOutputBytes: 100,
+        signal: sig(),
+        tag: ta,
+      }),
+      sbx.exec(h, {
+        command: "sleep 2; echo b",
+        timeoutMs: 30_000,
+        maxOutputBytes: 100,
+        signal: sig(),
+        tag: tb,
+      }),
+      ...[1, 2, 3, 4].map((i) =>
+        sbx.writeFile(h, `/workspace/c/${i}.txt`, enc.encode(`f${i}`), sig()),
+      ),
+    ]);
+    expect(a?.stdout).toBe("a\n");
+    expect(b?.stdout).toBe("b\n");
+    expect(Date.now() - t0).toBeLessThan(4000 + 5000);
+    expect((await run("cat /workspace/c/1.txt /workspace/c/4.txt")).stdout).toBe("f1f4");
+    // killTagged ends one holder's command only
+    const stop = new AbortController();
+    const keep = sbx.exec(h, {
+      command: "sleep 120",
+      timeoutMs: 150_000,
+      maxOutputBytes: 10,
+      signal: stop.signal,
+      tag: tb,
+    });
+    const gone = sbx.exec(h, {
+      command: "sleep 121",
+      timeoutMs: 150_000,
+      maxOutputBytes: 10,
+      signal: sig(),
+      tag: ta,
+    });
+    await new Promise((r) => setTimeout(r, 2000));
+    await sbx.killTagged?.(h, [ta], sig());
+    expect((await gone).exitCode).not.toBe(0);
+    expect((await run("pgrep -fc '^sleep 120' || true")).stdout.trim()).toBe("1");
+    stop.abort();
+    await keep;
+    // concurrent connects on a paused sandbox
+    await sbx.suspend(h, sig());
+    const both = await Promise.all([
+      run("echo x"),
+      run("echo y"),
+      sbx.stat(h, "/workspace", sig()),
+    ]);
+    expect(both[0].stdout).toBe("x\n");
+    expect(both[1].stdout).toBe("y\n");
   });
 
   it("suspend / resume keeps files; destroy → gone", async () => {
