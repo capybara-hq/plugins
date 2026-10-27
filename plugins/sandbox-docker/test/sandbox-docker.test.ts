@@ -729,8 +729,14 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
     ).rejects.toThrow(/allowOpenEgress/);
   });
 
-  it("when the kill exec itself cannot start (pid limit), the container is restarted", async () => {
-    const h = await sbx.create({
+  it("when the kill exec itself cannot start (pid limit), the container is restarted with a warn", async () => {
+    const warns: string[] = [];
+    const logged = createDockerSandbox(
+      cfg,
+      { labels: { [TEST_LABEL]: RUN } },
+      { warn: (m: string) => void warns.push(m) },
+    );
+    const h = await logged.create({
       name: sbxName(),
       image: images.sandboxImage,
       limits: limits("none"),
@@ -738,7 +744,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
     });
     try {
       await sbx.writeFile(h, "/workspace/keep.txt", enc.encode("kept"), sig());
-      const r = await sbx.exec(h, {
+      const r = await logged.exec(h, {
         command: "for i in $(seq 1100); do sleep 1000 & done 2>/dev/null; wait",
         timeoutMs: 4000,
         maxOutputBytes: 10_000,
@@ -748,6 +754,8 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       expect((await sh(h.id, "ps -eo args | grep -c '^sleep 1000' || true")).stdout).toBe("0\n");
       const kept = await sbx.readFile(h, "/workspace/keep.txt", { maxBytes: 10, signal: sig() });
       expect(kept && dec.decode(kept.data)).toBe("kept");
+      // the restart also ends every other command in the container: the operator is told
+      expect(warns).toContainEqual(expect.stringMatching(/restart/));
     } finally {
       await sbx.destroy(h, sig());
     }
