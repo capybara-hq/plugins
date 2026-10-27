@@ -22,7 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
  * todo through a real kernel (one in-process kernel, model-fake scripting the tool call): the
- * `tasks` view the kernel serves after `todo__write` shows the in-progress item by its activeForm,
+ * `tasks-panel` view (and its old alias `tasks`) the kernel serves after `todo__write` shows the in-progress item by its activeForm,
  * the badge counts completed items, and the bilingual display summary lands in the tool_result
  * event while the model sees the rendered list. The kernel side of views (routes, invalidation, the
  * summary staying out of model requests) is tested in core on the fake `fake-tools-ui`.
@@ -72,10 +72,10 @@ describe("todo in a kernel", () => {
       tools: [{ kind: "plugin", plugin: "todo", name: "write" }],
     });
     const convId = await createConversation(owner, orgId, agentId);
-    const view = async () => {
+    const view = async (id = "tasks-panel") => {
       const res = await owner({
         method: "GET",
-        url: `/api/v1/orgs/${orgId}/ui/views/todo/tasks?conversationId=${convId}&locale=en`,
+        url: `/api/v1/orgs/${orgId}/ui/views/todo/${id}?conversationId=${convId}&locale=en`,
       });
       expect(res.statusCode, res.body).toBe(200);
       return res.json() as {
@@ -100,12 +100,16 @@ describe("todo in a kernel", () => {
       {
         type: "checklist",
         items: [
-          { text: "Plan", status: "completed" },
-          { text: "Building", status: "in_progress" },
-          { text: "Ship", status: "pending" },
+          { text: "Plan", status: "completed", id: "0" },
+          { text: "Building", status: "in_progress", id: "1" },
+          { text: "Ship", status: "pending", id: "2" },
         ],
       },
     ]);
+    // the old id `tasks` still answers, with the panel (one release)
+    expect((await view("tasks")).view).toEqual(after);
+    expect((await view("tasks-section")).view.badge).toBe("1/3");
+    expect((await view("tasks-card")).view.badge).toBe("1/3");
 
     const result = (await eventsOf(db, convId)).find(
       (e): e is Extract<ConversationEvent, { type: "tool_result" }> => e.type === "tool_result",
@@ -115,6 +119,7 @@ describe("todo in a kernel", () => {
       isError: false,
       content: "Todo list updated (3 items):\n[x] Plan\n[>] Building\n[ ] Ship",
       display: { summary: { zh: "更新任务清单（3 项）", en: "Updated task list (3 items)" } },
+      card: { plugin: "todo", view: "tasks-card" },
     });
   }, 60_000);
 });

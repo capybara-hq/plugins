@@ -103,27 +103,71 @@ export async function readTodos(db: Db, conversationId: string): Promise<Todo[]>
   return row === undefined ? [] : (row.items as Todo[]);
 }
 
-/** 对话页右侧「任务」标签的贡献 id。 */
-export const TASKS_VIEW = "tasks";
+/** The right panel (title-bar icon) with the full list. */
+export const TASKS_PANEL = "tasks-panel";
+/** The "Tasks" section of the properties panel. */
+export const TASKS_SECTION = "tasks-section";
+/** The inline card under each `todo__write` call. */
+export const TASKS_CARD = "tasks-card";
+/** The old right-side tab id: an alias of {@link TASKS_PANEL} for one release (remove after). */
+export const TASKS_LEGACY = "tasks";
+/** Every contribution showing the list (refreshed after a write). */
+// capybara:allow-module-state a read-only list of contribution ids, never written
+const TASKS_ALL = [TASKS_PANEL, TASKS_SECTION, TASKS_CARD, TASKS_LEGACY] as const;
 
-/** 「任务」视图：badge 为「已完成/总数」，主体是一个 checklist（进行中的条目显示 activeForm）。 */
+const label = (t: Todo) => (t.status === "in_progress" ? t.activeForm : t.content);
+const badge = (todos: Todo[]) =>
+  `${todos.filter((t) => t.status === "completed").length}/${todos.length}`;
+
+/**
+ * The panel: badge done/total and a checklist (in-progress items show activeForm); each item's
+ * `id` is its index, the anchor the section's open targets scroll to.
+ */
 export function tasksView(todos: Todo[]): UiView {
-  const done = todos.filter((t) => t.status === "completed").length;
   return {
-    badge: `${done}/${todos.length}`,
+    badge: badge(todos),
     blocks: [
       {
         type: "checklist",
-        items: todos.map((t) => ({
-          text: t.status === "in_progress" ? t.activeForm : t.content,
+        items: todos.map((t, i) => ({ text: label(t), status: t.status, id: String(i) })),
+      },
+    ],
+  };
+}
+
+/** The properties section: badge done/total; every item opens the panel at that item. */
+export function tasksSectionView(todos: Todo[]): UiView {
+  return {
+    badge: badge(todos),
+    open: { contribution: TASKS_PANEL },
+    blocks: [
+      {
+        type: "checklist",
+        items: todos.map((t, i) => ({
+          text: label(t),
           status: t.status,
+          open: { contribution: TASKS_PANEL, item: String(i) },
         })),
       },
     ],
   };
 }
 
-/** `todo__write` 的处理函数：写入后通知界面刷新「任务」标签（刷新失败不影响写入结果）。 */
+/** The inline card: the checklist, with ⤢ in its title row opening the panel. */
+export function tasksCardView(todos: Todo[]): UiView {
+  return {
+    badge: badge(todos),
+    open: { contribution: TASKS_PANEL },
+    blocks: [
+      { type: "checklist", items: todos.map((t) => ({ text: label(t), status: t.status })) },
+    ],
+  };
+}
+
+/**
+ * `todo__write` 的处理函数：写入后通知界面刷新任务清单的各个位置（刷新失败不影响写入结果），结果带一张
+ * 行内卡片（`card`，只给界面显示）。
+ */
 export function writeHandler(db: Db, ui: Pick<ExtensionContext["ui"], "invalidate">): ToolHandler {
   return async (input, ctx) => {
     const parsed = WriteInput.safeParse(input);
@@ -135,13 +179,11 @@ export function writeHandler(db: Db, ui: Pick<ExtensionContext["ui"], "invalidat
     }
     const todos = parsed.data.todos;
     await writeTodos(db, ctx.conversationId, todos);
-    await ui
-      .invalidate({
-        orgId: ctx.orgId,
-        conversationId: ctx.conversationId,
-        contribution: TASKS_VIEW,
-      })
-      .catch(() => {});
+    for (const contribution of TASKS_ALL) {
+      await ui
+        .invalidate({ orgId: ctx.orgId, conversationId: ctx.conversationId, contribution })
+        .catch(() => {});
+    }
     return {
       content: [{ type: "text", text: renderTodos(todos) }],
       display: {
@@ -150,29 +192,50 @@ export function writeHandler(db: Db, ui: Pick<ExtensionContext["ui"], "invalidat
           en: `Updated task list (${todos.length} items)`,
         },
       },
+      card: { view: TASKS_CARD },
     };
   };
 }
 
 /**
- * todo 插件：一个工具 `write`（模型可见名 `todo__write`），清单存在本插件 schema，各副本读写一致；
- * 对话页右侧的「任务」标签（视图 `tasks`），写入后经 `ctx.ui.invalidate` 实时刷新。
+ * todo 插件：一个工具 `write`（模型可见名 `todo__write`），清单存在本插件 schema，各副本读写一致。
+ * 对话页上三个位置（UI refresh B）：右侧面板 `tasks-panel`、属性面板的「任务」小节 `tasks-section`
+ * （条目打开面板里的那一项）、每次写入下面的行内卡片 `tasks-card`；旧 id `tasks` 作为面板的别名保留一个版本。
+ * 写入后经 `ctx.ui.invalidate` 实时刷新。
  */
+const title = { zh: "任务", en: "Tasks" };
+
 export default defineExtension({
   name: "todo",
   version: "0.1.0",
   sdk: "^0.1.0",
   provides: [],
   migrations: "../migrations",
-  ui: [{ id: "tasks", title: { zh: "任务", en: "Tasks" }, place: "conversation", kind: "view" }],
-  permissions: { tools: ["write"], ui: { views: ["tasks"] } },
+  ui: [
+    { id: "tasks-panel", title, place: "panel", kind: "view", icon: "list-checks" },
+    { id: "tasks-section", title, place: "section", kind: "view", icon: "list-checks" },
+    { id: "tasks-card", title, place: "inline", kind: "view", icon: "list-checks" },
+    { id: "tasks", title, place: "conversation", kind: "view", aliasOf: "tasks-panel" },
+  ],
+  permissions: {
+    tools: ["write"],
+    ui: { views: ["tasks-panel", "tasks-section", "tasks-card", "tasks"] },
+  },
   setup(ctx) {
     ctx.tools.register(
       SPEC,
       writeHandler(ctx.db, { invalidate: (target) => ctx.ui.invalidate(target) }),
     );
-    ctx.ui.view("tasks", async ({ conversationId }) =>
-      tasksView(conversationId === undefined ? [] : await readTodos(ctx.db, conversationId)),
+    const todosOf = (conversationId: string | undefined) =>
+      conversationId === undefined ? Promise.resolve([]) : readTodos(ctx.db, conversationId);
+    ctx.ui.view("tasks-panel", async ({ conversationId }) =>
+      tasksView(await todosOf(conversationId)),
+    );
+    ctx.ui.view("tasks-section", async ({ conversationId }) =>
+      tasksSectionView(await todosOf(conversationId)),
+    );
+    ctx.ui.view("tasks-card", async ({ conversationId }) =>
+      tasksCardView(await todosOf(conversationId)),
     );
   },
 });

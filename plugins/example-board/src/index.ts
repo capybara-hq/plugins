@@ -116,6 +116,7 @@ export default defineExtension({
       place: "page",
       kind: "embed",
       path: "/ui/board",
+      icon: "layout-grid",
     },
     {
       id: "board-conv",
@@ -123,6 +124,8 @@ export default defineExtension({
       place: "conversation",
       kind: "embed",
       path: "/ui/board-conv",
+      // the old place: still a right panel (UI refresh B), with its title-bar icon
+      icon: "layout-grid",
     },
   ],
   permissions: {
