@@ -395,6 +395,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
       setTimeout(r, Math.max(0, killedAt + SANDBOX_LOCK_TTL_MS + 2000 - Date.now())),
     );
     await send(survivor, convId, "sandbox_bash", {
+      description: "Test step",
       command: "echo leftover=$(pgrep -fc '^sleep 300' || true)",
     });
     const r4c = await finished(convId, 6, 60_000);
