@@ -350,6 +350,25 @@ describe("connector-openapi 端到端", () => {
     return r?.payload as NonNullable<typeof r>["payload"];
   }
 
+  it("the conversation page's tool info names an OpenAPI tool by its connector and title", async () => {
+    const connectorId = await installPets();
+    const agentId = await agentFor(connectorId);
+    const convId = await createConv(req, orgId, agentId);
+    const res = await req({
+      method: "GET",
+      url: `/api/v1/orgs/${orgId}/conversations/${convId}/tools?keys=pets__createPet,pets__listPets`,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const [create, list] = (res.json() as { tools: Record<string, unknown>[] }).tools;
+    expect(create).toMatchObject({
+      key: "pets__createPet",
+      kind: "connector",
+      source: { kind: "connector", id: connectorId, name: "Pets" },
+    });
+    expect(create?.title).toEqual(expect.any(String));
+    expect(list).toMatchObject({ source: { kind: "connector", name: "Pets" } });
+  });
+
   it("A21：调用按已复核的路由；远端文档改了路径 → 刷新后待复核，复核通过才走新路由", async () => {
     const connectorId = await installPets();
     const agentId = await agentFor(connectorId);

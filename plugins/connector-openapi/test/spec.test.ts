@@ -71,6 +71,24 @@ describe("工具映射", () => {
     expect(byName(tools, "updatePet").annotations).toBeUndefined();
   });
 
+  it("a tool's display title is its operation's summary, cleaned to one line", async () => {
+    const tools = await listTools(doc());
+    expect(byName(tools, "createPet").title).toBe("Create a pet");
+    expect(byName(tools, "listPets").title).toBe("List pets");
+    const d = doc() as { paths: Record<string, Record<string, Record<string, unknown>>> };
+    const op = Object.values(d.paths)
+      .flatMap((p) => Object.values(p))
+      .find((o) => o.operationId === "createPet") as Record<string, unknown>;
+    op.summary = `Create\u202E a\n pet ${"x".repeat(100)}`;
+    const long = byName(await listTools(d), "createPet").title as string;
+    expect(long.startsWith("Create a pet x")).toBe(true);
+    expect([...long]).toHaveLength(80);
+    op.summary = " \u200B ";
+    expect(byName(await listTools(d), "createPet").title).toBeUndefined();
+    delete op.summary;
+    expect(byName(await listTools(d), "createPet").title).toBeUndefined();
+  });
+
   it("inputSchema：path / query / headers / body 只含实际存在的部分，内部 $ref 已展开", async () => {
     const tools = await listTools(doc());
     expect(byName(tools, "getPet").inputSchema).toEqual({

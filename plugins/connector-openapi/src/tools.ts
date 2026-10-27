@@ -58,11 +58,33 @@ export function inputSchemaOf(op: Operation): Record<string, unknown> {
   };
 }
 
+/** Longest display title kept from an operation's summary, in code points. */
+const TITLE_MAX = 80;
+
+/**
+ * An operation's summary as the tool's display title (conversation rows and approvals), cleaned
+ * the way the kernel cleans remote titles (the kernel is the authority and cleans again): format
+ * characters except ZWNJ / ZWJ removed, control characters (newlines included) turned into spaces,
+ * whitespace collapsed, trimmed and cut to 80 code points; undefined when nothing is left.
+ */
+export function displayTitle(summary: string | undefined): string | undefined {
+  if (summary === undefined) return undefined;
+  const clean = summary
+    .replace(/(?![\u200C\u200D])\p{Cf}/gu, "")
+    .replace(/\p{Cc}/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  const cut = [...clean].slice(0, TITLE_MAX).join("").trimEnd();
+  return cut === "" ? undefined : cut;
+}
+
 /** 工具定义；`route` 写进 connectorData（计入内核指纹，调用时交回，不发给模型）。 */
 export function toolSpecOf(op: Operation, route: Route): ToolSpec {
   const annotations = annotationsOf(op);
+  const title = displayTitle(op.summary);
   return {
     name: op.toolName,
+    ...(title !== undefined && { title }),
     description: descriptionOf(op, route.server),
     inputSchema: inputSchemaOf(op),
     ...(annotations && { annotations }),
