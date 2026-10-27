@@ -220,12 +220,19 @@ describe("listTools 映射", () => {
           annotations: { title: "Fallback" },
           description: "I",
         },
-        { name: "zw", title: "\u200B\uFEFF", description: "Zero width" },
+        { name: "zw", title: "\u200B\uFEFF\u200E", description: "Zero width" },
+        { name: "joiners", title: "می\u200Cخواهم 👨\u200D👩", description: "ZWNJ / ZWJ kept" },
       ],
     });
     const s = await open(server);
     const tools = await s.listTools();
-    expect(tools.map((t) => t.title)).toEqual(["Read elifx", "a b c", "Fallback", undefined]);
+    expect(tools.map((t) => t.title)).toEqual([
+      "Read elifx",
+      "a b c",
+      "Fallback",
+      undefined,
+      "می\u200Cخواهم 👨\u200D👩",
+    ]);
     expect(tools[3]).not.toHaveProperty("title");
   });
 

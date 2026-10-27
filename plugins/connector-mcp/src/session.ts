@@ -116,7 +116,8 @@ const TITLE_MAX = 80;
 function displayTitle(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
   const clean = raw
-    .replace(/\p{Cf}/gu, "")
+    // format characters except ZWNJ / ZWJ (scripts and emoji sequences need them)
+    .replace(/(?![\u200C\u200D])\p{Cf}/gu, "")
     .replace(/\p{Cc}/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();
