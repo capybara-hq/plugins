@@ -119,7 +119,20 @@ describe("todo in a kernel", () => {
       isError: false,
       content: "Todo list updated (3 items):\n[x] Plan\n[>] Building\n[ ] Ship",
       display: { summary: { zh: "更新任务清单（3 项）", en: "Updated task list (3 items)" } },
-      card: { plugin: "todo", view: "tasks-card" },
+      card: { plugin: "todo", view: "tasks-card", key: expect.any(String) },
     });
+
+    // a second write: the first call's card still shows the list as of that call (review M1)
+    const next = { todos: todos.todos.map((t) => ({ ...t, status: "completed" })) };
+    await postMessage(owner, orgId, convId, `tool:todo__write:${JSON.stringify(next)}`);
+    await waitForTerminal(db, convId, 2, 20_000);
+    expect((await view()).view.badge).toBe("3/3");
+    const first = result?.payload as { callId: string; card: { key: string } };
+    const card = await owner({
+      method: "GET",
+      url: `/api/v1/orgs/${orgId}/ui/views/todo/tasks-card?conversationId=${convId}&locale=en&callId=${encodeURIComponent(first.callId)}&key=${encodeURIComponent(first.card.key)}`,
+    });
+    expect(card.statusCode, card.body).toBe(200);
+    expect((card.json() as { view: { badge: string } }).view.badge).toBe("1/3");
   }, 60_000);
 });

@@ -11,6 +11,7 @@ import { Kysely, PostgresDialect } from "kysely";
 import pg from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import todo, {
+  readSnapshot,
   readTodos,
   renderTodos,
   tasksCardView,
@@ -182,8 +183,13 @@ describe("todo 插件", { timeout: 60_000 }, () => {
     expect("display" in r1 && r1.display).toEqual({
       summary: { zh: "更新任务清单（2 项）", en: "Updated task list (2 items)" },
     });
-    // the inline card under the call (display only)
-    expect("card" in r1 && r1.card).toEqual({ view: "tasks-card" });
+    // the inline card under the call (display only), keyed by a snapshot of the list at this call
+    const card1 = "card" in r1 ? r1.card : undefined;
+    expect(card1).toEqual({ view: "tasks-card", key: expect.any(String) });
+    const key1 = card1?.key as string;
+    expect(await readSnapshot(b, "conv-1", key1)).toEqual(first);
+    // a snapshot is scoped by its conversation
+    expect(await readSnapshot(b, "conv-2", key1)).toBeNull();
     expect(invalidated).toEqual(
       ["tasks-panel", "tasks-section", "tasks-card", "tasks"].map((contribution) => ({
         orgId: "org",
@@ -197,8 +203,13 @@ describe("todo 插件", { timeout: 60_000 }, () => {
       { content: "Plan", status: "completed", activeForm: "Planning" },
       { content: "Build", status: "in_progress", activeForm: "Building" },
     ];
-    await writeB({ todos: second }, call("conv-1"));
+    const r2 = await writeB({ todos: second }, call("conv-1"));
     expect(await readTodos(a, "conv-1")).toEqual(second);
+    // the first card keeps showing the list as of its call
+    expect(await readSnapshot(a, "conv-1", key1)).toEqual(first);
+    const key2 = ("card" in r2 ? r2.card?.key : undefined) as string;
+    expect(key2).not.toBe(key1);
+    expect(await readSnapshot(a, "conv-1", key2)).toEqual(second);
 
     expect(await readTodos(a, "conv-2")).toEqual([]);
     await writeA({ todos: [] }, call("conv-1"));

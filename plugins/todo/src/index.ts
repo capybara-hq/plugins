@@ -103,6 +103,35 @@ export async function readTodos(db: Db, conversationId: string): Promise<Todo[]>
   return row === undefined ? [] : (row.items as Todo[]);
 }
 
+/** Stores the list as of one call; returns the snapshot id (the inline card's key). */
+export async function writeSnapshot(
+  db: Db,
+  conversationId: string,
+  todos: Todo[],
+): Promise<string> {
+  const id = globalThis.crypto.randomUUID();
+  await db
+    .insertInto("snapshots")
+    .values({ id, conversation_id: conversationId, items: JSON.stringify(todos) })
+    .execute();
+  return id;
+}
+
+/** The list as of a call, scoped by its conversation; null when there is none. */
+export async function readSnapshot(
+  db: Db,
+  conversationId: string,
+  id: string,
+): Promise<Todo[] | null> {
+  const row = await db
+    .selectFrom("snapshots")
+    .select("items")
+    .where("id", "=", id)
+    .where("conversation_id", "=", conversationId)
+    .executeTakeFirst();
+  return row === undefined ? null : (row.items as Todo[]);
+}
+
 /** The right panel (title-bar icon) with the full list. */
 export const TASKS_PANEL = "tasks-panel";
 /** The "Tasks" section of the properties panel. */
@@ -179,6 +208,7 @@ export function writeHandler(db: Db, ui: Pick<ExtensionContext["ui"], "invalidat
     }
     const todos = parsed.data.todos;
     await writeTodos(db, ctx.conversationId, todos);
+    const snapshot = await writeSnapshot(db, ctx.conversationId, todos);
     for (const contribution of TASKS_ALL) {
       await ui
         .invalidate({ orgId: ctx.orgId, conversationId: ctx.conversationId, contribution })
@@ -192,7 +222,7 @@ export function writeHandler(db: Db, ui: Pick<ExtensionContext["ui"], "invalidat
           en: `Updated task list (${todos.length} items)`,
         },
       },
-      card: { view: TASKS_CARD },
+      card: { view: TASKS_CARD, key: snapshot },
     };
   };
 }
@@ -200,7 +230,8 @@ export function writeHandler(db: Db, ui: Pick<ExtensionContext["ui"], "invalidat
 /**
  * todo 插件：一个工具 `write`（模型可见名 `todo__write`），清单存在本插件 schema，各副本读写一致。
  * 对话页上三个位置（UI refresh B）：右侧面板 `tasks-panel`、属性面板的「任务」小节 `tasks-section`
- * （条目打开面板里的那一项）、每次写入下面的行内卡片 `tasks-card`；旧 id `tasks` 作为面板的别名保留一个版本。
+ * （条目打开面板里的那一项）、每次写入下面的行内卡片 `tasks-card`（shows the list as of that call,
+ * from a snapshot row）；旧 id `tasks` 作为面板的别名保留一个版本。
  * 写入后经 `ctx.ui.invalidate` 实时刷新。
  */
 const title = { zh: "任务", en: "Tasks" };
@@ -234,8 +265,14 @@ export default defineExtension({
     ctx.ui.view("tasks-section", async ({ conversationId }) =>
       tasksSectionView(await todosOf(conversationId)),
     );
-    ctx.ui.view("tasks-card", async ({ conversationId }) =>
-      tasksCardView(await todosOf(conversationId)),
-    );
+    // the card shows the list as of its call (the snapshot its key names); old cards without a
+    // key, or a snapshot that is gone, fall back to the current list
+    ctx.ui.view("tasks-card", async ({ conversationId, card }) => {
+      const at =
+        conversationId !== undefined && card?.key !== undefined
+          ? await readSnapshot(ctx.db, conversationId, card.key)
+          : null;
+      return tasksCardView(at ?? (await todosOf(conversationId)));
+    });
   },
 });
