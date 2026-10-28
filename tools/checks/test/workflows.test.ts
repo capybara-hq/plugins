@@ -54,11 +54,50 @@ describe("release.yml", () => {
     it("runs changesets/action without a publish command and never touches npm", () => {
       const cs = job.steps.filter((s) => s.uses?.startsWith("changesets/action@"));
       expect(cs).toHaveLength(1);
+      expect(cs[0]?.with?.["publish-script"]).toBeUndefined();
       expect(cs[0]?.with?.publish).toBeUndefined();
-      expect(cs[0]?.with?.version).toBe("pnpm version-packages");
+      expect(cs[0]?.with?.["version-script"]).toBe("pnpm version-packages");
       expect(jobText(job)).not.toMatch(
         /NPM_TOKEN|NODE_AUTH_TOKEN|id-token|pnpm release|npm publish/,
       );
+    });
+
+    // @changesets/cli 3 in pre mode keeps consumed changesets in .changeset/pre/. changesets/action
+    // v1 bundles the Changesets 2 reader, which takes every directory under .changeset/ for a
+    // Changesets 1 changeset and fails on .changeset/pre/changes.md (ENOENT); v2 reads the v3 layout
+    // (and refuses a CLI 2 project). v2 renamed the inputs and takes the token only as `github-token`.
+    it("uses changesets/action v2, the line that reads @changesets/cli 3, pinned by commit", () => {
+      const cs = job.steps.find((s) => s.uses?.startsWith("changesets/action@"));
+      expect(cs?.uses).toBe("changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51");
+      expect(read(".github/workflows/release.yml")).toContain(
+        "changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2",
+      );
+      const root = JSON.parse(read("package.json")) as { devDependencies: Record<string, string> };
+      expect(root.devDependencies["@changesets/cli"]).toMatch(/^\^3\./);
+      // v1 input names fail the v2 action (throwOnRenamedInputs).
+      for (const v1 of ["version", "publish", "commit", "title", "branch"]) {
+        expect(cs?.with?.[v1]).toBeUndefined();
+      }
+      expect(cs?.with?.["pr-title"]).toBe("chore: version packages");
+      expect(cs?.with?.["commit-message"]).toBe("chore: version packages");
+    });
+
+    it("passes RELEASE_PR_TOKEN (or GITHUB_TOKEN) as github-token and keeps no git credentials", () => {
+      const cs = job.steps.find((s) => s.uses?.startsWith("changesets/action@"));
+      // v2 pushes the version commit through the GitHub API with this input; a GITHUB_TOKEN env
+      // that differs from it fails the action.
+      expect(cs?.with?.["github-token"]).toBe(
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression
+        "${{ secrets.RELEASE_PR_TOKEN || secrets.GITHUB_TOKEN }}",
+      );
+      expect(cs?.env?.GITHUB_TOKEN).toBeUndefined();
+      expect(cs?.with?.["push-with-git-cli"]).toBeUndefined();
+      // Nothing pushes with git, so the checkout keeps no credentials for later steps
+      // (`pnpm version-packages` runs repository scripts).
+      const co = job.steps.filter((s) => s.uses?.startsWith("actions/checkout@"));
+      expect(co).toHaveLength(1);
+      expect(co[0]?.with?.["persist-credentials"]).toBe(false);
+      expect(co[0]?.with?.token).toBeUndefined();
     });
 
     it("versions, then syncs the plugin manifests, then appends the marketplace entries", () => {

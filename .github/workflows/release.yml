@@ -68,17 +68,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: write # changesets/action pushes the changeset-release/main branch
+      contents: write # changesets/action pushes the changeset-release/main branch (GitHub API)
       pull-requests: write # changesets/action opens the Version Packages PR
     env:
       HAS_RELEASE_PR_TOKEN: ${{ secrets.RELEASE_PR_TOKEN != '' }}
     steps:
-      # Credentials stay in this checkout on purpose: changesets/action pushes the version branch with
-      # them (so with RELEASE_PR_TOKEN those pushes trigger ci.yml on the PR).
+      # No credentials in this checkout: changesets/action v2 pushes the version commit through the
+      # GitHub API with its `github-token` input (with RELEASE_PR_TOKEN that push triggers ci.yml on
+      # the PR), and git here only switches and resets the local branch.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          persist-credentials: false
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -93,14 +94,17 @@ jobs:
           PR, or push an empty commit)."
       # With pending changesets, open / update the "Version Packages" PR. No `publish` input, so this
       # step never publishes; without changesets it does nothing.
+      # v2 is the changesets/action line for @changesets/cli 3: v1 bundles the Changesets 2 reader,
+      # which takes .changeset/pre/ (where CLI 3 pre mode keeps consumed changesets) for a Changesets
+      # 1 folder and fails on .changeset/pre/changes.md. v2 takes the token only as `github-token`
+      # (a differing GITHUB_TOKEN env fails it).
       - name: Version Packages PR
-        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
-          version: pnpm version-packages
-          title: "chore: version packages"
-          commit: "chore: version packages"
-        env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          version-script: pnpm version-packages
+          pr-title: "chore: version packages"
+          commit-message: "chore: version packages"
+          github-token: ${{ secrets.RELEASE_PR_TOKEN || secrets.GITHUB_TOKEN }}
 
   publish:
     # Forks never publish. Independent of version-pr: no `needs`, nothing shared.
