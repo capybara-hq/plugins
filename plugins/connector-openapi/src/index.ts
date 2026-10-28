@@ -14,7 +14,7 @@ const DeploymentConfig = z.object({
  */
 export default defineExtension({
   name: "connector-openapi",
-  version: "0.1.0",
+  version: "0.1.0-rc.0",
   sdk: "^0.1.0",
   provides: [CONNECTOR_EXTENSION_POINT],
   config: { deployment: DeploymentConfig },

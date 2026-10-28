@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-object-store-s3",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.0",
   "description": "Object storage (object-store@1) on any S3-compatible service (AWS S3, MinIO, Ceph, OSS, TOS, ...) using the official @aws-sdk/client-s3",
   "license": "Apache-2.0",
   "repository": {

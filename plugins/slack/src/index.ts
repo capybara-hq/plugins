@@ -29,7 +29,7 @@ export { createSlackIdentitySource } from "./identity.js";
  */
 export default defineExtension({
   name: "slack",
-  version: "0.1.0",
+  version: "0.1.0-rc.0",
   sdk: "^0.1.0",
   provides: [CHANNEL_EXTENSION_POINT, IDENTITY_SOURCE_EXTENSION_POINT, DIRECTORY_EXTENSION_POINT],
   permissions: { network: ["slack.com", "wss-primary.slack.com"] },

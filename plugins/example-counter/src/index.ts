@@ -56,7 +56,7 @@ export async function applyDelayedInc(db: Db, jobId: string, step: number): Prom
  */
 export default defineExtension({
   name: "example-counter",
-  version: "0.1.0",
+  version: "0.1.0-rc.0",
   sdk: "^0.1.0",
   provides: ["counter@1"],
   config: { deployment: DeploymentConfig },

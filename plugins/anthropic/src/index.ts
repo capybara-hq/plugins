@@ -210,7 +210,7 @@ const DeploymentConfig = z.object({
 /** Anthropic 供应商插件：官方 SDK + 原生 Messages API（不经 OpenAI 兼容层）。 */
 export default defineExtension({
   name: "anthropic",
-  version: "0.1.0",
+  version: "0.1.0-rc.0",
   sdk: "^0.1.0",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
   // 默认端点；部署配置 baseUrl 可改指向代理（只展示，平台不拦截）

@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-todo",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.0",
   "description": "Todo list tool for agents: todo__write keeps a per-conversation task list in PostgreSQL",
   "license": "Apache-2.0",
   "repository": {
