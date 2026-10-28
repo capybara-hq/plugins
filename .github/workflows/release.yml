@@ -4,7 +4,7 @@ name: Release
 # manual dispatch.
 #
 # How a release happens (the same code as core's npm release: `capybara-plugin release` of
-# @capybara-hq/plugin-tools; runbook: README.md "Releasing"):
+# @capybara-hq/plugin-tools; runbook: AGENTS.md "Releasing"):
 # - First release (the release candidate 0.1.0-rc.0, npm dist-tag `next`): only by running this
 #   workflow manually (workflow_dispatch) on main. Pushes never publish it: `capybara-plugin release
 #   --auto` refuses while none of our packages is on npm yet.

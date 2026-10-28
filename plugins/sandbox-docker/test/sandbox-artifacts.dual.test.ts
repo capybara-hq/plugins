@@ -44,7 +44,8 @@ import {
 /**
  * The M5 segment 2 acceptance on this plugin (dual replica): two kernel processes (api / worker)
  * share PG / Redis, with model-fake, the object store fake `fake-object-store` (SeaweedFS) and the
- * real Docker sandbox (runc, through the socket proxy of docker/sandbox-proxy, egress none), all over
+ * real Docker sandbox (runc, through the socket proxy of capybara-hq/core's
+ * docker/sandbox-proxy, egress none), all over
  * HTTP. The same flow on the kernel's fake sandbox is core's `sandbox-artifacts.dual.test.ts`; here it
  * checks the real container (same container after the takeover, the dead replica's command killed
  * inside it, stopped on suspend and started again on resume):

@@ -1,7 +1,7 @@
 # @capybara-hq/plugin-sandbox-docker
 
 The Docker implementation of the conversation sandbox (`sandbox@1`): one container per conversation (`cap-<conversation id>`), with a runtime of either runc or gVisor's runsc.
-The plugin **reaches Docker only through the endpoint** (the socket proxy in `docker/sandbox-proxy`) and does not mount `docker.sock` itself.
+The plugin **reaches Docker only through the endpoint** (the socket proxy in capybara-hq/core's [`docker/sandbox-proxy`](https://github.com/capybara-hq/core/tree/main/docker/sandbox-proxy)) and does not mount `docker.sock` itself.
 
 ## Deployment config
 
@@ -29,13 +29,15 @@ The deployment config schema is strict: extra keys are errors.
   (uid 1000), with HOME and the working directory at `/workspace`.
 - The egress proxy image `egress-proxy/Dockerfile`: `docker build -t capybara-sandbox-egress:latest plugins/sandbox-docker/egress-proxy`.
 - Multi-arch (amd64 + arm64): `docker buildx build --platform linux/amd64,linux/arm64 -t <registry>/<name>:<tag> --push <directory>`.
-- Local development: `docker compose -f docker/compose.dev.yaml --profile sandbox up -d` builds both images and starts the socket proxy
+- Local development: in a [capybara-hq/core](https://github.com/capybara-hq/core) checkout, `docker compose -f docker/compose.dev.yaml --profile sandbox up -d` ([`docker/compose.dev.yaml`](https://github.com/capybara-hq/core/blob/main/docker/compose.dev.yaml)) builds both images and starts the socket proxy
   (`127.0.0.1:2375`, **for local development only**, see the deployment requirements below). If an image is not local the plugin tries to pull it once.
 - **In a deployment, pre-pull `sandbox.image` and `egressProxyImage` on every Docker node** (`docker pull …`): if an image is not local
   the plugin pulls it only when a conversation first uses the sandbox, and a pull of several hundred MB eats into the time limit of that tool call (`tools.timeoutMs` plus the lock wait and a 3-minute margin);
   when it is slow that call fails, and the next one tries again.
 
 ## Socket proxy (`docker/sandbox-proxy/haproxy.cfg`)
+
+The proxy and its config live in capybara-hq/core: [`docker/sandbox-proxy/haproxy.cfg`](https://github.com/capybara-hq/core/tree/main/docker/sandbox-proxy/haproxy.cfg).
 
 HAProxy (the official image, pinned by digest); the proxy runs as root (to read the socket). Two checks:
 
@@ -139,4 +141,4 @@ The second parameter of `createDockerSandbox(config, testOptions)` can be passed
 
 `test/egress-proxy.test.ts` does not need Docker; `test/sandbox-docker.test.ts` needs Docker (the whole group is skipped without it),
 builds a uniquely tagged test image, starts the socket proxy, and cleans up by label at the end; the runsc cases run only when the daemon has runsc registered.
-Through a real kernel: `test/sandbox-tools.smoke.test.ts` (the kernel's sandbox tools in one process) and `test/sandbox-artifacts.dual.test.ts` (the M5 segment 2 flow across two replicas: attachments, delivery, takeover after a killed replica, idle suspend and resume). The socket proxy starts from `test/sandbox-proxy/haproxy.cfg`, an exact copy of `docker/sandbox-proxy/haproxy.cfg` (`pnpm check` compares them).
+Through a real kernel: `test/sandbox-tools.smoke.test.ts` (the kernel's sandbox tools in one process) and `test/sandbox-artifacts.dual.test.ts` (the M5 segment 2 flow across two replicas: attachments, delivery, takeover after a killed replica, idle suspend and resume). The socket proxy starts from `test/sandbox-proxy/haproxy.cfg`, an exact copy of capybara-hq/core's [`docker/sandbox-proxy/haproxy.cfg`](https://github.com/capybara-hq/core/tree/main/docker/sandbox-proxy/haproxy.cfg). Nothing in this repository compares them; core's `check:bootstrap --network` (rule `bootstrap-haproxy`) will check the copy against the commit core pins.

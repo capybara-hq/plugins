@@ -111,9 +111,11 @@ pnpm verify              # the required checks locally for the current branch (-
 
 Kernel-level tests load the plugin under test from `src` into a kernel installed from npm.
 `vitest.config.ts` inlines the core packages (`server.deps.inline`, so Vite transforms the kernel's
-`import()` of a TypeScript plugin) and sets `NODE_OPTIONS=--import tsx` for the test environment, so
-the kernel replicas that dual-replica tests start as child processes can load the plugin and the
-TypeScript fake extensions of `@capybara-hq/testing`.
+`import()` of a TypeScript plugin). Its setup file `vitest.setup.ts` adds tsx (an absolute loader
+URL) to `NODE_OPTIONS` inside `*.dual.test.ts` files only, so the kernel replicas those tests start
+as child processes can load the plugin and the TypeScript fake extensions of `@capybara-hq/testing`;
+workers and other tests' child processes run plain Node. This is temporary, until core's
+`@capybara-hq/testing` makes dual-replica children load TypeScript plugins themselves.
 
 ## How work is done
 

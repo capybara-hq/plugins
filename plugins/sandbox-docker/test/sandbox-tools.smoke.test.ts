@@ -34,7 +34,7 @@ import {
 
 /**
  * Smoke test (M5 T9): a real kernel + model-fake + this plugin (through the socket proxy of
- * docker/sandbox-proxy) run a few of the kernel's sandbox tool cases (default allowlist egress, so
+ * capybara-hq/core's docker/sandbox-proxy) run a few of the kernel's sandbox tool cases (default allowlist egress, so
  * the egress proxy is created too). Skipped without Docker.
  */
 

@@ -25,9 +25,10 @@ import {
 } from "./docker-env.js";
 
 /**
- * 真实 Docker（经 docker/sandbox-proxy 的 socket 代理）上的 sandbox@1：生命周期、exec 超时与中止、文件读写、
- * /skills 只读、同名重建、gone 语义、三种出站（none / allowlist / open）、安全设置；runsc 只在装了时跑。
- * 没有 Docker 时整组跳过。
+ * sandbox@1 on real Docker (through the socket proxy of capybara-hq/core's docker/sandbox-proxy):
+ * lifecycle, exec timeout and abort, file reads and writes, read-only /skills, same-name rebuild,
+ * gone semantics, the three egress modes (none / allowlist / open) and the security settings; the
+ * runsc cases run only when runsc is installed. Skipped as a whole without Docker.
  */
 
 const RUN = randomUUID().slice(0, 8);
