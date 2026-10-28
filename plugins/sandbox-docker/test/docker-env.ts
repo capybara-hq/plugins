@@ -5,32 +5,34 @@ import { promisify } from "node:util";
 import { GenericContainer, Wait } from "testcontainers";
 
 /**
- * 需要 Docker 的测试共用的环境：探测 Docker / runsc、构建测试镜像（唯一标签，结束时删掉）、
- * 起 docker/sandbox-proxy 的 socket 代理（插件只经它访问 Docker）、按标签清理测试留下的资源。
- * 内核的冒烟测试（packages/kernel/test/tools/sandbox）也用它。
+ * The environment shared by the tests that need Docker: detects Docker / runsc, builds the test
+ * images (unique tags, removed at the end), starts the socket proxy (the plugin reaches Docker only
+ * through it; its config is test/sandbox-proxy/haproxy.cfg, a copy of core's
+ * docker/sandbox-proxy/haproxy.cfg) and removes what the tests left behind, by label. The plugin's
+ * kernel-level smoke tests (sandbox-tools.smoke.test.ts, sandbox-artifacts.dual.test.ts) use it too.
  */
 
 const run = promisify(execFile);
 
 const pluginRoot = fileURLToPath(new URL("../", import.meta.url));
 
-/** 本机能用 Docker（`docker info` 成功）。 */
+/** Docker is usable here (`docker info` succeeds). */
 export const dockerAvailable =
   process.env.CAPYBARA_TEST_NO_DOCKER !== "1" &&
   spawnSync("docker", ["info", "--format", "{{.ServerVersion}}"], { stdio: "ignore" }).status === 0;
 
-/** Docker 守护进程登记了 gVisor 运行时 runsc。 */
+/** The Docker daemon has the gVisor runtime runsc registered. */
 export const runscAvailable =
   dockerAvailable &&
   spawnSync("docker", ["info", "--format", "{{json .Runtimes}}"], {
     encoding: "utf8",
   }).stdout.includes('"runsc"');
 
-/** socket 代理镜像（与 docker/compose.dev.yaml 一致，按摘要固定）。 */
+/** The socket proxy image (the same as core's docker/compose.yaml, pinned by digest). */
 export const SOCKET_PROXY_IMAGE =
   "haproxy:3.2-alpine@sha256:254e6370f01cd654e0744edf607c67f33777c1b6a9dc0d4b28bcba7171460122";
 
-/** 测试资源统一打的标签键（值是本次运行的 id）。 */
+/** The label key on every test resource (its value is the id of this run). */
 export const TEST_LABEL = "dev.capybara.test";
 
 export interface TestImages {
