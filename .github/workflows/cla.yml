@@ -1,0 +1,72 @@
+# CLA signing bot (contributor-assistant). Separate from ci.yml and NOT part of `ci-ok`.
+# It runs in the base repository context (pull_request_target / issue_comment) and must never
+# check out or run the PR's code: there is deliberately no checkout step here.
+# Signatures live on the `cla-signatures` branch of this repo at signatures/v1/cla.json.
+name: cla
+on:
+  pull_request_target:
+    types: [opened, closed, synchronize]
+  issue_comment:
+    types: [created]
+# No workflow-level grants: the token gets write scopes only inside the cla job (M-5). Until the
+# main ruleset is active (C1), contents: write could push to any unprotected branch.
+permissions: {}
+concurrency:
+  group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+jobs:
+  cla:
+    # Comments act only on PR comments that are the signing sentence or the recheck phrase.
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event.issue.pull_request &&
+      (github.event.comment.body == 'recheck' ||
+      github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: write
+      # actions: write lets the action re-run the last pull_request_target run after a signature;
+      # without it the CLA status stays red.
+      actions: write
+    steps:
+      # Self-seed the signatures branch (the archived action cannot create it reliably).
+      # Uses only gh api and GITHUB_TOKEN; no PR data reaches the shell. The branch
+      # `cla-signatures` must not be covered by a branch ruleset.
+      - name: Seed signatures branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          file=signatures/v1/cla.json
+          content='{"signedContributors":[]}'
+          b64=$(printf '%s' "$content" | base64 | tr -d '\n')
+          if gh api "repos/$REPO/git/ref/heads/cla-signatures" >/dev/null 2>&1; then
+            if ! gh api "repos/$REPO/contents/$file?ref=cla-signatures" >/dev/null 2>&1; then
+              gh api -X PUT "repos/$REPO/contents/$file" \
+                -f message="chore: seed CLA signatures" -f content="$b64" \
+                -f branch=cla-signatures >/dev/null
+            fi
+            exit 0
+          fi
+          blob=$(gh api -X POST "repos/$REPO/git/blobs" -f content="$b64" -f encoding=base64 --jq .sha)
+          tree=$(gh api -X POST "repos/$REPO/git/trees" -f "tree[][path]=$file" \
+            -f "tree[][mode]=100644" -f "tree[][type]=blob" -f "tree[][sha]=$blob" --jq .sha)
+          commit=$(gh api -X POST "repos/$REPO/git/commits" -f message="chore: seed CLA signatures" \
+            -f tree="$tree" --jq .sha)
+          if ! out=$(gh api -X POST "repos/$REPO/git/refs" -f ref=refs/heads/cla-signatures \
+            -f sha="$commit" 2>&1); then
+            case "$out" in *"already exists"*) echo "branch created concurrently" ;; *) echo "$out" >&2; exit 1 ;; esac
+          fi
+      - name: CLA assistant
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-signatures: signatures/v1/cla.json
+          path-to-document: https://github.com/capybara-hq/core/blob/main/CLA.md
+          branch: cla-signatures
+          allowlist: grant-chao,dependabot[bot],github-actions[bot],changeset-bot,changeset-bot[bot]
+          custom-pr-sign-comment: I have read the CLA Document and I hereby sign the CLA

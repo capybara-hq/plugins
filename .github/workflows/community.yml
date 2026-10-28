@@ -1,0 +1,25 @@
+# Community issue gate: calls the shared gate workflow from capybara-hq/.github.
+# It runs in the base repository context (pull_request_target) and must never check out or run
+# the PR's code; the shared workflow only reads PR metadata through the GitHub API.
+# It sets the commit status `issue-linked` on PR heads.
+name: community
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+  issues:
+    types: [opened, edited, labeled, unlabeled, assigned, unassigned, closed, reopened]
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  statuses: write
+jobs:
+  gate:
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      statuses: write
+    uses: capybara-hq/.github/.github/workflows/gate.yml@v1

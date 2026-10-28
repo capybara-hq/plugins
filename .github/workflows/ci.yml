@@ -1,0 +1,189 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to a PR cancels its older run; runs on main are never cancelled.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# No default token permissions: each job asks for what it needs (only `contents: read` to check out;
+# artifacts use the runner's own token, not GITHUB_TOKEN).
+permissions: {}
+
+# Branch protection requires `ci-ok` (which aggregates every job below) and `issue-linked`
+# (set by community.yml, not part of this workflow).
+#
+# PRs run what the diff affects; pushes to main run everything. The plan comes from
+# tools/ci/src/affected.ts (rules and their tests live there; AGENTS.md "CI and checks" lists them):
+# - ci: always, in full (all cheap or whole-repo):
+#   - pnpm lint, pnpm typecheck;
+#   - `capybara-plugin check` (@capybara-hq/plugin-tools): every plugin check on plugins/* (the
+#     SDK boundary, extension state under multiple replicas, the permission manifest, packing,
+#     the tool design rules, migrations, plugin-test-imports, plugin-release-metadata); on PRs with
+#     `--base`, which also rejects an edit, deletion or rename of an applied migration;
+#   - check:synced-skills (the shared skills match their recorded hashes) and
+#     check:skills-frontmatter (English, valid YAML, description <= 1024 characters);
+#   - `capybara-plugin marketplace --check`: every public plugin version has its
+#     .capybara-plugin/marketplace.json entry; on PRs with `--base`, the entries at the base stay
+#     unchanged and first (append-only) and the added ones match their packs;
+#   - pack every plugin (artifact), commitlint on PRs.
+#   npm publishing is not here: .github/workflows/release.yml runs on push to main and
+#   workflow_dispatch only, never on PRs.
+# - test: by diff on PRs (the changed plugins and the plugins that depend on them, by plugin.json
+#   dependencies or package.json dependencies); everything on main. Docker is available on the
+#   runner for sandbox-docker and the Testcontainers PostgreSQL / Valkey; live API tests skip
+#   without their CAPYBARA_TEST_* variables.
+# - Docs-only diffs skip test; root config, the lockfile (core package upgrades), .github/**,
+#   tools/**, unknown files, or a diff that can't be computed run everything.
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      test: ${{ steps.plan.outputs.test }}
+      test-dirs: ${{ steps.plan.outputs.test-dirs }}
+      test-shards: ${{ steps.plan.outputs.test-shards }}
+      test-shard-total: ${{ steps.plan.outputs.test-shard-total }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # The plan script is plain erasable TypeScript run by node 24; no pnpm install needed.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # When in doubt, run everything: a missed run is worse than a wasted one.
+          if [ "$EVENT" != "pull_request" ]; then
+            node tools/ci/src/cli.ts --all "push to main"
+          elif ! git diff --name-only "$BASE...$HEAD_SHA" > changed-files.txt; then
+            node tools/ci/src/cli.ts --all "could not diff $BASE...$HEAD_SHA"
+          elif grep -qE '^(\.github/|tools/)' changed-files.txt; then
+            # Decided here, not by the script: the PR may have changed the script itself.
+            cat changed-files.txt
+            node tools/ci/src/cli.ts --all "CI definition or tools changed (.github/** or tools/**)"
+          else
+            cat changed-files.txt
+            node tools/ci/src/cli.ts < changed-files.txt
+          fi
+
+  # Cheap or whole-repo checks and build artifacts: always run in full. Tests are in the test job.
+  ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      # The checkout of a PR is its merge commit; the first parent is the base branch as merged,
+      # while pull_request.base.sha goes stale once main moves on.
+      - name: Plugin checks
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            pnpm exec capybara-plugin check --base "$(git rev-parse HEAD^1)"
+          else
+            pnpm exec capybara-plugin check
+          fi
+      - run: pnpm check:synced-skills
+      - run: pnpm check:skills-frontmatter
+      - name: Marketplace manifest
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            pnpm exec capybara-plugin marketplace --check --base "$(git rev-parse HEAD^1)"
+          else
+            pnpm exec capybara-plugin marketplace --check
+          fi
+      - name: Pack every plugin
+        run: pnpm pack-plugins
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-packages
+          path: artifacts/plugins/*.tgz
+          if-no-files-found: error
+          retention-days: 14
+      - name: Lint commit messages
+        if: github.event_name == 'pull_request'
+        run: >
+          pnpm exec commitlint
+          --from ${{ github.event.pull_request.base.sha }}
+          --to ${{ github.event.pull_request.head.sha }}
+
+  # vitest by file, sharded on a full run; each shard starts its own Testcontainers. On PRs only the
+  # affected plugin directories run (test-dirs, empty = everything).
+  test:
+    name: test (${{ matrix.shard }}/${{ needs.changes.outputs.test-shard-total }})
+    needs: changes
+    if: needs.changes.outputs.test == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.changes.outputs.test-shards) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - env:
+          SHARD: ${{ matrix.shard }}
+          TOTAL: ${{ needs.changes.outputs.test-shard-total }}
+          DIRS: ${{ needs.changes.outputs.test-dirs }}
+        run: |
+          echo "test dirs: ${DIRS:-<all>}"
+          # Word splitting of DIRS is intended: space-separated directories, none of them with spaces.
+          # shellcheck disable=SC2086
+          pnpm exec vitest run --passWithNoTests --shard="$SHARD/$TOTAL" $DIRS
+
+  # Aggregate: the only required check. changes and ci must succeed; test must succeed when the plan
+  # says it runs, and may be skipped only when the plan says it doesn't. always(): report failure
+  # when an upstream job failed instead of being skipped (skipped = passed).
+  ci-ok:
+    if: always()
+    needs: [changes, ci, test]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - env:
+          CHANGES: ${{ needs.changes.result }}
+          CI_JOB: ${{ needs.ci.result }}
+          TEST: ${{ needs.changes.outputs.test }}:${{ needs.test.result }}
+        run: |
+          # test is "<planned>:<result>".
+          echo "changes=$CHANGES ci=$CI_JOB test=$TEST"
+          fail=0
+          [ "$CHANGES" = "success" ] || fail=1
+          [ "$CI_JOB" = "success" ] || fail=1
+          case "$TEST" in
+            true:success | false:success | false:skipped) ;;
+            *) fail=1 ;;
+          esac
+          exit "$fail"

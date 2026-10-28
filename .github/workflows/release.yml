@@ -1,0 +1,167 @@
+name: Release
+
+# npm release of the official plugins. Never runs on pull requests: only on push to main and on
+# manual dispatch.
+#
+# How a release happens (the same code as core's npm release: `capybara-plugin release` of
+# @capybara-hq/plugin-tools; runbook: README.md "Releasing"):
+# - First release (the release candidate 0.1.0-rc.0, npm dist-tag `next`): only by running this
+#   workflow manually (workflow_dispatch) on main. Pushes never publish it: `capybara-plugin release
+#   --auto` refuses while none of our packages is on npm yet.
+# - Afterwards: changesets (in pre mode with the tag `rc` while the release is a candidate,
+#   .changeset/pre.json). On push to main, with pending changesets, the `version-pr` job opens or
+#   updates the "Version Packages" PR; its version command `pnpm version-packages` runs `changeset
+#   version`, `capybara-plugin sync-versions` (plugin.json and the extension manifest follow
+#   package.json) and `capybara-plugin marketplace --write` (appends the new versions to
+#   .capybara-plugin/marketplace.json with the sha512 of their reproducible packs), so the integrity
+#   values are reviewed in that PR and never pushed to main by a bot. On every push the `publish`
+#   job runs `capybara-plugin release --auto`: it publishes whatever plugin versions in the
+#   committed main tree are not on npm yet, and nothing when a version would be promoted from an rc
+#   (promotion is a manual run). A manual run publishes whatever is missing; `dry_run` packs
+#   everything and runs `npm publish --dry-run`.
+# - Before the first publish the release packs every planned plugin and compares its sha512 with
+#   its marketplace.json entry (default `--marketplace .capybara-plugin/marketplace.json`); a
+#   mismatch or a missing entry stops the run with nothing published (`release.integrity_mismatch`).
+# - Scope: every public package under plugins/ (example-* are private and never published), each as
+#   its plugin tgz, with npm provenance naming this repository.
+#
+# Why two jobs (never merge them): `changeset version` rewrites package versions in the version-pr
+# job's checkout. If publishing ran in that same checkout it would ship versions nobody has
+# reviewed. The publish job runs on a fresh runner, checks out exactly github.sha, does not depend on
+# version-pr (no `needs`, no artifacts), and `--auto` requires HEAD == GITHUB_SHA with no uncommitted
+# package.json changes. tools/checks/test/workflows.test.ts asserts this layout.
+#
+# Least privilege: version-pr can write contents and PRs but has no id-token and no npm token;
+# publish can only read contents, gets id-token (provenance / trusted publishing) and the npm token.
+#
+# Secrets:
+# - NPM_TOKEN: a granular npm access token with read and write access to the @capybara-hq packages.
+#   Required for the first publish, because npm trusted publishing is configured per existing
+#   package. Later each package may use npm trusted publishing (OIDC) with this repository and
+#   workflow file `release.yml`, and the secret can go. Provenance needs a public repository whose
+#   URL matches each package's `repository` field (`capybara-plugin check`, plugin-release-metadata).
+# - RELEASE_PR_TOKEN (optional, recommended): a fine-grained PAT or GitHub App token with contents and
+#   pull-requests write on this repository. A Version Packages PR opened or pushed with GITHUB_TOKEN
+#   does not trigger ci.yml, so `ci-ok` never reports; without this secret, trigger CI by hand (close
+#   and reopen the PR, or push an empty commit to it).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Dry run, pack and run npm publish --dry-run; nothing is published
+        type: boolean
+        default: false
+
+# One release at a time, never cancelled half-way.
+concurrency:
+  group: release-${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  version-pr:
+    # Push only; forks never run it. It never publishes.
+    if: github.event_name == 'push' && github.repository == 'capybara-hq/plugins'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # changesets/action pushes the changeset-release/main branch
+      pull-requests: write # changesets/action opens the Version Packages PR
+    env:
+      HAS_RELEASE_PR_TOKEN: ${{ secrets.RELEASE_PR_TOKEN != '' }}
+    steps:
+      # Credentials stay in this checkout on purpose: changesets/action pushes the version branch with
+      # them (so with RELEASE_PR_TOKEN those pushes trigger ci.yml on the PR).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PR_TOKEN || secrets.GITHUB_TOKEN }}
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Note when CI will not run on the Version Packages PR
+        if: env.HAS_RELEASE_PR_TOKEN != 'true'
+        run: >
+          echo "::notice::RELEASE_PR_TOKEN is not set: the Version Packages PR is updated with
+          GITHUB_TOKEN, which does not trigger ci.yml. Trigger CI on it by hand (close and reopen the
+          PR, or push an empty commit)."
+      # With pending changesets, open / update the "Version Packages" PR. No `publish` input, so this
+      # step never publishes; without changesets it does nothing.
+      - name: Version Packages PR
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+        with:
+          version: pnpm version-packages
+          title: "chore: version packages"
+          commit: "chore: version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PR_TOKEN || secrets.GITHUB_TOKEN }}
+
+  publish:
+    # Forks never publish. Independent of version-pr: no `needs`, nothing shared.
+    if: github.repository == 'capybara-hq/plugins'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # npm provenance (and trusted publishing)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+
+      # A manual publish must come from main (provenance records the ref); a dry run may use any ref.
+      - name: Check the ref of a manual publish
+        if: github.event_name == 'workflow_dispatch' && !inputs.dry_run && github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::publish from main only (got $REF); use dry_run on other refs"
+          exit 1
+
+      # `pnpm release` is `capybara-plugin release`: every public plugin whose version is not on npm
+      # yet, as its plugin tgz, after checking every pack against .capybara-plugin/marketplace.json.
+      - name: Publish to npm
+        id: publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::notice::NPM_TOKEN is not set: relying on npm trusted publishing (OIDC)"
+          fi
+          args=(--provenance --out artifacts/release)
+          if [ "$EVENT" = "push" ]; then
+            args+=(--auto)
+          elif [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          pnpm release "${args[@]}"
+
+      # Also after a failure half-way: `published` and the checksums are written after every publish.
+      - name: Upload the published plugin packages and their sha512
+        if: always() && steps.publish.outputs.published != '' && steps.publish.outputs.published != '0'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: npm-plugin-packages
+          path: |
+            artifacts/release/plugins/*.tgz
+            artifacts/release/plugins/SHA512SUMS
+            artifacts/release/plugins/integrity.json
+          if-no-files-found: warn
+          retention-days: 90
