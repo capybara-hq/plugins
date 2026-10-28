@@ -53,8 +53,8 @@ export const DeploymentConfig = z
 /** `sandbox@1`：每个对话一个 E2B 沙箱，休眠用 E2B 的 pause，恢复用 connect。 */
 export default defineExtension({
   name: "sandbox-e2b",
-  version: "0.1.0",
-  sdk: "^0.1.0",
+  version: "0.1.0-rc.0",
+  sdk: "^0.1.0-rc.0",
   provides: [SANDBOX_EXTENSION_POINT],
   // 只用部署配置与 E2B 的 API，不用任何需要声明的平台能力
   permissions: {},

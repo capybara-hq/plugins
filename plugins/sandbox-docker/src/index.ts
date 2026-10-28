@@ -52,8 +52,8 @@ export const DeploymentConfig = z
 /** `sandbox@1`：每个对话一个 Docker 容器，经 socket 代理访问 Docker，插件不挂 docker.sock。 */
 export default defineExtension({
   name: "sandbox-docker",
-  version: "0.1.0",
-  sdk: "^0.1.0",
+  version: "0.1.0-rc.0",
+  sdk: "^0.1.0-rc.0",
   provides: [SANDBOX_EXTENSION_POINT],
   // 只用部署配置与 Docker endpoint，不用任何需要声明的平台能力
   permissions: {},

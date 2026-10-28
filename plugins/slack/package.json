@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-slack",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.0",
   "description": "Slack (channel@1 bot over Socket Mode with Block Kit cards, identity-source@1 Sign in with Slack, directory@1)",
   "license": "Apache-2.0",
   "repository": {

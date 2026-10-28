@@ -327,8 +327,8 @@ function abortFrom(signal: AbortSignal): AbortController {
  */
 export default defineExtension({
   name: "object-store-s3",
-  version: "0.1.0",
-  sdk: "^0.1.0",
+  version: "0.1.0-rc.0",
+  sdk: "^0.1.0-rc.0",
   provides: [OBJECT_STORE_EXTENSION_POINT],
   config: { deployment: DeploymentConfig },
   setup(ctx) {

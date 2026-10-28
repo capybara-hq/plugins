@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "lark",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.0",
   "publisher": "Capybara",
   "description": "Lark (channel@1 bot over the Lark long connection with interactive cards, identity-source@1 web login, directory@1)",
   "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/lark#readme"

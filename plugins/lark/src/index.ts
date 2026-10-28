@@ -32,8 +32,8 @@ export { createLarkIdentitySource } from "./identity.js";
  */
 export default defineExtension({
   name: "lark",
-  version: "0.1.0",
-  sdk: "^0.1.0",
+  version: "0.1.0-rc.0",
+  sdk: "^0.1.0-rc.0",
   provides: [CHANNEL_EXTENSION_POINT, IDENTITY_SOURCE_EXTENSION_POINT, DIRECTORY_EXTENSION_POINT],
   permissions: { network: ["open.larksuite.com", "accounts.larksuite.com"] },
   config: { deployment: LarkDeployment, org: LarkOrgConfig },

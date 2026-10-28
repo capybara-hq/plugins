@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-sandbox-e2b",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.0",
   "description": "Conversation sandboxes (sandbox@1) as E2B sandboxes (E2B cloud or self-hosted), with pause / resume and E2B egress controls",
   "license": "Apache-2.0",
   "repository": {
