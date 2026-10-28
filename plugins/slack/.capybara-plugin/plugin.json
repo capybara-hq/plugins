@@ -4,5 +4,5 @@
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
   "description": "Slack (channel@1 bot over Socket Mode with Block Kit cards, identity-source@1 Sign in with Slack, directory@1)",
-  "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/slack#readme"
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/slack#readme"
 }

@@ -5,10 +5,10 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/capybara-hq/core.git",
+    "url": "git+https://github.com/capybara-hq/plugins.git",
     "directory": "plugins/object-store-s3"
   },
-  "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/object-store-s3#readme",
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/object-store-s3#readme",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -31,10 +31,10 @@
     "@aws-sdk/lib-storage": "^3.1154.0",
     "@aws-sdk/s3-presigned-post": "^3.1154.0",
     "@aws-sdk/s3-request-presigner": "^3.1154.0",
-    "@capybara-hq/plugin-sdk": "workspace:*",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@capybara-hq/testing": "workspace:*"
+    "@capybara-hq/testing": "^0.1.0-rc.0"
   }
 }

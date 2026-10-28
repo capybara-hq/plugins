@@ -5,10 +5,10 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/capybara-hq/core.git",
+    "url": "git+https://github.com/capybara-hq/plugins.git",
     "directory": "plugins/sandbox-e2b"
   },
-  "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/sandbox-e2b#readme",
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-e2b#readme",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -28,10 +28,10 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "workspace:*",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@capybara-hq/testing": "workspace:*"
+    "@capybara-hq/testing": "^0.1.0-rc.0"
   }
 }

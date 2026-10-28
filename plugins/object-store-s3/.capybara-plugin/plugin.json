@@ -4,5 +4,5 @@
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
   "description": "Object storage (object-store@1) on any S3-compatible service (AWS S3, MinIO, Ceph, OSS, TOS, ...) using the official @aws-sdk/client-s3",
-  "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/object-store-s3#readme"
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/object-store-s3#readme"
 }

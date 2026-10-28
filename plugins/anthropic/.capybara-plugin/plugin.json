@@ -4,5 +4,5 @@
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
   "description": "Anthropic model provider (model-provider@2) using the official SDK and the native Messages API",
-  "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/anthropic#readme"
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/anthropic#readme"
 }

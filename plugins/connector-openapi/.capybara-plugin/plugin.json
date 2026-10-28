@@ -4,5 +4,5 @@
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
   "description": "OpenAPI connector (connector@1): one tool per operation of an OpenAPI 3.0 / 3.1 HTTP API",
-  "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/connector-openapi#readme"
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/connector-openapi#readme"
 }

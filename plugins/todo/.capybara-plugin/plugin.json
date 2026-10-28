@@ -4,5 +4,5 @@
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
   "description": "Todo list tool for agents: todo__write keeps a per-conversation task list in PostgreSQL",
-  "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/todo#readme"
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/todo#readme"
 }

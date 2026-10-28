@@ -5,10 +5,10 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/capybara-hq/core.git",
+    "url": "git+https://github.com/capybara-hq/plugins.git",
     "directory": "plugins/todo"
   },
-  "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/todo#readme",
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/todo#readme",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -28,12 +28,12 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "workspace:*",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@capybara-hq/plugin-model-fake": "workspace:*",
-    "@capybara-hq/testing": "workspace:*",
+    "@capybara-hq/plugin-model-fake": "^0.1.0-rc.0",
+    "@capybara-hq/testing": "^0.1.0-rc.0",
     "@types/pg": "^8.23.1",
     "kysely": "^0.29.6",
     "pg": "^8.23.1"

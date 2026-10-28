@@ -1,0 +1,56 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "plugins/anthropic"
+    },
+    {
+      "path": "plugins/connector-mcp"
+    },
+    {
+      "path": "plugins/connector-openapi"
+    },
+    {
+      "path": "plugins/example-board"
+    },
+    {
+      "path": "plugins/example-counter"
+    },
+    {
+      "path": "plugins/lark"
+    },
+    {
+      "path": "plugins/object-store-s3"
+    },
+    {
+      "path": "plugins/openai"
+    },
+    {
+      "path": "plugins/openai-compatible"
+    },
+    {
+      "path": "plugins/sandbox-docker"
+    },
+    {
+      "path": "plugins/sandbox-e2b"
+    },
+    {
+      "path": "plugins/slack"
+    },
+    {
+      "path": "plugins/todo"
+    },
+    {
+      "path": "tools/ci"
+    },
+    {
+      "path": "tools/dev"
+    },
+    {
+      "path": "tools/worktree"
+    },
+    {
+      "path": "tools/checks"
+    }
+  ]
+}

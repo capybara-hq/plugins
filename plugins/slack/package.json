@@ -5,10 +5,10 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/capybara-hq/core.git",
+    "url": "git+https://github.com/capybara-hq/plugins.git",
     "directory": "plugins/slack"
   },
-  "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/slack#readme",
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/slack#readme",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -28,7 +28,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "workspace:*",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.0",
     "@slack/socket-mode": "^3.1.0",
     "@slack/web-api": "^8.2.0",
     "jose": "^6.2.12",
@@ -36,8 +36,8 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@capybara-hq/plugin-model-fake": "workspace:*",
-    "@capybara-hq/testing": "workspace:*",
+    "@capybara-hq/plugin-model-fake": "^0.1.0-rc.0",
+    "@capybara-hq/testing": "^0.1.0-rc.0",
     "ioredis": "^6.0.0",
     "kysely": "^0.29.6"
   }

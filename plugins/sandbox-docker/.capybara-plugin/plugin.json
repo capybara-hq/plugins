@@ -4,5 +4,5 @@
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
   "description": "Conversation sandboxes (sandbox@1) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with an egress allowlist proxy",
-  "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/sandbox-docker#readme"
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-docker#readme"
 }

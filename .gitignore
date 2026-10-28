@@ -1,0 +1,9 @@
+node_modules
+dist
+coverage
+*.tsbuildinfo
+artifacts
+.capybara-pack-*
+# Local worktrees (the .claude/skills symlink is tracked; only worktrees are ignored)
+.claude/worktrees/
+.superpowers/

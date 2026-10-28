@@ -1,0 +1,48 @@
+{
+  "name": "capybara-plugins",
+  "private": true,
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/capybara-hq/plugins.git"
+  },
+  "type": "module",
+  "packageManager": "pnpm@10.34.3",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "doctor:env": "node tools/dev/src/doctor-cli.ts",
+    "verify": "tsx tools/dev/src/verify-cli.ts",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
+    "test": "vitest run",
+    "check": "capybara-plugin check && pnpm check:synced-skills && pnpm check:skills-frontmatter",
+    "check:synced-skills": "tsx tools/checks/src/cli/synced-skills.ts",
+    "check:skills-frontmatter": "tsx tools/checks/src/cli/skills-frontmatter.ts",
+    "check:marketplace": "capybara-plugin marketplace --check",
+    "changeset": "changeset",
+    "version-packages": "changeset version && capybara-plugin sync-versions && capybara-plugin marketplace --write",
+    "pack-plugins": "capybara-plugin pack --all . --out artifacts/plugins",
+    "release": "capybara-plugin release",
+    "wt:new": "tsx tools/worktree/src/cli.ts new",
+    "wt:rm": "tsx tools/worktree/src/cli.ts rm",
+    "wt:ls": "tsx tools/worktree/src/cli.ts ls"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "@capybara-hq/plugin-model-fake": "^0.1.0-rc.0",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.0",
+    "@capybara-hq/plugin-tools": "^0.1.0-rc.0",
+    "@capybara-hq/testing": "^0.1.0-rc.0",
+    "@changesets/cli": "^3.0.3",
+    "@commitlint/cli": "^21.2.3",
+    "@commitlint/config-conventional": "^21.2.3",
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5",
+    "yaml": "^2.9.1"
+  }
+}

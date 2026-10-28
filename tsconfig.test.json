@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "composite": false,
+    "incremental": false,
+    "types": ["node"]
+  },
+  "include": ["**/test/**/*.ts", "vitest.config.ts", "commitlint.config.ts"],
+  "exclude": ["node_modules", "**/dist"]
+}

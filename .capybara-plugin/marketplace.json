@@ -1,0 +1,8 @@
+{
+  "$schema": "https://capybarahq.com/schemas/marketplace.v1.schema.json",
+  "schemaVersion": 1,
+  "name": "capybara-official",
+  "owner": { "name": "Capybara", "url": "https://github.com/capybara-hq" },
+  "description": "The official Capybara plugins, published to npm from capybara-hq/plugins.",
+  "plugins": []
+}

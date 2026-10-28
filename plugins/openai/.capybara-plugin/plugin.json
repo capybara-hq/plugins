@@ -4,5 +4,5 @@
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
   "description": "OpenAI model provider (model-provider@2) using the official SDK and the native Responses API",
-  "homepage": "https://github.com/capybara-hq/core/tree/main/plugins/openai#readme"
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/openai#readme"
 }
