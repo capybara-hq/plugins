@@ -79,8 +79,8 @@ const EXTRA_INPUTS: { match: (f: string) => boolean; dirs: string[] }[] = [
 ];
 
 /**
- * Files no test reads; the ci job checks them in full on every PR (`capybara-plugin marketplace
- * --check`, changesets status).
+ * Files no test reads. The ci job checks the marketplace manifest in full on every PR
+ * (`capybara-plugin marketplace --check`); changesets are consumed by the release workflow only.
  */
 function isNoTestInput(f: string): boolean {
   if (f === ".capybara-plugin/marketplace.json") return true;

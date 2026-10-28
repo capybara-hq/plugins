@@ -32,12 +32,12 @@ export default defineConfig({
           // core packages lets Vite transform them and the dynamic import. The pattern is matched
           // against the resolved file path, not the package name (plugin-tools README).
           server: { deps: { inline: [/\/node_modules\/@capybara-hq\//] } },
-          // Dual-replica tests (@capybara-hq/testing's createDualReplicaHarness) start each kernel
-          // replica as a plain `node` child process, which inherits this environment. tsx lets that
-          // child load the plugin under test from src (mapping ./x.js to ./x.ts) and the TypeScript
-          // fake extensions @capybara-hq/testing ships under node_modules, which Node's own type
-          // stripping refuses. The workers themselves are unaffected (env is applied in-process).
-          env: { NODE_OPTIONS: "--import tsx" },
+          // TEMPORARY (until @capybara-hq/testing's dual-replica children load TypeScript plugins
+          // themselves, a fix in capybara-hq/core): the setup file adds tsx to NODE_OPTIONS for the
+          // child processes spawned by `*.dual.test.ts` files only. Not `test.env`: vitest builds the
+          // fork workers' own environment from it, so every worker and every process any test spawns
+          // would load tsx, resolved from that process's cwd.
+          setupFiles: ["./vitest.setup.ts"],
         },
       },
     ],

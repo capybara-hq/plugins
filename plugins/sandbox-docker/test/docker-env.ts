@@ -7,7 +7,7 @@ import { GenericContainer, Wait } from "testcontainers";
 /**
  * The environment shared by the tests that need Docker: detects Docker / runsc, builds the test
  * images (unique tags, removed at the end), starts the socket proxy (the plugin reaches Docker only
- * through it; its config is test/sandbox-proxy/haproxy.cfg, a copy of core's
+ * through it; its config is test/sandbox-proxy/haproxy.cfg, a copy of capybara-hq/core's
  * docker/sandbox-proxy/haproxy.cfg) and removes what the tests left behind, by label. The plugin's
  * kernel-level smoke tests (sandbox-tools.smoke.test.ts, sandbox-artifacts.dual.test.ts) use it too.
  */
@@ -68,7 +68,10 @@ export interface SocketProxy {
 
 /**
  * Starts the socket proxy (the only container that mounts docker.sock) with this directory's copy
- * of docker/sandbox-proxy/haproxy.cfg (`pnpm check` keeps the copy identical).
+ * of capybara-hq/core's docker/sandbox-proxy/haproxy.cfg
+ * (https://github.com/capybara-hq/core/tree/main/docker/sandbox-proxy). No check in this
+ * repository keeps the copy identical; core's `check:bootstrap --network` (rule
+ * `bootstrap-haproxy`) will compare it with core's file.
  */
 export async function startSocketProxy(): Promise<SocketProxy> {
   const c = await new GenericContainer(SOCKET_PROXY_IMAGE)
