@@ -2,7 +2,314 @@
   "$schema": "https://capybarahq.com/schemas/marketplace.v1.schema.json",
   "schemaVersion": 1,
   "name": "capybara-official",
-  "owner": { "name": "Capybara", "url": "https://github.com/capybara-hq" },
+  "owner": {
+    "name": "Capybara",
+    "url": "https://github.com/capybara-hq"
+  },
   "description": "The official Capybara plugins, published to npm from capybara-hq/plugins.",
-  "plugins": []
+  "plugins": [
+    {
+      "name": "anthropic",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Anthropic model provider (model-provider@2) using the official SDK and the native Messages API"
+      },
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/anthropic#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment.secret:apiKey",
+          "config.deployment:baseUrl",
+          "config.deployment:models",
+          "config.deployment:serverFallbacks",
+          "permissions.network:api.anthropic.com",
+          "provides:model-provider@2"
+        ],
+        "sensitive": ["config.deployment.secret:apiKey"]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-anthropic",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-jyiJ8b80UGZi2DMu6CU3U0byv6dBH2+c7czTi/jlS4mZpgo6rslAvoL8k8rI8l/xRmA1nEUS3VcCxjj2wKbmlw=="
+        }
+      }
+    },
+    {
+      "name": "connector-mcp",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "MCP connector (connector@1): tools and resources of remote MCP servers over Streamable HTTP"
+      },
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/connector-mcp#readme",
+      "permissions": {
+        "keys": ["config.deployment:allowInsecureLoopback", "provides:connector@1"],
+        "sensitive": []
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-connector-mcp",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-Ky5GdIBXy0QPMkcDpfu6sMGE5K6GJRtw5Hse1GzFIf1qk+2WHHIX7iTj5TDz74c75obsJOEpPjih3wxABNUOOg=="
+        }
+      }
+    },
+    {
+      "name": "connector-openapi",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "OpenAPI connector (connector@1): one tool per operation of an OpenAPI 3.0 / 3.1 HTTP API"
+      },
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/connector-openapi#readme",
+      "permissions": {
+        "keys": ["config.deployment:allowInsecureLoopback", "provides:connector@1"],
+        "sensitive": []
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-connector-openapi",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-RXXS0scBnQT/UF6fnnq9/GZTIcirOVLUY2anapY0/TuPpKBSYAuz+5NASrOSMyw2bINZfnkPVpLz/k8jm63oVQ=="
+        }
+      }
+    },
+    {
+      "name": "lark",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Lark (channel@1 bot over the Lark long connection with interactive cards, identity-source@1 web login, directory@1)"
+      },
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/lark#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment.secret:appSecret",
+          "config.deployment:accountsUrl",
+          "config.deployment:apiUrl",
+          "config.deployment:appId",
+          "config.deployment:region",
+          "config.org.secret:appSecret",
+          "config.org:appId",
+          "permissions.network:accounts.larksuite.com",
+          "permissions.network:open.larksuite.com",
+          "provides:channel@1",
+          "provides:directory@1",
+          "provides:identity-source@1"
+        ],
+        "sensitive": [
+          "config.deployment.secret:appSecret",
+          "config.org.secret:appSecret",
+          "provides:channel@1",
+          "provides:directory@1",
+          "provides:identity-source@1"
+        ]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-lark",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-JlHVR2LnyqFwhx3DST9AnAygqpFu63ML+tAptoowLgAE6nViGn129YecTueHQhapPrZLr67E7Pq2uJzqZNH9qw=="
+        }
+      }
+    },
+    {
+      "name": "object-store-s3",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Object storage (object-store@1) on any S3-compatible service (AWS S3, MinIO, Ceph, OSS, TOS, ...) using the official @aws-sdk/client-s3"
+      },
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/object-store-s3#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment.secret:accessKeyId",
+          "config.deployment.secret:secretAccessKey",
+          "config.deployment:bucket",
+          "config.deployment:endpoint",
+          "config.deployment:forcePathStyle",
+          "config.deployment:publicEndpoint",
+          "config.deployment:region",
+          "provides:object-store@1"
+        ],
+        "sensitive": [
+          "config.deployment.secret:accessKeyId",
+          "config.deployment.secret:secretAccessKey",
+          "provides:object-store@1"
+        ]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-object-store-s3",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-jFbstLMsMeZ3EqGEm/5OnYWm4aGM9nIw71DmIuPu/frk4/Y+nTnaBWgT1SUDEr6NbFb34V31NIVNMJSoxmvMww=="
+        }
+      }
+    },
+    {
+      "name": "openai",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "OpenAI model provider (model-provider@2) using the official SDK and the native Responses API"
+      },
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/openai#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment.secret:apiKey",
+          "config.deployment:baseUrl",
+          "config.deployment:models",
+          "config.deployment:organization",
+          "config.deployment:reasoningSummary",
+          "permissions.network:api.openai.com",
+          "provides:model-provider@2"
+        ],
+        "sensitive": ["config.deployment.secret:apiKey"]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-openai",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-n6g+GSyplpI3RblB2r7e5fHZ53I2MPtFiqKQ42nqSoZbPeR9wpmiHPqpwdVQJ3OIL1AqwEgpVm8SR69gSAPGOA=="
+        }
+      }
+    },
+    {
+      "name": "openai-compatible",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Model provider (model-provider@2) for Chat Completions-compatible services (vLLM, DeepSeek, Qwen, ...) using the official openai SDK"
+      },
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/openai-compatible#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment.secret:apiKeys",
+          "config.deployment:endpoints",
+          "provides:model-provider@2"
+        ],
+        "sensitive": ["config.deployment.secret:apiKeys"]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-openai-compatible",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-NYyjRfC2U6bAjjlFU0rmJuDs3IyuAwektV9KLBpnFcDVRDfRgBpcSBV/jp0tzXhv9ee5MWqzOKN20WNdKWO9fQ=="
+        }
+      }
+    },
+    {
+      "name": "sandbox-docker",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Conversation sandboxes (sandbox@1) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with an egress allowlist proxy"
+      },
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-docker#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment:allowOpenEgress",
+          "config.deployment:egressProxyImage",
+          "config.deployment:endpoint",
+          "config.deployment:network",
+          "config.deployment:runtime",
+          "config.deployment:volumeDriver",
+          "provides:sandbox@1"
+        ],
+        "sensitive": ["provides:sandbox@1"]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-sandbox-docker",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-ElTQbkHpnxCKT9G2my3mH4mQTXYNTmQfhzFirINGXs/RPdsoenCEcO3lA9nY/n5mRsBuCA3fGRMTgIOuN/IktA=="
+        }
+      }
+    },
+    {
+      "name": "sandbox-e2b",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Conversation sandboxes (sandbox@1) as E2B sandboxes (E2B cloud or self-hosted), with pause / resume and E2B egress controls"
+      },
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-e2b#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment.secret:apiKey",
+          "config.deployment:allowOpenEgress",
+          "config.deployment:apiUrl",
+          "config.deployment:domain",
+          "config.deployment:domainAllowlist",
+          "config.deployment:template",
+          "config.deployment:timeoutSeconds",
+          "provides:sandbox@1"
+        ],
+        "sensitive": ["config.deployment.secret:apiKey", "provides:sandbox@1"]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-sandbox-e2b",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-yvlxWH/WhR3AmTN1QCQR28ID/xlkEhTCicpYnkcr1nDO0K+wfui1QD8DWxnMlPuVMkU0Ezs4l9W3/p31j5R0Jg=="
+        }
+      }
+    },
+    {
+      "name": "slack",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Slack (channel@1 bot over Socket Mode with Block Kit cards, identity-source@1 Sign in with Slack, directory@1)"
+      },
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/slack#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment.secret:clientSecret",
+          "config.deployment:apiUrl",
+          "config.deployment:clientId",
+          "config.deployment:openidUrl",
+          "config.org.secret:botToken",
+          "config.org:teamId",
+          "permissions.network:slack.com",
+          "permissions.network:wss-primary.slack.com",
+          "provides:channel@1",
+          "provides:directory@1",
+          "provides:identity-source@1"
+        ],
+        "sensitive": [
+          "config.deployment.secret:clientSecret",
+          "config.org.secret:botToken",
+          "provides:channel@1",
+          "provides:directory@1",
+          "provides:identity-source@1"
+        ]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-slack",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-J5RigFmDj79jnbgcYWf1SH5u4zQd8fImHZAgO7GLGFXawhb8XwiLzXvEfrPQBJc6qwTGZgwy0O2EMdXs+nPCQQ=="
+        }
+      }
+    },
+    {
+      "name": "todo",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Todo list tool for agents: todo__write keeps a per-conversation task list in PostgreSQL"
+      },
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/todo#readme",
+      "permissions": {
+        "keys": [
+          "permissions.tools:write",
+          "table:snapshots",
+          "table:todos",
+          "ui.view:tasks",
+          "ui.view:tasks-card",
+          "ui.view:tasks-panel",
+          "ui.view:tasks-section"
+        ],
+        "sensitive": ["permissions.tools:write"]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-todo",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-Dw0CytgnKCKpMgIqjGyCUoDXpmyLu75RHk08UP1ZHwhooi6gu/p2EasQceIvsaz3r/hSKSjAvQ+c4FnPLAU7Ew=="
+        }
+      }
+    }
+  ]
 }
