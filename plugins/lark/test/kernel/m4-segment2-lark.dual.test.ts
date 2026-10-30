@@ -11,7 +11,7 @@ import {
   fakeExtensionEntry,
   findLarkButton,
   type Harness,
-  type KernelDb,
+  type KernelSchemaDb,
   kernelDb,
   larkCardAction,
   larkMessageEvent,
@@ -135,7 +135,7 @@ describe("M4 第二段验收：Lark（双副本）", () => {
     const harness = h;
     const raw = createDb(harness.dbUrl, 3);
     cleanups.push(() => raw.destroy());
-    const db: KernelDb = kernelDb(raw);
+    const db: KernelSchemaDb = kernelDb(raw);
 
     // ---- HTTP：杀副本前严格交替发往两个副本；之后只发往幸存的副本 ----
     let dead: number | undefined;

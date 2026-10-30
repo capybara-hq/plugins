@@ -7,7 +7,6 @@ import {
   createLocalAccount,
   createOrg,
   eventsOf,
-  type Kernel,
   kernelDb,
   login,
   postMessage,
@@ -15,6 +14,7 @@ import {
   startTestPostgres,
   startTestRedis,
   type TestContainer,
+  type TestKernel,
   testKernelConfig,
   waitForTerminal,
 } from "@capybara-hq/testing";
@@ -35,7 +35,7 @@ const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 
 let pgc: TestContainer;
 let rd: TestContainer;
-let k: Kernel;
+let k: TestKernel;
 let raw: ReturnType<typeof createDb>;
 
 beforeAll(async () => {
@@ -51,7 +51,7 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await k?.stop();
+  await k?.close();
   await raw?.destroy();
   await Promise.all([pgc?.stop(), rd?.stop()]);
 });

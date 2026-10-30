@@ -7,8 +7,7 @@ import {
   createLocalAccount,
   createOrg,
   eventsOf,
-  type Kernel,
-  type KernelDb,
+  type KernelSchemaDb,
   kernelDb,
   postMessage,
   type KernelRequest as Req,
@@ -17,6 +16,7 @@ import {
   startTestPostgres,
   startTestRedis,
   type TestContainer,
+  type TestKernel,
   testKernelConfig,
   truncateTables,
   waitForTerminal,
@@ -63,9 +63,9 @@ describe.skipIf(!dockerAvailable)(
     let rd: TestContainer;
     let images: TestImages;
     let proxy: SocketProxy;
-    let db: KernelDb;
+    let db: KernelSchemaDb;
     let destroyDb: () => Promise<void>;
-    let k: Kernel;
+    let k: TestKernel;
     let owner: Req;
     let orgId: string;
     const conversations: string[] = [];
@@ -108,7 +108,7 @@ describe.skipIf(!dockerAvailable)(
     }, 600_000);
 
     afterAll(async () => {
-      await k?.stop();
+      await k?.close();
       if (proxy) {
         const p = createDockerSandbox({
           endpoint: proxy.endpoint,

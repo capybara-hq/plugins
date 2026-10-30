@@ -6,15 +6,15 @@ import {
   createLocalAccount,
   createOrg,
   joinOrg,
-  type Kernel,
-  type KernelDb,
   type KernelRequest,
+  type KernelSchemaDb,
   kernelDb,
   login,
   startTestKernel,
   startTestPostgres,
   startTestRedis,
   type TestContainer,
+  type TestKernel,
   testKernelConfig,
   truncateTables,
 } from "@capybara-hq/testing";
@@ -37,9 +37,9 @@ type Req = KernelRequest;
 let pgc: TestContainer;
 let rd: TestContainer;
 let raw: ReturnType<typeof createDb>;
-let db: KernelDb;
+let db: KernelSchemaDb;
 let redis: Redis;
-let k: Kernel;
+let k: TestKernel;
 
 beforeAll(async () => {
   [pgc, rd] = await Promise.all([startTestPostgres(), startTestRedis()]);
@@ -55,7 +55,7 @@ beforeAll(async () => {
   );
 }, 120_000);
 afterAll(async () => {
-  await k?.stop();
+  await k?.close();
   redis?.disconnect();
   await raw?.destroy();
   await Promise.all([pgc?.stop(), rd?.stop()]);

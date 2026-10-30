@@ -4,7 +4,7 @@ import {
   createDualReplicaHarness,
   createLocalAccount,
   type Harness,
-  type KernelDb,
+  type KernelSchemaDb,
   kernelDb,
   openSse,
   replicaOf,
@@ -64,7 +64,7 @@ describe("example-board live updates (dual replica)", () => {
     const harness = h;
     const raw = createDb(harness.dbUrl, 3);
     cleanups.push(() => raw.destroy());
-    const db: KernelDb = kernelDb(raw);
+    const db: KernelSchemaDb = kernelDb(raw);
 
     let cookie = "";
     const at = async (

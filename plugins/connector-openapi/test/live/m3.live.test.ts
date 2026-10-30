@@ -6,8 +6,7 @@ import {
   createLocalAccount,
   createOrg,
   eventsOf,
-  type Kernel,
-  type KernelDb,
+  type KernelSchemaDb,
   kernelDb,
   postMessage,
   type KernelRequest as Req,
@@ -16,6 +15,7 @@ import {
   startTestPostgres,
   startTestRedis,
   type TestContainer,
+  type TestKernel,
   testKernelConfig,
   waitFor,
 } from "@capybara-hq/testing";
@@ -60,9 +60,9 @@ const ofType = <T extends ConversationEvent["type"]>(evs: ConversationEvent[], t
 
 let pgc: TestContainer | undefined;
 let rd: TestContainer | undefined;
-let k: Kernel | undefined;
+let k: TestKernel | undefined;
 let raw: ReturnType<typeof createDb> | undefined;
-let db: KernelDb;
+let db: KernelSchemaDb;
 let req: Req;
 let orgId: string;
 const logLines: string[] = [];
@@ -90,7 +90,7 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
-  await k?.stop();
+  await k?.close();
   await raw?.destroy();
   await Promise.all([pgc?.stop(), rd?.stop()]);
 });
