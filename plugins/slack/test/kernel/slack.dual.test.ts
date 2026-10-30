@@ -10,7 +10,7 @@ import {
   fakeExtensionEntry,
   findSlackButton,
   type Harness,
-  type KernelDb,
+  type KernelSchemaDb,
   kernelDb,
   TEST_PASSWORD as PW,
   slackBlockAction,
@@ -115,7 +115,7 @@ describe("Slack 插件接内核（双副本）", () => {
     const harness = h;
     const raw = createDb(harness.dbUrl, 3);
     cleanups.push(() => raw.destroy());
-    const db: KernelDb = kernelDb(raw);
+    const db: KernelSchemaDb = kernelDb(raw);
 
     const call = async (jar: Jar, method: string, path: string, body?: unknown) => {
       const res = await harness.request(path, {

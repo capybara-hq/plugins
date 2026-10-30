@@ -6,8 +6,7 @@ import {
   type FakeGitServer,
   type FakeMcpServer,
   fakeExtensionEntry,
-  type Kernel,
-  type KernelDb,
+  type KernelSchemaDb,
   kernelDb,
   login,
   type KernelRequest as Req,
@@ -18,6 +17,7 @@ import {
   startTestRedis,
   startTestS3,
   type TestContainer,
+  type TestKernel,
   type TestS3,
   testKernelConfig,
 } from "@capybara-hq/testing";
@@ -39,8 +39,8 @@ let pgc: TestContainer;
 let rd: TestContainer;
 let s3: TestS3;
 let raw: ReturnType<typeof createDb>;
-let db: KernelDb;
-let k: Kernel;
+let db: KernelSchemaDb;
+let k: TestKernel;
 let git: FakeGitServer;
 let mcp: FakeMcpServer;
 let admin: Req;
@@ -110,7 +110,7 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await k?.stop();
+  await k?.close();
   await mcp?.stop();
   await git?.stop();
   await raw?.destroy();

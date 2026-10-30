@@ -9,8 +9,7 @@ import {
   FakeMcpRpcError,
   type FakeMcpServer,
   type FakeMcpServerOptions,
-  type Kernel,
-  type KernelDb,
+  type KernelSchemaDb,
   kernelDb,
   postMessage,
   type KernelRequest as Req,
@@ -20,6 +19,7 @@ import {
   startTestPostgres,
   startTestRedis,
   type TestContainer,
+  type TestKernel,
   testKernelConfig,
   truncateTables,
   waitFor,
@@ -45,7 +45,7 @@ const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 const CONNECTOR_MCP = fileURLToPath(new URL("../../src/index.ts", import.meta.url));
 
 /** The tool definition stored under a spec hash (the kernel's `tool_specs`). */
-const loadToolSpec = async (db: KernelDb, specHash: string) =>
+const loadToolSpec = async (db: KernelSchemaDb, specHash: string) =>
   (
     await db
       .selectFrom("tool_specs")
@@ -58,9 +58,9 @@ const TOKEN = "mcp-org-token-7f3a9c1e5b2d4086";
 
 let pgc: TestContainer;
 let rd: TestContainer;
-let k: Kernel;
+let k: TestKernel;
 let raw: ReturnType<typeof createDb>;
-let db: KernelDb;
+let db: KernelSchemaDb;
 let mcp: FakeMcpServer;
 let req: Req;
 let orgId: string;
@@ -165,7 +165,7 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await k?.stop();
+  await k?.close();
   await mcp?.stop();
   await raw?.destroy();
   await Promise.all([pgc?.stop(), rd?.stop()]);

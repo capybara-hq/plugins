@@ -9,8 +9,7 @@ import {
   eventsOf,
   type FakeOpenApiServer,
   joinOrg,
-  type Kernel,
-  type KernelDb,
+  type KernelSchemaDb,
   kernelDb,
   postMessage,
   type KernelRequest as Req,
@@ -20,6 +19,7 @@ import {
   startTestPostgres,
   startTestRedis,
   type TestContainer,
+  type TestKernel,
   testKernelConfig,
   truncateTables,
   waitForTerminal,
@@ -46,9 +46,9 @@ const KEY = "openapi-org-key-5c1d9e7a3b";
 
 let pgc: TestContainer;
 let rd: TestContainer;
-let k: Kernel;
+let k: TestKernel;
 let raw: ReturnType<typeof createDb>;
-let db: KernelDb;
+let db: KernelSchemaDb;
 let api: FakeOpenApiServer;
 let req: Req;
 let orgId: string;
@@ -79,7 +79,7 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await k?.stop();
+  await k?.close();
   await api?.stop();
   await raw?.destroy();
   await Promise.all([pgc?.stop(), rd?.stop()]);

@@ -8,7 +8,7 @@ import {
   eventsOf,
   fakeExtensionEntry,
   type Harness,
-  type KernelDb,
+  type KernelSchemaDb,
   kernelDb,
   MAINTENANCE_QUEUE_NAME,
   TEST_PASSWORD as PW,
@@ -90,7 +90,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
   let proxy: SocketProxy;
   let h: Harness;
   let raw: ReturnType<typeof createDb>;
-  let db: KernelDb;
+  let db: KernelSchemaDb;
   let redis: Redis;
   let maint: Queue;
   let base = "";

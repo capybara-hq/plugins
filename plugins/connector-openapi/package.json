@@ -33,7 +33,7 @@
   },
   "devDependencies": {
     "@capybara-hq/plugin-model-fake": "^0.1.0-rc.0",
-    "@capybara-hq/testing": "^0.1.0-rc.0",
+    "@capybara-hq/testing": "^0.1.0-rc.3",
     "kysely": "^0.29.6"
   }
 }
