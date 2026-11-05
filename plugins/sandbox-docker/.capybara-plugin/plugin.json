@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "sandbox-docker",
+  "displayName": { "zh": "Docker 沙箱", "en": "Docker sandbox" },
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
   "description": "Conversation sandboxes (sandbox@1) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with an egress allowlist proxy",

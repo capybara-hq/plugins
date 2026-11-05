@@ -66,7 +66,7 @@ const text = (r: Awaited<ReturnType<ToolHandler>>): string =>
 
 // 双副本用例在用例里起两个副本子进程：全量并行跑时 5s 的本地默认值不够
 describe("todo 插件", { timeout: 60_000 }, () => {
-  it("registers write (allow, todo__write) and three places: panel, section, inline card", () => {
+  it("registers write (allow, plugin__todo__write) and three places: panel, section, inline card", () => {
     const registered: { spec: ToolSpec; handler: ToolHandler }[] = [];
     const views: string[] = [];
     todo.setup({

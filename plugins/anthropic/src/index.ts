@@ -12,6 +12,7 @@ import {
   type ModelRequest,
   type ModelStreamEvent,
   secret,
+  ui,
 } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 import { toModelError } from "./errors.js";
@@ -199,12 +200,17 @@ export function createAnthropicProvider(opts: AnthropicProviderOptions): ModelPr
 
 /** 部署级配置。 */
 const DeploymentConfig = z.object({
-  apiKey: secret(z.string().min(1)),
-  baseUrl: z.string().url().optional(),
-  models: z
-    .array(z.string().min(1))
-    .default(["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]),
-  serverFallbacks: z.enum(["default", "off"]).default("default"),
+  apiKey: ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
+  baseUrl: ui(z.string().url().optional(), { label: { zh: "接口地址", en: "API URL" } }),
+  models: ui(
+    z
+      .array(z.string().min(1))
+      .default(["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]),
+    { label: { zh: "可用模型", en: "Models" } },
+  ),
+  serverFallbacks: ui(z.enum(["default", "off"]).default("default"), {
+    label: { zh: "服务端回退", en: "Server fallbacks" },
+  }),
 });
 
 /** Anthropic 供应商插件：官方 SDK + 原生 Messages API（不经 OpenAI 兼容层）。 */

@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "openai-compatible",
+  "displayName": { "zh": "OpenAI 兼容模型", "en": "OpenAI-compatible models" },
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
   "description": "Model provider (model-provider@2) for Chat Completions-compatible services (vLLM, DeepSeek, Qwen, ...) using the official openai SDK",

@@ -236,7 +236,7 @@ describe("Slack 插件接内核（双副本）", () => {
     expect(postedTo("DUALICE").slice(before)).toHaveLength(1);
 
     // ================= 4. 频道里 @ 机器人 → 话题里的审批卡片 → 点击批准 =================
-    const tool = 'tool:fake-im__post_announcement:{"text":"Office closed on Friday"}';
+    const tool = 'tool:plugin__fake-im__post_announcement:{"text":"Office closed on Friday"}';
     await slack.waitForAck(
       push(
         slack.pushEvent(

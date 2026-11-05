@@ -43,14 +43,7 @@ const SANDBOX_DOCKER = fileURLToPath(new URL("../src/index.ts", import.meta.url)
 /** The scripted model provider (a devDependency): `tool:<key>:<json>` makes it call a tool. */
 const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 
-const SANDBOX_TOOLS = [
-  "sandbox_bash",
-  "sandbox_read",
-  "sandbox_write",
-  "sandbox_edit",
-  "sandbox_glob",
-  "sandbox_grep",
-];
+const SANDBOX_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep"];
 
 type ToolResultEvent = Extract<ConversationEvent, { type: "tool_result" }>;
 
@@ -172,7 +165,7 @@ describe.skipIf(!dockerAvailable)(
       const conv = await sandboxConversation();
       const r = await call(
         conv,
-        "sandbox_bash",
+        "Bash",
         { description: "Test step", command: "pwd && id -un && echo $HTTPS_PROXY" },
         1,
       );
@@ -182,28 +175,33 @@ describe.skipIf(!dockerAvailable)(
 
       const w = await call(
         conv,
-        "sandbox_write",
-        { path: "/workspace/src/a.txt", content: "alpha\nbeta\ngamma\n" },
+        "Write",
+        { file_path: "/workspace/src/a.txt", content: "alpha\nbeta\ngamma\n" },
         2,
       );
       expect(w.isError, w.content).toBe(false);
       const e = await call(
         conv,
-        "sandbox_edit",
-        { path: "/workspace/src/a.txt", oldText: "beta", newText: "BETA" },
+        "Edit",
+        { file_path: "/workspace/src/a.txt", old_string: "beta", new_string: "BETA" },
         3,
       );
       expect(e.isError, e.content).toBe(false);
-      const rd1 = await call(conv, "sandbox_read", { path: "/workspace/src/a.txt" }, 4);
+      const rd1 = await call(conv, "Read", { file_path: "/workspace/src/a.txt" }, 4);
       expect(rd1.content).toContain("2\tBETA");
-      const g = await call(conv, "sandbox_glob", { pattern: "**/*.txt" }, 5);
+      const g = await call(conv, "Glob", { pattern: "**/*.txt" }, 5);
       expect(g.content).toContain("/workspace/src/a.txt");
-      const gr = await call(conv, "sandbox_grep", { pattern: "beta", ignoreCase: true }, 6);
+      const gr = await call(
+        conv,
+        "Grep",
+        { pattern: "beta", "-i": true, output_mode: "content", "-n": true },
+        6,
+      );
       expect(gr.content).toContain("/workspace/src/a.txt:2:BETA");
       // /skills 对命令只读
       const ro = await call(
         conv,
-        "sandbox_bash",
+        "Bash",
         { description: "Test step", command: "touch /skills/x" },
         7,
       );
@@ -215,8 +213,8 @@ describe.skipIf(!dockerAvailable)(
       const t0 = Date.now();
       const r = await call(
         conv,
-        "sandbox_bash",
-        { description: "Test step", command: "sleep 60", timeoutSeconds: 1 },
+        "Bash",
+        { description: "Test step", command: "sleep 60", timeout: 1000 },
         1,
       );
       expect(Date.now() - t0).toBeLessThan(45_000);
@@ -224,7 +222,7 @@ describe.skipIf(!dockerAvailable)(
       expect(r.content, why(r.content)).toContain("timedOut");
       const ok = await call(
         conv,
-        "sandbox_bash",
+        "Bash",
         { description: "Test step", command: "ps -eo args | grep -c '^sleep 60' || true" },
         2,
       );

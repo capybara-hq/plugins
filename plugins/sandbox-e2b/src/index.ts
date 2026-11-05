@@ -1,4 +1,4 @@
-import { defineExtension, SANDBOX_EXTENSION_POINT, secret } from "@capybara-hq/plugin-sdk";
+import { defineExtension, SANDBOX_EXTENSION_POINT, secret, ui } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 import { createE2BSandbox, HOSTNAME_RE } from "./provider.js";
 
@@ -23,30 +23,41 @@ const MAX_TIMEOUT_SECONDS = 86_400;
 export const DeploymentConfig = z
   .object({
     /** E2B API key（`e2b_…`）。 */
-    apiKey: secret(z.string().min(1)),
+    apiKey: ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
     /** 控制面 API 地址；不填为 `https://api.<domain>`。自托管 E2B 填自己的地址。 */
-    apiUrl: z.url({ protocol: /^https?$/ }).optional(),
+    apiUrl: ui(z.url({ protocol: /^https?$/ }).optional(), {
+      label: { zh: "接口地址", en: "API URL" },
+    }),
     /** 沙箱域名（envd 地址为 `https://49983-<沙箱 id>.<domain>`）；API 返回了沙箱自己的域名时以返回的为准。 */
-    domain: z
-      .string()
-      .regex(HOSTNAME_RE, {
-        message: "domain must be a lowercase hostname such as e2b.app",
-      })
-      .default("e2b.app"),
+    domain: ui(
+      z
+        .string()
+        .regex(HOSTNAME_RE, {
+          message: "domain must be a lowercase hostname such as e2b.app",
+        })
+        .default("e2b.app"),
+      { label: { zh: "沙箱域名", en: "Sandbox domain" } },
+    ),
     /** 模板名或 id：由 plugins/sandbox-docker/image/Dockerfile 构建（见 README）。 */
-    template: z.string().min(1),
+    template: ui(z.string().min(1), { label: { zh: "模板", en: "Template" } }),
     /**
      * 沙箱的超时（秒，默认 3600）：到点 E2B 自动暂停（不是删除）沙箱，文件保留。内核每次用沙箱时把它往后推，
      * 长命令会按命令超时再加余量推后；空闲休眠与过期销毁由内核负责。
      */
-    timeoutSeconds: z.number().int().min(60).max(MAX_TIMEOUT_SECONDS).default(3600),
+    timeoutSeconds: ui(z.number().int().min(60).max(MAX_TIMEOUT_SECONDS).default(3600), {
+      label: { zh: "沙箱超时", en: "Sandbox timeout" },
+    }),
     /**
      * E2B 是否支持按域名的出站白名单（E2B 云：支持）。为 false 时（不支持的自托管版本）`allowlist` 退化为
      * `none` 并打告警。
      */
-    domainAllowlist: z.boolean().default(true),
+    domainAllowlist: ui(z.boolean().default(true), {
+      label: { zh: "按域名出站白名单", en: "Domain egress allowlist" },
+    }),
     /** 允许 `sandbox.limits.egress = "open"`（默认 false）。为 false 时 `create` 收到 open 直接报错。 */
-    allowOpenEgress: z.boolean().default(false),
+    allowOpenEgress: ui(z.boolean().default(false), {
+      label: { zh: "允许开放出站", en: "Allow open egress" },
+    }),
   })
   .strict();
 

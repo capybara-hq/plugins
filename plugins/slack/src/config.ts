@@ -1,4 +1,4 @@
-import { secret } from "@capybara-hq/plugin-sdk";
+import { secret, ui } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 
 /**
@@ -6,10 +6,16 @@ import { z } from "zod";
  * （`identity-source@1`）的 OAuth 客户端，只用机器人时不填；`clientSecret` 走密钥（日志打码）。
  */
 export const SlackDeployment = z.object({
-  apiUrl: z.string().url().default("https://slack.com/api/"),
-  openidUrl: z.string().url().default("https://slack.com/"),
-  clientId: z.string().min(1).optional(),
-  clientSecret: secret(z.string().min(1)).optional(),
+  apiUrl: ui(z.string().url().default("https://slack.com/api/"), {
+    label: { zh: "API 地址", en: "API URL" },
+  }),
+  openidUrl: ui(z.string().url().default("https://slack.com/"), {
+    label: { zh: "OpenID 地址", en: "OpenID URL" },
+  }),
+  clientId: ui(z.string().min(1).optional(), { label: { zh: "客户端 ID", en: "Client ID" } }),
+  clientSecret: ui(secret(z.string().min(1)), {
+    label: { zh: "客户端密钥", en: "Client secret" },
+  }).optional(),
 });
 export type SlackDeploymentConfig = z.infer<typeof SlackDeployment>;
 
@@ -20,13 +26,16 @@ export type SlackDeploymentConfig = z.infer<typeof SlackDeployment>;
  * 会把同一个人拆成两行身份。
  */
 export const SlackDirectoryConfig = z.object({
-  teamId: z
-    .string()
-    .regex(/^T[A-Z0-9]+$/, "must be a Slack workspace team id such as T0123ABCD")
-    .optional(),
-  botToken: secret(
-    z.string().regex(/^xoxb-/, "must be a bot token starting with xoxb-"),
-  ).optional(),
+  teamId: ui(
+    z
+      .string()
+      .regex(/^T[A-Z0-9]+$/, "must be a Slack workspace team id such as T0123ABCD")
+      .optional(),
+    { label: { zh: "工作区 ID", en: "Workspace ID" } },
+  ),
+  botToken: ui(secret(z.string().regex(/^xoxb-/, "must be a bot token starting with xoxb-")), {
+    label: { zh: "机器人令牌", en: "Bot token" },
+  }).optional(),
 });
 export type SlackDirectoryConfigValue = z.infer<typeof SlackDirectoryConfig>;
 

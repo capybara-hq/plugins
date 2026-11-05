@@ -161,9 +161,9 @@ describe("连接器预览", () => {
     expect(res.statusCode, res.body).toBe(200);
     const body = res.json() as PreviewJson;
     expect(body.tools?.map((t) => [t.key, t.defaultPolicy, t.issue])).toEqual([
-      ["pets__listPets", "allow", null],
-      ["pets__createPet", "ask", null],
-      ["pets__deletePet", "ask", null],
+      ["mcp__pets__listPets", "allow", null],
+      ["mcp__pets__createPet", "ask", null],
+      ["mcp__pets__deletePet", "ask", null],
     ]);
     expect(body.tools?.[0]?.annotations).toEqual({ readOnlyHint: true });
     expect(body.tools?.[0]?.inputSchema).toMatchObject({ type: "object" });
@@ -189,7 +189,9 @@ describe("连接器预览", () => {
     });
     expect(res.statusCode, res.body).toBe(200);
     const tool = (res.json() as PreviewJson).tools?.[0];
-    expect(tool?.key).toBe("a_very_long_app_slug_xyz__abcdefghijklmnopqrstuvwxyzabcdefghijklmn");
+    expect(tool?.key).toBe(
+      "mcp__a_very_long_app_slug_xyz__abcdefghijklmnopqrstuvwxyzabcdefghijklmn",
+    );
     expect(tool?.issue).toMatch(/limit is 64/);
   });
 
@@ -211,7 +213,7 @@ describe("连接器预览", () => {
     });
     expect(res.statusCode, res.body).toBe(200);
     const body = res.json() as PreviewJson & { issues: { name: string; reason: string }[] };
-    expect(body.tools?.map((t) => t.key)).toEqual(["app__do_it"]);
+    expect(body.tools?.map((t) => t.key)).toEqual(["mcp__app__do_it"]);
     expect(body.tools?.[0]?.annotations).toEqual({ readOnlyHint: true });
     expect(body.issues).toEqual([
       { name: "do_it", reason: "Duplicate tool name; only the first one is kept" },
@@ -356,12 +358,12 @@ describe("connector-openapi 端到端", () => {
     const convId = await createConv(req, orgId, agentId);
     const res = await req({
       method: "GET",
-      url: `/api/v1/orgs/${orgId}/conversations/${convId}/tools?keys=pets__createPet,pets__listPets`,
+      url: `/api/v1/orgs/${orgId}/conversations/${convId}/tools?keys=mcp__pets__createPet,mcp__pets__listPets`,
     });
     expect(res.statusCode, res.body).toBe(200);
     const [create, list] = (res.json() as { tools: Record<string, unknown>[] }).tools;
     expect(create).toMatchObject({
-      key: "pets__createPet",
+      key: "mcp__pets__createPet",
       kind: "connector",
       source: { kind: "connector", id: connectorId, name: "Pets" },
     });
@@ -380,7 +382,7 @@ describe("connector-openapi 端到端", () => {
     try {
       const since = () => api.requests.length;
       let mark = since();
-      await runTool(convId, 1, "pets__getPet", { path: { petId: 42 } });
+      await runTool(convId, 1, "mcp__pets__getPet", { path: { petId: 42 } });
       // 不读文档，按复核过的旧路由
       expect(api.requests.slice(mark).map((r) => `${r.method} ${r.path}`)).toEqual([
         "GET /v1/pets/42",
@@ -433,7 +435,7 @@ describe("connector-openapi 端到端", () => {
 
       // 待复核期间不可调用
       mark = since();
-      const pending = await runTool(convId, 2, "pets__getPet", { path: { petId: 42 } });
+      const pending = await runTool(convId, 2, "mcp__pets__getPet", { path: { petId: 42 } });
       expect(pending.isError).toBe(true);
       expect(api.requests.length).toBe(mark);
 
@@ -444,7 +446,7 @@ describe("connector-openapi 端到端", () => {
       });
       expect(review.statusCode, review.body).toBe(200);
       mark = since();
-      await runTool(convId, 3, "pets__getPet", { path: { petId: 42 } });
+      await runTool(convId, 3, "mcp__pets__getPet", { path: { petId: 42 } });
       expect(api.requests.slice(mark).map((x) => `${x.method} ${x.path}`)).toEqual([
         "GET /v1/animals/42",
       ]);
@@ -458,18 +460,18 @@ describe("connector-openapi 端到端", () => {
     const agentId = await agentFor(connectorId);
     const convId = await createConv(req, orgId, agentId);
 
-    const list = await runTool(convId, 1, "pets__listPets", { query: { limit: 5 } });
+    const list = await runTool(convId, 1, "mcp__pets__listPets", { query: { limit: 5 } });
     expect(list.isError).toBe(false);
     expect(list.content).toContain("HTTP 200");
     expect(api.requests.at(-1)?.headers["x-api-key"]).toBe(KEY);
 
-    const missing = await runTool(convId, 2, "pets__getPet", { path: { petId: 42 } });
+    const missing = await runTool(convId, 2, "mcp__pets__getPet", { path: { petId: 42 } });
     expect(missing.isError).toBe(true);
     expect(missing.content).toContain("HTTP 404");
     expect(missing.content).toContain("[REDACTED]");
     expect(missing.content).not.toContain(KEY);
 
-    const boom = await runTool(convId, 3, "pets__boom", {});
+    const boom = await runTool(convId, 3, "mcp__pets__boom", {});
     expect(boom.isError).toBe(true);
     expect(boom.content).toContain("HTTP 500");
     expect(boom.content).not.toContain(KEY);
