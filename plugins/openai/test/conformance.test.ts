@@ -66,6 +66,64 @@ describe.skipIf(!LIVE_KEY || !LIVE_MODEL)("live", { timeout: 120_000 }, () => {
   }));
 });
 
+// Core's tool rename (spec §15): a continued conversation keeps the release candidate's tool
+// names in its history while the tool list carries the new ones; the API must accept that.
+describe.skipIf(!LIVE_KEY || !LIVE_MODEL)(
+  "live history with renamed tools",
+  { timeout: 60_000 },
+  () => {
+    it("accepts a history tool name absent from the tool list", async () => {
+      const provider = createOpenAIProvider({
+        apiKey: LIVE_KEY ?? "",
+        models: [gpt(LIVE_MODEL ?? "")],
+      });
+      const events: ModelStreamEvent[] = [];
+      const r: ModelRequest = {
+        model: LIVE_MODEL ?? "",
+        system: [{ text: "Be brief.", cache: false }],
+        messages: [
+          { role: "user", content: [{ type: "text", text: "List the files in /workspace." }] },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_call",
+                id: "call_legacy_1",
+                name: "sandbox_bash",
+                input: { command: "ls /workspace" },
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              { type: "tool_result", callId: "call_legacy_1", content: "notes.md", isError: false },
+            ],
+          },
+          { role: "user", content: [{ type: "text", text: "Which file did you find?" }] },
+        ],
+        tools: [
+          {
+            name: "Bash",
+            description: "Run a shell command in the sandbox.",
+            inputSchema: {
+              type: "object",
+              properties: { command: { type: "string" }, description: { type: "string" } },
+              required: ["command", "description"],
+            },
+          },
+        ],
+        maxOutputTokens: 200,
+        params: {},
+      };
+      for await (const e of provider.stream(r, { signal: new AbortController().signal })) {
+        events.push(e);
+      }
+      expect(events.at(-1)?.type).toBe("message_complete");
+    });
+  },
+);
+
 // ---- 错误映射与边界 ----
 const req = (over: Partial<ModelRequest> = {}): ModelRequest => ({
   model: "gpt-5.5",
