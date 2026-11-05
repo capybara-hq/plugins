@@ -51,9 +51,9 @@ import {
  * inside it, stopped on suspend and started again on resume):
  *
  * 1. 预签名直传附件（CSV）→ finalize；
- * 2. 带附件发消息，agent 用 `sandbox_bash` 处理 /workspace/attachments 里的附件（首次使用，创建沙箱）；
- * 3. `sandbox_deliver` 交付产物 → `artifact_created` → 下载路由 302 到预签名地址，内容一致；
- * 4. the replica running a `sandbox_bash` call (a command longer than the lease TTL) is killed ->
+ * 2. 带附件发消息，agent 用 `Bash` 处理 /workspace/attachments 里的附件（首次使用，创建沙箱）；
+ * 3. `Deliver` 交付产物 → `artifact_created` → 下载路由 302 到预签名地址，内容一致；
+ * 4. the replica running a `Bash` call (a command longer than the lease TTL) is killed ->
  *    the survivor takes over the run (result unknown); the next call runs at once under a shared
  *    lease beside the dead replica's command, reusing the same container (files kept, no
  *    "recreated" notice); once the dead replica's lease has expired (TTL 60 s), the next call finds
@@ -70,7 +70,7 @@ const OBJECT_STORE = fakeExtensionEntry("fake-object-store");
 /** The scripted model provider (a devDependency): `tool:<key>:<json>` makes it call a tool. */
 const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 
-const SANDBOX_TOOLS = ["sandbox_bash", "sandbox_read", "sandbox_deliver"];
+const SANDBOX_TOOLS = ["Bash", "Read", "Deliver"];
 const CSV = "fruit,qty\napple,3\npear,5\nplum,7\n";
 const TOTAL = "total=15";
 
@@ -257,7 +257,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
       .where("conversation_id", "=", convId)
       .executeTakeFirstOrThrow();
 
-  it("附件 → sandbox_bash 处理 → 交付产物 → 杀执行副本后续跑复用沙箱 → 空闲休眠后恢复", async () => {
+  it("附件 → Bash 处理 → 交付产物 → 杀执行副本后续跑复用沙箱 → 空闲休眠后恢复", async () => {
     const ag = await at(0, "POST", `${base}/agents`, {
       definition: {
         name: "Analyst",
@@ -288,8 +288,8 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     // 只是登记了附件，还没有沙箱
     expect((await at(0, "GET", `${convPath}/sandbox`)).status).toBe(404);
 
-    // ---- 2. sandbox_bash 处理附件（首次使用：创建沙箱，附件同步到 /workspace/attachments） ----
-    await send(0, convId, "sandbox_bash", {
+    // ---- 2. Bash 处理附件（首次使用：创建沙箱，附件同步到 /workspace/attachments） ----
+    await send(0, convId, "Bash", {
       description: "Test step",
       command:
         "mkdir -p /workspace/out && awk -F, 'NR>1{s+=$2} END{print \"total=\" s}' " +
@@ -307,8 +307,8 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     const row2 = await sandboxRow(convId);
 
     // ---- 3. 交付产物 → artifact_created → 下载 ----
-    await send(1, convId, "sandbox_deliver", {
-      path: "/workspace/out/summary.txt",
+    await send(1, convId, "Deliver", {
+      file_path: "/workspace/out/summary.txt",
       name: "summary.txt",
     });
     const r3 = await finished(convId, 3);
@@ -328,9 +328,9 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     expect(got.status).toBe(200);
     expect(await got.text()).toBe(`${TOTAL}\n`);
 
-    // ---- 4. sandbox_bash 执行中杀掉执行这次运行的副本，另一个副本续跑 ----
+    // ---- 4. Bash 执行中杀掉执行这次运行的副本，另一个副本续跑 ----
     // 命令比锁的 TTL（60 秒）长、在默认超时（120 秒）之内：接手时它还在跑，必须由接手方杀掉
-    await send(0, convId, "sandbox_bash", {
+    await send(0, convId, "Bash", {
       description: "Test step",
       command: "touch /workspace/step4-started && sleep 300 && touch /workspace/step4-finished",
     });
@@ -366,7 +366,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     const r4 = await finished(convId, 4, 60_000);
     expect(r4.evs[0]?.runId).toBe(run.id);
     expect(r4.result).toMatchObject({
-      toolKey: "sandbox_bash",
+      toolKey: "Bash",
       isError: true,
       content: UNKNOWN_RESULT_TEXT,
     });
@@ -374,7 +374,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     const takeoverMs = Date.now() - killedAt;
 
     // the next call on the survivor runs at once (shared lease) in the same container
-    await send(survivor, convId, "sandbox_bash", {
+    await send(survivor, convId, "Bash", {
       description: "Test step",
       command:
         "cat /workspace/out/summary.txt && ls /workspace && echo leftover=$(pgrep -fc '^sleep 300' || true)",
@@ -395,7 +395,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     await new Promise((r) =>
       setTimeout(r, Math.max(0, killedAt + SANDBOX_LOCK_TTL_MS + 2000 - Date.now())),
     );
-    await send(survivor, convId, "sandbox_bash", {
+    await send(survivor, convId, "Bash", {
       description: "Test step",
       command: "echo leftover=$(pgrep -fc '^sleep 300' || true)",
     });
@@ -421,7 +421,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     );
     expect((await containerOf(convId)).State.Running).toBe(false);
 
-    await send(survivor, convId, "sandbox_read", { path: "/workspace/out/summary.txt" });
+    await send(survivor, convId, "Read", { file_path: "/workspace/out/summary.txt" });
     const r5 = await finished(convId, 7);
     expect(r5.result.isError, r5.result.content).toBe(false);
     expect(r5.result.content).not.toContain(SANDBOX_STARTED_NOTICE);

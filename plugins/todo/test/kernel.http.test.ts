@@ -22,7 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
  * todo through a real kernel (one in-process kernel, model-fake scripting the tool call): the
- * `tasks-panel` view (and its old alias `tasks`) the kernel serves after `todo__write` shows the in-progress item by its activeForm,
+ * `tasks-panel` view (and its old alias `tasks`) the kernel serves after `plugin__todo__write` shows the in-progress item by its activeForm,
  * the badge counts completed items, and the bilingual display summary lands in the tool_result
  * event while the model sees the rendered list. The kernel side of views (routes, invalidation, the
  * summary staying out of model requests) is tested in core on the fake `fake-tools-ui`.
@@ -91,7 +91,7 @@ describe("todo in a kernel", () => {
         { content: "Ship", status: "pending", activeForm: "Shipping" },
       ],
     };
-    await postMessage(owner, orgId, convId, `tool:todo__write:${JSON.stringify(todos)}`);
+    await postMessage(owner, orgId, convId, `tool:plugin__todo__write:${JSON.stringify(todos)}`);
     await waitForTerminal(db, convId, 1, 20_000);
 
     const after = (await view()).view;
@@ -115,7 +115,7 @@ describe("todo in a kernel", () => {
       (e): e is Extract<ConversationEvent, { type: "tool_result" }> => e.type === "tool_result",
     );
     expect(result?.payload).toMatchObject({
-      toolKey: "todo__write",
+      toolKey: "plugin__todo__write",
       isError: false,
       content: "Todo list updated (3 items):\n[x] Plan\n[>] Building\n[ ] Ship",
       display: { summary: { zh: "更新任务清单（3 项）", en: "Updated task list (3 items)" } },
@@ -124,7 +124,7 @@ describe("todo in a kernel", () => {
 
     // a second write: the first call's card still shows the list as of that call (review M1)
     const next = { todos: todos.todos.map((t) => ({ ...t, status: "completed" })) };
-    await postMessage(owner, orgId, convId, `tool:todo__write:${JSON.stringify(next)}`);
+    await postMessage(owner, orgId, convId, `tool:plugin__todo__write:${JSON.stringify(next)}`);
     await waitForTerminal(db, convId, 2, 20_000);
     expect((await view()).view.badge).toBe("3/3");
     const first = result?.payload as { callId: string; card: { key: string } };

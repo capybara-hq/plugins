@@ -166,7 +166,7 @@ export async function readSnapshot(
 export const TASKS_PANEL = "tasks-panel";
 /** The "Tasks" section of the properties panel. */
 export const TASKS_SECTION = "tasks-section";
-/** The inline card under each `todo__write` call. */
+/** The inline card under each `plugin__todo__write` call. */
 export const TASKS_CARD = "tasks-card";
 /** The old right-side tab id: an alias of {@link TASKS_PANEL} for one release (remove after). */
 export const TASKS_LEGACY = "tasks";
@@ -224,7 +224,7 @@ export function tasksCardView(todos: Todo[]): UiView {
 }
 
 /**
- * `todo__write` 的处理函数：写入后通知界面刷新任务清单的各个位置（刷新失败不影响写入结果），结果带一张
+ * `plugin__todo__write` 的处理函数：写入后通知界面刷新任务清单的各个位置（刷新失败不影响写入结果），结果带一张
  * 行内卡片（`card`，只给界面显示）。
  */
 export function writeHandler(db: Db, ui: Pick<ExtensionContext["ui"], "invalidate">): ToolHandler {
@@ -258,7 +258,7 @@ export function writeHandler(db: Db, ui: Pick<ExtensionContext["ui"], "invalidat
 }
 
 /**
- * todo 插件：一个工具 `write`（模型可见名 `todo__write`），清单存在本插件 schema，各副本读写一致。
+ * todo 插件：一个工具 `write`（模型可见名 `plugin__todo__write`），清单存在本插件 schema，各副本读写一致。
  * 对话页上三个位置（UI refresh B）：右侧面板 `tasks-panel`、属性面板的「任务」小节 `tasks-section`
  * （条目打开面板里的那一项）、每次写入下面的行内卡片 `tasks-card`（shows the list as of that call,
  * from a snapshot row）；旧 id `tasks` 作为面板的别名保留一个版本。

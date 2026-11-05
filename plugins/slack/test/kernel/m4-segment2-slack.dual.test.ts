@@ -378,7 +378,7 @@ describe("M4 第二段验收：Slack（双副本）", () => {
     expect(postedTo("DUALICE").slice(dmBefore)).toHaveLength(1);
 
     // ================= 5. 频道里 @ 机器人调用写工具 → 话题里的审批卡片 =================
-    const tool = 'tool:fake-im__post_announcement:{"text":"Office closed on Friday"}';
+    const tool = 'tool:plugin__fake-im__post_announcement:{"text":"Office closed on Friday"}';
     await slack.waitForAck(
       push(
         slack.pushEvent(

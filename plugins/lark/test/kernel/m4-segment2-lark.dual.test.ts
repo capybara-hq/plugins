@@ -373,7 +373,7 @@ describe("M4 第二段验收：Lark（双副本）", () => {
     expect(postedTo("oc_dm_alice").slice(dmBefore)).toHaveLength(1);
 
     // ================= 5. 群里 @ 机器人调用写工具 → 话题里的审批卡片 =================
-    const tool = 'tool:fake-im__post_announcement:{"text":"Office closed on Friday"}';
+    const tool = 'tool:plugin__fake-im__post_announcement:{"text":"Office closed on Friday"}';
     await lark.waitForAck(
       push(
         lark.pushEvent(
