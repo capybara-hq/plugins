@@ -46,7 +46,11 @@ describe.skipIf(!KEY)("jina live", () => {
         signal: AbortSignal.timeout(TIMEOUT),
       });
       expect(results.length).toBeGreaterThan(0);
-      for (const r of results) expect(new URL(r.url).hostname.endsWith("wikipedia.org")).toBe(true);
+      const d = "wikipedia.org";
+      for (const r of results) {
+        const h = new URL(r.url).hostname;
+        expect(h === d || h.endsWith(`.${d}`)).toBe(true);
+      }
     },
     TIMEOUT,
   );

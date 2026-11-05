@@ -31,7 +31,8 @@ export function createJinaSearch(endpoints: Pick<JinaEndpoints, "searchUrl">): W
     async search({ query, allowedDomains, maxResults, orgConfig, signal }) {
       const apiKey = apiKeyOf(orgConfig);
       const headers: Record<string, string> = { "X-Respond-With": "no-content" };
-      if (allowedDomains?.length === 1) headers["X-Site"] = `https://${allowedDomains[0]}`;
+      const site = allowedDomains?.length === 1 ? allowedDomains[0] : undefined;
+      if (site !== undefined && /^[\x21-\x7e]+$/.test(site)) headers["X-Site"] = `https://${site}`;
       const body = await jinaRequest(
         "search",
         joinUrl(endpoints.searchUrl, `/?q=${encodeURIComponent(query)}`),
@@ -45,9 +46,9 @@ export function createJinaSearch(endpoints: Pick<JinaEndpoints, "searchUrl">): W
       }
       const results: WebSearchResult[] = [];
       for (const item of data) {
+        if (results.length >= maxResults) break;
         const r = toResult(item);
         if (r) results.push(r);
-        if (results.length >= maxResults) break;
       }
       return { results };
     },

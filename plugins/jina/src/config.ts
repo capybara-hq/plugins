@@ -15,13 +15,21 @@ export const JinaDeployment = z.object({
 
 /** Org config: the organization's Jina API key. */
 export const JinaOrgConfig = z.object({
-  apiKey: ui(secret(z.string().min(1)), {
-    label: { zh: "API 密钥", en: "API key" },
-    help: {
-      zh: "在 jina.ai 的 API 控制台创建。",
-      en: "Create one in the Jina API dashboard at jina.ai.",
+  apiKey: ui(
+    secret(
+      z
+        .string()
+        .trim()
+        .regex(/^[\x21-\x7e]+$/, "must be printable ASCII without spaces"),
+    ),
+    {
+      label: { zh: "API 密钥", en: "API key" },
+      help: {
+        zh: "在 jina.ai 的 API 控制台创建。",
+        en: "Create one in the Jina API dashboard at jina.ai.",
+      },
     },
-  }),
+  ),
 });
 
 export type JinaEndpoints = { searchUrl: string; readerUrl: string };
