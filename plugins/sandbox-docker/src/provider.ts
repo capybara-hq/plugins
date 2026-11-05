@@ -103,11 +103,16 @@ export const IN_SANDBOX_GRACE_SECONDS = 5;
 /**
  * 命令包装：在新会话里跑（setsid），先把会话 id 写到 `<ctl>.pid`，再看有没有 `<ctl>.kill`（杀的请求先到）；
  * 中止时按会话杀掉命令派生的全部进程。命令经 `timeout -s KILL` 运行：到沙箱里的时限即杀掉它所在的进程组。
+ * After a timeout (124 or 137) the wrapper also kills what is left of its session: uutils `timeout`
+ * (Ubuntu 26.04's default coreutils) kills only its child, not the child's process group (#7).
  * `$0` 是标记、`$1` 是 ctl、`$2` 是命令、`$3` 是沙箱里的时限（秒）。
  */
 const EXEC_WRAPPER =
   'c=$1; echo $$ > "$c.pid" 2>/dev/null; if [ -e "$c.kill" ]; then exit 137; fi; ' +
-  'timeout -s KILL "$3" /bin/bash -c "$2"; s=$?; rm -f "$c.pid"; exit $s';
+  'timeout -s KILL "$3" /bin/bash -c "$2"; s=$?; ' +
+  "if [ $s -eq 124 ] || [ $s -eq 137 ]; then " +
+  'for p in $(pgrep -s $$); do [ "$p" = $$ ] || kill -9 "$p" 2>/dev/null; done; fi; ' +
+  'rm -f "$c.pid"; exit $s';
 
 /** `exec` 在容器里实际运行的命令行（导出供测试直接以 `docker exec -d` 模拟「内核崩溃后无人看管」）。 */
 export function execArgv(ctl: string, command: string, timeoutMs: number): string[] {
