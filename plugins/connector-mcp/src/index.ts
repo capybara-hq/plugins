@@ -17,7 +17,7 @@ const DeploymentConfig = z.object({
  */
 export default defineExtension({
   name: "connector-mcp",
-  version: "0.1.0-rc.0",
+  version: "0.1.0-rc.1",
   sdk: "^0.1.0-rc.0",
   provides: [CONNECTOR_EXTENSION_POINT],
   config: { deployment: DeploymentConfig },

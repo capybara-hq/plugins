@@ -1,8 +1,11 @@
 {
   "schemaVersion": 1,
   "name": "openai",
-  "displayName": { "zh": "OpenAI", "en": "OpenAI" },
-  "version": "0.1.0-rc.0",
+  "displayName": {
+    "zh": "OpenAI",
+    "en": "OpenAI"
+  },
+  "version": "0.1.0-rc.1",
   "publisher": "Capybara",
   "description": "OpenAI model provider (model-provider@2) using the official SDK and the native Responses API",
   "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/openai#readme"
