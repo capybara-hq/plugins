@@ -9,7 +9,7 @@ This skill covers only the UI an extension contributes; for general extension au
 
 Reference implementations:
 
-- Tier 1 (rendered schema view): `plugins/todo`, views `tasks-panel` / `tasks-section` / `tasks-card` (and the alias `tasks`); `todo__write` returns `card` and calls `invalidate` after writing.
+- Tier 1 (rendered schema view): `plugins/todo`, views `tasks-panel` / `tasks-section` / `tasks-card` (and the alias `tasks`); `plugin__todo__write` returns `card` and calls `invalidate` after writing.
 - Tier 2 (embed): `plugins/example-board`, org page `board` and conversation panel `board-conv` (still declared with the old `place: "conversation"`), icon `layout-grid`, with live SSE refresh.
 
 ## How to choose between the two tiers
@@ -141,7 +141,7 @@ The types and `validateUiView` are in the SDK (`ui.ts`); the kernel validates ev
 | `image` | `url`, `alt` | **Absolute http(s) addresses only** (<= 2000 characters); a relative address under the extension's routes is rejected |
 | `chart` | `kind: bar / line`, `series[{ label, value }]` | bar / line chart; `value` is a finite number |
 | `actions` | `buttons[{ actionId, label, payload?, danger? }]` (non-empty) | a group of buttons, calling back into `ctx.ui.action` |
-| `form` | `form: InputForm`, `actionId`, `submitLabel` | the form fields of `ask_user`; submitting goes through `action` (with `answer`); not submitted while a required field is empty |
+| `form` | `form: InputForm`, `actionId`, `submitLabel` | the form fields of `AskUserQuestion`; submitting goes through `action` (with `answer`); not submitted while a required field is empty |
 
 A view may carry a `badge` (<= 32 characters), such as todo's "2/4".
 

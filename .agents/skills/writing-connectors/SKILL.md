@@ -85,7 +85,7 @@ For every `listTools` (install, refresh, drift check), every tool call and every
 ## `listTools`, `connectorData` and routing by the reviewed definition
 
 - Keep `annotations` (the kernel derives the default policy: `readOnlyHint` -> allow, else ask); without a description fall back to title / name and warn. Pass a remote human title as `ToolSpec.title` (connector-mcp: the MCP `title`, else `annotations.title`, trimmed, cut to 80) and optionally `keyArgs` (up to 3 input names): display only, outside the definition fingerprint, an invalid one is dropped from the snapshot (see "Display metadata" in `.agents/skills/writing-tools`).
-- Keys are `<connectorSlug>__<tool>` matching `^[a-zA-Z0-9_-]{1,64}$`; a key that doesn't fit is disabled by the kernel with the reason, never truncated. Normalize remote names to a reasonable length and keep them unique within one connector (openapi replaces illegal characters in operationId with underscores and cuts to 40; duplicates are reported in the preview).
+- Keys are `mcp__<connectorSlug>__<tool>` matching `^[a-zA-Z0-9_-]{1,64}$`; a key that doesn't fit is disabled by the kernel with the reason, never truncated. Normalize remote names to a reasonable length and keep them unique within one connector (openapi replaces illegal characters in operationId with underscores and cuts to 40; duplicates are reported in the preview).
 - **`ToolSpec.connectorData`** (security): the routing information a call needs goes in this opaque JSON field (OpenAPI: method, path template, parameter locations / styles, request media type, the resolved server). The kernel stores it, counts it in the definition fingerprint (a change goes to admin review) and **never sends it to the model**.
 - On a call the kernel passes the tool's **reviewed** definition as `ctx.spec` (4th argument of `callTool`). A remote description can be changed (rug-pull), so route by `ctx.spec` and **never re-read the remote description**; when `ctx` is missing (older kernel), raise an error telling the admin to refresh. A protocol where the remote routes by name (MCP) may ignore `ctx`.
 - The kernel re-runs `listTools` periodically, on `onToolsChanged` and on admin refresh, and sends new or changed tools to review (unusable until approved). So `listTools` output must be **deterministic**: the same remote description gives the same spec every time (stable field order, no timestamps or random values), or it triggers review again and again.
@@ -107,7 +107,7 @@ For MCP `elicitation/create` (form and URL modes), call `args.onElicit?.(request
 
 ## Optional: resources and prompts
 
-- With `listResources` / `readResource`, the kernel adds `<slug>__list_resources` / `<slug>__read_resource` tools (read-only, default allow) and `@` references in the web input box, read with the sender's credentials. With `listPrompts` / `getPrompt`, the web input box gets `/<connector>:<prompt name>` commands. Both are started by the person with their own credentials and skip tool policy.
+- With `listResources` / `readResource`, the kernel adds `mcp__<slug>__list_resources` / `mcp__<slug>__read_resource` tools (read-only, default allow) and `@` references in the web input box, read with the sender's credentials. With `listPrompts` / `getPrompt`, the web input box gets `/<connector>:<prompt name>` commands. Both are started by the person with their own credentials and skip tool policy.
 - When `getPrompt` or a resource read fails, throw an English `ToolError` without credentials.
 
 ## What the kernel owns
