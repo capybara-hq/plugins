@@ -9,8 +9,9 @@ export function text(v: unknown): string | undefined {
 export function httpUrl(v: unknown): string | undefined {
   if (typeof v !== "string") return undefined;
   try {
-    const u = new URL(v);
-    return u.protocol === "http:" || u.protocol === "https:" ? v : undefined;
+    const t = v.trim();
+    const u = new URL(t);
+    return u.protocol === "http:" || u.protocol === "https:" ? t : undefined;
   } catch {
     return undefined;
   }

@@ -187,8 +187,8 @@ workers and other tests' child processes run plain Node. This is temporary, unti
 ## Live API tests
 
 - Tests that hit real services run only when their `CAPYBARA_TEST_*` variables are set (each skill
-  lists them: model providers, E2B, Slack, Lark, Jina (`CAPYBARA_TEST_JINA_API_KEY`), MCP / OpenAPI connectors with
-  `CAPYBARA_TEST_LIVE_TOOLS`).
+  lists them: model providers, E2B, Slack, Lark, Jina (`CAPYBARA_TEST_JINA_API_KEY`), MCP / OpenAPI
+  connectors with `CAPYBARA_TEST_LIVE_TOOLS`).
 - Keep keys in a local env file outside the repository (`~/.capybara-test.env`), load it only inside
   the test command, and never print it, paste it into a chat or commit it.
 - Run the live tests after changing request mapping, protocol handling or upgrading a vendor SDK. A

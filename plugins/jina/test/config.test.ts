@@ -10,6 +10,13 @@ describe("jina config", () => {
     expect(jinaConfigured(null)).toBe(false);
   });
 
+  it("rejects keys a header cannot carry and trims the rest", () => {
+    expect(jinaConfigured({ apiKey: "k\u200b" })).toBe(false);
+    expect(jinaConfigured({ apiKey: "a b" })).toBe(false);
+    expect(jinaConfigured({ apiKey: " k " })).toBe(true);
+    expect(apiKeyOf({ apiKey: " k " })).toBe("k");
+  });
+
   it("defaults the deployment endpoints", () => {
     expect(JinaDeployment.parse({})).toEqual({
       searchUrl: "https://s.jina.ai",

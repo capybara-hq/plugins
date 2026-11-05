@@ -64,6 +64,22 @@ describe("jina web-search", () => {
     expect(fake.requests[0]?.headers["x-site"]).toBe("https://docs.jina.ai");
   });
 
+  it("a non-ASCII allowed domain sends no X-Site", async () => {
+    fake.respond(ok([]));
+    await run({ allowedDomains: ["bücher.de"] });
+    expect(fake.requests[0]?.headers["x-site"]).toBeUndefined();
+  });
+
+  it("maxResults 0 returns nothing", async () => {
+    fake.respond(ok([{ title: "t", url: "https://e.example/1" }]));
+    expect((await run({ maxResults: 0 })).results).toEqual([]);
+  });
+
+  it("trims result URLs", async () => {
+    fake.respond(ok([{ title: "t", url: " https://a.example/x " }]));
+    expect((await run()).results[0]?.url).toBe("https://a.example/x");
+  });
+
   it("slices to maxResults", async () => {
     fake.respond(
       ok(Array.from({ length: 12 }, (_, i) => ({ title: `t${i}`, url: `https://e.example/${i}` }))),
