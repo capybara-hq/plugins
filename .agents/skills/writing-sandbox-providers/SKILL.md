@@ -5,7 +5,7 @@ description: 'Use when creating or changing a sandbox extension in this reposito
 
 # Writing sandbox extensions
 
-One sandbox per conversation, shared by its sub-agents. The kernel's sandbox tools (`sandbox_bash` / `read` / `write` / `edit` / `glob` / `grep` / `deliver`), attachment sync and `skill_load` use it through the kernel's `SandboxService`. `sandbox@1` is a **single-choice, brokered** extension point: a deployment installs only one sandbox extension, and other extensions cannot `requires` it. For general extension writing see `.agents/skills/writing-extensions`. The kernel side (the `SandboxService` lifecycle, leases, fencing, suspension and destruction, the builtin `sandbox_*` tools) is core's: [writing-sandbox-providers in core](https://github.com/capybara-hq/core/tree/main/.agents/skills/writing-sandbox-providers).
+One sandbox per conversation, shared by its sub-agents. The kernel's sandbox tools (`Bash` / `Read` / `Write` / `Edit` / `Glob` / `Grep` / `Deliver`), attachment sync and `Skill` use it through the kernel's `SandboxService`. `sandbox@1` is a **single-choice, brokered** extension point: a deployment installs only one sandbox extension, and other extensions cannot `requires` it. For general extension writing see `.agents/skills/writing-extensions`. The kernel side (the `SandboxService` lifecycle, leases, fencing, suspension and destruction, the builtin sandbox tools) is core's: [writing-sandbox-providers in core](https://github.com/capybara-hq/core/tree/main/.agents/skills/writing-sandbox-providers).
 
 Reference implementations:
 
@@ -69,7 +69,7 @@ The extension implements only primitives. **No scheduling, timers or state table
 - **Takeover of crashed holders**: their commands are killed with `killTagged` (or `killAll` where safe) by the next holder; whatever escapes ends at the in-sandbox time limit.
 - **Kernel file writes are serialized per path**; shell commands are not.
 - **Suspension** after `suspendAfterIdleMinutes` (default 10) idle or `maxRunningMinutes` (default 120) running; **destruction** after `destroyAfterInactiveDays` (default 7), org or conversation deletion, or a departing member. A suspended sandbox is resumed on next use; `gone`, destroyed or a provider switch rebuilds an empty one with a notice. Switching providers leaks old instances while the old extension is unloaded.
-- **Time limits**: per command `sandbox.limits.maxCommandSeconds` (default 7200; `sandbox_bash` defaults to 120 s), tightened to the owning run's remaining time.
+- **Time limits**: per command `sandbox.limits.maxCommandSeconds` (default 7200; `Bash` defaults to 120 s), tightened to the owning run's remaining time.
 
 ## Security
 

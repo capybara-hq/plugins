@@ -1,11 +1,11 @@
 ---
 name: writing-tools
-description: 'Use when adding or changing an extension tool in this repository (ctx.tools.register, reference plugins/todo), or the tool rules shared by connector tools: tool naming and keys, English descriptions and actionable error text (the tool-description and tool-error-actionable checks), annotations and defaultPolicy, ToolError and kind (circuit breaker), timeouts and call.signal, the error when an extension is disabled mid-call, result unknown after a crash, output size and spilling, InputRequired and resume, writing descriptions for tool_search, display-only title / keyArgs / display summary / inline cards, and extension hooks in a tool call (tool.preExecute, tool.postExecute). For connectors see writing-connectors.'
+description: 'Use when adding or changing an extension tool in this repository (ctx.tools.register, reference plugins/todo), or the tool rules shared by connector tools: tool naming and keys, English descriptions and actionable error text (the tool-description and tool-error-actionable checks), annotations and defaultPolicy, ToolError and kind (circuit breaker), timeouts and call.signal, the error when an extension is disabled mid-call, result unknown after a crash, output size and spilling, InputRequired and resume, writing descriptions for ToolSearch, display-only title / keyArgs / display summary / inline cards, and extension hooks in a tool call (tool.preExecute, tool.postExecute). For connectors see writing-connectors.'
 ---
 
 # Writing tools
 
-This skill is the plugin half: tools an extension registers with `ctx.tools.register`, and the rules connector tools share. General extension authoring (manifest, config, ctx, multi-replica rules, dual-replica tests) is in `.agents/skills/writing-extensions`. The kernel's builtin tools (`ask_user`, `read_tool_output`, `tool_search`, the sandbox tools `sandbox_*`, the skill tools `skill_load` / `skill_write`, the sub-agent tool `agent`), policy evaluation, output archiving, drift review and resume are core's: [writing-tools in core](https://github.com/capybara-hq/core/tree/main/.agents/skills/writing-tools).
+This skill is the plugin half: tools an extension registers with `ctx.tools.register`, and the rules connector tools share. General extension authoring (manifest, config, ctx, multi-replica rules, dual-replica tests) is in `.agents/skills/writing-extensions`. The kernel's builtin tools (`AskUserQuestion`, `ReadToolOutput`, `ToolSearch`, the sandbox tools `Bash` / `Read` / `Write` / `Edit` / `Glob` / `Grep` / `Deliver`, the skill tools `Skill` / `SkillWrite`, the sub-agent tool `Agent`, the web tools `WebSearch` / `WebFetch`), policy evaluation, output archiving, drift review and resume are core's: [writing-tools in core](https://github.com/capybara-hq/core/tree/main/.agents/skills/writing-tools).
 
 Reference implementations:
 
@@ -20,9 +20,9 @@ The tool name (key) the model sees matches `^[a-zA-Z0-9_-]{1,64}$`:
 
 | Source | key | Naming rule |
 |---|---|---|
-| builtin (kernel) | the name itself: `ask_user`, `read_tool_output`, `tool_search`, `sandbox_bash`, `skill_load`, `agent` | lowercase + underscores, no dots |
-| extension | `<plugin>__<tool>`, e.g. `todo__write` | `spec.name` matches `^[a-zA-Z0-9_-]{1,40}$` (`EXTENSION_TOOL_NAME`) |
-| connector | `<connectorSlug>__<tool>`, e.g. `docs__search` | slug `^[a-z][a-z0-9_]{0,23}$`; the tool name is decided by the remote |
+| builtin (kernel) | the name itself: `AskUserQuestion`, `ReadToolOutput`, `ToolSearch`, `Bash`, `Skill`, `Agent` | Claude Code's PascalCase names, no dots |
+| extension | `plugin__<plugin>__<tool>`, e.g. `plugin__todo__write` | `spec.name` matches `^[a-zA-Z0-9_-]{1,40}$` (`EXTENSION_TOOL_NAME`); the whole key must fit 64 characters (`plugin-tool-key-length` of `capybara-plugin check` computes it) |
+| connector | `mcp__<connectorSlug>__<tool>`, e.g. `mcp__docs__search` | slug `^[a-z][a-z0-9_]{0,23}$`; the tool name is decided by the remote |
 
 An invalid key is **neither truncated nor guessed**. Name tools with lowercase + underscore verb phrases (`write`, `search`, `delete_doc`), and don't repeat the extension name in the tool name (the key carries the prefix). An agent references an extension tool as `{kind:"plugin", plugin, name}` (the value is the extension name); a tool that is unavailable at a step (extension not enabled in the org, unloaded) is skipped with an English reminder to the model, and the run does not fail.
 
@@ -75,9 +75,9 @@ Beyond the checks:
 - No credentials, internal paths or stack traces in errors; no fuzzy matching ("did you mean to call X").
 - Text shown in the UI (form titles, field labels) may be bilingual `{ zh, en }`; text for the model is English only.
 
-### Descriptions under `tool_search`
+### Descriptions under `ToolSearch`
 
-When an agent has many tools (above the kernel's thresholds, by count or tokens), the model sees only a catalog line per tool, `- <key>: <first line of the description>` (cut at 200 characters), and loads full definitions with `tool_search`, which scores tools by keyword (words in the key weigh double). So:
+When an agent has many tools (above the kernel's thresholds, by count or tokens), the model sees only a catalog line per tool, `- <key>: <first line of the description>` (cut at 200 characters), and loads full definitions with `ToolSearch`, which scores tools by keyword (words in the key weigh double). So:
 
 - **The first line must explain the tool's purpose on its own**, with the object and action words (`create calendar event`).
 - Verb-phrase names (`search_docs`) help matching.
@@ -114,7 +114,7 @@ The conversation page shows a call as one row, "verb + source: title + key argum
 
 ## Output size
 
-- A result over `tools.outputSpillChars` (default 50000 characters) is archived; the model sees the first `tools.outputPreviewChars` (default 2000) characters and a note telling it to page with `read_tool_output` or pass `{"$output":"<id>"}` as an argument to another tool (the handler then sees the full text in place of the reference). Archives are readable only within the conversation that produced them.
+- A result over `tools.outputSpillChars` (default 50000 characters) is archived; the model sees the first `tools.outputPreviewChars` (default 2000) characters and a note telling it to page with `ReadToolOutput` or pass `{"$output":"<id>"}` as an argument to another tool (the handler then sees the full text in place of the reference). Archives are readable only within the conversation that produced them.
 - So **don't truncate** large results or invent pagination; return the full text. For truly unbounded data (a whole-database export), add a limit or pagination parameters and say so in the description.
 
 ## Needing user input: `InputRequired` and resume
@@ -139,16 +139,17 @@ async (input, call) => {
 
 Extensions can observe or deny tool calls through `ctx.hooks` (see "Hooks" in `.agents/skills/writing-extensions`).
 
+- The payloads carry the model-visible `toolKey` (a builtin name, `mcp__<slug>__<tool>` or `plugin__<plugin>__<tool>`); split it with the SDK's `parseToolKey` instead of matching the string yourself.
 - `tool.preExecute` runs after the policy and approval, before the call starts. A policy denial never runs the tool: the result is `Tool call blocked by the "<plugin>" policy hook: <reason>` (reason sanitized and cut to 500 characters, or a generic sentence for a hook error or timeout). The denial is sticky: a resumed step reuses it.
 - `tool.postExecute` is observe-only and gets the result the model sees (after spilling, not the raw output).
-- A sub-agent dispatch is the parent's `agent` call, so `tool.preExecute` can refuse it (the input has `subagent_type`). Hooks never fire in eval replays.
+- A sub-agent dispatch is the parent's `Agent` call, so `tool.preExecute` can refuse it (the input has `subagent_type`). Hooks never fire in eval replays.
 
 ## Connectors
 
-A connector (`connector@1`) connects a remote service; its tools are decided by the remote, and policy, approval, spilling and `tool_search` apply as above. The kernel re-reads a connector's tool list periodically and sends changed definitions to admin review, so `listTools` output must be deterministic. Contract, sessions, auth, `connectorData`, `inspect`, elicitation and test fixtures: `.agents/skills/writing-connectors`.
+A connector (`connector@1`) connects a remote service; its tools are decided by the remote, and policy, approval, spilling and `ToolSearch` apply as above. The kernel re-reads a connector's tool list periodically and sends changed definitions to admin review, so `listTools` output must be deterministic. Contract, sessions, auth, `connectorData`, `inspect`, elicitation and test fixtures: `.agents/skills/writing-connectors`.
 
 ## Testing
 
 - Unit tests: call the handler directly with a constructed `ToolCallContext`; see `plugins/todo/test/todo.test.ts`. Multi-replica consistency: `createDualReplicaHarness` from `@capybara-hq/testing`.
-- Through a real kernel: model-fake's `tool:<key>:<json>` message makes the model call a tool (e.g. `tool:todo__write:{"todos":[]}`); see `plugins/todo/test/kernel.http.test.ts` (`startTestKernel` from `@capybara-hq/testing`, model-fake as a devDependency loaded by package name).
+- Through a real kernel: model-fake's `tool:<key>:<json>` message makes the model call a tool (e.g. `tool:plugin__todo__write:{"todos":[]}`); see `plugins/todo/test/kernel.http.test.ts` (`startTestKernel` from `@capybara-hq/testing`, model-fake as a devDependency loaded by package name).
 - Run from the repository root: `pnpm exec vitest run plugins/todo`.
