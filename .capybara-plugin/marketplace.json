@@ -695,6 +695,34 @@
           "integrity": "sha512-LU2ZzzGgQV6Bo1RwqkSzq/+GRFoUjzAvR8+FkreugkdoP6PxMOKc44NL56M2i8PWLRj1B/C7mRdvLiTCDfScAg=="
         }
       }
+    },
+    {
+      "name": "sandbox-e2b",
+      "version": "0.1.0-rc.3",
+      "summary": {
+        "en": "Conversation sandboxes (sandbox@1) as E2B sandboxes (E2B cloud or self-hosted), with pause / resume and E2B egress controls"
+      },
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-e2b#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment.secret:apiKey",
+          "config.deployment:allowOpenEgress",
+          "config.deployment:apiUrl",
+          "config.deployment:domain",
+          "config.deployment:domainAllowlist",
+          "config.deployment:template",
+          "config.deployment:timeoutSeconds",
+          "provides:sandbox@1"
+        ],
+        "sensitive": ["config.deployment.secret:apiKey", "provides:sandbox@1"]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-sandbox-e2b",
+          "version": "0.1.0-rc.3",
+          "integrity": "sha512-ub/Tc7ClgrRoX1S0PI2bsvuU6teRT4M7WnAEDvjsi1h3CmvwA2mInE01gkMtIwwdhW8y1iEHHmcxpSbCToD9dg=="
+        }
+      }
     }
   ]
 }
