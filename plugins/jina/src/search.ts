@@ -5,25 +5,10 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import { apiKeyOf, type JinaEndpoints, jinaConfigured } from "./config.js";
 import { jinaRequest, joinUrl } from "./http.js";
-
-function text(v: unknown): string | undefined {
-  if (typeof v !== "string") return undefined;
-  const t = v.trim();
-  return t === "" ? undefined : t;
-}
+import { httpUrl, text } from "./util.js";
 
 function validDate(v: unknown): string | undefined {
   return typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : undefined;
-}
-
-function httpUrl(v: unknown): string | undefined {
-  if (typeof v !== "string") return undefined;
-  try {
-    const u = new URL(v);
-    return u.protocol === "http:" || u.protocol === "https:" ? v : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function toResult(item: unknown): WebSearchResult | undefined {
