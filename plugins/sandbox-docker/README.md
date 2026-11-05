@@ -24,7 +24,7 @@ The deployment config schema is strict: extra keys are errors.
 
 - The sandbox image `image/Dockerfile` (shared by the Docker plugin and the E2B template). The tag matches the default of the kernel config `sandbox.image`:
   `docker build -t capybara-sandbox:latest plugins/sandbox-docker/image`.
-  Debian trixie-slim (pinned by digest), with bash, coreutils, GNU find / grep (the kernel's `sandbox_glob` / `sandbox_grep`
+  Debian trixie-slim (pinned by digest), with bash, coreutils, GNU find / grep (the kernel's `Glob` / `Grep`
   depend on them), procps, util-linux (`setsid`), curl, git, jq, python3 (with pip / venv) and so on; it runs as the non-root user `sandbox`
   (uid 1000), with HOME and the working directory at `/workspace`.
 - The egress proxy image `egress-proxy/Dockerfile`: `docker build -t capybara-sandbox-egress:latest plugins/sandbox-docker/egress-proxy`.

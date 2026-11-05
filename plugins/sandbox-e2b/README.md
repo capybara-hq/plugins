@@ -63,7 +63,7 @@ Then set `template` to `capybara-sandbox`. Image conventions (the plugin depends
   and files are not lost even when the kernel has no chance to `suspend` (for example the whole kernel is down). Every use pushes it back through connect (it only extends, never shortens).
   Idle hibernation and expiry destruction are handled by the kernel's maintenance tasks. E2B's continuous run limit (24 hours on Pro, 1 hour on Hobby) is recounted after pause / resume.
 - **Hobby plan**: the `timeout` of connect / create is at most 1 hour, so the deployment config `timeoutSeconds` must be ≤ 3600, and a single command can actually run at most
-  about 1 hour minus 2 minutes; however large the `sandbox_bash` `timeoutSeconds` is (capped by `sandbox.limits.maxCommandSeconds`, default 7200), it will be interrupted by the pause when the sandbox expires.
+  about 1 hour minus 2 minutes; however large the `Bash` `timeout` (in milliseconds) is (capped by `sandbox.limits.maxCommandSeconds`, default 7200 seconds), it will be interrupted by the pause when the sandbox expires.
   On Hobby, set `sandbox.limits.maxCommandSeconds` to below 3480.
 - E2B keeps a paused sandbox indefinitely until it is deleted (the kernel deletes by `destroyAfterInactiveDays`).
 
