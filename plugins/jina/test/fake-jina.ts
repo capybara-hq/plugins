@@ -27,6 +27,7 @@ async function readBody(req: IncomingMessage): Promise<string> {
 export async function startFakeJina(): Promise<FakeJina> {
   const requests: FakeJinaRequest[] = [];
   let handler: (req: FakeJinaRequest) => FakeJinaReply = () => ({ status: 200, body: "{}" });
+  const timers = new Set<() => void>();
   const server = createServer(async (req, res) => {
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries(req.headers)) {
@@ -39,8 +40,25 @@ export async function startFakeJina(): Promise<FakeJina> {
       body: await readBody(req),
     };
     requests.push(rec);
-    const reply = handler(rec);
-    if (reply.delayMs) await new Promise((r) => setTimeout(r, reply.delayMs));
+    let reply: FakeJinaReply;
+    try {
+      reply = handler(rec);
+    } catch (err) {
+      reply = { status: 500, body: err instanceof Error ? err.message : String(err) };
+    }
+    if (reply.delayMs) {
+      const ms = reply.delayMs;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(done, ms);
+        timers.add(done);
+        function done() {
+          clearTimeout(timer);
+          timers.delete(done);
+          resolve();
+        }
+        res.once("close", done);
+      });
+    }
     if (res.destroyed) return;
     res.statusCode = reply.status;
     res.end(reply.body);
@@ -55,6 +73,7 @@ export async function startFakeJina(): Promise<FakeJina> {
     },
     stop() {
       return new Promise((resolve) => {
+        for (const release of [...timers]) release();
         server.closeAllConnections();
         server.close(() => resolve());
       });

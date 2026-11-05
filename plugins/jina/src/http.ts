@@ -2,8 +2,6 @@ import { WebProviderError, type WebProviderErrorKind } from "@capybara-hq/plugin
 
 export type JinaOp = "search" | "reader";
 
-const OP_NAME: Record<JinaOp, string> = { search: "search", reader: "reader" };
-
 /** Maps an HTTP status of a failed Jina call to a provider error kind. */
 export function jinaErrorKind(op: JinaOp, status: number): WebProviderErrorKind {
   if (status === 401 || status === 403) return "auth";
@@ -35,7 +33,7 @@ export async function jinaRequest(
     signal: AbortSignal;
   },
 ): Promise<unknown> {
-  const name = `Jina ${OP_NAME[op]}`;
+  const name = `Jina ${op}`;
   let res: Response;
   try {
     res = await fetch(url, {
