@@ -140,9 +140,7 @@ jobs:
     name: test (${{ matrix.shard }}/${{ needs.changes.outputs.test-shard-total }})
     needs: changes
     if: needs.changes.outputs.test == 'true'
-    # Pinned: the fake E2B runs exec commands on the runner, and ubuntu-26.04's default coreutils
-    # (uutils) break the sandbox-e2b kill tests (#7). Move back once they pass.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 30
