@@ -51,6 +51,13 @@ describe("jina web-fetch", () => {
     });
   });
 
+  it("prefers data.finalUrl over the echoed data.url", async () => {
+    fake.respond(
+      ok({ url: "https://example.com/a#x", finalUrl: "https://example.com/b", content: "x" }),
+    );
+    expect((await run("https://example.com/a#x")).finalUrl).toBe("https://example.com/b");
+  });
+
   it("no data.url keeps the requested URL", async () => {
     fake.respond(ok({ content: "x" }));
     expect((await run("https://example.com/a")).finalUrl).toBe("https://example.com/a");

@@ -27,7 +27,8 @@ export function createJinaReader(endpoints: Pick<JinaEndpoints, "readerUrl">): W
       }
       const d = data as Record<string, unknown>;
       const page: { finalUrl: string; title?: string; markdown: string } = {
-        finalUrl: httpUrl(text(d.url)) ?? url,
+        // `finalUrl` is where the page ended up after redirects; `url` echoes the request.
+        finalUrl: httpUrl(text(d.finalUrl)) ?? httpUrl(text(d.url)) ?? url,
         markdown: typeof d.content === "string" ? d.content : "",
       };
       const title = text(d.title);
