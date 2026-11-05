@@ -9,6 +9,7 @@ import {
   type ModelProvider,
   type ModelStreamEvent,
   secret,
+  ui,
 } from "@capybara-hq/plugin-sdk";
 import OpenAI from "openai";
 import { z } from "zod";
@@ -19,22 +20,30 @@ const EffortLevel = z.enum(EFFORT_VALUES as [Effort, ...Effort[]], {
 });
 
 const ModelConfigSchema = z.object({
-  id: z.string().min(1),
-  contextWindow: z.number().int().positive(),
-  maxOutputTokens: z.number().int().positive(),
-  reasoning: z.boolean(),
-  vision: z.boolean(),
+  id: ui(z.string().min(1), { label: { zh: "模型 ID", en: "Model ID" } }),
+  contextWindow: ui(z.number().int().positive(), {
+    label: { zh: "上下文窗口", en: "Context window" },
+  }),
+  maxOutputTokens: ui(z.number().int().positive(), {
+    label: { zh: "最大输出", en: "Max output tokens" },
+  }),
+  reasoning: ui(z.boolean(), { label: { zh: "推理", en: "Reasoning" } }),
+  vision: ui(z.boolean(), { label: { zh: "图片输入", en: "Image input" } }),
   /**
    * 是否接受 PDF（`input_file`）。缺省 false：由部署按模型开启。文档未列出逐模型清单，PDF 的页面图像需要
    * 支持视觉的模型（gpt-4o 及以后；https://developers.openai.com/api/docs/guides/pdf-files ，2026-10-21 核实）。
    */
-  documents: z.boolean().optional(),
-  streamIdleTimeoutMs: z.number().int().positive().optional(),
+  documents: ui(z.boolean().optional(), { label: { zh: "PDF 输入", en: "PDF input" } }),
+  streamIdleTimeoutMs: ui(z.number().int().positive().optional(), {
+    label: { zh: "流空闲超时", en: "Stream idle timeout" },
+  }),
   /**
    * 该模型接受的 effort 档位（按给定顺序声明）；档位因模型而异（如 gpt-5-nano 不接受 max），
    * 未给时用 low / medium / high。
    */
-  effortLevels: z.array(EffortLevel).min(1).optional(),
+  effortLevels: ui(z.array(EffortLevel).min(1).optional(), {
+    label: { zh: "思考深度档位", en: "Effort levels" },
+  }),
 });
 
 export type ModelConfig = z.infer<typeof ModelConfigSchema>;
@@ -135,15 +144,17 @@ export function createOpenAIProvider(opts: OpenAIProviderOptions): ModelProvider
 
 /** 部署级配置。 */
 const DeploymentConfig = z.object({
-  apiKey: secret(z.string().min(1)),
-  baseUrl: z.string().url().optional(),
-  organization: z.string().min(1).optional(),
-  models: z.array(ModelConfigSchema).min(1),
+  apiKey: ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
+  baseUrl: ui(z.string().url().optional(), { label: { zh: "接口地址", en: "API URL" } }),
+  organization: ui(z.string().min(1).optional(), { label: { zh: "组织 ID", en: "Organization" } }),
+  models: ui(z.array(ModelConfigSchema).min(1), { label: { zh: "模型", en: "Models" } }),
   /**
    * 推理摘要的部署级默认值："off" 时不发 reasoning.summary（未完成组织验证的账号请求摘要会被拒绝）。
    * agent 设置了 thinking 参数时以参数为准。
    */
-  reasoningSummary: z.enum(["auto", "off"]).default("auto"),
+  reasoningSummary: ui(z.enum(["auto", "off"]).default("auto"), {
+    label: { zh: "推理摘要", en: "Reasoning summary" },
+  }),
 });
 
 /** OpenAI 供应商插件：官方 SDK + 原生 Responses API。 */

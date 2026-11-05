@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "sandbox-e2b",
+  "displayName": { "zh": "E2B 沙箱", "en": "E2B sandbox" },
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
   "description": "Conversation sandboxes (sandbox@1) as E2B sandboxes (E2B cloud or self-hosted), with pause / resume and E2B egress controls",

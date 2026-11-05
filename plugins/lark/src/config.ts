@@ -1,4 +1,4 @@
-import { secret } from "@capybara-hq/plugin-sdk";
+import { secret, ui } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 
 /** 各区域的开放平台域名。`feishu`（飞书，国内）先在枚举里预留，M4 只支持 `lark`（国际版）。 */
@@ -26,14 +26,25 @@ export const LarkAppId = z
  * 机器人、通讯录三处的身份就对不上。插件在校验渠道连接与同步通讯录时，若发现同一租户用了与登录不同的应用就报错。
  */
 export const LarkDeployment = z.object({
-  region: z
-    .enum(["lark", "feishu"])
-    .default("lark")
-    .refine((r) => r === "lark", { message: "region feishu is reserved; only lark is supported" }),
-  apiUrl: z.string().url().optional(),
-  accountsUrl: z.string().url().optional(),
-  appId: LarkAppId.optional(),
-  appSecret: secret(z.string().min(1)).optional(),
+  region: ui(
+    z
+      .enum(["lark", "feishu"])
+      .default("lark")
+      .refine((r) => r === "lark", {
+        message: "region feishu is reserved; only lark is supported",
+      }),
+    { label: { zh: "区域", en: "Region" } },
+  ),
+  apiUrl: ui(z.string().url().optional(), {
+    label: { zh: "开放平台地址", en: "Open platform URL" },
+  }),
+  accountsUrl: ui(z.string().url().optional(), {
+    label: { zh: "授权页地址", en: "Authorization page URL" },
+  }),
+  appId: ui(LarkAppId.optional(), { label: { zh: "应用 ID", en: "App ID" } }),
+  appSecret: ui(secret(z.string().min(1)), {
+    label: { zh: "应用密钥", en: "App secret" },
+  }).optional(),
 });
 export type LarkDeploymentConfig = z.infer<typeof LarkDeployment>;
 
@@ -43,8 +54,10 @@ export type LarkDeploymentConfig = z.infer<typeof LarkDeployment>;
  * 内核静默跳过同步）。
  */
 export const LarkOrgConfig = z.object({
-  appId: LarkAppId.optional(),
-  appSecret: secret(z.string().min(1)).optional(),
+  appId: ui(LarkAppId.optional(), { label: { zh: "应用 ID", en: "App ID" } }),
+  appSecret: ui(secret(z.string().min(1)), {
+    label: { zh: "应用密钥", en: "App secret" },
+  }).optional(),
 });
 export type LarkOrgConfigValue = z.infer<typeof LarkOrgConfig>;
 

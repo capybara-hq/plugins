@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "todo",
+  "displayName": { "zh": "待办清单", "en": "Todo list" },
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
   "description": "Todo list tool for agents: todo__write keeps a per-conversation task list in PostgreSQL",

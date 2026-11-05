@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "connector-mcp",
+  "displayName": { "zh": "MCP 连接器", "en": "MCP connector" },
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
   "description": "MCP connector (connector@1): tools and resources of remote MCP servers over Streamable HTTP",

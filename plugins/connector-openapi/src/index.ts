@@ -1,11 +1,13 @@
-import { CONNECTOR_EXTENSION_POINT, defineExtension } from "@capybara-hq/plugin-sdk";
+import { CONNECTOR_EXTENSION_POINT, defineExtension, ui } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 import { createOpenApiConnector } from "./connector.js";
 
 /** 部署级配置。 */
 const DeploymentConfig = z.object({
   /** 允许文档地址、baseUrl 与文档里的 server 用本机 http（127.0.0.1 / localhost / [::1]），仅供开发与测试；默认关闭。 */
-  allowInsecureLoopback: z.boolean().default(false),
+  allowInsecureLoopback: ui(z.boolean().default(false), {
+    label: { zh: "允许本机 http 端点", en: "Allow loopback http endpoints" },
+  }),
 });
 
 /**

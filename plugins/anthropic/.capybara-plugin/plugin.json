@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "anthropic",
+  "displayName": { "zh": "Anthropic", "en": "Anthropic" },
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
   "description": "Anthropic model provider (model-provider@2) using the official SDK and the native Messages API",

@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "object-store-s3",
+  "displayName": { "zh": "S3 对象存储", "en": "S3 object storage" },
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
   "description": "Object storage (object-store@1) on any S3-compatible service (AWS S3, MinIO, Ceph, OSS, TOS, ...) using the official @aws-sdk/client-s3",

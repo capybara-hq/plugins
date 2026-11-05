@@ -6,6 +6,7 @@ import {
   type ModelProvider,
   type ModelStreamEvent,
   secret,
+  ui,
 } from "@capybara-hq/plugin-sdk";
 import OpenAI from "openai";
 import { z } from "zod";
@@ -14,36 +15,52 @@ import { streamChat } from "./map-stream.js";
 
 const EndpointModelSchema = z.object({
   /** 端点上的原始模型 id（可含 `/`，如 vLLM 的 `Qwen/Qwen3-8B`）。 */
-  id: z.string().min(1),
-  contextWindow: z.number().int().positive(),
-  maxOutputTokens: z.number().int().positive(),
+  id: ui(z.string().min(1), { label: { zh: "模型 ID", en: "Model ID" } }),
+  contextWindow: ui(z.number().int().positive(), {
+    label: { zh: "上下文窗口", en: "Context window" },
+  }),
+  maxOutputTokens: ui(z.number().int().positive(), {
+    label: { zh: "最大输出", en: "Max output tokens" },
+  }),
   /** 是否接受图片（`image_url`）；缺省 false。各方言的出处见 `dialects.ts`。 */
-  vision: z.boolean().optional(),
+  vision: ui(z.boolean().optional(), { label: { zh: "图片输入", en: "Image input" } }),
   /**
    * 是否接受 PDF（`file` 内容）；缺省 false。只有 `pdfInput` 的方言（generic、qwen）能开启，其余方言配置校验拒绝。
    * 开启后内核也把 `text/*` 附件作为文档块发来，插件解码成文本片段。
    */
-  documents: z.boolean().optional(),
-  reasoning: z.boolean().optional(),
+  documents: ui(z.boolean().optional(), { label: { zh: "PDF 输入", en: "PDF input" } }),
+  reasoning: ui(z.boolean().optional(), { label: { zh: "推理", en: "Reasoning" } }),
   /** 未给时取方言默认（服务是否有自动前缀缓存）。 */
-  caching: z.boolean().optional(),
-  streamIdleTimeoutMs: z.number().int().positive().optional(),
+  caching: ui(z.boolean().optional(), { label: { zh: "提示缓存", en: "Prompt caching" } }),
+  streamIdleTimeoutMs: ui(z.number().int().positive().optional(), {
+    label: { zh: "流空闲超时", en: "Stream idle timeout" },
+  }),
 });
 
 // strictObject：密钥不在端点里（见 apiKeys），误写的 `apiKey` 直接报错，而不是被静默丢掉后发出不带凭据的请求
 const EndpointSchema = z.strictObject({
   /** 端点名：对外模型 id 为 `<端点名>/<模型 id>`，所以不能含 `/`。 */
-  name: z
-    .string()
-    .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, "endpoint name must match [A-Za-z0-9][A-Za-z0-9._-]*"),
-  baseUrl: z.string().url(),
-  dialect: z.enum(["generic", "deepseek", "qwen", "ark"]),
+  name: ui(
+    z
+      .string()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, "endpoint name must match [A-Za-z0-9][A-Za-z0-9._-]*"),
+    { label: { zh: "端点名", en: "Name" } },
+  ),
+  baseUrl: ui(z.string().url(), { label: { zh: "接口地址", en: "API URL" } }),
+  dialect: ui(z.enum(["generic", "deepseek", "qwen", "ark"]), {
+    label: { zh: "方言", en: "Dialect" },
+  }),
   /** 中途 system 是否以原位置的 system 消息发送；未给时取方言默认。 */
-  midConversationSystem: z.boolean().optional(),
-  models: z
-    .array(EndpointModelSchema)
-    .min(1)
-    .refine((ms) => new Set(ms.map((m) => m.id)).size === ms.length, "duplicate model id"),
+  midConversationSystem: ui(z.boolean().optional(), {
+    label: { zh: "原位置 system 消息", en: "In-place system messages" },
+  }),
+  models: ui(
+    z
+      .array(EndpointModelSchema)
+      .min(1)
+      .refine((ms) => new Set(ms.map((m) => m.id)).size === ms.length, "duplicate model id"),
+    { label: { zh: "模型", en: "Models" } },
+  ),
 });
 
 export type EndpointModelConfig = z.infer<typeof EndpointModelSchema>;
@@ -55,12 +72,20 @@ export type EndpointConfig = z.input<typeof EndpointSchema>;
  */
 const DeploymentConfig = z
   .object({
-    endpoints: z
-      .array(EndpointSchema)
-      .min(1)
-      .refine((es) => new Set(es.map((e) => e.name)).size === es.length, "duplicate endpoint name"),
+    endpoints: ui(
+      z
+        .array(EndpointSchema)
+        .min(1)
+        .refine(
+          (es) => new Set(es.map((e) => e.name)).size === es.length,
+          "duplicate endpoint name",
+        ),
+      { label: { zh: "端点", en: "Endpoints" } },
+    ),
     /** 端点名 → API 密钥；没有密钥的端点（如内网 vLLM）不填，请求不带 Authorization 头。 */
-    apiKeys: secret(z.record(z.string(), z.string().min(1))).default({}),
+    apiKeys: ui(secret(z.record(z.string(), z.string().min(1))), {
+      label: { zh: "API 密钥（按端点名）", en: "API keys (by endpoint name)" },
+    }).default({}),
   })
   .superRefine((cfg, ctx) => {
     cfg.endpoints.forEach((e, i) => {

@@ -23,13 +23,13 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.0",
+    "@capybara-hq/plugin-sdk": "0.1.0-rc.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@capybara-hq/testing": "^0.1.0-rc.3",
+    "@capybara-hq/testing": "0.1.0-rc.4",
     "@types/pg": "^8.23.1",
-    "pg": "^8.23.1",
-    "kysely": "^0.29.6"
+    "kysely": "^0.29.8",
+    "pg": "^8.23.1"
   }
 }
