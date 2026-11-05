@@ -17,6 +17,9 @@
       "path": "plugins/example-counter"
     },
     {
+      "path": "plugins/jina"
+    },
+    {
       "path": "plugins/lark"
     },
     {
