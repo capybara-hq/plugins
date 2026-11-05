@@ -261,10 +261,16 @@ export async function envdStart(
   }
   if (res.status !== 200 || !res.body) throw await errorOf(res, "process start");
   const reader = res.body.getReader();
+  // Cancel the read ourselves: under load an abort of fetch's signal sometimes leaves a body that
+  // is already being read untouched, and the read then lasts as long as the command's output (#13).
+  const cancel = () => void reader.cancel().catch(() => undefined);
+  signal.addEventListener("abort", cancel, { once: true });
   let buf = Buffer.alloc(0);
   try {
     for (;;) {
+      signal.throwIfAborted();
       const { done, value } = await reader.read();
+      signal.throwIfAborted();
       if (done) break;
       buf = buf.byteLength === 0 ? Buffer.from(value) : Buffer.concat([buf, value]);
       while (buf.byteLength >= 5) {
@@ -290,6 +296,8 @@ export async function envdStart(
   } catch (e) {
     await reader.cancel().catch(() => undefined);
     rethrow(e, signal);
+  } finally {
+    signal.removeEventListener("abort", cancel);
   }
   throw new Error("E2B process stream ended without an end-of-stream message");
 }
