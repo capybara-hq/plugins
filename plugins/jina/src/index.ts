@@ -4,6 +4,7 @@ import {
   WEB_SEARCH_EXTENSION_POINT,
 } from "@capybara-hq/plugin-sdk";
 import { JinaDeployment, JinaOrgConfig } from "./config.js";
+import { createJinaReader } from "./reader.js";
 import { createJinaSearch } from "./search.js";
 
 export { JinaDeployment, JinaOrgConfig } from "./config.js";
@@ -17,7 +18,8 @@ export default defineExtension({
   permissions: { network: ["s.jina.ai", "r.jina.ai"] },
   config: { deployment: JinaDeployment, org: JinaOrgConfig },
   setup(ctx) {
-    const { searchUrl } = JinaDeployment.parse(ctx.config ?? {});
+    const { searchUrl, readerUrl } = JinaDeployment.parse(ctx.config ?? {});
     ctx.provide(WEB_SEARCH_EXTENSION_POINT, createJinaSearch({ searchUrl }));
+    ctx.provide(WEB_FETCH_EXTENSION_POINT, createJinaReader({ readerUrl }));
   },
 });
