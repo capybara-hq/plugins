@@ -5,7 +5,7 @@
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
   "description": {
-    "en": "Model provider (model-provider@2) for Alibaba Cloud Bailian chat and embedding models",
+    "en": "Model provider (model-provider@2) for Alibaba Cloud Model Studio (Bailian) chat and embedding models",
     "zh": "阿里云百炼对话与嵌入模型（model-provider@2）"
   },
   "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/bailian#readme"

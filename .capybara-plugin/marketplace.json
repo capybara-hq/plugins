@@ -401,8 +401,8 @@
       "permissions": {
         "keys": [
           "config.deployment.secret:apiKey",
+          "config.deployment.secret:management.accessKeyId",
           "config.deployment.secret:management.secretAccessKey",
-          "config.deployment:management.accessKeyId",
           "config.deployment:region",
           "permissions.network:ark.cn-beijing.volcengineapi.com",
           "permissions.network:ark.cn-beijing.volces.com",
@@ -412,6 +412,7 @@
         ],
         "sensitive": [
           "config.deployment.secret:apiKey",
+          "config.deployment.secret:management.accessKeyId",
           "config.deployment.secret:management.secretAccessKey"
         ]
       },
@@ -419,7 +420,7 @@
         "npm": {
           "package": "@capybara-hq/plugin-ark",
           "version": "0.1.0-rc.0",
-          "integrity": "sha512-ONZR39uh+HNoedeZ+ZWIaposOOv+rkBSSX9nyhdT0SCRJ3ekXYY3X2F5A9Ec2j7MrPvFFo92LbbBPEc6AMxh5w=="
+          "integrity": "sha512-LqLgUj1MjtzBX9t6NR9YMEVOHSGTobQjtbbU1c0ifcKxEpxFg/2LqK12wyhV6eSaZJQGj9TPhkUfh14Y49PXwg=="
         }
       }
     },
@@ -427,7 +428,7 @@
       "name": "bailian",
       "version": "0.1.0-rc.0",
       "summary": {
-        "en": "Model provider (model-provider@2) for Alibaba Cloud Bailian chat and embedding models",
+        "en": "Model provider (model-provider@2) for Alibaba Cloud Model Studio (Bailian) chat and embedding models",
         "zh": "阿里云百炼对话与嵌入模型（model-provider@2）"
       },
       "displayName": {
@@ -455,7 +456,7 @@
         "npm": {
           "package": "@capybara-hq/plugin-bailian",
           "version": "0.1.0-rc.0",
-          "integrity": "sha512-q9cinuIts/NvF0gmh3DIpnhwW6VZBKL65Oq0aePV8Zp9JhauAA0111iExP2451n5CoGHR71AiaPJWIccfYuNBg=="
+          "integrity": "sha512-ggAM/56wS7bEEwM/ZYQOQeLtH8QvWAFZyd2BPgSBvkOECZXwggavY6357SoPEmLevyNQH6PxR42uwxF8EuvJNg=="
         }
       }
     },
@@ -484,7 +485,7 @@
         "npm": {
           "package": "@capybara-hq/plugin-deepseek",
           "version": "0.1.0-rc.0",
-          "integrity": "sha512-oMhmBGUkhXtZLXjMV86WOFx0qMg3jF+8aydQbri+Z6V99pSTrEpKKOt0Ytd6rQ/INGShdanAtZGVjZo1AeQ9BQ=="
+          "integrity": "sha512-/3+qpvDChcPpW6mL7EdMfdi6X56WDau2k725rXT79fvKI1P7q8tD5e7VVAn7eOKJuiNRx8UiH/704SzbmcVR6A=="
         }
       }
     }
