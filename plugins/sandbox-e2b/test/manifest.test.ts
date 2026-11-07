@@ -4,7 +4,14 @@ import {
   extensionDeploymentSecretValues,
 } from "@capybara-hq/testing";
 import { describe, expect, it } from "vitest";
-import plugin, { DeploymentConfig, decodeOutput, exitCodeOf } from "../src/index.js";
+import plugin, {
+  DEFAULT_IMAGE,
+  DeploymentConfig,
+  decodeOutput,
+  exitCodeOf,
+  SANDBOX_DOCKER_VERSION,
+  TEMPLATE_ALIAS,
+} from "../src/index.js";
 
 describe("decodeOutput", () => {
   const zh = Buffer.from("a中", "utf8"); // 61 e4 b8 ad
@@ -31,15 +38,31 @@ describe("exitCodeOf", () => {
   });
 });
 
-/** 清单与部署配置。 */
+/** The manifest and the deployment config. */
 describe("sandbox-e2b manifest", () => {
-  it("provides sandbox@1 and declares no platform permissions", () => {
+  it("provides sandbox@2 and declares no platform permissions", () => {
     expect(plugin.name).toBe("sandbox-e2b");
+    expect(SANDBOX_EXTENSION_POINT).toBe("sandbox@2");
     expect(plugin.provides).toEqual([SANDBOX_EXTENSION_POINT]);
     expect(plugin.permissions).toEqual({});
   });
 
+  it("the default template comes from the image published with sandbox-docker's version", () => {
+    expect(SANDBOX_DOCKER_VERSION).toMatch(/^\d+\.\d+\.\d+(-[a-z]+\.\d+)?$/);
+    expect(DEFAULT_IMAGE).toBe(`ghcr.io/capybara-hq/capybara-sandbox:${SANDBOX_DOCKER_VERSION}`);
+    expect(TEMPLATE_ALIAS).toBe(`capybara-sandbox-${SANDBOX_DOCKER_VERSION.replaceAll(".", "-")}`);
+    // E2B aliases: lowercase letters, digits and dashes
+    expect(TEMPLATE_ALIAS).toMatch(/^[a-z0-9-]+$/);
+  });
+
   it("deployment config: defaults and validation", () => {
+    expect(DeploymentConfig.parse({ apiKey: "e2b_x" })).toEqual({
+      apiKey: "e2b_x",
+      domain: "e2b.app",
+      timeoutSeconds: 3600,
+      domainAllowlist: true,
+      allowOpenEgress: false,
+    });
     const c = DeploymentConfig.parse({ apiKey: "e2b_x", template: "capybara-sandbox" });
     expect(c).toEqual({
       apiKey: "e2b_x",
@@ -58,7 +81,7 @@ describe("sandbox-e2b manifest", () => {
       }),
     ).toMatchObject({ apiUrl: "https://e2b-api.internal.example.com", domain: "sbx.example.com" });
     expect(() => DeploymentConfig.parse({ template: "t" })).toThrow();
-    expect(() => DeploymentConfig.parse({ apiKey: "k" })).toThrow();
+    expect(() => DeploymentConfig.parse({ apiKey: "k", template: "" })).toThrow();
     expect(() =>
       DeploymentConfig.parse({ apiKey: "k", template: "t", apiUrl: "ftp://x" }),
     ).toThrow();

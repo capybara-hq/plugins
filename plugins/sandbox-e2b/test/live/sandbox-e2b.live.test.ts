@@ -1,21 +1,33 @@
 import { randomUUID } from "node:crypto";
 import {
-  isSandboxGoneError,
+  type FileSystemHandle,
+  isFileSystemGoneError,
   type SandboxHandle,
+  type SandboxLimits,
   type SandboxProvider,
 } from "@capybara-hq/plugin-sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createE2BSandbox, DeploymentConfig } from "../../src/index.js";
+import { createE2BApi, type E2BApi } from "../../src/e2b-api.js";
+import { createE2BSandbox, DeploymentConfig, TEMPLATE_ALIAS } from "../../src/index.js";
 
 /**
  * 真实 E2B 验收：`pnpm vitest run plugins/sandbox-e2b/test/live`
  *
- * - 开关：只在 `CAPYBARA_TEST_E2B_API_KEY` 与 `CAPYBARA_TEST_E2B_TEMPLATE`（由 plugins/sandbox-docker/image/Dockerfile
- *   构建的模板，见 README）都填了时运行，否则整组跳过；可选 `CAPYBARA_TEST_E2B_API_URL`、`CAPYBARA_TEST_E2B_DOMAIN`
- *   （自托管）。凭据由外层环境注入，代码不读任何凭据文件，也不打印。
- * - 覆盖：沙箱用户与工作目录、文件读写、/skills 对沙箱用户只读（含经符号链接写入被拒）、出站白名单、
- *   输出截断、超时杀进程（含 nohup 子进程）、中止、长时间无输出（保活）、逃出会话的子进程触发重启兜底、
- *   同名替换（真实列表接口）、暂停 / 恢复后文件仍在、销毁后 gone、同名清理。
+ * - Switch: runs only when `CAPYBARA_TEST_E2B_API_KEY` is filled, otherwise the whole group is
+ *   skipped. `CAPYBARA_TEST_E2B_TEMPLATE` (a template built from
+ *   plugins/sandbox-docker/image/Dockerfile, see README) is optional: unset, the first
+ *   `createFileSystem` builds the template `TEMPLATE_ALIAS` from the published image (that image
+ *   must exist on ghcr.io, i.e. sandbox-docker's version must have been released). Optional
+ *   `CAPYBARA_TEST_E2B_API_URL`, `CAPYBARA_TEST_E2B_DOMAIN` (self-hosted). Credentials come from
+ *   the outer environment; the code reads no credential file and prints none.
+ * - Covers: the template auto-build (template unset), a file system created paused and an instance
+ *   connecting it, the sandbox user and working directory, file reads and writes, /skills read-only
+ *   for the sandbox user (a write through a symlink refused too), the egress allowlist, output
+ *   truncation, timeout kills (nohup children too), abort, long silence (keepalive), the reboot
+ *   fallback for a child that escaped the session, files surviving instance destroy (processes
+ *   gone), createFileSystem by name, whether a paused sandbox's network rules can change (logged
+ *   as `[e2b-live] paused network update: …`, recorded in README "Egress"), destroyFileSystem →
+ *   FileSystemGoneError.
  *
  * 只能在真实 E2B 上确认的假设（第一次跑时逐条核对，失败时先看这里）：
  * - [ ] 模板里有 uid 1000 的 `sandbox` 用户（E2B 自带的是 `user`），envd 接受 `Authorization: Basic sandbox:`；
@@ -25,7 +37,13 @@ import { createE2BSandbox, DeploymentConfig } from "../../src/index.js";
  * - [ ] envd 接受 `Basic root:` 跑 Start、`username=root` 上传；
  * - [ ] create（带 `secure: true`）/ connect 总是返回 `envdAccessToken`；没有令牌时插件拒绝连接（fail closed）；
  * - [ ] 镜像里有 GNU `timeout`（coreutils）：exec 的命令在沙箱里也有时限，`timeout` 自成进程组、杀进程脚本先杀它；
- * - [ ] 暂停再恢复后，前任留下的 exec 命令还在（内存快照），`killAll` 能杀掉；
+ * - [ ] pause `{memory: false}` ends every process and keeps the files; a sandbox created and paused
+ *   at once resumes through connect; `autoPauseMemory: false` is accepted on create;
+ * - [ ] a template built with `fromImage` of the published image (POST /v3/templates, trigger,
+ *   poll status) keeps the image's user `sandbox`, its owners and modes; an alias whose build is
+ *   not ready answers 404 on create (the plugin then builds and retries once);
+ * - [ ] paused sandboxes stay (E2B documents no time to live; an older page said 30 days): resume
+ *   one paused for more than 30 days by hand and record it here;
  * - [ ] connect：运行中 200、暂停的恢复 201、只延长超时；`memory: false` 冷启动（进程全部结束，文件保留）；
  * - [ ] 暂停 / 过期的沙箱上 envd 回 502（不是 404），插件靠先 connect 判断 gone；
  * - [ ] 长流：几分钟无输出的命令靠 `Keepalive-Ping-Interval` 不被中间代理断开；
@@ -46,55 +64,76 @@ const filled = (v: string | undefined): v is string =>
 const env = process.env;
 const API_KEY = env.CAPYBARA_TEST_E2B_API_KEY;
 const TEMPLATE = env.CAPYBARA_TEST_E2B_TEMPLATE;
-const READY = filled(API_KEY) && filled(TEMPLATE);
+const READY = filled(API_KEY);
 
-if (!READY) {
-  console.info(
-    "[e2b-live] skipped: CAPYBARA_TEST_E2B_API_KEY / CAPYBARA_TEST_E2B_TEMPLATE not both filled",
-  );
-}
+if (!READY) console.info("[e2b-live] skipped: CAPYBARA_TEST_E2B_API_KEY not filled");
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const sig = () => AbortSignal.timeout(120_000);
+/** A template build from the image takes minutes. */
+const BUILD_MS = 35 * 60_000;
+const actor = { accountId: "live", conversationId: "live" };
+const who = () => ({ tag: randomUUID(), actor });
+const allowlist: SandboxLimits = {
+  cpu: 1,
+  memoryMb: 2048,
+  diskMb: 5120,
+  egress: "allowlist",
+  allowHosts: ["pypi.org"],
+};
 
 describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
   // describe 体在跳过时也会执行：配置放到 beforeAll 里解析
   let sbx: SandboxProvider;
+  let api: E2BApi;
   beforeAll(() => {
     const cfg = DeploymentConfig.parse({
       apiKey: API_KEY,
-      template: TEMPLATE,
+      ...(filled(TEMPLATE) && { template: TEMPLATE }),
       ...(filled(env.CAPYBARA_TEST_E2B_API_URL) && { apiUrl: env.CAPYBARA_TEST_E2B_API_URL }),
       ...(filled(env.CAPYBARA_TEST_E2B_DOMAIN) && { domain: env.CAPYBARA_TEST_E2B_DOMAIN }),
       timeoutSeconds: 600,
     });
-    const log = { info: () => undefined, warn: () => undefined, error: () => undefined };
+    const log = { info: console.info, warn: console.warn, error: console.error };
     sbx = createE2BSandbox(cfg, { log });
+    api = createE2BApi(cfg.apiUrl ?? `https://api.${cfg.domain}`, cfg.apiKey);
   });
-  const name = `cap-live-${randomUUID()}`;
+  const name = `cap-env-live-${randomUUID()}`;
+  let fs: FileSystemHandle;
   let h: SandboxHandle;
 
   afterAll(async () => {
-    await sbx?.destroyByName?.(name, sig());
+    await sbx?.destroyFileSystemByName(name, sig());
   });
 
   const run = (command: string, timeoutMs = 30_000) =>
-    sbx.exec(h, { command, timeoutMs, maxOutputBytes: 64 * 1024, signal: sig() });
+    sbx.exec(h, { ...who(), command, timeoutMs, maxOutputBytes: 64 * 1024, signal: sig() });
 
-  it("creates with an egress allowlist and runs as the sandbox user in /workspace", async () => {
-    h = await sbx.create({
-      name,
-      image: "unused",
-      limits: {
-        cpu: 1,
-        memoryMb: 2048,
-        diskMb: 5120,
-        egress: "allowlist",
-        allowHosts: ["pypi.org"],
-      },
+  const stateOf = async (id: string) => {
+    const r = await api.json<{ sandboxID: string; state: string }[]>("GET", "/v2/sandboxes", {
+      query: { state: "running,paused", limit: "100" },
       signal: sig(),
     });
+    return r.data?.find((x) => x.sandboxID === id)?.state;
+  };
+
+  it("builds or finds the template, creates the file system paused, and an instance runs as the sandbox user", {
+    timeout: BUILD_MS + 60_000,
+  }, async () => {
+    if (!filled(TEMPLATE)) console.info(`[e2b-live] template auto-build: ${TEMPLATE_ALIAS}`);
+    fs = await sbx.createFileSystem({
+      name,
+      limits: allowlist,
+      signal: AbortSignal.timeout(BUILD_MS),
+    });
+    expect(await stateOf(fs.id)).toBe("paused");
+    expect(await sbx.createFileSystem({ name, limits: allowlist, signal: sig() })).toEqual(fs);
+    h = await sbx.create({ name, limits: allowlist, fileSystem: fs, signal: sig() });
+    expect(h.id).toBe(fs.id);
+  });
+
+  it("runs as the sandbox user in /workspace", async () => {
     const r = await run("id -un; pwd; echo $HOME");
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toBe("sandbox\n/workspace\n/workspace\n");
@@ -129,6 +168,7 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
 
   it("output is capped at maxOutputBytes", async () => {
     const r = await sbx.exec(h, {
+      ...who(),
       command: "head -c 100000 /dev/zero | tr '\\0' x",
       timeoutMs: 30_000,
       maxOutputBytes: 1000,
@@ -148,6 +188,7 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
   it("abort mid-run kills the command", async () => {
     const ac = new AbortController();
     const p = sbx.exec(h, {
+      ...who(),
       command: "echo begin; sleep 300",
       timeoutMs: 60_000,
       maxOutputBytes: 1024,
@@ -172,18 +213,29 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
     expect((await run("cat /workspace/d/a.txt")).stdout).toBe("hi 中文");
   });
 
-  it("same-name create replaces the instance via the real list API", async () => {
-    const other = `cap-live-${randomUUID()}`;
-    const lim = { cpu: 1, memoryMb: 2048, diskMb: 5120, egress: "none" as const, allowHosts: [] };
-    try {
-      const a = await sbx.create({ name: other, image: "unused", limits: lim, signal: sig() });
-      const b = await sbx.create({ name: other, image: "unused", limits: lim, signal: sig() });
-      expect(b.id).not.toBe(a.id);
-      expect(await sbx.resume(a, sig())).toBe("gone");
-      expect(await sbx.resume(b, sig())).toBe("resumed");
-    } finally {
-      await sbx.destroyByName?.(other, sig());
-    }
+  it("files survive instance destroy; the processes do not (pause without memory)", async () => {
+    await run("echo kept > /workspace/kept.txt; nohup sleep 600 >/dev/null 2>&1 &");
+    await sbx.destroy(h, sig());
+    expect(await stateOf(fs.id)).toBe("paused");
+    h = await sbx.create({ name, limits: allowlist, fileSystem: fs, signal: sig() });
+    expect((await run("cat /workspace/kept.txt")).stdout).toBe("kept\n");
+    expect((await run("pgrep -x sleep || echo none")).stdout).toBe("none\n");
+  });
+
+  it("records whether a paused sandbox's network rules can change (spec §5.3)", async () => {
+    await sbx.suspend(h, sig());
+    // the SDK's Sandbox.updateNetwork (PUT /sandboxes/{id}/network) is documented for running ones
+    const outcome = await api
+      .json("PUT", `/sandboxes/${fs.id}/network`, {
+        body: { allow_internet_access: false },
+        signal: sig(),
+      })
+      .then(
+        (r) => `accepted (HTTP ${r.status})`,
+        (e: unknown) => `refused: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    console.info(`[e2b-live] paused network update: ${outcome}`);
+    expect(await sbx.resume(h, sig())).toBe("resumed");
   });
 
   it("concurrent processes and uploads (phase C)", async () => {
@@ -196,6 +248,7 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
         maxOutputBytes: 100,
         signal: sig(),
         tag: ta,
+        actor,
       }),
       sbx.exec(h, {
         command: "sleep 2; echo b",
@@ -203,6 +256,7 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
         maxOutputBytes: 100,
         signal: sig(),
         tag: tb,
+        actor,
       }),
       ...[1, 2, 3, 4].map((i) =>
         sbx.writeFile(h, `/workspace/c/${i}.txt`, enc.encode(`f${i}`), sig()),
@@ -220,6 +274,7 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
       maxOutputBytes: 10,
       signal: stop.signal,
       tag: tb,
+      actor,
     });
     const gone = sbx.exec(h, {
       command: "sleep 121",
@@ -227,6 +282,7 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
       maxOutputBytes: 10,
       signal: sig(),
       tag: ta,
+      actor,
     });
     await new Promise((r) => setTimeout(r, 2000));
     await sbx.killTagged?.(h, [ta], sig());
@@ -245,13 +301,15 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
     expect(both[1].stdout).toBe("y\n");
   });
 
-  it("suspend / resume keeps files; destroy → gone", async () => {
+  it("suspend / resume keeps files; destroyFileSystem → FileSystemGoneError", async () => {
     await sbx.suspend(h, sig());
     expect(await sbx.resume(h, sig())).toBe("resumed");
     expect((await run("cat /workspace/d/a.txt")).stdout).toBe("hi 中文");
-    await sbx.destroy(h, sig());
+    await sbx.destroyFileSystem(fs, sig());
     expect(await sbx.resume(h, sig())).toBe("gone");
-    const e = await sbx.stat(h, "/workspace", sig()).catch((x: unknown) => x);
-    expect(isSandboxGoneError(e)).toBe(true);
+    const e = await sbx
+      .create({ name, limits: allowlist, fileSystem: fs, signal: sig() })
+      .catch((x: unknown) => x);
+    expect(isFileSystemGoneError(e)).toBe(true);
   });
 });

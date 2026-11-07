@@ -7,6 +7,6 @@
   },
   "version": "0.1.0-rc.3",
   "publisher": "Capybara",
-  "description": "Conversation sandboxes (sandbox@1) as E2B sandboxes (E2B cloud or self-hosted), with pause / resume and E2B egress controls",
+  "description": "Environments (sandbox@2) as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, E2B egress controls",
   "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-e2b#readme"
 }

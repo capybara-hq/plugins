@@ -1,14 +1,16 @@
 # @capybara-hq/plugin-sandbox-e2b
 
-The E2B implementation of the conversation sandbox (`sandbox@1`): one E2B sandbox per conversation (E2B cloud or self-hosted E2B), using E2B's pause for hibernation
-and connect for resume. It is an either-or choice with `@capybara-hq/plugin-sandbox-docker` (`sandbox@1` is a single-select capability), and uses the same image.
+The E2B implementation of environments (`sandbox@2`): one E2B sandbox per environment (E2B cloud or self-hosted E2B). E2B has no volume
+separate from a micro-VM, so the environment's file system **is** the E2B sandbox kept paused without memory, and an instance is the same sandbox
+resumed through connect. It is an either-or choice with `@capybara-hq/plugin-sandbox-docker` (`sandbox@2` is a single-select capability), and uses the
+same image.
 
 ## Deployment config
 
 | Key | Default | Description |
 |---|---|---|
 | `apiKey` | (required, secret) | E2B API key (`e2b_…`) |
-| `template` | (required) | Template name or id, built from `plugins/sandbox-docker/image/Dockerfile` (see below) |
+| `template` | (empty) | Template name or id. Empty: the plugin builds the template `capybara-sandbox-<tag>` from the published image on first use (see "Template") |
 | `apiUrl` | `https://api.<domain>` | Control plane API address; for self-hosted E2B, use your own address |
 | `domain` | `e2b.app` | Sandbox domain: the envd address is `https://49983-<sandbox id>.<domain>`; when the API returns the sandbox's own `domain`, the returned one wins |
 | `timeoutSeconds` | `3600` | Sandbox timeout (60–86400 seconds); when it expires E2B **auto-pauses** (does not delete), see "Lifecycle" |
@@ -17,15 +19,29 @@ and connect for resume. It is an either-or choice with `@capybara-hq/plugin-sand
 
 ```bash
 export CAPYBARA_EXTENSIONS='["@capybara-hq/plugin-sandbox-e2b"]'
-export CAPYBARA_EXTENSION_CONFIG='{"sandbox-e2b":{"apiKey":"e2b_…","template":"capybara-sandbox"}}'
+export CAPYBARA_EXTENSION_CONFIG='{"sandbox-e2b":{"apiKey":"e2b_…"}}'
 ```
 
-The deployment config schema is strict: extra keys are errors. The kernel config `sandbox.image` has no effect on this plugin (the image is decided by the template).
+The deployment config schema is strict: extra keys are errors. The kernel config `sandbox.image` has no effect on this plugin: `sandbox@2` passes
+the image only to `create`, but on E2B the image is fixed when the file system (the E2B sandbox) is created, from the template.
 
 ## Template (the same image as the Docker plugin)
 
-The template is built from `plugins/sandbox-docker/image/Dockerfile` (E2B's Template SDK parses the Dockerfile's
-FROM / RUN / COPY / ADD / WORKDIR / USER / ENV / ARG / CMD / ENTRYPOINT). From the repository root:
+**Built for you (default).** With `template` empty, the first `createFileSystem` of a provider instance looks up the alias
+`capybara-sandbox-<tag>` (`GET /templates/aliases/{alias}`); when it does not exist, it builds that template from the image
+`ghcr.io/capybara-hq/capybara-sandbox:<tag>` with the calls `Template.build(Template().fromImage(image), alias, { cpuCount: 1, memoryMB: 2048 })`
+makes in `e2b@2.58.0` (`POST /v3/templates`, `POST /v2/templates/{templateID}/builds/{buildID}` with `{fromImage, steps: [], force: false}`,
+then `GET /templates/{templateID}/builds/{buildID}/status?logsOffset=` every second until `ready`, at most 30 minutes; `error` fails with E2B's reason).
+E2B credentials alone are enough. `<tag>` is **sandbox-docker's version** (the images are published by this repository's images workflow, tagged
+with sandbox-docker's version), not this plugin's: it is the constant `SANDBOX_DOCKER_VERSION` in `src/provider.ts`, bumped together with
+sandbox-docker; the alias replaces each `.` with `-` (`0.1.0-rc.3` → `capybara-sandbox-0-1-0-rc-3`), so a new tag builds a new template and an
+existing one is reused. The result is memoised per provider instance (a failure is not); concurrent first uses share one build, and two replicas
+starting at once may both build (wasteful but correct). An alias that exists does not mean its build is ready (another replica's build in flight,
+or a failed build): when creating a sandbox from it answers E2B's 404, the plugin builds the alias itself, polls until ready and retries once.
+CPU and memory are the kernel's defaults (1 core, 2048 MB); E2B templates are amd64.
+
+**Your own template.** Set `template` to a template name or id, for example one built from `plugins/sandbox-docker/image/Dockerfile`
+(E2B's Template SDK parses the Dockerfile's FROM / RUN / COPY / ADD / WORKDIR / USER / ENV / ARG / CMD / ENTRYPOINT). From the repository root:
 
 ```bash
 export E2B_API_KEY=e2b_…           # for self-hosted, also set E2B_DOMAIN / E2B_API_URL
@@ -49,23 +65,30 @@ Then set `template` to `capybara-sandbox`. Image conventions (the plugin depends
 
 ## Lifecycle
 
-| Operation | E2B call |
+| `sandbox@2` | E2B call |
 |---|---|
-| `create` | First lists by the metadata `capybara-sandbox-name=<name>` (`GET /v2/sandboxes?metadata=…&state=running,paused`, paginated) and deletes any old instance of the same name (the kernel may have exited before recording the handle), then `POST /v2/sandboxes` (`templateID`, `metadata`, `timeout`, `autoPause: true`, `secure: true`, egress settings); the handle id is E2B's sandbox id |
+| `createFileSystem` | Lists by the metadata `capybara-sandbox-name=<name>` (`GET /v2/sandboxes?metadata=…&state=running,paused`, paginated) and returns an existing sandbox of that name (the kernel may have stopped before recording the handle); otherwise ensures the template (above), `POST /v2/sandboxes` (`templateID`, `metadata`, `timeout`, `autoPause: true`, `autoPauseMemory: false`, `secure: true`, egress settings), then pauses it without memory (`POST /sandboxes/{id}/pause` `{memory: false}`); the file system handle is E2B's sandbox id |
+| `create` (instance) | `POST /v2/sandboxes/{id}/connect` `{timeout}` on the file system's sandbox (resumed; a 409 while another resume is in flight is retried); the instance handle carries the same id. E2B's 404 → `FileSystemGoneError` (the files are lost, never replaced by an empty sandbox); other failures, a bare 404 included, are ordinary errors. `image` and `limits` are ignored: they were fixed at `createFileSystem` |
 | `resume` | `POST /v2/sandboxes/{id}/connect` (a paused one is resumed, and a running one gets its timeout pushed back); 404 → `gone` |
-| `suspend` | `POST /sandboxes/{id}/pause` (files and memory are both kept: background processes and `/tmp` are still there after resume; the Docker plugin's hibernation instead ends processes and clears `/tmp`); a missing one (404) or an already paused one (409) also counts as success |
-| `killAll` | After connect (a paused one is resumed first, and the processes in memory come back with it), runs a script as the sandbox user that kills every command started through `exec` that is still running (SIGKILL by process group and session); called when the kernel takes over from a crashed previous lock holder |
-| Concurrent use (`concurrentExec`, `killTagged`) | Declares `concurrentExec: true`: envd runs each `process.Start` independently, so parallel sub-agents of one conversation run commands and file operations in its sandbox at the same time. Each exec's control file carries the holder's tag (`/tmp/.capybara-exec-<tag>-<uuid>`, tags checked against `SANDBOX_TAG_RE`); `killTagged` runs a script as the sandbox user that kills only the commands of the given tags. Concurrent `connect` calls are idempotent (a running sandbox only gets its timeout extended); a 409 answered while another call's resume is in flight is retried briefly (5 × 500 ms; to be confirmed on real E2B, see `test/live`). Uploads use UUID names in the staging directory. When a kill cannot run, the reboot fallback (pause + cold `connect`) also ends live siblings' commands (a last resort) |
-| `destroy` / `destroyByName` | `DELETE /sandboxes/{id}` (a missing one also counts as success); by name it first lists by metadata |
-| `exec` / file operations | First connect (a paused one is resumed, which is the contract's "auto-start"; the envd access token is fetched. **If no token can be obtained it does not connect and sends no request without a token; it reports `SandboxGoneError` (`resume` returns `gone`), and the kernel rebuilds a sandbox with a token on that basis; a sandbox created before `secure: true` was added never has a token**; the timeout is pushed to at least "command timeout + 120 seconds", and not beyond 24 hours), then calls envd; a connect that returns an E2B-format 404 (`{code: 404, …}`) → `SandboxGoneError`; a bare 404 (a proxy, a misconfigured `apiUrl`), 401 / 5xx / network errors → ordinary errors. pause / delete also treat only an E2B-format 404 as "does not exist" |
+| `suspend`, `destroy` (instance) | `POST /sandboxes/{id}/pause` `{memory: false}` (the SDK's `mode: "filesystem"`): every process ends, the files stay, like the Docker plugin stopping or removing its container; a missing one (404) or an already paused one (409) also counts as success |
+| `destroyByName` | Lists running sandboxes by the metadata name and pauses each without memory (files kept) |
+| `destroyFileSystem` / `destroyFileSystemByName` | `DELETE /sandboxes/{id}` (a missing one also counts as success); by name it first lists by metadata (running and paused), which also removes a `sandbox@1` sandbox under a `cap-<conversationId>` name |
+| Inactivity destruction | Nothing to do on E2B's side (the sandbox is already paused) |
+| `killAll` | After connect (a paused one is resumed first; paused without memory, no process comes back), runs a script as the sandbox user that kills every command started through `exec` that is still running (SIGKILL by process group and session); called when the kernel takes over from a crashed previous lock holder |
+| Concurrent use (`concurrentExec`, `killTagged`) | Declares `concurrentExec: true`: envd runs each `process.Start` independently, so the sessions of one environment (and their sub-agents) run commands and file operations in its sandbox at the same time. Each exec's control file carries the holder's tag (`/tmp/.capybara-exec-<tag>-<uuid>`, tags checked against `SANDBOX_TAG_RE`); `killTagged` runs a script as the sandbox user that kills only the commands of the given tags. Concurrent `connect` calls are idempotent (a running sandbox only gets its timeout extended); a 409 answered while another call's resume is in flight is retried briefly (5 × 500 ms; to be confirmed on real E2B, see `test/live`). Uploads use UUID names in the staging directory. When a kill cannot run, the reboot fallback (pause + cold `connect`) also ends live siblings' commands (a last resort) |
+| `exec` / file operations | First connect (a paused one is resumed, which is the contract's "auto-start"; the envd access token is fetched. **If no token can be obtained it does not connect and sends no request without a token; it reports `SandboxGoneError` (`resume` returns `gone`), and the kernel rebuilds a sandbox with a token on that basis**; the timeout is pushed to at least "command timeout + 120 seconds", and not beyond 24 hours), then calls envd; a connect that returns an E2B-format 404 (`{code: 404, …}`) → `SandboxGoneError`; a bare 404 (a proxy, a misconfigured `apiUrl`), 401 / 5xx / network errors → ordinary errors. pause / delete also treat only an E2B-format 404 as "does not exist" |
 
-- **Timeout**: an E2B sandbox is handled when its timeout (`timeoutSeconds`) expires; this plugin sets `autoPause: true` when creating a sandbox, so on expiry it is **paused** instead of deleted,
-  and files are not lost even when the kernel has no chance to `suspend` (for example the whole kernel is down). Every use pushes it back through connect (it only extends, never shortens).
+- **Timeout**: an E2B sandbox is handled when its timeout (`timeoutSeconds`) expires; this plugin sets `autoPause: true` and `autoPauseMemory: false` when creating a sandbox,
+  so on expiry it is **paused** (without memory, like `suspend`) instead of deleted, and files are not lost even when the kernel has no chance to `suspend` (for example the whole kernel is down). Every use pushes it back through connect (it only extends, never shortens).
   Idle hibernation and expiry destruction are handled by the kernel's maintenance tasks. E2B's continuous run limit (24 hours on Pro, 1 hour on Hobby) is recounted after pause / resume.
 - **Hobby plan**: the `timeout` of connect / create is at most 1 hour, so the deployment config `timeoutSeconds` must be ≤ 3600, and a single command can actually run at most
   about 1 hour minus 2 minutes; however large the `Bash` `timeout` (in milliseconds) is (capped by `sandbox.limits.maxCommandSeconds`, default 7200 seconds), it will be interrupted by the pause when the sandbox expires.
   On Hobby, set `sandbox.limits.maxCommandSeconds` to below 3480.
-- E2B keeps a paused sandbox indefinitely until it is deleted (the kernel deletes by `destroyAfterInactiveDays`).
+- **Retention**: E2B's current documentation says paused sandboxes have no time to live and are never removed by E2B
+  ([persistence](https://e2b.dev/docs/sandbox/persistence)); an older beta page said 30 days. Not yet confirmed against the live API (a
+  sandbox paused for more than 30 days, see `test/live`). The files live until the environment is deleted (`destroyFileSystem`); a paused sandbox
+  that is gone nevertheless surfaces as `FileSystemGoneError` from `create` (`gone` from `resume`), and the kernel shows the environment's files as
+  lost, never a silent empty workspace. Phase 1 has no export to object storage.
 
 ## exec and files
 
@@ -127,8 +150,12 @@ Limitations of `allowlist` (decided by E2B's implementation, written here for as
   and attachments in a conversation and data the agent has read can leak this way. Orgs that handle sensitive data should set `sandboxToolPolicy` to
   `ask` in the org settings, and / or set the sandbox network `sandboxEgress` to `none` (org-level egress, Ruling M19: an org can replace the allowlist or cut the network, and cannot set `open`).
 
-**Limits take effect only at creation**: `sandbox.limits.egress` / `allowHosts` are written into the create-sandbox request, and changing the config affects only sandboxes created afterwards; existing
-sandboxes (including ones resumed after a pause) keep the egress settings from creation until they are destroyed and rebuilt.
+**Limits are fixed when the file system is created** (`createFileSystem`, the create-sandbox request): an instance is the same E2B sandbox
+resumed, so a later change of `sandbox.limits.egress` / `allowHosts` or of the org's egress setting reaches an existing E2B environment only when
+the environment is recreated (the Docker plugin applies them per instance). The `e2b@2.58.0` SDK has `Sandbox.updateNetwork`
+(`PUT /sandboxes/{id}/network`), documented for **running** sandboxes; this plugin does not use it in phase 1. **Whether a paused sandbox's network
+rules can be changed is not yet verified**: the live test records it (`[e2b-live] paused network update: …`); it has not been run with an E2B key
+for this release.
 
 **Command time limit**: a single command runs at most `sandbox.limits.maxCommandSeconds`, and no more than the time left in the run it belongs to (`runtime.maxRunSeconds`,
 default 900 seconds, Ruling M20); to run long commands, raise `runtime.maxRunSeconds` to at least `maxCommandSeconds`.
@@ -136,8 +163,8 @@ default 900 seconds, Ruling M20); to run long commands, raise `runtime.maxRunSec
 ## Resources (`limits.cpu` / `memoryMb` / `diskMb`)
 
 E2B's CPU and memory are fixed **when the template is built** (`cpuCount` / `memoryMB` of `Template.build`) and cannot be specified per sandbox at creation; disk size is decided by
-E2B's plan / template. So for `limits` cpu / memoryMb / diskMb this plugin only validates them and **does not apply them per sandbox**: give the spec you want when
-building the template (the example above matches the kernel defaults of 1 core / 2048 MB), and use different templates for different specs. The sandbox CPU / memory overrides an enterprise admin sets for an org in the admin console
+E2B's plan / template. So for `limits` cpu / memoryMb / diskMb this plugin only validates them (at `createFileSystem`) and **does not apply them per sandbox**: the template it builds
+itself has the kernel defaults of 1 core / 2048 MB; for another spec build your own template (the example above) and set `template`. The sandbox CPU / memory overrides the super admin sets for an org in the admin console
 (deployment setting `sandboxLimitOverrides`) likewise **have no effect on this plugin**: to give some orgs a bigger spec, the only way is to switch to a different deployment
 (or template).
 
@@ -148,7 +175,7 @@ It does not use the official `e2b` SDK and instead has a minimal hand-written cl
 - Every request carries the caller's AbortSignal directly, so abort semantics are controllable (the command stream is disconnected by the plugin itself: kill the process first, then disconnect);
 - The official SDK reads process environment variables such as `E2B_API_KEY` / `E2B_DOMAIN` / `E2B_SANDBOX_URL` / `E2B_DEBUG` and caches a connection pool at module level
   (the multi-replica discipline does not allow module-level mutable state in a plugin), and it also brings undici, Connect, protobuf and a string of other dependencies;
-- It uses only 6 control plane endpoints and 3 envd endpoints, with the protocol following the SDK `e2b@2.58.0` implementation (listed in the header comment of `src/e2b-api.ts`).
+- It uses only 9 control plane endpoints (4 of them for the template build) and 3 envd endpoints, with the protocol following the SDK `e2b@2.58.0` implementation (listed in the header comment of `src/e2b-api.ts`).
 
 Protocol sources (verified 2026-10-21): `dist/index.mjs` of `e2b@2.58.0`; the E2B docs
 [internet-access](https://docs.e2b.dev/sandbox/internet-access), [persistence](https://docs.e2b.dev/sandbox/persistence),
@@ -166,8 +193,10 @@ The third parameter of `createE2BSandbox(config, { log }, testOptions)` can be p
 
 - `test/sandbox-e2b.test.ts`: against `startFakeE2B` from `@capybara-hq/testing` (control plane API + envd, Connect stream protocol,
   commands really run in a local temp directory), covering each method, error mapping (404 → gone, 401 / 5xx → ordinary errors), abort, kill on timeout,
-  file reads and writes and the way `/skills` is written, egress mapping, and the reboot backstop when killing fails / the output stream does not end (the fake server's `memory: false` connect ends all processes).
-- `test/live`: real E2B, run only when `CAPYBARA_TEST_E2B_API_KEY` and `CAPYBARA_TEST_E2B_TEMPLATE` are set (optionally
-  `CAPYBARA_TEST_E2B_API_URL` / `CAPYBARA_TEST_E2B_DOMAIN`), otherwise skipped: the sandbox user, files, `/skills` read-only (including a write through a symlink being
-  rejected), the egress allowlist, output truncation, kill on timeout (including nohup child processes), abort, long periods with no output, a child process that escaped the session triggering the reboot backstop, same-name replacement,
-  pause / resume, gone after destroy. The file header lists the "assumptions that can only be confirmed on real E2B"; check them one by one on the first run.
+  file reads and writes and the way `/skills` is written, egress mapping, and the reboot backstop when killing fails / the output stream does not end (the fake server's `memory: false` connect ends all processes);
+  file systems and instances (files survive destroy and recreate, connect 404 → `FileSystemGoneError`, pause drops memory, cleanup by name), and the template
+  auto-build (built once from the image, polled until ready, an existing alias reused, a not-ready alias rebuilt, a failed build not memoised).
+- `test/live`: real E2B, run only when `CAPYBARA_TEST_E2B_API_KEY` is set (optionally `CAPYBARA_TEST_E2B_TEMPLATE`, unset to exercise the auto-build,
+  and `CAPYBARA_TEST_E2B_API_URL` / `CAPYBARA_TEST_E2B_DOMAIN`), otherwise skipped: the template, the file system created paused, the sandbox user, files, `/skills` read-only (including a write through a symlink being
+  rejected), the egress allowlist, output truncation, kill on timeout (including nohup child processes), abort, long periods with no output, a child process that escaped the session triggering the reboot backstop,
+  files surviving instance destroy, whether a paused sandbox's network rules can change, `destroyFileSystem` → `FileSystemGoneError`. The file header lists the "assumptions that can only be confirmed on real E2B"; check them one by one on the first run.

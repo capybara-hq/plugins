@@ -8,6 +8,14 @@
  *     秒；暂停的沙箱会被恢复；404 = 不存在）、`POST /sandboxes/{id}/pause`（404 不存在、409 已暂停）、
  *     `DELETE /sandboxes/{id}`（404 不存在）、`GET /v2/sandboxes?metadata=&state=&limit=&nextToken=`
  *     （分页游标在响应头 `x-next-token`）；错误体 `{code, message}`；默认地址 `https://api.<domain>`。
+ *   - Pause body `{memory: false}` (`Sandbox.pause(id, { mode: "filesystem" })`: processes end, files
+ *     stay) and create's `autoPauseMemory: false` (`lifecycle.onTimeout: { action: "pause", mode:
+ *     "filesystem" }`).
+ *   - Template build (`Template.build(Template().fromImage(image), alias, { cpuCount, memoryMB })`,
+ *     `buildApi`): `GET /templates/aliases/{alias}` (404 = absent), `POST /v3/templates` (`{name,
+ *     cpuCount, memoryMB}` → `{templateID, buildID}`), `POST /v2/templates/{templateID}/builds/{buildID}`
+ *     (`{fromImage, steps, force}`), `GET /templates/{templateID}/builds/{buildID}/status?logsOffset=`
+ *     (`status`: waiting | building | ready | error, `reason.message`).
  *   - envd（端口 49983）：地址 `https://49983-<沙箱 id>.<domain>`（SDK 的 `getSandboxDirectUrl`），请求头
  *     `E2b-Sandbox-Id`、`E2b-Sandbox-Port`、`X-Access-Token`（建沙箱 / connect 返回的 `envdAccessToken`）；
  *     命令走 Connect 协议（`process.Process/Start` 服务端流，JSON 编码 `application/connect+json`；

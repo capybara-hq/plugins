@@ -3,8 +3,10 @@ import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
+  isFileSystemGoneError,
   isSandboxGoneError,
   type Logger,
+  type SandboxActor,
   type SandboxLimits,
   type SandboxProvider,
 } from "@capybara-hq/plugin-sdk";
@@ -13,21 +15,25 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { envdStart } from "../src/e2b-api.js";
 import {
   createE2BSandbox,
+  DEFAULT_IMAGE,
   type E2BSandboxConfig,
   execArgs,
   IN_SANDBOX_GRACE_SECONDS,
   METADATA_NAME,
+  TEMPLATE_ALIAS,
 } from "../src/index.js";
 
 /**
- * sandbox@1 的 E2B 实现，对着假 E2B（@capybara-hq/testing 的 startFakeE2B：控制面 API + envd，命令在本机跑）：
- * 生命周期与 API 映射、gone / 普通错误、exec 输出 / 超时 / 中止杀进程、文件读写、/skills 以 root 写、出站映射。
+ * sandbox@2 on E2B, against the fake E2B (startFakeE2B of @capybara-hq/testing: control plane API +
+ * envd, commands run on this machine): one E2B sandbox per environment, kept by pausing it without
+ * memory; template auto-build; gone / plain errors; exec output / timeout / abort kills; file reads
+ * and writes, /skills written as root; egress mapping.
  */
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const sig = () => AbortSignal.timeout(20_000);
-const sbxName = () => `cap-${randomUUID()}`;
+const sbxName = () => `cap-env-${randomUUID()}`;
 const limits = (
   egress: SandboxLimits["egress"] = "none",
   allowHosts: string[] = [],
@@ -38,6 +44,19 @@ const limits = (
   egress,
   allowHosts,
 });
+const ACTOR: SandboxActor = { accountId: "acc-1", conversationId: "conv-1" };
+/** The holder tag and actor every exec carries. */
+const who = () => ({ tag: randomUUID(), actor: ACTOR });
+
+/** A file system plus an instance attached to it (what the kernel does before first use). */
+const provision = async (
+  s: SandboxProvider,
+  l: SandboxLimits = limits(),
+  name: string = sbxName(),
+) => {
+  const fileSystem = await s.createFileSystem({ name, limits: l, signal: sig() });
+  return s.create({ name, limits: l, fileSystem, signal: sig() });
+};
 
 /** Start 请求里的 process 字段。 */
 const procOf = (c: FakeE2BCall | undefined) =>
@@ -60,7 +79,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
   let sbx: SandboxProvider;
   let cfg: E2BSandboxConfig;
 
-  const make = (over: Partial<E2BSandboxConfig> = {}) => {
+  const make = (over: Partial<E2BSandboxConfig> = {}, server: FakeE2BServer = fake) => {
     const log: Logger = {
       info: () => undefined,
       warn: (m, f) => {
@@ -69,7 +88,11 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       },
       error: () => undefined,
     };
-    return createE2BSandbox({ ...cfg, ...over }, { log }, { envdUrl: fake.url });
+    return createE2BSandbox(
+      { ...cfg, apiUrl: server.url, ...over },
+      { log },
+      { envdUrl: server.url },
+    );
   };
 
   beforeAll(async () => {
@@ -92,69 +115,136 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
   });
   warns = [];
 
-  const createdBody = () => {
-    const c = fake.calls.filter((x) => x.method === "POST" && x.path === "/v2/sandboxes").at(-1);
+  const createdBody = (server: FakeE2BServer = fake) => {
+    const c = server.calls.filter((x) => x.method === "POST" && x.path === "/v2/sandboxes").at(-1);
     return c?.body as Record<string, unknown>;
   };
+  const pauseBodies = (id: string, server: FakeE2BServer = fake) =>
+    server.calls.filter((x) => x.path === `/sandboxes/${id}/pause`).map((x) => x.body);
 
-  describe("create / lifecycle", () => {
+  describe("file systems and instances", () => {
     beforeAll(() => {
       sbx = make();
     });
 
-    it("creates from the template, tagged with the name, auto-pausing on timeout", async () => {
+    it("createFileSystem creates from the template, tagged with the name, then pauses it without memory", async () => {
       const name = sbxName();
-      const h = await sbx.create({
-        name,
-        image: "ignored:latest",
-        limits: limits(),
-        signal: sig(),
-      });
-      const s = fake.sandboxes.get(h.id);
+      const fs = await sbx.createFileSystem({ name, limits: limits(), signal: sig() });
+      const s = fake.sandboxes.get(fs.id);
       expect(s?.templateID).toBe("capybara-sandbox");
       expect(s?.metadata[METADATA_NAME]).toBe(name);
       expect(s?.autoPause).toBe(true);
       expect(s?.timeout).toBe(3600);
       expect(s?.allowInternetAccess).toBe(false);
+      expect(createdBody()).toMatchObject({ secure: true, autoPauseMemory: false });
+      expect(s?.state).toBe("paused");
+      expect(s?.pausedWithMemory).toBe(false);
+      expect(pauseBodies(fs.id)).toEqual([{ memory: false }]);
     });
 
-    it("replaces an existing sandbox with the same name (across pages)", async () => {
+    it("createFileSystem returns the existing file system of the same name", async () => {
       const name = sbxName();
-      const p = await startFakeE2B({ apiKey: fake.apiKey, pageSize: 1 });
-      try {
-        const s2 = createE2BSandbox(
-          { ...cfg, apiUrl: p.url },
-          { log: console },
-          { envdUrl: p.url },
-        );
-        const other = await s2.create({
-          name: sbxName(),
-          image: "x",
-          limits: limits(),
-          signal: sig(),
-        });
-        const a = await s2.create({ name, image: "x", limits: limits(), signal: sig() });
-        await s2.suspend(a, sig());
-        // 模拟内核在记下句柄前退出：同名又建了一个（第二个也带同名元数据）
-        const b = await s2.create({ name, image: "x", limits: limits(), signal: sig() });
-        expect(p.sandboxes.has(a.id)).toBe(false);
-        expect(p.sandboxes.has(b.id)).toBe(true);
-        expect(p.sandboxes.has(other.id)).toBe(true);
-        await s2.destroyByName?.(name, sig());
-        expect(p.sandboxes.has(b.id)).toBe(false);
-        expect(p.sandboxes.has(other.id)).toBe(true);
-        // 不存在也成功
-        await s2.destroyByName?.(name, sig());
-      } finally {
-        await p.close();
+      const a = await sbx.createFileSystem({ name, limits: limits(), signal: sig() });
+      const before = fake.calls.filter((c) => c.path === "/v2/sandboxes" && c.method === "POST");
+      const b = await sbx.createFileSystem({ name, limits: limits(), signal: sig() });
+      expect(b).toEqual(a);
+      expect(fake.calls.filter((c) => c.path === "/v2/sandboxes" && c.method === "POST")).toEqual(
+        before,
+      );
+    });
+
+    it("create connects the file system's sandbox; the instance id is the file system id", async () => {
+      const name = sbxName();
+      const fileSystem = await sbx.createFileSystem({ name, limits: limits(), signal: sig() });
+      const h = await sbx.create({
+        name,
+        image: "ignored:latest",
+        limits: limits(),
+        fileSystem,
+        signal: sig(),
+      });
+      expect(h).toEqual({ id: fileSystem.id });
+      expect(fake.sandboxes.get(h.id)?.state).toBe("running");
+      const connect = fake.calls.filter((c) => c.path === `/v2/sandboxes/${h.id}/connect`).at(-1);
+      expect(connect?.body).toEqual({ timeout: 3600 });
+    });
+
+    it("files survive destroy and recreate", async () => {
+      const name = sbxName();
+      const fileSystem = await sbx.createFileSystem({ name, limits: limits(), signal: sig() });
+      const h = await sbx.create({ name, limits: limits(), fileSystem, signal: sig() });
+      await sbx.writeFile(h, "/workspace/keep.txt", enc.encode("kept"), sig());
+      await sbx.destroy(h, sig());
+      expect(fake.sandboxes.get(h.id)?.state).toBe("paused");
+      expect(pauseBodies(h.id).at(-1)).toEqual({ memory: false });
+      await sbx.destroy(h, sig()); // already paused (409) also succeeds
+      const h2 = await sbx.create({ name, limits: limits(), fileSystem, signal: sig() });
+      const r = await sbx.readFile(h2, "/workspace/keep.txt", { maxBytes: 100, signal: sig() });
+      expect(r && dec.decode(r.data)).toBe("kept");
+      // destroyByName pauses the instance found by name and keeps the files
+      await sbx.destroyByName(name, sig());
+      expect(fake.sandboxes.get(h.id)?.state).toBe("paused");
+      await sbx.destroyByName(name, sig()); // nothing running: success
+      const h3 = await sbx.create({ name, limits: limits(), fileSystem, signal: sig() });
+      expect((await sbx.stat(h3, "/workspace/keep.txt", sig()))?.size).toBe(4);
+      // the file system goes with destroyFileSystem
+      await sbx.destroyFileSystem(fileSystem, sig());
+      expect(fake.sandboxes.has(fileSystem.id)).toBe(false);
+      await sbx.destroyFileSystem(fileSystem, sig()); // missing: success
+    });
+
+    it("connect 404 throws FileSystemGoneError", async () => {
+      const name = sbxName();
+      const fileSystem = await sbx.createFileSystem({ name, limits: limits(), signal: sig() });
+      await fake.removeSandbox(fileSystem.id);
+      const e = await sbx
+        .create({ name, limits: limits(), fileSystem, signal: sig() })
+        .catch((x: unknown) => x);
+      expect(isFileSystemGoneError(e)).toBe(true);
+      expect(String((e as Error).message)).toContain(fileSystem.id);
+      // a plain failure (5xx, a bare 404 from a proxy) is never "files lost"
+      const fs2 = await sbx.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() });
+      for (const fail of [
+        () => fake.failNext({ path: /\/connect$/ }, 503, "busy"),
+        () => fake.failNext({ path: /\/connect$/ }, 404, "Not Found", { raw: true }),
+      ]) {
+        fail();
+        const e2 = await sbx
+          .create({ name, limits: limits(), fileSystem: fs2, signal: sig() })
+          .catch((x: unknown) => x);
+        expect(e2).toBeInstanceOf(Error);
+        expect(isFileSystemGoneError(e2)).toBe(false);
       }
     });
 
-    it("suspend pauses, resume connects; missing instances are gone / no-ops", async () => {
-      const h = await sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
+    it("pause drops memory: suspend ends the processes and keeps the files", async () => {
+      const h = await provision(sbx);
+      await sbx.writeFile(h, "/workspace/f", enc.encode("x"), sig());
+      const ac = new AbortController();
+      const p = sbx.exec(h, {
+        ...who(),
+        command: "sleep 30",
+        timeoutMs: 60_000,
+        maxOutputBytes: 100,
+        signal: ac.signal,
+      });
+      await waitFor(() => fake.running(h.id).length === 1);
+      const pid = fake.running(h.id)[0]?.pid as number;
+      await sbx.suspend(h, sig());
+      expect(fake.sandboxes.get(h.id)).toMatchObject({ state: "paused", pausedWithMemory: false });
+      await waitFor(() => !fake.alive(pid));
+      ac.abort();
+      await p.catch(() => undefined);
+      await sbx.suspend(h, sig()); // already paused (409) also succeeds
+      expect(await sbx.resume(h, sig())).toBe("resumed");
+      expect(fake.running(h.id)).toEqual([]);
+      expect((await sbx.stat(h, "/workspace/f", sig()))?.size).toBe(1);
+    });
+
+    it("suspend / resume; a missing instance is gone, suspend and destroy are no-ops", async () => {
+      const h = await provision(sbx);
       await sbx.suspend(h, sig());
       expect(fake.sandboxes.get(h.id)?.state).toBe("paused");
-      await sbx.suspend(h, sig()); // 已暂停（409）也成功
       expect(await sbx.resume(h, sig())).toBe("resumed");
       expect(fake.sandboxes.get(h.id)?.state).toBe("running");
       expect(await sbx.resume(h, sig())).toBe("resumed");
@@ -164,15 +254,39 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       await sbx.destroy(h, sig());
     });
 
-    it("destroy kills the sandbox", async () => {
-      const h = await sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
-      await sbx.destroy(h, sig());
-      expect(fake.sandboxes.has(h.id)).toBe(false);
-      await sbx.destroy(h, sig());
+    it("destroyFileSystemByName kills every sandbox of the name across pages, legacy names too", async () => {
+      const p = await startFakeE2B({ apiKey: fake.apiKey, pageSize: 1 });
+      try {
+        const s2 = make({}, p);
+        const name = sbxName();
+        const other = await s2.createFileSystem({
+          name: sbxName(),
+          limits: limits(),
+          signal: sig(),
+        });
+        const a = await s2.createFileSystem({ name, limits: limits(), signal: sig() });
+        // a running instance on it, plus a sandbox@1 sandbox under a cap-<conversationId> name
+        await s2.create({ name, limits: limits(), fileSystem: a, signal: sig() });
+        const legacyName = `cap-${randomUUID()}`;
+        const legacy = await s2.createFileSystem({
+          name: legacyName,
+          limits: limits(),
+          signal: sig(),
+        });
+        await s2.destroyFileSystemByName(name, sig());
+        expect(p.sandboxes.has(a.id)).toBe(false);
+        expect(p.sandboxes.has(other.id)).toBe(true);
+        await s2.destroyFileSystemByName(name, sig()); // none left: success
+        await s2.destroyFileSystemByName(legacyName, sig());
+        expect(p.sandboxes.has(legacy.id)).toBe(false);
+        expect(p.sandboxes.has(other.id)).toBe(true);
+      } finally {
+        await p.close();
+      }
     });
 
     it("auth and server errors are plain errors (never gone) and never echo the API key", async () => {
-      const h = await sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
+      const h = await provision(sbx);
       fake.failNext({ path: /\/connect$/ }, 401, "Invalid API key");
       const e1 = await sbx.resume(h, sig()).catch((e: unknown) => e);
       expect(e1).toBeInstanceOf(Error);
@@ -181,6 +295,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       fake.failNext({ path: /\/connect$/ }, 503, "busy");
       const e2 = await sbx
         .exec(h, {
+          ...who(),
           command: "true",
           timeoutMs: 5000,
           maxOutputBytes: 100,
@@ -193,21 +308,18 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       await expect(sbx.suspend(h, sig())).rejects.toThrow(/500/);
       fake.failNext({ method: "POST", path: /^\/v2\/sandboxes$/ }, 500);
       const e3 = await sbx
-        .create({ name: sbxName(), image: "x", limits: limits(), signal: sig() })
+        .createFileSystem({ name: sbxName(), limits: limits(), signal: sig() })
         .catch((e: unknown) => e);
+      expect(String((e3 as Error).message)).toMatch(/500/);
       for (const e of [e1, e2, e3]) expect(String((e as Error).message)).not.toContain(fake.apiKey);
-      const bad = createE2BSandbox(
-        { ...cfg, apiKey: "e2b_wrong" },
-        { log: console },
-        { envdUrl: fake.url },
-      );
+      const bad = make({ apiKey: "e2b_wrong" });
       await expect(
-        bad.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() }),
+        bad.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() }),
       ).rejects.toThrow(/401/);
     });
 
     it("a bare 404 (not E2B's error shape) is a plain error, never gone", async () => {
-      const h = await sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
+      const h = await provision(sbx);
       fake.failNext({ path: /\/connect$/ }, 404, "404 page not found", { raw: true });
       await expect(sbx.resume(h, sig())).rejects.toThrow(/404/);
       fake.failNext({ path: /\/connect$/ }, 404, "Not Found", { raw: true });
@@ -215,10 +327,10 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       expect(e).toBeInstanceOf(Error);
       expect(isSandboxGoneError(e)).toBe(false);
       fake.failNext({ method: "DELETE", path: /^\/sandboxes\// }, 404, "nope", { raw: true });
-      await expect(sbx.destroy(h, sig())).rejects.toThrow(/404/);
+      await expect(sbx.destroyFileSystem(h, sig())).rejects.toThrow(/404/);
       fake.failNext({ path: /\/pause$/ }, 404, "nope", { raw: true });
       await expect(sbx.suspend(h, sig())).rejects.toThrow(/404/);
-      // E2B 格式的 404 才是 gone
+      // only E2B's 404 shape means gone
       fake.failNext({ path: /\/connect$/ }, 404, "sandbox not found");
       expect(await sbx.resume(h, sig())).toBe("gone");
     });
@@ -226,33 +338,40 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     it("rejects an invalid sandbox domain returned by the API", async () => {
       const p = await startFakeE2B({ apiKey: fake.apiKey, domain: "evil.com/x?" });
       try {
-        const s2 = createE2BSandbox(
-          { ...cfg, apiUrl: p.url },
-          { log: console },
-          { envdUrl: p.url },
-        );
-        const h = await s2.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
-        await expect(s2.stat(h, "/workspace", sig())).rejects.toThrow(/invalid sandbox domain/);
+        const s2 = make({}, p);
+        const fileSystem = await s2.createFileSystem({
+          name: sbxName(),
+          limits: limits(),
+          signal: sig(),
+        });
+        await expect(
+          s2.create({ name: sbxName(), limits: limits(), fileSystem, signal: sig() }),
+        ).rejects.toThrow(/invalid sandbox domain/);
       } finally {
         await p.close();
       }
     });
 
     it("every method rejects immediately when already aborted", async () => {
-      const h = await sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
+      const h = await provision(sbx);
       const ac = new AbortController();
       ac.abort(new Error("stop"));
       const s = ac.signal;
       const before = fake.calls.length;
       await expect(
-        sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: s }),
+        sbx.createFileSystem({ name: sbxName(), limits: limits(), signal: s }),
       ).rejects.toThrow("stop");
+      await expect(
+        sbx.create({ name: sbxName(), limits: limits(), fileSystem: h, signal: s }),
+      ).rejects.toThrow("stop");
+      await expect(sbx.destroyFileSystem(h, s)).rejects.toThrow("stop");
+      await expect(sbx.destroyFileSystemByName("cap-x", s)).rejects.toThrow("stop");
       await expect(sbx.resume(h, s)).rejects.toThrow("stop");
       await expect(sbx.suspend(h, s)).rejects.toThrow("stop");
       await expect(sbx.destroy(h, s)).rejects.toThrow("stop");
-      await expect(sbx.destroyByName?.("cap-x", s)).rejects.toThrow("stop");
+      await expect(sbx.destroyByName("cap-x", s)).rejects.toThrow("stop");
       await expect(
-        sbx.exec(h, { command: "true", timeoutMs: 1000, maxOutputBytes: 10, signal: s }),
+        sbx.exec(h, { ...who(), command: "true", timeoutMs: 1000, maxOutputBytes: 10, signal: s }),
       ).rejects.toThrow("stop");
       await expect(sbx.readFile(h, "/workspace/a", { maxBytes: 10, signal: s })).rejects.toThrow(
         "stop",
@@ -263,7 +382,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     });
 
     it("a hanging API request stops promptly on abort", async () => {
-      const h = await sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
+      const h = await provision(sbx);
       for (const run of [
         (s: AbortSignal) => sbx.resume(h, s),
         (s: AbortSignal) => sbx.suspend(h, s),
@@ -281,47 +400,135 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
 
     it("rejects bad names and invalid limits", async () => {
       await expect(
-        sbx.create({ name: "../x", image: "x", limits: limits(), signal: sig() }),
+        sbx.createFileSystem({ name: "../x", limits: limits(), signal: sig() }),
+      ).rejects.toThrow(/invalid sandbox name/);
+      await expect(
+        sbx.create({ name: "../x", limits: limits(), fileSystem: { id: "i1" }, signal: sig() }),
       ).rejects.toThrow(/invalid sandbox name/);
       await expect(
         sbx.create({
           name: sbxName(),
-          image: "x",
+          limits: limits(),
+          fileSystem: { id: "bad/id?x" },
+          signal: sig(),
+        }),
+      ).rejects.toThrow(/invalid E2B sandbox id/);
+      await expect(
+        sbx.createFileSystem({
+          name: sbxName(),
           limits: limits("allowlist", ["10.0.0.1"]),
           signal: sig(),
         }),
       ).rejects.toThrow(/allowHosts/);
       await expect(
-        sbx.create({ name: sbxName(), image: "x", limits: { ...limits(), cpu: 0 }, signal: sig() }),
+        sbx.createFileSystem({ name: sbxName(), limits: { ...limits(), cpu: 0 }, signal: sig() }),
       ).rejects.toThrow(/positive/);
     });
   });
 
-  describe("egress", () => {
+  describe("template", () => {
+    let p: FakeE2BServer;
+    afterEach(async () => {
+      await p?.close();
+    });
+    const builds = () => p.calls.filter((c) => c.method === "POST" && c.path === "/v3/templates");
+
+    it("missing template is built from the image once", async () => {
+      p = await startFakeE2B({ apiKey: fake.apiKey, templateBuildMs: 1200 });
+      const s = make({ template: undefined }, p);
+      const [a, b] = await Promise.all([
+        s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() }),
+        s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() }),
+      ]);
+      await s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() });
+      const t = p.templates.get(TEMPLATE_ALIAS);
+      expect(t?.image).toBe(DEFAULT_IMAGE);
+      expect(builds()).toHaveLength(1);
+      expect(builds()[0]?.body).toMatchObject({ name: TEMPLATE_ALIAS });
+      const trigger = p.calls.find(
+        (c) => c.path === `/v2/templates/${t?.templateID}/builds/${t?.buildID}`,
+      );
+      expect(trigger?.body).toEqual({ fromImage: DEFAULT_IMAGE, steps: [], force: false });
+      // the build was polled until ready before any sandbox was created
+      const status = p.calls.filter((c) => c.path.endsWith("/status"));
+      expect(status.length).toBeGreaterThanOrEqual(2);
+      expect(status.every((c) => c.query.logsOffset === "0")).toBe(true);
+      const firstCreate = p.calls.findIndex(
+        (c) => c.method === "POST" && c.path === "/v2/sandboxes",
+      );
+      expect(firstCreate).toBeGreaterThan(p.calls.indexOf(status.at(-1) as FakeE2BCall));
+      expect(p.sandboxes.get(a.id)?.templateID).toBe(t?.templateID);
+      expect(p.sandboxes.get(b.id)?.templateID).toBe(t?.templateID);
+    });
+
+    it("an existing alias is used without a build; a configured template skips the lookup", async () => {
+      p = await startFakeE2B({ apiKey: fake.apiKey, templates: [TEMPLATE_ALIAS] });
+      const s = make({ template: undefined }, p);
+      const fs = await s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() });
+      expect(builds()).toHaveLength(0);
+      expect(p.sandboxes.get(fs.id)?.templateID).toBe(p.templates.get(TEMPLATE_ALIAS)?.templateID);
+      const configured = make({ template: "my-template" }, p);
+      const before = p.calls.length;
+      const fs2 = await configured.createFileSystem({
+        name: sbxName(),
+        limits: limits(),
+        signal: sig(),
+      });
+      expect(p.sandboxes.get(fs2.id)?.templateID).toBe("my-template");
+      expect(p.calls.slice(before).some((c) => c.path.includes("/templates"))).toBe(false);
+    });
+
+    it("an alias that exists but is not ready is rebuilt and polled, never taken as ready", async () => {
+      p = await startFakeE2B({ apiKey: fake.apiKey, templateBuildMs: 60_000 });
+      // another replica requested a build that is still running: the alias exists already
+      const other = make({ template: undefined }, p);
+      const stuck = other.createFileSystem({
+        name: sbxName(),
+        limits: limits(),
+        signal: AbortSignal.timeout(1500),
+      });
+      await waitFor(() => p.templates.has(TEMPLATE_ALIAS));
+      await stuck.catch(() => undefined);
+      const s = make({ template: undefined }, p);
+      const done = s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() });
+      await waitFor(() => builds().length === 2);
+      // let the second build finish
+      const t = p.templates.get(TEMPLATE_ALIAS);
+      await waitFor(() => t?.readyAt !== undefined);
+      if (t) t.readyAt = Date.now();
+      const fs = await done;
+      expect(p.sandboxes.get(fs.id)?.templateID).toBe(t?.templateID);
+    });
+
+    it("a failed build is an error and is not memoised", async () => {
+      p = await startFakeE2B({ apiKey: fake.apiKey });
+      const s = make({ template: undefined }, p);
+      p.failNext({ method: "POST", path: /^\/v2\/templates\// }, 400, "image not found");
+      await expect(
+        s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() }),
+      ).rejects.toThrow(/image not found/);
+      await s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() });
+      expect(builds()).toHaveLength(2);
+    });
+  });
+
+  describe("egress (fixed when the file system is created)", () => {
     beforeAll(() => {
       sbx = make();
     });
+    const fsWith = (s: SandboxProvider, l: SandboxLimits) =>
+      s.createFileSystem({ name: sbxName(), limits: l, signal: sig() });
 
     it("none → no internet access", async () => {
-      const h = await sbx.create({
-        name: sbxName(),
-        image: "x",
-        limits: limits("none"),
-        signal: sig(),
-      });
-      expect(fake.sandboxes.get(h.id)?.allowInternetAccess).toBe(false);
+      const fs = await fsWith(sbx, limits("none"));
+      expect(fake.sandboxes.get(fs.id)?.allowInternetAccess).toBe(false);
       expect(createdBody().network).toBeUndefined();
     });
 
     it("allowlist → allowOut domains with everything else denied", async () => {
       const hosts = ["registry.npmjs.org", "*.githubusercontent.com"];
-      const h = await sbx.create({
-        name: sbxName(),
-        image: "x",
-        limits: limits("allowlist", hosts),
-        signal: sig(),
-      });
-      expect(fake.sandboxes.get(h.id)?.network).toEqual({
+      const fs = await fsWith(sbx, limits("allowlist", hosts));
+      expect(fake.sandboxes.get(fs.id)?.network).toEqual({
         allowOut: hosts,
         denyOut: ["0.0.0.0/0"],
       });
@@ -329,39 +536,20 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     });
 
     it("empty allowlist → no internet access", async () => {
-      const h = await sbx.create({
-        name: sbxName(),
-        image: "x",
-        limits: limits("allowlist", []),
-        signal: sig(),
-      });
-      expect(fake.sandboxes.get(h.id)?.allowInternetAccess).toBe(false);
+      const fs = await fsWith(sbx, limits("allowlist", []));
+      expect(fake.sandboxes.get(fs.id)?.allowInternetAccess).toBe(false);
     });
 
     it("open requires allowOpenEgress", async () => {
-      await expect(
-        sbx.create({ name: sbxName(), image: "x", limits: limits("open"), signal: sig() }),
-      ).rejects.toThrow(/allowOpenEgress/);
-      const open = make({ allowOpenEgress: true });
-      const h = await open.create({
-        name: sbxName(),
-        image: "x",
-        limits: limits("open"),
-        signal: sig(),
-      });
-      expect(fake.sandboxes.get(h.id)?.allowInternetAccess).toBe(true);
+      await expect(fsWith(sbx, limits("open"))).rejects.toThrow(/allowOpenEgress/);
+      const fs = await fsWith(make({ allowOpenEgress: true }), limits("open"));
+      expect(fake.sandboxes.get(fs.id)?.allowInternetAccess).toBe(true);
       expect(createdBody().network).toBeUndefined();
     });
 
     it("without domain allowlist support, allowlist degrades to none with a warning", async () => {
-      const s = make({ domainAllowlist: false });
-      const h = await s.create({
-        name: sbxName(),
-        image: "x",
-        limits: limits("allowlist", ["pypi.org"]),
-        signal: sig(),
-      });
-      expect(fake.sandboxes.get(h.id)?.allowInternetAccess).toBe(false);
+      const fs = await fsWith(make({ domainAllowlist: false }), limits("allowlist", ["pypi.org"]));
+      expect(fake.sandboxes.get(fs.id)?.allowInternetAccess).toBe(false);
       expect(createdBody().network).toBeUndefined();
       expect(warns.join("\n")).toMatch(/allowlist/);
     });
@@ -371,11 +559,12 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     let h: { id: string };
     beforeAll(async () => {
       sbx = make();
-      h = await sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
+      h = await provision(sbx);
     });
 
     const run = (command: string, over: Partial<Parameters<SandboxProvider["exec"]>[1]> = {}) =>
       sbx.exec(h, {
+        ...who(),
         command,
         timeoutMs: 10_000,
         maxOutputBytes: 64 * 1024,
@@ -526,16 +715,16 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     });
 
     it("gone sandbox → SandboxGoneError; envd 502 on a live sandbox is a plain error", async () => {
-      const g = await sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
+      const g = await provision(sbx);
       fake.failNext({ path: /^\/process\.Process\/Start$/ }, 502, "upstream error");
       const e = await sbx
-        .exec(g, { command: "true", timeoutMs: 1000, maxOutputBytes: 10, signal: sig() })
+        .exec(g, { ...who(), command: "true", timeoutMs: 1000, maxOutputBytes: 10, signal: sig() })
         .catch((x: unknown) => x);
       expect(e).toBeInstanceOf(Error);
       expect(isSandboxGoneError(e)).toBe(false);
       await fake.expire(g.id);
       const e2 = await sbx
-        .exec(g, { command: "true", timeoutMs: 1000, maxOutputBytes: 10, signal: sig() })
+        .exec(g, { ...who(), command: "true", timeoutMs: 1000, maxOutputBytes: 10, signal: sig() })
         .catch((x: unknown) => x);
       expect(isSandboxGoneError(e2)).toBe(true);
     });
@@ -550,7 +739,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     });
 
     it("create asks for a secured envd; without an access token nothing is sent to envd", async () => {
-      const h = await sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
+      const h = await provision(sbx);
       expect(createdBody().secure).toBe(true);
       fake.withholdAccessToken = true;
       const before = fake.calls.filter((c) => c.sandboxId !== undefined).length;
@@ -564,7 +753,13 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
         expect(isSandboxGoneError(e)).toBe(true);
       };
       await call(
-        sbx.exec(h, { command: "true", timeoutMs: 1000, maxOutputBytes: 10, signal: sig() }),
+        sbx.exec(h, {
+          ...who(),
+          command: "true",
+          timeoutMs: 1000,
+          maxOutputBytes: 10,
+          signal: sig(),
+        }),
       );
       await call(sbx.readFile(h, "/workspace/a", { maxBytes: 1, signal: sig() }));
       await call(sbx.writeFile(h, "/workspace/a", enc.encode("x"), sig()));
@@ -578,7 +773,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     let h: { id: string };
     beforeAll(async () => {
       sbx = make();
-      h = await sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
+      h = await provision(sbx);
     });
 
     /** 经 envd 以 exec 的命令行启动一条命令，收到 start 事件就断开（模拟发起它的内核副本崩溃）。 */
@@ -627,7 +822,8 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       expect(kill?.user).toBe("sandbox");
       expect(argsOf(kill as FakeE2BCall)).toContain("capybara-killall");
 
-      // 暂停的沙箱（内存里的进程保留）：killAll 先 connect 恢复再杀
+      // a paused sandbox: killAll connects (resumes) it first; pausing without memory already
+      // ended the command
       await orphan("sleep 44", 600_000);
       await waitFor(() => fake.running(h.id).length === 1);
       const pid = fake.running(h.id)[0]?.pid as number;
@@ -639,6 +835,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       expect(
         (
           await sbx.exec(h, {
+            ...who(),
             command: "echo ok",
             timeoutMs: 5000,
             maxOutputBytes: 100,
@@ -656,7 +853,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     let h: { id: string };
     beforeAll(async () => {
       sbx = make();
-      h = await sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
+      h = await provision(sbx);
     });
     const run = (
       command: string,
@@ -667,7 +864,8 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
         timeoutMs: o.timeoutMs ?? 15_000,
         maxOutputBytes: 1000,
         signal: o.signal ?? sig(),
-        ...(o.tag === undefined ? {} : { tag: o.tag }),
+        tag: o.tag ?? randomUUID(),
+        actor: ACTOR,
       });
 
     it("declares concurrent exec with killTagged; the control file carries the tag", async () => {
@@ -760,7 +958,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     let h: { id: string };
     beforeAll(async () => {
       sbx = make();
-      h = await sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
+      h = await provision(sbx);
     });
 
     it("writeFile creates parents (as the sandbox user via runuser), readFile / stat round-trip", async () => {
@@ -839,7 +1037,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     });
 
     it("gone sandbox → SandboxGoneError for every file operation", async () => {
-      const g = await sbx.create({ name: sbxName(), image: "x", limits: limits(), signal: sig() });
+      const g = await provision(sbx);
       await fake.expire(g.id);
       for (const op of [
         () => sbx.readFile(g, "/workspace/a", { maxBytes: 1, signal: sig() }),

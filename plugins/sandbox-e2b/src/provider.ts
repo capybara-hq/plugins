@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   type ExecResult,
+  FileSystemGoneError,
   type Logger,
   SANDBOX_TAG_RE,
   SandboxGoneError,
@@ -29,7 +30,11 @@ export interface E2BSandboxConfig {
   apiUrl?: string | undefined;
   /** 沙箱域名（API 返回了沙箱自己的域名时以返回的为准）。 */
   domain: string;
-  template: string;
+  /**
+   * Template name or id. Unset: the template {@link TEMPLATE_ALIAS}, built on first use from
+   * {@link DEFAULT_IMAGE}.
+   */
+  template?: string | undefined;
   /** 沙箱超时（秒）：到点 E2B 自动暂停。 */
   timeoutSeconds: number;
   /** E2B 支持按域名的出站白名单；false 时 allowlist 退化为 none 并打告警。 */
@@ -47,8 +52,28 @@ export interface E2BSandboxTestOptions {
   envdUrl?: string;
 }
 
-/** 沙箱上记名字的元数据键（`create` 的 name，`cap-<conversationId>`）；按它列出 / 清理同名实例。 */
+/**
+ * The metadata key carrying the name (`createFileSystem`'s `cap-env-<environmentId>`, or a
+ * sandbox@1 sandbox's `cap-<conversationId>`); sandboxes are listed and cleaned up by it.
+ */
 export const METADATA_NAME = "capybara-sandbox-name";
+
+/**
+ * The sandbox-docker version whose published image this release builds its template from: the
+ * images are tagged with sandbox-docker's version (environments spec §5.4), which is not this
+ * plugin's own. Bump it together with sandbox-docker.
+ */
+export const SANDBOX_DOCKER_VERSION = "0.1.0-rc.3";
+/** The image the template is built from when the `template` setting is empty. */
+export const DEFAULT_IMAGE = `ghcr.io/capybara-hq/capybara-sandbox:${SANDBOX_DOCKER_VERSION}`;
+/** The alias of that template: named after the image tag, so a new tag builds a new template. */
+export const TEMPLATE_ALIAS = `capybara-sandbox-${SANDBOX_DOCKER_VERSION.replaceAll(".", "-")}`;
+/** CPU and memory of the built template (E2B fixes them per template): the kernel's defaults. */
+const TEMPLATE_CPU_COUNT = 1;
+const TEMPLATE_MEMORY_MB = 2048;
+/** How often a template build's status is polled, and how long a build may take (ms). */
+const TEMPLATE_POLL_MS = 1000;
+const TEMPLATE_BUILD_TIMEOUT_MS = 30 * 60_000;
 
 /** 沙箱用户（镜像里的 sandbox，uid 1000）。 */
 const SANDBOX_USER = "sandbox";
@@ -77,6 +102,8 @@ const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const HOSTNAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 /** E2B 沙箱 id（拼进 envd 主机名与 API 路径前先校验）。 */
 const SANDBOX_ID_RE = /^[a-zA-Z0-9-]{1,128}$/;
+/** E2B template and build ids (checked before they go into an API path). */
+const TEMPLATE_ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
 
 /**
  * 沙箱里的硬时限比 `timeoutMs` 多出的秒数：正常情况下插件这边先按 `timeoutMs` 杀掉命令；内核副本崩溃
@@ -198,6 +225,28 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+/** `p`, rejecting with the signal's reason as soon as `signal` aborts (`p` itself goes on). */
+function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(abortReason(signal));
+      return;
+    }
+    const onAbort = () => reject(abortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.then(
+      (v) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(v);
+      },
+      (e: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(e);
+      },
+    );
+  });
+}
+
 function checkPath(p: string): void {
   const errors = validateSandboxPath(p);
   if (errors.length > 0)
@@ -235,7 +284,7 @@ interface SandboxInfo {
   domain?: string | null;
 }
 
-/** 按 E2B 的 sandbox@1 约定建提供方（插件 setup 与测试共用）。 */
+/** The `sandbox@2` provider on E2B (shared by the plugin setup and the tests). */
 export function createE2BSandbox(
   cfg: E2BSandboxConfig,
   deps: { log: Logger },
@@ -299,7 +348,12 @@ export function createE2BSandbox(
     }
   };
 
-  const destroyByName = async (name: string, signal: AbortSignal) => {
+  /** The ids of the sandboxes made under `name` (metadata {@link METADATA_NAME}) in `state`. */
+  const idsByName = async (
+    name: string,
+    state: "running" | "running,paused",
+    signal: AbortSignal,
+  ): Promise<string[]> => {
     signal.throwIfAborted();
     const ids: string[] = [];
     let nextToken: string | undefined;
@@ -310,7 +364,7 @@ export function createE2BSandbox(
         {
           query: {
             metadata: new URLSearchParams({ [enc(METADATA_NAME)]: enc(name) }).toString(),
-            state: "running,paused",
+            state,
             limit: String(LIST_LIMIT),
             nextToken,
           },
@@ -318,12 +372,12 @@ export function createE2BSandbox(
         },
       );
       for (const s of r.data ?? []) {
-        // 服务端已按元数据过滤；再核对一次，绝不误删别的沙箱
+        // the server filtered by metadata already; check again, never touch another sandbox
         if (s.metadata?.[METADATA_NAME] === name) ids.push(s.sandboxID);
       }
       nextToken = r.headers.get("x-next-token") || undefined;
     } while (nextToken);
-    for (const id of ids) await kill(id, signal);
+    return ids;
   };
 
   const kill = async (id: string, signal: AbortSignal) => {
@@ -333,6 +387,109 @@ export function createE2BSandbox(
     } catch (e) {
       if (!isE2BNotFound(e)) throw e;
     }
+  };
+
+  /**
+   * Pauses with the file system only (`memory: false`, the SDK's `mode: "filesystem"`): every
+   * process ends, the files stay. Already paused (409) is success; missing (E2B's 404) too when
+   * `missingOk`.
+   */
+  const pause = async (id: string, signal: AbortSignal, missingOk: boolean) => {
+    checkId(id);
+    try {
+      await api.json("POST", `/sandboxes/${enc(id)}/pause`, { body: { memory: false }, signal });
+    } catch (e) {
+      if (isStatus(e, 409) || (missingOk && isE2BNotFound(e))) return;
+      throw e;
+    }
+  };
+
+  // ---------- template ----------
+
+  /**
+   * Looks up {@link TEMPLATE_ALIAS} (unless `rebuild`), else builds it from {@link DEFAULT_IMAGE}
+   * with the calls `Template.build(Template().fromImage(image), alias)` makes in `e2b@2.58.0`
+   * (request a build, trigger it, poll its status until ready). Returns the template id. Bound to
+   * its own time limit, not to a caller's signal: concurrent callers share it.
+   */
+  const provisionTemplate = async (rebuild: boolean): Promise<string> => {
+    const signal = AbortSignal.timeout(TEMPLATE_BUILD_TIMEOUT_MS);
+    const checkTemplateId = (id: unknown, what: string): string => {
+      if (typeof id !== "string" || !TEMPLATE_ID_RE.test(id)) {
+        throw new Error(`E2B returned an invalid template ${what}: ${JSON.stringify(id)}`);
+      }
+      return id;
+    };
+    if (!rebuild) {
+      try {
+        const r = await api.json<{ templateID?: unknown }>(
+          "GET",
+          `/templates/aliases/${enc(TEMPLATE_ALIAS)}`,
+          { signal },
+        );
+        // the alias exists; whether its build is ready shows when a sandbox is created from it
+        return checkTemplateId(r.data?.templateID, "id");
+      } catch (e) {
+        if (!isE2BNotFound(e)) throw e;
+      }
+    }
+    deps.log.info("sandbox-e2b: building the E2B template from the published image", {
+      alias: TEMPLATE_ALIAS,
+      image: DEFAULT_IMAGE,
+    });
+    const req = await api.json<{ templateID?: unknown; buildID?: unknown }>(
+      "POST",
+      "/v3/templates",
+      {
+        body: { name: TEMPLATE_ALIAS, cpuCount: TEMPLATE_CPU_COUNT, memoryMB: TEMPLATE_MEMORY_MB },
+        signal,
+      },
+    );
+    const templateId = checkTemplateId(req.data?.templateID, "id");
+    const buildId = checkTemplateId(req.data?.buildID, "build id");
+    const build = `/templates/${enc(templateId)}/builds/${enc(buildId)}`;
+    await api.json("POST", `/v2${build}`, {
+      body: { fromImage: DEFAULT_IMAGE, steps: [], force: false },
+      signal,
+    });
+    let logsOffset = 0;
+    for (;;) {
+      const r = await api.json<{
+        status?: string;
+        logEntries?: unknown[];
+        reason?: { message?: string };
+      }>("GET", `${build}/status`, { query: { logsOffset: String(logsOffset) }, signal });
+      logsOffset += Array.isArray(r.data?.logEntries) ? r.data.logEntries.length : 0;
+      const status = r.data?.status;
+      if (status === "ready") break;
+      if (status !== "waiting" && status !== "building") {
+        throw new Error(
+          `E2B template build of ${DEFAULT_IMAGE} failed (${String(status)}): ${String(r.data?.reason?.message ?? "no reason given").slice(0, 300)}`,
+        );
+      }
+      await sleep(TEMPLATE_POLL_MS, signal);
+    }
+    deps.log.info("sandbox-e2b: E2B template ready", { alias: TEMPLATE_ALIAS, templateId });
+    return templateId;
+  };
+
+  /** The template ensure of this provider instance (memoised; a failure is not kept). */
+  let template: Promise<string> | undefined;
+  /**
+   * The template to create from: the `template` setting, else {@link provisionTemplate} (shared
+   * by concurrent callers). `stale` is a result that turned out unusable (its build not ready):
+   * it is replaced by a rebuild, once for all callers that saw it.
+   */
+  const ensureTemplate = (stale?: Promise<string>): Promise<string> => {
+    if (cfg.template) return Promise.resolve(cfg.template);
+    if (template === undefined || template === stale) {
+      const p: Promise<string> = provisionTemplate(stale !== undefined).catch((e: unknown) => {
+        if (template === p) template = undefined;
+        throw e;
+      });
+      template = p;
+    }
+    return template;
   };
 
   // ---------- exec ----------
@@ -466,21 +623,19 @@ export function createE2BSandbox(
   };
 
   /**
-   * 最后手段：重启沙箱——先 pause，再以 `memory: false` connect（SDK `e2b@2.58.0` 的
-   * `Sandbox.connect(id, { onResume: "reboot" })` 即发 `POST /v2/sandboxes/{id}/connect`
-   * `{timeout, memory: false}`：从磁盘状态冷启动，内存里的进程全部结束，/workspace 保留；没写盘的数据可能丢失）。
-   * 只在杀进程脚本没跑完、或杀完宽限期过了命令的输出流还没结束时用。不受调用方 signal 影响。
+   * Last resort: reboot the sandbox. Pause it without memory, then connect with `memory: false`
+   * (the SDK `e2b@2.58.0`'s `Sandbox.connect(id, { onResume: "reboot" })`, sent as well in case a
+   * control plane ignored the pause's `memory`): a cold start from the disk state, every process
+   * ends, /workspace stays; data not yet written to disk may be lost. Used only when the kill script
+   * did not finish, or the command's output stream is still open after the kill grace period. Not
+   * bound to the caller's signal.
    */
   const reboot = async (id: string) => {
     deps.log.warn("sandbox-e2b: could not stop a command cleanly; rebooting the sandbox", {
       sandboxId: id,
     });
     const signal = AbortSignal.timeout(120_000);
-    try {
-      await api.json("POST", `/sandboxes/${enc(id)}/pause`, { body: {}, signal });
-    } catch (e) {
-      if (!isStatus(e, 409)) throw e;
-    }
+    await pause(id, signal, false);
     await api.json("POST", `/v2/sandboxes/${enc(id)}/connect`, {
       body: { timeout: cfg.timeoutSeconds, memory: false },
       signal,
@@ -513,7 +668,7 @@ export function createE2BSandbox(
     // envd runs every process.Start independently; connect on a running sandbox only extends its
     // timeout, so concurrent auto-starts are idempotent (a 409 from a resume in flight is retried)
     concurrentExec: true,
-    async create({ name, limits, signal }) {
+    async createFileSystem({ name, limits, signal }) {
       signal.throwIfAborted();
       if (!NAME_RE.test(name)) throw new Error(`invalid sandbox name: ${name}`);
       checkLimits(limits);
@@ -530,28 +685,76 @@ export function createE2BSandbox(
         );
         egress = "none";
       }
-      // 同名的旧实例（内核在记下句柄前退出等）：整个换掉
-      await destroyByName(name, signal);
+      // made before under this name (the kernel stopped before recording the handle): return it
+      const [existing] = await idsByName(name, "running,paused", signal);
+      if (existing !== undefined) {
+        checkId(existing);
+        return { id: existing };
+      }
+      // limits (egress) are fixed here, for the life of the file system (README "Egress")
       const network =
         egress === "allowlist" && limits.allowHosts.length > 0
           ? { network: { allowOut: [...limits.allowHosts], denyOut: ["0.0.0.0/0"] } }
           : { allow_internet_access: egress === "open" };
-      const r = await api.json<SandboxInfo>("POST", "/v2/sandboxes", {
-        body: {
-          templateID: cfg.template,
-          metadata: { [METADATA_NAME]: name },
-          timeout: cfg.timeoutSeconds,
-          // 到点自动暂停而不是删除：内核来不及 suspend（如内核整个挂了）时文件也不丢
-          autoPause: true,
-          // envd 要求访问令牌（与 e2b SDK 的默认一致）；没拿到令牌时 targetOf 拒绝连接
-          secure: true,
-          ...network,
-        },
-        signal,
-      });
+      const createFrom = (templateID: string) =>
+        api.json<SandboxInfo>("POST", "/v2/sandboxes", {
+          body: {
+            templateID,
+            metadata: { [METADATA_NAME]: name },
+            timeout: cfg.timeoutSeconds,
+            // paused rather than killed at the timeout, with the file system only (like
+            // suspend): the files survive even when the kernel never gets to suspend
+            autoPause: true,
+            autoPauseMemory: false,
+            // envd requires an access token (the e2b SDK's default); targetOf refuses without one
+            secure: true,
+            ...network,
+          },
+          signal,
+        });
+      const first = ensureTemplate();
+      let r: Awaited<ReturnType<typeof createFrom>>;
+      try {
+        r = await createFrom(await untilAborted(first, signal));
+      } catch (e) {
+        // an existing alias whose build is not ready (another replica's build in flight, or a
+        // failed one) answers 404: build it ourselves and poll until ready, then retry once
+        if (cfg.template || !isE2BNotFound(e)) throw e;
+        r = await createFrom(await untilAborted(ensureTemplate(first), signal));
+      }
       if (!r.data?.sandboxID) throw new Error("E2B create sandbox returned no sandboxID");
       checkId(r.data.sandboxID);
+      // the file system lives on as a paused sandbox until an instance connects it
+      await pause(r.data.sandboxID, signal, false);
       return { id: r.data.sandboxID };
+    },
+
+    async destroyFileSystem(fs, signal) {
+      signal.throwIfAborted();
+      await kill(fs.id, signal);
+    },
+
+    async destroyFileSystemByName(name, signal) {
+      for (const id of await idsByName(name, "running,paused", signal)) await kill(id, signal);
+    },
+
+    async create({ name, fileSystem, signal }) {
+      signal.throwIfAborted();
+      if (!NAME_RE.test(name)) throw new Error(`invalid sandbox name: ${name}`);
+      // the instance is the file system's sandbox resumed: image and limits were fixed when the
+      // file system was created (README "Template", "Egress")
+      try {
+        await attach(fileSystem.id, signal);
+      } catch (e) {
+        if (e instanceof SandboxGoneError && isE2BNotFound(e.cause)) {
+          throw new FileSystemGoneError(
+            `E2B sandbox ${fileSystem.id} holding the environment's files no longer exists`,
+            { cause: e },
+          );
+        }
+        throw e;
+      }
+      return { id: fileSystem.id };
     },
 
     async resume(h, signal) {
@@ -566,25 +769,23 @@ export function createE2BSandbox(
 
     async suspend(h, signal) {
       signal.throwIfAborted();
-      checkId(h.id);
-      try {
-        await api.json("POST", `/sandboxes/${enc(h.id)}/pause`, { body: {}, signal });
-      } catch (e) {
-        // 不存在（E2B 的 404）、已暂停（409）都算成功
-        if (!isE2BNotFound(e) && !isStatus(e, 409)) throw e;
-      }
+      await pause(h.id, signal, true);
     },
 
     async destroy(h, signal) {
+      // the instance goes, the files stay: the same pause as suspend
       signal.throwIfAborted();
-      await kill(h.id, signal);
+      await pause(h.id, signal, true);
     },
 
-    destroyByName,
+    async destroyByName(name, signal) {
+      for (const id of await idsByName(name, "running", signal)) await pause(id, signal, true);
+    },
 
     async killAll(h, signal) {
       signal.throwIfAborted();
-      // connect 会恢复暂停的沙箱（内存里的进程也一起回来）；不在抛 SandboxGoneError
+      // connect resumes a paused sandbox (paused without memory: no process comes back); a
+      // missing one throws SandboxGoneError
       const t = await attach(h.id, signal);
       const r = await fileOp(
         t,

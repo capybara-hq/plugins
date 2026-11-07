@@ -4,6 +4,7 @@ import { createE2BSandbox, HOSTNAME_RE } from "./provider.js";
 
 export {
   createE2BSandbox,
+  DEFAULT_IMAGE,
   decodeOutput,
   type E2BSandboxConfig,
   type E2BSandboxTestOptions,
@@ -11,6 +12,8 @@ export {
   exitCodeOf,
   IN_SANDBOX_GRACE_SECONDS,
   METADATA_NAME,
+  SANDBOX_DOCKER_VERSION,
+  TEMPLATE_ALIAS,
 } from "./provider.js";
 
 /** E2B 沙箱的最长存活时间（秒，Pro 套餐的连续运行上限 24 小时）。 */
@@ -38,8 +41,11 @@ export const DeploymentConfig = z
         .default("e2b.app"),
       { label: { zh: "沙箱域名", en: "Sandbox domain" } },
     ),
-    /** 模板名或 id：由 plugins/sandbox-docker/image/Dockerfile 构建（见 README）。 */
-    template: ui(z.string().min(1), { label: { zh: "模板", en: "Template" } }),
+    /**
+     * Template name or id. Unset: the plugin builds the template `capybara-sandbox-<tag>` from the
+     * published sandbox image on first use and reuses it (README "Template").
+     */
+    template: ui(z.string().min(1).optional(), { label: { zh: "模板", en: "Template" } }),
     /**
      * 沙箱的超时（秒，默认 3600）：到点 E2B 自动暂停（不是删除）沙箱，文件保留。内核每次用沙箱时把它往后推，
      * 长命令会按命令超时再加余量推后；空闲休眠与过期销毁由内核负责。
@@ -61,7 +67,10 @@ export const DeploymentConfig = z
   })
   .strict();
 
-/** `sandbox@1`：每个对话一个 E2B 沙箱，休眠用 E2B 的 pause，恢复用 connect。 */
+/**
+ * `sandbox@2`: one E2B sandbox per environment. The file system is the sandbox kept paused
+ * without memory; an instance is the same sandbox resumed (connect), dropped again by pausing.
+ */
 export default defineExtension({
   name: "sandbox-e2b",
   version: "0.1.0-rc.3",
