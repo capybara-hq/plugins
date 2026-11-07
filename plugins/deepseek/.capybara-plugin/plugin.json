@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "name": "deepseek",
+  "displayName": { "zh": "DeepSeek 模型", "en": "DeepSeek models" },
+  "version": "0.1.0-rc.0",
+  "publisher": "Capybara",
+  "description": "Model provider (model-provider@2) for DeepSeek chat models through the Chat Completions API",
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/deepseek#readme"
+}

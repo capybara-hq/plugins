@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "name": "bailian",
+  "displayName": { "zh": "阿里云百炼模型", "en": "Alibaba Bailian models" },
+  "version": "0.1.0-rc.0",
+  "publisher": "Capybara",
+  "description": "Model provider (model-provider@2) for Alibaba Cloud Bailian chat and embedding models",
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/bailian#readme"
+}

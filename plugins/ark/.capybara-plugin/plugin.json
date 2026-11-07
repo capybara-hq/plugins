@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "name": "ark",
+  "displayName": { "zh": "火山方舟模型", "en": "Volcengine Ark models" },
+  "version": "0.1.0-rc.0",
+  "publisher": "Capybara",
+  "description": "Model provider (model-provider@2) for Volcengine Ark chat and embedding models",
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/ark#readme"
+}
