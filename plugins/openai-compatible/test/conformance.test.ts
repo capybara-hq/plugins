@@ -255,7 +255,7 @@ describe("openai-compatible: stream edge cases and errors", () => {
       documents: false,
     });
     expect(local?.streamIdleTimeoutMs).toBe(120_000);
-    expect(models[0]?.capabilities.midConversationSystem).toBe(true);
+    expect(models[0]?.capabilities.midConversationSystem).toBe(false);
     expect(models[0]?.parameters.map((p) => p.key)).toEqual([
       "thinking",
       "effort",
