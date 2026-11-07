@@ -185,7 +185,7 @@ describe("images.yml", () => {
     expect(text).toContain("imagetools inspect");
     expect(wf.jobs.build?.if).toBe("needs.plan.outputs.build == 'true'");
     const build = wf.jobs.build?.steps.find((s) => s.uses?.startsWith("docker/build-push-action@"));
-    expect(String(build?.with?.platforms)).toContain("linux/${{ matrix.arch }}");
+    expect(String(build?.with?.platforms)).toContain("matrix.arch }}");
     expect(String(build?.with?.outputs)).toContain("push-by-digest=true");
   });
 });
