@@ -1,10 +1,14 @@
 import { defineExtension, SANDBOX_EXTENSION_POINT, secret, ui } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
-import { createE2BSandbox, HOSTNAME_RE } from "./provider.js";
+import {
+  createE2BSandbox,
+  type E2BSandboxConfig,
+  HOSTNAME_RE,
+  publishedImage,
+} from "./provider.js";
 
 export {
   createE2BSandbox,
-  DEFAULT_IMAGE,
   decodeOutput,
   type E2BSandboxConfig,
   type E2BSandboxTestOptions,
@@ -12,8 +16,8 @@ export {
   exitCodeOf,
   IN_SANDBOX_GRACE_SECONDS,
   METADATA_NAME,
-  SANDBOX_DOCKER_VERSION,
-  TEMPLATE_ALIAS,
+  publishedImage,
+  templateAlias,
 } from "./provider.js";
 
 /** E2B 沙箱的最长存活时间（秒，Pro 套餐的连续运行上限 24 小时）。 */
@@ -60,7 +64,7 @@ export const DeploymentConfig = z
     domainAllowlist: ui(z.boolean().default(true), {
       label: { zh: "按域名出站白名单", en: "Domain egress allowlist" },
     }),
-    /** 允许 `sandbox.limits.egress = "open"`（默认 false）。为 false 时 `create` 收到 open 直接报错。 */
+    /** Allow `sandbox.limits.egress = "open"` (default false); when false, `createFileSystem` refuses open. */
     allowOpenEgress: ui(z.boolean().default(false), {
       label: { zh: "允许开放出站", en: "Allow open egress" },
     }),
@@ -68,10 +72,22 @@ export const DeploymentConfig = z
   .strict();
 
 /**
+ * The provider config from the deployment config: the template, when not set, is built from the
+ * image published with `version` (the extension manifest's version, kept equal to package.json by
+ * `capybara-plugin sync-versions`; sandbox-docker shares it, a changesets `fixed` group).
+ */
+export function providerConfig(
+  c: z.output<typeof DeploymentConfig>,
+  version: string = plugin.version,
+): E2BSandboxConfig {
+  return { ...c, defaultImage: publishedImage(version) };
+}
+
+/**
  * `sandbox@2`: one E2B sandbox per environment. The file system is the sandbox kept paused
  * without memory; an instance is the same sandbox resumed (connect), dropped again by pausing.
  */
-export default defineExtension({
+const plugin = defineExtension({
   name: "sandbox-e2b",
   version: "0.1.0-rc.3",
   sdk: "^0.1.0-rc.0",
@@ -82,7 +98,11 @@ export default defineExtension({
   setup(ctx) {
     ctx.provide(
       SANDBOX_EXTENSION_POINT,
-      createE2BSandbox(ctx.config as z.output<typeof DeploymentConfig>, { log: ctx.log }),
+      createE2BSandbox(providerConfig(ctx.config as z.output<typeof DeploymentConfig>), {
+        log: ctx.log,
+        signal: ctx.signal,
+      }),
     );
   },
 });
+export default plugin;

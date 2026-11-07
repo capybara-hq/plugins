@@ -15,7 +15,7 @@ same image.
 | `domain` | `e2b.app` | Sandbox domain: the envd address is `https://49983-<sandbox id>.<domain>`; when the API returns the sandbox's own `domain`, the returned one wins |
 | `timeoutSeconds` | `3600` | Sandbox timeout (60–86400 seconds); when it expires E2B **auto-pauses** (does not delete), see "Lifecycle" |
 | `domainAllowlist` | `true` | Whether E2B supports a per-domain egress allowlist; set `false` for self-hosted versions that do not, and `allowlist` degrades to `none` with a warning |
-| `allowOpenEgress` | `false` | Allow `sandbox.limits.egress = "open"`; when false, `create` fails immediately on open (an English error) |
+| `allowOpenEgress` | `false` | Allow `sandbox.limits.egress = "open"`; when false, `createFileSystem` fails immediately on open (an English error) |
 
 ```bash
 export CAPYBARA_EXTENSIONS='["@capybara-hq/plugin-sandbox-e2b"]'
@@ -31,11 +31,15 @@ the image only to `create`, but on E2B the image is fixed when the file system (
 `capybara-sandbox-<tag>` (`GET /templates/aliases/{alias}`); when it does not exist, it builds that template from the image
 `ghcr.io/capybara-hq/capybara-sandbox:<tag>` with the calls `Template.build(Template().fromImage(image), alias, { cpuCount: 1, memoryMB: 2048 })`
 makes in `e2b@2.58.0` (`POST /v3/templates`, `POST /v2/templates/{templateID}/builds/{buildID}` with `{fromImage, steps: [], force: false}`,
-then `GET /templates/{templateID}/builds/{buildID}/status?logsOffset=` every second until `ready`, at most 30 minutes; `error` fails with E2B's reason).
-E2B credentials alone are enough. `<tag>` is **sandbox-docker's version** (the images are published by this repository's images workflow, tagged
-with sandbox-docker's version), not this plugin's: it is the constant `SANDBOX_DOCKER_VERSION` in `src/provider.ts`, bumped together with
-sandbox-docker; the alias replaces each `.` with `-` (`0.1.0-rc.3` → `capybara-sandbox-0-1-0-rc-3`), so a new tag builds a new template and an
-existing one is reused. The result is memoised per provider instance (a failure is not); concurrent first uses share one build, and two replicas
+then `GET /templates/{templateID}/builds/{buildID}/status?logsOffset=` every second until `ready`, at most 30 minutes and never past the
+extension's lifetime (`ctx.signal`); `error` fails with E2B's reason and tells you to set `template`). E2B credentials alone are enough.
+`<tag>` is **this plugin's own version**: the images are published by this repository's images workflow tagged with sandbox-docker's version,
+and sandbox-docker and sandbox-e2b are one changesets `fixed` group, so both always share one version (= the image tag). The alias replaces
+each `.` with `-` (`0.1.0-rc.3` → `capybara-sandbox-0-1-0-rc-3`), so a new version builds a new template and an existing one is reused.
+**Only a private template of your team is used:** the alias is a predictable name, so an alias lookup answering `public: true`, or 403 (an
+alias of another team), and a build request answered 403 / 409 or creating a public template fail with "template alias … is owned by another
+E2B team or is public; set the sandbox-e2b setting `template` to a template of your own"; the plugin never runs sandboxes from a template it
+did not build or you did not name. The result is memoised per provider instance (a failure is not); concurrent first uses share one build, and two replicas
 starting at once may both build (wasteful but correct). An alias that exists does not mean its build is ready (another replica's build in flight,
 or a failed build): when creating a sandbox from it answers E2B's 404, the plugin builds the alias itself, polls until ready and retries once.
 CPU and memory are the kernel's defaults (1 core, 2048 MB); E2B templates are amd64.
@@ -76,7 +80,8 @@ Then set `template` to `capybara-sandbox`. Image conventions (the plugin depends
 | Inactivity destruction | Nothing to do on E2B's side (the sandbox is already paused) |
 | `killAll` | After connect (a paused one is resumed first; paused without memory, no process comes back), runs a script as the sandbox user that kills every command started through `exec` that is still running (SIGKILL by process group and session); called when the kernel takes over from a crashed previous lock holder |
 | Concurrent use (`concurrentExec`, `killTagged`) | Declares `concurrentExec: true`: envd runs each `process.Start` independently, so the sessions of one environment (and their sub-agents) run commands and file operations in its sandbox at the same time. Each exec's control file carries the holder's tag (`/tmp/.capybara-exec-<tag>-<uuid>`, tags checked against `SANDBOX_TAG_RE`); `killTagged` runs a script as the sandbox user that kills only the commands of the given tags. Concurrent `connect` calls are idempotent (a running sandbox only gets its timeout extended); a 409 answered while another call's resume is in flight is retried briefly (5 × 500 ms; to be confirmed on real E2B, see `test/live`). Uploads use UUID names in the staging directory. When a kill cannot run, the reboot fallback (pause + cold `connect`) also ends live siblings' commands (a last resort) |
-| `exec` / file operations | First connect (a paused one is resumed, which is the contract's "auto-start"; the envd access token is fetched. **If no token can be obtained it does not connect and sends no request without a token; it reports `SandboxGoneError` (`resume` returns `gone`), and the kernel rebuilds a sandbox with a token on that basis**; the timeout is pushed to at least "command timeout + 120 seconds", and not beyond 24 hours), then calls envd; a connect that returns an E2B-format 404 (`{code: 404, …}`) → `SandboxGoneError`; a bare 404 (a proxy, a misconfigured `apiUrl`), 401 / 5xx / network errors → ordinary errors. pause / delete also treat only an E2B-format 404 as "does not exist" |
+| `exec` / file operations | First connect (a paused one is resumed, which is the contract's "auto-start"; the envd access token is fetched. **If no token can be obtained it does not connect and sends no request without a token; it reports `SandboxGoneError` (`resume` returns `gone`), and the kernel tries a new instance once, but `create` reconnects the same E2B sandbox and fails the same way, so the environment stays unusable until its files are reset
+or the environment is recreated**; the timeout is pushed to at least "command timeout + 120 seconds", and not beyond 24 hours), then calls envd; a connect that returns an E2B-format 404 (`{code: 404, …}`) → `SandboxGoneError`; a bare 404 (a proxy, a misconfigured `apiUrl`), 401 / 5xx / network errors → ordinary errors. pause / delete also treat only an E2B-format 404 as "does not exist" |
 
 - **Timeout**: an E2B sandbox is handled when its timeout (`timeoutSeconds`) expires; this plugin sets `autoPause: true` and `autoPauseMemory: false` when creating a sandbox,
   so on expiry it is **paused** (without memory, like `suspend`) instead of deleted, and files are not lost even when the kernel has no chance to `suspend` (for example the whole kernel is down). Every use pushes it back through connect (it only extends, never shortens).

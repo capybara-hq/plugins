@@ -8,7 +8,12 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createE2BApi, type E2BApi } from "../../src/e2b-api.js";
-import { createE2BSandbox, DeploymentConfig, TEMPLATE_ALIAS } from "../../src/index.js";
+import {
+  createE2BSandbox,
+  DeploymentConfig,
+  providerConfig,
+  templateAlias,
+} from "../../src/index.js";
 
 /**
  * 真实 E2B 验收：`pnpm vitest run plugins/sandbox-e2b/test/live`
@@ -16,7 +21,8 @@ import { createE2BSandbox, DeploymentConfig, TEMPLATE_ALIAS } from "../../src/in
  * - Switch: runs only when `CAPYBARA_TEST_E2B_API_KEY` is filled, otherwise the whole group is
  *   skipped. `CAPYBARA_TEST_E2B_TEMPLATE` (a template built from
  *   plugins/sandbox-docker/image/Dockerfile, see README) is optional: unset, the first
- *   `createFileSystem` builds the template `TEMPLATE_ALIAS` from the published image (that image
+ *   `createFileSystem` builds the template `capybara-sandbox-<this plugin's version>` from the
+ *   published image (that image
  *   must exist on ghcr.io, i.e. sandbox-docker's version must have been released). Optional
  *   `CAPYBARA_TEST_E2B_API_URL`, `CAPYBARA_TEST_E2B_DOMAIN` (self-hosted). Credentials come from
  *   the outer environment; the code reads no credential file and prints none.
@@ -39,6 +45,11 @@ import { createE2BSandbox, DeploymentConfig, TEMPLATE_ALIAS } from "../../src/in
  * - [ ] 镜像里有 GNU `timeout`（coreutils）：exec 的命令在沙箱里也有时限，`timeout` 自成进程组、杀进程脚本先杀它；
  * - [ ] pause `{memory: false}` ends every process and keeps the files; a sandbox created and paused
  *   at once resumes through connect; `autoPauseMemory: false` is accepted on create;
+ * - [ ] the alias lookup (`GET /templates/aliases/{alias}`) answers `public: false` for our own
+ *   template, 403 for an alias of another team, and `public: true` for a public one (both refused
+ *   with "owned by another E2B team or is public"); whether aliases resolve across teams at all
+ *   (namespaced names `team/alias` in v3?), and that `POST /v3/templates` answers `public: false`
+ *   (templates are created private; the plugin refuses otherwise);
  * - [ ] a template built with `fromImage` of the published image (POST /v3/templates, trigger,
  *   poll status) keeps the image's user `sandbox`, its owners and modes; an alias whose build is
  *   not ready answers 404 on create (the plugin then builds and retries once);
@@ -87,6 +98,7 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
   // describe 体在跳过时也会执行：配置放到 beforeAll 里解析
   let sbx: SandboxProvider;
   let api: E2BApi;
+  let alias: string;
   beforeAll(() => {
     const cfg = DeploymentConfig.parse({
       apiKey: API_KEY,
@@ -96,7 +108,9 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
       timeoutSeconds: 600,
     });
     const log = { info: console.info, warn: console.warn, error: console.error };
-    sbx = createE2BSandbox(cfg, { log });
+    const provider = providerConfig(cfg);
+    alias = templateAlias(provider.defaultImage);
+    sbx = createE2BSandbox(provider, { log });
     api = createE2BApi(cfg.apiUrl ?? `https://api.${cfg.domain}`, cfg.apiKey);
   });
   const name = `cap-env-live-${randomUUID()}`;
@@ -121,7 +135,7 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
   it("builds or finds the template, creates the file system paused, and an instance runs as the sandbox user", {
     timeout: BUILD_MS + 60_000,
   }, async () => {
-    if (!filled(TEMPLATE)) console.info(`[e2b-live] template auto-build: ${TEMPLATE_ALIAS}`);
+    if (!filled(TEMPLATE)) console.info(`[e2b-live] template auto-build: ${alias}`);
     fs = await sbx.createFileSystem({
       name,
       limits: allowlist,

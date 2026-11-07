@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { dirname } from "node:path";
 import {
   isFileSystemGoneError,
@@ -15,12 +17,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { envdStart } from "../src/e2b-api.js";
 import {
   createE2BSandbox,
-  DEFAULT_IMAGE,
   type E2BSandboxConfig,
   execArgs,
   IN_SANDBOX_GRACE_SECONDS,
   METADATA_NAME,
-  TEMPLATE_ALIAS,
+  publishedImage,
+  templateAlias,
 } from "../src/index.js";
 
 /**
@@ -44,6 +46,9 @@ const limits = (
   egress,
   allowHosts,
 });
+/** The image the template is built from in these tests, and its alias. */
+const IMAGE = publishedImage("0.0.0-test.1");
+const ALIAS = templateAlias(IMAGE);
 const ACTOR: SandboxActor = { accountId: "acc-1", conversationId: "conv-1" };
 /** The holder tag and actor every exec carries. */
 const who = () => ({ tag: randomUUID(), actor: ACTOR });
@@ -56,6 +61,51 @@ const provision = async (
 ) => {
   const fileSystem = await s.createFileSystem({ name, limits: l, signal: sig() });
   return s.create({ name, limits: l, fileSystem, signal: sig() });
+};
+
+/**
+ * A proxy in front of a fake E2B: `override` may answer a request itself (to play an E2B answer
+ * the fake cannot give); everything else is forwarded.
+ */
+const proxyOf = async (
+  target: FakeE2BServer,
+  override: (method: string, path: string) => { status: number; body: unknown } | undefined,
+) => {
+  const server = createServer((req, res) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const c of req) chunks.push(c as Buffer);
+      const path = new URL(req.url ?? "/", "http://x").pathname;
+      const own = override(req.method ?? "GET", path);
+      if (own) {
+        res
+          .writeHead(own.status, { "content-type": "application/json" })
+          .end(JSON.stringify(own.body));
+        return;
+      }
+      const headers: Record<string, string> = {};
+      for (const [k, v] of Object.entries(req.headers)) {
+        if (typeof v === "string" && k !== "host" && k !== "content-length") headers[k] = v;
+      }
+      const body = Buffer.concat(chunks);
+      const r = await fetch(target.url + (req.url ?? "/"), {
+        method: req.method ?? "GET",
+        headers,
+        ...(body.byteLength > 0 && { body }),
+      });
+      const out = Buffer.from(await r.arrayBuffer());
+      const resHeaders: Record<string, string> = {};
+      r.headers.forEach((v, k) => {
+        if (k !== "content-length" && k !== "transfer-encoding") resHeaders[k] = v;
+      });
+      res.writeHead(r.status, resHeaders).end(out);
+    })().catch(() => res.destroy());
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  return {
+    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    close: () => new Promise<void>((r) => server.close(() => r())),
+  };
 };
 
 /** Start 请求里的 process 字段。 */
@@ -102,6 +152,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       apiUrl: fake.url,
       domain: "e2b.app",
       template: "capybara-sandbox",
+      defaultImage: IMAGE,
       timeoutSeconds: 3600,
       domainAllowlist: true,
       allowOpenEgress: false,
@@ -203,14 +254,15 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       expect(isFileSystemGoneError(e)).toBe(true);
       expect(String((e as Error).message)).toContain(fileSystem.id);
       // a plain failure (5xx, a bare 404 from a proxy) is never "files lost"
-      const fs2 = await sbx.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() });
+      const name2 = sbxName();
+      const fs2 = await sbx.createFileSystem({ name: name2, limits: limits(), signal: sig() });
       for (const fail of [
         () => fake.failNext({ path: /\/connect$/ }, 503, "busy"),
         () => fake.failNext({ path: /\/connect$/ }, 404, "Not Found", { raw: true }),
       ]) {
         fail();
         const e2 = await sbx
-          .create({ name, limits: limits(), fileSystem: fs2, signal: sig() })
+          .create({ name: name2, limits: limits(), fileSystem: fs2, signal: sig() })
           .catch((x: unknown) => x);
         expect(e2).toBeInstanceOf(Error);
         expect(isFileSystemGoneError(e2)).toBe(false);
@@ -441,14 +493,14 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
         s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() }),
       ]);
       await s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() });
-      const t = p.templates.get(TEMPLATE_ALIAS);
-      expect(t?.image).toBe(DEFAULT_IMAGE);
+      const t = p.templates.get(ALIAS);
+      expect(t?.image).toBe(IMAGE);
       expect(builds()).toHaveLength(1);
-      expect(builds()[0]?.body).toMatchObject({ name: TEMPLATE_ALIAS });
+      expect(builds()[0]?.body).toMatchObject({ name: ALIAS });
       const trigger = p.calls.find(
         (c) => c.path === `/v2/templates/${t?.templateID}/builds/${t?.buildID}`,
       );
-      expect(trigger?.body).toEqual({ fromImage: DEFAULT_IMAGE, steps: [], force: false });
+      expect(trigger?.body).toEqual({ fromImage: IMAGE, steps: [], force: false });
       // the build was polled until ready before any sandbox was created
       const status = p.calls.filter((c) => c.path.endsWith("/status"));
       expect(status.length).toBeGreaterThanOrEqual(2);
@@ -462,11 +514,11 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     });
 
     it("an existing alias is used without a build; a configured template skips the lookup", async () => {
-      p = await startFakeE2B({ apiKey: fake.apiKey, templates: [TEMPLATE_ALIAS] });
+      p = await startFakeE2B({ apiKey: fake.apiKey, templates: [ALIAS] });
       const s = make({ template: undefined }, p);
       const fs = await s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() });
       expect(builds()).toHaveLength(0);
-      expect(p.sandboxes.get(fs.id)?.templateID).toBe(p.templates.get(TEMPLATE_ALIAS)?.templateID);
+      expect(p.sandboxes.get(fs.id)?.templateID).toBe(p.templates.get(ALIAS)?.templateID);
       const configured = make({ template: "my-template" }, p);
       const before = p.calls.length;
       const fs2 = await configured.createFileSystem({
@@ -487,28 +539,122 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
         limits: limits(),
         signal: AbortSignal.timeout(1500),
       });
-      await waitFor(() => p.templates.has(TEMPLATE_ALIAS));
+      await waitFor(() => p.templates.has(ALIAS));
       await stuck.catch(() => undefined);
       const s = make({ template: undefined }, p);
       const done = s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() });
       await waitFor(() => builds().length === 2);
       // let the second build finish
-      const t = p.templates.get(TEMPLATE_ALIAS);
+      const t = p.templates.get(ALIAS);
       await waitFor(() => t?.readyAt !== undefined);
       if (t) t.readyAt = Date.now();
       const fs = await done;
       expect(p.sandboxes.get(fs.id)?.templateID).toBe(t?.templateID);
     });
 
-    it("a failed build is an error and is not memoised", async () => {
+    it("a failed build is an error pointing at the template setting, and is not memoised", async () => {
       p = await startFakeE2B({ apiKey: fake.apiKey });
       const s = make({ template: undefined }, p);
       p.failNext({ method: "POST", path: /^\/v2\/templates\// }, 400, "image not found");
-      await expect(
-        s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() }),
-      ).rejects.toThrow(/image not found/);
+      const e = await s
+        .createFileSystem({ name: sbxName(), limits: limits(), signal: sig() })
+        .catch((x: unknown) => x);
+      expect(String((e as Error).message)).toMatch(/image not found/);
+      expect(String((e as Error).message)).toMatch(/setting `template`/);
       await s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() });
       expect(builds()).toHaveLength(2);
+    });
+
+    it("a build whose status is error surfaces E2B's reason and is not memoised", async () => {
+      p = await startFakeE2B({ apiKey: fake.apiKey });
+      let failStatus = true;
+      const proxy = await proxyOf(p, (method, path) => {
+        if (!(failStatus && method === "GET" && path.endsWith("/status"))) return undefined;
+        failStatus = false;
+        return {
+          status: 200,
+          body: { status: "error", logEntries: [], reason: { message: "pull access denied" } },
+        };
+      });
+      try {
+        const s = createE2BSandbox(
+          { ...cfg, apiUrl: proxy.url, template: undefined },
+          { log: console },
+          { envdUrl: p.url },
+        );
+        const e = await s
+          .createFileSystem({ name: sbxName(), limits: limits(), signal: sig() })
+          .catch((x: unknown) => x);
+        expect(String((e as Error).message)).toMatch(/error: pull access denied/);
+        expect(String((e as Error).message)).toMatch(/setting `template`/);
+        expect(p.sandboxes.size).toBe(0);
+        // not memoised: the next use provisions again (the alias lookup runs a second time)
+        const lookups = () => p.calls.filter((c) => c.path === `/templates/aliases/${ALIAS}`);
+        expect(lookups()).toHaveLength(1);
+        await s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() });
+        expect(lookups()).toHaveLength(2);
+        expect(p.sandboxes.size).toBe(1);
+      } finally {
+        await proxy.close();
+      }
+    });
+
+    it("a public template under the alias is refused, never used", async () => {
+      p = await startFakeE2B({ apiKey: fake.apiKey });
+      const proxy = await proxyOf(p, (method, path) =>
+        method === "GET" && path === `/templates/aliases/${ALIAS}`
+          ? { status: 200, body: { templateID: "tsquatter", public: true } }
+          : undefined,
+      );
+      try {
+        const s = createE2BSandbox(
+          { ...cfg, apiUrl: proxy.url, template: undefined },
+          { log: console },
+          { envdUrl: p.url },
+        );
+        await expect(
+          s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() }),
+        ).rejects.toThrow(
+          `E2B template alias ${ALIAS} is owned by another E2B team or is public; set the sandbox-e2b setting \`template\``,
+        );
+        expect(p.sandboxes.size).toBe(0);
+        expect(builds()).toHaveLength(0);
+      } finally {
+        await proxy.close();
+      }
+    });
+
+    it("an alias of another team (403) and a build refused with 403 map to the same error", async () => {
+      p = await startFakeE2B({ apiKey: fake.apiKey });
+      const s = make({ template: undefined }, p);
+      p.failNext({ method: "GET", path: /^\/templates\/aliases\// }, 403, "forbidden");
+      await expect(
+        s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() }),
+      ).rejects.toThrow(/owned by another E2B team or is public/);
+      p.failNext({ method: "POST", path: /^\/v3\/templates$/ }, 403, "forbidden");
+      await expect(
+        s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() }),
+      ).rejects.toThrow(/owned by another E2B team or is public/);
+      expect(p.sandboxes.size).toBe(0);
+    });
+
+    it("a build in flight stops with the extension's lifetime signal", async () => {
+      p = await startFakeE2B({ apiKey: fake.apiKey, templateBuildMs: 60_000 });
+      const life = new AbortController();
+      const s = createE2BSandbox(
+        { ...cfg, apiUrl: p.url, template: undefined },
+        { log: console, signal: life.signal },
+        { envdUrl: p.url },
+      );
+      const started = s
+        .createFileSystem({ name: sbxName(), limits: limits(), signal: sig() })
+        .catch((x: unknown) => x);
+      await waitFor(() => p.calls.some((c) => c.path.endsWith("/status")));
+      life.abort(new Error("extension revoked"));
+      expect(String(await started)).toMatch(/extension revoked/);
+      const polls = p.calls.filter((c) => c.path.endsWith("/status")).length;
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(p.calls.filter((c) => c.path.endsWith("/status")).length).toBe(polls);
     });
   });
 

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { SANDBOX_EXTENSION_POINT } from "@capybara-hq/plugin-sdk";
 import {
   assertExtensionSecretsReachable,
@@ -5,12 +6,12 @@ import {
 } from "@capybara-hq/testing";
 import { describe, expect, it } from "vitest";
 import plugin, {
-  DEFAULT_IMAGE,
   DeploymentConfig,
   decodeOutput,
   exitCodeOf,
-  SANDBOX_DOCKER_VERSION,
-  TEMPLATE_ALIAS,
+  providerConfig,
+  publishedImage,
+  templateAlias,
 } from "../src/index.js";
 
 describe("decodeOutput", () => {
@@ -47,12 +48,17 @@ describe("sandbox-e2b manifest", () => {
     expect(plugin.permissions).toEqual({});
   });
 
-  it("the default template comes from the image published with sandbox-docker's version", () => {
-    expect(SANDBOX_DOCKER_VERSION).toMatch(/^\d+\.\d+\.\d+(-[a-z]+\.\d+)?$/);
-    expect(DEFAULT_IMAGE).toBe(`ghcr.io/capybara-hq/capybara-sandbox:${SANDBOX_DOCKER_VERSION}`);
-    expect(TEMPLATE_ALIAS).toBe(`capybara-sandbox-${SANDBOX_DOCKER_VERSION.replaceAll(".", "-")}`);
-    // E2B aliases: lowercase letters, digits and dashes
-    expect(TEMPLATE_ALIAS).toMatch(/^[a-z0-9-]+$/);
+  it("the default template comes from the image published with this plugin's version", () => {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+      version: string;
+    };
+    expect(plugin.version).toBe(pkg.version);
+    const c = providerConfig(DeploymentConfig.parse({ apiKey: "k" }));
+    expect(c.defaultImage).toBe(`ghcr.io/capybara-hq/capybara-sandbox:${plugin.version}`);
+    expect(publishedImage("0.1.0-rc.3")).toBe("ghcr.io/capybara-hq/capybara-sandbox:0.1.0-rc.3");
+    expect(templateAlias(publishedImage("0.1.0-rc.3"))).toBe("capybara-sandbox-0-1-0-rc-3");
+    expect(templateAlias("registry:5000/x/img:V1_2")).toBe("capybara-sandbox-v1-2");
+    expect(templateAlias("img")).toBe("capybara-sandbox-latest");
   });
 
   it("deployment config: defaults and validation", () => {

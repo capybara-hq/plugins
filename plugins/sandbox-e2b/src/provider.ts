@@ -31,10 +31,15 @@ export interface E2BSandboxConfig {
   /** 沙箱域名（API 返回了沙箱自己的域名时以返回的为准）。 */
   domain: string;
   /**
-   * Template name or id. Unset: the template {@link TEMPLATE_ALIAS}, built on first use from
-   * {@link DEFAULT_IMAGE}.
+   * Template name or id. Unset: the template `templateAlias(defaultImage)`, built on first use
+   * from {@link E2BSandboxConfig.defaultImage}.
    */
   template?: string | undefined;
+  /**
+   * The image the template is built from when `template` is unset: the plugin setup passes
+   * {@link publishedImage} of the plugin's own version.
+   */
+  defaultImage: string;
   /** 沙箱超时（秒）：到点 E2B 自动暂停。 */
   timeoutSeconds: number;
   /** E2B 支持按域名的出站白名单；false 时 allowlist 退化为 none 并打告警。 */
@@ -59,15 +64,26 @@ export interface E2BSandboxTestOptions {
 export const METADATA_NAME = "capybara-sandbox-name";
 
 /**
- * The sandbox-docker version whose published image this release builds its template from: the
- * images are tagged with sandbox-docker's version (environments spec §5.4), which is not this
- * plugin's own. Bump it together with sandbox-docker.
+ * The sandbox image published with `version`: the images are tagged with sandbox-docker's version
+ * (environments spec §5.4), and sandbox-docker and sandbox-e2b are one changesets `fixed` group,
+ * so this plugin's own version is that tag.
  */
-export const SANDBOX_DOCKER_VERSION = "0.1.0-rc.3";
-/** The image the template is built from when the `template` setting is empty. */
-export const DEFAULT_IMAGE = `ghcr.io/capybara-hq/capybara-sandbox:${SANDBOX_DOCKER_VERSION}`;
-/** The alias of that template: named after the image tag, so a new tag builds a new template. */
-export const TEMPLATE_ALIAS = `capybara-sandbox-${SANDBOX_DOCKER_VERSION.replaceAll(".", "-")}`;
+export function publishedImage(version: string): string {
+  return `ghcr.io/capybara-hq/capybara-sandbox:${version}`;
+}
+
+/**
+ * The alias of the template built from `image`: `capybara-sandbox-<tag>` with each character
+ * outside `[a-z0-9-]` replaced by `-` (`0.1.0-rc.3` → `capybara-sandbox-0-1-0-rc-3`), so a new tag
+ * builds a new template.
+ */
+export function templateAlias(image: string): string {
+  const name = image.slice(image.lastIndexOf("/") + 1);
+  const colon = name.lastIndexOf(":");
+  const tag = colon >= 0 ? name.slice(colon + 1) : "latest";
+  return `capybara-sandbox-${tag.toLowerCase().replace(/[^a-z0-9-]/g, "-")}`;
+}
+
 /** CPU and memory of the built template (E2B fixes them per template): the kernel's defaults. */
 const TEMPLATE_CPU_COUNT = 1;
 const TEMPLATE_MEMORY_MB = 2048;
@@ -287,7 +303,8 @@ interface SandboxInfo {
 /** The `sandbox@2` provider on E2B (shared by the plugin setup and the tests). */
 export function createE2BSandbox(
   cfg: E2BSandboxConfig,
-  deps: { log: Logger },
+  /** `signal`: the extension's lifetime (`ctx.signal`); a template build in flight stops with it. */
+  deps: { log: Logger; signal?: AbortSignal },
   test: E2BSandboxTestOptions = {},
 ): SandboxProvider {
   const api = createE2BApi(cfg.apiUrl ?? `https://api.${cfg.domain}`, cfg.apiKey);
@@ -305,13 +322,14 @@ export function createE2BSandbox(
         `E2B returned an invalid sandbox domain: ${JSON.stringify(domain).slice(0, 100)}`,
       );
     }
-    // 没有访问令牌的 envd 谁都能调用：建沙箱时要求了 secure，拿不到令牌就不连（fail closed）。
-    // 报 SandboxGoneError 而不是普通错误：加上 `secure: true` 之前建的沙箱永远没有令牌，报普通错误会让这个对话的
-    // 沙箱一直不可用；当作「已不在」，内核就会销毁同名旧实例（create 先 destroyByName）并重建一个带令牌的。
-    // 代价：E2B 若对所有沙箱都不再返回令牌，每次使用都会重建（文件丢失），而不是静默地不带令牌连接。
+    // An envd without an access token can be called by anyone: create asked for `secure`, so no
+    // token means no connection (fail closed). It is reported as SandboxGoneError, so the kernel
+    // tries a new instance once; `create` reconnects the same E2B sandbox and fails again, so the
+    // environment stays unusable until its files are reset (a new file system), never used
+    // without a token.
     if (typeof info.envdAccessToken !== "string" || info.envdAccessToken === "") {
       throw new SandboxGoneError(
-        `E2B returned no envd access token for sandbox ${info.sandboxID}; refusing to use an unauthenticated sandbox (it will be recreated)`,
+        `E2B returned no envd access token for sandbox ${info.sandboxID}; refusing to use an unauthenticated sandbox (reset the environment's files to recreate it)`,
       );
     }
     return {
@@ -406,14 +424,29 @@ export function createE2BSandbox(
 
   // ---------- template ----------
 
+  const alias = templateAlias(cfg.defaultImage);
+  /** The way out when the plugin cannot provide the template itself. */
+  const ownTemplateHint =
+    'set the sandbox-e2b setting `template` to a template of your own (README "Template")';
+  const foreignAlias = (cause?: unknown) =>
+    new Error(
+      `E2B template alias ${alias} is owned by another E2B team or is public; ${ownTemplateHint}`,
+      { cause },
+    );
+
   /**
-   * Looks up {@link TEMPLATE_ALIAS} (unless `rebuild`), else builds it from {@link DEFAULT_IMAGE}
-   * with the calls `Template.build(Template().fromImage(image), alias)` makes in `e2b@2.58.0`
-   * (request a build, trigger it, poll its status until ready). Returns the template id. Bound to
-   * its own time limit, not to a caller's signal: concurrent callers share it.
+   * Looks up the alias (unless `rebuild`), else builds it from `cfg.defaultImage` with the calls
+   * `Template.build(Template().fromImage(image), alias)` makes in `e2b@2.58.0` (request a build,
+   * trigger it, poll its status until ready). Returns the template id. Bound to its own time limit
+   * and the extension's lifetime, not to a caller's signal: concurrent callers share it.
+   *
+   * Only a template of this team that is not public is used: the alias is a predictable name, and
+   * a public template under it (another team's) would run agent commands on an image nobody here
+   * chose.
    */
   const provisionTemplate = async (rebuild: boolean): Promise<string> => {
-    const signal = AbortSignal.timeout(TEMPLATE_BUILD_TIMEOUT_MS);
+    const timeout = AbortSignal.timeout(TEMPLATE_BUILD_TIMEOUT_MS);
+    const signal = deps.signal ? AbortSignal.any([timeout, deps.signal]) : timeout;
     const checkTemplateId = (id: unknown, what: string): string => {
       if (typeof id !== "string" || !TEMPLATE_ID_RE.test(id)) {
         throw new Error(`E2B returned an invalid template ${what}: ${JSON.stringify(id)}`);
@@ -421,37 +454,66 @@ export function createE2BSandbox(
       return id;
     };
     if (!rebuild) {
+      let found: { templateID?: unknown; public?: unknown } | undefined;
       try {
-        const r = await api.json<{ templateID?: unknown }>(
-          "GET",
-          `/templates/aliases/${enc(TEMPLATE_ALIAS)}`,
-          { signal },
-        );
-        // the alias exists; whether its build is ready shows when a sandbox is created from it
-        return checkTemplateId(r.data?.templateID, "id");
+        found = (
+          await api.json<{ templateID?: unknown; public?: unknown }>(
+            "GET",
+            `/templates/aliases/${enc(alias)}`,
+            { signal },
+          )
+        ).data;
       } catch (e) {
+        // 403: the alias exists but belongs to another team (the SDK's aliasExists says so)
+        if (isStatus(e, 403)) throw foreignAlias(e);
         if (!isE2BNotFound(e)) throw e;
+      }
+      if (found !== undefined) {
+        if (found.public !== false) throw foreignAlias();
+        // the alias exists; whether its build is ready shows when a sandbox is created from it
+        return checkTemplateId(found.templateID, "id");
       }
     }
     deps.log.info("sandbox-e2b: building the E2B template from the published image", {
-      alias: TEMPLATE_ALIAS,
-      image: DEFAULT_IMAGE,
+      alias,
+      image: cfg.defaultImage,
     });
-    const req = await api.json<{ templateID?: unknown; buildID?: unknown }>(
-      "POST",
-      "/v3/templates",
-      {
-        body: { name: TEMPLATE_ALIAS, cpuCount: TEMPLATE_CPU_COUNT, memoryMB: TEMPLATE_MEMORY_MB },
-        signal,
-      },
-    );
-    const templateId = checkTemplateId(req.data?.templateID, "id");
-    const buildId = checkTemplateId(req.data?.buildID, "build id");
+    let req: { templateID?: unknown; buildID?: unknown; public?: unknown } | undefined;
+    try {
+      req = (
+        await api.json<{ templateID?: unknown; buildID?: unknown; public?: unknown }>(
+          "POST",
+          "/v3/templates",
+          {
+            body: { name: alias, cpuCount: TEMPLATE_CPU_COUNT, memoryMB: TEMPLATE_MEMORY_MB },
+            signal,
+          },
+        )
+      ).data;
+    } catch (e) {
+      if (isStatus(e, 403, 409)) throw foreignAlias(e);
+      throw e;
+    }
+    // templates are created private (the build request has no visibility field); refuse one that
+    // is not, rather than run sandboxes from it
+    if (req?.public !== false) throw foreignAlias();
+    const templateId = checkTemplateId(req.templateID, "id");
+    const buildId = checkTemplateId(req.buildID, "build id");
     const build = `/templates/${enc(templateId)}/builds/${enc(buildId)}`;
-    await api.json("POST", `/v2${build}`, {
-      body: { fromImage: DEFAULT_IMAGE, steps: [], force: false },
-      signal,
-    });
+    const failed = (detail: string, cause?: unknown) =>
+      new Error(
+        `E2B template build of ${cfg.defaultImage} (alias ${alias}) failed: ${detail}; ${ownTemplateHint}`,
+        { cause },
+      );
+    try {
+      await api.json("POST", `/v2${build}`, {
+        body: { fromImage: cfg.defaultImage, steps: [], force: false },
+        signal,
+      });
+    } catch (e) {
+      if (signal.aborted) throw e;
+      throw failed(e instanceof Error ? e.message : String(e), e);
+    }
     let logsOffset = 0;
     for (;;) {
       const r = await api.json<{
@@ -463,13 +525,13 @@ export function createE2BSandbox(
       const status = r.data?.status;
       if (status === "ready") break;
       if (status !== "waiting" && status !== "building") {
-        throw new Error(
-          `E2B template build of ${DEFAULT_IMAGE} failed (${String(status)}): ${String(r.data?.reason?.message ?? "no reason given").slice(0, 300)}`,
+        throw failed(
+          `${String(status)}: ${String(r.data?.reason?.message ?? "no reason given").slice(0, 300)}`,
         );
       }
       await sleep(TEMPLATE_POLL_MS, signal);
     }
-    deps.log.info("sandbox-e2b: E2B template ready", { alias: TEMPLATE_ALIAS, templateId });
+    deps.log.info("sandbox-e2b: E2B template ready", { alias, templateId });
     return templateId;
   };
 
