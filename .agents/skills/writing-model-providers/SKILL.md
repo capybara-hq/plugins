@@ -1,6 +1,6 @@
 ---
 name: writing-model-providers
-description: 'Use when creating or modifying a model provider extension in this repository (provides model-provider@2, e.g. plugins/anthropic, plugins/openai, plugins/openai-compatible): the contract, parameter declarations and standard knobs, dialect presets, the native-protocol principle, append-only request mapping, opaque replay, media blocks (image / document mapping and the vision / documents declarations), usage semantics, the error mapping table, no retries inside the extension, streamIdleTimeoutMs, model patches with removal conditions, and tests with the conformance suite, startFakeModelServer fixtures and the live-API mode (CAPYBARA_TEST_* keys).'
+description: 'Use when creating or modifying a model provider extension in this repository (provides model-provider@2, e.g. plugins/anthropic, plugins/openai, plugins/openai-compatible): the contract, parameter declarations and standard knobs, dialect presets, the native-protocol principle, append-only request mapping, opaque replay, model kinds and embeddings (kind, embed, expect.embedding), org-bound config (ModelCallOptions, orgAccess), media blocks (image / document mapping and the vision / documents declarations), usage semantics, the error mapping table, no retries inside the extension, streamIdleTimeoutMs, model patches with removal conditions, and tests with the conformance suite, startFakeModelServer fixtures and the live-API mode (CAPYBARA_TEST_* keys).'
 ---
 
 # Writing model provider extensions
@@ -13,9 +13,11 @@ The types are in `@capybara-hq/plugin-sdk` (`model.ts`). The manifest has `provi
 
 ```ts
 interface ModelProvider {
-  listModels(): Promise<ModelInfo[]>;
+  listModels(opts?: ModelCallOptions): Promise<ModelInfo[]>;
   /** The event sequence must end with exactly one message_complete; on error, throw ModelError. */
-  stream(req: ModelRequest, opts: { signal: AbortSignal }): AsyncIterable<ModelStreamEvent>;
+  stream(req: ModelRequest, opts: { signal: AbortSignal } & ModelCallOptions): AsyncIterable<ModelStreamEvent>;
+  /** Only on a provider that lists `embedding` models. */
+  embed?(req: EmbedRequest, opts: { signal: AbortSignal } & ModelCallOptions): Promise<EmbedResult>;
 }
 ```
 
@@ -26,7 +28,27 @@ interface ModelProvider {
 - `ModelInfo`: `contextWindow`, `maxOutputTokens`, `capabilities` (`tools` / `vision` / `reasoning` / `caching` / `midConversationSystem` / optional `documents`; `effort` is deprecated, `@1` only), optional `streamIdleTimeoutMs`, and required `parameters` (may be empty). The kernel caches `listModels`; on failure it skips that provider and logs.
 - Check errors with `isModelError(e)` / `isRetryableKind(kind)` (duck typing), never `instanceof ModelError`: an extension may bundle another copy of the SDK.
 
+- `ModelInfo.kind` (`ModelKind`: `chat` default, `embedding`, `rerank`, `image_generation`, ...; absent means `chat`). The chat-only fields (`contextWindow`, `maxOutputTokens`, `capabilities`, `parameters`) stay required for every kind. A model with `kind: "embedding"` sets `embedding: { dimensions: number[], defaultDimensions, maxInputTokens, maxBatch }`, and the provider then implements `embed`.
+
 No mutable in-process state: caches such as model info go in `ctx.kv` with a TTL (anthropic's `models:v3:<id>`, 3600 seconds; bump the version when the ModelInfo shape changes); accumulators within one call are local variables.
+
+## Embedding models (`embed`)
+
+A provider that lists `kind: "embedding"` models implements `embed(req, opts)`: `req` is `{ model, input: string[], dimensions?, inputType?: "query" | "document" }` and the result `{ vectors: number[][], usage: { inputTokens } }` with one vector per input in input order.
+
+- `dimensions` is one of the model's `embedding.dimensions` (the default when absent); map it to the native field only for models whose dimensions are adjustable. Respect `maxBatch` (the kernel splits batches) and map `inputType` to the native query / document distinction where the API has one.
+- Check your own output with the SDK's `validateEmbedResult(req, info, res)` (wrong vector count, wrong dimension, non-finite number) in tests; the kernel applies it too.
+- Errors follow the same `ModelError` table and the no-retry rule as `stream`.
+- A provider with no embedding model does not define `embed`.
+
+## Org-bound config: `ModelCallOptions` and `orgAccess`
+
+Model calls are made for an organization. `listModels(opts)`, `stream(req, opts)` and `embed(req, opts)` receive `opts.orgId` and `opts.config`: the extension's **effective deployment config for that org**, i.e. the platform's deployment config with the org's own copy applied to the fields marked `orgAccess(field, "override")`, or the platform's config (equal to `ctx.config`) while the org follows it. Both are optional in the type so older providers compile; the kernel always passes them.
+
+- Mark fields an org may set itself (typically `apiKey`, `baseUrl`) in the deployment schema: `orgAccess(secret(z.string()), "override")`; `"readonly"` shows a field to the org without letting it set it. A field without a level is deployment-only.
+- The promise that comes with `override`: **read the field from `opts.config`, never from `ctx.config`**, in `listModels`, `stream` and `embed` (`ctx.config` may lack the field, and the deployment value is only the default). Parse `opts.config ?? ctx.config` with the deployment schema once per call; build the SDK client per call (or cache by the key and base URL in `ctx.kv` with a TTL), never in a module-level variable.
+- Never send a platform-only (hidden) secret to an endpoint taken from an overridable field: an org could point that endpoint at a server it controls.
+- Model ids and parameter declarations may depend on the config (an org's own endpoint may serve other models), so `listModels` must use `opts.config` too.
 
 ## Parameter declarations (`ModelInfo.parameters`)
 
@@ -190,6 +212,7 @@ describe.skipIf(!LIVE_KEY)("live", () => {
 });
 ```
 
+- A provider that lists an embedding model sets `expect.embedding: { model, dimensions }` in the target (`dimensions` is one the model supports); the suite then runs the embedding cases (vector count and dimension via `validateEmbedResult`, input order, `inputType`, an out-of-range `dimensions` rejected). Use `contract: 2` and `plugin: "<name>"` in the target for `@2` providers.
 - `startFakeModelServer(routes)`: `routes(req)` gets `{ path, body, headers }` and returns `{ status, json, headers? }` (normal / error), `{ status: 200, sse: [{ event?, data }], delayMs? }` (SSE) or `{ stall: true }` (headers only, for abort and the watchdog). `server.requests` records every request, so assert on the native body sent. Fixtures are handwritten in the provider's native format in `test/fixtures.ts` (see `sseMessage`, `errorJson` in `plugins/anthropic/test/fixtures.ts`); never record keys from real responses.
 - The extension constructor must accept `baseUrl` so fixture mode can point at the fake server.
 - Beyond the suite, write a case per row of the error mapping table (429 with `retry-after`, 529, 5xx, 401/403, 400, 413, a mid-stream error event, stream truncation, malformed tool arguments, network failure, abort, stalled-stream abort), and prefix unit tests for the request mapping (`test/map.test.ts`).
