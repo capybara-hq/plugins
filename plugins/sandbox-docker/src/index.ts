@@ -52,6 +52,11 @@ export const DeploymentConfig = z
      */
     egressProxyImage: ui(z.string().min(1).optional(), {
       label: { zh: "出站代理镜像", en: "Egress proxy image" },
+      help: {
+        zh: "留空则用随本插件版本发布的镜像 ghcr.io/capybara-hq/capybara-sandbox-egress:<插件版本>；离线部署填自己构建的镜像。",
+        en: "Empty: the image published with this plugin's version, ghcr.io/capybara-hq/capybara-sandbox-egress:<plugin version>. Set it to your own build for an offline deployment.",
+      },
+      placeholder: "ghcr.io/capybara-hq/capybara-sandbox-egress:<plugin version>",
     }),
     /** 工作区卷的驱动（支持 `size` 选项的驱动才能限制磁盘）；不填用 local（不限大小）。 */
     volumeDriver: ui(z.string().min(1).optional(), {
@@ -92,7 +97,7 @@ export function providerConfig(
 const plugin = defineExtension({
   name: "sandbox-docker",
   version: "0.1.0-rc.2",
-  sdk: "^0.1.0-rc.0",
+  sdk: "^0.1.0-rc.3",
   provides: [SANDBOX_EXTENSION_POINT],
   // 只用部署配置与 Docker endpoint，不用任何需要声明的平台能力
   permissions: {},

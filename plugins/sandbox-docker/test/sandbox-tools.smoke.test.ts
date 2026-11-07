@@ -11,6 +11,7 @@ import {
   kernelDb,
   postMessage,
   type KernelRequest as Req,
+  SANDBOX_STARTED_NOTICE,
   login as session,
   startTestKernel,
   startTestPostgres,
@@ -61,7 +62,8 @@ describe.skipIf(!dockerAvailable)(
     let k: TestKernel;
     let owner: Req;
     let orgId: string;
-    const conversations: string[] = [];
+    /** The environments the conversations work in (`cap-env-<id>`), removed with their volumes. */
+    const environments = new Set<string>();
     // Kernel warnings (the pipeline logs the real cause of a failed tool call, which the model only
     // sees as "failed (DockerApiError)"). This test failed once under full-suite load without a
     // reproduction (M-11), so failures print them instead of only the tool's generic text.
@@ -109,8 +111,10 @@ describe.skipIf(!dockerAvailable)(
           network,
           egressProxyImage: images.egressImage,
         });
-        for (const c of conversations) {
-          await p.destroyByName?.(`cap-${c}`, AbortSignal.timeout(60_000)).catch(() => undefined);
+        for (const e of environments) {
+          const name = `cap-env-${e}`;
+          await p.destroyByName(name, AbortSignal.timeout(60_000)).catch(() => undefined);
+          await p.destroyFileSystemByName(name, AbortSignal.timeout(60_000)).catch(() => undefined);
         }
       }
       await docker("network", "rm", network).catch(() => undefined);
@@ -146,7 +150,12 @@ describe.skipIf(!dockerAvailable)(
       expect(res.statusCode, res.body).toBe(201);
       const agentId = (res.json() as { agent: { id: string } }).agent.id;
       const conv = await createConv(owner, orgId, agentId);
-      conversations.push(conv);
+      const { environment_id: env } = await db
+        .selectFrom("conversations")
+        .select("environment_id")
+        .where("id", "=", conv)
+        .executeTakeFirstOrThrow();
+      if (env !== null) environments.add(env);
       return conv;
     }
 
@@ -170,8 +179,8 @@ describe.skipIf(!dockerAvailable)(
         1,
       );
       expect(r.isError, why(r.content)).toBe(false);
-      expect(r.content).toMatch(/^Sandbox started/);
-      expect(r.content).toMatch(/\/workspace\nsandbox\nhttp:\/\/cap-[0-9a-f-]+-egress:3128/);
+      expect(r.content.startsWith(SANDBOX_STARTED_NOTICE)).toBe(true);
+      expect(r.content).toMatch(/\/workspace\nsandbox\nhttp:\/\/cap-env-[0-9a-f-]+-egress:3128/);
 
       const w = await call(
         conv,

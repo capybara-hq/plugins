@@ -353,11 +353,14 @@ export function createDockerSandbox(
   };
 
   /**
-   * Whether both volumes of the file system `fsId` exist and were made by this plugin (role
-   * label). A volume Docker created on its own for a missing mount source has no labels, so it
-   * does not count.
+   * Checks the two volumes of the file system `fsId`: `ok` when both exist and were made by this
+   * plugin (role label); `unlabelled` names the volumes that exist without their role label (a
+   * volume Docker created on its own for a missing mount source has none).
    */
-  const fileSystemExists = async (fsId: string, signal: AbortSignal): Promise<boolean> => {
+  const checkFileSystem = async (
+    fsId: string,
+    signal: AbortSignal,
+  ): Promise<{ ok: boolean; unlabelled: string[] }> => {
     const n = sandboxResourceNames(fsId);
     const found = await Promise.all(
       (
@@ -372,14 +375,17 @@ export function createDockerSandbox(
             `/volumes/${enc(vol)}`,
             { signal },
           );
-          return v.Labels?.[LABEL_ROLE] === role;
+          return { vol, state: v.Labels?.[LABEL_ROLE] === role ? "ok" : "unlabelled" } as const;
         } catch (e) {
-          if (isStatus(e, 404)) return false;
+          if (isStatus(e, 404)) return { vol, state: "missing" } as const;
           throw e;
         }
       }),
     );
-    return found.every(Boolean);
+    return {
+      ok: found.every((f) => f.state === "ok"),
+      unlabelled: found.filter((f) => f.state === "unlabelled").map((f) => f.vol),
+    };
   };
 
   /** Creates a volume unless one of that name exists already (idempotent by name). */
@@ -848,7 +854,7 @@ export function createDockerSandbox(
         new FileSystemGoneError(
           `sandbox file system ${fileSystem.id} is gone (volume ${v.workspace} or ${v.skills} missing)`,
         );
-      if (!(await fileSystemExists(fileSystem.id, signal))) throw gone();
+      if (!(await checkFileSystem(fileSystem.id, signal)).ok) throw gone();
       // An old instance of the same name (the kernel exited before recording the handle...):
       // replace the instance; the file system stays
       await destroyByName(name, signal);
@@ -914,9 +920,17 @@ export function createDockerSandbox(
           signal,
         );
         // The volumes may have been removed between the check and the container create, in which
-        // case Docker made empty, unlabelled ones for the mounts: refuse them too (the catch below
-        // drops the instance; the empty volumes carry no role label, so they never pass the check)
-        if (!(await fileSystemExists(fileSystem.id, signal))) throw gone();
+        // case Docker made empty, unlabelled ones for the mounts: drop the container that uses
+        // them, remove those empty volumes (so a later createFileSystem of this name makes real
+        // ones) and refuse
+        const after = await checkFileSystem(fileSystem.id, signal);
+        if (!after.ok) {
+          await destroyByName(name, signal);
+          await Promise.all(
+            after.unlabelled.map((u) => removeWithRetry(`/volumes/${enc(u)}`, signal)),
+          );
+          throw gone();
+        }
         await start(n.container, signal);
       } catch (e) {
         // No cleanup when aborted: a new lock holder may already use the same name; leftovers go
