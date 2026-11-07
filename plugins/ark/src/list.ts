@@ -6,12 +6,13 @@ import {
   type ModelKind,
   type ModelParameter,
 } from "@capybara-hq/plugin-sdk";
+import type { ArkEndpoint } from "./endpoints.js";
 import { fetchError, httpError } from "./errors.js";
 import {
   cachesAutomatically,
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_OUTPUT,
-  EMBEDDING_MODELS,
+  embeddingInfo,
   publisherOf,
 } from "./tables.js";
 
@@ -59,7 +60,7 @@ function kindOf(raw: RawModel, id: string): ModelKind | null {
   const api = raw.api_supported ?? {};
   const domain = typeof raw.domain === "string" ? raw.domain : "";
   if ((domain === "LLM" || domain === "VLM") && api["chat/completions"] === true) return "chat";
-  if (api["embeddings/multimodal"] === true && EMBEDDING_MODELS[id] !== undefined) {
+  if (api["embeddings/multimodal"] === true && embeddingInfo(id) !== undefined) {
     return "embedding";
   }
   if (domain === "ImageGeneration") return "image_generation";
@@ -139,7 +140,7 @@ function mapModel(raw: RawModel, id: string, kind: ModelKind): ModelInfo {
     ...(publisher !== undefined ? { publisher } : {}),
   };
   if (kind === "embedding") {
-    const embedding = EMBEDDING_MODELS[id];
+    const embedding = embeddingInfo(id);
     if (embedding === undefined) throw new Error("unreachable: kindOf checks the table");
     return {
       ...common,
@@ -191,12 +192,21 @@ function mapModel(raw: RawModel, id: string, kind: ModelKind): ModelInfo {
   };
 }
 
+/** The mapped list plus an index by the foundation model's `name` + `version` (for endpoints). */
+export interface ArkCatalog {
+  models: ModelInfo[];
+  byNameVersion: Map<string, ModelInfo>;
+}
+
+export const nameVersionKey = (name: string, version: string) => `${name}\u0000${version}`;
+
 /**
  * `GET {baseUrl}/models` with the inference key: the models the platform serves, as ModelInfo.
- * One odd entry is skipped, never the whole list. Custom inference endpoints (`ep-…`) are not in
- * this list (they need the control plane's ListEndpoints with AK/SK, which the plugin dropped).
+ * One odd entry is skipped, never the whole list. The account's inference endpoints (`ep-…`) are
+ * not in it: they come from the control plane's ListEndpoints when management keys are set
+ * (see `withEndpoints`).
  */
-export async function listArkModels(baseUrl: string, apiKey: string): Promise<ModelInfo[]> {
+export async function listArkModels(baseUrl: string, apiKey: string): Promise<ArkCatalog> {
   let res: Response;
   try {
     res = await fetch(`${baseUrl}/models`, {
@@ -216,7 +226,8 @@ export async function listArkModels(baseUrl: string, apiKey: string): Promise<Mo
   if (!Array.isArray(body.data)) {
     throw new ModelError("server", "Ark: the model list has no data array");
   }
-  const out: ModelInfo[] = [];
+  const models: ModelInfo[] = [];
+  const byNameVersion = new Map<string, ModelInfo>();
   const seen = new Set<string>();
   for (const entry of body.data) {
     if (typeof entry !== "object" || entry === null) continue;
@@ -226,7 +237,54 @@ export async function listArkModels(baseUrl: string, apiKey: string): Promise<Mo
     const kind = kindOf(raw, raw.id);
     if (kind === null) continue;
     seen.add(raw.id);
-    out.push(mapModel(raw, raw.id, kind));
+    const info = mapModel(raw, raw.id, kind);
+    models.push(info);
+    if (typeof raw.name === "string" && typeof raw.version === "string") {
+      byNameVersion.set(nameVersionKey(raw.name, raw.version), info);
+    }
+  }
+  return { models, byNameVersion };
+}
+
+/**
+ * The account's chat endpoints as models: id `ep-…`, the endpoint's name with its foundation
+ * model's display name, and that model's kind, limits, capabilities and parameters from the list.
+ * - Parameter defaults are dropped: an endpoint may set its own inference defaults
+ *   (`InferenceDefaultParam`, e.g. thinking disabled or effort low, seen live), so the model's API
+ *   default is not the endpoint's.
+ * - Only chat endpoints: `embed` reads its facts by the model id, and an endpoint id would need the
+ *   endpoint → model mapping at call time.
+ * - Only `Running` endpoints; an endpoint whose foundation model the list does not have (retired,
+ *   custom model, an unmapped kind) is skipped with one warn.
+ */
+export function withEndpoints(
+  catalog: ArkCatalog,
+  endpoints: ArkEndpoint[],
+  warn: (msg: string, fields?: Record<string, unknown>) => void,
+): ModelInfo[] {
+  const out = [...catalog.models];
+  const ids = new Set(out.map((m) => m.id));
+  for (const ep of endpoints) {
+    if (ids.has(ep.id) || ep.status !== "Running") continue;
+    const fm =
+      ep.model !== null
+        ? catalog.byNameVersion.get(nameVersionKey(ep.model.name, ep.model.version))
+        : undefined;
+    if (fm === undefined) {
+      warn("ark: endpoint skipped, its foundation model is not in the model list", {
+        endpoint: ep.id,
+        model: ep.model,
+      });
+      continue;
+    }
+    if ((fm.kind ?? "chat") !== "chat") continue;
+    ids.add(ep.id);
+    out.push({
+      ...fm,
+      id: ep.id,
+      displayName: `${ep.name} (${fm.displayName})`,
+      parameters: fm.parameters.map(({ default: _d, ...p }) => p),
+    });
   }
   return out;
 }

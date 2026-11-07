@@ -75,11 +75,13 @@ function mapAssistant(blocks: ContentBlock[], req: ModelRequest): AssistantMessa
     b.type === "thinking" && sameOrigin(b.opaque, req.model) ? [b] : [],
   );
   if (own.length === 0) return msg;
+  // One signature per turn (the stream emits one thinking block); joining two would break it,
+  // so a turn that somehow holds several sends the last
   const encrypted = own
     .map((b) => (b.opaque?.data as Partial<ThinkingOpaque> | undefined)?.encrypted_content)
     .filter((e): e is string => typeof e === "string" && e !== "")
-    .join("");
-  if (encrypted !== "") return { ...msg, encrypted_content: encrypted };
+    .at(-1);
+  if (encrypted !== undefined) return { ...msg, encrypted_content: encrypted };
   if (replaysReasoning(req.model)) {
     return { ...msg, reasoning_content: own.map((b) => b.text).join("") };
   }

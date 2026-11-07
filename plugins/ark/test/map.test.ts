@@ -120,6 +120,19 @@ describe("ark buildRequest", () => {
     expect(b.messages[3]).toEqual({ role: "tool", tool_call_id: "call_1", content: "Sunny" });
   });
 
+  it("sends one encrypted_content (the last), never two joined", () => {
+    const two: ModelMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", text: "a", opaque: own(SEED, { encrypted_content: "enc-a" }) },
+        { type: "thinking", text: "b", opaque: own(SEED, { encrypted_content: "enc-b" }) },
+        { type: "text", text: "Hi" },
+      ],
+    };
+    const b = buildRequest(req({ messages: [...req().messages, two] }));
+    expect(b.messages[2]).toEqual({ role: "assistant", content: "Hi", encrypted_content: "enc-b" });
+  });
+
   it("drops thinking from another model or provider", () => {
     const other = buildRequest(
       req({ messages: [...req().messages, assistant("doubao-seed-2-1-lite-260915", "enc-1")] }),

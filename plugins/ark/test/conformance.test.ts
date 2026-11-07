@@ -13,6 +13,7 @@ import {
   startFakeModelServer,
 } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { NOT_ACTIVATED_HINT } from "../src/errors.js";
 import { createArkProvider } from "../src/index.js";
 import { buildRequest } from "../src/map-request.js";
 import {
@@ -155,6 +156,37 @@ describe("ark: stream edge cases and errors", () => {
       req({ messages: [...req().messages, { role: "assistant", content: done.content }] }),
     );
     expect(replay.messages[2]).toMatchObject({ encrypted_content: "djE-secret" });
+  });
+
+  it("a not-activated model's 404 carries the activation hint", async () => {
+    next = () =>
+      errorJson(404, {
+        code: "InvalidEndpointOrModel.NotFound",
+        message: "The model or endpoint x does not exist or you do not have access to it.",
+        type: "Not Found",
+      });
+    const e = await streamError(provider());
+    expect(kindOf(e)).toBe("invalid_request");
+    expect(isModelError(e) && e.message).toContain("activated for this account in the Ark console");
+  });
+
+  it("completes with zero usage and a warning when no usage chunk arrives", async () => {
+    const warnings: string[] = [];
+    const p = createArkProvider({
+      apiKey: "ark-fixture",
+      baseUrl: `${server.url}/api/v3`,
+      log: { warn: (msg) => warnings.push(msg) },
+    });
+    next = () => sseChat({ model: SEED, text: "Hi", finish: "stop" });
+    const done = complete(await drain(p, req()));
+    expect(done.content).toEqual([{ type: "text", text: "Hi" }]);
+    expect(done.usage).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+    expect(warnings).toEqual(["ark: the stream ended without a usage chunk"]);
   });
 
   it("keeps an encrypted_content that comes without reasoning text", async () => {
@@ -392,6 +424,11 @@ describe("ark: embed", () => {
       .embed?.({ model: SEED, input: ["a"] }, { signal: signal() })
       .catch((e: unknown) => e);
     expect(kindOf(e2)).toBe("invalid_request");
+    // a prototype member is not a bundled model
+    const e3 = await provider()
+      .embed?.({ model: "constructor", input: ["a"] }, { signal: signal() })
+      .catch((e: unknown) => e);
+    expect(kindOf(e3)).toBe("invalid_request");
     expect(server.requests.length).toBe(before);
   });
 
@@ -448,6 +485,8 @@ describe("ark: embed", () => {
 // come from the account's list, the first ones that answer (at most 5 tried each).
 const LIVE_KEY = process.env.CAPYBARA_TEST_ARK_API_KEY;
 const LIVE_REGION = process.env.CAPYBARA_TEST_ARK_REGION;
+const LIVE_AK = process.env.CAPYBARA_TEST_ARK_ACCESS_KEY_ID;
+const LIVE_SK = process.env.CAPYBARA_TEST_ARK_SECRET_ACCESS_KEY;
 
 interface LivePick {
   provider: ModelProvider;
@@ -456,9 +495,13 @@ interface LivePick {
   reasons: string[];
 }
 
-/** Access / not-activated failures move to the next candidate; anything else is a real failure. */
+/**
+ * Only access / not-activated failures move to the next candidate (403, or the 404 NotFound that
+ * carries the activation hint); anything else, a 400 from a mapping regression included, fails.
+ */
 const nextCandidate = (e: unknown) =>
-  isModelError(e) && (e.kind === "auth" || e.kind === "invalid_request");
+  isModelError(e) &&
+  (e.kind === "auth" || (e.kind === "invalid_request" && e.message.includes(NOT_ACTIVATED_HINT)));
 
 async function pickLive(): Promise<LivePick> {
   const provider = createArkProvider({
@@ -481,7 +524,11 @@ async function pickLive(): Promise<LivePick> {
   let chat: ModelInfo | null = null;
   for (const m of ordered.slice(0, 5)) {
     try {
-      await drain(provider, req({ model: m.id, maxOutputTokens: 64, params: { thinking: "off" } }));
+      const thinkingKnob = m.parameters.some((p) => p.key === "thinking");
+      await drain(
+        provider,
+        req({ model: m.id, maxOutputTokens: 64, params: thinkingKnob ? { thinking: "off" } : {} }),
+      );
       chat = m;
       break;
     } catch (e) {
@@ -599,4 +646,34 @@ describe.skipIf(!live?.chat)("live", { timeout: 120_000 }, () => {
     expect(models.length).toBeGreaterThan(5);
     expect(models.some((m) => m.kind === "embedding")).toBe(true);
   });
+
+  it.skipIf(!LIVE_AK || !LIVE_SK)(
+    "live: management keys list the account's endpoints",
+    async () => {
+      const warnings: string[] = [];
+      const region = LIVE_REGION === "cn-shanghai" ? "cn-shanghai" : "cn-beijing";
+      const provider = createArkProvider({
+        apiKey: LIVE_KEY ?? "",
+        region,
+        management: { accessKeyId: LIVE_AK ?? "", secretAccessKey: LIVE_SK ?? "" },
+        log: { warn: (msg) => warnings.push(msg) },
+      });
+      const models = await provider.listModels();
+      const endpoints = models.filter((m) => m.id.startsWith("ep-"));
+      console.info(
+        `[plugin-ark] live: ${endpoints.length} endpoint(s) listed (${endpoints.map((m) => m.displayName).join("; ")}); ${warnings.length} warning(s): ${[...new Set(warnings)].join("; ")}`,
+      );
+      expect(warnings).not.toContain(
+        "ark: listing inference endpoints failed; listing the models only",
+      );
+      expect(endpoints.length).toBeGreaterThan(0);
+      // an endpoint answers like its foundation model
+      const ep = endpoints[0];
+      if (ep === undefined) return;
+      const done = complete(
+        await drain(provider, req({ model: ep.id, maxOutputTokens: 64, params: {} })),
+      );
+      expect(done.content.some((b) => b.type === "text")).toBe(true);
+    },
+  );
 });

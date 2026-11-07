@@ -1,6 +1,6 @@
 import { type EmbedRequest, type EmbedResult, ModelError } from "@capybara-hq/plugin-sdk";
 import { fetchError, httpError } from "./errors.js";
-import { EMBEDDING_MODELS } from "./tables.js";
+import { embeddingInfo } from "./tables.js";
 
 /**
  * `inputType` → doubao-embedding-vision's instruction templates
@@ -32,7 +32,7 @@ export async function embedTexts(
   req: EmbedRequest,
   signal: AbortSignal,
 ): Promise<EmbedResult> {
-  const info = EMBEDDING_MODELS[req.model];
+  const info = embeddingInfo(req.model);
   if (info === undefined) {
     throw new ModelError("invalid_request", `Ark: "${req.model}" is not an embedding model`);
   }

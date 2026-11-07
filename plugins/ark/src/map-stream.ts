@@ -83,6 +83,7 @@ export async function* streamChat(
   client: OpenAI,
   req: ModelRequest,
   signal: AbortSignal,
+  warn: (msg: string, fields?: Record<string, unknown>) => void = () => {},
 ): AsyncGenerator<ModelStreamEvent> {
   if (signal.aborted) throw aborted();
   const body = buildRequest(req);
@@ -131,6 +132,10 @@ export async function* streamChat(
     if (finish === null) {
       throw new ModelError("network", "Ark: stream ended before finish_reason");
     }
+
+    // `include_usage` is always requested and Ark always sent the usage chunk live (2026-11-08);
+    // a reply without one is still complete, so it finishes with zero usage and a warning
+    if (usage === null) warn("ark: the stream ended without a usage chunk", { model: req.model });
 
     const content: ContentBlock[] = [];
     // An encrypted_content without reasoning text still needs a block to travel back in

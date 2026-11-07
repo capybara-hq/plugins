@@ -15,7 +15,7 @@ import type { ModelEmbeddingInfo } from "@capybara-hq/plugin-sdk";
  * The text-only `/api/v3/embeddings` models (doubao-embedding, -large) are all retiring and answered
  * "does not exist or you do not have access" live, so they are not listed.
  */
-export const EMBEDDING_MODELS: Record<string, ModelEmbeddingInfo> = {
+const EMBEDDING_MODELS: Record<string, ModelEmbeddingInfo> = {
   "doubao-embedding-vision-251215": {
     dimensions: [1024, 2048],
     defaultDimensions: 2048,
@@ -29,6 +29,11 @@ export const EMBEDDING_MODELS: Record<string, ModelEmbeddingInfo> = {
     maxBatch: 1,
   },
 };
+
+/** The bundled embedding facts of a model id (own keys only, never a prototype member). */
+export function embeddingInfo(id: string): ModelEmbeddingInfo | undefined {
+  return Object.hasOwn(EMBEDDING_MODELS, id) ? EMBEDDING_MODELS[id] : undefined;
+}
 
 /**
  * Models whose own `reasoning_content` is replayed on later turns when no `encrypted_content`

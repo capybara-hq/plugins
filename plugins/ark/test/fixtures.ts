@@ -136,6 +136,14 @@ export const MODELS_BODY = {
       status: "Retiring",
       version: "250615",
     },
+    // A prototype member's name is not a bundled embedding model: skipped
+    {
+      api_supported: { "embeddings/multimodal": true },
+      domain: "Embedding",
+      id: "toString",
+      object: "model",
+      status: "Published",
+    },
     // Text-only legacy embedding with no bundled facts: skipped
     {
       api_supported: { embeddings: true },
@@ -495,3 +503,32 @@ export function arkRoutes(): (req: FakeRequest) => FakeResponse {
     });
   };
 }
+
+/** One `ListEndpoints` item in the live shape (trimmed). */
+export const endpointItem = (
+  id: string,
+  name: string,
+  model: { name: string; version: string } | null,
+  status = "Running",
+) => ({
+  Id: id,
+  Name: name,
+  Description: "",
+  ProjectName: "default",
+  ModelReference: {
+    FoundationModel: model !== null ? { Name: model.name, ModelVersion: model.version } : null,
+    CustomModelId: model === null ? "cm-123" : "",
+  },
+  EndpointModelType: model !== null ? "FoundationModel" : "CustomModel",
+  Status: status,
+  InferenceDefaultParam: { ThinkingConfig: { Value: "disabled", IsSupported: true } },
+});
+
+/** A `ListEndpoints` response page. */
+export const endpointsPage = (items: unknown[], total: number, page = 1): FakeResponse => ({
+  status: 200,
+  json: {
+    ResponseMetadata: { RequestId: "fixture", Action: "ListEndpoints", Version: "2024-01-01" },
+    Result: { TotalCount: total, PageNumber: page, PageSize: 100, Items: items },
+  },
+});

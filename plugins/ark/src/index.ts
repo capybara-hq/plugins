@@ -1,5 +1,6 @@
 import {
   defineExtension,
+  type Logger,
   MODEL_PROVIDER_EXTENSION_POINT_V2,
   ModelError,
   type ModelProvider,
@@ -10,8 +11,9 @@ import {
 import OpenAI from "openai";
 import { z } from "zod";
 import { embedTexts } from "./embed.js";
+import { listEndpoints, type Management } from "./endpoints.js";
 import { toModelError } from "./errors.js";
-import { listArkModels } from "./list.js";
+import { listArkModels, withEndpoints } from "./list.js";
 import { streamChat } from "./map-stream.js";
 
 // capybara:allow-module-state a read-only list of region names
@@ -21,14 +23,17 @@ const DEFAULT_REGION: Region = "cn-beijing";
 
 /** Ark's data plane of a region. */
 const dataPlane = (region: Region) => `https://ark.${region}.volces.com/api/v3`;
+/** Ark's control plane (OpenAPI, AK/SK) of a region. */
+const controlPlane = (region: Region) => `https://ark.${region}.volcengineapi.com`;
 
 /**
- * Deployment config. Both fields are org-overridable, so the platform's copy may lack the key:
+ * Deployment config. Every field is org-overridable, so the platform's copy may lack the key:
  * the key is required per call (not at load), and read from the per-call `opts.config`.
  *
- * No AK/SK `management` field: the inference key lists the models itself (`GET /api/v3/models`,
- * live 2026-11-08), so the control plane is not needed (design B §6.3: "if it does, AK/SK is
- * dropped").
+ * The inference key lists the models itself (`GET /api/v3/models`, live 2026-11-08). The optional
+ * `management` AK/SK only adds the account's inference endpoints (`ep-…`, control-plane
+ * ListEndpoints; ArkReadOnlyAccess is enough). It moves with `region` and `apiKey` as one org
+ * override, so a platform AK/SK never signs a request for an org's config.
  */
 const DeploymentConfig = z.object({
   apiKey: orgAccess(
@@ -39,13 +44,49 @@ const DeploymentConfig = z.object({
     ui(z.enum(REGIONS).default(DEFAULT_REGION), { label: { zh: "地域", en: "Region" } }),
     "override",
   ),
+  management: orgAccess(
+    ui(
+      z
+        .object({
+          accessKeyId: ui(z.string().min(1), {
+            label: { zh: "Access Key ID", en: "Access key ID" },
+          }),
+          secretAccessKey: ui(secret(z.string().min(1)), {
+            label: { zh: "Secret Access Key", en: "Secret access key" },
+          }),
+        })
+        .optional(),
+      {
+        label: {
+          zh: "管理密钥（可选，用于列出推理接入点）",
+          en: "Management keys (optional, lists inference endpoints)",
+        },
+        advanced: true,
+      },
+    ),
+    "override",
+  ),
 });
 
 export interface ArkDefaults {
   apiKey?: string | undefined;
   region?: Region | undefined;
+  management?: Management | undefined;
   /** The data plane base URL instead of the region's (tests: a fake server). Never from config. */
   baseUrl?: string | undefined;
+  /** The control plane URL instead of the region's (tests: a fake server). Never from config. */
+  controlPlaneUrl?: string | undefined;
+  /** Warnings (an endpoint skipped, ListEndpoints failed); `ctx.log` in the extension. */
+  log?: Pick<Logger, "warn"> | undefined;
+  /** The signing clock (tests). */
+  now?: () => Date;
+}
+
+interface Resolved {
+  apiKey: string;
+  baseUrl: string;
+  region: Region;
+  management: Management | undefined;
 }
 
 /**
@@ -54,12 +95,14 @@ export interface ArkDefaults {
  * `auth` before any request and the setup key is never sent for an org; the setup defaults serve
  * only a call without one (the conformance suite).
  */
-function resolve(defaults: ArkDefaults, config: unknown): { apiKey: string; baseUrl: string } {
+function resolve(defaults: ArkDefaults, config: unknown): Resolved {
   let apiKey: string | undefined;
   let region: Region;
+  let management: Management | undefined;
   if (config === undefined) {
     apiKey = defaults.apiKey;
     region = defaults.region ?? DEFAULT_REGION;
+    management = defaults.management;
   } else {
     const parsed = DeploymentConfig.safeParse(config);
     if (!parsed.success) {
@@ -67,11 +110,17 @@ function resolve(defaults: ArkDefaults, config: unknown): { apiKey: string; base
     }
     apiKey = parsed.data.apiKey;
     region = parsed.data.region;
+    management = parsed.data.management;
   }
   if (apiKey === undefined || apiKey === "") {
     throw new ModelError("auth", "Ark: no API key is configured");
   }
-  return { apiKey, baseUrl: (defaults.baseUrl ?? dataPlane(region)).replace(/\/+$/, "") };
+  return {
+    apiKey,
+    baseUrl: (defaults.baseUrl ?? dataPlane(region)).replace(/\/+$/, ""),
+    region,
+    management,
+  };
 }
 
 /**
@@ -82,8 +131,26 @@ function resolve(defaults: ArkDefaults, config: unknown): { apiKey: string; base
 export function createArkProvider(defaults: ArkDefaults): ModelProvider {
   return {
     async listModels(opts) {
-      const { apiKey, baseUrl } = resolve(defaults, opts?.config);
-      return listArkModels(baseUrl, apiKey);
+      const { apiKey, baseUrl, region, management } = resolve(defaults, opts?.config);
+      const catalog = await listArkModels(baseUrl, apiKey);
+      if (management === undefined) return catalog.models;
+      const warn = (msg: string, fields?: Record<string, unknown>) =>
+        defaults.log?.warn(msg, { ...fields, ...(opts?.orgId ? { orgId: opts.orgId } : {}) });
+      try {
+        const endpoints = await listEndpoints(
+          defaults.controlPlaneUrl ?? controlPlane(region),
+          region,
+          management,
+          defaults.now,
+        );
+        return withEndpoints(catalog, endpoints, warn);
+      } catch (e) {
+        // The models stay usable without the endpoints
+        warn("ark: listing inference endpoints failed; listing the models only", {
+          error: e instanceof Error ? e.message : String(e),
+        });
+        return catalog.models;
+      }
     },
     async *stream(req, opts) {
       let client: OpenAI;
@@ -102,7 +169,7 @@ export function createArkProvider(defaults: ArkDefaults): ModelProvider {
       } catch (e) {
         throw toModelError(e, opts.signal);
       }
-      yield* streamChat(client, req, opts.signal);
+      yield* streamChat(client, req, opts.signal, (msg, fields) => defaults.log?.warn(msg, fields));
     },
     async embed(req, opts) {
       const { apiKey, baseUrl } = resolve(defaults, opts.config);
@@ -117,8 +184,15 @@ export default defineExtension({
   version: "0.1.0-rc.0",
   sdk: "^0.1.0-rc.4",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
-  // The two regions' data planes (display only, the platform does not intercept)
-  permissions: { network: ["ark.cn-beijing.volces.com", "ark.cn-shanghai.volces.com"] },
+  // The two regions' data and control planes (display only, the platform does not intercept)
+  permissions: {
+    network: [
+      "ark.cn-beijing.volces.com",
+      "ark.cn-shanghai.volces.com",
+      "ark.cn-beijing.volcengineapi.com",
+      "ark.cn-shanghai.volcengineapi.com",
+    ],
+  },
   config: { deployment: DeploymentConfig },
   setup(ctx) {
     // Lenient: the platform's config may lack the (overridable) key
@@ -128,6 +202,8 @@ export default defineExtension({
       createArkProvider({
         apiKey: cfg.success ? cfg.data.apiKey : undefined,
         region: cfg.success ? cfg.data.region : undefined,
+        management: cfg.success ? cfg.data.management : undefined,
+        log: ctx.log,
       }),
     );
   },

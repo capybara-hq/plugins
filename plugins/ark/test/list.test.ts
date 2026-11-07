@@ -1,12 +1,22 @@
 import { assertValidDeclarations, isModelError } from "@capybara-hq/plugin-sdk";
 import {
   type FakeModelServer,
+  type FakeRequest,
   type FakeResponse,
   startFakeModelServer,
 } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createArkProvider } from "../src/index.js";
-import { DEEPSEEK, EMBED, errorJson, MODELS_BODY, SEED } from "./fixtures.js";
+import { signV4 } from "../src/sign.js";
+import {
+  DEEPSEEK,
+  EMBED,
+  endpointItem,
+  endpointsPage,
+  errorJson,
+  MODELS_BODY,
+  SEED,
+} from "./fixtures.js";
 
 describe("ark listModels", () => {
   let server: FakeModelServer;
@@ -176,5 +186,162 @@ describe("ark listModels", () => {
       .listModels()
       .catch((e: unknown) => e);
     expect(isModelError(err) && err.kind).toBe("auth");
+  });
+});
+
+describe("ark listModels with management keys (inference endpoints)", () => {
+  let data: FakeModelServer;
+  let control: FakeModelServer;
+  let controlNext: (path: string, body: unknown) => FakeResponse;
+  const NOW = new Date("2026-11-08T01:02:03Z");
+  const warnings: { msg: string; fields?: Record<string, unknown> }[] = [];
+  const MGMT = { accessKeyId: "AKLTSETUP", secretAccessKey: "setup-secret" };
+
+  beforeAll(async () => {
+    data = await startFakeModelServer(() => ({ status: 200, json: MODELS_BODY }));
+    control = await startFakeModelServer((r) => controlNext(r.path, r.body));
+  });
+  afterAll(async () => {
+    await data?.stop();
+    await control?.stop();
+  });
+  const provider = (management: typeof MGMT | null = MGMT) =>
+    createArkProvider({
+      apiKey: "ark-default",
+      baseUrl: `${data.url}/api/v3`,
+      controlPlaneUrl: control.url,
+      ...(management !== null ? { management } : {}),
+      now: () => NOW,
+      log: { warn: (msg, fields) => warnings.push({ msg, ...(fields ? { fields } : {}) }) },
+    });
+
+  /** Recomputes the signature the way the control plane checks it. */
+  const expectSigned = (r: FakeRequest | undefined, mgmt: typeof MGMT, region = "cn-beijing") => {
+    const url = new URL(r?.path ?? "/", control.url);
+    const signed = signV4({
+      method: "POST",
+      host: url.host,
+      path: url.pathname,
+      query: Object.fromEntries(url.searchParams),
+      body: JSON.stringify(r?.body),
+      accessKeyId: mgmt.accessKeyId,
+      secretAccessKey: mgmt.secretAccessKey,
+      region,
+      service: "ark",
+      now: NOW,
+    });
+    expect(r?.headers.authorization).toBe(signed.headers.authorization);
+  };
+
+  it("lists the running chat endpoints with their foundation model's info, every page", async () => {
+    const many = Array.from({ length: 100 }, (_, i) =>
+      endpointItem(`ep-gone-${i}`, `gone-${i}`, { name: "retired-model", version: "240101" }),
+    );
+    controlNext = (_path, body) =>
+      (body as { PageNumber: number }).PageNumber === 1
+        ? endpointsPage(many, 104)
+        : endpointsPage(
+            [
+              endpointItem("ep-20260228102317-zgmls", "deepseek-v3.2", {
+                name: "deepseek-v4-flash-ga",
+                version: "260731",
+              }),
+              endpointItem(
+                "ep-stopped",
+                "off",
+                { name: "deepseek-v4-flash-ga", version: "260731" },
+                "Stopped",
+              ),
+              endpointItem("ep-embed", "embedding", {
+                name: "doubao-embedding-vision",
+                version: "251215",
+              }),
+              endpointItem("ep-custom", "custom", null),
+            ],
+            104,
+            2,
+          );
+    warnings.length = 0;
+    const before = control.requests.length;
+    const models = await provider().listModels();
+    const calls = control.requests.slice(before);
+    expect(calls.map((c) => [c.path, c.body])).toEqual([
+      ["/?Action=ListEndpoints&Version=2024-01-01", { PageNumber: 1, PageSize: 100 }],
+      ["/?Action=ListEndpoints&Version=2024-01-01", { PageNumber: 2, PageSize: 100 }],
+    ]);
+    for (const c of calls) expectSigned(c, MGMT);
+    const ds = models.find((m) => m.id === DEEPSEEK);
+    const ep = models.find((m) => m.id === "ep-20260228102317-zgmls");
+    expect(ep).toMatchObject({
+      displayName: "deepseek-v3.2 (deepseek-v4-flash-ga (260731))",
+      kind: "chat",
+      contextWindow: ds?.contextWindow,
+      maxOutputTokens: ds?.maxOutputTokens,
+      capabilities: ds?.capabilities,
+    });
+    // the endpoint may set its own inference defaults: no declared defaults
+    expect(ep?.parameters.map((p) => p.key)).toEqual(ds?.parameters.map((p) => p.key));
+    expect(ep?.parameters.some((p) => p.default !== undefined)).toBe(false);
+    for (const id of ["ep-stopped", "ep-embed", "ep-custom", "ep-gone-0"]) {
+      expect(models.some((m) => m.id === id)).toBe(false);
+    }
+    // one warn per endpoint whose foundation model is unknown (100 gone + the custom model)
+    expect(warnings.filter((w) => w.msg.includes("foundation model")).length).toBe(101);
+  });
+
+  it("lists no endpoints without management keys", async () => {
+    const before = control.requests.length;
+    const models = await provider(null).listModels();
+    expect(control.requests.length).toBe(before);
+    expect(models.some((m) => m.id.startsWith("ep-"))).toBe(false);
+  });
+
+  it("never signs with the setup AK/SK for an org config; an org's own keys sign its calls", async () => {
+    controlNext = () => endpointsPage([], 0);
+    const before = control.requests.length;
+    await provider().listModels({
+      orgId: "o1",
+      config: { apiKey: "ark-org", region: "cn-shanghai" },
+    });
+    expect(control.requests.length).toBe(before);
+    const org = { accessKeyId: "AKLTORG", secretAccessKey: "org-secret" };
+    await provider().listModels({
+      orgId: "o1",
+      config: { apiKey: "ark-org", region: "cn-shanghai", management: org },
+    });
+    expect(control.requests.length).toBe(before + 1);
+    expect(control.requests.at(-1)?.headers.authorization).toContain("Credential=AKLTORG/");
+    expectSigned(control.requests.at(-1), org, "cn-shanghai");
+  });
+
+  it("a ListEndpoints failure still lists the models, with a warning", async () => {
+    warnings.length = 0;
+    controlNext = () => ({
+      status: 403,
+      json: {
+        ResponseMetadata: {
+          RequestId: "fixture",
+          Error: {
+            Code: "AccessDenied",
+            Message: "User is not authorized to perform: ark:ListEndpoints",
+          },
+        },
+      },
+    });
+    const models = await provider().listModels();
+    expect(models.map((m) => m.id)).toContain(SEED);
+    expect(models.some((m) => m.id.startsWith("ep-"))).toBe(false);
+    expect(warnings.map((w) => w.msg)).toEqual([
+      "ark: listing inference endpoints failed; listing the models only",
+    ]);
+    expect(String(warnings[0]?.fields?.error)).toContain("AccessDenied");
+    // an error inside a 200 body counts too
+    warnings.length = 0;
+    controlNext = () => ({
+      status: 200,
+      json: { ResponseMetadata: { Error: { Code: "InternalError", Message: "boom" } } },
+    });
+    expect((await provider().listModels()).length).toBe(models.length);
+    expect(warnings).toHaveLength(1);
   });
 });

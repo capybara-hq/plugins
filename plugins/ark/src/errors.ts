@@ -57,12 +57,23 @@ export function kindFromStatus(status: number, code?: string | null): ModelError
   return code === "context_length_exceeded" ? "context_overflow" : "invalid_request";
 }
 
+/**
+ * The hint for Ark's "model or endpoint does not exist or you do not have access" (404
+ * `InvalidEndpointOrModel.NotFound`): the model list is catalog-wide, so a listed model the
+ * account has not activated answers this way (live 2026-11-08).
+ */
+export const NOT_ACTIVATED_HINT =
+  "check that the model is activated for this account in the Ark console (or the endpoint exists)";
+const hintOf = (code: string | null | undefined) =>
+  code === "InvalidEndpointOrModel.NotFound" ? ` (${NOT_ACTIVATED_HINT})` : "";
+
 /** SDK error → ModelError. An aborted `signal` always means aborted. */
 export function toModelError(e: unknown, signal?: AbortSignal): ModelError {
   if (isModelError(e)) return e as ModelError;
   const message = e instanceof Error ? e.message : String(e);
+  const code = e instanceof OpenAI.APIError && typeof e.code === "string" ? e.code : null;
   const make = (kind: ModelErrorKind, extra?: { retryAfterMs?: number }) =>
-    new ModelError(kind, `Ark: ${message}`, { cause: e, ...extra });
+    new ModelError(kind, `Ark: ${message}${hintOf(code)}`, { cause: e, ...extra });
 
   if (signal?.aborted || e instanceof OpenAI.APIUserAbortError) {
     return new ModelError("aborted", "Request aborted", { cause: e });
@@ -71,7 +82,6 @@ export function toModelError(e: unknown, signal?: AbortSignal): ModelError {
   if (e instanceof OpenAI.APIConnectionError) return make("network");
   if (e instanceof OpenAI.APIError) {
     const status = e.status;
-    const code = typeof e.code === "string" ? e.code : null;
     if (typeof status === "number") {
       const kind = kindFromStatus(status, code);
       const ms = kind === "rate_limited" ? retryAfterMs(e.headers) : undefined;
@@ -98,7 +108,7 @@ export async function httpError(res: Response, what: string): Promise<ModelError
   const ms = kind === "rate_limited" ? retryAfterMs(res.headers) : undefined;
   return new ModelError(
     kind,
-    `Ark: ${what}: ${message}`,
+    `Ark: ${what}: ${message}${hintOf(code)}`,
     ms !== undefined ? { retryAfterMs: ms } : {},
   );
 }
