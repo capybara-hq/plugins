@@ -42,17 +42,23 @@ export interface DeepSeekDefaults {
  * the defaults the provider was built with. No key anywhere is `auth`, before any request.
  */
 function resolve(defaults: DeepSeekDefaults, config: unknown): { apiKey: string; baseUrl: string } {
-  const parsed = config === undefined ? undefined : DeploymentConfig.safeParse(config);
-  if (parsed !== undefined && !parsed.success) {
+  // The setup defaults serve only a call without a per-call config. An org's copy comes without the
+  // platform's secrets: mixing the two would send the platform key to the org's endpoint.
+  if (config === undefined) {
+    if (defaults.apiKey === undefined || defaults.apiKey === "") {
+      throw new ModelError("auth", "DeepSeek: no API key is configured");
+    }
+    return { apiKey: defaults.apiKey, baseUrl: defaults.baseUrl ?? DEFAULT_BASE_URL };
+  }
+  const parsed = DeploymentConfig.safeParse(config);
+  if (!parsed.success) {
     throw new ModelError("invalid_request", "DeepSeek: the extension config is invalid");
   }
-  const cfg = parsed?.data;
-  const apiKey = cfg?.apiKey ?? defaults.apiKey;
+  const { apiKey, baseUrl } = parsed.data;
   if (apiKey === undefined || apiKey === "") {
     throw new ModelError("auth", "DeepSeek: no API key is configured");
   }
-  const baseUrl = (config === undefined ? defaults.baseUrl : cfg?.baseUrl) ?? defaults.baseUrl;
-  return { apiKey, baseUrl: baseUrl ?? DEFAULT_BASE_URL };
+  return { apiKey, baseUrl };
 }
 
 /**

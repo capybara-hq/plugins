@@ -89,6 +89,15 @@ describe("deepseek listModels", () => {
     expect(server.requests.at(-1)?.headers.authorization).toBe("Bearer sk-org");
   });
 
+  it("an org config without a key -> auth, the default key is not used", async () => {
+    const before = server.requests.length;
+    const e = await provider()
+      .listModels({ config: { baseUrl: server.url } })
+      .catch((x: unknown) => x);
+    expect(isModelError(e) && e.kind).toBe("auth");
+    expect(server.requests.length).toBe(before);
+  });
+
   it("no key anywhere -> auth before any request", async () => {
     const before = server.requests.length;
     const e = await createDeepSeekProvider({ baseUrl: server.url })

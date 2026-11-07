@@ -240,6 +240,47 @@ describe("deepseek: stream edge cases and errors", () => {
       expect(server.requests.at(-1)?.headers.authorization).toBe("Bearer sk-fixture");
     });
 
+    it("an org config without a key never falls back to the default key", async () => {
+      const before = server.requests.length;
+      const e = await streamError(provider(), req(), { baseUrl: server.url });
+      expect(kindOf(e)).toBe("auth");
+      expect(server.requests.length).toBe(before);
+    });
+
+    it("an org baseUrl only ever receives the org's key", async () => {
+      const orgServer = await startFakeModelServer(() =>
+        sseChat({ text: "ok", finish: "stop", usage }),
+      );
+      try {
+        await drain(provider(), req(), { config: { apiKey: "sk-org", baseUrl: orgServer.url } });
+        expect(orgServer.requests.map((r) => r.headers.authorization)).toEqual(["Bearer sk-org"]);
+        const e = await streamError(provider(), req(), { baseUrl: orgServer.url });
+        expect(kindOf(e)).toBe("auth");
+        expect(orgServer.requests).toHaveLength(1);
+      } finally {
+        await orgServer.stop();
+      }
+    });
+
+    it("usage falls back to prompt_tokens_details.cached_tokens", async () => {
+      next = () =>
+        sseChat({
+          text: "ok",
+          finish: "stop",
+          usage: {
+            prompt_tokens: 50,
+            completion_tokens: 3,
+            prompt_tokens_details: { cached_tokens: 20 },
+          },
+        });
+      expect(complete(await drain(provider(), req())).usage).toEqual({
+        inputTokens: 30,
+        outputTokens: 3,
+        cacheReadTokens: 20,
+        cacheWriteTokens: 0,
+      });
+    });
+
     it("an invalid opts.config -> invalid_request", async () => {
       expect(kindOf(await streamError(provider(), req(), { apiKey: 5 }))).toBe("invalid_request");
     });
