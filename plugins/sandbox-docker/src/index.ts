@@ -1,6 +1,6 @@
 import { defineExtension, SANDBOX_EXTENSION_POINT, ui } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
-import { createDockerSandbox } from "./provider.js";
+import { createDockerSandbox, type DockerSandboxConfig, publishedImages } from "./provider.js";
 
 export {
   createDockerSandbox,
@@ -9,6 +9,7 @@ export {
   decodeOutput,
   execArgv,
   IN_SANDBOX_GRACE_SECONDS,
+  publishedImages,
   sandboxResourceNames,
 } from "./provider.js";
 
@@ -45,8 +46,11 @@ export const DeploymentConfig = z
         .default("capybara-sandbox"),
       { label: { zh: "沙箱网络", en: "Sandbox network" } },
     ),
-    /** 出站代理镜像（plugins/sandbox-docker/egress-proxy/Dockerfile）。 */
-    egressProxyImage: ui(z.string().min(1).default("capybara-sandbox-egress:latest"), {
+    /**
+     * Egress proxy image (plugins/sandbox-docker/egress-proxy/Dockerfile). Unset: the image
+     * published with this plugin's version, `ghcr.io/capybara-hq/capybara-sandbox-egress:<version>`.
+     */
+    egressProxyImage: ui(z.string().min(1).optional(), {
       label: { zh: "出站代理镜像", en: "Egress proxy image" },
     }),
     /** 工作区卷的驱动（支持 `size` 选项的驱动才能限制磁盘）；不填用 local（不限大小）。 */
@@ -63,8 +67,29 @@ export const DeploymentConfig = z
   })
   .strict();
 
-/** `sandbox@1`：每个对话一个 Docker 容器，经 socket 代理访问 Docker，插件不挂 docker.sock。 */
-export default defineExtension({
+/**
+ * The provider config from the deployment config: images not set fall back to the ones published
+ * with `version` (the extension manifest's version, kept equal to package.json by
+ * `capybara-plugin sync-versions`).
+ */
+export function providerConfig(
+  c: z.output<typeof DeploymentConfig>,
+  version: string = plugin.version,
+): DockerSandboxConfig {
+  const images = publishedImages(version);
+  return {
+    ...c,
+    egressProxyImage: c.egressProxyImage ?? images.egress,
+    defaultImage: images.sandbox,
+  };
+}
+
+/**
+ * `sandbox@2`: per environment, a file system of two Docker volumes and an instance (container +
+ * egress proxy + network) attached to it; Docker only through the socket proxy, the plugin never
+ * mounts docker.sock.
+ */
+const plugin = defineExtension({
   name: "sandbox-docker",
   version: "0.1.0-rc.2",
   sdk: "^0.1.0-rc.0",
@@ -75,7 +100,13 @@ export default defineExtension({
   setup(ctx) {
     ctx.provide(
       SANDBOX_EXTENSION_POINT,
-      createDockerSandbox(ctx.config as z.output<typeof DeploymentConfig>, {}, ctx.log),
+      createDockerSandbox(
+        providerConfig(ctx.config as z.output<typeof DeploymentConfig>),
+        {},
+        ctx.log,
+      ),
     );
   },
 });
+
+export default plugin;
