@@ -155,6 +155,15 @@ describe("images.yml", () => {
     expect((wf.on.push as { branches: string[] }).branches).toEqual(["main"]);
     expect(wf.permissions).toEqual({});
     expect(Object.keys(wf.jobs).sort()).toEqual(["build", "plan", "publish"]);
+    // A manual dispatch from another branch must not publish unreviewed code.
+    expect(wf.jobs.plan?.if).toContain("github.repository == 'capybara-hq/plugins'");
+    expect(wf.jobs.plan?.if).toContain("github.ref == 'refs/heads/main'");
+    // No attacker-controllable context in a shell script.
+    for (const [, job] of jobs) {
+      for (const step of job.steps) {
+        expect(step.run ?? "").not.toMatch(/github\.event|github\.head_ref/);
+      }
+    }
     // The plan only reads; only the jobs that push or tag get packages: write, and none gets
     // contents write or an id-token.
     expect(wf.jobs.plan?.permissions).toEqual({ contents: "read", packages: "read" });
@@ -183,9 +192,12 @@ describe("images.yml", () => {
     expect(text).toContain("plugins/sandbox-docker/image");
     expect(text).toContain("plugins/sandbox-docker/egress-proxy");
     expect(text).toContain("imagetools inspect");
+    // publish re-checks the tag right before creating it and leaves an existing one alone.
+    const tag = wf.jobs.publish?.steps.find((s) => s.name === "Tag the multi-arch image");
+    expect(tag?.run).toMatch(/imagetools inspect[\s\S]*exit 0[\s\S]*imagetools create/);
     expect(wf.jobs.build?.if).toBe("needs.plan.outputs.build == 'true'");
     const build = wf.jobs.build?.steps.find((s) => s.uses?.startsWith("docker/build-push-action@"));
-    expect(String(build?.with?.platforms)).toContain("matrix.arch }}");
+    expect(build?.with?.platforms).toBe(["linux/$", "{{ matrix.arch }}"].join(""));
     expect(String(build?.with?.outputs)).toContain("push-by-digest=true");
   });
 });

@@ -6,9 +6,11 @@
 # This is a separate file from release.yml on purpose: tools/checks/test/workflows.test.ts pins that
 # workflow's jobs and permissions. images.yml has its own rules in the same test file.
 #
-# - plan: reads the plugin version; when ghcr.io already has the <version> tag of both images, nothing
-#   is built (a push that does not bump the version, or a re-run, is a no-op). If either tag is
-#   missing, both images are rebuilt and re-tagged, so a half-failed run is retried by the next run.
+# - plan: reads the plugin version and lists the images whose <version> tag is not in ghcr.io yet;
+#   when there are none, nothing is built (a push that does not bump the version, or a re-run, is a
+#   no-op), and an existing tag is never rebuilt or moved. A half-failed run is retried by the next
+#   run for the missing image only. Runs from main only, so a manual dispatch from another branch
+#   cannot publish a version tag built from unreviewed code.
 # - build: one job per image and architecture on native runners (no QEMU), pushing an untagged image
 #   by digest, with provenance and an SBOM.
 # - publish: per image, joins the two digests into one multi-arch tag. Runs only when every build
@@ -34,7 +36,7 @@ permissions: {}
 
 jobs:
   plan:
-    if: github.repository == 'capybara-hq/plugins'
+    if: github.repository == 'capybara-hq/plugins' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -43,6 +45,7 @@ jobs:
     outputs:
       version: ${{ steps.plan.outputs.version }}
       build: ${{ steps.plan.outputs.build }}
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -64,19 +67,24 @@ jobs:
           esac
           echo "version=$version" >> "$GITHUB_OUTPUT"
           # A failed lookup (the package does not exist yet, or the tag does not) means: build.
-          build=false
-          for image in capybara-sandbox capybara-sandbox-egress; do
-            if ! docker buildx imagetools inspect "ghcr.io/capybara-hq/$image:$version" >/dev/null 2>&1; then
-              build=true
-            fi
-          done
-          if [ "$build" = "false" ]; then
-            echo "::notice::both images already have the tag $version, nothing to build"
+          matrix='[]'
+          add() { matrix="$(jq -c --arg i "$1" --arg c "$2" '. + [{image: $i, context: $c}]' <<<"$matrix")"; }
+          if ! docker buildx imagetools inspect "ghcr.io/capybara-hq/capybara-sandbox:$version" >/dev/null 2>&1; then
+            add capybara-sandbox plugins/sandbox-docker/image
           fi
-          echo "build=$build" >> "$GITHUB_OUTPUT"
+          if ! docker buildx imagetools inspect "ghcr.io/capybara-hq/capybara-sandbox-egress:$version" >/dev/null 2>&1; then
+            add capybara-sandbox-egress plugins/sandbox-docker/egress-proxy
+          fi
+          if [ "$matrix" = "[]" ]; then
+            echo "::notice::both images already have the tag $version, nothing to build"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   build:
-    name: build (${{ matrix.image }}, ${{ matrix.arch }})
+    name: build (${{ matrix.target.image }}, ${{ matrix.arch }})
     needs: plan
     if: needs.plan.outputs.build == 'true'
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
@@ -87,13 +95,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [capybara-sandbox, capybara-sandbox-egress]
+        target: ${{ fromJSON(needs.plan.outputs.matrix) }}
         arch: [amd64, arm64]
-        include:
-          - image: capybara-sandbox
-            context: plugins/sandbox-docker/image
-          - image: capybara-sandbox-egress
-            context: plugins/sandbox-docker/egress-proxy
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -110,21 +113,21 @@ jobs:
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: ${{ matrix.context }}
+          context: ${{ matrix.target.context }}
           platforms: linux/${{ matrix.arch }}
           labels: |
             org.opencontainers.image.source=https://github.com/capybara-hq/plugins
             org.opencontainers.image.url=https://github.com/capybara-hq/plugins
-            org.opencontainers.image.title=${{ matrix.image }}
+            org.opencontainers.image.title=${{ matrix.target.image }}
             org.opencontainers.image.version=${{ needs.plan.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=Apache-2.0
           outputs: >-
-            type=image,name=ghcr.io/capybara-hq/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+            type=image,name=ghcr.io/capybara-hq/${{ matrix.target.image }},push-by-digest=true,name-canonical=true,push=true
           provenance: mode=max
           sbom: true
-          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.target.image }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target.image }}-${{ matrix.arch }}
       - name: Export the digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -139,15 +142,16 @@ jobs:
       - name: Upload the digest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: digests-${{ matrix.image }}-${{ matrix.arch }}
+          name: digests-${{ matrix.target.image }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
           overwrite: true # a re-run of the job replaces its digest
 
   publish:
-    name: publish (${{ matrix.image }})
+    name: publish (${{ matrix.target.image }})
     needs: [plan, build]
+    if: needs.plan.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -155,12 +159,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [capybara-sandbox, capybara-sandbox-egress]
+        target: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: Download the digests
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: digests-${{ matrix.image }}-*
+          pattern: digests-${{ matrix.target.image }}-*
           merge-multiple: true
           path: ${{ runner.temp }}/digests
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -172,10 +176,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Tag the multi-arch image
         env:
-          IMAGE: ghcr.io/capybara-hq/${{ matrix.image }}
+          IMAGE: ghcr.io/capybara-hq/${{ matrix.target.image }}
           VERSION: ${{ needs.plan.outputs.version }}
           DIR: ${{ runner.temp }}/digests
         run: |
+          # Never move a version tag that exists (a concurrent or earlier run published it).
+          if docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "::notice::$IMAGE:$VERSION already exists, not retagging"
+            exit 0
+          fi
           sources=()
           for f in "$DIR"/*; do
             sources+=("$IMAGE@sha256:$(basename "$f")")
