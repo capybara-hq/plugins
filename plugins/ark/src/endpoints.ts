@@ -48,6 +48,7 @@ export async function listEndpoints(
 ): Promise<ArkEndpoint[]> {
   const url = new URL(controlPlaneUrl);
   const out: ArkEndpoint[] = [];
+  let seen = 0;
   for (let page = 1; page <= MAX_PAGES; page++) {
     const query = { Action: "ListEndpoints", Version: "2024-01-01" };
     const body = JSON.stringify({ PageNumber: page, PageSize: PAGE_SIZE });
@@ -108,8 +109,10 @@ export async function listEndpoints(
         status: str(e.Status),
       });
     }
-    const total = typeof raw.Result?.TotalCount === "number" ? raw.Result.TotalCount : 0;
-    if (items.length < PAGE_SIZE || out.length >= total) break;
+    seen += items.length;
+    // a missing TotalCount is unknown: page on until a short page (MAX_PAGES bounds it)
+    const total = typeof raw.Result?.TotalCount === "number" ? raw.Result.TotalCount : undefined;
+    if (items.length < PAGE_SIZE || (total !== undefined && seen >= total)) break;
   }
   return out;
 }

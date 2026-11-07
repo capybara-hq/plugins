@@ -48,7 +48,9 @@ const DeploymentConfig = z.object({
     ui(
       z
         .object({
-          accessKeyId: ui(z.string().min(1), {
+          // secret too: a new org copy then starts without either field (the kernel removes the
+          // secret leaves of a copy), not with the platform's AK and no SK
+          accessKeyId: ui(secret(z.string().min(1)), {
             label: { zh: "Access Key ID", en: "Access key ID" },
           }),
           secretAccessKey: ui(secret(z.string().min(1)), {

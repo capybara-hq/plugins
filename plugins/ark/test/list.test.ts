@@ -6,7 +6,8 @@ import {
   startFakeModelServer,
 } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createArkProvider } from "../src/index.js";
+import { z } from "zod";
+import extension, { createArkProvider } from "../src/index.js";
 import { signV4 } from "../src/sign.js";
 import {
   DEEPSEEK,
@@ -312,6 +313,90 @@ describe("ark listModels with management keys (inference endpoints)", () => {
     expect(control.requests.length).toBe(before + 1);
     expect(control.requests.at(-1)?.headers.authorization).toContain("Credential=AKLTORG/");
     expectSigned(control.requests.at(-1), org, "cn-shanghai");
+  });
+
+  it("pages until a short page when TotalCount is missing", async () => {
+    const full = Array.from({ length: 100 }, (_, i) =>
+      endpointItem(`ep-full-${i}`, `full-${i}`, { name: "retired-model", version: "240101" }),
+    );
+    const noTotal = (items: unknown[]): FakeResponse => ({
+      status: 200,
+      json: { ResponseMetadata: { RequestId: "fixture" }, Result: { Items: items } },
+    });
+    controlNext = (_path, body) =>
+      (body as { PageNumber: number }).PageNumber === 1
+        ? noTotal(full)
+        : noTotal([
+            endpointItem("ep-last", "last", { name: "deepseek-v4-flash-ga", version: "260731" }),
+          ]);
+    const before = control.requests.length;
+    const models = await provider().listModels();
+    expect(control.requests.slice(before).map((c) => c.body)).toEqual([
+      { PageNumber: 1, PageSize: 100 },
+      { PageNumber: 2, PageSize: 100 },
+    ]);
+    expect(models.map((m) => m.id)).toContain("ep-last");
+  });
+
+  it("marks both management fields secret, so an org copy starts without the pair", async () => {
+    // The kernel's secret leaves: wrappers unwrapped, objects expanded, a secret object
+    // marking every leaf under it (kernel config/fields.js configFields).
+    const WRAPPERS = new Set(["default", "prefault", "optional", "nullable", "readonly", "catch"]);
+    const secretLeaves = (schema: z.ZodType, prefix = "", inherited = false): string[] => {
+      let node = schema as z.ZodType;
+      let meta = z.globalRegistry.get(node);
+      while (WRAPPERS.has(node._zod.def.type)) {
+        node = (node._zod.def as unknown as { innerType: z.ZodType }).innerType;
+        meta ??= z.globalRegistry.get(node);
+      }
+      const secret = inherited || meta?.secret === true;
+      if (node._zod.def.type === "object") {
+        const shape = (node._zod.def as unknown as { shape: Record<string, z.ZodType> }).shape;
+        return Object.entries(shape).flatMap(([k, v]) =>
+          secretLeaves(v, prefix ? `${prefix}.${k}` : k, secret),
+        );
+      }
+      return secret ? [prefix] : [];
+    };
+    const schema = extension.config?.deployment as z.ZodType;
+    const secrets = secretLeaves(schema);
+    expect(secrets).toEqual(
+      expect.arrayContaining(["apiKey", "management.accessKeyId", "management.secretAccessKey"]),
+    );
+
+    // A copy is the platform's override values with every secret leaf removed (kernel
+    // platformOverrideValues); an emptied object goes away.
+    const platform: Record<string, unknown> = {
+      apiKey: "ark-platform",
+      region: "cn-shanghai",
+      management: { ...MGMT },
+    };
+    const copy = structuredClone(platform);
+    for (const path of secrets) {
+      const [head, leaf] = path.split(".");
+      if (head === undefined) continue;
+      if (leaf === undefined) {
+        delete copy[head];
+        continue;
+      }
+      const obj = copy[head] as Record<string, unknown> | undefined;
+      if (obj === undefined) continue;
+      delete obj[leaf];
+      if (Object.keys(obj).length === 0) delete copy[head];
+    }
+    expect(copy).toEqual({ region: "cn-shanghai" });
+
+    // The org enters only its own key: the models list with it, and nothing is signed.
+    const before = control.requests.length;
+    const dataBefore = data.requests.length;
+    const models = await provider().listModels({
+      orgId: "o1",
+      config: { ...copy, apiKey: "ark-org" },
+    });
+    expect(control.requests.length).toBe(before);
+    expect(data.requests.at(-1)?.headers.authorization).toBe("Bearer ark-org");
+    expect(data.requests.length).toBe(dataBefore + 1);
+    expect(models.some((m) => m.id.startsWith("ep-"))).toBe(false);
   });
 
   it("a ListEndpoints failure still lists the models, with a warning", async () => {
