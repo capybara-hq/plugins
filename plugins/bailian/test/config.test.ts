@@ -1,6 +1,8 @@
 import { isModelError, type ModelRequest } from "@capybara-hq/plugin-sdk";
 import { startFakeModelServer } from "@capybara-hq/testing";
 import { describe, expect, it } from "vitest";
+import { resolveTarget } from "../src/config.js";
+import { errorFromResponse } from "../src/errors.js";
 import plugin, { baseUrlFor, createBailianProvider } from "../src/index.js";
 import { bailianRoutes } from "./fixtures.js";
 
@@ -58,6 +60,55 @@ describe("base URL", () => {
       expect(kindOf(err)).toBe("invalid_request");
       expect((err as Error).message).toContain(`workspaceId is required for ${region}`);
     }
+  });
+});
+
+describe("empty fields", () => {
+  it("an empty apiKey in an org config is auth, with the setup key present and nothing sent", async () => {
+    const server = await startFakeModelServer(bailianRoutes());
+    const provider = createBailianProvider({ apiKey: "sk-platform", baseUrl: server.url });
+    for (const apiKey of ["", "  "]) {
+      const err = await provider
+        .listModels({ orgId: "o1", config: { apiKey, region: "cn-beijing" } })
+        .catch((e: unknown) => e);
+      expect(kindOf(err)).toBe("auth");
+    }
+    expect(server.requests).toHaveLength(0);
+    await server.stop();
+  });
+
+  it("an empty workspaceId is absent", () => {
+    expect(resolveTarget({}, { apiKey: "k", region: "cn-beijing", workspaceId: "" }).baseUrl).toBe(
+      "https://dashscope.aliyuncs.com",
+    );
+    let err: unknown;
+    try {
+      resolveTarget({}, { apiKey: "k", region: "eu-central-1", workspaceId: "" });
+    } catch (e) {
+      err = e;
+    }
+    expect(kindOf(err)).toBe("invalid_request");
+    expect((err as Error).message).toContain("workspaceId is required for eu-central-1");
+  });
+});
+
+describe("error bodies", () => {
+  it("an HTTP 400 with an SSE body (the live max_tokens shape) is read from its data line", async () => {
+    const body =
+      "event:error\n" +
+      'data:{"code":"InvalidParameter","message":"<400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 30720]","request_id":"r"}\n\n';
+    const err = await errorFromResponse(
+      new Response(body, { status: 400, headers: { "content-type": "text/event-stream" } }),
+    );
+    expect(err.kind).toBe("context_overflow");
+    const plain = await errorFromResponse(
+      new Response(body.replace("Range of input length", "Range of max_tokens"), {
+        status: 400,
+        headers: { "content-type": "text/event-stream" },
+      }),
+    );
+    expect(plain.kind).toBe("invalid_request");
+    expect(plain.message).toContain("InvalidParameter");
   });
 });
 

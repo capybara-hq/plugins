@@ -38,14 +38,33 @@ async function endpointFor(
   signal: AbortSignal,
 ): Promise<Endpoint> {
   const key = `endpoint:v1:${t.baseUrl}:${model}`;
-  const cached = await deps.kv?.get(key);
+  // kv is only a cache: a failing kv (Redis trouble) counts as a miss and never fails the call
+  let warned = false;
+  const kvFailed = (op: string, e: unknown) => {
+    if (warned) return;
+    warned = true;
+    deps.log?.warn("bailian: endpoint cache unavailable, looking the model up", {
+      op,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  };
+  let cached: string | null | undefined;
+  try {
+    cached = await deps.kv?.get(key);
+  } catch (e) {
+    kvFailed("get", e);
+  }
   if (cached === "text" || cached === "multimodal") return cached;
   const raw = await findModel(t, model, signal);
   if (raw === null) {
     throw new ModelError("invalid_request", `Bailian: model "${model}" is not in the model list`);
   }
   const endpoint = endpointOf(raw);
-  await deps.kv?.set(key, endpoint, { ttlSeconds: ENDPOINT_CACHE_TTL_SECONDS });
+  try {
+    await deps.kv?.set(key, endpoint, { ttlSeconds: ENDPOINT_CACHE_TTL_SECONDS });
+  } catch (e) {
+    kvFailed("set", e);
+  }
   return endpoint;
 }
 

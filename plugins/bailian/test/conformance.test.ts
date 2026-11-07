@@ -107,7 +107,7 @@ describe("stream", () => {
     const kv = {
       get: async (k: string) => store.get(k) ?? null,
       set: async (k: string, v: string, o: { ttlSeconds: number }) => {
-        expect(o.ttlSeconds).toBeGreaterThan(0);
+        expect(o.ttlSeconds).toBe(86_400);
         store.set(k, v);
       },
     };
@@ -121,6 +121,29 @@ describe("stream", () => {
       "qwen3.8-flash",
     );
   });
+
+  it.each(["get", "set", "both"])(
+    "a failing kv (%s) is a miss with one warn, never a failed stream",
+    async (which) => {
+      const boom = async () => {
+        throw new Error("redis down");
+      };
+      const kv = {
+        get: which === "set" ? async () => null : boom,
+        set: which === "get" ? async () => {} : boom,
+      };
+      const warns: unknown[] = [];
+      server = await startFakeModelServer(bailianRoutes());
+      const provider = createBailianProvider(
+        { apiKey: "sk-fixture", baseUrl: server.url },
+        { kv, log: { warn: (...a: unknown[]) => warns.push(a) } },
+      );
+      const { error, done } = await run(provider, req({ model: "qwen3.8-flash" }));
+      expect(error).toBeUndefined();
+      expect(done?.type).toBe("message_complete");
+      expect(warns).toHaveLength(1);
+    },
+  );
 
   it("an unlisted model is invalid_request before any generation request", async () => {
     const provider = await withGeneration(() => sseGeneration({ text: "x", finish: "stop" }));

@@ -116,7 +116,7 @@ function mapAssistant(
   content: ContentBlock[],
   req: ModelRequest,
   endpoint: Endpoint,
-): NativeMessage {
+): NativeMessage | null {
   let text = "";
   let reasoning: string | undefined;
   const calls: NonNullable<NativeMessage["tool_calls"]> = [];
@@ -135,6 +135,7 @@ function mapAssistant(
       });
     }
   }
+  if (text === "" && reasoning === undefined && calls.length === 0) return null;
   const msg: NativeMessage = { role: "assistant", content: textContent(text, endpoint) };
   if (reasoning !== undefined) msg.reasoning_content = reasoning;
   if (calls.length > 0) msg.tool_calls = calls;
@@ -157,7 +158,8 @@ function mapMessages(
     } else if (m.role === "user") {
       out.push(...mapUser(m.content, endpoint));
     } else {
-      out.push(mapAssistant(m.content, req, endpoint));
+      const a = mapAssistant(m.content, req, endpoint);
+      if (a !== null) out.push(a);
     }
   }
   return out;

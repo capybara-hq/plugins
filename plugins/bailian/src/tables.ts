@@ -31,8 +31,11 @@ export const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
 /** Reasoning models can go quiet for minutes while thinking. */
 export const REASONING_STREAM_IDLE_MS = 300_000;
 
-/** How long the generation endpoint of a model stays cached in `ctx.kv`. */
-export const ENDPOINT_CACHE_TTL_SECONDS = 3600;
+/**
+ * How long the generation endpoint of a model stays cached in `ctx.kv`: 24 h. The endpoint is a
+ * stable property of the model, and every miss costs a call on the rate-limited list route.
+ */
+export const ENDPOINT_CACHE_TTL_SECONDS = 86_400;
 
 /**
  * `inference_provider` values whose models are listed (design B §6.2: a model that does not work

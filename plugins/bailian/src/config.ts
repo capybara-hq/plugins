@@ -71,6 +71,17 @@ export function baseUrlFor(region: Region, workspaceId: string | undefined): str
 }
 
 /**
+ * A cleared field may arrive as "" (or blanks): an empty `apiKey` is a missing key (`auth`), an
+ * empty `workspaceId` an absent one, an empty `region` the default.
+ */
+function withoutEmptyFields(config: unknown): unknown {
+  if (typeof config !== "object" || config === null || Array.isArray(config)) return config;
+  return Object.fromEntries(
+    Object.entries(config).filter(([, v]) => !(typeof v === "string" && v.trim() === "")),
+  );
+}
+
+/**
  * The key and origin of one call. The config is resolved as a whole, never per field: with
  * `opts.config` (the org's effective config; an org's copy deliberately comes without the
  * platform's secrets) only its values count, so the platform key never reaches a host derived
@@ -85,7 +96,7 @@ export function resolveTarget(defaults: BailianDefaults, config: unknown): Targe
     ({ apiKey, workspaceId } = defaults);
     region = defaults.region ?? "cn-beijing";
   } else {
-    const parsed = DeploymentConfig.safeParse(config);
+    const parsed = DeploymentConfig.safeParse(withoutEmptyFields(config));
     if (!parsed.success) {
       throw new ModelError("invalid_request", "Bailian: the extension config is invalid");
     }

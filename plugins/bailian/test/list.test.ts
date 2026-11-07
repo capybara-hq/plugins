@@ -66,6 +66,12 @@ describe("listModels", () => {
     // Qwen's thinking default differs per model: no default declared
     expect(m?.parameters.find((p) => p.key === "thinking")?.default).toBeUndefined();
     expect(m?.retiresAt).toBeUndefined();
+    // DashScope takes [0, 2): 2 itself is a 400
+    expect(m?.parameters.find((p) => p.key === "temperature")?.schema).toEqual({
+      type: "number",
+      minimum: 0,
+      maximum: 1.99,
+    });
   });
 
   it("maps a plain chat model and a hosted vendor's model", async () => {

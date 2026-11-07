@@ -218,6 +218,50 @@ describe("buildRequest (multimodal-generation)", () => {
   });
 });
 
+describe("an assistant turn left empty", () => {
+  const onlyOtherThinking: ModelMessage[] = [
+    { role: "user", content: [{ type: "text", text: "Hi" }] },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          text: "Another model's thoughts.",
+          opaque: { provider: "bailian", model: "qwen-plus", data: { field: "reasoning_content" } },
+        },
+      ],
+    },
+    { role: "user", content: [{ type: "text", text: "Again" }] },
+  ];
+
+  it("is left out when only another model's thinking was in it", () => {
+    for (const endpoint of ["text", "multimodal"] as const) {
+      const body = buildRequest(req({ system: [], messages: onlyOtherThinking }), endpoint);
+      expect(body.input.messages.map((m) => m.role)).toEqual(["user", "user"]);
+    }
+  });
+
+  it("is kept when its thinking is this model's own", () => {
+    const body = buildRequest(
+      req({ system: [], model: "qwen-plus", messages: onlyOtherThinking }),
+      "text",
+    );
+    expect(body.input.messages[1]).toEqual({
+      role: "assistant",
+      content: "",
+      reasoning_content: "Another model's thoughts.",
+    });
+  });
+
+  it("keeps the mapping a prefix of the longer history", () => {
+    for (let n = 1; n < onlyOtherThinking.length; n++) {
+      const a = buildRequest(req({ messages: onlyOtherThinking.slice(0, n) }), "text");
+      const b = buildRequest(req({ messages: onlyOtherThinking }), "text");
+      expect(b.input.messages.slice(0, a.input.messages.length)).toEqual(a.input.messages);
+    }
+  });
+});
+
 describe("append-only", () => {
   it("the mapping of a request is a prefix of the mapping of the same request plus new messages", () => {
     for (const endpoint of ["text", "multimodal"] as const) {

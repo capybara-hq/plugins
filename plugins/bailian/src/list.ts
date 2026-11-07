@@ -67,6 +67,9 @@ function kindOf(id: string, caps: string[]): ModelKind | "skip" | "unknown-embed
   if (caps.includes("TG") || caps.includes("VU")) return "chat";
   if (caps.includes("TR")) {
     if (EMBEDDING_MODELS[id] !== undefined) return "embedding";
+    // HEURISTIC: the list tags rerank models `TR` too (live 2026-11-08: gte-rerank-v2,
+    // qwen3-rerank, qwen3.7-text-rerank, qwen3-vl-rerank), so the id tells them apart. Remove when
+    // the list gives rerank models a capability code of their own.
     if (/rerank/i.test(id)) return "rerank";
     return "unknown-embedding";
   }
@@ -89,7 +92,9 @@ const thinkingKnob: ModelParameter = {
 const temperatureKnob: ModelParameter = {
   key: "temperature",
   standard: "temperature",
-  schema: { type: "number", minimum: 0, maximum: 2 },
+  // DashScope's range is [0, 2): 2 itself answers 400 "Temperature should be in [0.0, 2.0)" (live
+  // 2026-11-08); the declaration schema has no exclusive bound, so 1.99 stands for "below 2"
+  schema: { type: "number", minimum: 0, maximum: 1.99 },
   // No default: DashScope's default temperature differs per model
   label: { zh: "温度", en: "Temperature" },
   description: { zh: "采样随机性，越高越发散", en: "Sampling randomness; higher is more diverse" },
