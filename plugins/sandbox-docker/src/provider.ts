@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Duplex } from "node:stream";
 import {
   type ExecResult,
+  FileSystemGoneError,
   type Logger,
   SANDBOX_TAG_RE,
   SandboxGoneError,
@@ -20,7 +21,15 @@ import {
   StreamDemuxer,
 } from "./docker-api.js";
 
-/** 部署配置（见 index.ts 的 DeploymentConfig）。 */
+/** The images published with a given sandbox-docker version (the plugins repo's image workflow). */
+export function publishedImages(version: string): { sandbox: string; egress: string } {
+  return {
+    sandbox: `ghcr.io/capybara-hq/capybara-sandbox:${version}`,
+    egress: `ghcr.io/capybara-hq/capybara-sandbox-egress:${version}`,
+  };
+}
+
+/** The provider's config: the deployment config (index.ts DeploymentConfig) with images resolved. */
 export interface DockerSandboxConfig {
   /** socket 代理地址：`tcp://host:port` 或 `unix:///path`。 */
   endpoint: string;
@@ -28,6 +37,11 @@ export interface DockerSandboxConfig {
   /** 共用的沙箱网络（`open` 的沙箱与各出站代理接在上面）；不存在时按 bridge、禁止容器互访创建。 */
   network: string;
   egressProxyImage: string;
+  /**
+   * The sandbox image `create` uses when it gets no `image` (the plugin passes the image published
+   * with its own version). Without it, `create` without `image` fails.
+   */
+  defaultImage?: string | undefined;
   /** 工作区卷的驱动；设了就带 `DriverOpts.size` 限制卷大小。 */
   volumeDriver?: string | undefined;
   /**
@@ -79,11 +93,18 @@ const LABEL_ROLE = "dev.capybara.sandbox.role";
 const LABEL_EGRESS = "dev.capybara.sandbox.egress";
 const LABEL_ALLOW = "dev.capybara.sandbox.allow-hosts";
 
-/** 容器 / 卷 / 网络名：`create` 的 name（`cap-<conversationId>`）加后缀。 */
+/**
+ * Container / volume / network names: `create`'s and `createFileSystem`'s name
+ * (`cap-env-<environmentId>`; legacy `cap-<conversationId>`) plus a suffix.
+ */
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,100}$/;
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** 一个沙箱在 Docker 里的全部资源名。句柄 id 就是 name（容器名）。 */
+/**
+ * The Docker resource names under one name. The instance is the container, its egress proxy and
+ * its internal network (handle id = the container name); the file system is the two volumes
+ * (handle id = the name they were made under). The kernel uses one name for both.
+ */
 export function sandboxResourceNames(name: string) {
   return {
     container: name,
@@ -245,8 +266,9 @@ interface RunResult {
 }
 
 /**
- * 按 Docker sandbox@1 的约定建提供方（插件 setup 与测试共用）。`log` (the extension's `ctx.log`)
- * gets a warn when a kill falls back to restarting the container, which ends every command in it.
+ * Builds the Docker `sandbox@2` provider (shared by the plugin's setup and the tests). `log` (the
+ * extension's `ctx.log`) gets a warn when a kill falls back to restarting the container, which ends
+ * every command in it.
  */
 export function createDockerSandbox(
   cfg: DockerSandboxConfig,
@@ -299,6 +321,7 @@ export function createDockerSandbox(
     }
   };
 
+  /** Drops the instance under `name`: container, egress proxy and internal network (never volumes). */
   const destroyByName = async (name: string, signal: AbortSignal) => {
     signal.throwIfAborted();
     const n = sandboxResourceNames(name);
@@ -309,11 +332,74 @@ export function createDockerSandbox(
           .catch(ignore(404, 409)),
       ),
     );
+    await removeWithRetry(`/networks/${enc(n.network)}`, signal);
+  };
+
+  /**
+   * Drops the file system under `name`: its two volumes. The only container that mounts them is
+   * the instance of the same name (the kernel names both alike; a `sandbox@1` provider made
+   * `cap-<conversationId>` with its volumes), so that instance is force-removed first: Docker
+   * refuses to remove a volume a container (even a stopped one) still uses.
+   */
+  const destroyFileSystemByName = async (name: string, signal: AbortSignal) => {
+    signal.throwIfAborted();
+    if (!NAME_RE.test(name)) throw new Error(`invalid sandbox name: ${name}`);
+    const n = sandboxResourceNames(name);
+    await destroyByName(name, signal);
     await Promise.all([
-      removeWithRetry(`/networks/${enc(n.network)}`, signal),
       removeWithRetry(`/volumes/${enc(n.workspace)}`, signal),
       removeWithRetry(`/volumes/${enc(n.skills)}`, signal),
     ]);
+  };
+
+  /**
+   * Checks the two volumes of the file system `fsId`: `ok` when both exist and were made by this
+   * plugin (role label); `unlabelled` names the volumes that exist without their role label (a
+   * volume Docker created on its own for a missing mount source has none).
+   */
+  const checkFileSystem = async (
+    fsId: string,
+    signal: AbortSignal,
+  ): Promise<{ ok: boolean; unlabelled: string[] }> => {
+    const n = sandboxResourceNames(fsId);
+    const found = await Promise.all(
+      (
+        [
+          [n.workspace, "workspace"],
+          [n.skills, "skills"],
+        ] as const
+      ).map(async ([vol, role]) => {
+        try {
+          const v = await api.json<{ Labels: Record<string, string> | null }>(
+            "GET",
+            `/volumes/${enc(vol)}`,
+            { signal },
+          );
+          return { vol, state: v.Labels?.[LABEL_ROLE] === role ? "ok" : "unlabelled" } as const;
+        } catch (e) {
+          if (isStatus(e, 404)) return { vol, state: "missing" } as const;
+          throw e;
+        }
+      }),
+    );
+    return {
+      ok: found.every((f) => f.state === "ok"),
+      unlabelled: found.filter((f) => f.state === "unlabelled").map((f) => f.vol),
+    };
+  };
+
+  /** Creates a volume unless one of that name exists already (idempotent by name). */
+  const ensureVolume = async (
+    body: { Name: string } & Record<string, unknown>,
+    signal: AbortSignal,
+  ) => {
+    try {
+      await api.json("GET", `/volumes/${enc(body.Name)}`, { signal });
+      return;
+    } catch (e) {
+      if (!isStatus(e, 404)) throw e;
+    }
+    await postCreate("/volumes/create", { body, signal });
   };
 
   const pull = async (image: string, signal: AbortSignal) => {
@@ -716,35 +802,63 @@ export function createDockerSandbox(
     // docker exec instances are independent; auto-start tolerates concurrent starts (304 / 409)
     concurrentExec: true,
 
-    async create({ name, image, limits, signal }) {
+    async createFileSystem({ name, limits, signal }) {
       signal.throwIfAborted();
       if (!NAME_RE.test(name)) throw new Error(`invalid sandbox name: ${name}`);
       checkLimits(limits);
+      const n = sandboxResourceNames(name);
+      // an existing file system of this name is returned as it is (never replaced)
+      await ensureVolume(
+        {
+          Name: n.workspace,
+          Labels: baseLabels(name, "workspace"),
+          ...(cfg.volumeDriver !== undefined && {
+            Driver: cfg.volumeDriver,
+            DriverOpts: { size: `${limits.diskMb}M` },
+          }),
+        },
+        signal,
+      );
+      await ensureVolume({ Name: n.skills, Labels: baseLabels(name, "skills") }, signal);
+      return { id: name };
+    },
+
+    async destroyFileSystem(fs, signal) {
+      await destroyFileSystemByName(fs.id, signal);
+    },
+
+    destroyFileSystemByName,
+
+    async create({ name, image, limits, fileSystem, signal }) {
+      signal.throwIfAborted();
+      if (!NAME_RE.test(name)) throw new Error(`invalid sandbox name: ${name}`);
+      if (!NAME_RE.test(fileSystem.id)) {
+        throw new Error(`invalid file system id: ${fileSystem.id}`);
+      }
+      checkLimits(limits);
+      const sandboxImage = image ?? cfg.defaultImage;
+      if (sandboxImage === undefined) {
+        throw new Error(
+          "sandbox-docker: create got no image and the provider has no default image",
+        );
+      }
       if (limits.egress === "open" && cfg.allowOpenEgress !== true) {
         throw new Error(
           'Sandbox egress "open" (sandbox.limits.egress) is refused: the sandbox-docker plugin setting allowOpenEgress is false. Set extensionConfig."sandbox-docker".allowOpenEgress to true (trusted environments only), or set sandbox.limits.egress to "allowlist" or "none".',
         );
       }
       const n = sandboxResourceNames(name);
-      // 同名的旧实例（内核在记下句柄前退出等）：整个换掉
+      const v = sandboxResourceNames(fileSystem.id);
+      // Docker would create a missing mount source as a new, empty volume: check first
+      const gone = () =>
+        new FileSystemGoneError(
+          `sandbox file system ${fileSystem.id} is gone (volume ${v.workspace} or ${v.skills} missing)`,
+        );
+      if (!(await checkFileSystem(fileSystem.id, signal)).ok) throw gone();
+      // An old instance of the same name (the kernel exited before recording the handle...):
+      // replace the instance; the file system stays
       await destroyByName(name, signal);
       try {
-        await postCreate("/volumes/create", {
-          body: {
-            Name: n.workspace,
-            Labels: baseLabels(name, "workspace"),
-            ...(cfg.volumeDriver !== undefined && {
-              Driver: cfg.volumeDriver,
-              DriverOpts: { size: `${limits.diskMb}M` },
-            }),
-          },
-          signal,
-        });
-        await postCreate("/volumes/create", {
-          body: { Name: n.skills, Labels: baseLabels(name, "skills") },
-          signal,
-        });
-
         const env = ["HOME=/workspace", "LANG=C.UTF-8"];
         let networkMode = "none";
         if (limits.egress === "open") {
@@ -772,7 +886,7 @@ export function createDockerSandbox(
         await createContainer(
           n.container,
           {
-            Image: image,
+            Image: sandboxImage,
             User: INIT_USER,
             WorkingDir: "/workspace",
             Cmd: ["sleep", "infinity"],
@@ -796,18 +910,31 @@ export function createDockerSandbox(
               NetworkMode: networkMode,
               Tmpfs: { "/tmp": `rw,nosuid,nodev,size=${tmpMb}m,mode=1777` },
               Mounts: [
-                { Type: "volume", Source: n.workspace, Target: "/workspace" },
-                { Type: "volume", Source: n.skills, Target: "/skills", ReadOnly: true },
+                { Type: "volume", Source: v.workspace, Target: "/workspace" },
+                { Type: "volume", Source: v.skills, Target: "/skills", ReadOnly: true },
                 // 同一个卷的可写挂载：只有 root 进得去（/opt/capybara 是 0700），插件经它写技能
-                { Type: "volume", Source: n.skills, Target: "/opt/capybara/skills" },
+                { Type: "volume", Source: v.skills, Target: "/opt/capybara/skills" },
               ],
             },
           },
           signal,
         );
+        // The volumes may have been removed between the check and the container create, in which
+        // case Docker made empty, unlabelled ones for the mounts: drop the container that uses
+        // them, remove those empty volumes (so a later createFileSystem of this name makes real
+        // ones) and refuse
+        const after = await checkFileSystem(fileSystem.id, signal);
+        if (!after.ok) {
+          await destroyByName(name, signal);
+          await Promise.all(
+            after.unlabelled.map((u) => removeWithRetry(`/volumes/${enc(u)}`, signal)),
+          );
+          throw gone();
+        }
         await start(n.container, signal);
       } catch (e) {
-        // 中止时不清理：可能已有新的持锁方在用同一个名字；残留由下一次 create 或 destroyByName 清掉
+        // No cleanup when aborted: a new lock holder may already use the same name; leftovers go
+        // with the next create or destroyByName. The cleanup drops the instance only.
         if (!signal.aborted) {
           await destroyByName(name, AbortSignal.timeout(60_000)).catch(() => undefined);
         }
@@ -861,6 +988,7 @@ export function createDockerSandbox(
       );
     },
 
+    // `args.actor` is informational in phase 1: not used for anything
     async exec(h, args): Promise<ExecResult> {
       args.signal.throwIfAborted();
       const ctl = execControlPath(args.tag);

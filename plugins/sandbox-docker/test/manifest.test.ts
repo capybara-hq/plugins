@@ -1,6 +1,16 @@
+import { readFileSync } from "node:fs";
 import { SANDBOX_EXTENSION_POINT } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
-import plugin, { createDockerSandbox, DeploymentConfig, decodeOutput } from "../src/index.js";
+import plugin, {
+  createDockerSandbox,
+  DeploymentConfig,
+  decodeOutput,
+  providerConfig,
+} from "../src/index.js";
+
+const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+  version: string;
+};
 
 describe("decodeOutput", () => {
   const zh = Buffer.from("a中", "utf8"); // 61 e4 b8 ad
@@ -15,10 +25,13 @@ describe("decodeOutput", () => {
 
 /** 清单与部署配置（不需要 Docker）。 */
 describe("sandbox-docker manifest", () => {
-  it("provides sandbox@1 and declares no platform permissions", () => {
+  it("provides sandbox@2 and declares no platform permissions", () => {
     expect(plugin.name).toBe("sandbox-docker");
-    expect(plugin.provides).toEqual([SANDBOX_EXTENSION_POINT]);
+    expect(SANDBOX_EXTENSION_POINT).toBe("sandbox@2");
+    expect(plugin.provides).toEqual(["sandbox@2"]);
     expect(plugin.permissions).toEqual({});
+    // the kernel checks this range against the installed SDK version
+    expect(plugin.sdk).toBe("^0.1.0-rc.3");
   });
 
   it("deployment config: defaults, endpoint schemes", () => {
@@ -27,7 +40,6 @@ describe("sandbox-docker manifest", () => {
       endpoint: "tcp://sandbox-proxy:2375",
       runtime: "runc",
       network: "capybara-sandbox",
-      egressProxyImage: "capybara-sandbox-egress:latest",
       allowOpenEgress: false,
     });
     expect(() => DeploymentConfig.parse({ endpoint: "tcp://x:1", network: "sandboxes" })).toThrow(
@@ -44,6 +56,20 @@ describe("sandbox-docker manifest", () => {
     ).toMatchObject({ runtime: "runsc", volumeDriver: "rexray" });
   });
 
+  it("create without image uses the versioned default; egressProxyImage defaults to its own version", () => {
+    expect(plugin.version).toBe(pkg.version);
+    const c = providerConfig(DeploymentConfig.parse({ endpoint: "tcp://x:1" }));
+    expect(c.defaultImage).toBe(`ghcr.io/capybara-hq/capybara-sandbox:${plugin.version}`);
+    expect(c.egressProxyImage).toBe(
+      `ghcr.io/capybara-hq/capybara-sandbox-egress:${plugin.version}`,
+    );
+    // the egressProxyImage setting overrides the published egress image
+    expect(
+      providerConfig(DeploymentConfig.parse({ endpoint: "tcp://x:1", egressProxyImage: "e:1" }))
+        .egressProxyImage,
+    ).toBe("e:1");
+  });
+
   it("test-only egress overrides cannot be set from plugin config", () => {
     expect(() =>
       DeploymentConfig.parse({
@@ -56,14 +82,34 @@ describe("sandbox-docker manifest", () => {
 
 describe("egress open without allowOpenEgress (no Docker needed)", () => {
   it("create refuses before touching Docker, naming the plugin setting", async () => {
-    const sbx = createDockerSandbox(DeploymentConfig.parse({ endpoint: "tcp://127.0.0.1:9" }));
+    const sbx = createDockerSandbox(
+      providerConfig(DeploymentConfig.parse({ endpoint: "tcp://127.0.0.1:9" })),
+    );
     await expect(
       sbx.create({
         name: "cap-00000000-0000-4000-8000-000000000001",
         image: "capybara-sandbox:latest",
         limits: { cpu: 1, memoryMb: 256, diskMb: 256, egress: "open", allowHosts: [] },
+        fileSystem: { id: "cap-00000000-0000-4000-8000-000000000001" },
         signal: AbortSignal.timeout(5000),
       }),
     ).rejects.toThrow(/extensionConfig\."sandbox-docker"\.allowOpenEgress/);
+  });
+
+  it("create without image and without a default image refuses before touching Docker", async () => {
+    const sbx = createDockerSandbox({
+      endpoint: "tcp://127.0.0.1:9",
+      runtime: "runc",
+      network: "capybara-sandbox",
+      egressProxyImage: "e:1",
+    });
+    await expect(
+      sbx.create({
+        name: "cap-env-00000000-0000-4000-8000-000000000001",
+        limits: { cpu: 1, memoryMb: 256, diskMb: 256, egress: "none", allowHosts: [] },
+        fileSystem: { id: "cap-env-00000000-0000-4000-8000-000000000001" },
+        signal: AbortSignal.timeout(5000),
+      }),
+    ).rejects.toThrow(/no image/);
   });
 });
