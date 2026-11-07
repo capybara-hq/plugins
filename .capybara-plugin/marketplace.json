@@ -723,6 +723,29 @@
           "integrity": "sha512-ub/Tc7ClgrRoX1S0PI2bsvuU6teRT4M7WnAEDvjsi1h3CmvwA2mInE01gkMtIwwdhW8y1iEHHmcxpSbCToD9dg=="
         }
       }
+    },
+    {
+      "name": "openai-compatible",
+      "version": "0.1.0-rc.2",
+      "summary": {
+        "en": "Model provider (model-provider@2) for Chat Completions-compatible services (vLLM, DeepSeek, Qwen, ...) using the official openai SDK"
+      },
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/openai-compatible#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment.secret:apiKeys",
+          "config.deployment:endpoints",
+          "provides:model-provider@2"
+        ],
+        "sensitive": ["config.deployment.secret:apiKeys"]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-openai-compatible",
+          "version": "0.1.0-rc.2",
+          "integrity": "sha512-HG3sPg9VjSldr/qP5647SV0LP3xEqIbtnMvl4VG0XHCHRPJ1wc9PBMb8hrTZ3FGc43OKTWgFyfAV3fNKm29JtQ=="
+        }
+      }
     }
   ]
 }
