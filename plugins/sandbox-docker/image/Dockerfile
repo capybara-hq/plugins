@@ -5,6 +5,8 @@
 # 多架构（amd64 + arm64）推到镜像仓库：
 #   docker buildx build --platform linux/amd64,linux/arm64 \
 #     -t <registry>/capybara-sandbox:<tag> --push plugins/sandbox-docker/image
+# 发布：.github/workflows/images.yml 在 plugins/sandbox-docker 的版本变更合入 main 后，构建并推送
+#   ghcr.io/capybara-hq/capybara-sandbox:<插件版本>（出站代理镜像 capybara-sandbox-egress 同理）。
 #
 # 约定（插件依赖这些，改动时一并改插件）：
 # - 以非 root 用户 sandbox（uid / gid 1000）运行，HOME 与工作目录是 /workspace（插件挂持久卷）；

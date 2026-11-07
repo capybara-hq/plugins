@@ -144,6 +144,52 @@ describe("release.yml", () => {
   });
 });
 
+describe("images.yml", () => {
+  const text = read(".github/workflows/images.yml");
+  const wf = parse(text) as Workflow;
+  const jobs = Object.entries(wf.jobs);
+
+  it("images workflow pushes only with packages write and pinned actions", () => {
+    // Never on a pull request: a PR must not push to ghcr.io.
+    expect(Object.keys(wf.on).sort()).toEqual(["push", "workflow_dispatch"]);
+    expect((wf.on.push as { branches: string[] }).branches).toEqual(["main"]);
+    expect(wf.permissions).toEqual({});
+    expect(Object.keys(wf.jobs).sort()).toEqual(["build", "plan", "publish"]);
+    // The plan only reads; only the jobs that push or tag get packages: write, and none gets
+    // contents write or an id-token.
+    expect(wf.jobs.plan?.permissions).toEqual({ contents: "read", packages: "read" });
+    expect(wf.jobs.build?.permissions).toEqual({ contents: "read", packages: "write" });
+    expect(wf.jobs.publish?.permissions).toEqual({ packages: "write" });
+    expect(text).not.toMatch(/id-token|NPM_TOKEN|contents: write/);
+    // Every action is pinned by a full commit SHA (or is a local path).
+    for (const [, job] of jobs) {
+      for (const step of job.steps) {
+        if (step.uses) expect(step.uses).toMatch(/^[\w.-]+\/[\w./-]+@[0-9a-f]{40}$/);
+      }
+    }
+    // Checkouts build exactly the pushed commit and keep no credentials.
+    for (const [, job] of jobs) {
+      for (const co of job.steps.filter((s) => s.uses?.startsWith("actions/checkout@"))) {
+        expect(co.with).toMatchObject({
+          ref: ["$", "{{ github.sha }}"].join(""),
+          "persist-credentials": false,
+        });
+      }
+    }
+  });
+
+  it("tags both images with the sandbox-docker version and skips an existing tag", () => {
+    expect(text).toContain("plugins/sandbox-docker/package.json");
+    expect(text).toContain("plugins/sandbox-docker/image");
+    expect(text).toContain("plugins/sandbox-docker/egress-proxy");
+    expect(text).toContain("imagetools inspect");
+    expect(wf.jobs.build?.if).toBe("needs.plan.outputs.build == 'true'");
+    const build = wf.jobs.build?.steps.find((s) => s.uses?.startsWith("docker/build-push-action@"));
+    expect(String(build?.with?.platforms)).toContain("linux/${{ matrix.arch }}");
+    expect(String(build?.with?.outputs)).toContain("push-by-digest=true");
+  });
+});
+
 describe("ci.yml", () => {
   const wf = parse(read(".github/workflows/ci.yml")) as Workflow;
 
