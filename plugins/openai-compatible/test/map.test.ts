@@ -171,18 +171,53 @@ describe("mid-conversation system", () => {
     { role: "system", content: "Be brief." },
   ];
 
-  it("deepseek keeps role system in place", () => {
-    const body = buildRequest(req(msgs), target("deepseek"));
-    expect(body.messages.at(-1)).toEqual({ role: "system", content: "Be brief." });
-  });
-
-  it.each(["generic", "qwen", "ark"] as const)(
+  it.each(["generic", "deepseek", "qwen", "ark"] as const)(
     "%s uses a [system] user message by default",
     (d) => {
       const body = buildRequest(req(msgs), target(d));
       expect(body.messages.at(-1)).toEqual({ role: "user", content: "[system] Be brief." });
     },
   );
+
+  it("deepseek: system notices between assistant turns become [system] user turns in place", () => {
+    // DeepSeek does not keep a mid-conversation role system message in position (see dialects.ts)
+    const history: ModelMessage[] = [
+      { role: "user", content: [{ type: "text", text: "Start A and B." }] },
+      { role: "assistant", content: [thinking("Wait."), { type: "text", text: "Waiting." }] },
+      { role: "system", content: "A reported." },
+      { role: "assistant", content: [{ type: "text", text: "Got A. Waiting for B." }] },
+      { role: "system", content: "B reported." },
+      { role: "system", content: "B completed." },
+      { role: "user", content: [{ type: "text", text: "Status?" }] },
+    ];
+    for (const params of [{}, { thinking: "off" }]) {
+      const body = buildRequest(req(history, { tools: [weather], params }), target("deepseek"));
+      const on = params.thinking !== "off";
+      expect(body.messages).toEqual([
+        { role: "system", content: "Stable system.\n\nVolatile part." },
+        { role: "user", content: "Start A and B." },
+        {
+          role: "assistant",
+          content: "Waiting.",
+          reasoning_content: "Wait.",
+        },
+        { role: "user", content: "[system] A reported." },
+        {
+          role: "assistant",
+          content: "Got A. Waiting for B.",
+          ...(on ? { reasoning_content: "" } : {}),
+        },
+        { role: "user", content: "[system] B reported." },
+        { role: "user", content: "[system] B completed." },
+        { role: "user", content: "Status?" },
+      ]);
+    }
+  });
+
+  it("deepseek: the endpoint can still opt in to in-place role system", () => {
+    const body = buildRequest(req(msgs), target("deepseek", { midConversationSystem: true }));
+    expect(body.messages.at(-1)).toEqual({ role: "system", content: "Be brief." });
+  });
 
   it("the endpoint can opt in to native mid-conversation system", () => {
     const body = buildRequest(req(msgs), target("generic", { midConversationSystem: true }));

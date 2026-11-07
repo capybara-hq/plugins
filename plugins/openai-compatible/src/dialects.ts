@@ -215,11 +215,17 @@ const generic: Dialect = {
  * - 图片（https://api-docs.deepseek.com/guides/vision ，2026-10-21 核实）：`image_url` 收 data URL，
  *   jpeg / png / gif / webp，单张 32 MiB、请求体 48 MiB，只在 user 消息里；文档只写了 deepseek-flash 收图片。
  *   文档没有 PDF 输入，`pdfInput: false`。
+ * - Mid-conversation system messages go out as in-place `[system] ` user turns (see the field).
  */
 const deepseek: Dialect = {
   name: "deepseek",
-  // 接口的 messages 不限制 system 的位置
-  midConversationSystem: true,
+  // The API accepts `role: "system"` anywhere in `messages`, but the model does not keep a
+  // mid-conversation system message in position: the service gathers them ahead of the
+  // conversation, so a live probe on deepseek-v4-pro (2026-11-07) with notices after an assistant
+  // turn saw nothing after that turn (0/6 runs right, thinking on and off). Sent as in-place
+  // `[system] ` user turns (like generic / ark) it quoted them in order (6/6). Consecutive user
+  // messages are accepted (test/live/deepseek-system-notices.live.test.ts).
+  midConversationSystem: false,
   // 磁盘缓存自动生效
   caching: true,
   pdfInput: false,
