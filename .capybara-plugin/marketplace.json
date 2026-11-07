@@ -746,6 +746,61 @@
           "integrity": "sha512-HG3sPg9VjSldr/qP5647SV0LP3xEqIbtnMvl4VG0XHCHRPJ1wc9PBMb8hrTZ3FGc43OKTWgFyfAV3fNKm29JtQ=="
         }
       }
+    },
+    {
+      "name": "sandbox-docker",
+      "version": "0.1.0-rc.4",
+      "summary": {
+        "en": "Conversation sandboxes (sandbox@1) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with an egress allowlist proxy"
+      },
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-docker#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment:allowOpenEgress",
+          "config.deployment:egressProxyImage",
+          "config.deployment:endpoint",
+          "config.deployment:network",
+          "config.deployment:runtime",
+          "config.deployment:volumeDriver",
+          "provides:sandbox@2"
+        ],
+        "sensitive": []
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-sandbox-docker",
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-WOFdF3JFxN5dfdJv2zt1w+NWsHhgdllMAfS75DBXVXbMrHuHKAVIgEP7htgerSmH0smTq0/p+gWoyO2x11cxUw=="
+        }
+      }
+    },
+    {
+      "name": "sandbox-e2b",
+      "version": "0.1.0-rc.4",
+      "summary": {
+        "en": "Environments (sandbox@2) as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, E2B egress controls"
+      },
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-e2b#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment.secret:apiKey",
+          "config.deployment:allowOpenEgress",
+          "config.deployment:apiUrl",
+          "config.deployment:domain",
+          "config.deployment:domainAllowlist",
+          "config.deployment:template",
+          "config.deployment:timeoutSeconds",
+          "provides:sandbox@2"
+        ],
+        "sensitive": ["config.deployment.secret:apiKey"]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-sandbox-e2b",
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-DMsi0ZEdcRquES3d6Lyqb+k6Zke7N5Sun2MY9NKO4Q9zF2Ej2AZZl4Gs9k4PeYCgKHB/F8Un1tYYwUBn+87R1w=="
+        }
+      }
     }
   ]
 }
