@@ -7,3 +7,8 @@ allowBuilds:
   msgpackr-extract: false
   protobufjs: true
   ssh2: true
+overrides:
+  # The other plugins' tests run on testing rc.4, whose kernel rc.4 must keep the SDK it shipped
+  # with: its range (^0.1.0-rc.2) would otherwise float to the newest SDK rc and change the kernel's
+  # behaviour under those tests. Drop this when those plugins move to a newer testing release.
+  "@capybara-hq/kernel@0.1.0-rc.4>@capybara-hq/plugin-sdk": 0.1.0-rc.2
