@@ -25,7 +25,7 @@ without a key fails with `auth`.
 ## Verified live (2026-11-08)
 
 The conformance suite passed against the real API on `deepseek-flash`: text, tools, parameters,
-thinking replay, caching, usage, mid-conversation system, image and abort (9/9). The `/models`
+thinking replay, caching, usage, mid-conversation system, image and abort (13/13). The `/models`
 response is recorded in `test/fixtures.ts`.
 
 ## Known limits

@@ -40,7 +40,7 @@ Conformance suite (text, tools, parameters, thinking replay, caching, usage, ima
 
 ## Known limits
 
-- Regions other than `cn-beijing` and `us-east-1` were not verified (no key).
+- Only `cn-beijing` was verified live; the other regions are unverified (no key).
 - `max_tokens` does not cap thinking tokens on some models.
 - The list route is rate limited (429); the endpoint cache keeps `stream` from calling it every time,
   and a cached endpoint is not invalidated if a model changes modality within 24 hours.

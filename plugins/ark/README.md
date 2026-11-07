@@ -1,15 +1,16 @@
 # Volcengine Ark models
 
 Model provider (`model-provider@2`) for Volcengine Ark chat and embedding models on the data plane
-(`https://ark.<region>.volces.com/api/v3`, plain `fetch`, no vendor SDK).
+(`https://ark.<region>.volces.com/api/v3`). Chat uses the official `openai` SDK (Chat Completions);
+the model list, endpoints and embeddings use plain `fetch`.
 
 ## Config
 
 | Field | Notes |
 |---|---|
-| `apiKey` | secret, optional; overridable per organization |
+| `apiKey` | secret; required per call (may be absent at load); overridable per organization |
 | `region` | `cn-beijing` (default) or `cn-shanghai`; overridable per organization |
-| `management.accessKeyId`, `management.secretAccessKey` | optional, secret, advanced; overridable per organization; list custom `ep-` endpoints |
+| `management.accessKeyId`, `management.secretAccessKey` | optional, advanced; both secret, so an organization's copy starts without the pair; overridable per organization; list custom `ep-` endpoints |
 
 An organization that sets its own copy is resolved as a whole: only its values count, so the
 platform's key and management keys never sign an organization's call. A copy without a key fails
