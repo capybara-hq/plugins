@@ -187,6 +187,30 @@ describe("images.yml", () => {
     }
   });
 
+  it("an image's digest download pattern cannot match the other image's artifacts", () => {
+    const up = wf.jobs.build?.steps.find((s) => s.uses?.startsWith("actions/upload-artifact@"));
+    const down = wf.jobs.publish?.steps.find((s) =>
+      s.uses?.startsWith("actions/download-artifact@"),
+    );
+    const images = ["capybara-sandbox", "capybara-sandbox-egress"];
+    const fill = (t: unknown, image: string, arch?: string) =>
+      String(t)
+        .replace("$" + "{{ matrix.target.image }}", image)
+        .replace("$" + "{{ matrix.arch }}", arch ?? "*");
+    for (const image of images) {
+      const glob = new RegExp(
+        `^${fill(down?.with?.pattern, image)
+          .replace(/[.+?^$()|[\]\\]/g, "\\$&")
+          .replace(/\*/g, ".*")}$`,
+      );
+      for (const other of images) {
+        for (const arch of ["amd64", "arm64"]) {
+          expect(glob.test(fill(up?.with?.name, other, arch))).toBe(other === image);
+        }
+      }
+    }
+  });
+
   it("tags both images with the sandbox-docker version and skips an existing tag", () => {
     expect(text).toContain("plugins/sandbox-docker/package.json");
     expect(text).toContain("plugins/sandbox-docker/image");

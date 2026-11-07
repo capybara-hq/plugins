@@ -142,7 +142,8 @@ jobs:
       - name: Upload the digest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: digests-${{ matrix.target.image }}-${{ matrix.arch }}
+          # Double dashes: no image name is a prefix of another's pattern.
+          name: digests--${{ matrix.target.image }}--${{ matrix.arch }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -164,7 +165,7 @@ jobs:
       - name: Download the digests
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: digests-${{ matrix.target.image }}-*
+          pattern: digests--${{ matrix.target.image }}--*
           merge-multiple: true
           path: ${{ runner.temp }}/digests
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
