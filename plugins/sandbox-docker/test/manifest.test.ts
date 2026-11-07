@@ -30,6 +30,8 @@ describe("sandbox-docker manifest", () => {
     expect(SANDBOX_EXTENSION_POINT).toBe("sandbox@2");
     expect(plugin.provides).toEqual(["sandbox@2"]);
     expect(plugin.permissions).toEqual({});
+    // the kernel checks this range against the installed SDK version
+    expect(plugin.sdk).toBe("^0.1.0-rc.3");
   });
 
   it("deployment config: defaults, endpoint schemes", () => {
