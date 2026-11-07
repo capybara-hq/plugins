@@ -51,6 +51,8 @@ export function kindFromStatus(status: number, code?: string | null): ModelError
   if (status === 429) return code === "insufficient_quota" ? "auth" : "rate_limited";
   if (status === 503) return "overloaded";
   if (status >= 500) return "server";
+  // DeepSeek documents no structured context-overflow code, so a real overflow 400 maps to
+  // invalid_request below.
   if (status === 400 && code === "context_length_exceeded") return "context_overflow";
   return kindFromCode(code) ?? "invalid_request";
 }

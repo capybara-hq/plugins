@@ -4,6 +4,9 @@
   "displayName": { "zh": "DeepSeek 模型", "en": "DeepSeek models" },
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
-  "description": "Model provider (model-provider@2) for DeepSeek chat models through the Chat Completions API",
+  "description": {
+    "en": "Model provider (model-provider@2) for DeepSeek chat models through the Chat Completions API",
+    "zh": "DeepSeek 对话模型（model-provider@2），通过 Chat Completions API 调用"
+  },
   "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/deepseek#readme"
 }

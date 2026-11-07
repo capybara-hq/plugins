@@ -189,6 +189,11 @@ workers and other tests' child processes run plain Node. This is temporary, unti
 - Tests that hit real services run only when their `CAPYBARA_TEST_*` variables are set (each skill
   lists them: model providers, E2B, Slack, Lark, Jina (`CAPYBARA_TEST_JINA_API_KEY`), MCP / OpenAPI
   connectors with `CAPYBARA_TEST_LIVE_TOOLS`).
+- Native model platform providers: deepseek `CAPYBARA_TEST_DEEPSEEK_API_KEY` (falls back to
+  `CAPYBARA_TEST_OAICOMPAT_API_KEY`); bailian `CAPYBARA_TEST_BAILIAN_API_KEY` with optional `_REGION`
+  and `_WORKSPACE_ID`; ark `CAPYBARA_TEST_ARK_API_KEY` with optional `_REGION`, `_ACCESS_KEY_ID` and
+  `_SECRET_ACCESS_KEY` (the management keys that list `ep-` endpoints). Bailian and ark pick the chat
+  and embedding models from the platform list; `_CHAT_MODEL` / `_EMBED_MODEL` pin one when set.
 - Keep keys in a local env file outside the repository (`~/.capybara-test.env`), load it only inside
   the test command, and never print it, paste it into a chat or commit it.
 - Run the live tests after changing request mapping, protocol handling or upgrading a vendor SDK. A
