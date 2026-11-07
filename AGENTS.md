@@ -20,7 +20,7 @@ plugins. Data locations keep their old names (`plugin_<name>` schemas, `/plugin-
 |---|---|
 | `plugins/<name>` | One plugin each: `package.json`, `.capybara-plugin/plugin.json`, the extension in `src/index.ts` (optional), `skills/`, `connectors/`, `agents/`, `migrations/`, `ui/`, and its tests in `test/` (unit, kernel-level and dual-replica tests, live tests under `test/live`) |
 | `plugins/example-counter`, `plugins/example-board` | Reference implementations (private, never published): the smallest extension and an embed UI |
-| `.capybara-plugin/marketplace.json` | The official marketplace (`capybara-official`): one npm entry per published `(plugin, version)` with its sha512; written only by `capybara-plugin marketplace --write` in the Version Packages PR, append-only |
+| `.capybara-plugin/marketplace.json` | The official marketplace (`capybara-official`): one npm entry per plugin at its current version with the sha512 of its reproducible pack; written only by `capybara-plugin marketplace --write` in the Version Packages PR, which replaces a plugin's entry when its version moves (older versions stay installable by direct npm import) |
 | `tools/ci` | The CI plan for a diff (`tools/ci/src/affected.ts`, run by the `changes` job) |
 | `tools/dev` | `pnpm doctor:env` and `pnpm verify` (same JSON contract as core's) |
 | `tools/worktree` | `pnpm wt:new` / `wt:rm` / `wt:ls`, paired with `.claude/hooks/branch-safety.sh` |
@@ -150,7 +150,7 @@ workers and other tests' child processes run plain Node. This is temporary, unti
   | `ci`: `pnpm lint`, `pnpm typecheck` | full | cheap |
   | `capybara-plugin check` (dependency boundary, extension state, permissions incl. `perm-hooks` / `perm-ui`, plugin pack, tool design, migrations, `plugin-test-imports`, `plugin-release-metadata`); on PRs with `--base "$(git rev-parse HEAD^1)"`, which also fails when the diff edits, deletes or renames an applied migration | full | reads every plugin, seconds |
   | `check:synced-skills`, `check:skills-frontmatter` | full | reads a few small files |
-  | `capybara-plugin marketplace --check`; on PRs with `--base "$(git rev-parse HEAD^1)"`: entries at the base stay unchanged and first (append-only), added ones match their packs | full | packs every public plugin, seconds; the release gate depends on it |
+  | `capybara-plugin marketplace --check`; on PRs with `--base "$(git rev-parse HEAD^1)"`: a plugin's version may only increase, a same version keeps its integrity, and changed entries match their packs | full | packs every public plugin, seconds; the release gate depends on it |
   | `pnpm pack-plugins` (artifact `plugin-packages`), commitlint (PRs) | full | cheap |
   | `test` (vitest; Docker on the runner; live tests skip without their env vars) | by diff | the changed plugins plus every plugin that depends on them (by `plugin.json` dependencies or package.json dependencies, transitively); `.claude/hooks/**` and `.claude/settings.json` run `tools/worktree`, `.agents/**` runs `tools/checks`; 2 shards on a full run, else 1 |
 
