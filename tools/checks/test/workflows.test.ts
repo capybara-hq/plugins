@@ -153,6 +153,10 @@ describe("images.yml", () => {
     // Never on a pull request: a PR must not push to ghcr.io.
     expect(Object.keys(wf.on).sort()).toEqual(["push", "workflow_dispatch"]);
     expect((wf.on.push as { branches: string[] }).branches).toEqual(["main"]);
+    // Only a version change publishes; editing the workflow itself must not tag an image.
+    expect((wf.on.push as { paths: string[] }).paths).toEqual([
+      "plugins/sandbox-docker/package.json",
+    ]);
     expect(wf.permissions).toEqual({});
     expect(Object.keys(wf.jobs).sort()).toEqual(["build", "plan", "publish"]);
     // A manual dispatch from another branch must not publish unreviewed code.
