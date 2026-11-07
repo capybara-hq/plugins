@@ -60,6 +60,12 @@ and the corrections to §4: `.superpowers/sdd/plugins-research.md` (cited "R").
   `_CHAT_MODEL`, `_EMBED_MODEL`; `CAPYBARA_TEST_ARK_API_KEY`, `_REGION`, `_ACCESS_KEY_ID`,
   `_SECRET_ACCESS_KEY`, `_CHAT_MODEL`, `_EMBED_MODEL`. Load with
   `set -a; . ~/.capybara-test.env; set +a` inside the test command only.
+  `CAPYBARA_TEST_DEEPSEEK_API_KEY` falls back to `CAPYBARA_TEST_OAICOMPAT_API_KEY`. The `_CHAT_MODEL` /
+  `_EMBED_MODEL` variables are optional (decided with the maintainer, 2026-11-08): unset, the live test
+  lists the platform's models (Ark through AK/SK, which the maintainer provides — listing is the
+  plugin's core feature) and picks the first chat / embedding model; a call failing with an
+  access / not-activated error moves to the next candidate (at most 5), then the case is skipped with
+  one printed reason.
 - Local only until the maintainer asks: no push, PR or publish. Single test: `pnpm exec vitest run
   <path>` from the worktree root.
 
