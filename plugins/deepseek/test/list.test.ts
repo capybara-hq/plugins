@@ -69,6 +69,21 @@ describe("deepseek listModels", () => {
     expect(server.requests.at(-1)?.headers.authorization).toBe("Bearer sk-default");
   });
 
+  it("skips null and malformed entries with a warning, never failing the list", async () => {
+    next = () => ({
+      status: 200,
+      json: { object: "list", data: [null, 7, "x", { id: 3 }, { id: "deepseek-plain" }] },
+    });
+    const warnings: string[] = [];
+    const models = await createDeepSeekProvider({
+      apiKey: "sk-default",
+      baseUrl: server.url,
+      log: { warn: (msg) => warnings.push(msg) },
+    }).listModels();
+    expect(models.map((m) => m.id)).toEqual(["deepseek-plain"]);
+    expect(warnings).toEqual(["deepseek: skipped 4 malformed model list entries"]);
+  });
+
   it("falls back to the bundled table when limits are missing", async () => {
     next = () => ({
       status: 200,

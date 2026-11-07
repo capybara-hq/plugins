@@ -1,6 +1,7 @@
 import {
   EFFORT_VALUES,
   type Effort,
+  type Logger,
   ModelError,
   type ModelInfo,
   type ModelParameter,
@@ -102,7 +103,11 @@ function mapModel(raw: RawModel & { id: string }): ModelInfo {
 }
 
 /** `GET {baseUrl}/models`; the models the endpoint lists, as ModelInfo. */
-export async function listDeepSeekModels(baseUrl: string, apiKey: string): Promise<ModelInfo[]> {
+export async function listDeepSeekModels(
+  baseUrl: string,
+  apiKey: string,
+  log?: Pick<Logger, "warn">,
+): Promise<ModelInfo[]> {
   let res: Response;
   try {
     res = await fetch(`${baseUrl.replace(/\/+$/, "")}/models`, {
@@ -142,7 +147,15 @@ export async function listDeepSeekModels(baseUrl: string, apiKey: string): Promi
   if (!Array.isArray(body.data)) {
     throw new ModelError("server", "DeepSeek: the model list has no data array");
   }
-  return (body.data as RawModel[])
-    .filter((m): m is RawModel & { id: string } => typeof m.id === "string" && m.id !== "")
-    .map(mapModel);
+  // A null or malformed entry is skipped (one warn), never failing the whole list
+  const entries = (body.data as unknown[]).filter(
+    (m): m is RawModel & { id: string } =>
+      typeof m === "object" &&
+      m !== null &&
+      typeof (m as RawModel).id === "string" &&
+      (m as RawModel).id !== "",
+  );
+  const skipped = body.data.length - entries.length;
+  if (skipped > 0) log?.warn(`deepseek: skipped ${skipped} malformed model list entries`);
+  return entries.map(mapModel);
 }

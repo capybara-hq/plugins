@@ -1,5 +1,6 @@
 import {
   defineExtension,
+  type Logger,
   MODEL_PROVIDER_EXTENSION_POINT_V2,
   ModelError,
   type ModelProvider,
@@ -35,6 +36,8 @@ const DeploymentConfig = z.object({
 export interface DeepSeekDefaults {
   apiKey?: string | undefined;
   baseUrl?: string | undefined;
+  /** Warnings (a malformed list entry skipped); `ctx.log` in the extension. */
+  log?: Pick<Logger, "warn"> | undefined;
 }
 
 /**
@@ -69,7 +72,7 @@ export function createDeepSeekProvider(defaults: DeepSeekDefaults): ModelProvide
   return {
     async listModels(opts) {
       const { apiKey, baseUrl } = resolve(defaults, opts?.config);
-      return listDeepSeekModels(baseUrl, apiKey);
+      return listDeepSeekModels(baseUrl, apiKey, defaults.log);
     },
     async *stream(req, opts) {
       let client: OpenAI;
@@ -110,6 +113,7 @@ export default defineExtension({
       createDeepSeekProvider({
         apiKey: cfg.success ? cfg.data.apiKey : undefined,
         baseUrl: cfg.success ? cfg.data.baseUrl : undefined,
+        log: ctx.log,
       }),
     );
   },
