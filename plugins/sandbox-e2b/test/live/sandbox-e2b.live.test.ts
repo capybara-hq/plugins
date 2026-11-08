@@ -29,8 +29,8 @@ import {
  * - Covers: the template auto-build (template unset), a file system created paused and an instance
  *   connecting it, the sandbox user and working directory, file reads and writes, /skills read-only
  *   for the sandbox user (a write through a symlink refused too), the egress allowlist, output
- *   truncation, timeout kills (nohup children too), abort, long silence (keepalive), the reboot
- *   fallback for a child that escaped the session, files surviving instance destroy (processes
+ *   truncation, timeout kills (nohup children too), abort, long silence (keepalive), a child
+ *   that escaped the session killed by its environment marker, files surviving instance destroy (processes
  *   gone), createFileSystem by name, whether a paused sandbox's network rules can change (logged
  *   as `[e2b-live] paused network update: …`, recorded in README "Egress"), destroyFileSystem →
  *   FileSystemGoneError.
@@ -122,7 +122,14 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
   });
 
   const run = (command: string, timeoutMs = 30_000) =>
-    sbx.exec(h, { ...who(), command, timeoutMs, maxOutputBytes: 64 * 1024, signal: sig() });
+    sbx.exec(h, {
+      ...who(),
+      command,
+      timeoutMs,
+      maxOutputBytes: 64 * 1024,
+      // outlive the command's own time limit, or the signal aborts a long command first
+      signal: AbortSignal.timeout(Math.max(120_000, timeoutMs + 60_000)),
+    });
 
   const stateOf = async (id: string) => {
     const r = await api.json<{ sandboxID: string; state: string }[]>("GET", "/v2/sandboxes", {
@@ -219,8 +226,9 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
     expect(r).toMatchObject({ exitCode: 0, stdout: "done\n", timedOut: false });
   });
 
-  it("a child that escapes the session triggers the reboot fallback; files survive", async () => {
-    // setsid 出新会话、继承 stdout：杀进程脚本按会话杀不到它，宽限期后插件 pause + connect(memory:false)
+  it("a child that escapes the session is killed by its environment marker; files survive", async () => {
+    // setsid leaves the session and keeps stdout: real envd ends the stream when the command exits,
+    // so only the kill script's marker scan (CAPYBARA_EXEC in /proc/<pid>/environ) finds the child
     const r = await run("setsid sleep 300 & sleep 300", 2000);
     expect(r.timedOut).toBe(true);
     expect((await run("pgrep -x sleep || echo none")).stdout).toBe("none\n");

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -52,6 +52,15 @@ const ALIAS = templateAlias(IMAGE);
 const ACTOR: SandboxActor = { accountId: "acc-1", conversationId: "conv-1" };
 /** The holder tag and actor every exec carries. */
 const who = () => ({ tag: randomUUID(), actor: ACTOR });
+/** Whether a host process still exists. */
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 /** A file system plus an instance attached to it (what the kernel does before first use). */
 const provision = async (
@@ -854,6 +863,29 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
         }
       }
     }, 15_000);
+
+    // Real envd ends the stream when the command exits, so a child that left the session with its
+    // output closed is invisible to the stream check: the kill script finds it by the exec marker
+    // in its environment. Needs /proc (Linux: CI and real sandboxes).
+    it.skipIf(!existsSync("/proc/self/environ"))(
+      "a child that left the session with its output closed is killed by its environment marker",
+      async () => {
+        const r0 = fake.reboots.get(h.id) ?? 0;
+        const pidFile = fake.hostPath(h.id, "/tmp/escaped-quiet.pid");
+        const escaped = `perl -MPOSIX -e 'POSIX::setsid(); open(STDOUT, ">", "/dev/null"); open(STDERR, ">", "/dev/null"); open(my $f, ">", $ARGV[0]); print $f $$; close $f; exec "sleep", "20"' ${pidFile} &`;
+        let pid = 0;
+        try {
+          const r = await run(`${escaped} sleep 20`, { timeoutMs: 1500 });
+          expect(r.timedOut).toBe(true);
+          pid = Number(readFileSync(pidFile, "utf8"));
+          expect(alive(pid)).toBe(false);
+          expect(fake.reboots.get(h.id) ?? 0).toBe(r0);
+        } finally {
+          if (pid && alive(pid)) process.kill(pid, "SIGKILL");
+        }
+      },
+      15_000,
+    );
 
     it("a command killed by a signal it did not get from us reports 128 + signal", async () => {
       const r = await run("echo x; kill -9 $PPID; sleep 1");

@@ -102,10 +102,13 @@ or the environment is recreated**; the timeout is pushed to at least "command ti
   `/tmp/.capybara-exec-<uuid>.pid`. The `timeout` inside the sandbox is the backstop: when a kernel replica crashes the timer on the plugin side is gone, disconnecting envd's stream does not end
   the process, and pause then resume would bring the process back; on expiry it kills the process group the command is in.
   On timeout or abort: a kill-processes script runs as the sandbox user, SIGKILLing all processes the command spawned by process group and session (the same as the Docker plugin),
-  then envd's `SendSignal` by pid serves as a backstop (it only ends the session's first process); it returns only after the kill finishes, and disconnects after a 3-second grace period (disconnecting itself does not
+  then every process whose environment carries the command's marker `CAPYBARA_EXEC=<control file>` (set on every exec, so a child that left the
+  session with `setsid` or as a daemon is found too; only a process that clears its own environment escapes it), then envd's `SendSignal` by pid serves as a backstop (it only ends the session's first process); it returns only after the kill finishes, and disconnects after a 3-second grace period (disconnecting itself does not
   end the processes in the sandbox).
-  **Last resort: reboot the sandbox.** When the kill-processes script did not finish (could not start, for example process count exhausted, timeout, or unreachable), or the output stream still has not ended 3 seconds after the kill
-  (a process escaped the session and still holds the output): first pause, then `POST /v2/sandboxes/{id}/connect` `{timeout, memory: false}`
+  The in-sandbox `timeout` path kills the marked processes as well. Real envd ends a command's output stream when the command itself exits, even while
+  an escaped child still holds the output (verified on E2B 2026-11-08), so the stream alone cannot show that a kill missed something: the marker scan does.
+  **Last resort: reboot the sandbox.** When the kill-processes script did not finish (could not start, for example process count exhausted, timeout, or unreachable),
+  marked processes are still there after it, or the output stream still has not ended 3 seconds after the kill: first pause, then `POST /v2/sandboxes/{id}/connect` `{timeout, memory: false}`
   (that is, the SDK `e2b@2.58.0`'s `Sandbox.connect(id, { onResume: "reboot" })`) to cold-start from the disk state: all processes in memory end,
   files such as `/workspace` are kept, writes not flushed before the pause may be lost, and whether things in `/tmp` survive depends on whether they are on disk. A warn log is written;
   the call returns as usual with `timedOut: true` or the abort result. The SDK notes: this requires the control plane to support connect's `memory` field (E2B cloud; self-hosted must be a
@@ -158,9 +161,9 @@ Limitations of `allowlist` (decided by E2B's implementation, written here for as
 **Limits are fixed when the file system is created** (`createFileSystem`, the create-sandbox request): an instance is the same E2B sandbox
 resumed, so a later change of `sandbox.limits.egress` / `allowHosts` or of the org's egress setting reaches an existing E2B environment only when
 the environment is recreated (the Docker plugin applies them per instance). The `e2b@2.58.0` SDK has `Sandbox.updateNetwork`
-(`PUT /sandboxes/{id}/network`), documented for **running** sandboxes; this plugin does not use it in phase 1. **Whether a paused sandbox's network
-rules can be changed is not yet verified**: the live test records it (`[e2b-live] paused network update: …`); it has not been run with an E2B key
-for this release.
+(`PUT /sandboxes/{id}/network`), documented for **running** sandboxes; this plugin does not use it in phase 1. **A paused sandbox's network rules
+cannot be changed** (verified on E2B 2026-11-08: the call answers 204 on a running sandbox and E2B's 404 on a paused one); the live test keeps
+recording it (`[e2b-live] paused network update: …`).
 
 **Command time limit**: a single command runs at most `sandbox.limits.maxCommandSeconds`, and no more than the time left in the run it belongs to (`runtime.maxRunSeconds`,
 default 900 seconds, Ruling M20); to run long commands, raise `runtime.maxRunSeconds` to at least `maxCommandSeconds`.
@@ -203,5 +206,5 @@ The third parameter of `createE2BSandbox(config, { log }, testOptions)` can be p
   auto-build (built once from the image, polled until ready, an existing alias reused, a not-ready alias rebuilt, a failed build not memoised).
 - `test/live`: real E2B, run only when `CAPYBARA_TEST_E2B_API_KEY` is set (optionally `CAPYBARA_TEST_E2B_TEMPLATE`, unset to exercise the auto-build,
   and `CAPYBARA_TEST_E2B_API_URL` / `CAPYBARA_TEST_E2B_DOMAIN`), otherwise skipped: the template, the file system created paused, the sandbox user, files, `/skills` read-only (including a write through a symlink being
-  rejected), the egress allowlist, output truncation, kill on timeout (including nohup child processes), abort, long periods with no output, a child process that escaped the session triggering the reboot backstop,
+  rejected), the egress allowlist, output truncation, kill on timeout (including nohup child processes), abort, long periods with no output, a child process that escaped the session being killed by its environment marker,
   files surviving instance destroy, whether a paused sandbox's network rules can change, `destroyFileSystem` → `FileSystemGoneError`. The file header lists the "assumptions that can only be confirmed on real E2B"; check them one by one on the first run.
