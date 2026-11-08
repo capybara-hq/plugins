@@ -82,7 +82,7 @@ export function telegramApi(o: { apiUrl: string; token: string; timeoutMs?: numb
     async call<T>(method: string, params?: Record<string, unknown>, signal?: AbortSignal) {
       const timer = AbortSignal.timeout(timeoutMs);
       let res: Response;
-      let body: Envelope | undefined;
+      let text: string;
       try {
         res = await fetch(`${base}/bot${o.token}/${method}`, {
           method: "POST",
@@ -90,13 +90,24 @@ export function telegramApi(o: { apiUrl: string; token: string; timeoutMs?: numb
           body: JSON.stringify(params ?? {}),
           signal: signal ? AbortSignal.any([signal, timer]) : timer,
         });
-        body = (await res.json().catch(() => undefined)) as Envelope | undefined;
+        // The body is read inside this try: a timeout, abort or reset after the headers is a
+        // network failure like one before them.
+        text = await res.text();
       } catch {
         // The fetch error is dropped on purpose (see the file comment).
         signal?.throwIfAborted();
         throw new TelegramApiError(method, { network: true, timeout: timer.aborted });
       }
+      let body: Envelope | undefined;
+      try {
+        body = JSON.parse(text) as Envelope | undefined;
+      } catch {
+        body = undefined; // Not an envelope (e.g. a proxy's HTML error page).
+      }
       if (res.ok && body?.ok === true) return body.result as T;
+      // Anything else is an error built from the status and whatever envelope fields exist. A 2xx
+      // without a valid `ok: true` envelope keeps its 2xx status and so maps to `rejected` (not
+      // retryable: a broken answer is not expected to fix itself); a non-envelope 5xx stays retryable.
       const errorCode = num(body?.error_code);
       const description = typeof body?.description === "string" ? body.description : undefined;
       const retryAfterSec = num(body?.parameters?.retry_after);

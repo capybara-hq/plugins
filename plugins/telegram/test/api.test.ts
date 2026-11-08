@@ -1,6 +1,9 @@
+import { createServer, type Server, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { type FakeTelegramServer, startFakeTelegram } from "@capybara-hq/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TelegramApiError, telegramApi } from "../src/api.js";
+import { toChannelSendError } from "../src/errors.js";
 
 let fake: FakeTelegramServer;
 beforeEach(async () => {
@@ -83,7 +86,7 @@ describe("telegramApi", () => {
   });
 
   it("a request over timeoutMs throws a timeout network error", async () => {
-    fake.delay("getMe", 2000);
+    fake.delay("getMe", 500);
     const api = telegramApi({ apiUrl: fake.apiUrl, token: fake.bot.token, timeoutMs: 100 });
     const e = await caught(api.call("getMe"));
     expect(e).toMatchObject({ network: true });
@@ -93,12 +96,107 @@ describe("telegramApi", () => {
   });
 
   it("an aborted caller signal rejects with the signal's reason", async () => {
-    fake.delay("getMe", 2000);
+    fake.delay("getMe", 500);
     const api = telegramApi({ apiUrl: fake.apiUrl, token: fake.bot.token });
     const ac = new AbortController();
     const p = api.call("getMe", undefined, ac.signal);
     ac.abort(new Error("stopped"));
     await expect(p).rejects.toThrow("stopped");
     fake.delay("getMe", 0);
+  });
+});
+
+/** A raw server whose handler controls exactly what is written (the fake always answers whole). */
+async function rawServer(handle: (res: ServerResponse) => void) {
+  let headersSent!: () => void;
+  const sent = new Promise<void>((r) => {
+    headersSent = r;
+  });
+  const server: Server = createServer((_req, res) => {
+    handle(res);
+    headersSent();
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as AddressInfo;
+  return {
+    apiUrl: `http://127.0.0.1:${port}`,
+    sent,
+    close: () =>
+      new Promise<void>((r) => {
+        server.closeAllConnections();
+        server.close(() => r());
+      }),
+  };
+}
+
+const stall = (res: ServerResponse) => {
+  res.writeHead(200, { "content-type": "application/json" });
+  res.write('{"ok":true,'); // never ended
+};
+
+describe("telegramApi: failures after the headers", () => {
+  const token = "123:raw-server-token";
+
+  it("a body stalled past timeoutMs → retryable timeout error", async () => {
+    const srv = await rawServer(stall);
+    try {
+      const api = telegramApi({ apiUrl: srv.apiUrl, token, timeoutMs: 100 });
+      const e = await caught(api.call("getMe"));
+      expect(e).toMatchObject({ method: "getMe", network: true });
+      expect(e.message).toBe("Telegram getMe failed: timeout");
+      expect(toChannelSendError(e)).toMatchObject({ retryable: true });
+      expect(printed(e)).not.toContain(token);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it("a caller abort while the body is read → rejects with the signal's reason", async () => {
+    const srv = await rawServer(stall);
+    try {
+      const api = telegramApi({ apiUrl: srv.apiUrl, token });
+      const ac = new AbortController();
+      const p = api.call("getMe", undefined, ac.signal);
+      await srv.sent;
+      await new Promise((r) => setTimeout(r, 50)); // let fetch resolve on the headers
+      const reason = new Error("stopped");
+      ac.abort(reason);
+      await expect(p).rejects.toBe(reason);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it("a non-JSON 502 → HTTP 502, retryable, no token", async () => {
+    const srv = await rawServer((res) => {
+      res.writeHead(502, { "content-type": "text/html" });
+      res.end("<html>Bad Gateway</html>");
+    });
+    try {
+      const api = telegramApi({ apiUrl: srv.apiUrl, token });
+      const e = await caught(api.call("getMe"));
+      expect(e).toMatchObject({ status: 502, network: false });
+      expect(e.errorCode).toBeUndefined();
+      expect(e.message).toBe("Telegram getMe failed: HTTP 502");
+      expect(toChannelSendError(e)).toMatchObject({ retryable: true });
+      expect(printed(e)).not.toContain(token);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it("a 200 without a valid envelope → rejected", async () => {
+    const srv = await rawServer((res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("hello");
+    });
+    try {
+      const api = telegramApi({ apiUrl: srv.apiUrl, token });
+      const e = await caught(api.call("getMe"));
+      expect(e).toMatchObject({ status: 200, network: false });
+      expect(toChannelSendError(e)).toMatchObject({ retryable: false, reason: "rejected" });
+    } finally {
+      await srv.close();
+    }
   });
 });

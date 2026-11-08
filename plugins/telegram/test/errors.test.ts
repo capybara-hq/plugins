@@ -62,6 +62,16 @@ describe("toChannelSendError", () => {
       { retryable: false, reason: "too_large" },
     ],
     [
+      "400 MESSAGE_TOO_LONG (edit) → too_large",
+      api(400, "Bad Request: MESSAGE_TOO_LONG"),
+      { retryable: false, reason: "too_large" },
+    ],
+    [
+      "400 caption too long → too_large",
+      api(400, "Bad Request: message caption is too long"),
+      { retryable: false, reason: "too_large" },
+    ],
+    [
       "other 400 → rejected",
       api(400, "Bad Request: can't parse entities"),
       { retryable: false, reason: "rejected" },
