@@ -285,7 +285,7 @@
     },
     {
       "name": "slack",
-      "version": "0.1.0-rc.1",
+      "version": "0.1.0-rc.2",
       "summary": {
         "en": "Slack (channel@1 bot over Socket Mode with Block Kit cards, identity-source@1 Sign in with Slack, directory@1)"
       },
@@ -319,8 +319,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-slack",
-          "version": "0.1.0-rc.1",
-          "integrity": "sha512-jkQ3tOQpXGbgeSOIbF88QoyY6sbTrBYjwVUq/udEGh6eAx0yIhJADlkJSxpLYzWbCH3qBtaOz1uCizMu7O5xTg=="
+          "version": "0.1.0-rc.2",
+          "integrity": "sha512-XenQ13JYxghuczMlPk/pi64iNO6WVYxuYFkQewZmDe1xw8mlDUnn5Mcoh6qxj8rE1RuyYA/aE78R0MUwzcC+Ng=="
         }
       }
     },
