@@ -1,5 +1,11 @@
 # @capybara-hq/plugin-connector-openapi
 
+## 0.1.0-rc.3
+
+### Patch Changes
+
+- 25d3f32: The icon stays in color on dark backgrounds (only its dark parts lighten).
+
 ## 0.1.0-rc.2
 
 ### Patch Changes

@@ -63,7 +63,7 @@
     },
     {
       "name": "connector-openapi",
-      "version": "0.1.0-rc.2",
+      "version": "0.1.0-rc.3",
       "summary": {
         "en": "OpenAPI connector (connector@1): one tool per operation of an OpenAPI 3.0 / 3.1 HTTP API"
       },
@@ -79,8 +79,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-connector-openapi",
-          "version": "0.1.0-rc.2",
-          "integrity": "sha512-/hPaWLmu7JznskbrnNF0uZP5MtA0cwm2//n+wAHP/P7BQpd5fmMVFZf2DSI+1i69KBircMmLnpmNs3hm8gDBDQ=="
+          "version": "0.1.0-rc.3",
+          "integrity": "sha512-bBhV2ugPPRCGxDnbTI5rukw+GjVaDF3nwfGo6eLDI2SgENurGK9rHHz2w1kI+fM43Om/FZqZYtHYc46MkN62rQ=="
         }
       }
     },
@@ -357,7 +357,7 @@
     },
     {
       "name": "jina",
-      "version": "0.1.0-rc.1",
+      "version": "0.1.0-rc.2",
       "summary": {
         "en": "Web search and page reading (web-search@1, web-fetch@1) through Jina's search and reader APIs"
       },
@@ -381,8 +381,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-jina",
-          "version": "0.1.0-rc.1",
-          "integrity": "sha512-SIuyc4OP0e2qQFE2Guz9yriRyVDTSlNIyLEfFB0w/aNawDdVZbJoGAgI+ZL/qr26PBpFSv+MlD9bHE2llNSnBQ=="
+          "version": "0.1.0-rc.2",
+          "integrity": "sha512-r+HrV7hCgWPbqWKl7baL0aP+xS6wvec747HbA6ktV/CsO695UYJUsjfYkkyV4NMsiF/hKRWPvE1nkPswRcQNFw=="
         }
       }
     },
