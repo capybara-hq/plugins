@@ -40,6 +40,8 @@ in the private chat only.
 
 - **Press Start once.** A bot cannot message a user who never started it: Telegram answers 403 ("Forbidden: bot can't initiate conversation with a user"),
   which the plugin maps to `target_gone`. So the first step for everyone is to open the bot and press **Start** (or send any message).
+- **Start is a message.** Pressing Start sends `/start`, and the plugin forwards it like any other text: that is what gives a new
+  user the binding card. A user who is already bound and presses Start again (for example after clearing the chat) sends `/start` to the agent.
 - **In a group**, an unbound person who mentions the bot gets a "bind in a private chat" reply instead of a card: open the bot, press Start, and bind there.
 - **The `anonymous` unbound policy has no effect on Telegram.** A Telegram bot is reachable by anyone who finds it, so
   anonymous guests would let the whole internet use an org's agent and model budget (maintainer decision). Every Telegram user is *external*
@@ -99,11 +101,18 @@ The deployment-level config lives under the kernel config `extensionConfig.teleg
 Approval, question, connection and binding cards are the message text plus an **inline keyboard** ([`InlineKeyboardMarkup`](https://core.telegram.org/bots/api#inlinekeyboardmarkup)),
 with button labels in the org's language. Link buttons are used only for http(s) URLs.
 
+- **One message per card.** The kernel sends a card with a short line of text ("Your input is needed") and later updates it the same way, so
+  the text leads the card's own message (left out when it repeats the card's title) and the update edits that one message. A card message is
+  never split: over 4096 characters the text is cut first, then the card, each ending in "…". Text without a card is split as described above.
+- **Rejected link buttons.** Telegram refuses some link-button URLs that work as links in text, such as `http://localhost:3000/...`
+  ("Wrong HTTP URL"; `127.0.0.1` and LAN addresses are accepted). When a send or edit is refused for that reason, the plugin sends it once more
+  without link buttons and puts the link into the card text; callback buttons stay.
+
 - `callback_data` is limited to 64 bytes ([`InlineKeyboardButton`](https://core.telegram.org/bots/api#inlinekeyboardbutton)), too small for a card id, action, scope and answer.
   Each button carries `cb:` plus a random 16-character token; the payload lives in kv for **30 days**, and any replica can decode it. A click whose token is missing, expired or malformed is answered and ignored.
   After 30 days a card's buttons stop working; use the card's "open on web" link.
 - A question card with a single single-choice field of at most 5 options shows one button per option. Any other question (several fields, a multi-select field, a field that allows "other", a non-enum field, or more than 5 options) is answered on the web: its card carries only the link.
-- A decided or expired card is edited without a keyboard.
+- A decided or expired card is edited to its new state without its action buttons; only the "Open on web" link button stays.
 - Every click is answered with `answerCallbackQuery` (no text) so the client's progress indicator stops. In long polling this happens after the kernel accepted the click.
 
 ## Errors

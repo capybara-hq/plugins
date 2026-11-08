@@ -1,4 +1,4 @@
-import type { ChannelCard, ChannelTarget, ExtensionContext } from "@capybara-hq/plugin-sdk";
+import type { ChannelCard, ChannelTarget } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { createTelegramChannel } from "../../src/channel.js";
 
@@ -122,6 +122,8 @@ describe.skipIf(!READY)("Telegram live", () => {
           state: "pending",
           webUrl: "https://example.com/capybara-live-test",
         };
+        // Only the records this send makes: `sets` is shared by the private-chat and group runs.
+        const setsBefore = sets.length;
         const cardMsg = await channel.send({
           ...base,
           message: { text: "", cards: [card] },
@@ -130,10 +132,10 @@ describe.skipIf(!READY)("Telegram live", () => {
         expect(cardMsg.messageId.length).toBeGreaterThan(0);
         // The keyboard carried callback buttons: each one stored its payload behind a 30-day token.
         const botId = (TOKEN as string).slice(0, (TOKEN as string).indexOf(":"));
-        const stored = sets.filter((x) => x.key.startsWith(`card/${botId}/`));
+        const stored = sets.slice(setsBefore).filter((x) => x.key.startsWith(`card/${botId}/`));
         expect(stored.length).toBeGreaterThanOrEqual(2); // approve (once, session) and deny
         for (const x of stored) expect(x.ttlSeconds).toBe(2_592_000);
-        // Decide it: the keyboard goes away, so no live button stays in the test chat.
+        // Decide it: the callback buttons go away, so no live button stays in the test chat.
         await channel.update({
           ...base,
           messageId: cardMsg.messageId,
