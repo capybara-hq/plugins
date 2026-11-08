@@ -283,14 +283,18 @@ describe("long polling", () => {
     expect(await failedWith(revoked.done)).toBe("Telegram bot token rejected");
   });
 
-  it("backs off on 5xx and recovers; five in a row throw", async () => {
+  it("backs off on 5xx and recovers", async () => {
     tg.failNext("getUpdates", { status: 502, description: "Bad Gateway" }, 4);
     const ok = connect({});
     tg.push(telegramPrivateMessage(user, "hi", { messageId: 1 }));
     await vi.waitFor(() => expect(ok.events).toHaveLength(1));
     ok.ac.abort();
     expect((await ok.done).ok).toBe(true);
+  });
 
+  // Its own test (a fresh fake): an aborted poller's in-flight request from the recovery case could
+  // reach the shared fake late and use up one of these five failures, leaving the loop polling.
+  it("five 5xx in a row throw", async () => {
     tg.failNext("getUpdates", { status: 500, description: "Internal Server Error" }, 5);
     const bad = connect({});
     expect(await failedWith(bad.done)).toBe(
