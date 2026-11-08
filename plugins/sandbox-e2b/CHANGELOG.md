@@ -1,5 +1,11 @@
 # @capybara-hq/plugin-sandbox-e2b
 
+## 0.1.0-rc.7
+
+### Patch Changes
+
+- 7dec2f6: Run on core plugin-sdk 0.1.0-rc.7 (testing rc.10, plugin-tools rc.8).
+
 ## 0.1.0-rc.6
 
 ### Patch Changes

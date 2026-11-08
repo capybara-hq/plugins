@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "example-board",
-  "version": "0.1.0-rc.1",
+  "version": "0.1.0-rc.2",
   "publisher": "Capybara",
   "icon": "./icon.svg",
   "description": "Reference plugin for embedded apps: a workflow progress board (embed token, SSE over ctx.bus)"
