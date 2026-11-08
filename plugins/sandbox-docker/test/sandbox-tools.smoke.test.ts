@@ -44,8 +44,6 @@ const SANDBOX_DOCKER = fileURLToPath(new URL("../src/index.ts", import.meta.url)
 /** The scripted model provider (a devDependency): `tool:<key>:<json>` makes it call a tool. */
 const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 
-const SANDBOX_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep"];
-
 type ToolResultEvent = Extract<ConversationEvent, { type: "tool_result" }>;
 
 describe.skipIf(!dockerAvailable)(
@@ -142,7 +140,7 @@ describe.skipIf(!dockerAvailable)(
             name: "Coder",
             instructions: "Use the sandbox.",
             model: { provider: "model-fake", model: "fake-1" },
-            tools: SANDBOX_TOOLS.map((name) => ({ kind: "builtin", name })),
+            disabledTools: [],
           },
           visibility: "org",
         },

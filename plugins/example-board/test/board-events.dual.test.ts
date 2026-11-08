@@ -148,7 +148,7 @@ describe("example-board live updates (dual replica)", () => {
         name: "Helper",
         instructions: "Be helpful.",
         model: { provider: "model-fake", model: "fake-1" },
-        tools: [],
+        disabledTools: [],
       },
       visibility: "org",
     });

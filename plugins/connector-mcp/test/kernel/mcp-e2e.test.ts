@@ -207,7 +207,7 @@ async function installConnector(): Promise<{ connectorId: string; body: Record<s
   return { connectorId: body.connector.id, body: body as unknown as Record<string, unknown> };
 }
 
-async function agentFor(connectorId: string): Promise<string> {
+async function agentFor(): Promise<string> {
   const res = await call({
     method: "POST",
     url: `/api/v1/orgs/${orgId}/agents`,
@@ -216,7 +216,7 @@ async function agentFor(connectorId: string): Promise<string> {
         name: "Helper",
         instructions: "Be helpful.",
         model: { provider: "model-fake", model: "fake-1" },
-        tools: [{ kind: "connector", connectorId, tools: "all" }],
+        disabledTools: [],
       },
       visibility: "org",
     },
@@ -376,7 +376,7 @@ describe("connector-mcp 端到端", () => {
 
   it("只读工具直接执行；resources；超时；Review Focus 3：凭据回显处处打码", async () => {
     const { connectorId } = await installConnector();
-    const agentId = await agentFor(connectorId);
+    const agentId = await agentFor();
     const convId = await createConv(req, orgId, agentId);
 
     const search = await runTool(convId, 1, "mcp__docs__search", { q: "cats" });
@@ -456,8 +456,8 @@ describe("connector-mcp 端到端", () => {
   }, 60_000);
 
   it("destructive 工具触发审批：批准前不执行，批准后执行一次", async () => {
-    const { connectorId } = await installConnector();
-    const agentId = await agentFor(connectorId);
+    await installConnector();
+    const agentId = await agentFor();
     const convId = await createConv(req, orgId, agentId);
     const before = mcp.calls.filter((c) => c.name === "delete_doc").length;
 
@@ -524,7 +524,7 @@ describe("connector-mcp 端到端", () => {
       });
       expect(res.statusCode, res.body).toBe(201);
       const connectorId = (res.json() as { connector: { id: string } }).connector.id;
-      const agentId = await agentFor(connectorId);
+      const agentId = await agentFor();
       const convId = await createConv(req, orgId, agentId);
       await runTool(convId, 1, "mcp__kb__lookup", {});
       const firstCall = ofType(await eventsOf(db, convId), "model_call")[0];

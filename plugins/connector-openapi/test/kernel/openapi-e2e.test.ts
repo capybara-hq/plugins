@@ -331,7 +331,7 @@ describe("connector-openapi 端到端", () => {
     return app.id;
   }
 
-  async function agentFor(connectorId: string): Promise<string> {
+  async function agentFor(): Promise<string> {
     const res = await req({
       method: "POST",
       url: `/api/v1/orgs/${orgId}/agents`,
@@ -340,7 +340,7 @@ describe("connector-openapi 端到端", () => {
           name: "Helper",
           instructions: "Be helpful.",
           model: { provider: "model-fake", model: "fake-1" },
-          tools: [{ kind: "connector", connectorId, tools: "all" }],
+          disabledTools: [],
         },
         visibility: "org",
       },
@@ -359,7 +359,7 @@ describe("connector-openapi 端到端", () => {
 
   it("the conversation page's tool info names an OpenAPI tool by its connector and title", async () => {
     const connectorId = await installPets();
-    const agentId = await agentFor(connectorId);
+    const agentId = await agentFor();
     const convId = await createConv(req, orgId, agentId);
     const res = await req({
       method: "GET",
@@ -378,7 +378,7 @@ describe("connector-openapi 端到端", () => {
 
   it("A21：调用按已复核的路由；远端文档改了路径 → 刷新后待复核，复核通过才走新路由", async () => {
     const connectorId = await installPets();
-    const agentId = await agentFor(connectorId);
+    const agentId = await agentFor();
     const convId = await createConv(req, orgId, agentId);
     const moved = defaultFakeOpenApiSpec(api.url, "header") as { paths: Record<string, unknown> };
     moved.paths["/animals/{petId}"] = moved.paths["/pets/{petId}"];
@@ -461,8 +461,8 @@ describe("connector-openapi 端到端", () => {
   });
 
   it("安装后调用只读操作：注入 API key；非 2xx 的正文回显的 key 被打码", async () => {
-    const connectorId = await installPets();
-    const agentId = await agentFor(connectorId);
+    await installPets();
+    const agentId = await agentFor();
     const convId = await createConv(req, orgId, agentId);
 
     const list = await runTool(convId, 1, "mcp__pets__listPets", { query: { limit: 5 } });

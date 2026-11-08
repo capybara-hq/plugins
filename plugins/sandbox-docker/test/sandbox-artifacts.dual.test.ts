@@ -74,7 +74,6 @@ const OBJECT_STORE = fakeExtensionEntry("fake-object-store");
 /** The scripted model provider (a devDependency): `tool:<key>:<json>` makes it call a tool. */
 const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 
-const SANDBOX_TOOLS = ["Bash", "Read", "Deliver"];
 const CSV = "fruit,qty\napple,3\npear,5\nplum,7\n";
 const TOTAL = "total=15";
 
@@ -278,7 +277,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
         name: "Analyst",
         instructions: "Use the sandbox.",
         model: { provider: "model-fake", model: "fake-1" },
-        tools: SANDBOX_TOOLS.map((name) => ({ kind: "builtin", name })),
+        disabledTools: [],
       },
       visibility: "org",
     });
