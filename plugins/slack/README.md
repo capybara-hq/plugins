@@ -148,7 +148,6 @@ The template [`connectors/slack.json`](./connectors/slack.json) connects Slack's
 their own Slack account, so an agent sees and does exactly what that person may in Slack, and every call runs
 on the caller's own user token; there is no shared org token. Design and decisions:
 [docs/superpowers/specs/2026-11-08-slack-connector-design.md](https://github.com/capybara-hq/plugins/blob/main/docs/superpowers/specs/2026-11-08-slack-connector-design.md).
-Verified on the Slack free plan.
 
 - **Off by default** (`defaultEnabled: false`): an org that turns on the `slack` plugin for the bot does not
   see the connector until an org admin switches the template on and enters the OAuth client.
