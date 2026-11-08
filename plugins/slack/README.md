@@ -224,3 +224,11 @@ The deployment-level config lives under the kernel config `extensionConfig.slack
 |---|---|
 | `teamId` | Optional: the Slack workspace id (`T…`) for syncing members into the org; leave empty if you only chat with the bot |
 | `botToken` | Optional, only for member sync (`xoxb-…`, secret); the tokens for chat go into the channel connection |
+
+## Icon
+
+`icon.svg`: the Slack mark (owner: Slack (Salesforce)), downloaded on 2026-11-08 from the Slack media kit,
+https://slack.com/media-kit (Logos: https://salesforce.widencollective.com/c/yn6bxnam, file
+SLA-Slack-icon-RGB.svg). It is a trademark of its owner, used only to identify the service this
+plugin connects to; the plugin is not affiliated with or endorsed by the owner. The artwork is
+unchanged except for removing editor metadata and setting a square viewBox.

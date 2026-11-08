@@ -4,6 +4,7 @@
   "displayName": { "zh": "火山方舟模型", "en": "Volcengine Ark models" },
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
+  "icon": "./icon.svg",
   "description": {
     "en": "Model provider (model-provider@2) for Volcengine Ark chat and embedding models",
     "zh": "火山方舟对话与嵌入模型（model-provider@2）"

@@ -4,6 +4,7 @@
   "displayName": { "zh": "阿里云百炼模型", "en": "Alibaba Cloud Model Studio models" },
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
+  "icon": "./icon.svg",
   "description": {
     "en": "Model provider (model-provider@2) for Alibaba Cloud Model Studio (Bailian) chat and embedding models",
     "zh": "阿里云百炼对话与嵌入模型（model-provider@2）"
