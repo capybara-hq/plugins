@@ -134,11 +134,42 @@ export const IN_SANDBOX_GRACE_SECONDS = 5;
  * (Ubuntu 26.04's default coreutils) kills only its child, not the child's process group (#7).
  * `$0` 是标记、`$1` 是 ctl、`$2` 是命令、`$3` 是沙箱里的时限（秒）。与 sandbox-docker 相同。
  */
+/**
+ * The environment variable every exec command carries (value: its control file path). A process
+ * that leaves the command's session (`setsid`, a daemon) keeps it, so the kill scripts find such a
+ * process by its environment in `/proc` (#escaped). Real envd ends a command's output stream when
+ * the command itself exits, even while an escaped child still holds the output, so the stream
+ * cannot tell us a kill missed something. Only a process that clears its own environment escapes
+ * this as well.
+ */
+export const EXEC_MARKER = "CAPYBARA_EXEC";
+
+/**
+ * Shell function `m F|E <pattern>`: the pids (other than this shell) whose environment has an
+ * entry matching the pattern as a whole line (`grep -F` / `grep -E`). Prints nothing without
+ * `/proc` (only on test machines).
+ */
+const MARKED =
+  'm() { for p in $(cd /proc 2>/dev/null && echo [0-9]*); do [ "$p" = "$$" ] && continue; ' +
+  'tr "\\0" "\\n" < "/proc/$p/environ" 2>/dev/null | grep -q"x$1" -- "$2" && echo "$p"; done; }; ';
+
+/**
+ * Shell function `km F|E <pattern>`: SIGKILLs the marked processes, rescanning for children forked
+ * meanwhile; exits the script with 1 when some are still there (the caller then reboots).
+ */
+const KILL_MARKED =
+  `${MARKED}km() { for _ in 1 2 3; do l=$(m "$1" "$2"); [ -z "$l" ] && return 0; ` +
+  'for p in $l; do kill -9 "$p" 2>/dev/null; done; sleep 0.05; done; ' +
+  '[ -z "$(m "$1" "$2")" ] || exit 1; }; ';
+
 const EXEC_WRAPPER =
   'c=$1; echo $$ > "$c.pid" 2>/dev/null; if [ -e "$c.kill" ]; then exit 137; fi; ' +
   'timeout -s KILL "$3" /bin/bash -c "$2"; s=$?; ' +
   "if [ $s -eq 124 ] || [ $s -eq 137 ]; then " +
-  'for p in $(pgrep -s $$); do [ "$p" = $$ ] || kill -9 "$p" 2>/dev/null; done; fi; ' +
+  'for p in $(pgrep -s $$); do [ "$p" = $$ ] || kill -9 "$p" 2>/dev/null; done; ' +
+  // a fresh shell without the marker: /proc/<pid>/environ of this shell and of its forks keeps
+  // the marker even after unset, so the scan would find (and kill) itself
+  `env -u ${EXEC_MARKER} /bin/sh -c '${KILL_MARKED}km F "$0"' "${EXEC_MARKER}=$c"; fi; ` +
   'rm -f "$c.pid"; exit $s';
 
 /** `exec` 交给 envd 的 `setsid` 参数（导出供测试直接经 envd 启动，模拟「内核崩溃后无人看管」）。 */
@@ -160,8 +191,8 @@ const KILL_TREE =
  * 按进程组与会话 SIGKILL。模式里的 `[.]` 让它匹配不到这个脚本自己的命令行。与 sandbox-docker 相同。
  */
 const KILL_ALL_SCRIPT =
-  `${KILL_TREE}for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-"); do ` +
-  'k "$q"; kill -9 "$q" 2>/dev/null; done; exit 0';
+  `${KILL_TREE}${KILL_MARKED}for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-"); do ` +
+  `k "$q"; kill -9 "$q" 2>/dev/null; done; km E "${EXEC_MARKER}=/tmp/[.]capybara-exec-.*"; exit 0`;
 
 /**
  * Kills the exec commands of the holders whose tags are the script's arguments (`killTagged`),
@@ -170,9 +201,11 @@ const KILL_ALL_SCRIPT =
  * running. Tags are checked against `SANDBOX_TAG_RE` first. Same as sandbox-docker.
  */
 const KILL_TAGGED_SCRIPT =
-  `${KILL_TREE}u='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; for t in "$@"; do ` +
+  `${KILL_TREE}${KILL_MARKED}u='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; ` +
+  'for t in "$@"; do ' +
   'for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-$t-$u( |$)"); do ' +
-  'k "$q"; kill -9 "$q" 2>/dev/null; done; done; exit 0';
+  `k "$q"; kill -9 "$q" 2>/dev/null; done; km E "${EXEC_MARKER}=/tmp/[.]capybara-exec-$t-$u"; ` +
+  "done; exit 0";
 
 /** The control file of one exec: carries the holder's tag when there is one. */
 export function execControlPath(tag?: string): string {
@@ -187,12 +220,14 @@ export function execControlPath(tag?: string): string {
  * 找到了会话 id（命令确实已启动）才删 `.kill` 标记；没找到时留着，防止包装稍后才启动。
  */
 const KILL_SCRIPT =
-  `${KILL_TREE}c=$1; : > "$c.kill" 2>/dev/null; i=0; ` +
+  `${KILL_TREE}${KILL_MARKED}c=$1; : > "$c.kill" 2>/dev/null; i=0; ` +
   'while [ ! -s "$c.pid" ] && [ $i -lt 20 ]; do sleep 0.05; i=$((i+1)); done; ' +
   'p=$(cat "$c.pid" 2>/dev/null); ' +
   'if [ -n "$p" ]; then k "$p"; rm -f "$c.kill"; fi; ' +
   'for q in $(pgrep -f -- "capybara-exec $c"); do ' +
   'k "$q"; kill -9 "$q" 2>/dev/null; done; ' +
+  // processes that left the session; some still there → exit 1 → the caller reboots
+  `km F "${EXEC_MARKER}=$c"; ` +
   'rm -f "$c.pid"; exit 0';
 
 const READ_SCRIPT =
@@ -890,6 +925,8 @@ export function createE2BSandbox(
         if (!ENV_KEY_RE.test(k)) throw new Error(`invalid environment variable name: ${k}`);
         env[k] = v;
       }
+      // set last: a caller's variable of the same name never replaces it
+      env[EXEC_MARKER] = ctl;
       const t = await attach(
         h.id,
         args.signal,
