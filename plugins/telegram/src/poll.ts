@@ -1,7 +1,7 @@
 import type { ChannelConnectArgs, Logger } from "@capybara-hq/plugin-sdk";
 import type { CardTokenStore } from "./actions.js";
 import { type TelegramApi, TelegramApiError } from "./api.js";
-import { type BotIdentity, updateToInbound } from "./inbound.js";
+import { type BotIdentity, chatMigration, fetchBotIdentity, updateToInbound } from "./inbound.js";
 import type { Kv, ThreadStore } from "./threads.js";
 import { pause } from "./wait.js";
 
@@ -165,22 +165,14 @@ export async function runLongPolling(a: LongPollingArgs): Promise<void> {
 /** `getMe` then `getWebhookInfo`; `undefined` when aborted. */
 async function startup(a: LongPollingArgs): Promise<BotIdentity | undefined> {
   try {
-    const me = await a.api.call<{ id?: unknown; username?: unknown } | undefined>(
-      "getMe",
-      undefined,
-      a.signal,
-    );
-    const id = int(me?.id);
-    if (id === undefined || typeof me?.username !== "string" || me.username === "") {
-      throw new Error("Telegram getMe returned no bot user");
-    }
+    const bot = await fetchBotIdentity(a.api, a.signal);
     const hook = await a.api.call<{ url?: unknown } | undefined>(
       "getWebhookInfo",
       undefined,
       a.signal,
     );
     if (typeof hook?.url === "string" && hook.url !== "") throw new Error(WEBHOOK_SET_ERROR);
-    return { id, username: me.username };
+    return bot;
   } catch (e) {
     if (a.signal.aborted) return undefined;
     if (e instanceof TelegramApiError) throw refusal(e) ?? new Error(e.message);
@@ -190,13 +182,11 @@ async function startup(a: LongPollingArgs): Promise<BotIdentity | undefined> {
 
 /** Hands one update to the kernel; `true` when an event was delivered, `false` when ignored. */
 async function deliver(a: LongPollingArgs, update: unknown, bot: BotIdentity): Promise<boolean> {
-  const message = obj(obj(update)?.message);
-  const migrateTo = int(message?.migrate_to_chat_id);
-  if (migrateTo !== undefined) {
+  const migration = chatMigration(update);
+  if (migration) {
     a.log.info("telegram: a group became a supergroup; its old conversations stop", {
       connectionId: a.connectionId,
-      chatId: int(obj(message?.chat)?.id),
-      migrateToChatId: migrateTo,
+      ...migration,
     });
     return false;
   }

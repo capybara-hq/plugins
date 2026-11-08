@@ -159,6 +159,7 @@ describe("Channel.webhook", () => {
     kv: Kv | undefined,
     body: string | object,
     headers = telegramWebhookHeaders(SECRET),
+    signal = new AbortController().signal,
   ) => {
     const channel = createTelegramChannel({ apiUrl: tg.apiUrl, log, ...(kv && { kv }) });
     if (!channel.webhook) throw new Error("no webhook");
@@ -166,7 +167,7 @@ describe("Channel.webhook", () => {
       connectionId: "conn1",
       config,
       request: request(body, headers),
-      signal: new AbortController().signal,
+      signal,
     });
   };
 
@@ -273,5 +274,80 @@ describe("Channel.webhook", () => {
     const warn = logs.find((l) => /answerCallbackQuery failed/.test(l.msg));
     expect(warn).toBeDefined();
     expect(JSON.stringify(warn)).not.toContain("s3cr3t");
+  });
+
+  it("yields the same card_action event as long polling for the same callback query", async () => {
+    const { kv } = memoryKv();
+    const token = await cardTokenStore(kv, String(BOT_ID)).put({
+      cardKind: "approval",
+      cardId: "ap2",
+      action: "approve",
+      scope: "once",
+    });
+    const callback = telegramCallback(user, { chatId: 42, messageId: 9 }, `cb:${token}`, {
+      id: "cbq-parity",
+    });
+
+    const polled: InboundEvent[] = [];
+    const ac = new AbortController();
+    const channel = createTelegramChannel({ apiUrl: tg.apiUrl, log, kv, pollTimeoutSec: 1 });
+    const done = channel.connect({
+      connectionId: "conn1",
+      config: { botToken: TOKEN },
+      signal: ac.signal,
+      onEvent: async (e) => void polled.push(e),
+    });
+    const updateId = tg.push(callback);
+    await vi.waitFor(() => expect(polled).toHaveLength(1));
+    ac.abort();
+    await done;
+
+    const r = await handle(kv, { update_id: updateId, ...callback });
+    expect(r.kind === "events" && r.events).toEqual(polled);
+    expect(polled[0]).toMatchObject({
+      type: "card_action",
+      eventId: "cbq-parity",
+      messageId: "42:9",
+    });
+  });
+
+  it("does not warn when the callback answer fails because the request was aborted", async () => {
+    const { kv, data } = memoryKv();
+    data.set(`bot/${BOT_ID}`, JSON.stringify({ id: BOT_ID, username: "hook_bot" }));
+    tg.delay("answerCallbackQuery", 2000);
+    const ac = new AbortController();
+    const update = {
+      update_id: 40,
+      ...telegramCallback(user, { chatId: 42, messageId: 9 }, "cb:AAAAAAAAAAAAAAAA"),
+    };
+    const p = handle(kv, update, telegramWebhookHeaders(SECRET), ac.signal);
+    await vi.waitFor(() =>
+      expect(tg.calls.some((c) => c.method.toLowerCase() === "answercallbackquery")).toBe(true),
+    );
+    ac.abort();
+    expect(await p).toEqual({ kind: "events", events: [], ack: { status: 200 } });
+    expect(logs.some((l) => /answerCallbackQuery failed/.test(l.msg))).toBe(false);
+  });
+
+  it("logs a group's migration to a supergroup at info and acks it without calling Telegram", async () => {
+    const update = {
+      update_id: 50,
+      message: {
+        message_id: 3,
+        date: 1,
+        chat: { id: -100, type: "group" },
+        from: { id: 42, is_bot: false, first_name: "Ada" },
+        migrate_to_chat_id: -1001234,
+      },
+    };
+    const r = await handle(memoryKv().kv, update);
+    expect(r).toEqual({ kind: "events", events: [], ack: { status: 200 } });
+    const line = logs.find((l) => l.level === "info" && /supergroup/.test(l.msg));
+    expect(line?.fields).toEqual({
+      connectionId: "conn1",
+      chatId: -100,
+      migrateToChatId: -1001234,
+    });
+    expect(tg.calls).toHaveLength(0);
   });
 });

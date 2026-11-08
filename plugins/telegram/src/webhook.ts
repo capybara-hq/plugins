@@ -8,7 +8,7 @@ import type {
 } from "@capybara-hq/plugin-sdk";
 import { type TelegramApi, TelegramApiError } from "./api.js";
 import type { TelegramConnectionConfig } from "./config.js";
-import type { BotIdentity } from "./inbound.js";
+import { type BotIdentity, fetchBotIdentity } from "./inbound.js";
 import type { Kv } from "./threads.js";
 
 /**
@@ -101,20 +101,7 @@ export async function webhookBotIdentity(
       // Unreadable or kv down: ask Telegram.
     }
   }
-  const me = await api.call<{ id?: unknown; username?: unknown } | undefined>(
-    "getMe",
-    undefined,
-    signal,
-  );
-  if (
-    typeof me?.id !== "number" ||
-    !Number.isSafeInteger(me.id) ||
-    typeof me.username !== "string" ||
-    me.username === ""
-  ) {
-    throw new Error("Telegram getMe returned no bot user");
-  }
-  const bot = { id: me.id, username: me.username };
+  const bot = await fetchBotIdentity(api, signal);
   if (kv) {
     try {
       await kv.set(key, JSON.stringify(bot), { ttlSeconds: BOT_IDENTITY_TTL_SECONDS });
@@ -143,6 +130,7 @@ export async function answerWebhookCallback(
   try {
     await api.call("answerCallbackQuery", { callback_query_id: id }, signal);
   } catch (e) {
+    if (signal.aborted) return; // the kernel gave up on the request; nothing to report
     log.warn("telegram: answerCallbackQuery failed", {
       connectionId,
       error: e instanceof TelegramApiError ? e.message : "unexpected error",

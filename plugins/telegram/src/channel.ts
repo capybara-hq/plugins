@@ -12,7 +12,7 @@ import { renderCards, type TelegramPost } from "./cards.js";
 import { botIdOf, connectionTenant, TelegramConnection } from "./config.js";
 import { toChannelSendError } from "./errors.js";
 import { markdownToTelegramHtml, splitHtml } from "./html.js";
-import { updateToInbound } from "./inbound.js";
+import { chatMigration, updateToInbound } from "./inbound.js";
 import { runLongPolling } from "./poll.js";
 import { threadStore } from "./threads.js";
 import { answerWebhookCallback, handleTelegramWebhook, webhookBotIdentity } from "./webhook.js";
@@ -200,6 +200,14 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
           config: c,
           request,
           toEvent: async (update) => {
+            const migration = chatMigration(update);
+            if (migration) {
+              o.log.info("telegram: a group became a supergroup; its old conversations stop", {
+                connectionId,
+                ...migration,
+              });
+              return null;
+            }
             const bot = await webhookBotIdentity(api, o.kv, botId, signal);
             const event = await updateToInbound(
               update,

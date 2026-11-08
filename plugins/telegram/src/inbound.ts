@@ -1,5 +1,6 @@
 import type { ChannelTarget, InboundEvent } from "@capybara-hq/plugin-sdk";
 import { type CardTokenStore, parseCallback } from "./actions.js";
+import type { TelegramApi } from "./api.js";
 import { SENDER_TENANT } from "./config.js";
 import type { ThreadStore } from "./threads.js";
 
@@ -13,6 +14,39 @@ const obj = (v: unknown): Obj | undefined =>
   typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Obj) : undefined;
 const int = (v: unknown) => (typeof v === "number" && Number.isSafeInteger(v) ? v : undefined);
 const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+
+/**
+ * The bot behind the token, from `getMe`; throws a token-free error when Telegram answers without
+ * a usable bot user (`TelegramApiError` from the call itself propagates).
+ */
+export async function fetchBotIdentity(
+  api: TelegramApi,
+  signal?: AbortSignal,
+): Promise<BotIdentity> {
+  const me = await api.call<{ id?: unknown; username?: unknown } | undefined>(
+    "getMe",
+    undefined,
+    signal,
+  );
+  const id = int(me?.id);
+  if (id === undefined || typeof me?.username !== "string" || me.username === "") {
+    throw new Error("Telegram getMe returned no bot user");
+  }
+  return { id, username: me.username };
+}
+
+/**
+ * The chat ids of a "group became a supergroup" service message (`migrate_to_chat_id`), else
+ * `undefined`. Such an update is ignored; callers log it at info level.
+ */
+export function chatMigration(
+  update: unknown,
+): { chatId: number | undefined; migrateToChatId: number } | undefined {
+  const message = obj(obj(update)?.message);
+  const migrateToChatId = int(message?.migrate_to_chat_id);
+  if (migrateToChatId === undefined) return undefined;
+  return { chatId: int(obj(message?.chat)?.id), migrateToChatId };
+}
 
 interface Edit {
   start: number;
