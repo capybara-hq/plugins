@@ -47,12 +47,15 @@ function backoffMs(base: number, attempt: number): number {
   return Math.round(step * (0.5 + Math.random() * 0.5));
 }
 
-/** A refusal that retrying cannot fix: the token is bad or another client polls the bot. */
+/** A refusal that retrying cannot fix: a bad token, another client polling, or a webhook. */
 function refusal(e: unknown): Error | undefined {
   if (!(e instanceof TelegramApiError)) return undefined;
   const code = e.errorCode ?? e.status;
   if (code === 401) return new Error(TOKEN_REJECTED_ERROR);
-  if (code === 409) return new Error(CONFLICT_ERROR);
+  if (code === 409) {
+    // Telegram also answers 409 while a webhook is set (one was set after connect started).
+    return new Error(/webhook/i.test(e.description ?? "") ? WEBHOOK_SET_ERROR : CONFLICT_ERROR);
+  }
   return undefined;
 }
 
@@ -118,15 +121,19 @@ export async function runLongPolling(a: LongPollingArgs): Promise<void> {
       continue;
     }
 
+    // No filter on ids below the offset: Telegram only returns unconfirmed updates (ids may restart
+    // after a long idle) and the kernel dedupes, so every returned update is processed.
+    let usable = 0;
     for (const update of updates) {
       const updateId = int(obj(update)?.update_id);
       if (updateId === undefined) continue; // not an update; nothing to confirm by
-      if (offset !== undefined && updateId < offset) continue; // already confirmed
+      usable++;
 
       let delivered: boolean;
       try {
         delivered = await deliver(a, update, bot);
       } catch (e) {
+        if (signal.aborted) return; // the rejection came from the shutdown; nothing to report
         // onEvent rejected (or the parser's kv failed): do not confirm; fetch it again later.
         rejections++;
         const wait = backoffMs(a.backoffBaseMs, rejections);
@@ -147,6 +154,10 @@ export async function runLongPolling(a: LongPollingArgs): Promise<void> {
         await answerCallback(a, callbackId);
       }
       if (signal.aborted) return;
+    }
+    // A batch with nothing to confirm by would come back unchanged: do not hammer the API.
+    if (updates.length > 0 && usable === 0) {
+      await pause(backoffMs(a.backoffBaseMs, 1), signal);
     }
   }
 }

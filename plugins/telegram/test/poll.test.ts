@@ -7,9 +7,11 @@ import {
 } from "@capybara-hq/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cardTokenStore } from "../src/actions.js";
+import type { TelegramApi } from "../src/api.js";
 import { createTelegramChannel } from "../src/channel.js";
-import { OFFSET_TTL_SECONDS } from "../src/poll.js";
+import { OFFSET_TTL_SECONDS, runLongPolling } from "../src/poll.js";
 import type { Kv } from "../src/threads.js";
+import { threadStore } from "../src/threads.js";
 
 const TOKEN = "333:s3cr3t-poll-token";
 const BOT_ID = 333;
@@ -171,6 +173,106 @@ describe("long polling", () => {
     expect(await failedWith(c.done)).toBe(
       "Telegram getUpdates conflict: another client is polling this bot",
     );
+  });
+
+  it("throws the webhook error on a 409 about an active webhook", async () => {
+    tg.failNext("getUpdates", {
+      status: 409,
+      description:
+        "Conflict: can't use getUpdates method while webhook is active; use deleteWebhook to delete the webhook first",
+    });
+    const c = connect({});
+    expect(await failedWith(c.done)).toBe(
+      "A webhook is set for this Telegram bot; switch the connection to webhook mode or call deleteWebhook",
+    );
+  });
+
+  it("returns quietly when onEvent rejects after the abort", async () => {
+    let reject: (e: Error) => void = () => {};
+    let called = false;
+    const c = connect({
+      onEvent: () =>
+        new Promise<void>((_, rej) => {
+          called = true;
+          reject = rej;
+        }),
+    });
+    tg.push(telegramPrivateMessage(user, "hi", { messageId: 1 }));
+    await vi.waitFor(() => expect(called).toBe(true));
+    c.ac.abort();
+    reject(new Error("shutting down"));
+    expect((await c.done).ok).toBe(true);
+    expect(logs.filter((l) => l.level === "warn")).toEqual([]);
+    expect(tg.confirmedOffset()).toBe(0);
+  });
+
+  it("processes updates whose ids are below the offset (Telegram restarted its ids)", async () => {
+    const ac = new AbortController();
+    const offsets: unknown[] = [];
+    const batches: unknown[][] = [
+      [{ update_id: 100, ...telegramPrivateMessage(user, "before", { messageId: 1 }) }],
+      [{ update_id: 5, ...telegramPrivateMessage(user, "after reset", { messageId: 2 }) }],
+    ];
+    const api: TelegramApi = {
+      async call<T>(method: string, params?: Record<string, unknown>, signal?: AbortSignal) {
+        if (method === "getMe") return { id: BOT_ID, username: "poll_bot" } as T;
+        if (method === "getWebhookInfo") return { url: "" } as T;
+        offsets.push(params?.offset);
+        const next = batches.shift();
+        if (next) return next as T;
+        // Nothing more: hold like a long poll until the abort.
+        return new Promise<T>((_, rej) => {
+          signal?.addEventListener("abort", () => rej(signal.reason), { once: true });
+        });
+      },
+    };
+    const events: InboundEvent[] = [];
+    const done = runLongPolling({
+      api,
+      connectionId: "conn1",
+      onEvent: async (e) => void events.push(e),
+      signal: ac.signal,
+      log,
+      threads: threadStore(undefined, String(BOT_ID)),
+      tokens: cardTokenStore(undefined, String(BOT_ID)),
+      pollTimeoutSec: 1,
+      backoffBaseMs: 10,
+    });
+    await vi.waitFor(() => expect(offsets).toHaveLength(3));
+    expect(events.map(idOf)).toEqual(["42:1", "42:2"]);
+    expect(offsets).toEqual([undefined, 101, 6]);
+    ac.abort();
+    await expect(done).resolves.toBeUndefined();
+  });
+
+  it("pauses instead of spinning on a batch with nothing to confirm by", async () => {
+    const ac = new AbortController();
+    let polls = 0;
+    const api: TelegramApi = {
+      async call<T>(method: string) {
+        if (method === "getMe") return { id: BOT_ID, username: "poll_bot" } as T;
+        if (method === "getWebhookInfo") return { url: "" } as T;
+        polls++;
+        return [{ no_update_id: true }] as T;
+      },
+    };
+    const done = runLongPolling({
+      api,
+      connectionId: "conn1",
+      onEvent: async () => {},
+      signal: ac.signal,
+      log,
+      threads: threadStore(undefined, String(BOT_ID)),
+      tokens: cardTokenStore(undefined, String(BOT_ID)),
+      pollTimeoutSec: 1,
+      backoffBaseMs: 100,
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    ac.abort();
+    await done;
+    // 50-100 ms per pause: a handful of polls, not thousands.
+    expect(polls).toBeGreaterThan(0);
+    expect(polls).toBeLessThan(10);
   });
 
   it("throws on a rejected token (getMe or getUpdates)", async () => {
