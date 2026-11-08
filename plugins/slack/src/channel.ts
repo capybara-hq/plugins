@@ -24,7 +24,7 @@ import {
 } from "./commands.js";
 import { workspaceTokenProblem } from "./config.js";
 import { platformErrorCode, toChannelSendError } from "./errors.js";
-import { eventToInbound, profileOf, type SlackProfile } from "./inbound.js";
+import { eventToInbound, type SlackProfile, userInfoProfile } from "./inbound.js";
 import { handleSlackWebhook, type SlackEnvelope, type SlashOutcome } from "./webhook.js";
 
 /**
@@ -77,8 +77,10 @@ export interface SlackChannelOptions {
   /** 重连退避的基数（默认 1000 毫秒；测试调小）。 */
   reconnectBaseMs?: number;
   /**
-   * Plugin kv (`ctx.kv`) for the per-connection bot user id cache used by webhook mode. Without
-   * it every webhook event calls `auth.test`.
+   * Plugin kv (`ctx.kv`) for the caches shared by every replica: the per-connection bot user id
+   * (webhook mode), the speakers' `users.info` profiles, the bot's DM per user and slash command
+   * echoes. Without it nothing is cached (every event calls `users.info`, every webhook event
+   * `auth.test`).
    */
   kv?: ExtensionContext["kv"];
 }
@@ -103,10 +105,15 @@ const SHORT_LIVED_MS = 10_000;
 const MAX_SHORT_LIVED = 5;
 const MAX_RECONNECT_DELAY_MS = 30_000;
 
-/** users.info 结果的进程内缓存：纯性能缓存（不是共享状态），每个渠道实例最多 1000 项、10 分钟过期。 */
-const PROFILE_TTL_MS = 10 * 60_000;
-const PROFILE_CACHE_MAX = 1000;
-/** 查资料的超时：Slack 要求 3 秒内确认事件，资料查不到就不带（https://docs.slack.dev/apis/events-api/ ）。 */
+/**
+ * TTL of a cached `users.info` profile (name, avatar, time zone, language) per team and user, in
+ * seconds: a changed name or zone shows within ten minutes.
+ */
+export const PROFILE_CACHE_TTL_SECONDS = 600;
+/**
+ * Timeout of the profile lookup: Slack wants events acked within 3 seconds
+ * (https://docs.slack.dev/apis/events-api/), so a slow lookup is dropped and the fields left out.
+ */
 const PROFILE_TIMEOUT_MS = 1500;
 
 /** TTL of the cached bot DM channel per user (the DM channel never changes), in seconds. */
@@ -214,36 +221,42 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
   };
   const parse = (config: unknown): SlackConnectionConfig => SlackConnection.parse(config);
 
-  const profiles = new Map<string, { at: number; profile: SlackProfile | undefined }>();
+  /**
+   * The speaker's profile from `users.info` (`include_locale=true`), cached in kv per team and user
+   * for {@link PROFILE_CACHE_TTL_SECONDS} (shared by every replica and connection of the team;
+   * nothing in process memory). `user_not_found` is cached as an empty profile; any other failure
+   * (rate limit, timeout, kv down) leaves the fields out and caches nothing.
+   */
   const lookupProfile = async (
     botToken: string,
-    scope: string,
+    teamId: string,
     userId: string,
     signal: AbortSignal,
   ): Promise<SlackProfile | undefined> => {
-    const key = `${scope}\u0000${userId}`;
-    const hit = profiles.get(key);
-    if (hit && Date.now() - hit.at < PROFILE_TTL_MS) return hit.profile;
+    const key = `profile/${teamId}/${userId}`;
+    const hit = await opts.kv?.get(key).catch(() => null);
+    if (hit) {
+      try {
+        const cached = JSON.parse(hit) as SlackProfile;
+        return Object.keys(cached).length > 0 ? cached : undefined;
+      } catch {
+        // a malformed entry is looked up again
+      }
+    }
     let profile: SlackProfile | undefined;
     try {
       const s = AbortSignal.any([signal, AbortSignal.timeout(PROFILE_TIMEOUT_MS)]);
-      const r = (await web(botToken, s).apiCall("users.info", { user: userId })) as {
-        user?: { name?: string; real_name?: string; profile?: unknown };
-      };
-      profile =
-        profileOf(r.user?.profile) ??
-        profileOf({ real_name: r.user?.real_name, name: r.user?.name });
+      const r = (await web(botToken, s).apiCall("users.info", {
+        user: userId,
+        include_locale: true,
+      })) as { user?: unknown };
+      profile = userInfoProfile(r.user);
     } catch (e) {
-      // 查不到（user_not_found、限流、超时）就不带资料，不耽误确认；不缓存失败
-      const code = platformErrorCode(e);
-      if (code !== "user_not_found") return undefined;
+      if (platformErrorCode(e) !== "user_not_found") return undefined;
     }
-    profiles.delete(key);
-    profiles.set(key, { at: Date.now(), profile });
-    if (profiles.size > PROFILE_CACHE_MAX) {
-      const oldest = profiles.keys().next().value;
-      if (oldest !== undefined) profiles.delete(oldest);
-    }
+    await opts.kv
+      ?.set(key, JSON.stringify(profile ?? {}), { ttlSeconds: PROFILE_CACHE_TTL_SECONDS })
+      .catch(() => {});
     return profile;
   };
 
@@ -254,6 +267,8 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
     ...sender,
     ...(p?.displayName !== undefined && { displayName: p.displayName }),
     ...(p?.avatarUrl !== undefined && { avatarUrl: p.avatarUrl }),
+    ...(p?.timeZone !== undefined && { timeZone: p.timeZone }),
+    ...(p?.locale !== undefined && { locale: p.locale }),
   });
 
   /**
@@ -262,7 +277,6 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
    */
   const toEvent = async (
     c: SlackConnectionConfig,
-    connectionId: string,
     botUserId: string,
     { type, body }: SlackEnvelope,
     signal: AbortSignal,
@@ -271,14 +285,21 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
       const cand = eventToInbound(body, botUserId);
       if (!cand) return null;
       if (cand.kind === "directory") return cand.event;
-      const p =
-        cand.profile ?? (await lookupProfile(c.botToken, connectionId, cand.userId, signal));
+      // The event's own user_profile wins for the name and avatar; users.info adds the time zone
+      // and language it lacks
+      const looked = await lookupProfile(
+        c.botToken,
+        cand.event.sender.tenantId,
+        cand.userId,
+        signal,
+      );
+      const p = looked || cand.profile ? { ...looked, ...cand.profile } : undefined;
       return { ...cand.event, sender: withProfile(cand.event.sender, p) };
     }
     const a = parseBlockActions(body);
     if (!a) return null;
     const p =
-      (await lookupProfile(c.botToken, connectionId, a.sender.externalId, signal)) ??
+      (await lookupProfile(c.botToken, a.sender.tenantId, a.sender.externalId, signal)) ??
       (a.username !== undefined ? { displayName: a.username } : undefined);
     return {
       type: "card_action",
@@ -394,7 +415,7 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
     if (!cmd) return { event: null, response: undefined };
     const text = slashCommandText(cmd.command, cmd.text);
     if (text === null) return { event: null, response: ephemeral(SLASH_REPLIES.usage) };
-    const profile = lookupProfile(c.botToken, connectionId, cmd.userId, signal).then(
+    const profile = lookupProfile(c.botToken, cmd.teamId, cmd.userId, signal).then(
       (p) => p ?? (cmd.userName !== undefined ? { displayName: cmd.userName } : undefined),
     );
     const sender = { externalId: cmd.userId, tenantId: cmd.teamId };
@@ -487,7 +508,7 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
         let response: Record<string, unknown> | undefined;
         try {
           if (type === "events_api" || type === "interactive") {
-            event = await toEvent(c, connectionId, botUserId, { type, body }, signal);
+            event = await toEvent(c, botUserId, { type, body }, signal);
           } else if (type === "slash_commands") {
             ({ event, response } = await toCommand(c, connectionId, body, signal));
           }
@@ -619,7 +640,7 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
           },
           toEvent: async (envelope, botUserId) => {
             try {
-              return await toEvent(c, connectionId, botUserId, envelope, signal);
+              return await toEvent(c, botUserId, envelope, signal);
             } catch (e) {
               log.warn("slack: could not read a webhook event; acknowledging and skipping it", {
                 connectionId,

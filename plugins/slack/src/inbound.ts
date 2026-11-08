@@ -1,9 +1,16 @@
 import type { ChannelTarget, InboundEvent } from "@capybara-hq/plugin-sdk";
 
-/** 发言人资料（显示名 / 头像），拿得到就带进 `InboundSender`。 */
+/**
+ * The speaker's profile (display name, avatar, time zone, language), added to `InboundSender` when
+ * known. `timeZone` is `users.info` `user.tz` (IANA), `locale` is `user.locale` (BCP 47, needs
+ * `include_locale=true`); both are passed as is (the kernel ignores an unknown zone and normalizes
+ * the language).
+ */
 export interface SlackProfile {
   displayName?: string;
   avatarUrl?: string;
+  timeZone?: string;
+  locale?: string;
 }
 
 export type InboundCandidate =
@@ -48,8 +55,8 @@ const TEXT_SUBTYPES: Record<string, true> = { file_share: true, thread_broadcast
 const mentions = (text: string, botUserId: string) =>
   new RegExp(`<@${botUserId.replace(/[^A-Za-z0-9]/g, "")}(\\|[^>]*)?>`).test(text);
 
-/** 资料里的显示名（display_name → real_name）与头像（image_72 → image_48 → image_192）。 */
-export function profileOf(p: unknown): SlackProfile | undefined {
+/** The display name (display_name → real_name → name) and avatar (image_72 → image_48 → image_192) of a profile. */
+export function profileOf(p: unknown): Pick<SlackProfile, "displayName" | "avatarUrl"> | undefined {
   const o = obj(p);
   if (!o) return undefined;
   const displayName = str(o.display_name) ?? str(o.real_name) ?? str(o.name);
@@ -126,5 +133,23 @@ export function eventToInbound(body: unknown, botUserId: string): InboundCandida
       text,
       mentionsBot: !dm && mentioned,
     },
+  };
+}
+
+/**
+ * A `users.info` user (called with `include_locale=true`) → profile: the name and avatar of its
+ * `profile` (else its `real_name` / `name`), `tz` and `locale`. Undefined when it has none of them.
+ */
+export function userInfoProfile(u: unknown): SlackProfile | undefined {
+  const o = obj(u);
+  if (!o) return undefined;
+  const base = profileOf(o.profile) ?? profileOf({ real_name: o.real_name, name: o.name });
+  const timeZone = str(o.tz);
+  const locale = str(o.locale);
+  if (base === undefined && timeZone === undefined && locale === undefined) return undefined;
+  return {
+    ...base,
+    ...(timeZone !== undefined && { timeZone }),
+    ...(locale !== undefined && { locale }),
   };
 }

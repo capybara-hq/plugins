@@ -1,12 +1,15 @@
 # @capybara-hq/plugin-slack
 
-The official Slack plugin. It provides three capabilities:
+The official Slack plugin. It provides three capabilities and a connector template:
 
 - `channel@1` (bot): receives events over [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode)
   (no public callback URL needed), sends messages through the Web API, and renders approval / question /
   connection / binding cards as Block Kit.
 - `identity-source@1` (Sign in with Slack, OpenID Connect): sign in to Capybara with a Slack account.
 - `directory@1` (directory sync): syncs Slack workspace members into org members.
+- The connector template `slack` ([Slack connector](#slack-connector-slacks-mcp-server)): agents search,
+  read and send in Slack **as the person talking to them**, through Slack's MCP server and each member's own
+  OAuth authorization. Switched off by default.
 
 All three use the same identity key: `identities.source` = `slack:<team id>`, `external_id` = the Slack user id (`U…`).
 When the same person appears through sign-in, a DM to the bot and directory sync, it maps to one identity row and one account.
@@ -15,9 +18,20 @@ The Slack docs cited here were consulted on 2026-10-20.
 
 ## Create the Slack app
 
-1. Open <https://api.slack.com/apps> → **Create New App** → **From a manifest**, pick the workspace, and paste this directory's
-   [`app-manifest.yaml`](./app-manifest.yaml) (format: [App manifest reference](https://docs.slack.dev/reference/app-manifest)).
-   It turns on Socket Mode and Interactivity, subscribes to the events `message.im`, `app_mention`, `message.channels`,
+The plugin ships a **setup guide** (`plugin.json` `setupGuides`, id `slack-app`): when an org admin
+creates a Slack channel connection (Channels → New channel) or opens one, the web app shows the steps
+below and the app manifest rendered for that connection, with a copy button and a switch between
+Socket Mode and webhook mode. The manifest is filled in with the connection's name, the Sign in with
+Slack callback (`<http.publicUrl>/api/v1/auth/sso/slack/callback`) and, in webhook mode, the
+connection's webhook URL. When a plugin upgrade changes the manifest, the channel page says so and
+asks you to update the Slack app. The templates are in [`guides/`](./guides):
+[`app-manifest.socket.yaml.tmpl`](./guides/app-manifest.socket.yaml.tmpl) (Socket Mode) and
+[`app-manifest.webhook.yaml.tmpl`](./guides/app-manifest.webhook.yaml.tmpl) (webhook mode); outside
+Capybara, replace each `{{…}}` placeholder by hand.
+
+1. Open <https://api.slack.com/apps> → **Create New App** → **From a manifest**, pick the workspace, and paste the
+   manifest from the setup guide (format: [App manifest reference](https://docs.slack.dev/reference/app-manifest)).
+   It turns on Socket Mode (or, in webhook mode, sets the Request URLs) and Interactivity, subscribes to the events `message.im`, `app_mention`, `message.channels`,
    `message.groups`, `team_join` and `user_change`, registers the slash commands `/new`, `/env` and
    `/capybara` (see [Commands](#commands)), and requests these bot scopes:
 
@@ -29,7 +43,7 @@ The Slack docs cited here were consulted on 2026-10-20.
    | `im:history` | Receive DM messages |
    | `app_mentions:read` | Receive messages that @-mention the bot in channels |
    | `channels:history` / `groups:history` | Receive thread replies in public / private channels |
-   | `users:read` | Look up the speaker's display name and avatar; people-change events; directory `users.list` |
+   | `users:read` | Look up the speaker's display name, avatar, time zone and language (`users.info`); people-change events; directory `users.list` |
    | `users:read.email` | Read emails during directory sync (the bot itself does not use it) |
 
 2. **Basic Information → App-Level Tokens → Generate Token and Scopes**: add the scope `connections:write`
@@ -39,6 +53,8 @@ The Slack docs cited here were consulted on 2026-10-20.
    [directory sync](#directory-directory1): leave them empty if you only chat with the bot), then **create a new channel
    connection** under Channels: pick Slack as the plugin, fill in the app-level token (`appToken`, `xapp-…`) and
    the bot token (`botToken`, `xoxb-…`), and bind an agent. Both are stored in the secret store, and the API only returns "set".
+   The app's name in the manifest is the connection's name; Slack caps it at 35 characters, so shorten it in
+   the app settings if Slack refuses it (the bot user's name stays `capybara`).
 5. In Slack, DM the bot, or add the bot to a channel and @-mention it. The first conversation gets a binding card; click the button to confirm the binding on the web page.
 
 Note: apps that use Socket Mode cannot currently be listed in the public Slack Marketplace, and one app can hold at most 10 concurrent
@@ -59,12 +75,14 @@ connection → Overview → Inbound mode); the connection page then shows its we
 1. Copy **Basic Information → App Credentials → Signing Secret** into the connection's
    `signingSecret`. Every request is verified with it (HMAC-SHA256 over `v0:<timestamp>:<body>`)
    and must be at most 5 minutes old; without it every webhook request is refused.
-2. In the app settings, turn **Socket Mode** off, then use the webhook URL as the **Event
-   Subscriptions → Request URL** (Slack verifies it with a `url_verification` challenge, which the
-   plugin answers) and as the **Interactivity & Shortcuts → Request URL** (card buttons).
-3. Under **Slash Commands**, edit `/new`, `/env` and `/capybara` and set each one's **Request URL**
-   to the same webhook URL (the manifest leaves it out, since Socket Mode needs none). The plugin tells
-   a slash command from an event by its form body and answers it like Socket Mode does.
+2. The webhook manifest of the setup guide turns **Socket Mode** off and uses the connection's webhook
+   URL as the **Event Subscriptions → Request URL** (Slack verifies it with a `url_verification`
+   challenge, which the plugin answers), the **Interactivity & Shortcuts → Request URL** (card
+   buttons) and each slash command's **Request URL**. For an existing app, paste it under **App
+   Manifest**, or set the four URLs by hand. The plugin tells a slash command from an event by its
+   form body and answers it like Socket Mode does.
+3. The webhook URL exists only once the connection is saved, so the guide shows it after saving;
+   create the connection first, then let Slack verify the URL.
 4. `appToken` is optional in webhook mode: only Socket Mode uses it.
 
 Both modes parse events the same way (same message and card-click ids), so the kernel's dedupe
@@ -74,7 +92,7 @@ still drops a redelivery that arrives across a mode switch.
 
 [Sign in with Slack](https://docs.slack.dev/authentication/sign-in-with-slack/) is based on OpenID Connect.
 
-1. In the app settings, add
+1. The setup guide's manifest already lists the callback; otherwise, in the app settings, add
    `<http.publicUrl>/api/v1/auth/sso/slack/callback` under **OAuth & Permissions → Redirect URLs** (for example `https://capybara.example.com/api/v1/auth/sso/slack/callback`;
    the `redirect_uri` the kernel sends must equal it or be a sub-path of it).
 2. The login flow requests the scopes `openid`, `email` and `profile` in the authorization URL (`openid` is required; `email` gives the email and
@@ -122,6 +140,79 @@ channel connection uses, but the config is stored separately and goes through th
 - When `teamId` / `botToken` are not filled in (the org only uses the bot), the plugin's `configured()` returns false: the kernel does not scan or sync, and records no audit
   or warning; a manual sync returns 409 `directory.not_configured`. It is not treated as an empty directory.
 
+## Slack connector (Slack's MCP server)
+
+The template [`connectors/slack.json`](./connectors/slack.json) connects Slack's official MCP server
+(`https://mcp.slack.com/mcp`, [Slack MCP server](https://docs.slack.dev/ai/slack-mcp-server/)) through the
+`connector-mcp` plugin (a dependency in `plugin.json`, preinstalled with Capybara). Each member authorizes
+their own Slack account, so an agent sees and does exactly what that person may in Slack, and every call runs
+on the caller's own user token; there is no shared org token. Design and decisions:
+[docs/superpowers/specs/2026-11-08-slack-connector-design.md](https://github.com/capybara-hq/plugins/blob/main/docs/superpowers/specs/2026-11-08-slack-connector-design.md).
+
+- **Off by default** (`defaultEnabled: false`): an org that turns on the `slack` plugin for the bot does not
+  see the connector until an org admin switches the template on and enters the OAuth client.
+- **Auth**: OAuth authorization code, personal credentials, MCP discovery (Slack's metadata points at
+  `https://slack.com/oauth/v2_user/authorize` and `oauth.v2.user.access`), a manually entered client (Slack
+  offers no dynamic client registration), `client_secret_post`, and 30 explicit user scopes (the full set
+  Slack's server supports; a scope Slack adds later needs a template update).
+- **Tools**: reads are allowed; every write (send, schedule, draft, create, update, react, upload) and
+  `slack_search_public_and_private` (reaches DMs and private channels) ask the person first. Org admins and
+  agents change the policies on the tools page; tools Slack adds later default by their annotations (`ask`
+  without `readOnlyHint`).
+
+### Create the OAuth app (Slack admin)
+
+The recommended setup is a separate internal app, "Capybara connector" (user scopes only, MCP on, no bot):
+
+1. Open <https://api.slack.com/apps> → **Create New App** → **From a manifest** in the company workspace and
+   paste [`app-manifest.connector.yaml`](./app-manifest.connector.yaml), with its redirect URL replaced by
+   `<http.publicUrl>/api/v1/oauth/callback` (for example
+   `https://capybara.example.com/api/v1/oauth/callback`). The deployment must set `http.publicUrl`. The
+   manifest turns on MCP (`is_mcp_enabled`) and requests the user scopes the template asks for:
+   `search:read.public`, `search:read.private`, `search:read.mpim`, `search:read.im`, `search:read.files`,
+   `search:read.users`, `channels:history`, `groups:history`, `mpim:history`, `im:history`,
+   `channels:read`, `groups:read`, `mpim:read`, `im:read`, `channels:write`, `groups:write`, `mpim:write`,
+   `im:write`, `chat:write`, `canvases:read`, `canvases:write`, `lists:read`, `lists:write`, `files:read`,
+   `files:write`, `reactions:read`, `reactions:write`, `emoji:read`, `users:read`, `users:read.email`.
+2. Leave **Manage Distribution** off: Slack's MCP server serves only internal apps and Marketplace apps,
+   and an internal app cannot be authorized from other workspaces.
+3. Do **not** enable PKCE in the app settings: it turns the app into a public client for good. Capybara
+   stays a confidential client (it still sends a PKCE challenge, which Slack's metadata advertises).
+4. Keep token rotation off (the manifest does). Without rotation, user tokens do not expire.
+5. Approve or install the app as your workspace requires (with "Only allow pre-approved apps", a workspace
+   admin approves it; on Enterprise Grid, an org admin).
+6. Copy **Basic Information → App Credentials → Client ID** and **Client Secret**.
+
+Reusing the channel app instead is possible as long as token rotation stays off (rotation is app-wide and
+would expire the bot's static `xoxb` token): add the user scopes, turn on MCP and add the redirect URL. Slack
+prefix-matches redirect URLs, so one entry `<http.publicUrl>/api/v1/` covers both this callback and the Sign
+in with Slack callback that the [setup guide](#create-the-slack-app) puts in the bot app's manifest.
+
+### Turn it on (org admin) and connect (members)
+
+1. Org settings → plugins → Slack: switch on the Slack connector template and enter the client
+   (`clientId`, `clientSecret`) from step 6. The secret is stored encrypted and reads back only as "set";
+   rotate it later through the connector's org credentials. Each org enters its own client (the same app may
+   serve several orgs).
+2. Members open **My connections** (`/account/connections`), click **Connect** on Slack and approve on
+   Slack's consent screen. Until they do, a Slack tool call shows the standard "connection required" card.
+3. **Disconnect** deletes the stored token in Capybara but does not revoke it at Slack: remove the
+   authorization in Slack too (the app's page → **Remove app**, or a workspace admin under **Manage apps**).
+
+### Decided risks
+
+- **Slack data in conversations**: tool results stay in the conversation event log and archives like any
+  other connector's, although Slack's Real-time Search terms say retrieved data must not be stored. The app
+  is the customer's own internal app under its own Slack agreement.
+- **Quoting private Slack content into shared threads**: in a Slack channel thread (through the bot), a tool
+  call runs on the acting member's token and the reply goes to a channel others read. There is no special
+  rule for this; it relies on the tool policies (the `ask` default of `slack_search_public_and_private`
+  plus whatever the org or agent sets).
+- **No identity check**: a member may connect a different Slack account than the one bound to their
+  Capybara account; the token still reaches only their own calls.
+- **No revoke on disconnect** and **one client per org** (no platform-level client) in this release.
+- **Scopes**: the full set only; there is no reduced variant (for example without DM scopes).
+
 ## Commands
 
 The kernel parses commands from the message text: `/new` (DM: start a new conversation), `/env [name]`
@@ -163,7 +254,7 @@ one in Slack's menu.
   `trigger_id`) reuses the cached echo, so it is posted once.
 - The fixed hints are bilingual (English · 中文): the org's IM language is not known on inbound.
 
-Existing apps: re-paste the manifest (**App Manifest** in the app settings) or add the three commands
+Existing apps: re-paste the manifest from the setup guide (**App Manifest** in the app settings) or add the three commands
 by hand under **Slash Commands**, add the bot scopes `commands` and `im:write`, then **reinstall the
 app** to the workspace (Slack asks for it because the scopes changed). The bot token stays the same.
 
@@ -188,8 +279,15 @@ app** to the workspace (Slack asks for it because the scopes changed). The bot t
 - **Reconnect**: managed by the plugin (SDK auto-reconnect is turned off). When Slack recycles a connection normally it reconnects immediately; consecutive short-lived (under 10 seconds) connections back off exponentially
   (with jitter), and after 5 in a row, or on receiving `link_disabled`, it reports an error; the kernel records `last_error` and backs off.
 - **Idempotency**: `chat.postMessage` has no idempotency parameter, so `idempotencyKey` is ignored.
-- **Profile**: the display name / avatar come from the `user_profile` carried by the event, otherwise from `users.info` (cached per process for 10 minutes, at most 1000 people,
-  1.5 second timeout; if the lookup fails it is left out).
+- **Profile, time zone and language**: every speaker is looked up with
+  [`users.info`](https://docs.slack.dev/reference/methods/users.info) `include_locale=true` (Tier 4, `users:read`):
+  `user.tz` becomes `sender.timeZone` and `user.locale` becomes `sender.locale`, passed as is (the kernel
+  ignores an unknown zone and normalizes the language; both win over the person's Capybara settings for the
+  run's date, zone and language). The display name and avatar come from the event's `user_profile` when it
+  has one, else from the same lookup. The result is cached in the plugin kv per team and user for 10 minutes
+  (shared by every replica; nothing in process memory; an unknown user is cached as empty). The lookup has a
+  1.5 second timeout so the 3 second ack deadline holds; on any failure the fields are left out and nothing
+  is cached.
 - **Permission manifest**: `network: ["slack.com", "wss-primary.slack.com"]`, shown only and not enforced; login (OIDC) and the directory also use
   `slack.com`. The WSS host for Socket Mode is
   assigned by Slack and is not fixed (for example `wss-primary.slack.com`, `wss-backup.slack.com`, `wss-111.slack.com`); the manifest's domain

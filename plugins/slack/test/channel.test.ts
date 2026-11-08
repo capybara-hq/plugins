@@ -402,21 +402,6 @@ describe("connect (Socket Mode)", () => {
     expect(events).toHaveLength(1);
   });
 
-  it("users.info lookups are cached per process (one call per user)", async () => {
-    slack.users.set("U7", { id: "U7", teamId: "T1", name: "gus" });
-    const { events } = await connect();
-    const before = slack.calls.filter((c) => c.method === "users.info").length;
-    for (const ts of ["7.1", "7.2", "7.3"]) {
-      await slack.waitForAck(slack.pushEvent(slackDmEvent("U7", "hey", { ts })));
-    }
-    expect(slack.calls.filter((c) => c.method === "users.info").length - before).toBe(1);
-    expect(events.map((e) => e.type === "message" && e.sender.displayName)).toEqual([
-      "gus",
-      "gus",
-      "gus",
-    ]);
-  });
-
   it("profile lookup failure does not block the event", async () => {
     const { events } = await connect();
     const env = slack.pushEvent(slackDmEvent("U404", "hey", { ts: "8.1" }));

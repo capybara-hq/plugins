@@ -47,7 +47,7 @@ const approval = (over: Partial<Extract<ChannelCard, { kind: "approval" }>> = {}
   toolName: "post_announcement",
   appName: "Fake IM",
   agentName: "Helper",
-  inputPreview: '{"text":"Office closed on Friday"}',
+  inputPreview: "Post announcement: Office closed on Friday",
   scopes: ["always", "once", "session"],
   expiresAt: "2026-10-20T10:00:00Z",
   state: "pending",
@@ -165,7 +165,8 @@ describe("renderSend: approval card", () => {
     expect(md).toContain("Approve?");
     expect(md).toContain("Fake IM / post\\_announcement");
     expect(md).toContain("Helper");
-    expect(md).toContain('```\n{"text":"Office closed on Friday"}\n```');
+    expect(md).toContain("**Summary**: Post announcement: Office closed on Friday");
+    expect(md).not.toContain("```");
     expect(md).toContain("2026-10-20T10:00:00Z");
     const bs = buttons(card);
     expect(bs.map(label)).toEqual([
@@ -196,6 +197,16 @@ describe("renderSend: approval card", () => {
     expect(buttons(card).map(label)).toEqual(["批准一次", "拒绝", "在网页上打开"]);
     expect(actionOf(buttons(card)[0] as El)).toMatchObject({ chat: "d" });
     expect(card.config).toMatchObject({ summary: { content: "审批：Post an announcement" } });
+    expect(markdown(card)).toContain("**摘要**：Post announcement: Office closed on Friday");
+  });
+
+  it("the summary is plain escaped text: no Markdown, links or code from model-controlled values", () => {
+    const evil = "**bold** [x](https://evil.example) `code` <b>&";
+    const [card] = renderSend({ text: "", cards: [approval({ inputPreview: evil })] }, "en", "g");
+    const md = markdown(card as LarkCard);
+    expect(md).toContain(
+      "**Summary**: \\*\\*bold\\*\\* \\[x\\]\\(https://evil.example\\) \\`code\\` &#60;b\\>&#38;",
+    );
   });
 
   it("decided: state shown with who decided, no action buttons, only a details link", () => {
@@ -233,7 +244,7 @@ describe("renderSend: approval card", () => {
     expect(markdown(card as LarkCard).split("Post an announcement").length - 1).toBe(0);
   });
 
-  it("truncates a huge input preview and keeps fences intact", () => {
+  it("truncates a huge summary and keeps the card within the size limit", () => {
     const [card] = renderSend(
       { text: "", cards: [approval({ inputPreview: `${"```".repeat(10)}${"x".repeat(50_000)}` })] },
       "en",
@@ -242,7 +253,7 @@ describe("renderSend: approval card", () => {
     if (!card) throw new Error("no card");
     expect(contentBytes(card)).toBeLessThanOrEqual(CONTENT_BYTES_LIMIT);
     const md = markdown(card);
-    expect((md.match(/^```$/gm) ?? []).length).toBe(2);
+    expect(md).not.toMatch(/^```/m);
     expect(md).toContain("…");
   });
 

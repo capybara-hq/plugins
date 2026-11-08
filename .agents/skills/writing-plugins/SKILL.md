@@ -75,6 +75,7 @@ Run from the repository root; relative paths resolve against the current directo
 - `connectorTemplates` (<= 20): `./…/<id>.json` files; the template id is the file's base name (`^[a-z0-9][a-z0-9-]{0,63}$`), unique in the plugin. Omitted = scan `connectors/*.json`.
 - `dependencies` (<= 20): a plugin name and a semver range; no self-dependency, no duplicates. No integrity lock: each dependency is verified against its own source when imported. An org install installs missing dependencies first (the highest imported version satisfying the range); a dependency whose templates need a credential must be installed on its own first. Publish dependencies before the plugins that need them.
 - `agents` (<= 64): `./…/<name>.md` agent templates (`parseAgentTemplate`: frontmatter `name` (the template name rule), `description` (<= 4096), optional `tools` / `disallowedTools` (tool keys), `toolPolicies` (`ask` / `deny`), `model` (`inherit` / `fast` / `standard` / `capable`, a purpose tier, never a model id), `effort`, `maxSteps`, `skills` (<= 3 names, preloaded); the body (<= 100 000 characters) is the instructions). Omitted = scan `agents/*.md`. Names are unique in the plugin; an agent dispatches one as `<plugin>:<name>`. A plugin with only templates needs no extension or permission approval.
+- `setupGuides` (<= 8): setup material the kernel renders and the web shows where a person needs it (core spec `2026-11-08-plugin-setup-guides-design.md`). Each guide has an `id`, a `place` (today only `channel-connection`: 新建渠道 and the channel page; the extension must provide `channel@1`), a `{ en, zh? }` `title`, plain-text `steps` (a backtick pair is inline code) and template `files` (`./…` `.tmpl` / `.yaml` / `.yml` / `.json` / `.txt`, <= 64 KiB, `language` `yaml` / `json` / `text`); a step or file may carry a `mode` (`long_connection` / `webhook`), one file per mode instead of conditionals. Placeholders are `{{name}}` from the place's fixed, secret-free set (`publicUrl`, `webhookUrl`, `signInCallbackUrl`, `connectionName`, `orgName`, `pluginName`, `pluginVersion`, `mode`); the packer refuses others. Put placeholders inside double quotes in YAML / JSON (values are JSON-string-escaped). Test templates with the SDK's `renderSetupGuideText` (see `plugins/slack/test/setup-guide.test.ts`). A changed file changes the guide's hash, and connections set up with the old one get a "update the app" notice.
 - Version ranges on official packages (`pluginVersion`, `dependencies`, the `sdk` range) are written `^0.1.0-rc.0` while they are release candidates: a plain `^0.1.0` does not accept `0.1.0-rc.N`.
 - `extension`: **written by the packer, never by hand** (a source `plugin.json` that has it fails to pack). Its `manifest` is the static extension manifest; its `sdk` range must have an upper bound and equals `package.json` `peerDependencies["@capybara-hq/plugin-sdk"]`.
 - `package.json` in the tgz: an npm name, no install scripts, no `gypfile`, no dependency fields; `peerDependencies` only the host packages (`@capybara-hq/plugin-sdk`, `zod`) and only with an extension.
@@ -83,7 +84,6 @@ Run from the repository root; relative paths resolve against the current directo
 
 ```json
 {
-  "$schema": "https://capybarahq.com/schemas/connector-template.v1.schema.json",
   "displayName": { "zh": "Acme CRM", "en": "Acme CRM" },
   "description": "Acme CRM over MCP",
   "icon": "./icons/crm.svg",
@@ -99,7 +99,9 @@ Run from the repository root; relative paths resolve against the current directo
 }
 ```
 
-The file is strict; `template` is validated by `validateConnectorTemplate`, and values are never echoed in errors.
+The file is strict (unlike `plugin.json`, a `$schema` key is refused); `template` is validated by `validateConnectorTemplate`, and values are never echoed in errors.
+
+- `defaultEnabled` (file level, optional): `false` starts the template switched off in every org, even where its plugin is on, until an org admin switches it on (so an org using the plugin for something else is not asked for the template's input). Default `true`. Used by slack's `connectors/slack.json`.
 
 - `plugin` / `connector`: the connector extension's name and its `Connector.kind`. At import, when that connector is loaded on the deployment, the endpoint is validated against its `endpointSchema`, every `editableEndpoint` path must be a field of that schema, and `pluginVersion` must be satisfied by the loaded version; when the connector is this plugin's own extension or a dependency's, only the static checks run then. Any other connector that is not loaded refuses the import. At org install the template is checked again against the loaded connector.
 - `endpoint`: the preset, visible to every org; **no credential-like keys at any level** (`token`, `apiKey`, `secret`, `password`, `authorization`, `cookie` and so on, ignoring case and `-` / `_`).
