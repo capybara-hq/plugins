@@ -10,7 +10,7 @@ import {
 } from "@capybara-hq/testing";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { encodeActionValue } from "../src/actions.js";
-import { createSlackChannel, SlackConnection } from "../src/channel.js";
+import { createSlackChannel, PROFILE_CACHE_TTL_SECONDS, SlackConnection } from "../src/channel.js";
 import { verifySlackSignature } from "../src/webhook.js";
 
 const SIGNING_SECRET = "8f742231b10e8888abcd99yyyzzz85a5";
@@ -178,9 +178,10 @@ describe("Slack webhook inbound", () => {
     const again = await handle(fresh, request(JSON.stringify(body)));
     expect(again).toEqual(r);
     expect(authTests() - before).toBe(1);
-    // Socket Mode's credentials check fills the same cache
-    expect([...kv.map.values()]).toEqual(["UBOT"]);
-    expect(kv.ttls).toEqual([3600]);
+    // Socket Mode's credentials check fills the same cache (next to the speaker's profile)
+    const botUser = [...kv.map].filter(([k]) => k.startsWith("bot-user/"));
+    expect(botUser.map(([, v]) => v)).toEqual(["UBOT"]);
+    expect([...kv.ttls].sort()).toEqual([3600, PROFILE_CACHE_TTL_SECONDS].sort());
   });
 
   it("block_actions form → card_action with the same eventId as Socket Mode", async () => {

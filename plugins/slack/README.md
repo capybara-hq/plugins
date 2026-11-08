@@ -203,8 +203,15 @@ app** to the workspace (Slack asks for it because the scopes changed). The bot t
 - **Reconnect**: managed by the plugin (SDK auto-reconnect is turned off). When Slack recycles a connection normally it reconnects immediately; consecutive short-lived (under 10 seconds) connections back off exponentially
   (with jitter), and after 5 in a row, or on receiving `link_disabled`, it reports an error; the kernel records `last_error` and backs off.
 - **Idempotency**: `chat.postMessage` has no idempotency parameter, so `idempotencyKey` is ignored.
-- **Profile**: the display name / avatar come from the `user_profile` carried by the event, otherwise from `users.info` (cached per process for 10 minutes, at most 1000 people,
-  1.5 second timeout; if the lookup fails it is left out).
+- **Profile, time zone and language**: every speaker is looked up with
+  [`users.info`](https://docs.slack.dev/reference/methods/users.info) `include_locale=true` (Tier 4, `users:read`):
+  `user.tz` becomes `sender.timeZone` and `user.locale` becomes `sender.locale`, passed as is (the kernel
+  ignores an unknown zone and normalizes the language; both win over the person's Capybara settings for the
+  run's date, zone and language). The display name and avatar come from the event's `user_profile` when it
+  has one, else from the same lookup. The result is cached in the plugin kv per team and user for 10 minutes
+  (shared by every replica; nothing in process memory; an unknown user is cached as empty). The lookup has a
+  1.5 second timeout so the 3 second ack deadline holds; on any failure the fields are left out and nothing
+  is cached.
 - **Permission manifest**: `network: ["slack.com", "wss-primary.slack.com"]`, shown only and not enforced; login (OIDC) and the directory also use
   `slack.com`. The WSS host for Socket Mode is
   assigned by Slack and is not fixed (for example `wss-primary.slack.com`, `wss-backup.slack.com`, `wss-111.slack.com`); the manifest's domain
