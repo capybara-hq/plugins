@@ -18,11 +18,14 @@ The Slack docs cited here were consulted on 2026-10-20.
 1. Open <https://api.slack.com/apps> → **Create New App** → **From a manifest**, pick the workspace, and paste this directory's
    [`app-manifest.yaml`](./app-manifest.yaml) (format: [App manifest reference](https://docs.slack.dev/reference/app-manifest)).
    It turns on Socket Mode and Interactivity, subscribes to the events `message.im`, `app_mention`, `message.channels`,
-   `message.groups`, `team_join` and `user_change`, and requests these bot scopes:
+   `message.groups`, `team_join` and `user_change`, registers the slash commands `/new`, `/env` and
+   `/capybara` (see [Commands](#commands)), and requests these bot scopes:
 
    | scope | Purpose |
    |---|---|
-   | `chat:write` | Send and update replies and cards |
+   | `chat:write` | Send and update replies and cards; post the visible echo of a slash command run in a channel |
+   | `commands` | Receive the slash commands `/new`, `/env`, `/capybara` |
+   | `im:write` | `conversations.open`: tell the bot's own DM from a DM between two people where a slash command was run |
    | `im:history` | Receive DM messages |
    | `app_mentions:read` | Receive messages that @-mention the bot in channels |
    | `channels:history` / `groups:history` | Receive thread replies in public / private channels |
@@ -32,8 +35,10 @@ The Slack docs cited here were consulted on 2026-10-20.
 2. **Basic Information → App-Level Tokens → Generate Token and Scopes**: add the scope `connections:write`
    to get the app-level token `xapp-…` (Socket Mode uses it to call `apps.connections.open`).
 3. **Install App → Install to Workspace** to get the bot token `xoxb-…`.
-4. In the Capybara org settings, enable the `slack` plugin, then **create a new channel connection**: pick Slack as the plugin, fill in `appToken` (`xapp-…`) and
-   `botToken` (`xoxb-…`), and bind an agent. Both are stored in the secret store, and the API only returns "set".
+4. In the Capybara org settings, enable the `slack` plugin (its org-level fields are optional and only for
+   [directory sync](#directory-directory1): leave them empty if you only chat with the bot), then **create a new channel
+   connection** under Channels: pick Slack as the plugin, fill in the app-level token (`appToken`, `xapp-…`) and
+   the bot token (`botToken`, `xoxb-…`), and bind an agent. Both are stored in the secret store, and the API only returns "set".
 5. In Slack, DM the bot, or add the bot to a channel and @-mention it. The first conversation gets a binding card; click the button to confirm the binding on the web page.
 
 Note: apps that use Socket Mode cannot currently be listed in the public Slack Marketplace, and one app can hold at most 10 concurrent
@@ -57,7 +62,10 @@ connection → Overview → Inbound mode); the connection page then shows its we
 2. In the app settings, turn **Socket Mode** off, then use the webhook URL as the **Event
    Subscriptions → Request URL** (Slack verifies it with a `url_verification` challenge, which the
    plugin answers) and as the **Interactivity & Shortcuts → Request URL** (card buttons).
-3. `appToken` is optional in webhook mode: only Socket Mode uses it.
+3. Under **Slash Commands**, edit `/new`, `/env` and `/capybara` and set each one's **Request URL**
+   to the same webhook URL (the manifest leaves it out, since Socket Mode needs none). The plugin tells
+   a slash command from an event by its form body and answers it like Socket Mode does.
+4. `appToken` is optional in webhook mode: only Socket Mode uses it.
 
 Both modes parse events the same way (same message and card-click ids), so the kernel's dedupe
 still drops a redelivery that arrives across a mode switch.
@@ -114,6 +122,51 @@ channel connection uses, but the config is stored separately and goes through th
 - When `teamId` / `botToken` are not filled in (the org only uses the bot), the plugin's `configured()` returns false: the kernel does not scan or sync, and records no audit
   or warning; a manual sync returns 409 `directory.not_configured`. It is not treated as an empty directory.
 
+## Commands
+
+The kernel parses commands from the message text: `/new` (DM: start a new conversation), `/env [name]`
+(DM: list or set your default environment) and `/<skill> args` (invoke a skill). The Slack client,
+however, treats any message starting with `/` as a slash command and refuses names no app registered
+("/env is not a valid command"), so those messages never reach the bot. The app therefore registers
+three slash commands, and the plugin turns each back into the text the kernel parses (it parses no
+command itself):
+
+| Slash command | Text the kernel gets |
+|---|---|
+| `/new` | `/new` |
+| `/env [name]` | `/env [name]` |
+| `/capybara <skill> [args]` | `/<skill> [args]` (`/capybara fix-issue 12` → `/fix-issue 12`; also `/capybara github:fix-issue 12`) |
+
+`@capybara /fix-issue 12` in a channel still works as plain text, as before. Commands other than `/new`
+and `/env` map like `/capybara`, so an admin may rename it (for example when another app already owns
+`/capybara`). Slack lets several apps register `/new` or `/env`; a person who has two such apps picks
+one in Slack's menu.
+
+- **In your DM with the bot**: the command becomes a DM message from you, exactly as if you had typed
+  the text (binding, `/new`, `/env` and skills behave the same). Slack shows no slash command in the
+  conversation, so the ack carries an ephemeral echo of what you ran ("only visible to you"); the
+  kernel's reply follows as usual. The message id is `<DM channel>:cmd-<trigger_id>`.
+- **In a channel**: the bot first posts a visible echo `@you: /capybara fix-issue 12` and the event is
+  that message, with `mentionsBot: true` (the same as `@capybara /fix-issue 12`): the kernel applies its
+  group rules (`/new` and `/env` are plain text in a group) and replies in the echo's thread, where you
+  can follow up by @-mentioning the bot. The bot must be in the channel; otherwise you get an
+  ephemeral "invite the app first" hint and nothing is sent to the kernel.
+- **In a DM between two people** (where the bot cannot reply): an ephemeral hint to use your DM with
+  the app or a channel; nothing is sent. The plugin finds the bot's own DM with `conversations.open`
+  (cached in kv for a day; if the lookup fails it assumes the DM is the bot's).
+- **`/capybara` without a skill**: an ephemeral usage line.
+- **Ack**: Slack wants a slash command acked within 3 seconds and never redelivers one. The plugin acks
+  only after `onEvent` resolves, which is quick (the kernel dedupes and enqueues); before it, at most
+  one Web API call runs (the echo post, or the DM lookup), each with a 1.5 second timeout, in parallel
+  with the profile lookup. If `onEvent` rejects, nothing is acked and Slack shows the person a timeout
+  error, so they run the command again. A Socket Mode redelivery of the same command (same
+  `trigger_id`) reuses the cached echo, so it is posted once.
+- The fixed hints are bilingual (English · 中文): the org's IM language is not known on inbound.
+
+Existing apps: re-paste the manifest (**App Manifest** in the app settings) or add the three commands
+by hand under **Slash Commands**, add the bot scopes `commands` and `im:write`, then **reinstall the
+app** to the workspace (Slack asks for it because the scopes changed). The bot token stays the same.
+
 ## Behavior
 
 - **DMs**: every text message goes to the kernel. **Channels**: only messages that @-mention the bot (a new message gets a thread reply under it), and replies inside threads
@@ -146,9 +199,13 @@ channel connection uses, but the config is stored separately and goes through th
 
 | Field | Description |
 |---|---|
-| `botToken` | Bot token (`xoxb-…`, secret) |
-| `appToken` | App-level token (`xapp-…`, secret); required for Socket Mode, unused in webhook mode |
-| `signingSecret` | Signing Secret (secret); required in webhook mode, unused with Socket Mode |
+Shown in the form with zh / en labels and help.
+
+| Field | Label | Description |
+|---|---|---|
+| `appToken` | App-level token / 应用令牌 | `xapp-…` (secret); required for Socket Mode (Basic Information → App-Level Tokens, scope `connections:write`), unused in webhook mode |
+| `botToken` | Bot token / 机器人令牌 | `xoxb-…` (secret; Install App → Bot User OAuth Token) |
+| `signingSecret` | Signing secret / 签名密钥 | Secret; only needed in webhook mode, leave empty for Socket Mode |
 
 ## Deployment-level config
 
@@ -165,5 +222,5 @@ The deployment-level config lives under the kernel config `extensionConfig.slack
 
 | Field | Description |
 |---|---|
-| `teamId` | The Slack workspace id for directory sync (`T…`) |
-| `botToken` | The bot token for directory sync (`xoxb-…`, secret) |
+| `teamId` | Optional: the Slack workspace id (`T…`) for syncing members into the org; leave empty if you only chat with the bot |
+| `botToken` | Optional, only for member sync (`xoxb-…`, secret); the tokens for chat go into the channel connection |

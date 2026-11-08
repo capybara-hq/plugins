@@ -15,6 +15,22 @@ features:
   bot_user:
     display_name: capybara
     always_online: true
+  # Slack rejects a message starting with an unregistered "/name", so the kernel's commands are
+  # registered here. The plugin turns each into the text the kernel parses: /new -> "/new",
+  # /env x -> "/env x", /capybara foo bar -> "/foo bar" (skill invocation). No url: Socket Mode
+  # delivers them; in webhook mode set each command's Request URL to the webhook URL.
+  slash_commands:
+    - command: /new
+      description: Start a new conversation (direct message)
+      should_escape: false
+    - command: /env
+      description: List or set your default environment (direct message)
+      usage_hint: "[name]"
+      should_escape: false
+    - command: /capybara
+      description: Run a skill
+      usage_hint: "<skill> [args]"
+      should_escape: false
 oauth_config:
   # Sign in with Slack (identity-source@1): uncomment and set to <http.publicUrl>/api/v1/auth/sso/slack/callback.
   # The sign-in flow requests openid / email / profile itself; do not add them as scopes here (Slack wants
@@ -24,6 +40,8 @@ oauth_config:
   scopes:
     bot:
       - chat:write # post and update replies and cards
+      - commands # slash commands /new, /env, /capybara
+      - im:write # conversations.open: tell the bot's own DM from other DMs a slash command runs in
       - im:history # message.im: direct messages to the bot
       - app_mentions:read # app_mention: @capybara in channels
       - channels:history # message.channels: thread replies in public channels

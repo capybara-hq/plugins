@@ -31,10 +31,22 @@ export const SlackDirectoryConfig = z.object({
       .string()
       .regex(/^T[A-Z0-9]+$/, "must be a Slack workspace team id such as T0123ABCD")
       .optional(),
-    { label: { zh: "工作区 ID", en: "Workspace ID" } },
+    {
+      label: { zh: "工作区 ID", en: "Workspace ID" },
+      help: {
+        zh: "选填：和机器人令牌一起用于把 Slack 成员同步到组织；只用机器人收发消息时不用填。",
+        en: "Optional: used with the bot token to sync Slack members into the org. Leave empty if you only use the bot for chat.",
+      },
+      placeholder: "T0123ABCD",
+    },
   ),
   botToken: ui(secret(z.string().regex(/^xoxb-/, "must be a bot token starting with xoxb-")), {
     label: { zh: "机器人令牌", en: "Bot token" },
+    help: {
+      zh: "选填，仅用于成员同步；聊天用的令牌在新建渠道连接时填。",
+      en: "Optional, only for member sync. The tokens for chat go into the channel connection you create under Channels.",
+    },
+    placeholder: "xoxb-…",
   }).optional(),
 });
 export type SlackDirectoryConfigValue = z.infer<typeof SlackDirectoryConfig>;
