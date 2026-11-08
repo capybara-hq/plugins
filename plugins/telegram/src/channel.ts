@@ -12,8 +12,10 @@ import { renderCards, type TelegramPost } from "./cards.js";
 import { botIdOf, connectionTenant, TelegramConnection } from "./config.js";
 import { toChannelSendError } from "./errors.js";
 import { markdownToTelegramHtml, splitHtml } from "./html.js";
+import { updateToInbound } from "./inbound.js";
 import { runLongPolling } from "./poll.js";
 import { threadStore } from "./threads.js";
+import { answerWebhookCallback, handleTelegramWebhook, webhookBotIdentity } from "./webhook.js";
 
 /** Telegram allows about 20 messages a minute in a group; edits count (spec "Send, update"). */
 export const MIN_EDIT_INTERVAL_MS = 3000;
@@ -181,6 +183,35 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
         pollTimeoutSec,
         backoffBaseMs: o.backoffBaseMs ?? 1000,
       });
+    },
+
+    webhook: {
+      // The kernel validated `config`; parsing again only narrows its type. Nothing reaches
+      // Telegram (getMe, answerCallbackQuery) before the secret check passed.
+      async handle({ connectionId, config, request, signal }) {
+        const c = TelegramConnection.parse(config);
+        const botId = botIdOf(c.botToken);
+        const api = telegramApi({
+          apiUrl: o.apiUrl,
+          token: c.botToken,
+          ...(o.requestTimeoutMs !== undefined && { timeoutMs: o.requestTimeoutMs }),
+        });
+        return handleTelegramWebhook({
+          config: c,
+          request,
+          toEvent: async (update) => {
+            const bot = await webhookBotIdentity(api, o.kv, botId, signal);
+            const event = await updateToInbound(
+              update,
+              bot,
+              threadStore(o.kv, botId),
+              cardTokenStore(o.kv, botId),
+            );
+            await answerWebhookCallback(api, update, o.log, connectionId, signal);
+            return event;
+          },
+        });
+      },
     },
 
     async send({ config, target, message, locale, signal }) {
