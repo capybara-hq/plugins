@@ -99,14 +99,15 @@ beforeAll(async () => {
   raw = createDb(pgc.url, 3);
   db = kernelDb(raw);
   const rootId = await createLocalAccount(db, "root", "R");
-  // marketplace imports need an enterprise admin (no testing helper creates one)
-  await db
-    .updateTable("accounts")
-    .set({ is_enterprise_admin: true })
-    .where("id", "=", rootId)
-    .execute();
+  // marketplace imports need a super admin (no testing helper creates one)
+  await db.updateTable("accounts").set({ is_super_admin: true }).where("id", "=", rootId).execute();
   admin = await login(k, "root");
   orgId = await createOrg(admin);
+  // connector-mcp is loaded from config, not the catalog: the org switches it on itself
+  await db
+    .insertInto("extension_org_configs")
+    .values({ plugin: "connector-mcp", org_id: orgId, enabled: true })
+    .execute();
 }, 120_000);
 
 afterAll(async () => {
@@ -163,7 +164,7 @@ describe("a translated Claude Code MCP server with connector-mcp", () => {
     const confirmed = await admin({
       method: "POST",
       url: `/api/v1/admin/catalog/imports/${stagingId}/confirm`,
-      payload: { reviewHash: review.reviewHash, deployExtension: false },
+      payload: { reviewHash: review.reviewHash },
     });
     expect(confirmed.statusCode, confirmed.body).toBe(201);
     const itemId = confirmed.json().item.id as string;

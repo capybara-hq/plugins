@@ -20,7 +20,7 @@ plugins. Data locations keep their old names (`plugin_<name>` schemas, `/plugin-
 |---|---|
 | `plugins/<name>` | One plugin each: `package.json`, `.capybara-plugin/plugin.json`, the extension in `src/index.ts` (optional), `skills/`, `connectors/`, `agents/`, `migrations/`, `ui/`, and its tests in `test/` (unit, kernel-level and dual-replica tests, live tests under `test/live`) |
 | `plugins/example-counter`, `plugins/example-board` | Reference implementations (private, never published): the smallest extension and an embed UI |
-| `.capybara-plugin/marketplace.json` | The official marketplace (`capybara-official`): one npm entry per published `(plugin, version)` with its sha512; written only by `capybara-plugin marketplace --write` in the Version Packages PR, append-only |
+| `.capybara-plugin/marketplace.json` | The official marketplace (`capybara-official`): one npm entry per plugin at its current version with the sha512 of its reproducible pack; written only by `capybara-plugin marketplace --write` in the Version Packages PR, which replaces a plugin's entry when its version moves (older versions stay installable by direct npm import) |
 | `tools/ci` | The CI plan for a diff (`tools/ci/src/affected.ts`, run by the `changes` job) |
 | `tools/dev` | `pnpm doctor:env` and `pnpm verify` (same JSON contract as core's) |
 | `tools/worktree` | `pnpm wt:new` / `wt:rm` / `wt:ls`, paired with `.claude/hooks/branch-safety.sh` |
@@ -150,7 +150,7 @@ workers and other tests' child processes run plain Node. This is temporary, unti
   | `ci`: `pnpm lint`, `pnpm typecheck` | full | cheap |
   | `capybara-plugin check` (dependency boundary, extension state, permissions incl. `perm-hooks` / `perm-ui`, plugin pack, tool design, migrations, `plugin-test-imports`, `plugin-release-metadata`); on PRs with `--base "$(git rev-parse HEAD^1)"`, which also fails when the diff edits, deletes or renames an applied migration | full | reads every plugin, seconds |
   | `check:synced-skills`, `check:skills-frontmatter` | full | reads a few small files |
-  | `capybara-plugin marketplace --check`; on PRs with `--base "$(git rev-parse HEAD^1)"`: entries at the base stay unchanged and first (append-only), added ones match their packs | full | packs every public plugin, seconds; the release gate depends on it |
+  | `capybara-plugin marketplace --check`; on PRs with `--base "$(git rev-parse HEAD^1)"`: a plugin's version may only increase, a same version keeps its integrity, and changed entries match their packs | full | packs every public plugin, seconds; the release gate depends on it |
   | `pnpm pack-plugins` (artifact `plugin-packages`), commitlint (PRs) | full | cheap |
   | `test` (vitest; Docker on the runner; live tests skip without their env vars) | by diff | the changed plugins plus every plugin that depends on them (by `plugin.json` dependencies or package.json dependencies, transitively); `.claude/hooks/**` and `.claude/settings.json` run `tools/worktree`, `.agents/**` runs `tools/checks`; 2 shards on a full run, else 1 |
 
@@ -189,6 +189,11 @@ workers and other tests' child processes run plain Node. This is temporary, unti
 - Tests that hit real services run only when their `CAPYBARA_TEST_*` variables are set (each skill
   lists them: model providers, E2B, Slack, Lark, Jina (`CAPYBARA_TEST_JINA_API_KEY`), MCP / OpenAPI
   connectors with `CAPYBARA_TEST_LIVE_TOOLS`).
+- Native model platform providers: deepseek `CAPYBARA_TEST_DEEPSEEK_API_KEY` (falls back to
+  `CAPYBARA_TEST_OAICOMPAT_API_KEY`); bailian `CAPYBARA_TEST_BAILIAN_API_KEY` with optional `_REGION`
+  and `_WORKSPACE_ID`; ark `CAPYBARA_TEST_ARK_API_KEY` with optional `_REGION`, `_ACCESS_KEY_ID` and
+  `_SECRET_ACCESS_KEY` (the management keys that list `ep-` endpoints). Bailian and ark pick the chat
+  and embedding models from the platform list; `_CHAT_MODEL` / `_EMBED_MODEL` pin one when set.
 - Keep keys in a local env file outside the repository (`~/.capybara-test.env`), load it only inside
   the test command, and never print it, paste it into a chat or commit it.
 - Run the live tests after changing request mapping, protocol handling or upgrading a vendor SDK. A
