@@ -5,7 +5,7 @@
     "zh": "Docker 沙箱",
     "en": "Docker sandbox"
   },
-  "version": "0.1.0-rc.4",
+  "version": "0.1.0-rc.5",
   "publisher": "Capybara",
   "description": "Conversation sandboxes (sandbox@1) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with an egress allowlist proxy",
   "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-docker#readme"
