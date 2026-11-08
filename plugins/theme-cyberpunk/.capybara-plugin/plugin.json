@@ -1,0 +1,22 @@
+{
+  "$schema": "https://capybarahq.com/schemas/plugin.v1.schema.json",
+  "schemaVersion": 1,
+  "name": "theme-cyberpunk",
+  "displayName": {
+    "zh": "赛博朋克",
+    "en": "Cyberpunk"
+  },
+  "version": "0.1.0-rc.0",
+  "publisher": "Capybara",
+  "icon": "./favicon.svg",
+  "description": {
+    "en": "Cyberpunk theme: neon yellow on deep blue-black with cyan glow, techno fonts and a neon pixel capybara",
+    "zh": "赛博朋克主题：深蓝黑底上的霓虹黄与青色辉光，科技感字体，霓虹像素水豚标志"
+  },
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/theme-cyberpunk#readme",
+  "themes": [
+    {
+      "path": "./themes/cyberpunk.json"
+    }
+  ]
+}

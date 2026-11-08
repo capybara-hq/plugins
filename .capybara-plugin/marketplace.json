@@ -532,6 +532,31 @@
           "integrity": "sha512-Zs8G0lW52t8A2TKZuwpHrG/0GmAPNRQHZR2+u8A2OMinHP6elAptf0BEYYjsWs0X6Ifc3ft5qxeQkCVDgMpPLA=="
         }
       }
+    },
+    {
+      "name": "theme-cyberpunk",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Cyberpunk theme: neon yellow on deep blue-black with cyan glow, techno fonts and a neon pixel capybara",
+        "zh": "赛博朋克主题：深蓝黑底上的霓虹黄与青色辉光，科技感字体，霓虹像素水豚标志"
+      },
+      "displayName": {
+        "zh": "赛博朋克",
+        "en": "Cyberpunk"
+      },
+      "icon": "./plugins/theme-cyberpunk/favicon.svg",
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/theme-cyberpunk#readme",
+      "permissions": {
+        "keys": [],
+        "sensitive": []
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-theme-cyberpunk",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-q8ZxMcO8RA4t81rufMSxjnPVufqKbtsZ5pLOI22OvN46vvPHy1tQTLCMWPPDiwLb6Och/iDqCm/+Kx+8dIAMtw=="
+        }
+      }
     }
   ]
 }
