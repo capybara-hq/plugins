@@ -2,15 +2,21 @@ import {
   type CardAction,
   type ChannelCard,
   type Locale,
+  type Logger,
   questionRenderableInline,
   renderCardAsText,
 } from "@capybara-hq/plugin-sdk";
 import { CALLBACK_PREFIX, type CardTokenStore } from "./actions.js";
-import { markdownToTelegramHtml } from "./html.js";
+import { htmlLink, markdownToTelegramHtml } from "./html.js";
 
 export interface TelegramPost {
   html: string;
   replyMarkup?: { inline_keyboard: unknown[][] };
+  /**
+   * The same card without URL buttons, its link kept in the text (callback buttons stay). Telegram
+   * rejects some button URLs (`http://localhost/...`: "Wrong HTTP URL") that it accepts as text.
+   */
+  withoutUrlButtons?: TelegramPost;
 }
 
 type Button = { text: string; callback_data: string } | { text: string; url: string };
@@ -53,22 +59,40 @@ function isHttp(v: string): boolean {
 
 const urlButton = (text: string, url: string): Button[] => (isHttp(url) ? [{ text, url }] : []);
 
-/** Card text without the line that carries the card's link (it becomes a URL button). */
-function cardText(card: ChannelCard, locale: Locale): string {
+/**
+ * Card text without the line that carries the card's link (it becomes a URL button), and that line
+ * as HTML with the link, for when Telegram rejects the button.
+ */
+function cardText(card: ChannelCard, locale: Locale): { body: string; linkLine?: string } {
   const url = card.kind === "connect" || card.kind === "bind" ? card.url : card.webUrl;
   const lines = renderCardAsText(card, locale).split("\n");
-  if (lines.length > 1 && lines[lines.length - 1]?.endsWith(url)) lines.pop();
-  return markdownToTelegramHtml(lines.join("\n"));
+  const last = lines[lines.length - 1];
+  if (lines.length > 1 && last?.endsWith(url)) {
+    lines.pop();
+    const label = markdownToTelegramHtml(last.slice(0, last.length - url.length));
+    return { body: markdownToTelegramHtml(lines.join("\n")), linkLine: `${label}${htmlLink(url)}` };
+  }
+  return { body: markdownToTelegramHtml(lines.join("\n")) };
+}
+
+/** Where a card button's action is stored, and where a failed store is reported. */
+interface ButtonContext {
+  tokens: CardTokenStore;
+  log: Logger;
 }
 
 async function callbackButton(
-  tokens: CardTokenStore,
+  b: ButtonContext,
   text: string,
   action: CardAction,
 ): Promise<Button[]> {
   try {
-    return [{ text: clip(text), callback_data: `${CALLBACK_PREFIX}${await tokens.put(action)}` }];
+    return [{ text: clip(text), callback_data: `${CALLBACK_PREFIX}${await b.tokens.put(action)}` }];
   } catch {
+    b.log.warn("telegram: could not store a card button's action; the button is left out", {
+      cardKind: action.cardKind,
+      cardId: action.cardId,
+    });
     return [];
   }
 }
@@ -76,7 +100,7 @@ async function callbackButton(
 async function keyboard(
   card: ChannelCard,
   locale: Locale,
-  tokens: CardTokenStore,
+  tokens: ButtonContext,
 ): Promise<Button[][]> {
   const t = T[locale];
   switch (card.kind) {
@@ -157,18 +181,36 @@ export function cardHeadline(card: ChannelCard, locale: Locale): string | undefi
   }
 }
 
-/** One post per card: HTML text and an inline keyboard (no keyboard when no button applies). */
+const markup = (rows: Button[][]) => {
+  const kept = rows.filter((r) => r.length > 0);
+  return kept.length > 0 ? { replyMarkup: { inline_keyboard: kept } } : {};
+};
+
+/**
+ * One post per card: HTML text and an inline keyboard (no keyboard when no button applies), plus
+ * the post without URL buttons when it has any (see {@link TelegramPost.withoutUrlButtons}).
+ */
 export async function renderCards(
   cards: ChannelCard[],
   locale: Locale,
   tokens: CardTokenStore,
+  log: Logger,
 ): Promise<TelegramPost[]> {
   const posts: TelegramPost[] = [];
   for (const card of cards) {
-    const rows = (await keyboard(card, locale, tokens)).filter((r) => r.length > 0);
+    const rows = await keyboard(card, locale, { tokens, log });
+    const { body, linkLine } = cardText(card, locale);
+    const hasUrlButton = rows.some((r) => r.some((b) => "url" in b));
     posts.push({
-      html: cardText(card, locale),
-      ...(rows.length > 0 && { replyMarkup: { inline_keyboard: rows } }),
+      html: body,
+      ...markup(rows),
+      ...(hasUrlButton &&
+        linkLine !== undefined && {
+          withoutUrlButtons: {
+            html: body === "" ? linkLine : `${body}\n${linkLine}`,
+            ...markup(rows.map((r) => r.filter((b) => !("url" in b)))),
+          },
+        }),
     });
   }
   return posts;

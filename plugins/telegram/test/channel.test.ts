@@ -2,7 +2,7 @@ import { ChannelSendError } from "@capybara-hq/plugin-sdk";
 import { type FakeTelegramServer, startFakeTelegram } from "@capybara-hq/testing";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createTelegramChannel } from "../src/channel.js";
-import { TEXT_LIMIT } from "../src/html.js";
+import { TEXT_LIMIT, visibleLength } from "../src/html.js";
 import type { Kv } from "../src/threads.js";
 
 let tg: FakeTelegramServer;
@@ -61,6 +61,21 @@ const approval = {
   state: "pending" as const,
   webUrl: "https://cap.example/c/1",
 };
+const question = (state: "pending" | "answered") => ({
+  kind: "question" as const,
+  id: "q1",
+  state,
+  webUrl: "https://cap.example/c/2",
+  form: {
+    title: "Pick one",
+    fields: [
+      { key: "env", label: "Env", schema: { type: "string" as const, enum: ["dev", "prod"] } },
+    ],
+  },
+});
+type Button = { text: string; url?: string; callback_data?: string };
+const buttonsOf = (m: { replyMarkup?: unknown } | undefined): Button[] =>
+  ((m?.replyMarkup as { inline_keyboard?: Button[][] } | undefined)?.inline_keyboard ?? []).flat();
 const base = { config, locale: "en" as const, signal: signal() };
 const sendErr = async (p: Promise<unknown>) => {
   const e = await p.then(
@@ -111,15 +126,117 @@ describe("send", () => {
     expect(JSON.stringify(tg.calls.map((c) => c.params))).not.toContain("k1");
   });
 
-  it("sends one message per card after the text, with a keyboard", async () => {
-    await make().send({
+  it("sends the text and a card as one message, the text first, with the keyboard", async () => {
+    const r = await make().send({
       ...base,
       target: dm,
       message: { text: "see", cards: [approval] },
     });
-    expect(tg.messages).toHaveLength(2);
-    expect(tg.messages[0]?.replyMarkup).toBeUndefined();
-    expect(tg.messages[1]?.replyMarkup).toBeDefined();
+    expect(tg.messages).toHaveLength(1);
+    expect(tg.messages[0]?.text.startsWith("see\n\n")).toBe(true);
+    expect(tg.messages[0]?.text).toContain("deploy");
+    expect(tg.messages[0]?.replyMarkup).toBeDefined();
+    expect(r.messageId).toBe(`42:${tg.messages[0]?.messageId}`);
+  });
+
+  it("sends a question card with the kernel's fixed text as one message", async () => {
+    const r = await make(memoryKv().kv).send({
+      ...base,
+      target: dm,
+      message: { text: "Your input is needed", cards: [question("pending")] },
+    });
+    expect(tg.messages).toHaveLength(1);
+    expect(tg.messages[0]?.text).toContain("Your input is needed");
+    expect(tg.messages[0]?.text).toContain("Pick one");
+    const labels = buttonsOf(tg.messages[0]).map((b) => b.text);
+    expect(labels).toEqual(["dev", "prod", "Open on web"]);
+    expect(r.messageId).toBe(`42:${tg.messages[0]?.messageId}`);
+  });
+
+  it("sends an approval card whose text is its title once", async () => {
+    await make().send({
+      ...base,
+      target: dm,
+      message: { text: approval.title, cards: [approval] },
+    });
+    expect(tg.messages).toHaveLength(1);
+    expect(tg.messages[0]?.text.split(approval.title)).toHaveLength(2);
+  });
+
+  it("sends a connect card with its text as one message", async () => {
+    await make().send({
+      ...base,
+      target: dm,
+      message: {
+        text: "Connect Jira to continue",
+        cards: [{ kind: "connect", appName: "Jira", url: "https://x.example/auth" }],
+      },
+    });
+    expect(tg.messages).toHaveLength(1);
+    expect(tg.messages[0]?.text).toContain("Connect Jira to continue");
+    expect(buttonsOf(tg.messages[0])).toEqual([{ text: "Connect", url: "https://x.example/auth" }]);
+  });
+
+  it("cuts an over-long card message to the limit instead of splitting it", async () => {
+    const text = `**${"a ".repeat(TEXT_LIMIT)}a**`;
+    await make().send({ ...base, target: dm, message: { text, cards: [approval] } });
+    expect(tg.messages).toHaveLength(1);
+    const html = tg.messages[0]?.text ?? "";
+    expect(visibleLength(html)).toBeLessThanOrEqual(TEXT_LIMIT);
+    expect(html.startsWith("<b>a a")).toBe(true);
+    expect(html).toContain("…</b>\n\n");
+    expect(html).toContain("deploy");
+    expect(tg.messages[0]?.replyMarkup).toBeDefined();
+  });
+
+  it("cuts the card itself when the card alone is over the limit", async () => {
+    const huge = { ...approval, inputPreview: "x".repeat(TEXT_LIMIT * 2) };
+    await make().send({ ...base, target: dm, message: { text: "lead", cards: [huge] } });
+    expect(tg.messages).toHaveLength(1);
+    const html = tg.messages[0]?.text ?? "";
+    expect(visibleLength(html)).toBeLessThanOrEqual(TEXT_LIMIT);
+    expect(html).not.toContain("lead");
+    expect(html).toMatch(/…(<\/[a-z]+>)*$/);
+    expect(html.split("<code>").length).toBe(html.split("</code>").length);
+  });
+
+  it("resends a card without URL buttons, the link in the text, when Telegram rejects one", async () => {
+    tg.failNext("sendMessage", {
+      status: 400,
+      description:
+        "Bad Request: inline keyboard button URL 'http://localhost:3000/c/1' is invalid: Wrong HTTP URL",
+    });
+    const card = { ...approval, webUrl: "http://localhost:3000/c/1" };
+    const r = await make(memoryKv().kv).send({
+      ...base,
+      target: dm,
+      message: { text: "", cards: [card] },
+    });
+    const sends = tg.calls.filter((c) => c.method === "sendMessage");
+    expect(sends).toHaveLength(2);
+    const first = JSON.stringify(sends[0]?.params.reply_markup);
+    expect(first).toContain('"url"');
+    const markup = sends[1]?.params.reply_markup as { inline_keyboard: Record<string, string>[][] };
+    const flat = markup.inline_keyboard.flat();
+    expect(flat.map((b) => b.text)).toEqual(["Approve once", "Deny"]);
+    expect(flat.every((b) => "callback_data" in b && !("url" in b))).toBe(true);
+    expect(String(sends[1]?.params.text)).toContain(
+      '<a href="http://localhost:3000/c/1">http://localhost:3000/c/1</a>',
+    );
+    expect(tg.messages).toHaveLength(1);
+    expect(r.messageId).toBe(`42:${tg.messages[0]?.messageId}`);
+  });
+
+  it("does not retry other 400s without URL buttons", async () => {
+    tg.failNext("sendMessage", {
+      status: 400,
+      description: "Bad Request: can't parse entities",
+    });
+    const e = await sendErr(
+      make().send({ ...base, target: dm, message: { text: "", cards: [approval] } }),
+    );
+    expect(e.retryable).toBe(false);
+    expect(tg.calls.filter((c) => c.method === "sendMessage")).toHaveLength(1);
   });
 
   it("sends only the card when the text repeats the card's headline (the bind prompt)", async () => {
@@ -145,11 +262,9 @@ describe("send", () => {
         cards: [{ kind: "bind", url: "https://cap.example/bind/t", text: headline }],
       },
     });
-    expect(tg.messages).toHaveLength(2);
-    expect(tg.messages[0]?.text).toBe(text);
-    expect(tg.messages[0]?.replyMarkup).toBeUndefined();
-    expect(tg.messages[1]?.text).toBe(headline);
-    expect(tg.messages[1]?.replyMarkup).toBeDefined();
+    expect(tg.messages).toHaveLength(1);
+    expect(tg.messages[0]?.text).toBe(`${text}\n\n${headline}`);
+    expect(tg.messages[0]?.replyMarkup).toBeDefined();
   });
 
   it("sends only the card when the text is empty", async () => {
@@ -174,9 +289,9 @@ describe("send", () => {
     expect(tg.calls.filter((c) => c.method === "sendMessage")[0]?.params).toMatchObject({
       reply_parameters: { message_id: 5, allow_sending_without_reply: true },
     });
-    expect(tg.messages).toHaveLength(2);
+    expect(tg.messages).toHaveLength(1);
     for (const m of tg.messages) expect(data.get(`thread/111/-100:${m.messageId}`)).toBe("-100:5");
-    expect(r.messageId).toBe(`-100:${tg.messages[1]?.messageId}`);
+    expect(r.messageId).toBe(`-100:${tg.messages[0]?.messageId}`);
   });
 
   it("records nothing for a group send without a threadId", async () => {
@@ -331,17 +446,54 @@ describe("update", () => {
     expect(call?.params).not.toHaveProperty("reply_markup");
   });
 
-  it("text plus a card is too_large without calling Telegram", async () => {
+  it("updates a question card sent with the kernel's text to its answered state", async () => {
+    const kv = memoryKv().kv;
+    const text = "Your input is needed";
+    const { messageId } = await make(kv).send({
+      ...base,
+      target: dm,
+      message: { text, cards: [question("pending")] },
+    });
+    await make(kv).update({
+      ...base,
+      target: dm,
+      messageId,
+      message: { text, cards: [question("answered")] },
+    });
+    expect(tg.edits).toHaveLength(1);
+    expect(tg.edits[0]?.text).toContain(text);
+    expect(tg.edits[0]?.text).toContain("Answered");
+    expect(buttonsOf(tg.edits[0])).toEqual([
+      { text: "Open on web", url: "https://cap.example/c/2" },
+    ]);
+  });
+
+  it("several cards are too_large without calling Telegram", async () => {
     const e = await sendErr(
       make().update({
         ...base,
         target: dm,
         messageId: "42:1",
-        message: { text: "b", cards: [approval] },
+        message: { text: "b", cards: [approval, { ...approval, id: "ap2" }] },
       }),
     );
     expect(e).toMatchObject({ retryable: false, reason: "too_large" });
     expect(tg.calls).toHaveLength(0);
+  });
+
+  it("re-edits a card without URL buttons when Telegram rejects one", async () => {
+    tg.failNext("editMessageText", {
+      status: 400,
+      description: "Bad Request: BUTTON_URL_INVALID",
+    });
+    const { messageId } = await make().send({ ...base, target: dm, message: { text: "a" } });
+    const card = { ...approval, state: "approved" as const, webUrl: "http://localhost:3000/c/1" };
+    await make().update({ ...base, target: dm, messageId, message: { text: "", cards: [card] } });
+    const edits = tg.calls.filter((c) => c.method === "editMessageText");
+    expect(edits).toHaveLength(2);
+    expect(edits[1]?.params).not.toHaveProperty("reply_markup");
+    expect(tg.edits).toHaveLength(1);
+    expect(tg.edits[0]?.text).toContain('<a href="http://localhost:3000/c/1">');
   });
 
   it("maps a gone chat to target_gone", async () => {

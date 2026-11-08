@@ -51,6 +51,13 @@ const question = (
   },
 });
 
+const warnings: { msg: string; fields: unknown }[] = [];
+const log = {
+  info() {},
+  warn: (msg: string, fields?: unknown) => void warnings.push({ msg, fields }),
+  error() {},
+};
+
 const setup = () => {
   const m = memoryKv();
   return { ...m, tokens: cardTokenStore(m.kv, "999") };
@@ -65,7 +72,7 @@ const buttons = (p: { replyMarkup?: { inline_keyboard: unknown[][] } }) =>
 describe("renderCards", () => {
   it("pending approval: one callback button per scope, deny and a web link", async () => {
     const { tokens, data } = setup();
-    const [p] = await renderCards([approval()], "en", tokens);
+    const [p] = await renderCards([approval()], "en", tokens, log);
     const b = buttons(p as never);
     expect(b.map((x) => x.text)).toEqual([
       "Approve once",
@@ -90,18 +97,18 @@ describe("renderCards", () => {
   });
 
   it("zh labels, and only the offered scopes", async () => {
-    const [p] = await renderCards([approval({ scopes: ["once"] })], "zh", setup().tokens);
+    const [p] = await renderCards([approval({ scopes: ["once"] })], "zh", setup().tokens, log);
     expect(buttons(p as never).map((x) => x.text)).toEqual(["批准一次", "拒绝", "在网页上查看"]);
   });
 
   it("decided approval: state line plus a web link only", async () => {
-    const [p] = await renderCards([approval({ state: "approved" })], "en", setup().tokens);
+    const [p] = await renderCards([approval({ state: "approved" })], "en", setup().tokens, log);
     expect(buttons(p as never).map((x) => x.text)).toEqual(["Open on web"]);
     expect(p?.html).toContain("Approved");
   });
 
   it("escapes model-controlled names and drops the link line", async () => {
-    const [p] = await renderCards([approval()], "en", setup().tokens);
+    const [p] = await renderCards([approval()], "en", setup().tokens, log);
     expect(p?.html).not.toContain("<b>deploy");
     expect(p?.html).toContain("&lt;b&gt;deploy&lt;/b&gt;");
     expect(p?.html).toContain("&lt;i&gt;X&lt;/i&gt;");
@@ -110,7 +117,7 @@ describe("renderCards", () => {
 
   it("single-select question: one button per option and a web link", async () => {
     const { tokens, data } = setup();
-    const [p] = await renderCards([question()], "en", tokens);
+    const [p] = await renderCards([question()], "en", tokens, log);
     const b = buttons(p as never);
     expect(b.map((x) => x.text)).toEqual(["dev", "prod", "Open on web"]);
     expect(b[0]?.callback_data).toMatch(/^cb:/);
@@ -129,7 +136,7 @@ describe("renderCards", () => {
       question({ options: ["a", "b", "c", "d", "e", "f"] }),
     ]) {
       const { tokens, data } = setup();
-      const [p] = await renderCards([c], "en", tokens);
+      const [p] = await renderCards([c], "en", tokens, log);
       const b = buttons(p as never);
       expect(b).toEqual([{ text: "Open on web", url: "https://cap.example/c/2" }]);
       expect(data.size).toBe(0);
@@ -138,7 +145,7 @@ describe("renderCards", () => {
 
   it("answered question has no option buttons", async () => {
     const c = { ...question(), state: "answered" } as ChannelCard;
-    const [p] = await renderCards([c], "en", setup().tokens);
+    const [p] = await renderCards([c], "en", setup().tokens, log);
     expect(buttons(p as never).map((x) => x.text)).toEqual(["Open on web"]);
   });
 
@@ -150,6 +157,7 @@ describe("renderCards", () => {
       ],
       "en",
       setup().tokens,
+      log,
     );
     expect(buttons(c as never)).toEqual([
       { text: "Connect", url: "https://x.example/auth?a=1&b=2" },
@@ -168,6 +176,7 @@ describe("renderCards", () => {
       [approval({ state: "approved", webUrl: "javascript:alert(1)" })],
       "en",
       setup().tokens,
+      log,
     );
     expect(p?.replyMarkup).toBeUndefined();
     expect(p?.html).toContain("Approved");
@@ -176,14 +185,53 @@ describe("renderCards", () => {
       [{ kind: "bind", url: "tg://user?id=1", text: "Link" }],
       "en",
       setup().tokens,
+      log,
     );
     expect(b?.replyMarkup).toBeUndefined();
   });
 
-  it("without a kv only URL buttons are rendered", async () => {
+  it("without a kv only URL buttons are rendered, and each left-out button is logged", async () => {
     const tokens = cardTokenStore(undefined, "999");
-    const [a, q] = await renderCards([approval(), question()], "en", tokens);
+    warnings.length = 0;
+    const [a, q] = await renderCards([approval(), question()], "en", tokens, log);
     expect(buttons(a as never)).toEqual([{ text: "Open on web", url: "https://cap.example/c/1" }]);
     expect(buttons(q as never)).toEqual([{ text: "Open on web", url: "https://cap.example/c/2" }]);
+    // 3 scopes + deny on the approval, 2 options on the question.
+    expect(warnings).toHaveLength(6);
+    expect(warnings[0]?.fields).toEqual({ cardKind: "approval", cardId: "ap1" });
+    expect(warnings[5]?.fields).toEqual({ cardKind: "question", cardId: "q1" });
+  });
+
+  it("offers each card without URL buttons, its link kept in the text", async () => {
+    const [a, c] = await renderCards(
+      [approval(), { kind: "connect", appName: "Jira", url: "http://localhost:3000/auth?a=1&b=2" }],
+      "en",
+      setup().tokens,
+      log,
+    );
+    const fa = a?.withoutUrlButtons;
+    expect(buttons(fa as never).map((x) => x.text)).toEqual([
+      "Approve once",
+      "Approve for session",
+      "Always approve",
+      "Deny",
+    ]);
+    expect(fa?.html.startsWith(a?.html ?? "-")).toBe(true);
+    expect(fa?.html).toContain('<a href="https://cap.example/c/1">https://cap.example/c/1</a>');
+    const fc = c?.withoutUrlButtons;
+    expect(fc?.replyMarkup).toBeUndefined();
+    expect(fc?.html).toContain(
+      '<a href="http://localhost:3000/auth?a=1&amp;b=2">http://localhost:3000/auth?a=1&amp;b=2</a>',
+    );
+  });
+
+  it("a card without URL buttons has no such alternative", async () => {
+    const [p] = await renderCards(
+      [approval({ state: "approved", webUrl: "javascript:alert(1)" })],
+      "en",
+      setup().tokens,
+      log,
+    );
+    expect(p?.withoutUrlButtons).toBeUndefined();
   });
 });

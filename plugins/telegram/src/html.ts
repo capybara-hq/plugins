@@ -14,6 +14,10 @@ export function escapeHtml(s: string): string {
 
 const escapeAttr = (s: string) => escapeHtml(s).replace(/"/g, "&quot;");
 
+/** `<a href="url">url</a>`, escaped. */
+export const htmlLink = (url: string): string =>
+  `<a href="${escapeAttr(url)}">${escapeHtml(url)}</a>`;
+
 const WORD_JOINER = "\u2060";
 
 /**
@@ -181,6 +185,38 @@ const closers = (stack: string[][]) =>
     .reverse()
     .map((t) => `</${t[1]}>`)
     .join("");
+
+/** The visible length of Telegram HTML as Telegram counts it (UTF-16 code units, an entity is one). */
+export function visibleLength(html: string): number {
+  let n = 0;
+  for (const t of tokenise(html)) if (t.kind === "text") n += t.len;
+  return n;
+}
+
+/**
+ * `html` cut to at most `limit` visible characters, ending in an ellipsis (inside the tags the cut
+ * closes); tags stay balanced.
+ */
+export function truncateHtml(html: string, limit = TEXT_LIMIT): string {
+  if (visibleLength(html) <= limit) return html;
+  const head = splitHtml(html, limit - 1)[0] ?? "";
+  const closing = /(?:<\/[a-z-]+>)*$/.exec(head)?.[0] ?? "";
+  return `${head.slice(0, head.length - closing.length)}…${closing}`;
+}
+
+/**
+ * `lead` and `body` in one message, separated by a blank line, within `limit` visible characters:
+ * the lead is cut first, then (when the body alone is too long) the lead is dropped and the body cut.
+ */
+export function fitHtml(lead: string, body: string, limit = TEXT_LIMIT): string {
+  const sep = "\n\n";
+  if (lead === "") return truncateHtml(body, limit);
+  if (body === "") return truncateHtml(lead, limit);
+  const room = limit - visibleLength(body) - sep.length;
+  // Room for at least one character of the lead and its ellipsis.
+  if (room >= 2) return `${truncateHtml(lead, room)}${sep}${body}`;
+  return truncateHtml(body, limit);
+}
 
 /**
  * Splits Telegram HTML into parts of at most `limit` visible characters. Never cuts inside a tag or entity;

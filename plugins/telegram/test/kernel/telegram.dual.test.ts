@@ -46,6 +46,9 @@ const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
  *  (e) a write tool (fake-im's `post_announcement`, policy ask) → approval card in the group thread →
  *      the button click → the card is edited to approved, the final reply arrives once, the
  *      callback query is answered;
+ *  (h) a single-select question (the fixture tool `fake-ask.pick`) → the kernel's fixed text and the
+ *      card arrive as one message with option buttons → the click → that message is edited once to
+ *      answered, and the run's final reply arrives once;
  *  (g) `unboundPolicy: "anonymous"` still gives every Telegram sender the bind card (senders are
  *      external: tenant `global` ≠ the connection's `bot<id>`), and no agent run;
  *  (f) SIGKILL of the replica holding the poll: the other replica polls, never overlapping, and a
@@ -54,6 +57,7 @@ const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
 
 const TELEGRAM = fileURLToPath(new URL("../../src/index.ts", import.meta.url));
 const FAKE_IM = fakeExtensionEntry("fake-im");
+const FAKE_ASK = fileURLToPath(new URL("./fixtures/fake-ask.ts", import.meta.url));
 const PUBLIC = "https://cap.example";
 const LONG =
   "Streaming replies reach Telegram as a draft that keeps growing until it is final. ".repeat(2);
@@ -113,10 +117,10 @@ const repliesWith = (chatId: number, text: string) =>
   sentTo(chatId).filter((m) => finalText(m) === text);
 
 describe("Telegram plugin in the kernel (dual replica, long polling)", () => {
-  it("one poller → bind card → streamed reply → group threads → approval click → anonymous policy → failover", async () => {
+  it("one poller → bind card → streamed reply → group threads → approval click → question click → anonymous policy → failover", async () => {
     h = await createDualReplicaHarness({
       resolveFrom: PLUGIN_DIR,
-      extensions: [MODEL_FAKE, FAKE_IM, TELEGRAM],
+      extensions: [MODEL_FAKE, FAKE_IM, FAKE_ASK, TELEGRAM],
       pgUrl: pgc.url,
       redisUrl: rdc.url,
       extensionConfig: {
@@ -179,6 +183,7 @@ describe("Telegram plugin in the kernel (dual replica, long polling)", () => {
     const book = im.book("acme-telegram");
     for (const [plugin, body] of [
       ["fake-im", { enabled: true, config: { url: book.url } }],
+      ["fake-ask", { enabled: true }],
       ["telegram", { enabled: true }],
     ] as const) {
       const en = await call(ownerJar, "PUT", `${base}/extensions/${plugin}`, body);
@@ -379,6 +384,67 @@ describe("Telegram plugin in the kernel (dual replica, long polling)", () => {
     );
     expect(repliesWith(OPS.id, "Tool result: Announcement posted (post_1).")).toHaveLength(1);
     expect(im.posts).toHaveLength(1);
+
+    // ================= (h) question card: one message, option click → edited once, reply once ====
+    const beforeAsk = sentTo(ALICE.id).length;
+    tg.push(telegramPrivateMessage(ALICE, "tool:plugin__fake-ask__pick:{}"));
+    const askMsg = await waitFor(
+      async () =>
+        sentTo(ALICE.id)
+          .slice(beforeAsk)
+          .find(
+            (m) => findTelegramButton(m.replyMarkup, (b) => b.text === "staging") !== undefined,
+          ),
+      20_000,
+      "question card",
+    );
+    // The kernel's fixed text and the card are one message (a second one would break the update)
+    expect(askMsg.text).toContain("Your input is needed");
+    expect(askMsg.text).toContain("Deploy target");
+    expect(sentTo(ALICE.id).slice(beforeAsk)).toHaveLength(1);
+    const staging = findTelegramButton(askMsg.replyMarkup, (b) => b.text === "staging");
+    if (!staging?.callback_data) throw new Error("no option button");
+    expect(
+      findTelegramButton(askMsg.replyMarkup, (b) => b.text === "production")?.callback_data,
+    ).toMatch(/^cb:/);
+    await cardRecorded(db, { kind: "question" });
+    const askQueryId = "cbq-question-1";
+    tg.push(
+      telegramCallback(
+        ALICE,
+        { chatId: ALICE.id, messageId: askMsg.messageId },
+        staging.callback_data,
+        { id: askQueryId },
+      ),
+    );
+    await waitFor(
+      async () => finalText(askMsg).includes("Answered") || undefined,
+      20_000,
+      "question card edited to answered",
+    );
+    expect(finalText(askMsg)).toContain("Your input is needed");
+    expect(
+      findTelegramButton(latest(askMsg).replyMarkup, (b) => b.callback_data !== undefined),
+    ).toBe(undefined);
+    await waitFor(
+      async () => repliesWith(ALICE.id, "Tool result: Picked staging")[0],
+      20_000,
+      "reply after the answer",
+    );
+    await waitFor(
+      async () => tg.callbackAnswers.includes(askQueryId) || undefined,
+      10_000,
+      "question callback answered",
+    );
+    // Barrier: a later message in the same conversation is answered after the question's run
+    tg.push(telegramPrivateMessage(ALICE, "echo:barrier after question"));
+    await waitFor(
+      async () => repliesWith(ALICE.id, "barrier after question")[0],
+      20_000,
+      "barrier reply after question",
+    );
+    expect(editsOf(askMsg)).toHaveLength(1);
+    expect(repliesWith(ALICE.id, "Tool result: Picked staging")).toHaveLength(1);
 
     // ================= (g) anonymous policy: Telegram senders are external → bind card, no run ====
     const conversationsBefore = (await db.selectFrom("conversations").select("id").execute())

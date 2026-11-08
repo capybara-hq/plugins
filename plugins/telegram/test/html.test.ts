@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   escapeHtml,
+  fitHtml,
+  htmlLink,
   markdownToTelegramHtml as md,
   splitHtml,
   TEXT_LIMIT,
+  truncateHtml,
+  visibleLength,
 } from "../src/html.js";
 
 const WJ = "⁠";
@@ -190,5 +194,37 @@ describe("splitHtml", () => {
       expect(p.startsWith('<a href="https://e.com">')).toBe(true);
       expect(wellFormed(p)).toBe(true);
     }
+  });
+});
+
+describe("visibleLength / truncateHtml / fitHtml", () => {
+  it("counts visible UTF-16 units, an entity as one", () => {
+    expect(visibleLength("<b>a&amp;b</b> 😀")).toBe(6);
+  });
+
+  it("keeps html within the limit unchanged and cuts longer html well-formed", () => {
+    expect(truncateHtml("<b>abc</b>", 3)).toBe("<b>abc</b>");
+    const cut = truncateHtml(`<b>${"word ".repeat(50)}</b><code>x</code>`, 40);
+    expect(visibleLength(cut)).toBeLessThanOrEqual(40);
+    expect(wellFormed(cut)).toBe(true);
+    expect(cut).toMatch(/…<\/b>$/);
+  });
+
+  it("joins lead and body with a blank line, cutting the lead first, then the body", () => {
+    expect(fitHtml("lead", "body")).toBe("lead\n\nbody");
+    expect(fitHtml("", "body")).toBe("body");
+    const cutLead = fitHtml("<i>long lead text here</i>", "body", 15);
+    expect(cutLead).toMatch(/^<i>long.*…<\/i>\n\nbody$/);
+    expect(visibleLength(cutLead)).toBeLessThanOrEqual(15);
+    const cutBody = fitHtml("lead", "a much longer body text", 10);
+    expect(cutBody).not.toContain("lead");
+    expect(visibleLength(cutBody)).toBeLessThanOrEqual(10);
+    expect(cutBody.endsWith("…")).toBe(true);
+  });
+
+  it("htmlLink escapes the url", () => {
+    expect(htmlLink('http://h/?a=1&b="2"')).toBe(
+      '<a href="http://h/?a=1&amp;b=&quot;2&quot;">http://h/?a=1&amp;b="2"</a>',
+    );
   });
 });

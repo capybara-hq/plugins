@@ -11,7 +11,7 @@ import { TelegramApiError, telegramApi } from "./api.js";
 import { cardHeadline, renderCards, type TelegramPost } from "./cards.js";
 import { botIdOf, connectionTenant, TelegramConnection } from "./config.js";
 import { toChannelSendError } from "./errors.js";
-import { markdownToTelegramHtml, splitHtml } from "./html.js";
+import { fitHtml, markdownToTelegramHtml, splitHtml } from "./html.js";
 import { chatMigration, updateToInbound } from "./inbound.js";
 import { runLongPolling } from "./poll.js";
 import { threadStore } from "./threads.js";
@@ -60,6 +60,12 @@ const tooLarge = () =>
     reason: "too_large",
   });
 
+/** Telegram refused an inline keyboard button's URL (e.g. `http://localhost/...`). */
+const urlButtonRejected = (e: unknown) =>
+  e instanceof TelegramApiError &&
+  (e.errorCode ?? e.status) === 400 &&
+  /button URL|Wrong HTTP URL|BUTTON_URL_INVALID/i.test(e.description ?? "");
+
 export function createTelegramChannel(o: TelegramChannelOptions): Channel {
   const apiFor = (config: unknown, signal?: AbortSignal) => {
     const c = TelegramConnection.parse(config);
@@ -77,30 +83,49 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
   };
 
   /**
-   * The posts of a message: its text parts, then one post per card. Text that repeats a card's
-   * headline is left out (the card carries it).
+   * The posts of a message. Text alone: its parts (split at the limit). With cards: one post per
+   * card, never split (cut with an ellipsis instead), the text leading the first card's post unless
+   * it repeats a card's headline (the card carries it). The kernel sends a card with a fixed line
+   * of text and later updates it the same way, so a card and its text must stay one message.
    */
   async function render(
     message: ChannelSendArgs["message"],
     locale: ChannelSendArgs["locale"],
     botId: string,
   ): Promise<TelegramPost[]> {
-    const posts: TelegramPost[] = [];
     const text = message.text.trim();
-    const dup = (message.cards ?? []).some((c) => cardHeadline(c, locale)?.trim() === text);
-    if (text !== "" && !dup) {
-      for (const html of splitHtml(markdownToTelegramHtml(message.text))) posts.push({ html });
+    const cards = message.cards ?? [];
+    if (cards.length === 0) {
+      return text === ""
+        ? []
+        : splitHtml(markdownToTelegramHtml(message.text)).map((html) => ({ html }));
     }
-    if (message.cards?.length) {
-      for (const card of await renderCards(message.cards, locale, cardTokenStore(o.kv, botId))) {
-        const parts = splitHtml(card.html);
-        parts.forEach((html, i) => {
-          const last = i === parts.length - 1;
-          posts.push({ html, ...(last && card.replyMarkup && { replyMarkup: card.replyMarkup }) });
-        });
-      }
+    const dup = cards.some((c) => cardHeadline(c, locale)?.trim() === text);
+    const lead = text === "" || dup ? "" : markdownToTelegramHtml(message.text);
+    const fit = (p: TelegramPost, leading: string): TelegramPost => ({
+      ...p,
+      html: fitHtml(leading, p.html),
+      ...(p.withoutUrlButtons && { withoutUrlButtons: fit(p.withoutUrlButtons, leading) }),
+    });
+    const posts = await renderCards(cards, locale, cardTokenStore(o.kv, botId), o.log);
+    return posts.map((p, i) => fit(p, i === 0 ? lead : ""));
+  }
+
+  /**
+   * Calls `attempt` with `post`; when Telegram rejects one of its URL buttons, once more with the
+   * post without URL buttons (the link moves into the text).
+   */
+  async function withUrlButtonFallback<T>(
+    post: TelegramPost,
+    attempt: (p: TelegramPost) => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await attempt(post);
+    } catch (e) {
+      if (!post.withoutUrlButtons || !urlButtonRejected(e)) throw e;
+      o.log.warn("telegram: Telegram rejected a card's URL button; the link is sent as text");
+      return attempt(post.withoutUrlButtons);
     }
-    return posts;
   }
 
   async function sendOne(
@@ -111,14 +136,16 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
   ): Promise<number> {
     let r: { message_id?: number } | undefined;
     try {
-      r = await api.call<{ message_id?: number } | undefined>("sendMessage", {
-        chat_id: target.chatId,
-        text: post.html,
-        parse_mode: "HTML",
-        link_preview_options: { is_disabled: true },
-        ...(post.replyMarkup && { reply_markup: post.replyMarkup }),
-        ...extra,
-      });
+      r = await withUrlButtonFallback(post, (p) =>
+        api.call<{ message_id?: number } | undefined>("sendMessage", {
+          chat_id: target.chatId,
+          text: p.html,
+          parse_mode: "HTML",
+          link_preview_options: { is_disabled: true },
+          ...(p.replyMarkup && { reply_markup: p.replyMarkup }),
+          ...extra,
+        }),
+      );
     } catch (e) {
       throw toChannelSendError(e);
     }
@@ -264,23 +291,24 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
     async update({ config, messageId, message, locale, signal }) {
       const { call, botId } = apiFor(config, signal);
       const { chatId, messageId: id } = parseMessageId(messageId);
-      // Like Slack: an update that renders to several messages is too large; the kernel then
-      // sends the full message fresh. Without reply_markup an edit removes an inline keyboard.
+      // Like Slack: an update that renders to several messages (long text, several cards) is too
+      // large; the kernel then sends the full message fresh. Without reply_markup an edit removes
+      // an inline keyboard.
       const posts = await render(message, locale, botId);
       if (posts.length > 1) throw tooLarge();
       const post = posts[0];
       if (!post) throw new ChannelSendError("nothing to send", { retryable: false });
-      const html = post.html;
-      const markup = post.replyMarkup;
       try {
-        await call("editMessageText", {
-          chat_id: chatId,
-          message_id: id,
-          text: html,
-          parse_mode: "HTML",
-          link_preview_options: { is_disabled: true },
-          ...(markup && { reply_markup: markup }),
-        });
+        await withUrlButtonFallback(post, (p) =>
+          call("editMessageText", {
+            chat_id: chatId,
+            message_id: id,
+            text: p.html,
+            parse_mode: "HTML",
+            link_preview_options: { is_disabled: true },
+            ...(p.replyMarkup && { reply_markup: p.replyMarkup }),
+          }),
+        );
       } catch (e) {
         if (e instanceof TelegramApiError && /message is not modified/i.test(e.description ?? "")) {
           return;
