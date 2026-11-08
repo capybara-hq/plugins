@@ -21,8 +21,7 @@
     }
   },
   "files": [
-    "dist",
-    "app-manifest.yaml"
+    "dist"
   ],
   "scripts": {
     "build": "tsc -b"
