@@ -18,6 +18,7 @@
         "zh": "Anthropic",
         "en": "Anthropic"
       },
+      "icon": "./plugins/anthropic/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/anthropic#readme",
       "permissions": {
         "keys": [
@@ -48,6 +49,7 @@
         "zh": "MCP 连接器",
         "en": "MCP connector"
       },
+      "icon": "./plugins/connector-mcp/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/connector-mcp#readme",
       "permissions": {
         "keys": ["config.deployment:allowInsecureLoopback", "provides:connector@1"],
@@ -71,6 +73,7 @@
         "zh": "OpenAPI 连接器",
         "en": "OpenAPI connector"
       },
+      "icon": "./plugins/connector-openapi/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/connector-openapi#readme",
       "permissions": {
         "keys": ["config.deployment:allowInsecureLoopback", "provides:connector@1"],
@@ -94,6 +97,7 @@
         "zh": "飞书 Lark",
         "en": "Lark"
       },
+      "icon": "./plugins/lark/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/lark#readme",
       "permissions": {
         "keys": [
@@ -136,6 +140,7 @@
         "zh": "S3 对象存储",
         "en": "S3 object storage"
       },
+      "icon": "./plugins/object-store-s3/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/object-store-s3#readme",
       "permissions": {
         "keys": [
@@ -172,6 +177,7 @@
         "zh": "OpenAI",
         "en": "OpenAI"
       },
+      "icon": "./plugins/openai/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/openai#readme",
       "permissions": {
         "keys": [
@@ -203,6 +209,7 @@
         "zh": "OpenAI 兼容模型",
         "en": "OpenAI-compatible models"
       },
+      "icon": "./plugins/openai-compatible/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/openai-compatible#readme",
       "permissions": {
         "keys": [
@@ -230,6 +237,7 @@
         "zh": "Docker 沙箱",
         "en": "Docker sandbox"
       },
+      "icon": "./plugins/sandbox-docker/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-docker#readme",
       "permissions": {
         "keys": [
@@ -261,6 +269,7 @@
         "zh": "E2B 沙箱",
         "en": "E2B sandbox"
       },
+      "icon": "./plugins/sandbox-e2b/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-e2b#readme",
       "permissions": {
         "keys": [
@@ -293,6 +302,7 @@
         "zh": "Slack",
         "en": "Slack"
       },
+      "icon": "./plugins/slack/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/slack#readme",
       "permissions": {
         "keys": [
@@ -334,6 +344,7 @@
         "zh": "待办清单",
         "en": "Todo list"
       },
+      "icon": "./plugins/todo/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/todo#readme",
       "permissions": {
         "keys": [
@@ -365,6 +376,7 @@
         "zh": "Jina 网页搜索",
         "en": "Jina web search"
       },
+      "icon": "./plugins/jina/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/jina#readme",
       "permissions": {
         "keys": [
@@ -397,6 +409,7 @@
         "zh": "火山方舟模型",
         "en": "Volcengine Ark models"
       },
+      "icon": "./plugins/ark/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/ark#readme",
       "permissions": {
         "keys": [
@@ -435,6 +448,7 @@
         "zh": "阿里云百炼模型",
         "en": "Alibaba Cloud Model Studio models"
       },
+      "icon": "./plugins/bailian/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/bailian#readme",
       "permissions": {
         "keys": [
@@ -471,6 +485,7 @@
         "zh": "DeepSeek 模型",
         "en": "DeepSeek models"
       },
+      "icon": "./plugins/deepseek/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/deepseek#readme",
       "permissions": {
         "keys": [
@@ -500,6 +515,7 @@
         "zh": "Telegram",
         "en": "Telegram"
       },
+      "icon": "./plugins/telegram/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/telegram#readme",
       "permissions": {
         "keys": [
