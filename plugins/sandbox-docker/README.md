@@ -163,3 +163,11 @@ The second parameter of `createDockerSandbox(config, testOptions)` can be passed
 `test/egress-proxy.test.ts` and `test/manifest.test.ts` do not need Docker; `test/sandbox-docker.test.ts` and `test/concurrent.test.ts` need Docker (the whole group is skipped without it),
 builds a uniquely tagged test image, starts the socket proxy, and cleans up by label at the end; the runsc cases run only when the daemon has runsc registered.
 Through a real kernel: `test/sandbox-tools.smoke.test.ts` (the kernel's sandbox tools in one process) and `test/sandbox-artifacts.dual.test.ts` (the M5 segment 2 flow across two replicas: attachments, delivery, takeover after a killed replica, idle suspend and resume). The socket proxy starts from `test/sandbox-proxy/haproxy.cfg`, an exact copy of capybara-hq/core's [`docker/sandbox-proxy/haproxy.cfg`](https://github.com/capybara-hq/core/tree/main/docker/sandbox-proxy/haproxy.cfg). Nothing in this repository compares them; core's `check:bootstrap --network` (rule `bootstrap-haproxy`) will check the copy against the commit core pins.
+
+## Icon
+
+`icon.svg`: the Docker mark (owner: Docker, Inc.), downloaded on 2026-11-08 from Docker media resources,
+https://www.docker.com/company/newsroom/media-resources/ (Docker-Logos-1.zip,
+docker-mark-ocean-blue.svg). It is a trademark of its owner, used only to identify the service this
+plugin connects to; the plugin is not affiliated with or endorsed by the owner. The artwork is
+unchanged except for removing editor metadata and setting a square viewBox.

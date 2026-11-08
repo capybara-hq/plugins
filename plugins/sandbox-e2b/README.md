@@ -208,3 +208,10 @@ The third parameter of `createE2BSandbox(config, { log }, testOptions)` can be p
   and `CAPYBARA_TEST_E2B_API_URL` / `CAPYBARA_TEST_E2B_DOMAIN`), otherwise skipped: the template, the file system created paused, the sandbox user, files, `/skills` read-only (including a write through a symlink being
   rejected), the egress allowlist, output truncation, kill on timeout (including nohup child processes), abort, long periods with no output, a child process that escaped the session being killed by its environment marker,
   files surviving instance destroy, whether a paused sandbox's network rules can change, `destroyFileSystem` → `FileSystemGoneError`. The file header lists the "assumptions that can only be confirmed on real E2B"; check them one by one on the first run.
+
+## Icon
+
+`icon.svg`: the E2B symbol (owner: E2B), downloaded on 2026-11-08 from the E2B brand page, https://e2b.dev/brand
+(e2b-symbol-fire-orange-s.svg). It is a trademark of its owner, used only to identify the service
+this plugin connects to; the plugin is not affiliated with or endorsed by the owner. The artwork is
+unchanged except for removing editor metadata and setting a square viewBox.

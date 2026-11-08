@@ -34,3 +34,12 @@ response is recorded in `test/fixtures.ts`.
   `invalid_request`; only a 413 or the code `context_length_exceeded` maps to `context_overflow`.
 - `stream` does not consult `/models`: every model is assumed to reason unless `thinking` is `off`.
 - The SDK's `toolChoice` only has `auto` and `none`; a forced tool choice is refused.
+
+## Icon
+
+`icon.svg`: the DeepSeek whale mark (owner: DeepSeek), downloaded on 2026-11-08 from
+https://github.com/deepseek-ai/DeepSeek-LLM at 6712a86bfb7d (images/logo.svg); DeepSeek publishes no
+brand or press page, so this is its logo from its own repository. It is a trademark of its owner,
+used only to identify the service this plugin connects to; the plugin is not affiliated with or
+endorsed by the owner. The artwork is unchanged except for removing editor metadata and setting a
+square viewBox; only the whale mark is kept, the wordmark is omitted.
