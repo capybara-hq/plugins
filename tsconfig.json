@@ -50,6 +50,9 @@
       "path": "plugins/slack"
     },
     {
+      "path": "plugins/telegram"
+    },
+    {
       "path": "plugins/todo"
     },
     {
