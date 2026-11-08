@@ -1,4 +1,4 @@
-import type { ChannelCard, ChannelTarget } from "@capybara-hq/plugin-sdk";
+import type { ChannelCard, ChannelTarget, ExtensionContext } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { createTelegramChannel } from "../../src/channel.js";
 
@@ -15,6 +15,8 @@ import { createTelegramChannel } from "../../src/channel.js";
  *   checks in a group.
  * - Checks: `verify`; send, then edit; a 5000-character send that splits; a card with buttons
  *   (nobody clicks it; it is edited to its decided state so no live button stays).
+ *
+ * The test messages and cards stay in the chat (there is no cleanup); use a throwaway chat or group.
  *
  * The parts that need a person (press Start, click a card, a mention in a group) are not here.
  */
@@ -40,10 +42,33 @@ const API = "https://api.telegram.org";
 const log = { info: () => {}, warn: () => {}, error: () => {} };
 const config = () => ({ botToken: TOKEN as string });
 const timeout = (ms: number) => AbortSignal.timeout(ms);
+/** Test-only in-memory kv (the real one is the kernel's): get / set honoring the TTL. */
+function memoryKv() {
+  const store = new Map<string, { value: string; expires: number }>();
+  const sets: { key: string; ttlSeconds: number }[] = [];
+  const kv = {
+    async get(key: string) {
+      const e = store.get(key);
+      return e && e.expires > Date.now() ? e.value : null;
+    },
+    async set(key: string, value: string, opts: { ttlSeconds: number }) {
+      sets.push({ key, ttlSeconds: opts.ttlSeconds });
+      store.set(key, { value, expires: Date.now() + opts.ttlSeconds * 1000 });
+    },
+    async del(key: string) {
+      store.delete(key);
+    },
+    async incr() {
+      throw new Error("not used by the plugin");
+    },
+  };
+  return { kv, sets };
+}
 const stamp = new Date().toISOString();
 
 describe.skipIf(!READY)("Telegram live", () => {
-  const channel = createTelegramChannel({ apiUrl: API, log });
+  const { kv, sets } = memoryKv();
+  const channel = createTelegramChannel({ apiUrl: API, log, kv });
 
   it("live: verify returns the bot and a tenant that is never the sender tenant", async () => {
     const v = await channel.verify({ config: config(), signal: timeout(20_000) });
@@ -103,6 +128,11 @@ describe.skipIf(!READY)("Telegram live", () => {
           signal: timeout(20_000),
         });
         expect(cardMsg.messageId.length).toBeGreaterThan(0);
+        // The keyboard carried callback buttons: each one stored its payload behind a 30-day token.
+        const botId = (TOKEN as string).slice(0, (TOKEN as string).indexOf(":"));
+        const stored = sets.filter((x) => x.key.startsWith(`card/${botId}/`));
+        expect(stored.length).toBeGreaterThanOrEqual(2); // approve (once, session) and deny
+        for (const x of stored) expect(x.ttlSeconds).toBe(2_592_000);
         // Decide it: the keyboard goes away, so no live button stays in the test chat.
         await channel.update({
           ...base,

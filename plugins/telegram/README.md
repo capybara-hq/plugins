@@ -70,7 +70,7 @@ The deployment-level config lives under the kernel config `extensionConfig.teleg
 - **Groups and supergroups**: only messages that mention the bot (`@<username>`, a text mention, or a command addressed to the bot such as `/cmd@botname`)
   and replies to one of the bot's messages (a reply to the bot counts as a mention, since people address a bot by replying to it). Other group messages are dropped.
 - **Threads**: each mention that is not a reply starts its own conversation, and replies continue it. Telegram replies only point to their direct parent,
-  so the plugin records the thread of every message it sends into a group (kv, 30 days). A reply to a bot message older than that, or to an unknown message, starts a new conversation.
+  so the plugin records the thread of every message it sends into a group and of every inbound group message it forwards (kv, 30 days). A reply to a bot message older than that, or to an unknown message, starts a new conversation.
   Replies are sent as replies to the thread's root message.
 - **Forum supergroups behave like groups.** A forum topic is only where the messages live, never the conversation key (otherwise a topic would become one ever-growing conversation):
   each mention starts a conversation and replies continue it. The plugin remembers the topic (`message_thread_id`, kv, 30 days) so replies land in the right topic. `/new` works only in private chats.
@@ -102,7 +102,7 @@ with button labels in the org's language. Link buttons are used only for http(s)
 - `callback_data` is limited to 64 bytes ([`InlineKeyboardButton`](https://core.telegram.org/bots/api#inlinekeyboardbutton)), too small for a card id, action, scope and answer.
   Each button carries `cb:` plus a random 16-character token; the payload lives in kv for **30 days**, and any replica can decode it. A click whose token is missing, expired or malformed is answered and ignored.
   After 30 days a card's buttons stop working; use the card's "open on web" link.
-- Question cards with a single-choice field show one button per option. **Multi-select questions are answered on the web** (the card carries the link).
+- A question card with a single single-choice field of at most 5 options shows one button per option. Any other question (several fields, a multi-select field, a field that allows "other", a non-enum field, or more than 5 options) is answered on the web: its card carries only the link.
 - A decided or expired card is edited without a keyboard.
 - Every click is answered with `answerCallbackQuery` (no text) so the client's progress indicator stops. In long polling this happens after the kernel accepted the click.
 
