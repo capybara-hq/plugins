@@ -98,6 +98,11 @@ beforeAll(async () => {
   await createLocalAccount(db, "owner", "O");
   req = await session(k, "owner");
   orgId = await createOrg(req);
+  // Connectors can be created only of kinds whose extension the org has switched on
+  await db
+    .insertInto("extension_org_configs")
+    .values({ plugin: "connector-mcp", org_id: orgId, enabled: true })
+    .execute();
 }, 180_000);
 
 afterAll(async () => {
