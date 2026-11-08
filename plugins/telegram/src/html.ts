@@ -14,12 +14,29 @@ export function escapeHtml(s: string): string {
 
 const escapeAttr = (s: string) => escapeHtml(s).replace(/"/g, "&quot;");
 
+const WORD_JOINER = "\u2060";
+
 /**
- * Keeps a model from pinging people: an `@` directly followed by a username character gets a U+2060 WORD
- * JOINER after it, so Telegram no longer parses a mention. Apply to plain text only (not code, not URLs).
+ * Keeps a model from pinging people: an `@` directly followed by a username character (not preceded by one,
+ * so `a@b.c` stays) gets a U+2060 WORD JOINER after it, so Telegram no longer parses a mention. Bare URLs are
+ * left alone. Apply to plain text only (not code).
  */
 export function neutraliseMentions(text: string): string {
-  return text.replace(/@(?=[A-Za-z0-9_])/g, "@⁠");
+  return text.replace(/(https?:\/\/\S+)|(?<![A-Za-z0-9_])@(?=[A-Za-z0-9_])/g, (m, url?: string) =>
+    url ? m : `@${WORD_JOINER}`,
+  );
+}
+
+/**
+ * The same on finished HTML, judged on the visible text: skips pre / code content, `<a ...>` tags and bare
+ * URLs, and sees through formatting tags (`@<b>x</b>` is a mention too; the joiner goes right after the `@`).
+ */
+function neutraliseHtmlMentions(html: string): string {
+  return html.replace(
+    /(<pre[\s\S]*?<\/pre>)|(<code>[\s\S]*?<\/code>)|(<a [^>]*>)|(https?:\/\/[^\s<]+)|(?<![A-Za-z0-9_])@(?=(?:<[^>]+>)*[A-Za-z0-9_])/g,
+    (m, pre?: string, code?: string, a?: string, url?: string) =>
+      pre || code || a || url ? m : `@${WORD_JOINER}`,
+  );
 }
 
 const HOLD = "\u0000";
@@ -41,7 +58,7 @@ function wrap(s: string, re: RegExp, tag: string): string {
 
 /** Inline formatting of a non-code segment (no links: those are held by the caller). */
 function formatText(seg: string): string {
-  let s = neutraliseMentions(escapeHtml(seg));
+  let s = escapeHtml(seg);
   s = s.replace(/\*\*\*(?=\S)(.*?\S)\*\*\*/g, (m, inner: string) =>
     balanced(inner) ? `<b><i>${inner}</i></b>` : m,
   );
@@ -63,8 +80,9 @@ function formatSpan(seg: string): string {
     hold(`<a href="${escapeAttr(url)}">${formatText(label)}</a>`);
   const s = formatText(
     seg
-      .replace(/(?<!!)\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, l: string, u: string) =>
-        link(l, u),
+      .replace(
+        /(?<!!)\[([^\]\n]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)/g,
+        (_m, l: string, u: string) => link(l, u),
       )
       .replace(/<(https?:\/\/[^>\s]+)>/g, (_m, u: string) => link(u, u)),
   );
@@ -137,7 +155,7 @@ export function markdownToTelegramHtml(md: string): string {
   }
   if (fence) out.push(codeBlock(fence.lang, fence.lines));
   closeQuote();
-  return out.join("\n");
+  return neutraliseHtmlMentions(out.join("\n"));
 }
 
 type Token =

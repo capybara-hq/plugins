@@ -67,6 +67,38 @@ describe("markdownToTelegramHtml", () => {
     expect(md("mail me @ home")).toBe("mail me @ home");
   });
 
+  it("neutralises mentions hidden behind formatting", () => {
+    for (const s of [
+      "@**x**",
+      "@`x`",
+      "@[x](https://e.com)",
+      "@~~x~~",
+      "@__x__",
+      "@*x*",
+      "@***x***",
+    ]) {
+      const out = md(s);
+      expect(visible(out)).not.toMatch(/@[A-Za-z0-9_]/);
+      expect(wellFormed(out)).toBe(true);
+    }
+  });
+
+  it("leaves emails and URLs intact", () => {
+    expect(md("write a@b.c")).toBe("write a@b.c");
+    expect(md("see https://medium.com/@user/post now")).toBe(
+      "see https://medium.com/@user/post now",
+    );
+    expect(neutraliseMentions("https://medium.com/@user/post @bob")).toBe(
+      `https://medium.com/@user/post @${WJ}bob`,
+    );
+  });
+
+  it("supports one level of parentheses in link URLs", () => {
+    expect(md("[x](https://en.wikipedia.org/wiki/Foo_(bar)) after")).toBe(
+      '<a href="https://en.wikipedia.org/wiki/Foo_(bar)">x</a> after',
+    );
+  });
+
   it("converts fenced code with and without a language", () => {
     expect(md("```ts\nlet a = 1 < 2;\n```")).toBe(
       '<pre><code class="language-ts">let a = 1 &lt; 2;</code></pre>',
@@ -85,7 +117,7 @@ describe("markdownToTelegramHtml", () => {
 
 describe("neutraliseMentions / escapeHtml", () => {
   it("inserts a word joiner after @ before a username character only", () => {
-    expect(neutraliseMentions("@a @ b a@b.c")).toBe(`@${WJ}a @ b a@${WJ}b.c`);
+    expect(neutraliseMentions("@a @ b a@b.c")).toBe(`@${WJ}a @ b a@b.c`);
     expect(neutraliseMentions(`@${WJ}a`)).toBe(`@${WJ}a`);
   });
   it("escapes & < >", () => {
