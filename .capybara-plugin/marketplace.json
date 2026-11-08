@@ -488,6 +488,34 @@
           "integrity": "sha512-YibChobIRXmv2cIkWffFXHq2RN5HoWK9YrFlXrARAjqa5PhJ1cfQoQrKZQpIPArgCRL/Sb5irQBlHwpvcE1RIQ=="
         }
       }
+    },
+    {
+      "name": "telegram",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Telegram (channel@1 bot over the Bot API: long polling or webhook, inline keyboard cards)",
+        "zh": "Telegram 机器人渠道（channel@1，Bot API：长轮询或 webhook，内联键盘卡片）"
+      },
+      "displayName": {
+        "zh": "Telegram",
+        "en": "Telegram"
+      },
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/telegram#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment:apiUrl",
+          "permissions.network:api.telegram.org",
+          "provides:channel@1"
+        ],
+        "sensitive": ["provides:channel@1"]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-telegram",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-iY8YEi1B7KIr6WWYwBG60IxjHiEhlR5XkkGk86xlICAJBRQVKQQcl6K/PvlvIwKFaeSKr252TsoT2EWE0ZlcOQ=="
+        }
+      }
     }
   ]
 }

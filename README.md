@@ -16,6 +16,7 @@ npm; the kernel verifies each download against that integrity.
 | [`connector-openapi`](plugins/connector-openapi) | OpenAPI connector (`connector@1`, one tool per operation) |
 | [`slack`](plugins/slack) | Slack bot (`channel@1`), Sign in with Slack (`identity-source@1`), directory sync (`directory@1`) |
 | [`lark`](plugins/lark) | Lark bot (`channel@1`), Lark login (`identity-source@1`), directory sync (`directory@1`) |
+| [`telegram`](plugins/telegram) | Telegram bot (`channel@1`; long polling or webhook, inline keyboard cards) |
 | [`jina`](plugins/jina) | Web search and page reading through Jina (`web-search@1`, `web-fetch@1`) |
 | [`sandbox-docker`](plugins/sandbox-docker) | Conversation sandboxes as Docker containers (`sandbox@1`) |
 | [`sandbox-e2b`](plugins/sandbox-e2b) | Conversation sandboxes on E2B (`sandbox@1`) |
