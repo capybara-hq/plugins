@@ -849,8 +849,10 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     it("output stream still open after the kill grace period → reboots the sandbox", async () => {
       const r0 = fake.reboots.get(h.id) ?? 0;
       const pidFile = fake.hostPath(h.id, "/tmp/escaped.pid");
-      // 逃出会话的子进程（杀进程脚本按会话杀不到它）拿着 stdout 不放
-      const escaped = `perl -MPOSIX -e 'POSIX::setsid(); open(my $f, ">", $ARGV[0]); print $f $$; close $f; exec "sleep", "20"' ${pidFile} &`;
+      // A child that left the session (the kill script's session kill misses it) and cleared its
+      // environment (the marker scan misses it too) holds stdout. The fake maps the sandbox path in
+      // the command to the host, so the command names the sandbox path.
+      const escaped = `perl -MPOSIX -e 'POSIX::setsid(); %ENV = (); open(my $f, ">", $ARGV[0]); print $f $$; close $f; exec "/bin/sleep", "20"' /tmp/escaped.pid &`;
       try {
         const r = await run(`${escaped} sleep 20`, { timeoutMs: 1500 });
         expect(r.timedOut).toBe(true);
@@ -872,7 +874,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       async () => {
         const r0 = fake.reboots.get(h.id) ?? 0;
         const pidFile = fake.hostPath(h.id, "/tmp/escaped-quiet.pid");
-        const escaped = `perl -MPOSIX -e 'POSIX::setsid(); open(STDOUT, ">", "/dev/null"); open(STDERR, ">", "/dev/null"); open(my $f, ">", $ARGV[0]); print $f $$; close $f; exec "sleep", "20"' ${pidFile} &`;
+        const escaped = `perl -MPOSIX -e 'POSIX::setsid(); open(STDOUT, ">", "/dev/null"); open(STDERR, ">", "/dev/null"); open(my $f, ">", $ARGV[0]); print $f $$; close $f; exec "sleep", "20"' /tmp/escaped-quiet.pid &`;
         let pid = 0;
         try {
           const r = await run(`${escaped} sleep 20`, { timeoutMs: 1500 });
