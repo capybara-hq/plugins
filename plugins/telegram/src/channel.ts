@@ -175,7 +175,16 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
       for (const post of posts) {
         last = await sendOne({ call }, target, post, extra);
         if (inThread && target.threadId !== undefined) {
-          await store.recordSent(target.chatId, last, target.threadId);
+          // The message is delivered: a failing record must not fail the send (the kernel would
+          // resend it). Only a later reply to this message loses its thread.
+          try {
+            await store.recordSent(target.chatId, last, target.threadId);
+          } catch {
+            o.log.warn("telegram: could not record a sent message's thread", {
+              chatId: target.chatId,
+              messageId: last,
+            });
+          }
         }
       }
       return { messageId: `${target.chatId}:${last}` };
@@ -184,17 +193,14 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
     async update({ config, messageId, message, locale, signal }) {
       const { call, botId } = apiFor(config, signal);
       const { chatId, messageId: id } = parseMessageId(messageId);
-      // The edit replaces the text (it must fit one message) and carries the first card's keyboard;
-      // cards themselves are new sends.
-      const parts =
-        message.text.trim() === "" ? [] : splitHtml(markdownToTelegramHtml(message.text));
-      if (parts.length > 1) throw tooLarge();
-      const card = message.cards?.[0]
-        ? (await renderCards([message.cards[0]], locale, cardTokenStore(o.kv, botId)))[0]
-        : undefined;
-      const html = parts[0] ?? card?.html;
-      if (html === undefined) throw new ChannelSendError("nothing to send", { retryable: false });
-      const markup = card?.replyMarkup;
+      // Like Slack: an update that renders to several messages is too large; the kernel then
+      // sends the full message fresh. Without reply_markup an edit removes an inline keyboard.
+      const posts = await render(message, locale, botId);
+      if (posts.length > 1) throw tooLarge();
+      const post = posts[0];
+      if (!post) throw new ChannelSendError("nothing to send", { retryable: false });
+      const html = post.html;
+      const markup = post.replyMarkup;
       try {
         await call("editMessageText", {
           chat_id: chatId,

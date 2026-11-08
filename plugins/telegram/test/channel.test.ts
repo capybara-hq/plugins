@@ -186,6 +186,45 @@ describe("send", () => {
     expect(limited).toMatchObject({ retryable: true, retryAfterMs: 3000 });
   });
 
+  it("still resolves when recording the thread fails, and warns", async () => {
+    const kv = {
+      get: async () => null,
+      set: async () => {
+        throw new Error("kv down");
+      },
+    } as unknown as Kv;
+    warnings.length = 0;
+    const r = await make(kv).send({
+      ...base,
+      target: { chatId: "-100", chatType: "group", threadId: "-100:5" },
+      message: { text: "ok" },
+    });
+    expect(r.messageId).toMatch(/^-100:\d+$/);
+    expect(tg.messages).toHaveLength(1);
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("part 2 failing with 429 is retryable and part 1 stays recorded", async () => {
+    const { kv, data } = memoryKv();
+    const inner = kv.set.bind(kv);
+    // The first record happens after part 1 and before part 2: arm the failure there.
+    kv.set = (async (k: string, v: string, o: { ttlSeconds: number }) => {
+      await inner(k, v, o as never);
+      tg.failNext("sendMessage", { status: 429, description: "Too Many Requests", retryAfter: 2 });
+    }) as Kv["set"];
+    const text = `${"a".repeat(TEXT_LIMIT - 10)} ${"b".repeat(100)}`;
+    const e = await sendErr(
+      make(kv).send({
+        ...base,
+        target: { chatId: "-100", chatType: "group", threadId: "-100:5" },
+        message: { text },
+      }),
+    );
+    expect(e).toMatchObject({ retryable: true, retryAfterMs: 2000 });
+    expect(tg.messages).toHaveLength(1);
+    expect(data.get(`thread/111/-100:${tg.messages[0]?.messageId}`)).toBe("-100:5");
+  });
+
   it("rejects a malformed thread id without calling Telegram", async () => {
     const e = await sendErr(
       make().send({
@@ -211,17 +250,6 @@ describe("update", () => {
     });
   });
 
-  it("carries the first card's keyboard", async () => {
-    const { messageId } = await make().send({ ...base, target: dm, message: { text: "a" } });
-    await make().update({
-      ...base,
-      target: dm,
-      messageId,
-      message: { text: "b", cards: [approval] },
-    });
-    expect(tg.edits[0]?.replyMarkup).toBeDefined();
-  });
-
   it("resolves on 'message is not modified'", async () => {
     const { messageId } = await make().send({ ...base, target: dm, message: { text: "a" } });
     tg.failNext("editMessageText", {
@@ -243,6 +271,43 @@ describe("update", () => {
         target: dm,
         messageId,
         message: { text: "x".repeat(TEXT_LIMIT + 1) },
+      }),
+    );
+    expect(e).toMatchObject({ retryable: false, reason: "too_large" });
+    expect(tg.calls).toHaveLength(0);
+  });
+
+  it("card-only update edits to the card text and keyboard", async () => {
+    const { messageId } = await make().send({ ...base, target: dm, message: { text: "a" } });
+    await make().update({
+      ...base,
+      target: dm,
+      messageId,
+      message: { text: "", cards: [approval] },
+    });
+    expect(tg.edits[0]?.text).toContain("deploy");
+    expect(tg.edits[0]?.replyMarkup).toBeDefined();
+  });
+
+  it("text-only update sends no reply_markup, which removes a keyboard", async () => {
+    const { messageId } = await make().send({
+      ...base,
+      target: dm,
+      message: { text: "", cards: [approval] },
+    });
+    tg.calls.length = 0;
+    await make().update({ ...base, target: dm, messageId, message: { text: "done" } });
+    const call = tg.calls.find((c) => c.method === "editMessageText");
+    expect(call?.params).not.toHaveProperty("reply_markup");
+  });
+
+  it("text plus a card is too_large without calling Telegram", async () => {
+    const e = await sendErr(
+      make().update({
+        ...base,
+        target: dm,
+        messageId: "42:1",
+        message: { text: "b", cards: [approval] },
       }),
     );
     expect(e).toMatchObject({ retryable: false, reason: "too_large" });
