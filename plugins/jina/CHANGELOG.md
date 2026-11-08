@@ -1,5 +1,11 @@
 # @capybara-hq/plugin-jina
 
+## 0.1.0-rc.2
+
+### Patch Changes
+
+- 25d3f32: The icon stays in color on dark backgrounds.
+
 ## 0.1.0-rc.1
 
 ### Patch Changes
