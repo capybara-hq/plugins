@@ -160,7 +160,7 @@ describe.skipIf(!READY)("Slack live", () => {
         title: `Capybara live test ${stamp}`,
         toolName: "post_announcement",
         agentName: "Live test",
-        inputPreview: '{"text":"Office closed on Friday"}',
+        inputPreview: "Post announcement: Office closed on Friday",
         scopes: ["once", "session"],
         expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
         state: "pending",

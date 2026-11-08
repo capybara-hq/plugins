@@ -29,7 +29,7 @@ const approval = (over: Partial<Extract<ChannelCard, { kind: "approval" }>> = {}
   toolName: "post_announcement",
   appName: "Fake IM",
   agentName: "Helper",
-  inputPreview: '{"text":"Office closed"}',
+  inputPreview: "Post announcement: Office closed",
   scopes: ["once", "session", "always"],
   expiresAt: "2026-10-20T10:00:00Z",
   state: "pending",
@@ -89,6 +89,23 @@ describe("renderCard: approval", () => {
     expect(t).toContain("Office closed");
   });
 
+  it("the summary is a plain_text section labelled by locale, never a code block or mrkdwn", () => {
+    const evil = "*bold* <!channel> <https://evil.example|x> `code` & co";
+    const summary = (locale: "en" | "zh") =>
+      (renderCard(approval({ inputPreview: evil }), locale) as Block[]).find(
+        (b) => (b.text as { type?: string } | undefined)?.type === "plain_text",
+      );
+    expect(summary("en")).toEqual({
+      type: "section",
+      text: { type: "plain_text", text: `Summary: ${evil}`, emoji: false },
+    });
+    expect(summary("zh")?.text).toMatchObject({ text: `摘要：${evil}` });
+    expect(allText(renderCard(approval(), "en") as Block[])).not.toContain("```");
+    // an empty summary shows nothing
+    const none = renderCard(approval({ inputPreview: "" }), "en") as Block[];
+    expect(allText(none)).not.toContain("Summary");
+  });
+
   it("only the allowed scopes get buttons; zh labels", () => {
     const bs = buttons(renderCard(approval({ scopes: ["once"] }), "zh") as Block[]);
     expect(bs.map((b) => b.text.text)).toEqual(["批准一次", "拒绝", "在网页上打开"]);
@@ -111,26 +128,11 @@ describe("renderCard: approval", () => {
     expect(allText(ok)).not.toContain("Reason");
   });
 
-  it("long input previews are truncated to fit a section block", () => {
+  it("long summaries are truncated to fit a section block", () => {
     const blocks = renderCard(approval({ inputPreview: "x".repeat(10_000) }), "en") as Block[];
     for (const b of blocks) {
       const text = (b.text as { text?: string } | undefined)?.text ?? "";
       expect(text.length).toBeLessThanOrEqual(SECTION_TEXT_LIMIT);
-    }
-  });
-
-  it("truncation never cuts an escaped entity (&lt; / &gt; / &amp;) in half", () => {
-    for (const ch of ["<", ">", "&"]) {
-      for (let pad = 0; pad < 6; pad++) {
-        const preview = "a".repeat(pad) + ch.repeat(5000);
-        const blocks = renderCard(approval({ inputPreview: preview }), "en") as Block[];
-        const texts = blocks.map((b) => (b.text as { text?: string } | undefined)?.text ?? "");
-        const body = texts.find((t) => t.includes("```")) ?? "";
-        expect(body.length).toBeLessThanOrEqual(SECTION_TEXT_LIMIT);
-        expect(body).toContain("…");
-        // 每个 & 都是完整实体的开头
-        expect(body, `${ch} pad ${pad}`).not.toMatch(/&(?!amp;|lt;|gt;)/);
-      }
     }
   });
 });

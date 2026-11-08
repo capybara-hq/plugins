@@ -13,7 +13,7 @@ import {
   SUBMIT_NAME,
   VALUE_KEY,
 } from "./actions.js";
-import { codeSafe, escapePlain, neutralizeAt, splitMarkdown, toCardMarkdown } from "./markdown.js";
+import { escapePlain, neutralizeAt, splitMarkdown, toCardMarkdown } from "./markdown.js";
 
 /**
  * 出站消息 → Lark 交互卡片（JSON 2.0）。**所有消息都发成卡片**（`msg_type: interactive`）：
@@ -53,7 +53,7 @@ const T = {
     question: "Question",
     tool: "Tool",
     agent: "Agent",
-    input: "Input",
+    summary: "Summary",
     status: "Status",
     reason: "Reason",
     expires: "Expires",
@@ -92,7 +92,7 @@ const T = {
     question: "提问",
     tool: "工具",
     agent: "Agent",
-    input: "输入",
+    summary: "摘要",
     status: "状态",
     reason: "原因",
     expires: "过期时间",
@@ -235,9 +235,12 @@ function approval(
         `**${t.agent}**${escapePlain(t.sep)}${escapePlain(c.agentName)}`,
     ),
   ];
+  // inputPreview is the kernel's one-line summary of the call (never the raw input): plain text
   if (c.inputPreview !== "") {
     elements.push(
-      md(`**${t.input}**\n\`\`\`\n${codeSafe(trunc(c.inputPreview, PREVIEW_LIMIT))}\n\`\`\``),
+      md(
+        `**${t.summary}**${escapePlain(t.sep)}${escapePlain(trunc(c.inputPreview, PREVIEW_LIMIT))}`,
+      ),
     );
   }
   if (c.state !== "pending") {

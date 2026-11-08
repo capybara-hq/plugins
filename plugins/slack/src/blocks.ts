@@ -47,7 +47,7 @@ const T = {
     question: "Question",
     tool: "Tool",
     agent: "Agent",
-    input: "Input",
+    summary: "Summary",
     status: "Status",
     reason: "Reason",
     expires: "Expires",
@@ -85,7 +85,7 @@ const T = {
     question: "提问",
     tool: "工具",
     agent: "Agent",
-    input: "输入",
+    summary: "摘要",
     status: "状态",
     reason: "原因",
     expires: "过期时间",
@@ -224,11 +224,17 @@ function approvalBlocks(c: Extract<ChannelCard, { kind: "approval" }>, locale: L
       ],
     },
   ];
+  // inputPreview is the kernel's one-line summary of the call (never the raw input). A plain_text
+  // section shows it verbatim: no mrkdwn, links, mentions or <!channel> are parsed in it.
   if (c.inputPreview !== "") {
-    const head = `*${t.input}*\n\`\`\`\n`;
-    const tail = "\n```";
-    const body = trunc(esc(c.inputPreview), SECTION_TEXT_LIMIT - head.length - tail.length);
-    blocks.push(section(`${head}${body}${tail}`));
+    blocks.push({
+      type: "section",
+      text: {
+        type: "plain_text",
+        text: trunc(`${t.summary}${t.sep}${c.inputPreview}`, SECTION_TEXT_LIMIT),
+        emoji: false,
+      },
+    });
   }
   if (c.state !== "pending") {
     const state = t.approvalStates[c.state];
