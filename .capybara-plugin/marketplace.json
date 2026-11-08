@@ -222,7 +222,7 @@
     },
     {
       "name": "sandbox-docker",
-      "version": "0.1.0-rc.4",
+      "version": "0.1.0-rc.5",
       "summary": {
         "en": "Conversation sandboxes (sandbox@1) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with an egress allowlist proxy"
       },
@@ -241,19 +241,19 @@
           "config.deployment:volumeDriver",
           "provides:sandbox@2"
         ],
-        "sensitive": []
+        "sensitive": ["provides:sandbox@2"]
       },
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-sandbox-docker",
-          "version": "0.1.0-rc.4",
-          "integrity": "sha512-WOFdF3JFxN5dfdJv2zt1w+NWsHhgdllMAfS75DBXVXbMrHuHKAVIgEP7htgerSmH0smTq0/p+gWoyO2x11cxUw=="
+          "version": "0.1.0-rc.5",
+          "integrity": "sha512-Q+4s3lG/kii5cHaIfBStCqvK2Z1IVpjeAWUN3cuxIwhQHc2HNTYSpKO5R9JfC8J3ajC8KEO+LkED4iI9oCCcGg=="
         }
       }
     },
     {
       "name": "sandbox-e2b",
-      "version": "0.1.0-rc.4",
+      "version": "0.1.0-rc.5",
       "summary": {
         "en": "Environments (sandbox@2) as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, E2B egress controls"
       },
@@ -273,13 +273,13 @@
           "config.deployment:timeoutSeconds",
           "provides:sandbox@2"
         ],
-        "sensitive": ["config.deployment.secret:apiKey"]
+        "sensitive": ["config.deployment.secret:apiKey", "provides:sandbox@2"]
       },
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-sandbox-e2b",
-          "version": "0.1.0-rc.4",
-          "integrity": "sha512-DMsi0ZEdcRquES3d6Lyqb+k6Zke7N5Sun2MY9NKO4Q9zF2Ej2AZZl4Gs9k4PeYCgKHB/F8Un1tYYwUBn+87R1w=="
+          "version": "0.1.0-rc.5",
+          "integrity": "sha512-gb6fHk5MXTIx1R0vzMCeLVwy0knDYdg9qocQBgs0BzdObFBKRwBbeU14sm4Ay/0pv6TYTak6NmL2SrNYuxfh9g=="
         }
       }
     },
