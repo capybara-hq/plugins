@@ -12,6 +12,7 @@ import { renderCards, type TelegramPost } from "./cards.js";
 import { botIdOf, connectionTenant, TelegramConnection } from "./config.js";
 import { toChannelSendError } from "./errors.js";
 import { markdownToTelegramHtml, splitHtml } from "./html.js";
+import { runLongPolling } from "./poll.js";
 import { threadStore } from "./threads.js";
 
 /** Telegram allows about 20 messages a minute in a group; edits count (spec "Send, update"). */
@@ -152,8 +153,34 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
       };
     },
 
-    async connect() {
-      throw new Error("not implemented");
+    async connect({ connectionId, config, onEvent, signal }) {
+      const c = TelegramConnection.parse(config);
+      const botId = botIdOf(c.botToken);
+      const pollTimeoutSec = o.pollTimeoutSec ?? 25;
+      const api = telegramApi({
+        apiUrl: o.apiUrl,
+        token: c.botToken,
+        ...(o.requestTimeoutMs !== undefined && { timeoutMs: o.requestTimeoutMs }),
+      });
+      // getUpdates holds the request for up to pollTimeoutSec: its client must wait longer.
+      const pollApi = telegramApi({
+        apiUrl: o.apiUrl,
+        token: c.botToken,
+        timeoutMs: pollTimeoutSec * 1000 + 10_000,
+      });
+      await runLongPolling({
+        api,
+        pollApi,
+        connectionId,
+        onEvent,
+        signal,
+        log: o.log,
+        kv: o.kv,
+        threads: threadStore(o.kv, botId),
+        tokens: cardTokenStore(o.kv, botId),
+        pollTimeoutSec,
+        backoffBaseMs: o.backoffBaseMs ?? 1000,
+      });
     },
 
     async send({ config, target, message, locale, signal }) {
