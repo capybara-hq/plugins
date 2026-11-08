@@ -72,7 +72,8 @@ Package names are always `@capybara-hq/plugin-<name>`; `repository.url` is
 - Model providers (`model-provider@2`):
   [writing-model-providers](.agents/skills/writing-model-providers/SKILL.md).
 - Channels, third-party login, directory sync (`channel@1`, `identity-source@1`, `directory@1`):
-  [writing-channels](.agents/skills/writing-channels/SKILL.md); references `plugins/slack`, `plugins/lark`.
+  [writing-channels](.agents/skills/writing-channels/SKILL.md); references `plugins/slack`, `plugins/lark`,
+  `plugins/telegram`.
 - Connectors (`connector@1`; no stdio MCP):
   [writing-connectors](.agents/skills/writing-connectors/SKILL.md); references `plugins/connector-mcp`,
   `plugins/connector-openapi`.
@@ -187,7 +188,7 @@ workers and other tests' child processes run plain Node. This is temporary, unti
 ## Live API tests
 
 - Tests that hit real services run only when their `CAPYBARA_TEST_*` variables are set (each skill
-  lists them: model providers, E2B, Slack, Lark, Jina (`CAPYBARA_TEST_JINA_API_KEY`), MCP / OpenAPI
+  lists them: model providers, E2B, Slack, Lark, Telegram, Jina (`CAPYBARA_TEST_JINA_API_KEY`), MCP / OpenAPI
   connectors with `CAPYBARA_TEST_LIVE_TOOLS`).
 - Native model platform providers: deepseek `CAPYBARA_TEST_DEEPSEEK_API_KEY` (falls back to
   `CAPYBARA_TEST_OAICOMPAT_API_KEY`); bailian `CAPYBARA_TEST_BAILIAN_API_KEY` with optional `_REGION`
