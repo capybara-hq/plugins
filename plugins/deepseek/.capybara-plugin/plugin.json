@@ -1,8 +1,11 @@
 {
   "schemaVersion": 1,
   "name": "deepseek",
-  "displayName": { "zh": "DeepSeek 模型", "en": "DeepSeek models" },
-  "version": "0.1.0-rc.0",
+  "displayName": {
+    "zh": "DeepSeek 模型",
+    "en": "DeepSeek models"
+  },
+  "version": "0.1.0-rc.1",
   "publisher": "Capybara",
   "icon": "./icon.svg",
   "description": {

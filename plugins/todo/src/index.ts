@@ -268,7 +268,7 @@ const title = { zh: "任务", en: "Tasks" };
 
 export default defineExtension({
   name: "todo",
-  version: "0.1.0-rc.1",
+  version: "0.1.0-rc.2",
   sdk: "^0.1.0-rc.0",
   provides: [],
   migrations: "../migrations",
