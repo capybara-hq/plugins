@@ -4,6 +4,7 @@
   "displayName": { "zh": "Telegram", "en": "Telegram" },
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
+  "icon": "./icon.svg",
   "description": {
     "en": "Telegram (channel@1 bot over the Bot API: long polling or webhook, inline keyboard cards)",
     "zh": "Telegram 机器人渠道（channel@1，Bot API：长轮询或 webhook，内联键盘卡片）"
