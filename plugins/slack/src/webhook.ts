@@ -16,7 +16,10 @@ import type {
  *   (`url_verification` carries `challenge`; events arrive as `event_callback`; Slack retries a
  *   delivery not answered with 2xx within 3 seconds, with `x-slack-retry-num`);
  * - interactivity: https://docs.slack.dev/interactivity/handling-user-interaction/
- *   (`application/x-www-form-urlencoded` body with one `payload` field holding the JSON).
+ *   (`application/x-www-form-urlencoded` body with one `payload` field holding the JSON);
+ * - slash commands: https://docs.slack.dev/interactivity/implementing-slash-commands (checked
+ *   2026-11-08; a form body whose fields are the command payload, `command` among them, posted to
+ *   each command's Request URL; the response body may carry an ephemeral reply).
  *
  * The payloads are the same objects Socket Mode wraps in `events_api` / `interactive` envelopes,
  * so both modes go through one parser and produce identical events (same `messageId` /
@@ -32,12 +35,19 @@ export interface SlackEnvelope {
   body: unknown;
 }
 
+/** A slash command turned into an inbound event (or none) and the ack body (an ephemeral reply). */
+export interface SlashOutcome {
+  event: InboundEvent | null;
+  response: Record<string, unknown> | undefined;
+}
+
 /** What a webhook request is, before turning it into events. */
 export type SlackWebhookRead =
   | { kind: "respond"; response: ChannelWebhookResponse }
   | { kind: "reject"; status: 400 | 401 }
   | { kind: "ignore" }
-  | { kind: "envelope"; envelope: SlackEnvelope };
+  | { kind: "envelope"; envelope: SlackEnvelope }
+  | { kind: "command"; body: Record<string, string> };
 
 /** Empty 200: Slack's ack for both events and interactive payloads. */
 export const SLACK_WEBHOOK_ACK: ChannelWebhookResponse = {
@@ -72,11 +82,18 @@ export function verifySlackSignature(
   return got.length === want.length && timingSafeEqual(got, want);
 }
 
+/** A 200 whose JSON body Slack shows (a slash command's ephemeral reply). */
+export const slackJsonAck = (body: Record<string, unknown>): ChannelWebhookResponse => ({
+  status: 200,
+  headers: { "content-type": "application/json; charset=utf-8" },
+  body: JSON.stringify(body),
+});
+
 /**
  * Verifies and decodes one webhook request (no network): no signing secret configured or a bad /
  * stale signature → reject 401; malformed body → reject 400; `url_verification` → respond with
  * the challenge (before any event parsing); `event_callback` → `events_api` envelope; a form
- * `payload` → `interactive` envelope; anything else (e.g. `app_rate_limited`) → ignore (acked).
+ * `payload` → `interactive` envelope; a form with `command` → slash command; anything else (e.g. `app_rate_limited`) → ignore (acked).
  */
 export function readSlackWebhook(
   config: { signingSecret?: string | undefined },
@@ -91,8 +108,12 @@ export function readSlackWebhook(
   const text = new TextDecoder().decode(request.body);
   const type = (request.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase();
   if (type === "application/x-www-form-urlencoded") {
-    const payload = new URLSearchParams(text).get("payload");
-    if (payload === null) return { kind: "ignore" };
+    const form = new URLSearchParams(text);
+    const payload = form.get("payload");
+    if (payload === null) {
+      if (form.get("command") === null) return { kind: "ignore" };
+      return { kind: "command", body: Object.fromEntries(form) };
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(payload);
@@ -137,10 +158,17 @@ export async function handleSlackWebhook(args: {
   request: ChannelWebhookRequest;
   botUserId: () => Promise<string>;
   toEvent: (envelope: SlackEnvelope, botUserId: string) => Promise<InboundEvent | null>;
+  /** A genuine slash command → its event and ack body (see `commands.ts`). */
+  command: (body: Record<string, string>) => Promise<SlashOutcome>;
 }): Promise<ChannelWebhookResult> {
   const r = readSlackWebhook(args.config, args.request);
   if (r.kind === "respond" || r.kind === "reject") return r;
   if (r.kind === "ignore") return { kind: "events", events: [], ack: SLACK_WEBHOOK_ACK };
+  if (r.kind === "command") {
+    const { event, response } = await args.command(r.body);
+    const ack = response !== undefined ? slackJsonAck(response) : SLACK_WEBHOOK_ACK;
+    return event ? { kind: "events", events: [event], ack } : { kind: "respond", response: ack };
+  }
   const bot = r.envelope.type === "events_api" ? await args.botUserId() : "";
   const event = await args.toEvent(r.envelope, bot);
   return { kind: "events", events: event ? [event] : [], ack: SLACK_WEBHOOK_ACK };

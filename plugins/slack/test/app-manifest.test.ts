@@ -28,12 +28,25 @@ describe("app-manifest.yaml", () => {
         "app_mentions:read",
         "channels:history",
         "chat:write",
+        "commands",
         "groups:history",
+        "im:write",
         "im:history",
         "users:read",
         "users:read.email",
       ].sort(),
     );
+  });
+
+  it("registers the kernel's commands as slash commands (Slack rejects unregistered /names)", () => {
+    const commands = [...manifest.matchAll(/\n\s+- command: (\S+)\n/g)].map((m) => m[1]);
+    expect(commands).toEqual(["/new", "/env", "/capybara"]);
+    expect(manifest).toMatch(
+      /command: \/capybara\n(?:\s+\w+: .*\n)*\s+usage_hint: "<skill> \[args\]"/,
+    );
+    // Text arrives as typed (no <@U…> rewriting of mentions); no per-command url under Socket Mode
+    expect(manifest.match(/should_escape: false/g)).toHaveLength(3);
+    expect(manifest).not.toMatch(/\n\s+url:/);
   });
 
   it("subscribes to the events the plugin handles", () => {

@@ -7,16 +7,25 @@ import {
   type InboundEvent,
   type Logger,
   secret,
+  ui,
 } from "@capybara-hq/plugin-sdk";
 import { LogLevel, type Logger as SlackLogger, SocketModeClient } from "@slack/socket-mode";
 import { type FetchFunction, WebClient } from "@slack/web-api";
 import { z } from "zod";
 import { parseBlockActions } from "./actions.js";
 import { renderSend, renderUpdate } from "./blocks.js";
+import {
+  ephemeral,
+  escapeSlack,
+  parseSlashCommand,
+  SLASH_REPLIES,
+  slashCommandText,
+  typedCommand,
+} from "./commands.js";
 import { workspaceTokenProblem } from "./config.js";
 import { platformErrorCode, toChannelSendError } from "./errors.js";
 import { eventToInbound, profileOf, type SlackProfile } from "./inbound.js";
-import { handleSlackWebhook, type SlackEnvelope } from "./webhook.js";
+import { handleSlackWebhook, type SlackEnvelope, type SlashOutcome } from "./webhook.js";
 
 /**
  * 渠道连接配置：应用级令牌（Socket Mode，`connections:write`）与机器人令牌。都走密钥存储。
@@ -25,14 +34,37 @@ import { handleSlackWebhook, type SlackEnvelope } from "./webhook.js";
  * without it every webhook request is rejected with 401.
  */
 export const SlackConnection = z.object({
-  appToken: secret(
-    z
-      .string()
-      .regex(/^xapp-/, "must be an app-level token starting with xapp-")
-      .optional(),
+  appToken: ui(
+    secret(
+      z
+        .string()
+        .regex(/^xapp-/, "must be an app-level token starting with xapp-")
+        .optional(),
+    ),
+    {
+      label: { zh: "应用令牌", en: "App-level token" },
+      help: {
+        zh: "xapp-…，Socket Mode 必填（Basic Information → App-Level Tokens，权限 connections:write）。",
+        en: "xapp-…, required for Socket Mode (Basic Information → App-Level Tokens, scope connections:write).",
+      },
+      placeholder: "xapp-…",
+    },
   ),
-  botToken: secret(z.string().regex(/^xoxb-/, "must be a bot token starting with xoxb-")),
-  signingSecret: secret(z.string().min(1).optional()),
+  botToken: ui(secret(z.string().regex(/^xoxb-/, "must be a bot token starting with xoxb-")), {
+    label: { zh: "机器人令牌", en: "Bot token" },
+    help: {
+      zh: "xoxb-…（Install App → Bot User OAuth Token）。",
+      en: "xoxb-… (Install App → Bot User OAuth Token).",
+    },
+    placeholder: "xoxb-…",
+  }),
+  signingSecret: ui(secret(z.string().min(1).optional()), {
+    label: { zh: "签名密钥", en: "Signing secret" },
+    help: {
+      zh: "仅 webhook 模式需要；Socket Mode 留空。",
+      en: "Only needed in webhook mode; leave empty for Socket Mode.",
+    },
+  }),
 });
 type SlackConnectionConfig = z.infer<typeof SlackConnection>;
 
@@ -76,6 +108,13 @@ const PROFILE_TTL_MS = 10 * 60_000;
 const PROFILE_CACHE_MAX = 1000;
 /** 查资料的超时：Slack 要求 3 秒内确认事件，资料查不到就不带（https://docs.slack.dev/apis/events-api/ ）。 */
 const PROFILE_TIMEOUT_MS = 1500;
+
+/** TTL of the cached bot DM channel per user (the DM channel never changes), in seconds. */
+export const BOT_DM_CACHE_TTL_SECONDS = 86_400;
+/** TTL of a slash command's echo ts (a Socket Mode redelivery reuses it), in seconds. */
+export const COMMAND_ECHO_TTL_SECONDS = 3600;
+/** Timeout of the Web API calls made before a slash command is acked (Slack wants it in 3 s). */
+const COMMAND_CALL_TIMEOUT_MS = 1500;
 
 /** 可中止的等待（只用于本次连接循环内，随 signal 结束）。 */
 const pause = (ms: number, signal: AbortSignal) =>
@@ -274,6 +313,140 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
     return id;
   };
 
+  /**
+   * Whether `channelId` is the bot's own DM with `userId` (a slash command also runs in a DM
+   * between two people, where the bot cannot reply). `conversations.open` returns the bot's DM;
+   * the answer is cached in kv. When the lookup fails the channel is taken as the bot's DM (a
+   * wrong guess only makes the reply fail as `target_gone`).
+   */
+  const isBotDm = async (
+    c: SlackConnectionConfig,
+    connectionId: string,
+    userId: string,
+    channelId: string,
+    signal: AbortSignal,
+  ): Promise<boolean> => {
+    const key = `dm/${connectionId}/${userId}`;
+    const hit = await opts.kv?.get(key).catch(() => null);
+    if (hit) return hit === channelId;
+    try {
+      const s = AbortSignal.any([signal, AbortSignal.timeout(COMMAND_CALL_TIMEOUT_MS)]);
+      const r = (await web(c.botToken, s).apiCall("conversations.open", { users: userId })) as {
+        channel?: { id?: string };
+      };
+      const id = r.channel?.id;
+      if (!id) return true;
+      await opts.kv?.set(key, id, { ttlSeconds: BOT_DM_CACHE_TTL_SECONDS }).catch(() => {});
+      return id === channelId;
+    } catch (e) {
+      log.warn("slack: could not look up the bot's DM for a slash command; assuming it is", {
+        connectionId,
+        error: describe(e, "conversations.open").message,
+      });
+      return true;
+    }
+  };
+
+  /**
+   * Posts the visible echo of a channel slash command (`<@user>: /capybara foo bar`) and returns
+   * its ts: the echo is the thread root the kernel replies under, as for an @-mention. A Socket
+   * Mode redelivery of the same command (same `trigger_id`) reuses the cached echo.
+   */
+  const postEcho = async (
+    c: SlackConnectionConfig,
+    connectionId: string,
+    channelId: string,
+    triggerId: string,
+    text: string,
+    signal: AbortSignal,
+  ): Promise<{ ts: string } | { error: string }> => {
+    const key = `cmd-echo/${connectionId}/${createHash("sha256").update(triggerId).digest("hex").slice(0, 32)}`;
+    const hit = await opts.kv?.get(key).catch(() => null);
+    if (hit) return { ts: hit };
+    try {
+      const s = AbortSignal.any([signal, AbortSignal.timeout(COMMAND_CALL_TIMEOUT_MS)]);
+      const r = (await web(c.botToken, s).apiCall("chat.postMessage", {
+        channel: channelId,
+        text,
+      })) as { ts?: string };
+      if (!r.ts) return { error: "no_ts" };
+      await opts.kv?.set(key, r.ts, { ttlSeconds: COMMAND_ECHO_TTL_SECONDS }).catch(() => {});
+      return { ts: r.ts };
+    } catch (e) {
+      return { error: platformErrorCode(e) ?? "request_failed" };
+    }
+  };
+
+  /**
+   * A slash command payload → the inbound message the kernel gets for the same typed text, plus
+   * the ack body. DM (the bot's own): the text as a DM message, acked with an ephemeral echo of the
+   * command (Slack shows no slash command in the conversation). Channel: a visible echo is posted
+   * first and the event is that message, `mentionsBot: true` (as `@bot /foo bar`), so the reply
+   * lands in its thread. Anything that cannot be served gets an ephemeral hint and no event.
+   */
+  const toCommand = async (
+    c: SlackConnectionConfig,
+    connectionId: string,
+    body: unknown,
+    signal: AbortSignal,
+  ): Promise<SlashOutcome> => {
+    const cmd = parseSlashCommand(body);
+    if (!cmd) return { event: null, response: undefined };
+    const text = slashCommandText(cmd.command, cmd.text);
+    if (text === null) return { event: null, response: ephemeral(SLASH_REPLIES.usage) };
+    const profile = lookupProfile(c.botToken, connectionId, cmd.userId, signal).then(
+      (p) => p ?? (cmd.userName !== undefined ? { displayName: cmd.userName } : undefined),
+    );
+    const sender = { externalId: cmd.userId, tenantId: cmd.teamId };
+    if (cmd.channelId.startsWith("D")) {
+      const [own, p] = await Promise.all([
+        isBotDm(c, connectionId, cmd.userId, cmd.channelId, signal),
+        profile,
+      ]);
+      if (!own) return { event: null, response: ephemeral(SLASH_REPLIES.wrongDm) };
+      return {
+        event: {
+          type: "message",
+          messageId: `${cmd.channelId}:cmd-${cmd.triggerId}`,
+          target: { chatId: cmd.channelId, chatType: "dm" },
+          sender: withProfile(sender, p),
+          text,
+          mentionsBot: false,
+        },
+        response: ephemeral(escapeSlack(typedCommand(cmd))),
+      };
+    }
+    const echoText = `<@${cmd.userId}>: ${escapeSlack(typedCommand(cmd))}`;
+    const [echo, p] = await Promise.all([
+      postEcho(c, connectionId, cmd.channelId, cmd.triggerId, echoText, signal),
+      profile,
+    ]);
+    if ("error" in echo) {
+      const gone = ["not_in_channel", "channel_not_found", "is_archived"].includes(echo.error);
+      if (!gone) {
+        log.warn("slack: could not post a slash command's echo", {
+          connectionId,
+          error: echo.error,
+        });
+      }
+      return {
+        event: null,
+        response: ephemeral(gone ? SLASH_REPLIES.notInChannel : SLASH_REPLIES.failed),
+      };
+    }
+    return {
+      event: {
+        type: "message",
+        messageId: `${cmd.channelId}:${echo.ts}`,
+        target: { chatId: cmd.channelId, chatType: "group" },
+        sender: withProfile(sender, p),
+        text,
+        mentionsBot: true,
+      },
+      response: undefined,
+    };
+  };
+
   return {
     connectionSchema: SlackConnection,
     features: { cards: true, edit: true, threads: true, minEditIntervalMs: MIN_EDIT_INTERVAL_MS },
@@ -311,9 +484,12 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
 
       const handle = async ({ ack, type, body }: SocketEnvelope) => {
         let event: InboundEvent | null = null;
+        let response: Record<string, unknown> | undefined;
         try {
           if (type === "events_api" || type === "interactive") {
             event = await toEvent(c, connectionId, botUserId, { type, body }, signal);
+          } else if (type === "slash_commands") {
+            ({ event, response } = await toCommand(c, connectionId, body, signal));
           }
         } catch (e) {
           log.warn("slack: could not read an event; acknowledging and skipping it", {
@@ -333,7 +509,7 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
             return;
           }
         }
-        await ack().catch((e: unknown) => {
+        await ack(response).catch((e: unknown) => {
           log.warn("slack: acknowledging an event failed; Slack will redeliver it", {
             connectionId,
             error: e instanceof Error ? e.message : String(e),
@@ -430,6 +606,17 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
           config: c,
           request,
           botUserId: () => botUserIdOf(connectionId, c.botToken, signal),
+          command: async (body) => {
+            try {
+              return await toCommand(c, connectionId, body, signal);
+            } catch (e) {
+              log.warn("slack: could not read a webhook slash command; skipping it", {
+                connectionId,
+                error: e instanceof Error ? e.message : String(e),
+              });
+              return { event: null, response: ephemeral(SLASH_REPLIES.failed) };
+            }
+          },
           toEvent: async (envelope, botUserId) => {
             try {
               return await toEvent(c, connectionId, botUserId, envelope, signal);
