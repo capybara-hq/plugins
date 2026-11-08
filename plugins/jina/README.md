@@ -28,5 +28,5 @@ set -a; . ~/.capybara-test.env; set +a; pnpm exec vitest run plugins/jina/test/l
 Jina logo", https://jina.ai/logo-Jina-1024.zip, Jina-color.svg and Jina-white.svg; Jina publishes no
 square mark). It is a trademark of its owner, used only to identify the service this plugin connects
 to; the plugin is not affiliated with or endorsed by the owner. The artwork is unchanged except for
-removing editor metadata and setting a square viewBox; it shows the color version on light
-backgrounds and the white version on dark ones.
+removing editor metadata and setting a square viewBox; it shows the color version on both light
+and dark backgrounds.
