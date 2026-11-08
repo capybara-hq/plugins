@@ -1,8 +1,11 @@
 {
   "schemaVersion": 1,
   "name": "telegram",
-  "displayName": { "zh": "Telegram", "en": "Telegram" },
-  "version": "0.1.0-rc.0",
+  "displayName": {
+    "zh": "Telegram",
+    "en": "Telegram"
+  },
+  "version": "0.1.0-rc.1",
   "publisher": "Capybara",
   "icon": "./icon.svg",
   "description": {

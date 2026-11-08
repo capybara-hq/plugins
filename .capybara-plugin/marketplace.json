@@ -491,7 +491,7 @@
     },
     {
       "name": "telegram",
-      "version": "0.1.0-rc.0",
+      "version": "0.1.0-rc.1",
       "summary": {
         "en": "Telegram (channel@1 bot over the Bot API: long polling or webhook, inline keyboard cards)",
         "zh": "Telegram 机器人渠道（channel@1，Bot API：长轮询或 webhook，内联键盘卡片）"
@@ -512,8 +512,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-telegram",
-          "version": "0.1.0-rc.0",
-          "integrity": "sha512-jUfZz3G13sFcTwJ63DTe0x4nvsdJyRdydw/RLDeITDyBvDfNso9sQUfgfADzBB4PVJT4P23EVqkYK+yM5uMshg=="
+          "version": "0.1.0-rc.1",
+          "integrity": "sha512-n6Cemp4sU070wcKFOmasXB0CVY3l95e7d3lnovDR+EPRQr2xgoRXKFje9CdtoQj954HR6V7+isbBlsIrHtKsbA=="
         }
       }
     }
