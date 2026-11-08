@@ -1,4 +1,5 @@
 import type { ChannelTarget, InboundEvent } from "@capybara-hq/plugin-sdk";
+import { type CardTokenStore, parseCallback } from "./actions.js";
 import { SENDER_TENANT } from "./config.js";
 import type { ThreadStore } from "./threads.js";
 
@@ -85,7 +86,8 @@ function readText(
 
 /**
  * A Bot API update to an inbound event, or `null` when nothing should be sent (spec "Inbound
- * rules"): only `message` updates count here (callbacks are parsed by the card code); bot senders,
+ * rules"): `message` updates, and `callback_query` updates (card button clicks, parsed by
+ * `parseCallback`, only when `tokens` is given; the caller answers the query); bot senders,
  * ephemeral messages (`message_id` 0), service messages, media without a caption and group
  * messages that neither mention the bot nor reply to it are dropped.
  *
@@ -98,7 +100,11 @@ export async function updateToInbound(
   update: unknown,
   bot: BotIdentity,
   threads: ThreadStore,
+  tokens?: CardTokenStore,
 ): Promise<InboundEvent | null> {
+  if (tokens && obj(obj(update)?.callback_query)) {
+    return (await parseCallback(update, tokens, threads))?.event ?? null;
+  }
   const message = obj(obj(update)?.message);
   if (!message) return null;
   const chat = obj(message.chat);
