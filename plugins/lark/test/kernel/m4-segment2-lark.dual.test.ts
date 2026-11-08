@@ -268,7 +268,7 @@ describe("M4 第二段验收：Lark（双副本）", () => {
         name: "Helper",
         instructions: "Be helpful.",
         model: { provider: "model-fake", model: "fake-1" },
-        tools: [{ kind: "plugin", plugin: "fake-im", name: "post_announcement" }],
+        disabledTools: [],
       },
       visibility: "org",
     });

@@ -28,7 +28,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.4",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.5",
     "@slack/socket-mode": "^3.1.0",
     "@slack/web-api": "^8.2.0",
     "jose": "^6.2.12",
@@ -36,8 +36,8 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@capybara-hq/plugin-model-fake": "^0.1.0-rc.4",
-    "@capybara-hq/testing": "^0.1.0-rc.7",
+    "@capybara-hq/plugin-model-fake": "^0.1.0-rc.5",
+    "@capybara-hq/testing": "^0.1.0-rc.8",
     "ioredis": "^6.0.0",
     "kysely": "^0.29.8"
   }

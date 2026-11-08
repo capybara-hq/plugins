@@ -99,7 +99,7 @@ describe("Slack webhook inbound (dual replica, real plugin)", () => {
         name: "Helper",
         instructions: "Be helpful.",
         model: { provider: "model-fake", model: "fake-1" },
-        tools: [],
+        disabledTools: [],
       },
       visibility: "org",
     });

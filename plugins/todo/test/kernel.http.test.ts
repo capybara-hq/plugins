@@ -69,7 +69,7 @@ describe("todo in a kernel", () => {
     });
     expect(enabled.statusCode, enabled.body).toBe(200);
     const agentId = await createAgent(owner, orgId, {
-      tools: [{ kind: "plugin", plugin: "todo", name: "write" }],
+      disabledTools: [],
     });
     const convId = await createConversation(owner, orgId, agentId);
     const view = async (id = "tasks-panel") => {

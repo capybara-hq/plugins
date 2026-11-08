@@ -144,7 +144,7 @@ describe("M7 segment 1: gateway roles, fair share, webhook mode, failover (dual 
         name: "Helper",
         instructions: "Be helpful.",
         model: { provider: "model-fake", model: "fake-1" },
-        tools: [],
+        disabledTools: [],
       },
       visibility: "org",
     });

@@ -107,10 +107,7 @@ describe("jina in a kernel", () => {
     expect(points).toContainEqual({ point: "web-fetch", available: true });
 
     const agentId = await createAgent(owner, orgId, {
-      tools: [
-        { kind: "builtin", name: "WebSearch" },
-        { kind: "builtin", name: "WebFetch" },
-      ],
+      disabledTools: [],
     });
     const convId = await createConversation(owner, orgId, agentId);
 
