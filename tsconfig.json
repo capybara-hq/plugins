@@ -5,10 +5,19 @@
       "path": "plugins/anthropic"
     },
     {
+      "path": "plugins/ark"
+    },
+    {
+      "path": "plugins/bailian"
+    },
+    {
       "path": "plugins/connector-mcp"
     },
     {
       "path": "plugins/connector-openapi"
+    },
+    {
+      "path": "plugins/deepseek"
     },
     {
       "path": "plugins/example-board"
@@ -44,6 +53,9 @@
       "path": "plugins/todo"
     },
     {
+      "path": "tools/checks"
+    },
+    {
       "path": "tools/ci"
     },
     {
@@ -51,9 +63,6 @@
     },
     {
       "path": "tools/worktree"
-    },
-    {
-      "path": "tools/checks"
     }
   ]
 }

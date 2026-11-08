@@ -27,9 +27,10 @@ permissions: {}
 #     `--base`, which also rejects an edit, deletion or rename of an applied migration;
 #   - check:synced-skills (the shared skills match their recorded hashes) and
 #     check:skills-frontmatter (English, valid YAML, description <= 1024 characters);
-#   - `capybara-plugin marketplace --check`: every public plugin version has its
-#     .capybara-plugin/marketplace.json entry; on PRs with `--base`, the entries at the base stay
-#     unchanged and first (append-only) and the added ones match their packs;
+#   - `capybara-plugin marketplace --check`: every public plugin has its
+#     .capybara-plugin/marketplace.json entry at its current version; on PRs with `--base`, a
+#     plugin's version may only increase, a same version keeps its integrity and changed entries
+#     match their packs;
 #   - pack every plugin (artifact), commitlint on PRs.
 #   npm publishing is not here: .github/workflows/release.yml runs on push to main and
 #   workflow_dispatch only, never on PRs.
