@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
+  isFileSystemGoneError,
   isSandboxGoneError,
+  type SandboxActor,
   type SandboxLimits,
   type SandboxProvider,
 } from "@capybara-hq/plugin-sdk";
@@ -25,10 +27,11 @@ import {
 } from "./docker-env.js";
 
 /**
- * sandbox@1 on real Docker (through the socket proxy of capybara-hq/core's docker/sandbox-proxy):
- * lifecycle, exec timeout and abort, file reads and writes, read-only /skills, same-name rebuild,
- * gone semantics, the three egress modes (none / allowlist / open) and the security settings; the
- * runsc cases run only when runsc is installed. Skipped as a whole without Docker.
+ * sandbox@2 on real Docker (through the socket proxy of capybara-hq/core's docker/sandbox-proxy):
+ * file systems (volumes) that outlive instances (containers), lifecycle, exec timeout and abort,
+ * file reads and writes, read-only /skills, same-name rebuild, gone semantics, the three egress
+ * modes (none / allowlist / open) and the security settings; the runsc cases run only when runsc
+ * is installed. Skipped as a whole without Docker.
  */
 
 const RUN = randomUUID().slice(0, 8);
@@ -36,6 +39,9 @@ const enc = new TextEncoder();
 const dec = new TextDecoder();
 const sig = () => AbortSignal.timeout(120_000);
 const sbxName = () => `cap-${randomUUID()}`;
+const ACTOR: SandboxActor = { accountId: "acc-1", conversationId: "conv-1" };
+/** The `tag` and `actor` every `exec` carries in sandbox@2. */
+const who = () => ({ tag: randomUUID(), actor: ACTOR });
 const limits = (egress: SandboxLimits["egress"], allowHosts: string[] = []): SandboxLimits => ({
   cpu: 1,
   memoryMb: 512,
@@ -93,8 +99,21 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
     await images?.remove();
   }, 120_000);
 
+  /** A file system and an instance on it, both under `name` (as the kernel names them). */
+  const newSandbox = async (
+    p: SandboxProvider,
+    o: { name: string; image?: string; limits: SandboxLimits; signal: AbortSignal },
+  ) => {
+    const fileSystem = await p.createFileSystem({
+      name: o.name,
+      limits: o.limits,
+      signal: o.signal,
+    });
+    return p.create({ ...o, fileSystem });
+  };
+
   const sh = async (id: string, command: string, timeoutMs = 30_000) =>
-    sbx.exec({ id }, { command, timeoutMs, maxOutputBytes: 1_000_000, signal: sig() });
+    sbx.exec({ id }, { ...who(), command, timeoutMs, maxOutputBytes: 1_000_000, signal: sig() });
 
   const inspect = async (name: string) =>
     JSON.parse(await docker("inspect", name))[0] as {
@@ -120,7 +139,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
 
   it("full lifecycle: create → exec → write / read → suspend → resume (files kept) → destroy", async () => {
     const name = sbxName();
-    const h = await sbx.create({
+    const h = await newSandbox(sbx, {
       name,
       image: images.sandboxImage,
       limits: limits("none"),
@@ -171,8 +190,113 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
 
     await sbx.destroy(h, sig());
     expect(await exists("container", name)).toBe(false);
+    // destroy drops the instance only: the file system stays until destroyFileSystem
+    expect(await exists("volume", `${name}-workspace`)).toBe(true);
+    expect(await exists("volume", `${name}-skills`)).toBe(true);
+    await sbx.destroyFileSystem({ id: name }, sig());
     expect(await exists("volume", `${name}-workspace`)).toBe(false);
     expect(await exists("volume", `${name}-skills`)).toBe(false);
+    // not being there counts as success
+    await sbx.destroyFileSystem({ id: name }, sig());
+  });
+
+  it("destroy keeps the volumes and a new instance sees the files", async () => {
+    const name = sbxName();
+    const fileSystem = await sbx.createFileSystem({ name, limits: limits("none"), signal: sig() });
+    expect(fileSystem).toEqual({ id: name });
+    const vol = await docker("volume", "inspect", `${name}-workspace`, `${name}-skills`);
+    const labels = (JSON.parse(vol) as { Labels: Record<string, string> }[]).map(
+      (v) => v.Labels["dev.capybara.sandbox.role"],
+    );
+    expect(labels).toEqual(["workspace", "skills"]);
+    const h1 = await sbx.create({
+      name,
+      image: images.sandboxImage,
+      limits: limits("allowlist", ["allowed.example.com"]),
+      fileSystem,
+      signal: sig(),
+    });
+    await sbx.writeFile(h1, "/workspace/keep.txt", enc.encode("kept"), sig());
+    await sbx.writeFile(h1, "/skills/s/SKILL.md", enc.encode("skill"), sig());
+    await sbx.destroy(h1, sig());
+    expect(await exists("container", name)).toBe(false);
+    expect(await exists("container", `${name}-egress`)).toBe(false);
+    expect(await exists("network", `${name}-net`)).toBe(false);
+    // createFileSystem on an existing name returns it, files untouched
+    expect(await sbx.createFileSystem({ name, limits: limits("none"), signal: sig() })).toEqual({
+      id: name,
+    });
+    const h2 = await sbx.create({
+      name,
+      image: images.sandboxImage,
+      limits: limits("none"),
+      fileSystem,
+      signal: sig(),
+    });
+    try {
+      expect((await sh(h2.id, "cat /workspace/keep.txt /skills/s/SKILL.md")).stdout).toBe(
+        "keptskill",
+      );
+    } finally {
+      await sbx.destroyFileSystem(fileSystem, sig());
+    }
+    // destroyFileSystem force-removed the instance still using the volumes
+    expect(await exists("container", name)).toBe(false);
+    expect(await exists("volume", `${name}-workspace`)).toBe(false);
+  });
+
+  it("create on removed volumes throws FileSystemGoneError and makes no empty volume", async () => {
+    const name = sbxName();
+    const fileSystem = await sbx.createFileSystem({ name, limits: limits("none"), signal: sig() });
+    await sbx.destroyFileSystem(fileSystem, sig());
+    const attempt = () =>
+      sbx.create({
+        name,
+        image: images.sandboxImage,
+        limits: limits("none"),
+        fileSystem,
+        signal: sig(),
+      });
+    await expect(attempt()).rejects.toSatisfy(isFileSystemGoneError);
+    expect(await exists("volume", `${name}-workspace`)).toBe(false);
+    expect(await exists("volume", `${name}-skills`)).toBe(false);
+    expect(await exists("container", name)).toBe(false);
+
+    // only one of the two volumes gone counts as gone too
+    await sbx.createFileSystem({ name, limits: limits("none"), signal: sig() });
+    await docker("volume", "rm", `${name}-skills`);
+    await expect(attempt()).rejects.toSatisfy(isFileSystemGoneError);
+    expect(await exists("volume", `${name}-skills`)).toBe(false);
+    expect(await exists("container", name)).toBe(false);
+  });
+
+  it("destroyFileSystemByName removes legacy cap-<id> volumes", async () => {
+    // a sandbox@1 instance: one container `cap-<conversationId>` that mounts its two volumes
+    const name = sbxName();
+    for (const v of [`${name}-workspace`, `${name}-skills`]) {
+      await docker("volume", "create", "--label", `${TEST_LABEL}=${RUN}`, v);
+    }
+    await docker(
+      "create",
+      "--name",
+      name,
+      "--label",
+      `${TEST_LABEL}=${RUN}`,
+      "-v",
+      `${name}-workspace:/workspace`,
+      "-v",
+      `${name}-skills:/skills`,
+      images.sandboxImage,
+      "sleep",
+      "infinity",
+    );
+    await docker("start", name);
+    await sbx.destroyFileSystemByName(name, sig());
+    expect(await exists("container", name)).toBe(false);
+    expect(await exists("volume", `${name}-workspace`)).toBe(false);
+    expect(await exists("volume", `${name}-skills`)).toBe(false);
+    // none left: still succeeds
+    await sbx.destroyFileSystemByName(name, sig());
   });
 
   it("a missing instance: resume is gone, file and exec calls throw SandboxGoneError, cleanup succeeds", async () => {
@@ -195,7 +319,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
   });
 
   it("exec: exit code, stderr, env, cwd and the output cap", async () => {
-    const h = await sbx.create({
+    const h = await newSandbox(sbx, {
       name: sbxName(),
       image: images.sandboxImage,
       limits: limits("none"),
@@ -212,7 +336,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       ).toBe("\u4e2d\u6587\n");
       // 建容器的值里有非 ASCII：插件自己先拒绝（不转义）
       await expect(
-        sbx.create({
+        newSandbox(sbx, {
           name: sbxName(),
           image: "capybara-sandbox:\u955c\u50cf",
           limits: limits("none"),
@@ -220,6 +344,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
         }),
       ).rejects.toThrow(/non-ASCII/);
       const e = await sbx.exec(h, {
+        ...who(),
         command: 'echo "$FOO"; pwd',
         cwd: "/tmp",
         env: { FOO: "bar baz" },
@@ -229,6 +354,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       });
       expect(e.stdout).toBe("bar baz\n/tmp\n");
       const big = await sbx.exec(h, {
+        ...who(),
         command: "head -c 100000 /dev/zero | tr '\\0' a; echo done >&2",
         timeoutMs: 10_000,
         maxOutputBytes: 100,
@@ -247,7 +373,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
   });
 
   it("exec: timeout and abort kill the command with its children; the sandbox stays usable", async () => {
-    const h = await sbx.create({
+    const h = await newSandbox(sbx, {
       name: sbxName(),
       image: images.sandboxImage,
       limits: limits("none"),
@@ -256,6 +382,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
     try {
       const t0 = Date.now();
       const r = await sbx.exec(h, {
+        ...who(),
         command: "echo started; sleep 301 & (sleep 302 &); sleep 303; echo never",
         timeoutMs: 1500,
         maxOutputBytes: 1000,
@@ -269,6 +396,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       setTimeout(() => ac.abort(new Error("stop")), 1500);
       const t1 = Date.now();
       const a = await sbx.exec(h, {
+        ...who(),
         command: "echo begun; sleep 304 & sleep 305",
         timeoutMs: 60_000,
         maxOutputBytes: 1000,
@@ -281,7 +409,13 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       // 调用时已中止：立即 reject
       const dead = AbortSignal.abort(new Error("already"));
       await expect(
-        sbx.exec(h, { command: "true", timeoutMs: 1000, maxOutputBytes: 10, signal: dead }),
+        sbx.exec(h, {
+          ...who(),
+          command: "true",
+          timeoutMs: 1000,
+          maxOutputBytes: 10,
+          signal: dead,
+        }),
       ).rejects.toThrow("already");
       await expect(
         sbx.readFile(h, "/workspace/x", { maxBytes: 1, signal: dead }),
@@ -297,7 +431,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
   });
 
   it("binary files round-trip, including empty files", async () => {
-    const h = await sbx.create({
+    const h = await newSandbox(sbx, {
       name: sbxName(),
       image: images.sandboxImage,
       limits: limits("none"),
@@ -324,7 +458,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
   });
 
   it("/skills is read-only inside the sandbox but writable through writeFile; no symlink bypass", async () => {
-    const h = await sbx.create({
+    const h = await newSandbox(sbx, {
       name: sbxName(),
       image: images.sandboxImage,
       limits: limits("none"),
@@ -358,7 +492,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
 
   it("applies resource limits and hardening", async () => {
     const name = sbxName();
-    const h = await sbx.create({
+    const h = await newSandbox(sbx, {
       name,
       image: images.sandboxImage,
       limits: limits("none"),
@@ -389,14 +523,14 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
 
   it("create with an existing name replaces the old instance instead of failing", async () => {
     const name = sbxName();
-    const h1 = await sbx.create({
+    const h1 = await newSandbox(sbx, {
       name,
       image: images.sandboxImage,
       limits: limits("allowlist", ["allowed.example.com"]),
       signal: sig(),
     });
     await sbx.writeFile(h1, "/workspace/old.txt", enc.encode("old"), sig());
-    const h2 = await sbx.create({
+    const h2 = await newSandbox(sbx, {
       name,
       image: images.sandboxImage,
       limits: limits("none"),
@@ -404,7 +538,8 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
     });
     try {
       expect(h2.id).toBe(h1.id);
-      expect(await sbx.stat(h2, "/workspace/old.txt", sig())).toBeNull();
+      // the instance is replaced, the file system is not
+      expect(await sbx.stat(h2, "/workspace/old.txt", sig())).toEqual({ size: 3, isDir: false });
       expect((await inspect(name)).HostConfig.NetworkMode).toBe("none");
       // 旧的出站代理与内部网络也清掉了
       expect(await exists("container", `${name}-egress`)).toBe(false);
@@ -414,9 +549,9 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
     }
   });
 
-  it("destroyByName removes the container, egress proxy, internal network and volumes", async () => {
+  it("destroyByName removes the container, egress proxy and internal network, not the volumes", async () => {
     const name = sbxName();
-    await sbx.create({
+    await newSandbox(sbx, {
       name,
       image: images.sandboxImage,
       limits: limits("allowlist", ["allowed.example.com"]),
@@ -429,17 +564,17 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       ["container", name],
       ["container", `${name}-egress`],
       ["network", `${name}-net`],
-      ["volume", `${name}-workspace`],
-      ["volume", `${name}-skills`],
     ] as const) {
       expect(await exists(kind, n), `${kind} ${n}`).toBe(false);
     }
+    expect(await exists("volume", `${name}-workspace`)).toBe(true);
+    expect(await exists("volume", `${name}-skills`)).toBe(true);
     // 共用的沙箱网络不删
     expect(await exists("network", netName)).toBe(true);
   });
 
   it("egress none: no network at all", async () => {
-    const h = await sbx.create({
+    const h = await newSandbox(sbx, {
       name: sbxName(),
       image: images.sandboxImage,
       limits: limits("none"),
@@ -457,7 +592,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
 
   it("egress allowlist: allowed hosts through the proxy (HTTP and CONNECT), others refused, no direct route", async () => {
     const name = sbxName();
-    const h = await sbx.create({
+    const h = await newSandbox(sbx, {
       name,
       image: images.sandboxImage,
       limits: limits("allowlist", ["allowed.example.com"]),
@@ -497,7 +632,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
   });
 
   it("egress open: a plain bridge network", async () => {
-    const h = await sbx.create({
+    const h = await newSandbox(sbx, {
       name: sbxName(),
       image: images.sandboxImage,
       limits: limits("open"),
@@ -725,6 +860,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
         name: sbxName(),
         image: images.sandboxImage,
         limits: limits("open"),
+        fileSystem: { id: sbxName() },
         signal: sig(),
       }),
     ).rejects.toThrow(/allowOpenEgress/);
@@ -737,7 +873,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       { labels: { [TEST_LABEL]: RUN } },
       { warn: (m: string) => void warns.push(m) },
     );
-    const h = await logged.create({
+    const h = await newSandbox(logged, {
       name: sbxName(),
       image: images.sandboxImage,
       limits: limits("none"),
@@ -746,6 +882,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
     try {
       await sbx.writeFile(h, "/workspace/keep.txt", enc.encode("kept"), sig());
       const r = await logged.exec(h, {
+        ...who(),
         command: "for i in $(seq 1100); do sleep 1000 & done 2>/dev/null; wait",
         timeoutMs: 4000,
         maxOutputBytes: 10_000,
@@ -763,7 +900,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
   });
 
   it("truncated output is cut at a UTF-8 character boundary", async () => {
-    const h = await sbx.create({
+    const h = await newSandbox(sbx, {
       name: sbxName(),
       image: images.sandboxImage,
       limits: limits("none"),
@@ -771,6 +908,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
     });
     try {
       const r = await sbx.exec(h, {
+        ...who(),
         command: "printf 'a\\344\\270\\255b'",
         timeoutMs: 10_000,
         maxOutputBytes: 3,
@@ -786,7 +924,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
   describe("stopped behind the kernel's back (fix wave S2 I1)", () => {
     it("exec / readFile / writeFile / stat start a stopped container again, files and egress intact", async () => {
       const name = sbxName();
-      const h = await sbx.create({
+      const h = await newSandbox(sbx, {
         name,
         image: images.sandboxImage,
         limits: limits("allowlist", ["allowed.example.com"]),
@@ -818,7 +956,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
 
     it("a docker-paused container (Running but frozen) is unpaused by resume and by exec / file calls", async () => {
       const name = sbxName();
-      const h = await sbx.create({
+      const h = await newSandbox(sbx, {
         name,
         image: images.sandboxImage,
         limits: limits("allowlist", ["allowed.example.com"]),
@@ -847,7 +985,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
 
     it("the sandbox user cannot stop the container (kill 1, pkill sleep, kill -9 -1)", async () => {
       const name = sbxName();
-      const h = await sbx.create({
+      const h = await newSandbox(sbx, {
         name,
         image: images.sandboxImage,
         limits: limits("none"),
@@ -883,7 +1021,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
     };
 
     it("the command is killed inside the sandbox at its deadline even with nobody watching", async () => {
-      const h = await sbx.create({
+      const h = await newSandbox(sbx, {
         name: sbxName(),
         image: images.sandboxImage,
         limits: limits("none"),
@@ -904,7 +1042,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
     });
 
     it("killAll stops every leftover exec command; the sandbox stays usable", async () => {
-      const h = await sbx.create({
+      const h = await newSandbox(sbx, {
         name: sbxName(),
         image: images.sandboxImage,
         limits: limits("none"),
@@ -939,7 +1077,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       { labels: { [TEST_LABEL]: RUN } },
     );
     const name = sbxName();
-    const h = await runsc.create({
+    const h = await newSandbox(runsc, {
       name,
       image: images.sandboxImage,
       limits: limits("none"),
@@ -949,6 +1087,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       expect((await inspect(name)).HostConfig.Runtime).toBe("runsc");
       await runsc.writeFile(h, "/workspace/a.txt", enc.encode("gvisor"), sig());
       const r = await runsc.exec(h, {
+        ...who(),
         command: "cat /workspace/a.txt; sleep 300",
         timeoutMs: 2000,
         maxOutputBytes: 100,

@@ -1,10 +1,18 @@
+import { readFileSync } from "node:fs";
 import { SANDBOX_EXTENSION_POINT } from "@capybara-hq/plugin-sdk";
 import {
   assertExtensionSecretsReachable,
   extensionDeploymentSecretValues,
 } from "@capybara-hq/testing";
 import { describe, expect, it } from "vitest";
-import plugin, { DeploymentConfig, decodeOutput, exitCodeOf } from "../src/index.js";
+import plugin, {
+  DeploymentConfig,
+  decodeOutput,
+  exitCodeOf,
+  providerConfig,
+  publishedImage,
+  templateAlias,
+} from "../src/index.js";
 
 describe("decodeOutput", () => {
   const zh = Buffer.from("a中", "utf8"); // 61 e4 b8 ad
@@ -31,15 +39,38 @@ describe("exitCodeOf", () => {
   });
 });
 
-/** 清单与部署配置。 */
+/** The manifest and the deployment config. */
 describe("sandbox-e2b manifest", () => {
-  it("provides sandbox@1 and declares no platform permissions", () => {
+  it("provides sandbox@2 and declares no platform permissions", () => {
     expect(plugin.name).toBe("sandbox-e2b");
+    expect(SANDBOX_EXTENSION_POINT).toBe("sandbox@2");
     expect(plugin.provides).toEqual([SANDBOX_EXTENSION_POINT]);
     expect(plugin.permissions).toEqual({});
+    // the kernel checks this range against the installed SDK version
+    expect(plugin.sdk).toBe("^0.1.0-rc.3");
+  });
+
+  it("the default template comes from the image published with this plugin's version", () => {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+      version: string;
+    };
+    expect(plugin.version).toBe(pkg.version);
+    const c = providerConfig(DeploymentConfig.parse({ apiKey: "k" }));
+    expect(c.defaultImage).toBe(`ghcr.io/capybara-hq/capybara-sandbox:${plugin.version}`);
+    expect(publishedImage("0.1.0-rc.3")).toBe("ghcr.io/capybara-hq/capybara-sandbox:0.1.0-rc.3");
+    expect(templateAlias(publishedImage("0.1.0-rc.3"))).toBe("capybara-sandbox-0-1-0-rc-3");
+    expect(templateAlias("registry:5000/x/img:V1_2")).toBe("capybara-sandbox-v1-2");
+    expect(templateAlias("img")).toBe("capybara-sandbox-latest");
   });
 
   it("deployment config: defaults and validation", () => {
+    expect(DeploymentConfig.parse({ apiKey: "e2b_x" })).toEqual({
+      apiKey: "e2b_x",
+      domain: "e2b.app",
+      timeoutSeconds: 3600,
+      domainAllowlist: true,
+      allowOpenEgress: false,
+    });
     const c = DeploymentConfig.parse({ apiKey: "e2b_x", template: "capybara-sandbox" });
     expect(c).toEqual({
       apiKey: "e2b_x",
@@ -58,7 +89,7 @@ describe("sandbox-e2b manifest", () => {
       }),
     ).toMatchObject({ apiUrl: "https://e2b-api.internal.example.com", domain: "sbx.example.com" });
     expect(() => DeploymentConfig.parse({ template: "t" })).toThrow();
-    expect(() => DeploymentConfig.parse({ apiKey: "k" })).toThrow();
+    expect(() => DeploymentConfig.parse({ apiKey: "k", template: "" })).toThrow();
     expect(() =>
       DeploymentConfig.parse({ apiKey: "k", template: "t", apiUrl: "ftp://x" }),
     ).toThrow();

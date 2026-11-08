@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { SandboxHandle, SandboxLimits, SandboxProvider } from "@capybara-hq/plugin-sdk";
+import type {
+  SandboxActor,
+  SandboxHandle,
+  SandboxLimits,
+  SandboxProvider,
+} from "@capybara-hq/plugin-sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDockerSandbox } from "../src/index.js";
 import {
@@ -22,6 +27,7 @@ import {
 
 const RUN = randomUUID().slice(0, 8);
 const sig = () => AbortSignal.timeout(120_000);
+const actor: SandboxActor = { accountId: "acc-1", conversationId: "conv-1" };
 const limits = (egress: SandboxLimits["egress"], allowHosts: string[] = []): SandboxLimits => ({
   cpu: 1,
   memoryMb: 512,
@@ -59,13 +65,17 @@ describe.skipIf(!dockerAvailable)("sandbox-docker concurrent exec", { timeout: 1
     await images?.remove();
   }, 120_000);
 
-  const create = (egress: SandboxLimits["egress"] = "none", hosts: string[] = []) =>
-    sbx.create({
-      name: `cap-${randomUUID()}`,
+  const create = async (egress: SandboxLimits["egress"] = "none", hosts: string[] = []) => {
+    const name = `cap-${randomUUID()}`;
+    const fileSystem = await sbx.createFileSystem({ name, limits: limits(egress), signal: sig() });
+    return sbx.create({
+      name,
       image: images.sandboxImage,
       limits: limits(egress, hosts),
+      fileSystem,
       signal: sig(),
     });
+  };
   const exec = (
     h: SandboxHandle,
     command: string,
@@ -76,7 +86,8 @@ describe.skipIf(!dockerAvailable)("sandbox-docker concurrent exec", { timeout: 1
       timeoutMs: o.timeoutMs ?? 60_000,
       maxOutputBytes: 10_000,
       signal: o.signal ?? sig(),
-      ...(o.tag === undefined ? {} : { tag: o.tag }),
+      tag: o.tag ?? randomUUID(),
+      actor,
     });
   const count = async (h: SandboxHandle, pattern: string) =>
     Number((await exec(h, `pgrep -fc -- ${JSON.stringify(pattern)} || true`)).stdout.trim());
@@ -195,6 +206,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker concurrent exec", { timeout: 1
         maxOutputBytes: 10,
         signal: sig(),
         tag: "UPPER",
+        actor,
       }),
     ).rejects.toThrow(/tag/);
   });

@@ -1,10 +1,15 @@
 # Capybara 对话沙箱镜像：Docker 插件与 E2B 模板共用这一份。
 #
-# 构建（标签与内核配置 sandbox.image 的默认值 capybara-sandbox:latest 一致）：
+# Images are published by .github/workflows/images.yml as
+#   ghcr.io/capybara-hq/capybara-sandbox:<plugin version>
+# A local build is the offline route (then set the kernel's sandbox.image to the tag):
 #   docker build -t capybara-sandbox:latest plugins/sandbox-docker/image
 # 多架构（amd64 + arm64）推到镜像仓库：
 #   docker buildx build --platform linux/amd64,linux/arm64 \
 #     -t <registry>/capybara-sandbox:<tag> --push plugins/sandbox-docker/image
+# Published: .github/workflows/images.yml builds and pushes
+#   ghcr.io/capybara-hq/capybara-sandbox:<plugin version> once a plugins/sandbox-docker version change
+#   reaches main (the egress proxy image capybara-sandbox-egress likewise).
 #
 # 约定（插件依赖这些，改动时一并改插件）：
 # - 以非 root 用户 sandbox（uid / gid 1000）运行，HOME 与工作目录是 /workspace（插件挂持久卷）；

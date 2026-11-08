@@ -144,6 +144,92 @@ describe("release.yml", () => {
   });
 });
 
+describe("images.yml", () => {
+  const text = read(".github/workflows/images.yml");
+  const wf = parse(text) as Workflow;
+  const jobs = Object.entries(wf.jobs);
+
+  it("images workflow pushes only with packages write and pinned actions", () => {
+    // Never on a pull request: a PR must not push to ghcr.io.
+    expect(Object.keys(wf.on).sort()).toEqual(["push", "workflow_dispatch"]);
+    expect((wf.on.push as { branches: string[] }).branches).toEqual(["main"]);
+    // Only a version change publishes; editing the workflow itself must not tag an image.
+    expect((wf.on.push as { paths: string[] }).paths).toEqual([
+      "plugins/sandbox-docker/package.json",
+    ]);
+    expect(wf.permissions).toEqual({});
+    expect(Object.keys(wf.jobs).sort()).toEqual(["build", "plan", "publish"]);
+    // A manual dispatch from another branch must not publish unreviewed code.
+    expect(wf.jobs.plan?.if).toContain("github.repository == 'capybara-hq/plugins'");
+    expect(wf.jobs.plan?.if).toContain("github.ref == 'refs/heads/main'");
+    // No attacker-controllable context in a shell script.
+    for (const [, job] of jobs) {
+      for (const step of job.steps) {
+        expect(step.run ?? "").not.toMatch(/github\.event|github\.head_ref/);
+      }
+    }
+    // The plan only reads; only the jobs that push or tag get packages: write, and none gets
+    // contents write or an id-token.
+    expect(wf.jobs.plan?.permissions).toEqual({ contents: "read", packages: "read" });
+    expect(wf.jobs.build?.permissions).toEqual({ contents: "read", packages: "write" });
+    expect(wf.jobs.publish?.permissions).toEqual({ packages: "write" });
+    expect(text).not.toMatch(/id-token|NPM_TOKEN|contents: write/);
+    // Every action is pinned by a full commit SHA (or is a local path).
+    for (const [, job] of jobs) {
+      for (const step of job.steps) {
+        if (step.uses) expect(step.uses).toMatch(/^[\w.-]+\/[\w./-]+@[0-9a-f]{40}$/);
+      }
+    }
+    // Checkouts build exactly the pushed commit and keep no credentials.
+    for (const [, job] of jobs) {
+      for (const co of job.steps.filter((s) => s.uses?.startsWith("actions/checkout@"))) {
+        expect(co.with).toMatchObject({
+          ref: ["$", "{{ github.sha }}"].join(""),
+          "persist-credentials": false,
+        });
+      }
+    }
+  });
+
+  it("an image's digest download pattern cannot match the other image's artifacts", () => {
+    const up = wf.jobs.build?.steps.find((s) => s.uses?.startsWith("actions/upload-artifact@"));
+    const down = wf.jobs.publish?.steps.find((s) =>
+      s.uses?.startsWith("actions/download-artifact@"),
+    );
+    const images = ["capybara-sandbox", "capybara-sandbox-egress"];
+    const fill = (t: unknown, image: string, arch?: string) =>
+      String(t)
+        .replace("$" + "{{ matrix.target.image }}", image)
+        .replace("$" + "{{ matrix.arch }}", arch ?? "*");
+    for (const image of images) {
+      const glob = new RegExp(
+        `^${fill(down?.with?.pattern, image)
+          .replace(/[.+?^$()|[\]\\]/g, "\\$&")
+          .replace(/\*/g, ".*")}$`,
+      );
+      for (const other of images) {
+        for (const arch of ["amd64", "arm64"]) {
+          expect(glob.test(fill(up?.with?.name, other, arch))).toBe(other === image);
+        }
+      }
+    }
+  });
+
+  it("tags both images with the sandbox-docker version and skips an existing tag", () => {
+    expect(text).toContain("plugins/sandbox-docker/package.json");
+    expect(text).toContain("plugins/sandbox-docker/image");
+    expect(text).toContain("plugins/sandbox-docker/egress-proxy");
+    expect(text).toContain("imagetools inspect");
+    // publish re-checks the tag right before creating it and leaves an existing one alone.
+    const tag = wf.jobs.publish?.steps.find((s) => s.name === "Tag the multi-arch image");
+    expect(tag?.run).toMatch(/imagetools inspect[\s\S]*exit 0[\s\S]*imagetools create/);
+    expect(wf.jobs.build?.if).toBe("needs.plan.outputs.build == 'true'");
+    const build = wf.jobs.build?.steps.find((s) => s.uses?.startsWith("docker/build-push-action@"));
+    expect(build?.with?.platforms).toBe(["linux/$", "{{ matrix.arch }}"].join(""));
+    expect(String(build?.with?.outputs)).toContain("push-by-digest=true");
+  });
+});
+
 describe("ci.yml", () => {
   const wf = parse(read(".github/workflows/ci.yml")) as Workflow;
 

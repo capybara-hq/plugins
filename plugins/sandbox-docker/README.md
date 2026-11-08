@@ -1,6 +1,8 @@
 # @capybara-hq/plugin-sandbox-docker
 
-The Docker implementation of the conversation sandbox (`sandbox@1`): one container per conversation (`cap-<conversation id>`), with a runtime of either runc or gVisor's runsc.
+The Docker implementation of the environment sandbox (`sandbox@2`), with a runtime of either runc or gVisor's runsc. Each environment
+(`cap-env-<environment id>`) has a **file system**, its two Docker volumes, which lives until the environment is deleted, and an **instance**, the container
+(with its egress proxy and internal network), which is suspended when idle, destroyed after long disuse and recreated on the next use with the same files.
 The plugin **reaches Docker only through the endpoint** (the socket proxy in capybara-hq/core's [`docker/sandbox-proxy`](https://github.com/capybara-hq/core/tree/main/docker/sandbox-proxy)) and does not mount `docker.sock` itself.
 
 ## Deployment config
@@ -10,8 +12,8 @@ The plugin **reaches Docker only through the endpoint** (the socket proxy in cap
 | `endpoint` | (required) | Socket proxy address: `tcp://sandbox-proxy:2375` or `unix:///path` |
 | `runtime` | `runc` | `runc` or `runsc` (runsc must be registered in the Docker daemon first) |
 | `network` | `capybara-sandbox` | Name of the shared sandbox network; it must start with `cap` (the socket proxy only allows such networks); if it does not exist the plugin creates it as a bridge with `enable_icc=false` (containers cannot reach each other) |
-| `egressProxyImage` | `capybara-sandbox-egress:latest` | Egress proxy image (`egress-proxy/Dockerfile`) |
-| `volumeDriver` | (unset, uses local) | Driver for the workspace volume; when set, `DriverOpts.size=<diskMb>M` is passed |
+| `egressProxyImage` | `ghcr.io/capybara-hq/capybara-sandbox-egress:<plugin version>` | Egress proxy image (`egress-proxy/Dockerfile`); set it to use your own build (the offline route below) |
+| `volumeDriver` | (unset, uses local) | Driver for the workspace volume; when set, `DriverOpts.size=<diskMb>M` is passed (at `createFileSystem`) |
 | `allowOpenEgress` | `false` | Allow `sandbox.limits.egress = "open"`; when false, `create` fails immediately on open (an English error naming `extensionConfig."sandbox-docker".allowOpenEgress`), and the kernel also logs a warn at startup |
 
 ```bash
@@ -22,17 +24,30 @@ The deployment config schema is strict: extra keys are errors.
 
 ## Images
 
-- The sandbox image `image/Dockerfile` (shared by the Docker plugin and the E2B template). The tag matches the default of the kernel config `sandbox.image`:
-  `docker build -t capybara-sandbox:latest plugins/sandbox-docker/image`.
+Both images are published by this repository's image workflow, multi-arch (amd64 + arm64), tagged with this plugin's version:
+
+| Image | Used for |
+|---|---|
+| `ghcr.io/capybara-hq/capybara-sandbox:<plugin version>` | `create` without `image` (the kernel passes an `image` only when the kernel config `sandbox.image` or the environment pins one) |
+| `ghcr.io/capybara-hq/capybara-sandbox-egress:<plugin version>` | the egress proxy, unless `egressProxyImage` is set |
+
+The version is the extension manifest's `version` (`src/index.ts`, kept equal to `package.json` by `capybara-plugin sync-versions`), so a
+plugin upgrade moves both images with it and the kernel never needs to know the plugin's version.
+
+- The sandbox image `image/Dockerfile` (shared by the Docker plugin and the E2B template).
   Debian trixie-slim (pinned by digest), with bash, coreutils, GNU find / grep (the kernel's `Glob` / `Grep`
   depend on them), procps, util-linux (`setsid`), curl, git, jq, python3 (with pip / venv) and so on; it runs as the non-root user `sandbox`
   (uid 1000), with HOME and the working directory at `/workspace`.
-- The egress proxy image `egress-proxy/Dockerfile`: `docker build -t capybara-sandbox-egress:latest plugins/sandbox-docker/egress-proxy`.
-- Multi-arch (amd64 + arm64): `docker buildx build --platform linux/amd64,linux/arm64 -t <registry>/<name>:<tag> --push <directory>`.
+- The egress proxy image `egress-proxy/Dockerfile`.
+- **Offline route** (a deployment without access to ghcr.io): build both images yourself
+  (`docker build -t capybara-sandbox:local plugins/sandbox-docker/image`,
+  `docker build -t capybara-sandbox-egress:local plugins/sandbox-docker/egress-proxy`, or
+  `docker buildx build --platform linux/amd64,linux/arm64 -t <registry>/<name>:<tag> --push <directory>` for a private registry), then set the kernel config
+  `sandbox.image` to the sandbox image and this plugin's `egressProxyImage` to the egress image.
 - Local development: in a [capybara-hq/core](https://github.com/capybara-hq/core) checkout, `docker compose -f docker/compose.dev.yaml --profile sandbox up -d` ([`docker/compose.dev.yaml`](https://github.com/capybara-hq/core/blob/main/docker/compose.dev.yaml)) builds both images and starts the socket proxy
   (`127.0.0.1:2375`, **for local development only**, see the deployment requirements below). If an image is not local the plugin tries to pull it once.
-- **In a deployment, pre-pull `sandbox.image` and `egressProxyImage` on every Docker node** (`docker pull …`): if an image is not local
-  the plugin pulls it only when a conversation first uses the sandbox, and a pull of several hundred MB eats into the time limit of that tool call (`tools.timeoutMs` plus the lock wait and a 3-minute margin);
+- **In a deployment, pre-pull both images on every Docker node** (`docker pull …`): if an image is not local
+  the plugin pulls it only when an environment's instance is first created, and a pull of several hundred MB eats into the time limit of that tool call (`tools.timeoutMs` plus the lock wait and a 3-minute margin);
   when it is slow that call fails, and the next one tries again.
 
 ## Socket proxy (`docker/sandbox-proxy/haproxy.cfg`)
@@ -66,18 +81,21 @@ To let the local kernel connect, the dev compose publishes it on `127.0.0.1:2375
 
 | Operation | What it does |
 |---|---|
-| `create` | First deletes any old instance of the same name (the kernel may have exited before recording the handle), then creates the volumes, (for allowlist) the internal network and egress proxy, and the sandbox container, and starts it; the handle id is the name |
+| `createFileSystem` | Creates the volumes `<name>-workspace` (with the `volumeDriver` size option) and `<name>-skills`, labelled `dev.capybara.sandbox.role=workspace` / `skills`; a volume that already exists is kept as it is (idempotent by name, never replaced); the handle id is the name |
+| `destroyFileSystem` / `destroyFileSystemByName` | Force-removes the instance of the same name first (Docker refuses to remove a volume a container still uses, even a stopped one), then removes both volumes; a missing one counts as success. The kernel's one-off cleanup calls `destroyFileSystemByName("cap-<conversation id>")` for `sandbox@1` sandboxes, whose volumes `cap-<conversation id>-workspace` / `-skills` follow the same naming |
+| `create` | Checks that both volumes of the file system exist and carry their role label (`GET /volumes/<name>`); otherwise it throws `FileSystemGoneError`, because Docker would silently create empty volumes for a missing mount source. Then deletes any old instance of the same name (the kernel may have exited before recording the handle; its volumes are kept), creates (for allowlist) the internal network and egress proxy and the sandbox container, checks the volumes again (if they were removed in between, Docker made empty unlabelled ones for the mounts: the container and those volumes are removed and `create` throws `FileSystemGoneError`) and starts it; the handle id is the name. Without `image` it uses the published sandbox image |
 | `suspend` | Stops the sandbox container and the egress proxy (files stay on the volumes). **Processes are not preserved**: all background processes in the sandbox end and `/tmp` (tmpfs) is cleared; E2B's pause, in contrast, keeps memory too |
 | `resume` | Starts (or unpauses one that was `docker pause`d); if the container does not exist it returns `gone`. If the allowlist's egress proxy or internal network is gone, it is rebuilt from the allowlist recorded in the container labels |
-| Auto-start | When `exec` / `readFile` / `writeFile` / `stat` / `killAll` find the container still exists but is not running (Docker returns 409: the host or daemon restarted, the idle sweep stopped the container before it could record `suspended`, someone ran `docker pause` on it…), they recover it the way `resume` does (egress proxy and network in place; unpause a paused one, start a stopped one) and retry once (the `sandbox@1` contract: the kernel trusts only the `running` it recorded itself) |
+| Auto-start | When `exec` / `readFile` / `writeFile` / `stat` / `killAll` find the container still exists but is not running (Docker returns 409: the host or daemon restarted, the idle sweep stopped the container before it could record `suspended`, someone ran `docker pause` on it…), they recover it the way `resume` does (egress proxy and network in place; unpause a paused one, start a stopped one) and retry once (the `sandbox@2` contract: the kernel trusts only the `running` it recorded itself) |
 | `killAll` | Kills every command started through `exec` that is still running (finds the wrapper by command line and sends SIGKILL by process group and session); called when the kernel takes over from a crashed previous lock holder. A process that a command puts in the background in a session of its own (`setsid`) is not guaranteed to be killed |
-| Concurrent use (`concurrentExec`, `killTagged`) | Declares `concurrentExec: true`: parallel sub-agents of one conversation run commands and file operations in its sandbox at the same time (independent `docker exec` instances; the socket proxy rules are unchanged). Each exec's control file carries the holder's tag (`/tmp/.capybara-exec-<tag>-<uuid>`, tags checked against `SANDBOX_TAG_RE`); `killTagged` kills only the commands of the given tags (a variant of the `killAll` script), used when the kernel takes over from a crashed holder while others keep running. Concurrent auto-starts of a stopped container are idempotent (`start` answers 304; a concurrent egress proxy create answers 409, tolerated). Concurrent commands share the container's `PidsLimit` (1024) and memory. When the kill exec itself cannot start, the container restarts, which also ends live siblings' commands (a last resort) |
-| `destroy` / `destroyByName` | Deletes the container, egress proxy, internal network and both volumes; a missing one also counts as success |
-| `exec` | `docker exec` (sandbox user, bash); on timeout or abort it SIGKILLs the command and all processes it spawned by session. Commands run through `timeout -s KILL <timeout + 5 seconds>`: when a kernel replica crashes (the timer on the plugin side is gone, and a dropped connection does not end the command) the time limit inside the sandbox is the backstop. When the exec used to kill processes cannot itself start (for example the process count has hit its limit), it falls back to restarting the whole container (`restart?t=0`): files are all on the volumes, `/tmp` is cleared, and the remaining processes in the sandbox all end. When output is truncated it backs up to a full UTF-8 character boundary |
+| Concurrent use (`concurrentExec`, `killTagged`) | Declares `concurrentExec: true`: the sessions of one environment (and their sub-agents) run commands and file operations in its sandbox at the same time (independent `docker exec` instances; the socket proxy rules are unchanged). Each exec's control file carries the holder's tag (`/tmp/.capybara-exec-<tag>-<uuid>`, tags checked against `SANDBOX_TAG_RE`); `killTagged` kills only the commands of the given tags (a variant of the `killAll` script), used when the kernel takes over from a crashed holder while others keep running. Concurrent auto-starts of a stopped container are idempotent (`start` answers 304; a concurrent egress proxy create answers 409, tolerated). Concurrent commands share the container's `PidsLimit` (1024) and memory. When the kill exec itself cannot start, the container restarts, which also ends live siblings' commands (a last resort) |
+| `destroy` / `destroyByName` | Deletes the instance: the container, egress proxy and internal network, **never the volumes**; a missing one also counts as success |
+| `exec` | `docker exec` (sandbox user, bash); the `actor` argument is not used (phase 1); on timeout or abort it SIGKILLs the command and all processes it spawned by session. Commands run through `timeout -s KILL <timeout + 5 seconds>`: when a kernel replica crashes (the timer on the plugin side is gone, and a dropped connection does not end the command) the time limit inside the sandbox is the backstop. When the exec used to kill processes cannot itself start (for example the process count has hit its limit), it falls back to restarting the whole container (`restart?t=0`): files are all on the volumes, `/tmp` is cleared, and the remaining processes in the sandbox all end. When output is truncated it backs up to a full UTF-8 character boundary |
 | `readFile` / `writeFile` / `stat` | Run small `head` / `stat` scripts in the container as the sandbox user (permissions and symlinks are resolved as the sandbox user, and the volume is not written as root through the daemon) |
 
-Resources for each conversation: the container `<name>`, the egress proxy `<name>-egress`, the internal network `<name>-net`, and the volumes `<name>-workspace`
-(`/workspace`) and `<name>-skills` (`/skills`). All carry the labels `dev.capybara.sandbox=1` and `dev.capybara.sandbox.name=<name>`.
+Resources for each environment (`<name>` = `cap-env-<environment id>`): the instance is the container `<name>`, the egress proxy `<name>-egress` and the
+internal network `<name>-net`; the file system is the volumes `<name>-workspace` (`/workspace`) and `<name>-skills` (`/skills`). All carry the labels
+`dev.capybara.sandbox=1`, `dev.capybara.sandbox.name=<name>` and `dev.capybara.sandbox.role=<role>`.
 
 ## Isolation and limits
 
@@ -97,9 +115,12 @@ Resources for each conversation: the container `<name>`, the egress proxy `<name
 **Command time limit**: a single command runs at most `sandbox.limits.maxCommandSeconds`, and no more than the time left in the run it belongs to (`runtime.maxRunSeconds`,
 default 900 seconds, Ruling M20). To run long commands, raise `runtime.maxRunSeconds` to at least `maxCommandSeconds`.
 
-**Limits take effect only at creation**: the `cpu` / `memoryMb` / `diskMb` / `egress` / `allowHosts` of `sandbox.limits` are written into the container,
-volumes and egress proxy (the allowlist is recorded in the container labels); changing the config affects only sandboxes created afterwards; existing sandboxes (including ones resumed after hibernation) keep the
-limits from creation until they are destroyed and rebuilt (destroyed for inactivity, or by deleting the `cap-<conversation>` family of resources).
+**Limits take effect only at creation**: `cpu` / `memoryMb` / `egress` / `allowHosts` are written into the container and egress proxy at `create`
+(the allowlist is recorded in the container labels), `diskMb` into the workspace volume at `createFileSystem`. Changing the config affects only instances created
+afterwards; an existing instance (including one resumed after hibernation) keeps its limits until it is destroyed and recreated (destroyed for inactivity, then
+recreated on the next use with the same files); the volume size stays for the life of the environment. Likewise an existing file system keeps the volume driver and size it was
+created with: a workspace volume made before `volumeDriver` was configured stays on the local driver with no size limit, and changing `volumeDriver` or `diskMb`
+reaches only file systems created afterwards (a new environment, or resetting the environment's files).
 
 ## Egress (`limits.egress`)
 
@@ -139,6 +160,6 @@ The second parameter of `createDockerSandbox(config, testOptions)` can be passed
 
 ## Tests
 
-`test/egress-proxy.test.ts` does not need Docker; `test/sandbox-docker.test.ts` needs Docker (the whole group is skipped without it),
+`test/egress-proxy.test.ts` and `test/manifest.test.ts` do not need Docker; `test/sandbox-docker.test.ts` and `test/concurrent.test.ts` need Docker (the whole group is skipped without it),
 builds a uniquely tagged test image, starts the socket proxy, and cleans up by label at the end; the runsc cases run only when the daemon has runsc registered.
 Through a real kernel: `test/sandbox-tools.smoke.test.ts` (the kernel's sandbox tools in one process) and `test/sandbox-artifacts.dual.test.ts` (the M5 segment 2 flow across two replicas: attachments, delivery, takeover after a killed replica, idle suspend and resume). The socket proxy starts from `test/sandbox-proxy/haproxy.cfg`, an exact copy of capybara-hq/core's [`docker/sandbox-proxy/haproxy.cfg`](https://github.com/capybara-hq/core/tree/main/docker/sandbox-proxy/haproxy.cfg). Nothing in this repository compares them; core's `check:bootstrap --network` (rule `bootstrap-haproxy`) will check the copy against the commit core pins.

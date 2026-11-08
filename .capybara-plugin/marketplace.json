@@ -222,7 +222,7 @@
     },
     {
       "name": "sandbox-docker",
-      "version": "0.1.0-rc.2",
+      "version": "0.1.0-rc.4",
       "summary": {
         "en": "Conversation sandboxes (sandbox@1) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with an egress allowlist proxy"
       },
@@ -239,23 +239,23 @@
           "config.deployment:network",
           "config.deployment:runtime",
           "config.deployment:volumeDriver",
-          "provides:sandbox@1"
+          "provides:sandbox@2"
         ],
-        "sensitive": ["provides:sandbox@1"]
+        "sensitive": []
       },
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-sandbox-docker",
-          "version": "0.1.0-rc.2",
-          "integrity": "sha512-f5BiecQQvRLI8NaGHUy3l+nNvcCLXTQnHQ8od93PAbBpg6q0EkAvZ7R/M4yZ7dK7PeIan61VB+QfwlnpLLw27Q=="
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-WOFdF3JFxN5dfdJv2zt1w+NWsHhgdllMAfS75DBXVXbMrHuHKAVIgEP7htgerSmH0smTq0/p+gWoyO2x11cxUw=="
         }
       }
     },
     {
       "name": "sandbox-e2b",
-      "version": "0.1.0-rc.3",
+      "version": "0.1.0-rc.4",
       "summary": {
-        "en": "Conversation sandboxes (sandbox@1) as E2B sandboxes (E2B cloud or self-hosted), with pause / resume and E2B egress controls"
+        "en": "Environments (sandbox@2) as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, E2B egress controls"
       },
       "displayName": {
         "zh": "E2B 沙箱",
@@ -271,15 +271,15 @@
           "config.deployment:domainAllowlist",
           "config.deployment:template",
           "config.deployment:timeoutSeconds",
-          "provides:sandbox@1"
+          "provides:sandbox@2"
         ],
-        "sensitive": ["config.deployment.secret:apiKey", "provides:sandbox@1"]
+        "sensitive": ["config.deployment.secret:apiKey"]
       },
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-sandbox-e2b",
-          "version": "0.1.0-rc.3",
-          "integrity": "sha512-ub/Tc7ClgrRoX1S0PI2bsvuU6teRT4M7WnAEDvjsi1h3CmvwA2mInE01gkMtIwwdhW8y1iEHHmcxpSbCToD9dg=="
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-DMsi0ZEdcRquES3d6Lyqb+k6Zke7N5Sun2MY9NKO4Q9zF2Ej2AZZl4Gs9k4PeYCgKHB/F8Un1tYYwUBn+87R1w=="
         }
       }
     },
