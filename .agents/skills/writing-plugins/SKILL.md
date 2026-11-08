@@ -84,7 +84,6 @@ Run from the repository root; relative paths resolve against the current directo
 
 ```json
 {
-  "$schema": "https://capybarahq.com/schemas/connector-template.v1.schema.json",
   "displayName": { "zh": "Acme CRM", "en": "Acme CRM" },
   "description": "Acme CRM over MCP",
   "icon": "./icons/crm.svg",
@@ -100,7 +99,9 @@ Run from the repository root; relative paths resolve against the current directo
 }
 ```
 
-The file is strict; `template` is validated by `validateConnectorTemplate`, and values are never echoed in errors.
+The file is strict (unlike `plugin.json`, a `$schema` key is refused); `template` is validated by `validateConnectorTemplate`, and values are never echoed in errors.
+
+- `defaultEnabled` (file level, optional): `false` starts the template switched off in every org, even where its plugin is on, until an org admin switches it on (so an org using the plugin for something else is not asked for the template's input). Default `true`. Used by slack's `connectors/slack.json`.
 
 - `plugin` / `connector`: the connector extension's name and its `Connector.kind`. At import, when that connector is loaded on the deployment, the endpoint is validated against its `endpointSchema`, every `editableEndpoint` path must be a field of that schema, and `pluginVersion` must be satisfied by the loaded version; when the connector is this plugin's own extension or a dependency's, only the static checks run then. Any other connector that is not loaded refuses the import. At org install the template is checked again against the loaded connector.
 - `endpoint`: the preset, visible to every org; **no credential-like keys at any level** (`token`, `apiKey`, `secret`, `password`, `authorization`, `cookie` and so on, ignoring case and `-` / `_`).

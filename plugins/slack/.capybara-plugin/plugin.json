@@ -10,6 +10,12 @@
   "icon": "./icon.svg",
   "description": "Slack (channel@1 bot over Socket Mode with Block Kit cards, identity-source@1 Sign in with Slack, directory@1)",
   "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/slack#readme",
+  "dependencies": [
+    {
+      "name": "connector-mcp",
+      "version": "^0.1.0-rc.1"
+    }
+  ],
   "setupGuides": [
     {
       "id": "slack-app",

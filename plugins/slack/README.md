@@ -1,12 +1,15 @@
 # @capybara-hq/plugin-slack
 
-The official Slack plugin. It provides three capabilities:
+The official Slack plugin. It provides three capabilities and a connector template:
 
 - `channel@1` (bot): receives events over [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode)
   (no public callback URL needed), sends messages through the Web API, and renders approval / question /
   connection / binding cards as Block Kit.
 - `identity-source@1` (Sign in with Slack, OpenID Connect): sign in to Capybara with a Slack account.
 - `directory@1` (directory sync): syncs Slack workspace members into org members.
+- The connector template `slack` ([Slack connector](#slack-connector-slacks-mcp-server)): agents search,
+  read and send in Slack **as the person talking to them**, through Slack's MCP server and each member's own
+  OAuth authorization. Switched off by default.
 
 All three use the same identity key: `identities.source` = `slack:<team id>`, `external_id` = the Slack user id (`U…`).
 When the same person appears through sign-in, a DM to the bot and directory sync, it maps to one identity row and one account.
@@ -136,6 +139,80 @@ channel connection uses, but the config is stored separately and goes through th
 - People-change events (`team_join`, `user_change`, received through the channel connection) trigger a sync.
 - When `teamId` / `botToken` are not filled in (the org only uses the bot), the plugin's `configured()` returns false: the kernel does not scan or sync, and records no audit
   or warning; a manual sync returns 409 `directory.not_configured`. It is not treated as an empty directory.
+
+## Slack connector (Slack's MCP server)
+
+The template [`connectors/slack.json`](./connectors/slack.json) connects Slack's official MCP server
+(`https://mcp.slack.com/mcp`, [Slack MCP server](https://docs.slack.dev/ai/slack-mcp-server/)) through the
+`connector-mcp` plugin (a dependency in `plugin.json`, preinstalled with Capybara). Each member authorizes
+their own Slack account, so an agent sees and does exactly what that person may in Slack, and every call runs
+on the caller's own user token; there is no shared org token. Design and decisions:
+[docs/superpowers/specs/2026-11-08-slack-connector-design.md](https://github.com/capybara-hq/plugins/blob/main/docs/superpowers/specs/2026-11-08-slack-connector-design.md).
+Verified on the Slack free plan.
+
+- **Off by default** (`defaultEnabled: false`): an org that turns on the `slack` plugin for the bot does not
+  see the connector until an org admin switches the template on and enters the OAuth client.
+- **Auth**: OAuth authorization code, personal credentials, MCP discovery (Slack's metadata points at
+  `https://slack.com/oauth/v2_user/authorize` and `oauth.v2.user.access`), a manually entered client (Slack
+  offers no dynamic client registration), `client_secret_post`, and 30 explicit user scopes (the full set
+  Slack's server supports; a scope Slack adds later needs a template update).
+- **Tools**: reads are allowed; every write (send, schedule, draft, create, update, react, upload) and
+  `slack_search_public_and_private` (reaches DMs and private channels) ask the person first. Org admins and
+  agents change the policies on the tools page; tools Slack adds later default by their annotations (`ask`
+  without `readOnlyHint`).
+
+### Create the OAuth app (Slack admin)
+
+The recommended setup is a separate internal app, "Capybara connector" (user scopes only, MCP on, no bot):
+
+1. Open <https://api.slack.com/apps> → **Create New App** → **From a manifest** in the company workspace and
+   paste [`app-manifest.connector.yaml`](./app-manifest.connector.yaml), with its redirect URL replaced by
+   `<http.publicUrl>/api/v1/oauth/callback` (for example
+   `https://capybara.example.com/api/v1/oauth/callback`). The deployment must set `http.publicUrl`. The
+   manifest turns on MCP (`is_mcp_enabled`) and requests the user scopes the template asks for:
+   `search:read.public`, `search:read.private`, `search:read.mpim`, `search:read.im`, `search:read.files`,
+   `search:read.users`, `channels:history`, `groups:history`, `mpim:history`, `im:history`,
+   `channels:read`, `groups:read`, `mpim:read`, `im:read`, `channels:write`, `groups:write`, `mpim:write`,
+   `im:write`, `chat:write`, `canvases:read`, `canvases:write`, `lists:read`, `lists:write`, `files:read`,
+   `files:write`, `reactions:read`, `reactions:write`, `emoji:read`, `users:read`, `users:read.email`.
+2. Leave **Manage Distribution** off: Slack's MCP server serves only internal apps and Marketplace apps,
+   and an internal app cannot be authorized from other workspaces.
+3. Do **not** enable PKCE in the app settings: it turns the app into a public client for good. Capybara
+   stays a confidential client (it still sends a PKCE challenge, which Slack's metadata advertises).
+4. Keep token rotation off (the manifest does). Without rotation, user tokens do not expire.
+5. Approve or install the app as your workspace requires (with "Only allow pre-approved apps", a workspace
+   admin approves it; on Enterprise Grid, an org admin).
+6. Copy **Basic Information → App Credentials → Client ID** and **Client Secret**.
+
+Reusing the channel app instead is possible as long as token rotation stays off (rotation is app-wide and
+would expire the bot's static `xoxb` token): add the user scopes, turn on MCP and add the redirect URL. Slack
+prefix-matches redirect URLs, so one entry `<http.publicUrl>/api/v1/` covers both this callback and the Sign
+in with Slack callback that the [setup guide](#create-the-slack-app) puts in the bot app's manifest.
+
+### Turn it on (org admin) and connect (members)
+
+1. Org settings → plugins → Slack: switch on the Slack connector template and enter the client
+   (`clientId`, `clientSecret`) from step 6. The secret is stored encrypted and reads back only as "set";
+   rotate it later through the connector's org credentials. Each org enters its own client (the same app may
+   serve several orgs).
+2. Members open **My connections** (`/account/connections`), click **Connect** on Slack and approve on
+   Slack's consent screen. Until they do, a Slack tool call shows the standard "connection required" card.
+3. **Disconnect** deletes the stored token in Capybara but does not revoke it at Slack: remove the
+   authorization in Slack too (the app's page → **Remove app**, or a workspace admin under **Manage apps**).
+
+### Decided risks
+
+- **Slack data in conversations**: tool results stay in the conversation event log and archives like any
+  other connector's, although Slack's Real-time Search terms say retrieved data must not be stored. The app
+  is the customer's own internal app under its own Slack agreement.
+- **Quoting private Slack content into shared threads**: in a Slack channel thread (through the bot), a tool
+  call runs on the acting member's token and the reply goes to a channel others read. There is no special
+  rule for this; it relies on the tool policies (the `ask` default of `slack_search_public_and_private`
+  plus whatever the org or agent sets).
+- **No identity check**: a member may connect a different Slack account than the one bound to their
+  Capybara account; the token still reaches only their own calls.
+- **No revoke on disconnect** and **one client per org** (no platform-level client) in this release.
+- **Scopes**: the full set only; there is no reduced variant (for example without DM scopes).
 
 ## Commands
 

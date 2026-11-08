@@ -21,7 +21,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "app-manifest.connector.yaml"
   ],
   "scripts": {
     "build": "tsc -b"
