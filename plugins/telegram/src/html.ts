@@ -17,25 +17,22 @@ const escapeAttr = (s: string) => escapeHtml(s).replace(/"/g, "&quot;");
 const WORD_JOINER = "\u2060";
 
 /**
- * Keeps a model from pinging people: an `@` directly followed by a username character (not preceded by one,
- * so `a@b.c` stays) gets a U+2060 WORD JOINER after it, so Telegram no longer parses a mention. Bare URLs are
- * left alone. Apply to plain text only (not code).
- */
-export function neutraliseMentions(text: string): string {
-  return text.replace(/(https?:\/\/\S+)|(?<![A-Za-z0-9_])@(?=[A-Za-z0-9_])/g, (m, url?: string) =>
-    url ? m : `@${WORD_JOINER}`,
-  );
-}
-
-/**
- * The same on finished HTML, judged on the visible text: skips pre / code content, `<a ...>` tags and bare
- * URLs, and sees through formatting tags (`@<b>x</b>` is a mention too; the joiner goes right after the `@`).
+ * Keeps a model from pinging people, judged on the visible text of finished HTML: an `@` directly followed
+ * by a username character (not preceded by one, so `a@b.c` stays) gets a U+2060 WORD JOINER after it, so
+ * Telegram no longer parses a mention. Skips pre / code content and `<a ...>` tags, and sees through
+ * formatting tags (`@<b>x</b>` is a mention too; the joiner goes right after the `@`). Inside a bare URL
+ * only an `@` right after `/` is kept (`https://medium.com/@user/post`): Telegram ends a URL at
+ * punctuation such as `,` `)` `、`, so `https://x.com,@bob` would otherwise leave `@bob` live.
  */
 function neutraliseHtmlMentions(html: string): string {
   return html.replace(
     /(<pre[\s\S]*?<\/pre>)|(<code>[\s\S]*?<\/code>)|(<a [^>]*>)|(https?:\/\/[^\s<]+)|(?<![A-Za-z0-9_])@(?=(?:<[^>]+>)*[A-Za-z0-9_])/g,
     (m, pre?: string, code?: string, a?: string, url?: string) =>
-      pre || code || a || url ? m : `@${WORD_JOINER}`,
+      pre || code || a
+        ? m
+        : url
+          ? url.replace(/(?<![A-Za-z0-9_/])@(?=[A-Za-z0-9_])/g, `@${WORD_JOINER}`)
+          : `@${WORD_JOINER}`,
   );
 }
 

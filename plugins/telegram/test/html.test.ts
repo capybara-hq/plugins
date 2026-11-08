@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   escapeHtml,
   markdownToTelegramHtml as md,
-  neutraliseMentions,
   splitHtml,
   TEXT_LIMIT,
 } from "../src/html.js";
@@ -88,9 +87,16 @@ describe("markdownToTelegramHtml", () => {
     expect(md("see https://medium.com/@user/post now")).toBe(
       "see https://medium.com/@user/post now",
     );
-    expect(neutraliseMentions("https://medium.com/@user/post @bob")).toBe(
+    expect(md("https://medium.com/@user/post @bob")).toBe(
       `https://medium.com/@user/post @${WJ}bob`,
     );
+  });
+
+  it("neutralises a mention glued to a bare URL by punctuation Telegram ends the URL at", () => {
+    expect(md("see https://x.com,@bob")).toBe(`see https://x.com,@${WJ}bob`);
+    expect(md("(https://x.com)@bob")).toBe(`(https://x.com)@${WJ}bob`);
+    expect(md("https://x.com、@bob")).toBe(`https://x.com、@${WJ}bob`);
+    expect(md("https://user@x.com/a")).toBe("https://user@x.com/a");
   });
 
   it("supports one level of parentheses in link URLs", () => {
@@ -115,11 +121,7 @@ describe("markdownToTelegramHtml", () => {
   });
 });
 
-describe("neutraliseMentions / escapeHtml", () => {
-  it("inserts a word joiner after @ before a username character only", () => {
-    expect(neutraliseMentions("@a @ b a@b.c")).toBe(`@${WJ}a @ b a@b.c`);
-    expect(neutraliseMentions(`@${WJ}a`)).toBe(`@${WJ}a`);
-  });
+describe("escapeHtml", () => {
   it("escapes & < >", () => {
     expect(escapeHtml("<a & b>")).toBe("&lt;a &amp; b&gt;");
   });
