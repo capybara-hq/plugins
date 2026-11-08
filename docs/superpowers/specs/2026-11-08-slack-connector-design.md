@@ -1,6 +1,7 @@
 # Slack connector: per-person OAuth to Slack's MCP server
 
-- Status: draft for maintainer review
+- Status: draft; the maintainer's answers to the open questions are recorded below and marked
+  **(decided, 2026-11-08)**
 - Date: 2026-11-08
 - Plugin: `plugins/slack` (adds a connector template; no extension code)
 - Direction (maintainer, 2026-11-08): an enterprise-internal Slack app (not on the Slack
@@ -177,6 +178,12 @@ OAuth via MCP discovery and a manually entered (pre-registered) client.
 - Scopes are explicit (not taken from metadata) so they are reviewed with the template and a
   Slack-side addition does not silently widen what we ask for. Scopes Slack later adds to the server
   need a template update.
+- **(decided, 2026-11-08)** The first release ships this full set only, with no reduced variant
+  (for example without DM scopes), unless the maintainer asks otherwise.
+- **(decided, 2026-11-08)** The template ships **switched off by default** in an org, so an org that
+  turns on `slack` only for the bot does not see 需要配置; an org admin switches the template on and
+  enters the client when they want the connector. If the catalog cannot yet express a per-component
+  default state inside a plugin, that is a core change to make alongside G1 (to check while planning).
 
 ### 3.1 Who configures what
 
@@ -188,7 +195,8 @@ OAuth via MCP discovery and a manually entered (pre-registered) client.
 | Member | 我的连接 / `/account/connections` | Clicks Connect → Slack consent screen → back to Capybara |
 
 The client is org-level today. A deployment with several orgs on one Slack workspace enters the same
-client in each org (gap G4 proposes a platform-level client).
+client in each org. A platform-level client (G4) is **later, not in the first release (decided,
+2026-11-08)**.
 
 ### 3.2 Connect, refresh, revoke
 
@@ -204,23 +212,26 @@ client in each org (gap G4 proposes a platform-level client).
    a revoked token gets a 401 from `mcp.slack.com` → forced refresh finds no refresh token →
    credential deleted → "connection required" card / page. With rotation on, the kernel refreshes
    12 h tokens via `refresh_token`; requires G2 so a dead refresh token deletes the credential.
-6. Revoke: Disconnect in 我的连接 deletes the stored token. v1 does not call `auth.revoke` (gap G3);
-   README tells people and admins to remove the authorization in Slack (Apps → Manage) when needed.
+6. Revoke: Disconnect in 我的连接 deletes the stored token. The first release does not call
+   `auth.revoke`: G3 is **later (decided, 2026-11-08)**. The README tells people and admins to remove
+   the authorization in Slack (Apps → Manage) when needed.
    Removing a member from the org follows the kernel's existing personal-credential cleanup.
 
 ## 4. Which Slack app: reuse the channel app or a separate one
 
-Both work; **recommendation: a separate internal app "Capybara connector"** (user scopes only, MCP
-on, no bot, no Socket Mode), shipped as `plugins/slack/app-manifest.connector.yaml`:
+Both work. **(decided, 2026-11-08)** The README default is **a separate internal app "Capybara
+connector"** (user scopes only, MCP on, no bot, no Socket Mode), shipped as
+`plugins/slack/app-manifest.connector.yaml`; the maintainer may still revise this. Reasons:
 
 - Least privilege per app: the bot app's approval stays bot-only; user scopes do not appear on the
   bot's install screen and vice versa.
 - Rotation becomes a free choice for the connector (it stays off for the bot's static `xoxb`).
 - An admin can disable one without breaking the other.
 
-Reusing the channel app is supported and documented as the simpler alternative: add the user
-scopes, `is_mcp_enabled: true` and the Redirect URL `<http.publicUrl>/api/v1/oauth/callback` to the
-existing app; **keep token rotation off**. Slack prefix-matches Redirect URLs, so one entry
+Reusing the channel app is allowed and documented as the alternative, **as long as token rotation
+stays off**: rotation is app-wide and would make the channel bot's static `xoxb` token expire. Add
+the user scopes, `is_mcp_enabled: true` and the Redirect URL
+`<http.publicUrl>/api/v1/oauth/callback` to the existing app. Slack prefix-matches Redirect URLs, so one entry
 `<http.publicUrl>/api/v1/` covers both this callback and Sign in with Slack's
 `/api/v1/auth/sso/slack/callback`.
 
@@ -234,8 +245,10 @@ existing app; **keep token rotation off**. Slack prefix-matches Redirect URLs, s
 
 ## 6. Tools and approval
 
-Template `defaultToolPolicies` (local names; admins and members may change them as usual; tools that
-appear later fall back to annotations, i.e. `ask` without `readOnlyHint`):
+**(decided, 2026-11-08)** Per-tool policies are configured on the tools page (org and agent tool
+policies). The template only ships defaults: reads `allow`, writes `ask`, the private / DM search
+`ask`. Tools that appear later fall back to annotations (`ask` without `readOnlyHint`).
+Template `defaultToolPolicies` (local names):
 
 | Policy | Tools | Why |
 |---|---|---|
@@ -266,19 +279,23 @@ a renamed tool would otherwise lose its template policy and fall back to annotat
 ### 7.3 Channel and DM privacy
 
 - The agent sees what the person sees in Slack, nothing more (Slack enforces it per user token).
-- Risk: in a Slack channel thread (via `channel@1`), the tool call runs on the **acting member's**
-  token, and the reply goes to a channel others read. The agent could quote the member's DMs or
-  private channels into that channel. Mitigations in v1: `slack_search_public_and_private` is `ask`;
-  the connector skill/description tells the model not to repost private content into shared
-  channels. Open question Q3 asks whether the kernel should block personal-credential tools in group
-  channel conversations, or force `ask` there.
+- Known consideration: in a Slack channel thread (via `channel@1`), the tool call runs on the
+  **acting member's** token, and the reply goes to a channel others read, so the agent could quote
+  the member's DMs or private channels into that channel. **(decided, 2026-11-08)** No special
+  kernel rule for group threads: this relies on the configured tool policies (the template's
+  `ask` default for `slack_search_public_and_private`, plus whatever the org or agent sets on the
+  tools page).
+- **(decided, 2026-11-08)** No identity check: a member may connect a different Slack account than
+  their bound Slack identity (`slack:<team>`); connecting another account is allowed. The token is
+  still theirs and only reaches their own calls.
 - Guests: Slack's RTS excludes guests; guests are not org members via directory sync anyway.
 
 ### 7.4 Slack data terms
 
 RTS says retrieved data must not be stored or copied. Capybara's event log keeps tool results (the
-replay invariant), and big results are archived. This is the customer's internal app under its own
-Slack agreement, but it conflicts with the letter of the RTS terms. Open question Q1.
+replay invariant), and big results are archived. **(decided, 2026-11-08)** Accepted as a risk:
+Slack tool results stay in the event log and archives exactly as for any other connector; nothing
+special is done for Slack. The app is the customer's own internal app under its own Slack agreement.
 
 ## 8. What the customer does in Slack
 
@@ -323,20 +340,27 @@ user) instead of legacy `search.messages`, `chat.postMessage` with a user token 
 | # | Gap | Needed for | Core first? |
 |---|---|---|---|
 | G1 | `tokenRequest` rejects `token_type: "user"` (`unsupported_token_type`). Proposal: reject only known non-bearer schemes (`DPoP`, `mac`, `N_A`) and store anything else as Bearer, or accept a template `auth.tokenType` override. | Connecting at all | **Yes, blocker** |
-| G2 | Token-endpoint errors as `200 {"ok":false,"error":…}` count as "unavailable", so a dead refresh token never deletes the credential. Proposal: a 200 body with no `access_token` and an RFC 6749-shaped `error` is a grant error; treat `invalid_refresh_token` and `token_revoked` like `invalid_grant`. | Token rotation on | Yes, before rotation is offered; v1 with rotation off works without it |
-| G3 | Disconnect does not revoke at the provider. Proposal: optional `auth.revocation` (RFC 7009 from metadata, or a template `revokeUrl` with Slack's `auth.revoke` form) called best-effort in `afterCommit`. | Clean revoke | No; v1 documents manual removal |
-| G4 | OAuth client only org-level. Proposal: platform-level client for a platform template (super admin enters once; orgs inherit, may override), in line with `orgAccess` config levels. | Multi-org deployments | No; v1 enters the client per org |
+| G2 | Token-endpoint errors as `200 {"ok":false,"error":…}` count as "unavailable", so a dead refresh token never deletes the credential. Proposal: a 200 body with no `access_token` and an RFC 6749-shaped `error` is a grant error; treat `invalid_refresh_token` and `token_revoked` like `invalid_grant`. | Token rotation on; correct errors | **Yes**, in the first core PR (decided order) |
+| G3 | Disconnect does not revoke at the provider. Proposal: optional `auth.revocation` (RFC 7009 from metadata, or a template `revokeUrl` with Slack's `auth.revoke` form) called best-effort in `afterCommit`. | Clean revoke | **Later, not in the first release (decided, 2026-11-08)**; README documents manual removal |
+| G4 | OAuth client only org-level. Proposal: platform-level client for a platform template (super admin enters once; orgs inherit, may override), in line with `orgAccess` config levels. | Multi-org deployments | **Later, not in the first release (decided, 2026-11-08)**; the client is entered per org |
 | G5 | Nested token responses (`authed_user.access_token`) unsupported. | Only the §9 fallback with classic `oauth.v2.access` | Only if the fallback is built |
 | G6 | `@capybara-hq/testing` `startFakeOAuthServer` has no way to answer like Slack (`token_type: "user"`, 200 + `ok:false`). Proposal: a `tokenResponse` hook or a `dialect: "slack"` option. | Tests for G1 / G2 here | Yes, with G1 |
 | G7 | No extra authorize parameters (e.g. Slack `team=T…` to preselect the workspace). | Nicety on multi-workspace Grid | No |
 | G8 | To verify live, may become gaps: Slack accepting `code_challenge` from a confidential client, the `resource` parameter, space-separated `scope` on `v2_user/authorize`, whether Slack sends `iss` on the callback, and that a revoked token yields HTTP 401 from `mcp.slack.com`. | Connecting | Becomes "yes" if any fails |
 
-Order: core PR (G1, G6, ideally G2) → core release → dependency upgrade here → template, manifest,
-README, tests.
+The plugin-install coupling (an org that turns on `slack` only for the bot would see 需要配置 until the
+template gets a client; spec P2-6 / P2-10 in core's plugin-component-management design) is resolved
+by shipping the template switched off by default (§3, decided 2026-11-08).
 
-The plugin-install coupling also needs a look: an org that turns on `slack` only for the bot sees the
-plugin as 需要配置 until the template gets a client or is switched off (spec P2-6 / P2-10 in core's
-plugin-component-management design). Q5.
+## 10a. Order of work
+
+1. **Core PR**: G1 (accept a `token_type` other than Bearer), G2 (`{"ok":false,"error":…}` on HTTP
+   200 from the token endpoint treated as a token error), G6 (Slack-like mode in
+   `startFakeOAuthServer`); plus the default-off template state if the catalog lacks it.
+2. **Core release**, then the dependency upgrade in this repository.
+3. **Plugins PR**: `connectors/slack.json`, the `connector-mcp` dependency in `plugin.json`,
+   `app-manifest.connector.yaml`, README, template and kernel-level tests.
+4. **Live check**: the G8 items by hand through a real Slack workspace, then the gated live test.
 
 ## 11. Testing
 
@@ -361,21 +385,21 @@ plugin-component-management design). Q5.
   interactive OAuth hop is verified once by hand for G8 and recorded in the PR. Keys stay in
   `~/.capybara-test.env`, never printed.
 
-## 12. Open questions for the maintainer
+## 12. Decisions and open questions
 
-1. **Data terms**: Slack's RTS terms forbid storing retrieved data; our event log and archives store
-   tool results. Accept as the customer's own internal app, or limit persistence of Slack results
-   (would touch the replay invariant)?
-2. **Plan gating**: Slack documents no plan requirement for MCP. Do we need a supported-plans
-   statement before shipping, or verify on our test workspace's plan only?
-3. **Shared channels**: should the kernel block or force `ask` for personal-credential tools when the
-   conversation is a group channel thread, so a member's DMs cannot leak into a channel?
-4. **App choice**: separate connector app (recommended) or reuse of the channel app as the default in
-   the README?
-5. **Plugin coupling**: keep the template in `slack` (decided) and accept 需要配置 for bot-only orgs,
-   or ship the template switched off by default?
-6. **DM scopes**: ship all 30 scopes, or a variant without `im:*` / `mpim:*` / `search:read.im/.mpim`
-   for companies that want no DM access?
-7. **Platform client (G4) and revoke (G3)**: in scope for the first release, or later?
-8. **Identity match**: should the kernel check that the Slack user who authorized (`authed_user.id`)
-   is the member's bound Slack identity (`slack:<team>`), refusing a different Slack account?
+Decided by the maintainer (2026-11-08):
+
+1. Real-time Search data terms: accepted as a risk; tool results stay in the event log (§7.4).
+2. Tool policy: configured on the tools page; the template only ships defaults. Group-thread
+   leakage gets no special kernel rule and relies on the configured policies (§6, §7.3).
+3. Slack app: README default is a separate "Capybara connector" app; reusing the channel app is
+   allowed only with token rotation off (§4). May still be revised.
+4. The connector template ships switched off by default (§3).
+5. Scopes: the full set only for the first release (§3).
+6. No identity check; connecting a different Slack account is allowed (§7.3).
+7. G3 (revoke on disconnect) and G4 (platform-level OAuth client): later (§10).
+
+Still open:
+
+- **Plan gating**: Slack documents no plan requirement for MCP. Is a supported-plans statement
+  needed before shipping, or is checking our test workspace's plan enough?
