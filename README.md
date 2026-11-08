@@ -22,6 +22,7 @@ npm; the kernel verifies each download against that integrity.
 | [`sandbox-e2b`](plugins/sandbox-e2b) | Conversation sandboxes on E2B (`sandbox@1`) |
 | [`object-store-s3`](plugins/object-store-s3) | Object storage on S3-compatible services (`object-store@1`) |
 | [`todo`](plugins/todo) | A per-conversation todo list tool for agents |
+| [`theme-cyberpunk`](plugins/theme-cyberpunk) | The Cyberpunk theme (declarative, no extension): neon yellow on deep blue-black, techno fonts, a neon pixel capybara |
 | [`example-counter`](plugins/example-counter), [`example-board`](plugins/example-board) | Reference implementations for plugin authors (not published) |
 
 `openai-compatible` and `object-store-s3` are bootstrap plugins: core's images bake the versions

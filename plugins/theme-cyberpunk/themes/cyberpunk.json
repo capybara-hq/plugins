@@ -1,0 +1,94 @@
+{
+  "$schema": "https://capybarahq.com/schemas/theme.v1.schema.json",
+  "name": { "en": "Cyberpunk", "zh": "赛博朋克" },
+  "description": {
+    "en": "Neon yellow on deep blue-black, cyan glow, sharp corners and a techno type pair.",
+    "zh": "深蓝黑底上的霓虹黄，青色辉光，直角与科技感字体。"
+  },
+  "schemes": {
+    "dark": {
+      "color": {
+        "bg": "#070A12",
+        "panel": "#0C1120",
+        "panel-2": "#0A0E1A",
+        "sidebar": "#0A0E1B",
+        "sidebar-active": "#1B2642",
+        "raised": "#101629",
+        "selected": "#1D2945",
+        "hover": "#141C33",
+        "line-soft": "#151D33",
+        "line": "#24324F",
+        "line-strong": "#36496F",
+        "line-card": "rgba(0,229,255,0.14)",
+        "scroll-thumb": "rgba(0,229,255,0.24)",
+        "ink": "#E6F4FF",
+        "muted": "#93A7C6",
+        "faint": "#56688A",
+        "disabled": "#71829F",
+        "accent": "#FFE600",
+        "accent-hover": "#FFF04D",
+        "accent-press": "#E6CF00",
+        "on-accent": "#0A0B00",
+        "focus-ring": "rgba(0,229,255,0.45)",
+        "ok": "#3DFFA2",
+        "fail": "#FF5470",
+        "warn": "#FF9F1C",
+        "scrim": "rgba(2,4,10,0.72)",
+        "diff-add": "rgba(61,255,162,0.10)",
+        "diff-del": "rgba(255,84,112,0.10)"
+      },
+      "shadow": {
+        "shadow-1": "0 0 16px rgba(0,229,255,0.12)",
+        "shadow-2": "0 0 32px rgba(0,229,255,0.18)",
+        "shadow-sheet": "-16px 0 40px rgba(0,0,0,0.60)",
+        "shadow-float": "0 0 24px rgba(0,229,255,0.16)"
+      },
+      "radius": { "sm": 0, "md": 2, "bubble": 2 }
+    }
+  },
+  "fonts": [
+    {
+      "family": "JetBrains Mono",
+      "file": "./fonts/JetBrainsMono-400.woff2",
+      "weight": 400,
+      "role": "mono"
+    },
+    {
+      "family": "JetBrains Mono",
+      "file": "./fonts/JetBrainsMono-500.woff2",
+      "weight": 500,
+      "role": "mono"
+    },
+    {
+      "family": "JetBrains Mono",
+      "file": "./fonts/JetBrainsMono-600.woff2",
+      "weight": 600,
+      "role": "mono"
+    },
+    {
+      "family": "JetBrains Mono",
+      "file": "./fonts/JetBrainsMono-700.woff2",
+      "weight": 700,
+      "role": "mono"
+    },
+    {
+      "family": "Chakra Petch",
+      "file": "./fonts/ChakraPetch-400.woff2",
+      "weight": 400,
+      "role": "prose"
+    },
+    {
+      "family": "Chakra Petch",
+      "file": "./fonts/ChakraPetch-600.woff2",
+      "weight": 600,
+      "role": "prose"
+    },
+    {
+      "family": "Chakra Petch",
+      "file": "./fonts/ChakraPetch-700.woff2",
+      "weight": 700,
+      "role": "prose"
+    }
+  ],
+  "logo": { "mark": "./logo.svg", "wordmark": "CYBERBARA", "favicon": "./favicon.svg" }
+}

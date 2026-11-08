@@ -1,0 +1,20 @@
+{
+  "name": "@capybara-hq/plugin-theme-cyberpunk",
+  "version": "0.1.0-rc.0",
+  "description": "Cyberpunk theme: neon yellow on deep blue-black with cyan glow, techno fonts and a neon pixel capybara",
+  "license": "Apache-2.0 AND OFL-1.1",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/capybara-hq/plugins.git",
+    "directory": "plugins/theme-cyberpunk"
+  },
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/theme-cyberpunk#readme",
+  "type": "module",
+  "files": [
+    "OFL-JetBrainsMono.txt",
+    "OFL-ChakraPetch.txt"
+  ],
+  "devDependencies": {
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.8"
+  }
+}
