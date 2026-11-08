@@ -513,7 +513,7 @@
         "npm": {
           "package": "@capybara-hq/plugin-telegram",
           "version": "0.1.0-rc.0",
-          "integrity": "sha512-iY8YEi1B7KIr6WWYwBG60IxjHiEhlR5XkkGk86xlICAJBRQVKQQcl6K/PvlvIwKFaeSKr252TsoT2EWE0ZlcOQ=="
+          "integrity": "sha512-jUfZz3G13sFcTwJ63DTe0x4nvsdJyRdydw/RLDeITDyBvDfNso9sQUfgfADzBB4PVJT4P23EVqkYK+yM5uMshg=="
         }
       }
     }
