@@ -9,7 +9,6 @@ import {
   type Harness,
   kernelDb,
   TEST_PASSWORD as PW,
-  sleep,
   startFakeTelegram,
   type TgUser,
   telegramPrivateMessage,
@@ -198,7 +197,6 @@ describe("Telegram webhook inbound (dual replica, real plugin)", () => {
       20_000,
       "barrier run finished",
     );
-    await sleep(500);
     expect(await countEvents("user_message")).toBe(2);
     expect(await countEvents("run_started")).toBe(2);
     expect(replies()).toHaveLength(1);

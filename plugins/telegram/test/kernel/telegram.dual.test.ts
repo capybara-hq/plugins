@@ -257,7 +257,15 @@ describe("Telegram plugin in the kernel (dual replica, long polling)", () => {
     );
     expect(editsOf(draft).length).toBeGreaterThanOrEqual(1);
     expect(latest(draft).parseMode).toBe("HTML");
-    await sleep(500);
+    // Barrier: the run is over, so no further message for it can come
+    const [dmThread] = await threadsIn(ALICE.id);
+    expect(dmThread).toBeDefined();
+    const dmConv = dmThread?.conversation_id as string;
+    await waitFor(
+      async () => (await countEvents(dmConv, "run_finished")) === 1 || undefined,
+      20_000,
+      "dm run finished",
+    );
     expect(sentTo(ALICE.id).slice(before)).toHaveLength(1);
 
     // ================= (d) group mention → reply to it; a reply to the bot continues =================
@@ -355,7 +363,20 @@ describe("Telegram plugin in the kernel (dual replica, long polling)", () => {
       10_000,
       "callback answered",
     );
-    await sleep(1000);
+    // Barrier: the approval thread's run (it waits for the approval and continues after it) is
+    // over, so no further reply for it can come
+    const approvalThread = await db
+      .selectFrom("channel_threads")
+      .select("conversation_id")
+      .where("connection_id", "=", connId)
+      .where("thread_key", "=", `${OPS.id}:3003`)
+      .executeTakeFirstOrThrow();
+    await waitFor(
+      async () =>
+        (await countEvents(approvalThread.conversation_id, "run_finished")) === 1 || undefined,
+      20_000,
+      "approval runs finished",
+    );
     expect(repliesWith(OPS.id, "Tool result: Announcement posted (post_1).")).toHaveLength(1);
     expect(im.posts).toHaveLength(1);
 
@@ -387,7 +408,14 @@ describe("Telegram plugin in the kernel (dual replica, long polling)", () => {
       20_000,
       "bind-in-DM prompt",
     );
-    await sleep(1000);
+    // Barrier: a bound user's later message is answered, so Bob's updates (earlier in the queue)
+    // have been handled
+    tg.push(telegramPrivateMessage(ALICE, "echo:barrier after bob"));
+    await waitFor(
+      async () => repliesWith(ALICE.id, "barrier after bob")[0],
+      20_000,
+      "barrier reply",
+    );
     expect(sentTo(BOB.id)).toHaveLength(1);
     expect(await threadsIn(BOB.id)).toHaveLength(0);
     expect(repliesWith(OPS.id, "let me in")).toHaveLength(0);
@@ -431,7 +459,13 @@ describe("Telegram plugin in the kernel (dual replica, long polling)", () => {
       "reply after failover",
     );
     expect(failoverReply.chatId).toBe(ALICE.id);
-    await sleep(1500);
+    // Barrier: a later message in the same chat (same conversation) is answered after it
+    tg.push(telegramPrivateMessage(ALICE, "echo:barrier after failover"));
+    await waitFor(
+      async () => repliesWith(ALICE.id, "barrier after failover")[0],
+      30_000,
+      "barrier reply after failover",
+    );
     expect(repliesWith(ALICE.id, "after failover")).toHaveLength(1);
     // The takeover never overlapped the old poll, so no replica saw a 409 conflict
     expect(tg.maxConcurrentPollers()).toBe(1);

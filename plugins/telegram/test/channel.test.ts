@@ -134,6 +134,24 @@ describe("send", () => {
     expect(tg.messages[0]?.replyMarkup).toBeDefined();
   });
 
+  it("still sends the text when it only starts with the card's headline", async () => {
+    const headline = "Please link your Capybara account before chatting with me.";
+    const text = `${headline} It takes a minute.`;
+    await make().send({
+      ...base,
+      target: dm,
+      message: {
+        text,
+        cards: [{ kind: "bind", url: "https://cap.example/bind/t", text: headline }],
+      },
+    });
+    expect(tg.messages).toHaveLength(2);
+    expect(tg.messages[0]?.text).toBe(text);
+    expect(tg.messages[0]?.replyMarkup).toBeUndefined();
+    expect(tg.messages[1]?.text).toBe(headline);
+    expect(tg.messages[1]?.replyMarkup).toBeDefined();
+  });
+
   it("sends only the card when the text is empty", async () => {
     await make().send({ ...base, target: dm, message: { text: "", cards: [approval] } });
     expect(tg.messages).toHaveLength(1);
