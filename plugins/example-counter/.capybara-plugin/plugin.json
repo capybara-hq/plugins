@@ -3,5 +3,6 @@
   "name": "example-counter",
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
+  "icon": "./icon.svg",
   "description": "Reference plugin: a multi-replica-safe counter (db transaction + idempotent queue job + provide)"
 }
