@@ -11,7 +11,7 @@ const memoryKv = () => {
     set: async (key: string, value: string) => {
       data.set(key, value);
     },
-  } as Kv;
+  } as unknown as Kv;
   return { kv, data };
 };
 

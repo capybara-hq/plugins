@@ -17,7 +17,7 @@ export interface CardTokenStore {
 }
 
 const nonEmpty = (x: unknown): x is string => typeof x === "string" && x !== "";
-const SCOPES = ["once", "session", "always"];
+const SCOPES: ReadonlySet<string> = new Set(["once", "session", "always"]); // capybara:allow-module-state read-only constant list of approval scopes
 
 /** Strict decoding: shape, kind, action, scope and every answer value are checked. */
 export function decodeCardAction(json: string): CardAction | null {
@@ -34,7 +34,7 @@ export function decodeCardAction(json: string): CardAction | null {
   const cardId = o.cardId;
   if (o.cardKind === "approval") {
     if (o.answer !== undefined) return null;
-    if (o.action === "approve" && typeof o.scope === "string" && SCOPES.includes(o.scope)) {
+    if (o.action === "approve" && typeof o.scope === "string" && SCOPES.has(o.scope)) {
       return {
         cardKind: "approval",
         cardId,
