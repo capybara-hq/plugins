@@ -170,3 +170,12 @@ If the kernel then answers non-2xx and Telegram redelivers, the spinner has alre
 - **Directory (`directory@1`)**: the Bot API cannot list group members and Telegram has no organization concept (maintainer decision).
 - **Media**: attachments, voice, stickers, polls, inline mode, business accounts and broadcast channels are not handled; media without a caption sends no event.
 - **Proxy**: no proxy support for networks where `api.telegram.org` is unreachable (maintainer decision); `apiUrl` can point at a reverse proxy you run.
+
+## Icon
+
+`icon.svg`: the Telegram logo (owner: Telegram), downloaded on 2026-11-09 from
+https://telegram.org/tour/screenshots ("Download Telegram Logos", file `Logo.svg`). Telegram lets
+its logos be used as long as people understand you're not representing Telegram officially. It is a
+trademark of its owner, used only to identify the service this plugin connects to; the plugin is
+not affiliated with or endorsed by the owner. The artwork is unchanged except for removing editor
+metadata.
