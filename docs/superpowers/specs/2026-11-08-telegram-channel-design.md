@@ -148,7 +148,14 @@ every group message; the plugin still forwards only what the Inbound rules allow
 
 - `features.cards: true`. Rendered as HTML text plus an inline keyboard. Button labels in the
   org's `locale`. Fallback text from `renderCardAsText`.
-- Link buttons (`url`) only for http(s) URLs.
+- Link buttons (`url`) only for http(s) URLs. Telegram rejects some hosts as button URLs
+  (verified 2026-11-08: `http://localhost:…` → 400 "Wrong HTTP URL"; IPs are accepted): on such a
+  400 the post is sent (or edited) once more without URL buttons, with the link in the text and
+  the callback buttons kept. (Decided in the final review.)
+- One Telegram message per card: the message text leads the first card's post unless it repeats a
+  card's headline; a card post is truncated to fit, never split, so a card refresh always edits one
+  message. (Decided in the final review: the kernel sends cards as a fixed phrase plus the card, and
+  a two-post rendering made every question-card refresh fail.)
 - `callback_data` is limited to 64 bytes, too small for card id + action + scope + answer. Each
   button gets `callback_data = "cb:" + <random 16-char base64url token>`; kv
   `card/<bot id>/<token>` holds the compact JSON payload (card id, kind, action, scope,
@@ -157,7 +164,8 @@ every group message; the plugin still forwards only what the Inbound rules allow
   64 bytes and skip kv; behavior must be identical.)
 - Every `callback_query` is answered with `answerCallbackQuery` (no text) after `onEvent`
   resolves, so the client's progress indicator stops; the answer is best-effort and never blocks
-  the ack.
+  the ack. Webhook mode has no hook after the kernel accepts, so there the answer is sent before
+  returning the events (documented trade-off).
 - `card_action`: `messageId` = the card's message, `eventId` = `callback_query.id`, target from
   the message's chat (and thread as above).
 
@@ -168,8 +176,8 @@ every group message; the plugin still forwards only what the Inbound rules allow
   produce `tg://user?id=` mentions. A raw `@username` in model text would notify group members,
   so the converter neutralises it (a zero-width joiner after `@`, outside code), with injection
   tests like Slack's `<!channel>` ones. (My call.)
-- Limit 4096 characters after entity parsing: split into several messages, return the last id;
-  `update` over the limit throws `too_large`.
+- Limit 4096 characters after entity parsing: text-only messages split into several messages,
+  return the last id; `update` that does not fit one message throws `too_large`.
 - `features.edit: true`, `minEditIntervalMs: 3000` (Telegram allows about 20 messages per minute in
   a group; edits count). On 429 use `parameters.retry_after`.
 - `idempotencyKey` ignored (no idempotent send in the Bot API); same trade-off as Slack.
