@@ -90,7 +90,8 @@ function readText(
  * messages that neither mention the bot nor reply to it are dropped.
  *
  * In a group, a reply continues the thread of its parent when the plugin recorded that parent;
- * a reply to any other non-bot message treats that message as the root. A message inside a forum
+ * otherwise it starts a new one. Every forwarded group message is recorded (a new root maps to its
+ * own id), so replies to it find the thread. A message inside a forum
  * topic records the topic of its thread (the root's id when it has no thread yet).
  */
 export async function updateToInbound(
@@ -145,11 +146,10 @@ export async function updateToInbound(
   const replyToBot = parentId !== undefined && obj(parent?.from)?.id === bot.id;
   if (!addressed && !replyToBot) return null;
 
-  let threadId: string | undefined;
-  if (parentId !== undefined) {
-    threadId = await threads.threadOfMessage(chatKey, parentId);
-    if (threadId === undefined && !replyToBot) threadId = `${chatKey}:${parentId}`;
-  }
+  const threadId =
+    parentId !== undefined ? await threads.threadOfMessage(chatKey, parentId) : undefined;
+  // Record every forwarded group message, so a later reply to it finds its thread.
+  await threads.recordSent(chatKey, messageId, threadId ?? base.messageId);
   const messageThreadId = int(message.message_thread_id);
   if (message.is_topic_message === true && messageThreadId !== undefined) {
     await threads.recordTopic(threadId ?? base.messageId, messageThreadId);

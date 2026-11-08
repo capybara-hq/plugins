@@ -4,11 +4,15 @@ import { type Kv, threadStore } from "../src/threads.js";
 
 const memoryKv = () => {
   const data = new Map<string, string>();
+  const ttls = new Map<string, number>();
   const kv = {
     get: async (key: string) => data.get(key) ?? null,
-    set: async (key: string, value: string) => void data.set(key, value),
+    set: async (key: string, value: string, opts: { ttlSeconds: number }) => {
+      data.set(key, value);
+      ttls.set(key, opts.ttlSeconds);
+    },
   } as Kv;
-  return { kv };
+  return { kv, data, ttls };
 };
 
 const BOT = { id: 999, username: "mybot" };
@@ -198,9 +202,62 @@ describe("updateToInbound", () => {
     expect(ev && "target" in ev && "threadId" in ev.target).toBe(false);
   });
 
-  it("uses the root message as threadId when replying to it", async () => {
+  it("sends no threadId when replying to an unrecorded user message", async () => {
     const ev = await run(groupMsg({ reply_to_message: { message_id: 40, from: ann } }));
-    expect(ev).toMatchObject({ target: { threadId: "-100:40" } });
+    expect(ev && "target" in ev && "threadId" in ev.target).toBe(false);
+  });
+
+  it("records forwarded messages so replies find the thread (TTL 30 days)", async () => {
+    const { kv, data, ttls } = memoryKv();
+    const store = threadStore(kv, "999");
+    await run(groupMsg({ message_id: 40 }), store);
+    expect(data.get("thread/999/-100:40")).toBe("-100:40");
+    expect(ttls.get("thread/999/-100:40")).toBe(2_592_000);
+
+    const reply = await run(
+      groupMsg({ message_id: 41, reply_to_message: { message_id: 40, from: ann } }),
+      store,
+    );
+    expect(reply).toMatchObject({ target: { threadId: "-100:40" } });
+    expect(data.get("thread/999/-100:41")).toBe("-100:40");
+    expect(ttls.get("thread/999/-100:41")).toBe(2_592_000);
+
+    const nested = await run(
+      groupMsg({ message_id: 42, reply_to_message: { message_id: 41, from: ann } }),
+      store,
+    );
+    expect(nested).toMatchObject({ target: { threadId: "-100:40" } });
+  });
+
+  it("records nothing for dropped group messages", async () => {
+    const { kv, data } = memoryKv();
+    const store = threadStore(kv, "999");
+    await run(groupMsg({ text: "hi all", entities: [] }), store);
+    await run(groupMsg({ from: { ...ann, is_bot: true } }), store);
+    expect(data.size).toBe(0);
+  });
+
+  it("does not treat a forum_topic_created parent as a reply", async () => {
+    const ev = await run(
+      groupMsg({
+        reply_to_message: {
+          message_id: 77,
+          from: { id: 999, is_bot: true },
+          forum_topic_created: { name: "t" },
+        },
+      }),
+    );
+    expect(ev && "target" in ev && "threadId" in ev.target).toBe(false);
+  });
+
+  it("strips a text_mention that follows an emoji", async () => {
+    const ev = await run(
+      groupMsg({
+        text: "😀 Bot go",
+        entities: [{ type: "text_mention", offset: 3, length: 3, user: { id: 999 } }],
+      }),
+    );
+    expect(ev).toMatchObject({ text: "😀 go" });
   });
 
   it("records the topic of a thread inside a forum topic", async () => {
