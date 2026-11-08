@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-lark
 
+## 0.1.0-rc.3
+
+### Patch Changes
+
+- 7dec2f6: The approval card shows the call summary as plain escaped text labelled Summary / 摘要 instead of
+  an "Input" code block.
+
 ## 0.1.0-rc.2
 
 ### Patch Changes
