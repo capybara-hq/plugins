@@ -1,5 +1,11 @@
 # @capybara-hq/plugin-sandbox-docker
 
+## 0.1.0-rc.6
+
+### Patch Changes
+
+- ce8d729: The plugin ships an icon (`icon.svg`): the Docker mark from Docker's media resources (source and date in the README).
+
 ## 0.1.0-rc.5
 
 No changes in this release.

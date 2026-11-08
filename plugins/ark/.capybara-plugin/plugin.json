@@ -1,8 +1,11 @@
 {
   "schemaVersion": 1,
   "name": "ark",
-  "displayName": { "zh": "火山方舟模型", "en": "Volcengine Ark models" },
-  "version": "0.1.0-rc.0",
+  "displayName": {
+    "zh": "火山方舟模型",
+    "en": "Volcengine Ark models"
+  },
+  "version": "0.1.0-rc.1",
   "publisher": "Capybara",
   "icon": "./icon.svg",
   "description": {

@@ -1,5 +1,11 @@
 # @capybara-hq/plugin-sandbox-e2b
 
+## 0.1.0-rc.6
+
+### Patch Changes
+
+- ce8d729: The plugin ships an icon (`icon.svg`): the E2B symbol from the E2B brand page (source and date in the README).
+
 ## 0.1.0-rc.5
 
 ### Patch Changes

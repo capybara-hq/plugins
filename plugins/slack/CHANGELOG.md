@@ -1,5 +1,11 @@
 # @capybara-hq/plugin-slack
 
+## 0.1.0-rc.3
+
+### Patch Changes
+
+- ce8d729: The plugin ships an icon (`icon.svg`): the Slack mark from the Slack media kit (source and date in the README).
+
 ## 0.1.0-rc.2
 
 ### Patch Changes

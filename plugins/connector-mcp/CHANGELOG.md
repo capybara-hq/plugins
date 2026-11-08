@@ -1,5 +1,11 @@
 # @capybara-hq/plugin-connector-mcp
 
+## 0.1.0-rc.2
+
+### Patch Changes
+
+- ce8d729: The plugin ships an icon (`icon.svg`): the Model Context Protocol mark (source and date in the README).
+
 ## 0.1.0-rc.1
 
 ### Patch Changes
