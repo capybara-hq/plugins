@@ -14,7 +14,7 @@ global (one person has the same id for every bot), so one person is one identity
 
 The Telegram docs cited here are the [Bot API reference](https://core.telegram.org/bots/api) (Bot API 10.3), consulted on 2026-11-08.
 
-Verified live: not yet.
+Verified live on 2026-11-08 against a real bot: verify, send, edit, a 5000-character split send and a card with an inline callback keyboard, in a private chat and in a basic group. Not covered live: a person clicking a card button, webhook mode and forum supergroups.
 
 ## Create the bot
 
