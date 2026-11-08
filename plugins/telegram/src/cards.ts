@@ -137,6 +137,26 @@ async function keyboard(
   }
 }
 
+const textOf = (t: string | { zh: string; en: string }, locale: Locale) =>
+  typeof t === "string" ? t : t[locale];
+
+/**
+ * The line a card leads with, when the kernel may also send it as the message text (the bind
+ * prompt is both): `render` then drops the text so it is not posted twice (as Slack and Lark do).
+ */
+export function cardHeadline(card: ChannelCard, locale: Locale): string | undefined {
+  switch (card.kind) {
+    case "approval":
+      return card.title;
+    case "question":
+      return textOf(card.form.title, locale);
+    case "bind":
+      return card.text;
+    case "connect":
+      return undefined;
+  }
+}
+
 /** One post per card: HTML text and an inline keyboard (no keyboard when no button applies). */
 export async function renderCards(
   cards: ChannelCard[],

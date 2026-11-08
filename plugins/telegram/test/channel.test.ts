@@ -122,6 +122,18 @@ describe("send", () => {
     expect(tg.messages[1]?.replyMarkup).toBeDefined();
   });
 
+  it("sends only the card when the text repeats the card's headline (the bind prompt)", async () => {
+    const text = "Please link your Capybara account before chatting with me.";
+    await make().send({
+      ...base,
+      target: dm,
+      message: { text, cards: [{ kind: "bind", url: "https://cap.example/bind/t", text }] },
+    });
+    expect(tg.messages).toHaveLength(1);
+    expect(tg.messages[0]?.text).toBe(text);
+    expect(tg.messages[0]?.replyMarkup).toBeDefined();
+  });
+
   it("sends only the card when the text is empty", async () => {
     await make().send({ ...base, target: dm, message: { text: "", cards: [approval] } });
     expect(tg.messages).toHaveLength(1);

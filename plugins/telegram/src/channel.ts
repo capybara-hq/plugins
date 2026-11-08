@@ -8,7 +8,7 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import { cardTokenStore } from "./actions.js";
 import { TelegramApiError, telegramApi } from "./api.js";
-import { renderCards, type TelegramPost } from "./cards.js";
+import { cardHeadline, renderCards, type TelegramPost } from "./cards.js";
 import { botIdOf, connectionTenant, TelegramConnection } from "./config.js";
 import { toChannelSendError } from "./errors.js";
 import { markdownToTelegramHtml, splitHtml } from "./html.js";
@@ -76,14 +76,19 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
     };
   };
 
-  /** The posts of a message: its text parts, then one post per card. */
+  /**
+   * The posts of a message: its text parts, then one post per card. Text that repeats a card's
+   * headline is left out (the card carries it).
+   */
   async function render(
     message: ChannelSendArgs["message"],
     locale: ChannelSendArgs["locale"],
     botId: string,
   ): Promise<TelegramPost[]> {
     const posts: TelegramPost[] = [];
-    if (message.text.trim() !== "") {
+    const text = message.text.trim();
+    const dup = (message.cards ?? []).some((c) => cardHeadline(c, locale)?.trim() === text);
+    if (text !== "" && !dup) {
       for (const html of splitHtml(markdownToTelegramHtml(message.text))) posts.push({ html });
     }
     if (message.cards?.length) {
