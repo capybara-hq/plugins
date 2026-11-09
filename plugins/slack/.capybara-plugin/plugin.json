@@ -19,60 +19,12 @@
   "setupGuides": [
     {
       "id": "slack-app",
-      "place": "channel-connection",
-      "title": {
-        "en": "Create the Slack app",
-        "zh": "创建 Slack 应用"
-      },
-      "steps": [
-        {
-          "en": "Open https://api.slack.com/apps, choose Create New App → From a manifest, pick your workspace and paste the app manifest below. It registers the bot scopes, the events and the slash commands `/new`, `/env` and `/capybara` the plugin needs.",
-          "zh": "打开 https://api.slack.com/apps，选择 Create New App → From a manifest，选中工作区，粘贴下面的应用 manifest。它会登记插件需要的机器人权限、事件以及斜杠命令 `/new`、`/env`、`/capybara`。"
-        },
-        {
-          "mode": "long_connection",
-          "en": "Under Basic Information → App-Level Tokens choose Generate Token and Scopes, add the scope `connections:write` and copy the `xapp-…` token into the App-level token field. Socket Mode needs no public URL.",
-          "zh": "在 Basic Information → App-Level Tokens 选择 Generate Token and Scopes，添加权限 `connections:write`，把 `xapp-…` 令牌填进「应用令牌」。Socket Mode 不需要公网地址。"
-        },
-        {
-          "mode": "webhook",
-          "en": "Slack checks the Request URL {{webhookUrl}} when you create the app or save Event Subscriptions: the connection must exist first, and Capybara answers the check. If Slack reports it unverified, save the channel connection, then retry under Event Subscriptions.",
-          "zh": "创建应用或保存 Event Subscriptions 时，Slack 会校验 Request URL {{webhookUrl}}：渠道连接要先存在，由 Capybara 应答校验。若 Slack 提示未通过，先保存渠道连接，再到 Event Subscriptions 重试。"
-        },
-        {
-          "en": "Choose Install App → Install to Workspace and copy the Bot User OAuth Token (`xoxb-…`) into the Bot token field.",
-          "zh": "选择 Install App → Install to Workspace，把 Bot User OAuth Token（`xoxb-…`）填进「机器人令牌」。"
-        },
-        {
-          "mode": "webhook",
-          "en": "Copy Basic Information → App Credentials → Signing Secret into the Signing secret field: every webhook request is verified with it, and without it every request is refused.",
-          "zh": "把 Basic Information → App Credentials → Signing Secret 填进「签名密钥」：每个 webhook 请求都用它校验，不填则全部拒绝。"
-        },
-        {
-          "en": "The manifest's redirect URL {{signInCallbackUrl}} is for Sign in with Slack; it needs `http.publicUrl` set on the deployment. Without it, remove the redirect URL or ask your super admin to set it.",
-          "zh": "manifest 里的重定向地址 {{signInCallbackUrl}} 用于 Slack 登录，需要部署设置 `http.publicUrl`。未设置时，删掉该重定向地址，或请超级管理员设置。"
-        }
-      ],
-      "files": [
-        {
-          "path": "./guides/app-manifest.socket.yaml.tmpl",
-          "language": "yaml",
-          "mode": "long_connection",
-          "title": {
-            "en": "App manifest (Socket Mode)",
-            "zh": "应用 manifest（Socket Mode）"
-          }
-        },
-        {
-          "path": "./guides/app-manifest.webhook.yaml.tmpl",
-          "language": "yaml",
-          "mode": "webhook",
-          "title": {
-            "en": "App manifest (webhook)",
-            "zh": "应用 manifest（Webhook）"
-          }
-        }
-      ]
+      "place": "channel-connection"
+    },
+    {
+      "id": "slack-connector",
+      "place": "connector-template",
+      "template": "slack"
     }
   ]
 }

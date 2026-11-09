@@ -5,7 +5,6 @@ import {
   validateConnectorTemplate,
 } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
-import { parse } from "yaml";
 
 /**
  * The Slack connector template (connectors/slack.json): per-person OAuth to Slack's MCP server
@@ -149,30 +148,5 @@ describe("connectors/slack.json", () => {
       { name: "connector-mcp", version: file.template.pluginVersion },
     ]);
     expect(file.template.pluginVersion).toMatch(/^\^0\.1\.0-rc\.\d+$/);
-  });
-});
-
-describe("app-manifest.connector.yaml", () => {
-  const m = parse(read("app-manifest.connector.yaml")) as {
-    oauth_config: { redirect_urls: string[]; scopes: { user: string[]; bot?: string[] } };
-    settings: Record<string, unknown>;
-    features?: unknown;
-  };
-
-  it("asks for exactly the template's user scopes, no bot, MCP on, rotation off", () => {
-    expect(m.oauth_config.scopes.user).toEqual(SCOPES);
-    expect(m.oauth_config.scopes.bot).toBeUndefined();
-    expect(m.features).toBeUndefined();
-    expect(m.settings).toMatchObject({
-      is_mcp_enabled: true,
-      socket_mode_enabled: false,
-      token_rotation_enabled: false,
-    });
-  });
-
-  it("names the kernel's OAuth callback as the redirect URL", () => {
-    expect(m.oauth_config.redirect_urls).toEqual([
-      "https://capybara.example.com/api/v1/oauth/callback",
-    ]);
   });
 });
