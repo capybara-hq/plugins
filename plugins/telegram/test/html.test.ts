@@ -228,3 +228,66 @@ describe("visibleLength / truncateHtml / fitHtml", () => {
     );
   });
 });
+
+describe("markdownToTelegramHtml tables", () => {
+  const ATTEMPTS = [
+    "**实际情况**",
+    "| 尝试 | 结果 |",
+    "|---|---|",
+    "| 列出会话（第 1 次） | 报错：`Could not obtain an access token: the app's authorization server is unavailable` |",
+    "| 列出会话（第 2 次） | 报错：`The user has not connected Slack`（提示已弹出连接卡片） |",
+    "| 读取刚才那个私信频道 D0BBPQXM55F | 同样报错：`The user has not connected Slack` |",
+  ].join("\n");
+
+  it("the reported reply: two columns, one item per row, the first cell bold", () => {
+    expect(md(ATTEMPTS)).toBe(
+      [
+        "<b>实际情况</b>",
+        "• <b>列出会话（第 1 次）</b> — 报错：<code>Could not obtain an access token: the app's authorization server is unavailable</code>",
+        "• <b>列出会话（第 2 次）</b> — 报错：<code>The user has not connected Slack</code>（提示已弹出连接卡片）",
+        "• <b>读取刚才那个私信频道 D0BBPQXM55F</b> — 同样报错：<code>The user has not connected Slack</code>",
+      ].join("\n"),
+    );
+  });
+
+  it("three columns: indented header: value lines; empty cells skipped; a paragraph after it", () => {
+    const src = [
+      "| 会话 | 类型 | 最新内容 |",
+      "|:--|:-:|--:|",
+      "| #所有-meta1 (C0BABB5B5L6) | 公开频道 | 1 条：「晚间招呼」（由 connector 在 11-09 23:13 代发） |",
+      "| #dev | | [链接](https://x.example/?a=1&b=2) |",
+      "以上是结果。",
+    ].join("\n");
+    expect(md(src)).toBe(
+      [
+        "• <b>#所有-meta1 (C0BABB5B5L6)</b>",
+        "   类型：公开频道",
+        "   最新内容：1 条：「晚间招呼」（由 connector 在 11-09 23:13 代发）",
+        "• <b>#dev</b>",
+        '   最新内容：<a href="https://x.example/?a=1&amp;b=2">链接</a>',
+        "以上是结果。",
+      ].join("\n"),
+    );
+  });
+
+  it("cells keep escaping and the mention guard; escaped pipes are pipes", () => {
+    const src = "| who | note |\n|---|---|\n| @alice <b> | a \\| b & `@x` |";
+    expect(md(src)).toBe("• <b>@⁠alice &lt;b&gt;</b> — a | b &amp; <code>@x</code>");
+  });
+
+  it("tables in code fences and lone pipe lines are untouched", () => {
+    expect(md("```\n| a | b |\n|---|---|\n```")).toBe("<pre>| a | b |\n|---|---|</pre>");
+    expect(md("a | b")).toBe("a | b");
+  });
+
+  it("a long table splits between rows, not inside one", () => {
+    const rows = Array.from({ length: 80 }, (_, i) => `| 第 ${i} 行 | ${"值 ".repeat(30)}|`);
+    const html = md(`| k | v |\n|---|---|\n${rows.join("\n")}`);
+    const parts = splitHtml(html);
+    expect(parts.length).toBeGreaterThan(1);
+    for (const p of parts) {
+      expect(visibleLength(p)).toBeLessThanOrEqual(4096);
+      expect(p.startsWith("• <b>第 ")).toBe(true);
+    }
+  });
+});

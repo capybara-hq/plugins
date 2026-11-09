@@ -299,3 +299,191 @@ describe("renderSend / renderUpdate", () => {
     }
   });
 });
+
+describe("tables", () => {
+  type Table = { type: "table"; rows: Record<string, unknown>[][]; column_settings: unknown[] };
+  const tablesOf = (p: { blocks?: Record<string, unknown>[] }) =>
+    (p.blocks ?? []).filter((b) => b.type === "table") as Table[];
+  const ATTEMPTS = [
+    "**实际情况**",
+    "| 尝试 | 结果 |",
+    "|---|---|",
+    "| 列出会话（第 1 次） | 报错：`Could not obtain an access token: the app's authorization server is unavailable` |",
+    "| 列出会话（第 2 次） | 报错：`The user has not connected Slack`（提示已弹出连接卡片） |",
+    "| 读取刚才那个私信频道 D0BBPQXM55F | 同样报错：`The user has not connected Slack` |",
+  ].join("\n");
+
+  it("the reported reply: the text before it in a section, then a native table block", () => {
+    const posts = renderSend({ text: ATTEMPTS }, "zh");
+    expect(posts).toHaveLength(1);
+    const p = posts[0] as (typeof posts)[number];
+    expect(p.blocks?.map((b) => b.type)).toEqual(["section", "table"]);
+    expect(p.blocks?.[0]).toEqual({
+      type: "section",
+      text: { type: "mrkdwn", text: "*实际情况*" },
+    });
+    const [t] = tablesOf(p);
+    expect(t?.rows).toHaveLength(4);
+    expect(t?.column_settings).toEqual([{ is_wrapped: true }, { is_wrapped: true }]);
+    expect(t?.rows[0]?.[0]).toEqual({
+      type: "rich_text",
+      elements: [
+        {
+          type: "rich_text_section",
+          elements: [{ type: "text", text: "尝试", style: { bold: true } }],
+        },
+      ],
+    });
+    expect(t?.rows[1]?.[0]).toEqual({ type: "raw_text", text: "列出会话（第 1 次）" });
+    expect(t?.rows[2]?.[1]).toEqual({
+      type: "rich_text",
+      elements: [
+        {
+          type: "rich_text_section",
+          elements: [
+            { type: "text", text: "报错：" },
+            { type: "text", text: "The user has not connected Slack", style: { code: true } },
+            { type: "text", text: "（提示已弹出连接卡片）" },
+          ],
+        },
+      ],
+    });
+    // The notification text and the text-only fallback show the table as a list.
+    expect(p.text).toBe(
+      [
+        "*实际情况*",
+        "",
+        "• *列出会话（第 1 次）* — 报错：`Could not obtain an access token: the app's authorization server is unavailable`",
+        "• *列出会话（第 2 次）* — 报错：`The user has not connected Slack`（提示已弹出连接卡片）",
+        "• *读取刚才那个私信频道 D0BBPQXM55F* — 同样报错：`The user has not connected Slack`",
+      ].join("\n"),
+    );
+    expect(p.fallback).toEqual([{ text: p.text }]);
+  });
+
+  it("inline formatting in cells: bold, italic, strike, links (http only); mentions stay literal", () => {
+    const md = [
+      "| a | b |",
+      "|---|---|",
+      "| ***x*** ~~y~~ _z_ | [**doc**](https://d.example/?a=1&b=2) <https://e.example> [js](javascript:x) |",
+      "| <!channel> <@U1> & | |",
+    ].join("\n");
+    const [t] = tablesOf(renderSend({ text: md }, "en")[0] as never);
+    expect(t?.rows[1]?.[0]).toEqual({
+      type: "rich_text",
+      elements: [
+        {
+          type: "rich_text_section",
+          elements: [
+            { type: "text", text: "x", style: { bold: true, italic: true } },
+            { type: "text", text: " " },
+            { type: "text", text: "y", style: { strike: true } },
+            { type: "text", text: " " },
+            { type: "text", text: "z", style: { italic: true } },
+          ],
+        },
+      ],
+    });
+    expect(t?.rows[1]?.[1]).toEqual({
+      type: "rich_text",
+      elements: [
+        {
+          type: "rich_text_section",
+          elements: [
+            { type: "link", url: "https://d.example/?a=1&b=2", text: "doc", style: { bold: true } },
+            { type: "text", text: " " },
+            { type: "link", url: "https://e.example", text: "https://e.example" },
+            { type: "text", text: " [js](javascript:x)" },
+          ],
+        },
+      ],
+    });
+    // Rich text is literal: no escaping, and no way to mention anyone.
+    expect(t?.rows[2]?.[0]).toEqual({ type: "raw_text", text: "<!channel> <@U1> &" });
+    expect(t?.rows[2]?.[1]).toEqual({ type: "raw_text", text: "\u00a0" });
+  });
+
+  it("one table per message: text between tables leads the next table; text after is its own post", () => {
+    const md = "intro\n\n| a |\n|---|\n| 1 |\n\nbetween\n| b |\n|---|\n| 2 |\n\n以上是结果。";
+    const posts = renderSend({ text: md }, "zh");
+    expect(posts.map((p) => p.blocks?.map((b) => b.type) ?? "text")).toEqual([
+      ["section", "table"],
+      ["section", "table"],
+      "text",
+    ]);
+    expect(posts[1]?.blocks?.[0]).toEqual({
+      type: "section",
+      text: { type: "mrkdwn", text: "between" },
+    });
+    expect(posts[2]).toEqual({ text: "以上是结果。" });
+  });
+
+  it("a table first: no section; a card after a table goes in a post of its own", () => {
+    const posts = renderSend(
+      {
+        text: "| a |\n|---|\n| 1 |",
+        cards: [{ kind: "connect", appName: "X", url: "https://x.example" }],
+      },
+      "en",
+    );
+    expect(posts.map((p) => p.blocks?.map((b) => b.type))).toEqual([
+      ["table"],
+      ["section", "actions"],
+    ]);
+  });
+
+  it("over 100 rows: several tables in several posts, each with the header", () => {
+    const rows = Array.from({ length: 150 }, (_, i) => `| r${i} | v |`).join("\n");
+    const posts = renderSend({ text: `| k | v |\n|---|---|\n${rows}` }, "en");
+    expect(posts).toHaveLength(2);
+    const [a, b] = posts.map((p) => tablesOf(p)[0]);
+    expect(a?.rows).toHaveLength(100);
+    expect(b?.rows).toHaveLength(52);
+    expect(b?.rows[0]).toEqual(a?.rows[0]);
+    expect(b?.rows[1]?.[0]).toEqual({ type: "raw_text", text: "r99" });
+    for (const p of posts) expect(p.text.length).toBeLessThanOrEqual(TEXT_LIMIT);
+  });
+
+  it("over 10,000 characters: split by rows within the limit, never mid-row", () => {
+    const rows = Array.from({ length: 30 }, (_, i) => `| r${i} | ${"x".repeat(900)} |`).join("\n");
+    const posts = renderSend({ text: `| k | v |\n|---|---|\n${rows}` }, "en");
+    expect(posts.length).toBeGreaterThan(2);
+    let total = 0;
+    for (const p of posts) {
+      const t = tablesOf(p)[0];
+      const chars = JSON.stringify(t?.rows).match(/x+/g)?.join("").length ?? 0;
+      expect(chars).toBeLessThanOrEqual(10_000);
+      total += (t?.rows.length ?? 0) - 1;
+    }
+    expect(total).toBe(30);
+  });
+
+  it("over 20 columns: no native table, a list in the text", () => {
+    const head = Array.from({ length: 21 }, (_, i) => `c${i}`);
+    const md = `|${head.join("|")}|\n|${head.map(() => "-").join("|")}|\n|${head.map((h) => `${h}v`).join("|")}|`;
+    const posts = renderSend({ text: md }, "en");
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.blocks).toBeUndefined();
+    expect(posts[0]?.text).toMatch(/^• \*c0v\*\n {3}c1: c1v\n/);
+  });
+
+  it("long text before a table: earlier parts are posts of their own, the last leads the table", () => {
+    const md = `${"word ".repeat(1000)}\n\n| a |\n|---|\n| 1 |`;
+    const posts = renderSend({ text: md }, "en");
+    expect(posts.length).toBe(2);
+    expect(posts[0]?.blocks).toBeUndefined();
+    const sec = posts[1]?.blocks?.[0] as { type: string; text: { text: string } };
+    expect(sec.type).toBe("section");
+    expect(sec.text.text.length).toBeLessThanOrEqual(SECTION_TEXT_LIMIT);
+  });
+
+  it("renderUpdate keeps a message with one table in one post", () => {
+    const p = renderUpdate({ text: ATTEMPTS }, "zh");
+    expect(p.blocks?.map((b) => b.type)).toEqual(["section", "table"]);
+  });
+
+  it("a table in a code fence stays code (no table block)", () => {
+    const posts = renderSend({ text: "```\n| a |\n|---|\n| 1 |\n```" }, "en");
+    expect(posts).toEqual([{ text: "```\n| a |\n|---|\n| 1 |\n```" }]);
+  });
+});

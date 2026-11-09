@@ -266,6 +266,47 @@ describe("send / update", () => {
     expect(findSlackButton(m?.blocks, (b) => b.url === "https://cap.example/b")).toBeDefined();
     expect(JSON.stringify(m?.blocks)).toContain("绑定账号");
   });
+
+  it("a Markdown table is posted as a table block; rejected blocks fall back to a list", async () => {
+    const text = "Results\n| k | v |\n|---|---|\n| a | `1` |";
+    const ch = channel();
+    const before = slack.messages.length;
+    await ch.send({
+      config: config(),
+      target: dmTarget,
+      message: { text },
+      signal: signal(),
+      locale: "en",
+    });
+    const m = slack.messages.at(-1);
+    expect(slack.messages.length).toBe(before + 1);
+    expect(m?.blocks?.map((b) => (b as { type: string }).type)).toEqual(["section", "table"]);
+
+    slack.failNext("chat.postMessage", { error: "invalid_blocks" });
+    const { messageId } = await ch.send({
+      config: config(),
+      target: dmTarget,
+      message: { text },
+      signal: signal(),
+      locale: "en",
+    });
+    const f = slack.messages.at(-1);
+    expect(f?.blocks ?? []).toEqual([]);
+    expect(f?.text).toBe("Results\n\n• *a* — `1`");
+    expect(messageId).toBe(`D1:${f?.ts}`);
+
+    // An edit Slack rejects for its blocks is retried as text too.
+    slack.failNext("chat.update", { error: "invalid_attachments" });
+    await ch.update({
+      config: config(),
+      target: dmTarget,
+      messageId,
+      message: { text: `${text}\n| b | 2 |` },
+      signal: signal(),
+      locale: "en",
+    });
+    expect(slack.finalText(f as never)).toBe("Results\n\n• *a* — `1`\n• *b* — 2");
+  });
 });
 
 describe("connect (Socket Mode)", () => {
