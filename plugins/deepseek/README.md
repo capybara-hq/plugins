@@ -7,8 +7,14 @@ Model provider (`model-provider@2`) for DeepSeek chat models through the Chat Co
 
 | Field | Notes |
 |---|---|
-| `apiKey` | secret; overridable per organization |
+| `apiKey` | secret; required; overridable per organization |
 | `baseUrl` | default `https://api.deepseek.com`; overridable per organization |
+
+The key is required, so a deployment without one shows the provider as needing configuration
+rather than as failing to list its models. The platform may leave it empty for the organizations
+to fill in (the kernel loads the extension with required overridable fields optional): each
+organization following the platform then needs configuration and is never called, and an
+organization copy brings its own key.
 
 An organization that sets its own copy is resolved as a whole: its `apiKey` and `baseUrl` are used
 together and the platform key is never sent to an organization's `baseUrl`. An organization copy

@@ -7,9 +7,15 @@ API (plain `fetch`, no vendor SDK).
 
 | Field | Notes |
 |---|---|
-| `apiKey` | secret; overridable per organization |
+| `apiKey` | secret; required; overridable per organization |
 | `region` | default `cn-beijing`; overridable per organization |
 | `workspaceId` | overridable per organization; required outside `us-east-1`, optional in `cn-beijing` (which then uses the shared domain `dashscope.aliyuncs.com`) |
+
+The key is required, so a deployment without one shows the provider as needing configuration
+rather than as failing to list its models. The platform may leave it empty for the organizations
+to fill in (the kernel loads the extension with required overridable fields optional): each
+organization following the platform then needs configuration and is never called, and an
+organization copy brings its own key.
 
 An organization that sets its own copy is resolved as a whole; the platform's key is never mixed
 into it.
@@ -47,3 +53,14 @@ Conformance suite (text, tools, parameters, thinking replay, caching, usage, ima
 - `Throttling.AllocationQuota` is classified as `rate_limited`; a context overflow is recognised by
   the error message (a patch with a removal condition in `errors.ts`).
 - Models are not checked for activation: a listed model the account has not activated fails on call.
+
+## Icon
+
+`icon.svg`: the Alibaba Cloud Model Studio (Bailian) product mark (owner: Alibaba Cloud), downloaded
+on 2026-11-09 from the header logo of the official console, https://bailian.console.aliyun.com/
+(https://img.alicdn.com/imgextra/i1/O1CN01IU2US71Ciicsi3Br3_!!6000000000115-55-tps-357-76.svg, the
+same mark as the console's favicon); Alibaba Cloud publishes no separate square mark for the
+product. It is a trademark of its owner, used only to identify the service this plugin connects
+to; the plugin is not affiliated with or endorsed by the owner. The artwork is unchanged except for
+removing editor metadata, inlining its colours and setting a square viewBox; only the mark is kept,
+the wordmark is omitted, and it shows in colour on both light and dark backgrounds.

@@ -27,8 +27,11 @@ const dataPlane = (region: Region) => `https://ark.${region}.volces.com/api/v3`;
 const controlPlane = (region: Region) => `https://ark.${region}.volcengineapi.com`;
 
 /**
- * Deployment config. Every field is org-overridable, so the platform's copy may lack the key:
- * the key is required per call (not at load), and read from the per-call `opts.config`.
+ * Deployment config. Every field is org-overridable. The key is required, so a deployment without
+ * one shows the provider as needing configuration rather than as failing to list its models. The
+ * platform may leave it empty (the kernel's load gate makes required overridable fields optional
+ * for the platform's copy): orgs following the platform then need configuration and are never
+ * called, and an org copy brings its own key.
  *
  * The inference key lists the models itself (`GET /api/v3/models`, live 2026-11-08). The optional
  * `management` AK/SK only adds the account's inference endpoints (`ep-…`, control-plane
@@ -37,7 +40,7 @@ const controlPlane = (region: Region) => `https://ark.${region}.volcengineapi.co
  */
 const DeploymentConfig = z.object({
   apiKey: orgAccess(
-    ui(secret(z.string().min(1).optional()), { label: { zh: "API 密钥", en: "API key" } }),
+    ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
     "override",
   ),
   region: orgAccess(
@@ -69,6 +72,9 @@ const DeploymentConfig = z.object({
     "override",
   ),
 });
+
+/** A call's config: the key may be absent (left to the orgs), `auth` before any request. */
+const CallConfig = DeploymentConfig.partial({ apiKey: true });
 
 export interface ArkDefaults {
   apiKey?: string | undefined;
@@ -106,7 +112,7 @@ function resolve(defaults: ArkDefaults, config: unknown): Resolved {
     region = defaults.region ?? DEFAULT_REGION;
     management = defaults.management;
   } else {
-    const parsed = DeploymentConfig.safeParse(config);
+    const parsed = CallConfig.safeParse(config);
     if (!parsed.success) {
       throw new ModelError("invalid_request", "Ark: the extension config is invalid");
     }
@@ -198,7 +204,7 @@ export default defineExtension({
   config: { deployment: DeploymentConfig },
   setup(ctx) {
     // Lenient: the platform's config may lack the (overridable) key
-    const cfg = DeploymentConfig.safeParse(ctx.config ?? {});
+    const cfg = CallConfig.safeParse(ctx.config ?? {});
     ctx.provide(
       MODEL_PROVIDER_EXTENSION_POINT_V2,
       createArkProvider({

@@ -5,7 +5,13 @@ import {
   ModelError,
   type ModelProvider,
 } from "@capybara-hq/plugin-sdk";
-import { type BailianDefaults, DeploymentConfig, resolveTarget, type Target } from "./config.js";
+import {
+  type BailianDefaults,
+  CallConfig,
+  DeploymentConfig,
+  resolveTarget,
+  type Target,
+} from "./config.js";
 import { embedTexts } from "./embed.js";
 import { toModelError } from "./errors.js";
 import { type Endpoint, endpointOf, findModel, listBailianModels } from "./list.js";
@@ -132,7 +138,7 @@ export default defineExtension({
   config: { deployment: DeploymentConfig },
   setup(ctx) {
     // Lenient: the platform's config may lack the (overridable) key
-    const cfg = DeploymentConfig.safeParse(ctx.config ?? {});
+    const cfg = CallConfig.safeParse(ctx.config ?? {});
     ctx.provide(
       MODEL_PROVIDER_EXTENSION_POINT_V2,
       createBailianProvider(

@@ -3,12 +3,15 @@ import { z } from "zod";
 import { REGIONS, type Region } from "./tables.js";
 
 /**
- * Deployment config. Every field is org-overridable (design B §5.5), so the platform's copy may
- * lack the key: it is required per call (not at load) and read from the per-call `opts.config`.
+ * Deployment config. Every field is org-overridable (design B §5.5). The key is required, so a
+ * deployment without one shows the provider as needing configuration rather than as failing to list
+ * its models. The platform may leave it empty (the kernel's load gate makes required overridable
+ * fields optional for the platform's copy): orgs following the platform then need configuration and
+ * are never called, and an org copy brings its own key.
  */
 export const DeploymentConfig = z.object({
   apiKey: orgAccess(
-    ui(secret(z.string().min(1).optional()), { label: { zh: "API 密钥", en: "API key" } }),
+    ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
     "override",
   ),
   region: orgAccess(
@@ -35,6 +38,12 @@ export const DeploymentConfig = z.object({
     "override",
   ),
 });
+
+/**
+ * The schema a call's config is read with: the key may be absent (a platform config that leaves it
+ * to the orgs), which is `auth` before any request rather than an invalid config.
+ */
+export const CallConfig = DeploymentConfig.partial({ apiKey: true });
 
 /** Defaults the provider is built with (from `ctx.config` at setup), used only without `opts.config`. */
 export interface BailianDefaults {
@@ -96,7 +105,7 @@ export function resolveTarget(defaults: BailianDefaults, config: unknown): Targe
     ({ apiKey, workspaceId } = defaults);
     region = defaults.region ?? "cn-beijing";
   } else {
-    const parsed = DeploymentConfig.safeParse(withoutEmptyFields(config));
+    const parsed = CallConfig.safeParse(withoutEmptyFields(config));
     if (!parsed.success) {
       throw new ModelError("invalid_request", "Bailian: the extension config is invalid");
     }
