@@ -49,12 +49,12 @@ import {
  * HTTP. The same flow on the kernel's fake sandbox is core's `sandbox-artifacts.dual.test.ts`; here it
  * checks the real container (same container after the takeover, the dead replica's command killed
  * inside it, stopped on suspend and started again on resume). The conversation works in its
- * owner's default environment: the container is `cap-env-<environmentId>`, its state is the
- * environment's `environment_instances` row, and attachments land in
+ * owner's default device: the container is `cap-device-<deviceId>`, its state is the
+ * device's `device_instances` row, and attachments land in
  * `/workspace/attachments/<first 12 hex digits of the conversation id>/`:
  *
  * 1. 预签名直传附件（CSV）→ finalize；
- * 2. The agent processes the attachment with `Bash` (first use: the environment's file system
+ * 2. The agent processes the attachment with `Bash` (first use: the device's file system
  *    and instance are created);
  * 3. `Deliver` 交付产物 → `artifact_created` → 下载路由 302 到预签名地址，内容一致；
  * 4. the replica running a `Bash` call (a command longer than the lease TTL) is killed ->
@@ -98,8 +98,8 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
   let maint: Queue;
   let base = "";
   const cookies = new Map<string, string>();
-  /** The environments the test used (`cap-env-<id>`), removed with their volumes at the end. */
-  const environments: string[] = [];
+  /** The devices the test used (`cap-device-<id>`), removed with their volumes at the end. */
+  const devices: string[] = [];
 
   /** 指定副本发请求（带登录 cookie，不跟随重定向）。 */
   async function at(i: 0 | 1, method: string, path: string, body?: unknown): Promise<Res> {
@@ -188,8 +188,8 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
         network,
         egressProxyImage: images.egressImage,
       });
-      for (const e of environments) {
-        const name = `cap-env-${e}`;
+      for (const e of devices) {
+        const name = `cap-device-${e}`;
         await p.destroyByName(name, AbortSignal.timeout(60_000)).catch(() => undefined);
         await p.destroyFileSystemByName(name, AbortSignal.timeout(60_000)).catch(() => undefined);
       }
@@ -250,24 +250,24 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     expect(r.status, JSON.stringify(r.json)).toBe(202);
   }
 
-  const containerOf = async (envId: string) =>
-    JSON.parse(await docker("inspect", `cap-env-${envId}`))[0] as {
+  const containerOf = async (deviceId: string) =>
+    JSON.parse(await docker("inspect", `cap-device-${deviceId}`))[0] as {
       Id: string;
       State: { Running: boolean };
     };
 
-  const instanceRow = (envId: string) =>
+  const instanceRow = (deviceId: string) =>
     db
-      .selectFrom("environment_instances")
+      .selectFrom("device_instances")
       .select(["status", "handle", "generation"])
-      .where("environment_id", "=", envId)
+      .where("device_id", "=", deviceId)
       .executeTakeFirstOrThrow();
 
   /** The instance status the conversation page shows (`null`: no live instance). */
   const instanceStatus = async (i: 0 | 1, convPath: string) => {
-    const r = await at(i, "GET", `${convPath}/environment`);
+    const r = await at(i, "GET", `${convPath}/device`);
     expect(r.status, JSON.stringify(r.json)).toBe(200);
-    const env = r.json.environment as { instance: { status: string } | null } | null;
+    const env = r.json.device as { instance: { status: string } | null } | null;
     return env?.instance?.status ?? null;
   };
 
@@ -286,13 +286,13 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     const conv = await at(1, "POST", `${base}/conversations`, { agentId });
     expect(conv.status, JSON.stringify(conv.json)).toBe(201);
     const convId = (conv.json.conversation as { id: string }).id;
-    const { environment_id: envId } = await db
+    const { device_id: deviceId } = await db
       .selectFrom("conversations")
-      .select("environment_id")
+      .select("device_id")
       .where("id", "=", convId)
       .executeTakeFirstOrThrow();
-    if (envId === null) throw new Error("the conversation is not bound to an environment");
-    environments.push(envId);
+    if (deviceId === null) throw new Error("the conversation is not bound to a device");
+    devices.push(deviceId);
     const convPath = `${base}/conversations/${convId}`;
     const attachments = `/workspace/attachments/${convId.replaceAll("-", "").slice(0, 12)}`;
 
@@ -321,15 +321,15 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     expect(r2.result.content.startsWith(SANDBOX_STARTED_NOTICE)).toBe(true);
     expect(r2.result.content).toContain(TOTAL);
     expect(await instanceStatus(1, convPath)).toBe("running");
-    const c2 = await containerOf(envId);
+    const c2 = await containerOf(deviceId);
     expect(c2.State.Running).toBe(true);
-    const row2 = await instanceRow(envId);
-    // the environment's file system: the two volumes
-    const volumes = (await docker("volume", "ls", "-q", "--filter", `name=cap-env-${envId}-`))
+    const row2 = await instanceRow(deviceId);
+    // the device's file system: the two volumes
+    const volumes = (await docker("volume", "ls", "-q", "--filter", `name=cap-device-${deviceId}-`))
       .split("\n")
       .filter((v) => v !== "")
       .sort();
-    expect(volumes).toEqual([`cap-env-${envId}-skills`, `cap-env-${envId}-workspace`]);
+    expect(volumes).toEqual([`cap-device-${deviceId}-skills`, `cap-device-${deviceId}-workspace`]);
 
     // ---- 3. 交付产物 → artifact_created → 下载 ----
     await send(1, convId, "Deliver", {
@@ -362,7 +362,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     // 命令确实在容器里跑起来了（沙箱锁在执行副本手里）
     await waitFor(
       async () =>
-        (await docker("exec", `cap-env-${envId}`, "ls", "/workspace"))
+        (await docker("exec", `cap-device-${deviceId}`, "ls", "/workspace"))
           .split("\n")
           .includes("step4-started"),
       60_000,
@@ -383,7 +383,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     expect(victim, `processedBy=${processedBy}`).toBeDefined();
     const victimIndex = (victim as { index: 0 | 1 }).index;
     const survivor: 0 | 1 = victimIndex === 0 ? 1 : 0;
-    expect(await redis.exists(`capk:sandbox:${envId}`)).toBe(1);
+    expect(await redis.exists(`capk:sandbox:${deviceId}`)).toBe(1);
     const killedAt = Date.now();
     await h.kill(victimIndex);
 
@@ -427,16 +427,16 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     const r4c = await finished(convId, 6, 60_000);
     expect(r4c.result.isError, r4c.result.content).toBe(false);
     expect(r4c.result.content).toContain("leftover=0");
-    const c4 = await containerOf(envId);
+    const c4 = await containerOf(deviceId);
     expect(c4.Id).toBe(c2.Id);
-    const row4 = await instanceRow(envId);
+    const row4 = await instanceRow(deviceId);
     expect(row4.status).toBe("running");
     expect(row4.handle).toEqual(row2.handle);
 
     // ---- 5. 空闲到期 → 维护任务休眠 → 下一次调用恢复 ----
     // suspendAfterIdleMinutes 最小 1 分钟：把 last_used_at 拨回 2 分钟前（PG 时钟），再立即触发扫描任务
-    await sql`UPDATE capybara.environment_instances SET last_used_at = now() - interval '2 minutes'
-      WHERE environment_id = ${envId}`.execute(raw);
+    await sql`UPDATE capybara.device_instances SET last_used_at = now() - interval '2 minutes'
+      WHERE device_id = ${deviceId}`.execute(raw);
     await maint.add(SANDBOX_SUSPEND_JOB, {}, { removeOnComplete: true });
     await waitFor(
       async () => (await instanceStatus(survivor, convPath)) === "suspended",
@@ -444,7 +444,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
       "sandbox suspended",
       250,
     );
-    expect((await containerOf(envId)).State.Running).toBe(false);
+    expect((await containerOf(deviceId)).State.Running).toBe(false);
 
     await send(survivor, convId, "Read", { file_path: "/workspace/out/summary.txt" });
     const r5 = await finished(convId, 7);
@@ -453,10 +453,10 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     expect(r5.result.content).not.toContain(SANDBOX_RESTARTED_NOTICE);
     expect(r5.result.content).toContain(TOTAL);
     expect(await instanceStatus(survivor, convPath)).toBe("running");
-    const c5 = await containerOf(envId);
+    const c5 = await containerOf(deviceId);
     expect(c5.Id).toBe(c2.Id);
     expect(c5.State.Running).toBe(true);
-    expect((await instanceRow(envId)).handle).toEqual(row2.handle);
+    expect((await instanceRow(deviceId)).handle).toEqual(row2.handle);
 
     // one instance for the whole flow (unlike a restart: no restarted notice, same container id)
     const notices = ofType(await eventsOf(db, convId), "tool_result").filter((e) =>

@@ -2,6 +2,9 @@ import { defineExtension, type EmbedClaims, type ExtensionContext } from "@capyb
 import { z } from "zod";
 import { BOARD_HTML, BOARD_JS } from "./page.js";
 
+/** The claims of an org page's embed token (the board never runs on a platform page). */
+type OrgClaims = Extract<EmbedClaims, { scope: "org" }>;
+
 type Db = ExtensionContext["db"];
 
 // capybara:allow-module-state 只读常量：卡片状态的固定取值
@@ -69,14 +72,14 @@ async function body<T>(req: Request, schema: z.ZodType<T>): Promise<T | undefine
  * （对话里的卡片只能经声明里有该对话的 board-conv 令牌看到，组织页面的令牌看不到也改不了）。
  */
 // biome-ignore lint/suspicious/noExplicitAny: 插件自带表结构，Kysely 未声明类型
-function scoped(q: any, claims: EmbedClaims): any {
+function scoped(q: any, claims: OrgClaims): any {
   const byOrg = q.where("org_id", "=", claims.orgId);
   return claims.conversationId === undefined
     ? byOrg.where("conversation_id", "is", null)
     : byOrg.where("conversation_id", "=", claims.conversationId);
 }
 
-async function listCards(db: Db, claims: EmbedClaims): Promise<Card[]> {
+async function listCards(db: Db, claims: OrgClaims): Promise<Card[]> {
   const rows = await scoped(
     db.selectFrom("cards").select(["id", "title", "status", "conversation_id"]),
     claims,
@@ -141,9 +144,12 @@ export default defineExtension({
     ui: { embeds: ["board", "board-conv"] },
   },
   setup(ctx) {
-    const auth = async (req: Request): Promise<EmbedClaims | null> => {
+    // The board is an org page: a platform-scope token (no org) is refused like a missing one.
+    const auth = async (req: Request): Promise<OrgClaims | null> => {
       const m = BEARER_RE.exec(req.headers.get("authorization") ?? "");
-      return m?.[1] === undefined ? null : ctx.ui.verifyEmbedToken(m[1]);
+      if (m?.[1] === undefined) return null;
+      const claims = await ctx.ui.verifyEmbedToken(m[1]);
+      return claims?.scope === "org" ? claims : null;
     };
     const publish = (orgId: string, change: CardChange) =>
       ctx.bus.publish(cardsTopic(orgId), change);

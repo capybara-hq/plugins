@@ -95,7 +95,7 @@ const LABEL_ALLOW = "dev.capybara.sandbox.allow-hosts";
 
 /**
  * Container / volume / network names: `create`'s and `createFileSystem`'s name
- * (`cap-env-<environmentId>`; legacy `cap-<conversationId>`) plus a suffix.
+ * (`cap-device-<deviceId>`; legacy `cap-<conversationId>`) plus a suffix.
  */
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,100}$/;
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;

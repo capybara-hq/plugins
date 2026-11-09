@@ -105,9 +105,9 @@ describe("egress open without allowOpenEgress (no Docker needed)", () => {
     });
     await expect(
       sbx.create({
-        name: "cap-env-00000000-0000-4000-8000-000000000001",
+        name: "cap-device-00000000-0000-4000-8000-000000000001",
         limits: { cpu: 1, memoryMb: 256, diskMb: 256, egress: "none", allowHosts: [] },
-        fileSystem: { id: "cap-env-00000000-0000-4000-8000-000000000001" },
+        fileSystem: { id: "cap-device-00000000-0000-4000-8000-000000000001" },
         signal: AbortSignal.timeout(5000),
       }),
     ).rejects.toThrow(/no image/);

@@ -113,7 +113,7 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
     sbx = createE2BSandbox(provider, { log });
     api = createE2BApi(cfg.apiUrl ?? `https://api.${cfg.domain}`, cfg.apiKey);
   });
-  const name = `cap-env-live-${randomUUID()}`;
+  const name = `cap-device-live-${randomUUID()}`;
   let fs: FileSystemHandle;
   let h: SandboxHandle;
 
