@@ -52,3 +52,14 @@ the management keys, three endpoints were listed and a chat call to one answered
   live; a prompt over the context window maps to `invalid_request`.
 - An endpoint over an embedding model not in `/models` is skipped with a warning.
 - A stream that ends without a usage chunk completes with zero usage and a warning.
+
+## Icon
+
+`icon.svg`: the Volcengine mark (owner: Volcengine), downloaded on 2026-11-09 from
+the header logo of the official Ark product page, https://www.volcengine.com/product/ark
+(https://lf3-static.bytednsdoc.com/obj/eden-cn/shayvw_lmjsvc/ljhwZthlaukjlkulzlp/logo-theme-light.svg,
+the same mark as the site's favicon); Ark has no product mark of its own on the page, so this is the
+vendor's. It is a trademark of its owner, used only to identify the service this plugin connects
+to; the plugin is not affiliated with or endorsed by the owner. The artwork is unchanged except for
+removing editor metadata, inlining its colours and setting a square viewBox; only the mark is kept,
+the wordmark is omitted, and it shows in colour on both light and dark backgrounds.

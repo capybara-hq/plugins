@@ -53,3 +53,14 @@ Conformance suite (text, tools, parameters, thinking replay, caching, usage, ima
 - `Throttling.AllocationQuota` is classified as `rate_limited`; a context overflow is recognised by
   the error message (a patch with a removal condition in `errors.ts`).
 - Models are not checked for activation: a listed model the account has not activated fails on call.
+
+## Icon
+
+`icon.svg`: the Alibaba Cloud Model Studio (Bailian) product mark (owner: Alibaba Cloud), downloaded
+on 2026-11-09 from the header logo of the official console, https://bailian.console.aliyun.com/
+(https://img.alicdn.com/imgextra/i1/O1CN01IU2US71Ciicsi3Br3_!!6000000000115-55-tps-357-76.svg, the
+same mark as the console's favicon); Alibaba Cloud publishes no separate square mark for the
+product. It is a trademark of its owner, used only to identify the service this plugin connects
+to; the plugin is not affiliated with or endorsed by the owner. The artwork is unchanged except for
+removing editor metadata, inlining its colours and setting a square viewBox; only the mark is kept,
+the wordmark is omitted, and it shows in colour on both light and dark backgrounds.
