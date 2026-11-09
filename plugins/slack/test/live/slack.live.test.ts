@@ -3,6 +3,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { createSlackChannel } from "../../src/channel.js";
 import { createSlackDirectory } from "../../src/directory.js";
 import { createSlackIdentitySource } from "../../src/identity.js";
+import { appTokenCheck, botScopesCheck, botTokenCheck } from "../../src/setup-checks.js";
 
 /**
  * Slack 真实平台验收（不需要人操作的部分）：
@@ -13,6 +14,8 @@ import { createSlackIdentitySource } from "../../src/identity.js";
  *   也不打印。
  * - verify（auth.test）返回机器人与租户（= TEAM_ID）；Socket Mode：`apps.connections.open` 可用，插件的
  *   `connect` 连上后保持 10 秒不出错、不重连，中止后正常返回；通讯录 `users.list` 第一页。
+ * - Setup checks: `bot-token`, `bot-scopes` (the app installed from the guide's manifest) and
+ *   `app-token` answer ok, with no token in any text.
  * - 另填 `CAPYBARA_TEST_SLACK_CHANNEL`（测试频道或私聊的 id，机器人须已在其中）时：发一条消息、编辑它、
  *   发一张审批卡片并把它改成「已批准」（不留下可点的按钮）。
  * - 另填 `CAPYBARA_TEST_SLACK_CLIENT_ID` / `_CLIENT_SECRET` 时：Sign in with Slack 的授权地址，以及用一个无效的
@@ -118,6 +121,24 @@ describe.skipIf(!READY)("Slack live", () => {
     await done;
     expect(settled).toBe("resolved");
   }, 40_000);
+
+  it("live: the setup checks bot-token, bot-scopes and app-token are ok", async () => {
+    const opts = { apiUrl: () => API };
+    for (const def of [botTokenCheck(opts), botScopesCheck(opts), appTokenCheck(opts)]) {
+      const r = await def.run({
+        orgId: "live",
+        config: {},
+        locale: "en",
+        mode: "long_connection",
+        target: { kind: "channel-connection", connectionId: "live", config: config() },
+        signal: timeout(10_000),
+      });
+      const text = JSON.stringify(r);
+      expect(text).not.toContain(BOT_TOKEN as string);
+      expect(text).not.toContain(APP_TOKEN as string);
+      expect(r, r.reason?.en).toMatchObject({ status: "ok" });
+    }
+  });
 
   it("live: directory lists the first page of workspace members", async () => {
     const dir = createSlackDirectory({ apiUrl: API });
