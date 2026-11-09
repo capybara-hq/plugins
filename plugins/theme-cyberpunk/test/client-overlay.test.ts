@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // = @capybara-hq/plugin-client/testing, through package.json "imports" (see README, Tests)
 import { type FakeHost, renderWithFakeHost } from "#client-testing";
 import { Brand, brandPanel, GlitchBrand, Hero } from "../src/brand.js";
-import { BOOT_OUT_ANIMATION, Boot, BootScreen, Scanlines } from "../src/overlay.js";
+import { BOOT_MAX_MS, BOOT_OUT_ANIMATION, Boot, BootScreen, Scanlines } from "../src/overlay.js";
 
 const BOOTED = "cap-ext:theme-cyberpunk:booted";
 let host: FakeHost | undefined;
@@ -43,6 +43,7 @@ beforeEach(() => {
 afterEach(() => {
   host?.unmount();
   host = undefined;
+  vi.restoreAllMocks();
 });
 
 describe("boot screen", () => {
@@ -91,6 +92,35 @@ describe("boot screen", () => {
     expect(boot()).not.toBeNull(); // a line's animation does not end the screen
     act(() => animationEnd(el, BOOT_OUT_ANIMATION));
     expect(boot()).toBeNull();
+  });
+
+  it("ends by itself at the deadline, without the stylesheet (animation frames, no timers)", () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    render(createElement(BootScreen));
+    const frame = (t: number) => act(() => frames.shift()?.(t));
+    frame(1000);
+    frame(1000 + BOOT_MAX_MS - 1);
+    expect(boot()).not.toBeNull();
+    frame(1000 + BOOT_MAX_MS);
+    expect(boot()).toBeNull();
+  });
+
+  it("leaves no keydown listener or animation frame behind", () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 42);
+    const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    const add = vi.spyOn(window, "addEventListener");
+    const remove = vi.spyOn(window, "removeEventListener");
+    render(createElement(BootScreen));
+    const onKey = add.mock.calls.find(([type]) => type === "keydown")?.[1];
+    expect(onKey).toBeDefined();
+    host?.unmount();
+    host = undefined;
+    expect(remove).toHaveBeenCalledWith("keydown", onKey);
+    expect(cancel).toHaveBeenCalledWith(42);
   });
 
   it("the overlay components draw nothing while another theme is active", () => {

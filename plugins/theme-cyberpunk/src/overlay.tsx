@@ -30,6 +30,7 @@ function bootLines(t: (text: { en: string; zh: string }) => string): string[] {
     `${t({ en: "neural link", zh: "神经链路" })} ........ [ OK ]`,
     `${t({ en: "optic overlay", zh: "视觉叠层" })} ...... [ OK ]`,
     `${t({ en: "agent uplink", zh: "智能体上行" })} ....... [ OK ]`,
+    `${t({ en: "audio bus (muted)", zh: "音频总线（静音）" })} .. [ OK ]`,
     `${t({ en: "welcome back, operator", zh: "欢迎回来，操作员" })}`,
   ];
 }
@@ -83,12 +84,18 @@ export function BootScreen() {
   return (
     <div className={cx("boot")} onAnimationEnd={onAnimationEnd}>
       <div aria-hidden="true" className={cx("boot-screen")}>
+        <div className={cx("boot-head")}>
+          <span>{`${WORDMARK} // BOOT`}</span>
+          <span>TTY-01</span>
+        </div>
         {bootLines(t).map((line) => (
           <div key={line} className={cx("boot-line")}>
             {line}
           </div>
         ))}
-        <div className={cx("boot-bar")} />
+        <div className={cx("boot-track")}>
+          <div className={cx("boot-bar")} />
+        </div>
       </div>
       <button
         type="button"

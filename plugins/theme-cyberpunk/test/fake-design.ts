@@ -62,18 +62,27 @@ export function button(text: string): HTMLButtonElement {
   return b;
 }
 
-/** A Web Audio stand-in that counts the contexts (one per cue) and the tones they schedule. */
+/**
+ * A Web Audio stand-in that counts the contexts (one per cue), the tones they schedule and the
+ * contexts closed. `startState` is the state `resume()` leaves a context in ("suspended" = the
+ * browser refused to start audio).
+ */
 export class FakeAudioContext {
   static contexts = 0;
   static tones = 0;
+  static closed = 0;
+  static startState: "running" | "suspended" = "running";
   currentTime = 0;
   destination = {};
+  state: "running" | "suspended" | "closed" = "suspended";
   constructor() {
     FakeAudioContext.contexts += 1;
   }
   static reset(): void {
     FakeAudioContext.contexts = 0;
     FakeAudioContext.tones = 0;
+    FakeAudioContext.closed = 0;
+    FakeAudioContext.startState = "running";
   }
   createGain() {
     const param = { value: 0, setValueAtTime() {}, exponentialRampToValueAtTime() {} };
@@ -85,9 +94,12 @@ export class FakeAudioContext {
     return { type: "sine", frequency: param, connect() {}, start() {}, stop() {}, onended: null };
   }
   resume(): Promise<void> {
+    this.state = FakeAudioContext.startState;
     return Promise.resolve();
   }
   close(): Promise<void> {
+    this.state = "closed";
+    FakeAudioContext.closed += 1;
     return Promise.resolve();
   }
 }

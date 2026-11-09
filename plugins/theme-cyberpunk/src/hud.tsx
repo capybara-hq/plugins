@@ -1,6 +1,5 @@
 import {
   Button,
-  type CapybaraEvent,
   type CapybaraEventType,
   type ComponentProps,
   KeyValue,
@@ -14,7 +13,8 @@ import {
   useRunState,
   useView,
 } from "@capybara-hq/plugin-client";
-import { useState } from "react";
+import { useReducer, useState } from "react";
+import { readCounts, recordEvent } from "./counts.js";
 import { cx, parseHudData, SOUND_KEY } from "./shared.js";
 import { playCue } from "./sound.js";
 
@@ -34,26 +34,6 @@ const HUD_EVENTS: readonly CapybaraEventType[] = [
   "approval.requested",
 ];
 
-/** What the HUD counted on this page for the open conversation (client events since it opened). */
-interface Counts {
-  runs: number;
-  tools: number;
-  errors: number;
-  approvals: number;
-}
-
-const ZERO: Counts = { runs: 0, tools: 0, errors: 0, approvals: 0 };
-
-/** The counts after one client event. */
-function count(c: Counts, e: CapybaraEvent): Counts {
-  if (e.type === "run.started") return { ...c, runs: c.runs + 1 };
-  if (e.type === "approval.requested") return { ...c, approvals: c.approvals + 1 };
-  if (e.type === "tool.finished") {
-    return e.isError ? { ...c, errors: c.errors + 1 } : { ...c, tools: c.tools + 1 };
-  }
-  return c;
-}
-
 /** "HH:MM:SS" of an ISO time, or null when it does not parse. */
 function clock(iso: string): string | null {
   const d = new Date(iso);
@@ -65,7 +45,7 @@ function clock(iso: string): string | null {
 /**
  * The run HUD (slot `conversation.properties.section`, inside the host's section frame): the open
  * conversation's run state, a signal meter, the server's view data (operator role, last uplink),
- * tool and approval counts since the page opened, and the sound toggle (off by default, stored in
+ * the runs, tool results and approvals seen live in this browser session, and the sound toggle (off by default, stored in
  * local client storage). Its colours follow the run state through the plugin CSS
  * (`[data-cap-state~="run=…"]`), only while the cyberpunk theme is active.
  */
@@ -76,20 +56,14 @@ export function RunHud({ conversationId }: ComponentProps<"conversation.properti
   const storage = useClientStorage();
   const reducedMotion = usePrefersReducedMotion();
   const [sound, setSound] = useState(() => storage.get(SOUND_KEY) === "on");
-  // Counts belong to the conversation they were counted for.
-  const [counted, setCounted] = useState<{ conversationId: string; counts: Counts }>({
-    conversationId,
-    counts: ZERO,
-  });
-  const counts = counted.conversationId === conversationId ? counted.counts : ZERO;
-
+  // Counts live in session client storage, recorded by the extension's listener from the page's
+  // first load; the HUD records too (idempotent by seq) and re-reads on each event.
+  const [, refresh] = useReducer((n: number) => n + 1, 0);
   useCapybaraEvents((e) => {
-    if (e.conversationId !== conversationId) return;
-    setCounted((prev) => {
-      const c = prev.conversationId === conversationId ? prev.counts : ZERO;
-      return { conversationId, counts: count(c, e) };
-    });
+    recordEvent(storage, e);
+    refresh();
   }, HUD_EVENTS);
+  const counts = readCounts(storage, conversationId);
 
   const toggleSound = () => {
     const next = !sound;

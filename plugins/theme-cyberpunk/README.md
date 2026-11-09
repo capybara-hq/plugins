@@ -23,14 +23,15 @@ plain design).
 
 | Contribution | Slot | What it does |
 |---|---|---|
-| `run-hud` | `conversation.properties.section` (after the context section) | The run state (STANDBY / RUNNING / AWAITING INPUT / FAULT) with a signal meter, the viewer's role and the last uplink time from its server view, the runs, tool results and approvals seen since the page opened, and the sound toggle |
+| `run-hud` | `conversation.properties.section` (after the context section) | The run state in the viewer's language (zh 待命 / 运行中 / 等待输入 / 故障, en STANDBY / RUNNING / AWAITING INPUT / FAULT) with a signal meter, the viewer's role and the last uplink time from its server view, the runs, tool results and approvals of the conversation seen live in this browser session (counted by the extension's listeners from the page's first load, kept in session client storage, so a run that finished before the panel opened counts), and the sound toggle |
 | `scanlines` | `shell.overlay` | CRT scanlines and a light vignette over the workspace; a sweep line while a run is going |
-| `boot` | `shell.overlay` | A short terminal boot screen, once per browser session |
-| `brand` | `shell.brand` (replaceable) | The neon mark and a glitch `CYBERBARA` wordmark in the full sidebar and the drawer; the built-in mark with a flicker in the rail |
+| `boot` | `shell.overlay` | A short opaque terminal boot screen over the whole viewport (boot lines, then a progress bar under them), once per browser session, about two seconds |
+| `brand` | `shell.brand` (replaceable) | The neon mark (the theme logo through the design `Logo`) and a glitch `CYBERBARA` wordmark in the full sidebar and the drawer, in place of the built-in row; the built-in mark with a flicker in the rail |
 | `hero` | `conversation.empty` (replaceable) | The new-conversation hero: the big neon capybara, a status line and the greeting with a glitch |
 
 The decoration CSS chamfers cards, sections, dialogs, the composer and buttons (larger cuts and
-uppercase on primary buttons, no clipping while a button has keyboard focus), and colours the HUD,
+uppercase on primary buttons; no clipping while a button, card or section has or holds keyboard
+focus, so focus rings drawn outside the box stay whole), and colours the HUD,
 the properties panel edge, the title bar line and the composer by the run state
 (`run=running` neon yellow, `run=waiting` cyan, `run=failed` red, idle green).
 
@@ -41,10 +42,14 @@ applied on install; an admin applies it in one step (below).
 ### Sound
 
 Short cues synthesized with the Web Audio API (no audio files): run started, run finished (an error
-buzz when aborted), approval requested, tool finished (a tick, or the error buzz for a failed
-tool). Sound is **off by default**; the HUD's **Sound: off / on** button turns it on for this
-browser (stored with `useClientStorage`, key `cap-ext:theme-cyberpunk:sound`) and plays a short
-confirmation.
+buzz when aborted), run failed (the error buzz), approval requested, tool finished (a tick, or the
+error buzz for a failed tool). Sound is **off by default**; the HUD's **Sound: off / on** button
+turns it on for this browser (stored with `useClientStorage`, key `cap-ext:theme-cyberpunk:sound`)
+and plays a short confirmation. One cue plays at a time (a burst of events, such as the catch-up of
+a revisited conversation, plays once), nothing plays before the page's first click or key press,
+and every audio context is closed when its cue ends or when the browser does not let it start.
+The cues and the HUD follow the toggle, not the theme: listeners get no theme
+(`ClientApi` has none yet), and the HUD carries the only off switch.
 
 ### Reduced motion and accessibility
 
@@ -68,10 +73,15 @@ confirmation.
    the same for one org on the workspace 扩展 page.)
 3. Open the workspace: the boot screen plays once, the sidebar shows the glitch wordmark, the new
    conversation shows the cyberpunk hero, scanlines sit over the page. Start a conversation: the
-   HUD in the properties panel turns yellow while the run goes, cyan when it waits for input, red
-   on a failure. Turn sound on in the HUD to hear the cues.
-4. `?safe-ui=1` (or 平台设置 › 插件界面代码 off, or disabling the plugin) returns the official UI;
-   picking another theme in 个人设置 › 偏好设置 › 外观 removes the decoration.
+   HUD in the properties panel reads 运行中 (RUNNING) in yellow while the run goes, 等待输入
+   (AWAITING INPUT) in cyan when it waits for input, 故障 (FAULT) in red on a failure and 待命
+   (STANDBY) in green when idle. Turn sound on in the HUD to hear the cues. Tab through `/agents`: the focused
+   card's ring is whole.
+4. `?safe-ui=1` (or 平台设置 › 插件界面代码 off, or disabling the plugin's client code) removes
+   every component, the overlays and the plugin CSS: the built-in brand, hero and composer return.
+   The L0 theme (palette, fonts, the neon logo and its `CYBERBARA` wordmark) **stays**, because a
+   theme is declarative, not client code; to return to the official look, pick another theme in
+   平台设置 › 外观 (or 个人设置 › 偏好设置 › 外观), which also removes the decoration.
 
 The theme alone can still be picked without the client code in 平台设置 › 外观, 组织设置 › 外观
 or 个人设置 › 偏好设置 › 外观.
@@ -81,8 +91,11 @@ or 个人设置 › 偏好设置 › 外观.
 `test/` covers the theme (tokens, readability, fonts, logo), the pack (`capybara-plugin check` with
 no warning, the packed files and manifest), the extension manifest and the HUD view data, and the
 client code with the fake host of `@capybara-hq/plugin-client/testing`: the HUD (run states, view
-data, counts, the stored sound toggle), the sound listeners (silent by default and under reduced
-motion), the boot screen (once per session, reduced motion, Skip / Escape / end of animation) and
+data, session counts recorded by the listeners and the HUD once each, the stored sound toggle),
+the sound listeners (silent by default, under reduced motion and before a user gesture; one cue
+for a burst; suspended contexts closed), the boot screen (once per session, reduced motion, Skip /
+Escape / end of animation, the deadline, no listener left), the stylesheet (focus rings never
+clipped, every rule theme-scoped, reduced motion outweighs run-state animations) and
 the theme fallbacks of the brand and hero. The tests import the fake host as `#client-testing`
 (`package.json` `imports`) because `plugin-test-imports` of `@capybara-hq/plugin-tools`
 0.1.0-rc.12 does not list `@capybara-hq/plugin-client` yet; switch to the package name once it
@@ -133,8 +146,9 @@ the SIL Open Font License 1.1, whose full text ships next to them:
 水豚标志，字标为 `CYBERBARA`。
 
 - **主题（L0）**：只有深色一种配色，通过全部对比度与分隔度下限。
-- **组件（L1-L2）**：对话属性面板里的运行 HUD（运行状态、信号条、操作员角色、上行时间、本页看到的
-  运行 / 工具 / 审批次数、音效开关）；覆盖层的扫描线与启动画面（每个浏览器会话一次）；侧栏品牌位的
+- **组件（L1-L2）**：对话属性面板里的运行 HUD（运行状态 待命 / 运行中 / 等待输入 / 故障、信号条、
+  操作员角色、上行时间、本浏览器会话里实时看到的运行 / 工具 / 审批次数、音效开关）；覆盖层的扫描线与
+  不透明的终端启动画面（每个浏览器会话一次，约两秒）；侧栏品牌位的
   故障风字标；新对话页的赛博朋克欢迎区。
 - **装饰（L3）**：卡片、分区、对话框、输入框与按钮切角；HUD、属性面板边线、标题栏与输入框随运行状态
   变色（运行中黄、等待输入青、失败红、空闲绿）。
@@ -146,5 +160,7 @@ the SIL Open Font License 1.1, whose full text ships next to them:
 
 验收：超级管理员导入插件并批准权限（`permissions.client` 与各 `ui.component:*` 为敏感权限），在插件
 详情页点“应用此插件的外观”，即把平台默认主题设为赛博朋克，并把 `shell.brand`、`conversation.empty`
-换成本插件的组件，页面随后重新加载。`?safe-ui=1`、关闭“插件界面代码”或停用插件都会回到官方界面。
+换成本插件的组件，页面随后重新加载。`?safe-ui=1`、关闭“插件界面代码”或停用插件会移除全部组件、覆盖层与插件
+样式，但 L0 主题（配色、字体、霓虹标志）仍然生效，因为主题是声明式的，不属于客户端代码；要回到官方
+外观，在外观设置里换成别的主题。
 字体均为 SIL OFL 1.1 授权，许可证全文随插件分发。

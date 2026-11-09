@@ -8,6 +8,7 @@ import {
 } from "@capybara-hq/plugin-client";
 import type { ComponentType } from "react";
 import { Brand, Hero } from "./brand.js";
+import { recordEvent } from "./counts.js";
 import { RunHud } from "./hud.js";
 import { Boot, Scanlines } from "./overlay.js";
 import { PLUGIN } from "./shared.js";
@@ -32,7 +33,8 @@ function component<S extends ComponentSlotId>(
 
 /**
  * The browser side of theme-cyberpunk (client extensions spec §8 / §15): components keyed by the
- * extension manifest's `component` contributions, and the sound listeners.
+ * extension manifest's `component` contributions, and the listeners: the HUD's counts (session
+ * client storage, from the page's first load) and the sound cues.
  */
 export default defineClientExtension({
   name: PLUGIN,
@@ -44,16 +46,22 @@ export default defineClientExtension({
     hero: component("conversation.empty", Hero),
   },
   events: {
-    "run.started": (_e, api) => {
+    "run.started": (e, api) => {
+      recordEvent(api.storage, e);
       cue("start", api);
     },
     "run.finished": (e, api) => {
       cue(e.reason === "aborted" ? "error" : "done", api);
     },
-    "approval.requested": (_e, api) => {
+    "run.failed": (_e, api) => {
+      cue("error", api);
+    },
+    "approval.requested": (e, api) => {
+      recordEvent(api.storage, e);
       cue("alert", api);
     },
     "tool.finished": (e, api) => {
+      recordEvent(api.storage, e);
       cue(e.isError ? "error" : "tick", api);
     },
   },

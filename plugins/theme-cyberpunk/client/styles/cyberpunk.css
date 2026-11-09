@@ -89,6 +89,16 @@
   box-shadow: inset 0 -2px 0 rgba(10, 11, 0, 0.35);
 }
 
+/*
+ * Focus rings are drawn outside the box (an object card's only ring sits on the card, around its
+ * link; a section's edge-flush controls): no clipping while a card or section holds keyboard focus.
+ * Dialogs keep the cut: they always hold focus, and their controls sit inside the padding.
+ */
+[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] [data-cap-part~="card"]:has(:focus-visible),
+[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] [data-cap-part~="section"]:has(:focus-visible) {
+  clip-path: none;
+}
+
 /* The focus ring is drawn outside the box: no clipping while a button has keyboard focus. */
 [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] [data-cap-part~="button"]:focus-visible {
   clip-path: none;
@@ -205,80 +215,85 @@
 
 /* ---------- Glitch text (wordmark and hero) ---------- */
 
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-glitch {
+/*
+ * The brand is also drawn in the drawer, which is portaled out of the shell: these rules match
+ * through :root:has(the shell token) so they hold in every sidebar panel.
+ */
+
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-glitch {
   position: relative;
   display: inline-block;
 }
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-glitch-layer {
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-glitch-layer {
   position: absolute;
   inset: 0;
   opacity: 0;
   pointer-events: none;
 }
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-glitch-a {
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-glitch-a {
   color: var(--cx-theme-cyberpunk-cyan);
   animation: cx-theme-cyberpunk-glitch-a 4.6s steps(1) infinite;
 }
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-glitch-b {
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-glitch-b {
   color: var(--cx-theme-cyberpunk-magenta);
   animation: cx-theme-cyberpunk-glitch-b 4.6s steps(1) infinite;
 }
 
 /* ---------- Brand (component brand, slot shell.brand) ---------- */
 
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-brand {
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-brand {
   display: inline-flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
 }
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-brand-mark {
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-brand-mark {
   display: inline-flex;
   filter: drop-shadow(0 0 6px rgba(255, 230, 0, 0.35));
 }
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-brand-word {
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-brand-word {
   color: var(--cb-accent);
   font: 700 14px / 1 var(--cb-font);
   letter-spacing: 0.2em;
   text-shadow: 0 0 8px rgba(255, 230, 0, 0.45);
   white-space: nowrap;
 }
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-brand-rail {
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-brand-rail {
   animation: cx-theme-cyberpunk-flicker 7s steps(1) infinite;
 }
 
 /* ---------- Hero (component hero, slot conversation.empty) ---------- */
 
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-hero {
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-hero {
   display: grid;
   justify-items: center;
   gap: 12px;
   text-align: center;
   padding: 8px 16px;
 }
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-hero-mark {
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-hero-mark {
   display: inline-flex;
   filter: drop-shadow(0 0 14px rgba(255, 230, 0, 0.3)) drop-shadow(3px 0 0 rgba(0, 229, 255, 0.55));
 }
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-hero-kicker {
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-hero-kicker {
   margin: 0;
   color: var(--cx-theme-cyberpunk-cyan);
   font: 500 12px / 1.4 var(--cb-font);
   letter-spacing: 0.24em;
 }
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-hero-title {
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-hero-title {
   margin: 0;
   color: var(--cb-ink);
   font: 700 clamp(24px, 4vw, 34px) / 1.2 var(--cb-font-prose);
   letter-spacing: 0.02em;
   text-shadow: 0 0 18px rgba(0, 229, 255, 0.25);
 }
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-hero-sub {
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-hero-sub {
   margin: 0;
   color: var(--cb-muted);
   font: 400 14px / 1.5 var(--cb-font);
 }
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-hero-sub::after {
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-hero-sub::after {
   content: "_";
   margin-left: 2px;
   color: var(--cb-accent);
@@ -310,52 +325,88 @@
 
 /* ---------- Boot screen (component boot, slot shell.overlay) ---------- */
 
+/* An opaque full-viewport terminal: nothing of the page shows through until it fades out. */
 [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot {
   position: fixed;
   inset: 0;
   display: grid;
   place-items: center;
   pointer-events: none;
-  background: rgba(7, 10, 18, 0.94);
-  animation: cx-theme-cyberpunk-boot-out 0.4s ease-in 1.5s forwards;
+  background-color: var(--cb-bg);
+  background-image:
+    repeating-linear-gradient(to bottom, rgba(0, 229, 255, 0.05) 0 1px, transparent 1px 3px),
+    radial-gradient(ellipse at center, rgba(0, 229, 255, 0.08), transparent 70%);
+  animation: cx-theme-cyberpunk-boot-out 0.35s ease-in 1.55s forwards;
 }
 [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-screen {
   display: grid;
   gap: 6px;
-  width: min(440px, calc(100vw - 48px));
+  width: min(520px, calc(100vw - 48px));
+  padding: 20px 24px 22px;
+  border: 1px solid rgba(0, 229, 255, 0.35);
+  background: rgba(12, 17, 32, 0.9);
+  box-shadow: 0 0 32px rgba(0, 229, 255, 0.12);
+  clip-path: polygon(
+    0 0,
+    calc(100% - 14px) 0,
+    100% 14px,
+    100% 100%,
+    14px 100%,
+    0 calc(100% - 14px)
+  );
   color: var(--cb-ink);
-  font: 500 13px / 1.5 var(--cb-font);
+  font: 500 13px / 1.6 var(--cb-font);
   text-shadow: 0 0 6px rgba(0, 229, 255, 0.35);
+}
+[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(0, 229, 255, 0.2);
+  color: var(--cx-theme-cyberpunk-cyan);
+  font-size: 11px;
+  letter-spacing: 0.24em;
 }
 [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-line {
   opacity: 0;
   white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
   animation: cx-theme-cyberpunk-show 0.01s steps(1) forwards;
 }
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-line:nth-child(1) {
+[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-line:nth-child(2) {
   color: var(--cb-accent);
   animation-delay: 0.05s;
 }
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-line:nth-child(2) {
-  animation-delay: 0.3s;
-}
 [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-line:nth-child(3) {
-  animation-delay: 0.55s;
+  animation-delay: 0.25s;
 }
 [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-line:nth-child(4) {
-  animation-delay: 0.8s;
+  animation-delay: 0.45s;
 }
 [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-line:nth-child(5) {
+  animation-delay: 0.65s;
+}
+[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-line:nth-child(6) {
+  animation-delay: 0.85s;
+}
+[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-line:nth-child(7) {
   color: var(--cx-theme-cyberpunk-cyan);
-  animation-delay: 1.05s;
+  animation-delay: 1.1s;
+}
+[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-track {
+  height: 4px;
+  margin-top: 12px;
+  background: rgba(255, 230, 0, 0.12);
 }
 [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-bar {
-  height: 3px;
-  margin-top: 6px;
+  height: 100%;
   background: var(--cb-accent);
   box-shadow: 0 0 10px rgba(255, 230, 0, 0.6);
+  transform: scaleX(0);
   transform-origin: left center;
-  animation: cx-theme-cyberpunk-load 1.3s ease-out forwards;
+  animation: cx-theme-cyberpunk-load 1.35s ease-out forwards;
 }
 [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-skip {
   position: fixed;
@@ -363,7 +414,7 @@
   bottom: 24px;
   padding: 6px 14px;
   border: 1px solid var(--cb-accent);
-  background: rgba(7, 10, 18, 0.8);
+  background: var(--cb-bg);
   color: var(--cb-accent);
   font: 600 12px / 1.4 var(--cb-font);
   letter-spacing: 0.12em;
@@ -382,17 +433,27 @@
 
 /* ---------- Reduced motion: no animation, no boot screen ---------- */
 
+/*
+ * The extra [data-cap-state] matches the specificity of the run-state rules
+ * ([theme][run=...] .x), so this block wins over them by coming later.
+ */
 @media (prefers-reduced-motion: reduce) {
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-hud-dot,
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-hud-meter > span,
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-glitch-layer,
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-brand-rail,
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-hero-sub::after,
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-scanlines,
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-scanlines::after {
+  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state] .cx-theme-cyberpunk-hud-dot,
+  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state]
+    .cx-theme-cyberpunk-hud-meter
+    > span,
+  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state]
+    .cx-theme-cyberpunk-glitch-layer,
+  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state]
+    .cx-theme-cyberpunk-brand-rail,
+  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state]
+    .cx-theme-cyberpunk-hero-sub::after,
+  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state] .cx-theme-cyberpunk-scanlines,
+  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state]
+    .cx-theme-cyberpunk-scanlines::after {
     animation: none;
   }
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot {
+  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state] .cx-theme-cyberpunk-boot {
     display: none;
   }
 }
@@ -416,6 +477,24 @@
 [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"]
   .cx-theme-cyberpunk-boot {
   display: none;
+}
+
+/* The portaled brand (drawer) under reduced motion: same weight as its rules, later in the file. */
+@media (prefers-reduced-motion: reduce) {
+  :root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-glitch-layer,
+  :root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-brand-rail,
+  :root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"])
+    .cx-theme-cyberpunk-hero-sub::after {
+    animation: none;
+  }
+}
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"])
+  .cx-theme-cyberpunk-glitch-layer,
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"])
+  .cx-theme-cyberpunk-brand-rail,
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"])
+  .cx-theme-cyberpunk-hero-sub::after {
+  animation: none;
 }
 
 /* ---------- Keyframes ---------- */

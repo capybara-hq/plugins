@@ -52,9 +52,31 @@ export function soundEnabled(storage: ClientStorage, reducedMotion: boolean): bo
 
 type AudioContextCtor = new () => AudioContext;
 
+/** Length of a cue in seconds (its last tone's end plus the release). */
+function cueSeconds(list: Tone[]): number {
+  return list.reduce((end, t) => Math.max(end, t.at + t.dur), 0) + 0.05;
+}
+
+/** When the cue playing now ends (performance.now() ms): cues never overlap or pile up. */
+// capybara:allow-module-state browser-only state, one per document: the end of the current cue
+let playingUntil = 0;
+
 /**
- * Plays a cue with the Web Audio API, quietly. Each cue gets its own AudioContext, closed when its
- * last tone ends (no state kept between cues). Returns false when the browser has no Web Audio.
+ * Whether the page may start audio now: browsers keep an AudioContext made before the first user
+ * gesture suspended, and cues queued then would all start together at the first click (a burst of
+ * replayed catch-up events). Browsers without `navigator.userActivation` are allowed.
+ */
+function pageActivated(): boolean {
+  const nav = (globalThis as { navigator?: { userActivation?: { hasBeenActive?: boolean } } })
+    .navigator;
+  return nav?.userActivation?.hasBeenActive !== false;
+}
+
+/**
+ * Plays a cue with the Web Audio API, quietly. One cue at a time: a cue asked for while another
+ * plays is dropped, so a burst of events plays once. Nothing plays before the page's first user
+ * gesture. Each cue gets its own AudioContext, closed when its last tone ends, or at once when the
+ * browser does not let it run, so no context outlives its cue. Returns whether a cue started.
  */
 export function playCue(cue: Cue): boolean {
   const g = globalThis as {
@@ -62,19 +84,29 @@ export function playCue(cue: Cue): boolean {
     webkitAudioContext?: AudioContextCtor;
   };
   const Ctor = g.AudioContext ?? g.webkitAudioContext;
-  if (Ctor === undefined) return false;
+  if (Ctor === undefined || !pageActivated()) return false;
+  const now = performance.now();
+  if (now < playingUntil) return false;
   let audio: AudioContext;
   try {
     audio = new Ctor();
   } catch {
     return false;
   }
+  const list = tones(cue);
+  playingUntil = now + cueSeconds(list) * 1000;
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    audio.close().catch(() => {});
+  };
   const master = audio.createGain();
   master.gain.value = 0.05;
   master.connect(audio.destination);
   const t0 = audio.currentTime + 0.01;
   let last: OscillatorNode | undefined;
-  for (const tone of tones(cue)) {
+  for (const tone of list) {
     const start = t0 + tone.at;
     const end = start + tone.dur;
     const osc = audio.createOscillator();
@@ -91,13 +123,14 @@ export function playCue(cue: Cue): boolean {
     osc.stop(end + 0.02);
     last = osc;
   }
-  if (last !== undefined) {
-    last.onended = () => {
-      audio.close().catch(() => {});
-    };
-  }
-  // A context made before any user gesture starts suspended; resuming may be refused, then the
-  // cue stays silent (sound is a nicety).
-  audio.resume().catch(() => {});
+  if (last !== undefined) last.onended = close;
+  // A context the browser keeps suspended never reaches onended: close it, and free the slot.
+  const settle = () => {
+    if (audio.state !== "running") {
+      close();
+      playingUntil = 0;
+    }
+  };
+  audio.resume().then(settle, settle);
   return true;
 }

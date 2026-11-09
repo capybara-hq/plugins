@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // = @capybara-hq/plugin-client/testing, through package.json "imports" (see README, Tests)
 import { type FakeHost, renderWithFakeHost } from "#client-testing";
+import extension from "../src/client.js";
 import { RunHud } from "../src/hud.js";
 import { button, FakeAudioContext, installRicherDesign, row } from "./fake-design.js";
 
@@ -13,7 +14,11 @@ const at = "2026-11-10T08:00:00.000Z";
 
 let host: FakeHost | undefined;
 
-function renderHud(options: { view?: { blocks: []; data?: unknown }; reducedMotion?: boolean }) {
+function renderHud(options: {
+  view?: { blocks: []; data?: unknown };
+  reducedMotion?: boolean;
+  withListeners?: boolean;
+}) {
   const h = renderWithFakeHost(
     createElement(RunHud, {
       plugin: "theme-cyberpunk",
@@ -29,6 +34,7 @@ function renderHud(options: { view?: { blocks: []; data?: unknown }; reducedMoti
       role: "admin",
       ...(options.view === undefined ? {} : { view: options.view as never }),
       ...(options.reducedMotion === undefined ? {} : { reducedMotion: options.reducedMotion }),
+      ...(options.withListeners === true ? { events: extension.events } : {}),
     },
   );
   installRicherDesign();
@@ -85,6 +91,39 @@ describe("run HUD", () => {
     h.emit({ type: "run.started", seq: 9, conversationId: "conv_other", at });
     expect(row("Runs")).toBe("1");
     expect(row("Tools")).toBe("1 ok / 1 err");
+    expect(row("Approvals")).toBe("1");
+  });
+
+  it("shows what the extension's listener counted before the panel opened (session storage)", () => {
+    // the page is open, the properties panel is not: only the listeners run
+    const page = renderWithFakeHost(createElement("div"), {
+      slot: "shell.overlay",
+      plugin: "theme-cyberpunk",
+      events: extension.events,
+    });
+    const base = { conversationId, at };
+    page.emit({ type: "run.started", seq: 1, ...base });
+    page.emit({
+      type: "tool.finished",
+      seq: 2,
+      callId: "c1",
+      tool: "Bash",
+      isError: false,
+      ...base,
+    });
+    page.emit({ type: "run.finished", seq: 3, reason: "end_turn", ...base });
+    page.unmount();
+    renderHud({});
+    expect(row("Runs")).toBe("1");
+    expect(row("Tools")).toBe("1 ok / 0 err");
+  });
+
+  it("counts an event once when both the listener and the HUD see it", () => {
+    const h = renderHud({ withListeners: true });
+    const base = { conversationId, at };
+    h.emit({ type: "run.started", seq: 1, ...base });
+    h.emit({ type: "approval.requested", seq: 2, callId: "c1", ...base });
+    expect(row("Runs")).toBe("1");
     expect(row("Approvals")).toBe("1");
   });
 
