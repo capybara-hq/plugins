@@ -90,7 +90,7 @@ export function providerConfig(
 }
 
 /**
- * `sandbox@2`: per environment, a file system of two Docker volumes and an instance (container +
+ * `sandbox@2`: per device, a file system of two Docker volumes and an instance (container +
  * egress proxy + network) attached to it; Docker only through the socket proxy, the plugin never
  * mounts docker.sock.
  */

@@ -27,7 +27,7 @@ import {
 
 /**
  * sandbox@2 on E2B, against the fake E2B (startFakeE2B of @capybara-hq/testing: control plane API +
- * envd, commands run on this machine): one E2B sandbox per environment, kept by pausing it without
+ * envd, commands run on this machine): one E2B sandbox per device, kept by pausing it without
  * memory; template auto-build; gone / plain errors; exec output / timeout / abort kills; file reads
  * and writes, /skills written as root; egress mapping.
  */
@@ -35,7 +35,7 @@ import {
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const sig = () => AbortSignal.timeout(20_000);
-const sbxName = () => `cap-env-${randomUUID()}`;
+const sbxName = () => `cap-device-${randomUUID()}`;
 const limits = (
   egress: SandboxLimits["egress"] = "none",
   allowHosts: string[] = [],

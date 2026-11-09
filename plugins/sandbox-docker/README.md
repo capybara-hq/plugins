@@ -1,7 +1,7 @@
 # @capybara-hq/plugin-sandbox-docker
 
-The Docker implementation of the environment sandbox (`sandbox@2`), with a runtime of either runc or gVisor's runsc. Each environment
-(`cap-env-<environment id>`) has a **file system**, its two Docker volumes, which lives until the environment is deleted, and an **instance**, the container
+The Docker implementation of the device sandbox (`sandbox@2`), with a runtime of either runc or gVisor's runsc. Each device
+(`cap-device-<device id>`) has a **file system**, its two Docker volumes, which lives until the device is deleted, and an **instance**, the container
 (with its egress proxy and internal network), which is suspended when idle, destroyed after long disuse and recreated on the next use with the same files.
 The plugin **reaches Docker only through the endpoint** (the socket proxy in capybara-hq/core's [`docker/sandbox-proxy`](https://github.com/capybara-hq/core/tree/main/docker/sandbox-proxy)) and does not mount `docker.sock` itself.
 
@@ -28,7 +28,7 @@ Both images are published by this repository's image workflow, multi-arch (amd64
 
 | Image | Used for |
 |---|---|
-| `ghcr.io/capybara-hq/capybara-sandbox:<plugin version>` | `create` without `image` (the kernel passes an `image` only when the kernel config `sandbox.image` or the environment pins one) |
+| `ghcr.io/capybara-hq/capybara-sandbox:<plugin version>` | `create` without `image` (the kernel passes an `image` only when the kernel config `sandbox.image` or the device pins one) |
 | `ghcr.io/capybara-hq/capybara-sandbox-egress:<plugin version>` | the egress proxy, unless `egressProxyImage` is set |
 
 The version is the extension manifest's `version` (`src/index.ts`, kept equal to `package.json` by `capybara-plugin sync-versions`), so a
@@ -47,7 +47,7 @@ plugin upgrade moves both images with it and the kernel never needs to know the 
 - Local development: in a [capybara-hq/core](https://github.com/capybara-hq/core) checkout, `docker compose -f docker/compose.dev.yaml --profile sandbox up -d` ([`docker/compose.dev.yaml`](https://github.com/capybara-hq/core/blob/main/docker/compose.dev.yaml)) builds both images and starts the socket proxy
   (`127.0.0.1:2375`, **for local development only**, see the deployment requirements below). If an image is not local the plugin tries to pull it once.
 - **In a deployment, pre-pull both images on every Docker node** (`docker pull …`): if an image is not local
-  the plugin pulls it only when an environment's instance is first created, and a pull of several hundred MB eats into the time limit of that tool call (`tools.timeoutMs` plus the lock wait and a 3-minute margin);
+  the plugin pulls it only when a device's instance is first created, and a pull of several hundred MB eats into the time limit of that tool call (`tools.timeoutMs` plus the lock wait and a 3-minute margin);
   when it is slow that call fails, and the next one tries again.
 
 ## Socket proxy (`docker/sandbox-proxy/haproxy.cfg`)
@@ -88,12 +88,12 @@ To let the local kernel connect, the dev compose publishes it on `127.0.0.1:2375
 | `resume` | Starts (or unpauses one that was `docker pause`d); if the container does not exist it returns `gone`. If the allowlist's egress proxy or internal network is gone, it is rebuilt from the allowlist recorded in the container labels |
 | Auto-start | When `exec` / `readFile` / `writeFile` / `stat` / `killAll` find the container still exists but is not running (Docker returns 409: the host or daemon restarted, the idle sweep stopped the container before it could record `suspended`, someone ran `docker pause` on it…), they recover it the way `resume` does (egress proxy and network in place; unpause a paused one, start a stopped one) and retry once (the `sandbox@2` contract: the kernel trusts only the `running` it recorded itself) |
 | `killAll` | Kills every command started through `exec` that is still running (finds the wrapper by command line and sends SIGKILL by process group and session); called when the kernel takes over from a crashed previous lock holder. A process that a command puts in the background in a session of its own (`setsid`) is not guaranteed to be killed |
-| Concurrent use (`concurrentExec`, `killTagged`) | Declares `concurrentExec: true`: the sessions of one environment (and their sub-agents) run commands and file operations in its sandbox at the same time (independent `docker exec` instances; the socket proxy rules are unchanged). Each exec's control file carries the holder's tag (`/tmp/.capybara-exec-<tag>-<uuid>`, tags checked against `SANDBOX_TAG_RE`); `killTagged` kills only the commands of the given tags (a variant of the `killAll` script), used when the kernel takes over from a crashed holder while others keep running. Concurrent auto-starts of a stopped container are idempotent (`start` answers 304; a concurrent egress proxy create answers 409, tolerated). Concurrent commands share the container's `PidsLimit` (1024) and memory. When the kill exec itself cannot start, the container restarts, which also ends live siblings' commands (a last resort) |
+| Concurrent use (`concurrentExec`, `killTagged`) | Declares `concurrentExec: true`: the sessions of one device (and their sub-agents) run commands and file operations in its sandbox at the same time (independent `docker exec` instances; the socket proxy rules are unchanged). Each exec's control file carries the holder's tag (`/tmp/.capybara-exec-<tag>-<uuid>`, tags checked against `SANDBOX_TAG_RE`); `killTagged` kills only the commands of the given tags (a variant of the `killAll` script), used when the kernel takes over from a crashed holder while others keep running. Concurrent auto-starts of a stopped container are idempotent (`start` answers 304; a concurrent egress proxy create answers 409, tolerated). Concurrent commands share the container's `PidsLimit` (1024) and memory. When the kill exec itself cannot start, the container restarts, which also ends live siblings' commands (a last resort) |
 | `destroy` / `destroyByName` | Deletes the instance: the container, egress proxy and internal network, **never the volumes**; a missing one also counts as success |
 | `exec` | `docker exec` (sandbox user, bash); the `actor` argument is not used (phase 1); on timeout or abort it SIGKILLs the command and all processes it spawned by session. Commands run through `timeout -s KILL <timeout + 5 seconds>`: when a kernel replica crashes (the timer on the plugin side is gone, and a dropped connection does not end the command) the time limit inside the sandbox is the backstop. When the exec used to kill processes cannot itself start (for example the process count has hit its limit), it falls back to restarting the whole container (`restart?t=0`): files are all on the volumes, `/tmp` is cleared, and the remaining processes in the sandbox all end. When output is truncated it backs up to a full UTF-8 character boundary |
 | `readFile` / `writeFile` / `stat` | Run small `head` / `stat` scripts in the container as the sandbox user (permissions and symlinks are resolved as the sandbox user, and the volume is not written as root through the daemon) |
 
-Resources for each environment (`<name>` = `cap-env-<environment id>`): the instance is the container `<name>`, the egress proxy `<name>-egress` and the
+Resources for each device (`<name>` = `cap-device-<device id>`): the instance is the container `<name>`, the egress proxy `<name>-egress` and the
 internal network `<name>-net`; the file system is the volumes `<name>-workspace` (`/workspace`) and `<name>-skills` (`/skills`). All carry the labels
 `dev.capybara.sandbox=1`, `dev.capybara.sandbox.name=<name>` and `dev.capybara.sandbox.role=<role>`.
 
@@ -118,9 +118,9 @@ default 900 seconds, Ruling M20). To run long commands, raise `runtime.maxRunSec
 **Limits take effect only at creation**: `cpu` / `memoryMb` / `egress` / `allowHosts` are written into the container and egress proxy at `create`
 (the allowlist is recorded in the container labels), `diskMb` into the workspace volume at `createFileSystem`. Changing the config affects only instances created
 afterwards; an existing instance (including one resumed after hibernation) keeps its limits until it is destroyed and recreated (destroyed for inactivity, then
-recreated on the next use with the same files); the volume size stays for the life of the environment. Likewise an existing file system keeps the volume driver and size it was
+recreated on the next use with the same files); the volume size stays for the life of the device. Likewise an existing file system keeps the volume driver and size it was
 created with: a workspace volume made before `volumeDriver` was configured stays on the local driver with no size limit, and changing `volumeDriver` or `diskMb`
-reaches only file systems created afterwards (a new environment, or resetting the environment's files).
+reaches only file systems created afterwards (a new device, or resetting the device's files).
 
 ## Egress (`limits.egress`)
 

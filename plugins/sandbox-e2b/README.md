@@ -1,7 +1,7 @@
 # @capybara-hq/plugin-sandbox-e2b
 
-The E2B implementation of environments (`sandbox@2`): one E2B sandbox per environment (E2B cloud or self-hosted E2B). E2B has no volume
-separate from a micro-VM, so the environment's file system **is** the E2B sandbox kept paused without memory, and an instance is the same sandbox
+The E2B implementation of devices (`sandbox@2`): one E2B sandbox per device (E2B cloud or self-hosted E2B). E2B has no volume
+separate from a micro-VM, so the device's file system **is** the E2B sandbox kept paused without memory, and an instance is the same sandbox
 resumed through connect. It is an either-or choice with `@capybara-hq/plugin-sandbox-docker` (`sandbox@2` is a single-select capability), and uses the
 same image.
 
@@ -79,9 +79,9 @@ Then set `template` to `capybara-sandbox`. Image conventions (the plugin depends
 | `destroyFileSystem` / `destroyFileSystemByName` | `DELETE /sandboxes/{id}` (a missing one also counts as success); by name it first lists by metadata (running and paused), which also removes a `sandbox@1` sandbox under a `cap-<conversationId>` name |
 | Inactivity destruction | Nothing to do on E2B's side (the sandbox is already paused) |
 | `killAll` | After connect (a paused one is resumed first; paused without memory, no process comes back), runs a script as the sandbox user that kills every command started through `exec` that is still running (SIGKILL by process group and session); called when the kernel takes over from a crashed previous lock holder |
-| Concurrent use (`concurrentExec`, `killTagged`) | Declares `concurrentExec: true`: envd runs each `process.Start` independently, so the sessions of one environment (and their sub-agents) run commands and file operations in its sandbox at the same time. Each exec's control file carries the holder's tag (`/tmp/.capybara-exec-<tag>-<uuid>`, tags checked against `SANDBOX_TAG_RE`); `killTagged` runs a script as the sandbox user that kills only the commands of the given tags. Concurrent `connect` calls are idempotent (a running sandbox only gets its timeout extended); a 409 answered while another call's resume is in flight is retried briefly (5 × 500 ms; to be confirmed on real E2B, see `test/live`). Uploads use UUID names in the staging directory. When a kill cannot run, the reboot fallback (pause + cold `connect`) also ends live siblings' commands (a last resort) |
-| `exec` / file operations | First connect (a paused one is resumed, which is the contract's "auto-start"; the envd access token is fetched. **If no token can be obtained it does not connect and sends no request without a token; it reports `SandboxGoneError` (`resume` returns `gone`), and the kernel tries a new instance once, but `create` reconnects the same E2B sandbox and fails the same way, so the environment stays unusable until its files are reset
-or the environment is recreated**; the timeout is pushed to at least "command timeout + 120 seconds", and not beyond 24 hours), then calls envd; a connect that returns an E2B-format 404 (`{code: 404, …}`) → `SandboxGoneError`; a bare 404 (a proxy, a misconfigured `apiUrl`), 401 / 5xx / network errors → ordinary errors. pause / delete also treat only an E2B-format 404 as "does not exist" |
+| Concurrent use (`concurrentExec`, `killTagged`) | Declares `concurrentExec: true`: envd runs each `process.Start` independently, so the sessions of one device (and their sub-agents) run commands and file operations in its sandbox at the same time. Each exec's control file carries the holder's tag (`/tmp/.capybara-exec-<tag>-<uuid>`, tags checked against `SANDBOX_TAG_RE`); `killTagged` runs a script as the sandbox user that kills only the commands of the given tags. Concurrent `connect` calls are idempotent (a running sandbox only gets its timeout extended); a 409 answered while another call's resume is in flight is retried briefly (5 × 500 ms; to be confirmed on real E2B, see `test/live`). Uploads use UUID names in the staging directory. When a kill cannot run, the reboot fallback (pause + cold `connect`) also ends live siblings' commands (a last resort) |
+| `exec` / file operations | First connect (a paused one is resumed, which is the contract's "auto-start"; the envd access token is fetched. **If no token can be obtained it does not connect and sends no request without a token; it reports `SandboxGoneError` (`resume` returns `gone`), and the kernel tries a new instance once, but `create` reconnects the same E2B sandbox and fails the same way, so the device stays unusable until its files are reset
+or the device is recreated**; the timeout is pushed to at least "command timeout + 120 seconds", and not beyond 24 hours), then calls envd; a connect that returns an E2B-format 404 (`{code: 404, …}`) → `SandboxGoneError`; a bare 404 (a proxy, a misconfigured `apiUrl`), 401 / 5xx / network errors → ordinary errors. pause / delete also treat only an E2B-format 404 as "does not exist" |
 
 - **Timeout**: an E2B sandbox is handled when its timeout (`timeoutSeconds`) expires; this plugin sets `autoPause: true` and `autoPauseMemory: false` when creating a sandbox,
   so on expiry it is **paused** (without memory, like `suspend`) instead of deleted, and files are not lost even when the kernel has no chance to `suspend` (for example the whole kernel is down). Every use pushes it back through connect (it only extends, never shortens).
@@ -91,8 +91,8 @@ or the environment is recreated**; the timeout is pushed to at least "command ti
   On Hobby, set `sandbox.limits.maxCommandSeconds` to below 3480.
 - **Retention**: E2B's current documentation says paused sandboxes have no time to live and are never removed by E2B
   ([persistence](https://e2b.dev/docs/sandbox/persistence)); an older beta page said 30 days. Not yet confirmed against the live API (a
-  sandbox paused for more than 30 days, see `test/live`). The files live until the environment is deleted (`destroyFileSystem`); a paused sandbox
-  that is gone nevertheless surfaces as `FileSystemGoneError` from `create` (`gone` from `resume`), and the kernel shows the environment's files as
+  sandbox paused for more than 30 days, see `test/live`). The files live until the device is deleted (`destroyFileSystem`); a paused sandbox
+  that is gone nevertheless surfaces as `FileSystemGoneError` from `create` (`gone` from `resume`), and the kernel shows the device's files as
   lost, never a silent empty workspace. Phase 1 has no export to object storage.
 
 ## exec and files
@@ -159,8 +159,8 @@ Limitations of `allowlist` (decided by E2B's implementation, written here for as
   `ask` in the org settings, and / or set the sandbox network `sandboxEgress` to `none` (org-level egress, Ruling M19: an org can replace the allowlist or cut the network, and cannot set `open`).
 
 **Limits are fixed when the file system is created** (`createFileSystem`, the create-sandbox request): an instance is the same E2B sandbox
-resumed, so a later change of `sandbox.limits.egress` / `allowHosts` or of the org's egress setting reaches an existing E2B environment only when
-the environment is recreated (the Docker plugin applies them per instance). The `e2b@2.58.0` SDK has `Sandbox.updateNetwork`
+resumed, so a later change of `sandbox.limits.egress` / `allowHosts` or of the org's egress setting reaches an existing E2B device only when
+the device is recreated (the Docker plugin applies them per instance). The `e2b@2.58.0` SDK has `Sandbox.updateNetwork`
 (`PUT /sandboxes/{id}/network`), documented for **running** sandboxes; this plugin does not use it in phase 1. **A paused sandbox's network rules
 cannot be changed** (verified on E2B 2026-11-08: the call answers 204 on a running sandbox and E2B's 404 on a paused one); the live test keeps
 recording it (`[e2b-live] paused network update: …`).

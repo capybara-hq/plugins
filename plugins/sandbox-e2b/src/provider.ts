@@ -58,7 +58,7 @@ export interface E2BSandboxTestOptions {
 }
 
 /**
- * The metadata key carrying the name (`createFileSystem`'s `cap-env-<environmentId>`, or a
+ * The metadata key carrying the name (`createFileSystem`'s `cap-device-<deviceId>`, or a
  * sandbox@1 sandbox's `cap-<conversationId>`); sandboxes are listed and cleaned up by it.
  */
 export const METADATA_NAME = "capybara-sandbox-name";
@@ -360,11 +360,11 @@ export function createE2BSandbox(
     // An envd without an access token can be called by anyone: create asked for `secure`, so no
     // token means no connection (fail closed). It is reported as SandboxGoneError, so the kernel
     // tries a new instance once; `create` reconnects the same E2B sandbox and fails again, so the
-    // environment stays unusable until its files are reset (a new file system), never used
+    // device stays unusable until its files are reset (a new file system), never used
     // without a token.
     if (typeof info.envdAccessToken !== "string" || info.envdAccessToken === "") {
       throw new SandboxGoneError(
-        `E2B returned no envd access token for sandbox ${info.sandboxID}; refusing to use an unauthenticated sandbox (reset the environment's files to recreate it)`,
+        `E2B returned no envd access token for sandbox ${info.sandboxID}; refusing to use an unauthenticated sandbox (reset the device's files to recreate it)`,
       );
     }
     return {
@@ -845,7 +845,7 @@ export function createE2BSandbox(
       } catch (e) {
         if (e instanceof SandboxGoneError && isE2BNotFound(e.cause)) {
           throw new FileSystemGoneError(
-            `E2B sandbox ${fileSystem.id} holding the environment's files no longer exists`,
+            `E2B sandbox ${fileSystem.id} holding the device's files no longer exists`,
             { cause: e },
           );
         }

@@ -8,6 +8,6 @@
   "version": "0.1.0-rc.7",
   "publisher": "Capybara",
   "icon": "./icon.svg",
-  "description": "Environments (sandbox@2) as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, E2B egress controls",
+  "description": "Devices (sandbox@2) as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, E2B egress controls",
   "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-e2b#readme"
 }

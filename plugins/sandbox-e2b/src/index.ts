@@ -84,7 +84,7 @@ export function providerConfig(
 }
 
 /**
- * `sandbox@2`: one E2B sandbox per environment. The file system is the sandbox kept paused
+ * `sandbox@2`: one E2B sandbox per device. The file system is the sandbox kept paused
  * without memory; an instance is the same sandbox resumed (connect), dropped again by pausing.
  */
 const plugin = defineExtension({

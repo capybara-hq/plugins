@@ -60,8 +60,8 @@ describe.skipIf(!dockerAvailable)(
     let k: TestKernel;
     let owner: Req;
     let orgId: string;
-    /** The environments the conversations work in (`cap-env-<id>`), removed with their volumes. */
-    const environments = new Set<string>();
+    /** The devices the conversations work in (`cap-device-<id>`), removed with their volumes. */
+    const devices = new Set<string>();
     // Kernel warnings (the pipeline logs the real cause of a failed tool call, which the model only
     // sees as "failed (DockerApiError)"). This test failed once under full-suite load without a
     // reproduction (M-11), so failures print them instead of only the tool's generic text.
@@ -109,8 +109,8 @@ describe.skipIf(!dockerAvailable)(
           network,
           egressProxyImage: images.egressImage,
         });
-        for (const e of environments) {
-          const name = `cap-env-${e}`;
+        for (const e of devices) {
+          const name = `cap-device-${e}`;
           await p.destroyByName(name, AbortSignal.timeout(60_000)).catch(() => undefined);
           await p.destroyFileSystemByName(name, AbortSignal.timeout(60_000)).catch(() => undefined);
         }
@@ -148,12 +148,12 @@ describe.skipIf(!dockerAvailable)(
       expect(res.statusCode, res.body).toBe(201);
       const agentId = (res.json() as { agent: { id: string } }).agent.id;
       const conv = await createConv(owner, orgId, agentId);
-      const { environment_id: env } = await db
+      const { device_id: env } = await db
         .selectFrom("conversations")
-        .select("environment_id")
+        .select("device_id")
         .where("id", "=", conv)
         .executeTakeFirstOrThrow();
-      if (env !== null) environments.add(env);
+      if (env !== null) devices.add(env);
       return conv;
     }
 
@@ -178,7 +178,7 @@ describe.skipIf(!dockerAvailable)(
       );
       expect(r.isError, why(r.content)).toBe(false);
       expect(r.content.startsWith(SANDBOX_STARTED_NOTICE)).toBe(true);
-      expect(r.content).toMatch(/\/workspace\nsandbox\nhttp:\/\/cap-env-[0-9a-f-]+-egress:3128/);
+      expect(r.content).toMatch(/\/workspace\nsandbox\nhttp:\/\/cap-device-[0-9a-f-]+-egress:3128/);
 
       const w = await call(
         conv,
