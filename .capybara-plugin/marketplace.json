@@ -169,7 +169,7 @@
     },
     {
       "name": "openai",
-      "version": "0.1.0-rc.4",
+      "version": "0.1.0-rc.5",
       "summary": {
         "en": "OpenAI model provider (model-provider@2) using the official SDK and the native Responses API"
       },
@@ -194,8 +194,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-openai",
-          "version": "0.1.0-rc.4",
-          "integrity": "sha512-tf6yywGBmcjDknMFnkJeKU14MYnEWsCoZyup2N4bf8Q2OHjAF5o5Xx2Bj0s3fg5IIpWEVyrKY85at0FJNIqF/A=="
+          "version": "0.1.0-rc.5",
+          "integrity": "sha512-Dg8vRq1GcPpLl/nf8QWlPggnKPVwHXfKVLu/FZ66X1pC0uv0thkeuBheLTCL+He2a65RUdtlLrfn2nzfdilx6Q=="
         }
       }
     },
@@ -403,7 +403,7 @@
     },
     {
       "name": "ark",
-      "version": "0.1.0-rc.3",
+      "version": "0.1.0-rc.4",
       "summary": {
         "en": "Model provider (model-provider@2) for Volcengine Ark chat and embedding models",
         "zh": "火山方舟对话与嵌入模型（model-provider@2）"
@@ -435,14 +435,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-ark",
-          "version": "0.1.0-rc.3",
-          "integrity": "sha512-wtMYbamI7jR3CZXJvi3B0zx2k/swYcTzzlGYE4XihbjKdq2RWu2nK6E8cvZsvIa8ZyJRkILk2HvvK9nCGN98Dg=="
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-Q4Tu4FWz9QjXYPvQlvmNIn1IIzazOSlQ0OxByb4T5nYibTC+x4jEfnEqy4tZPaBenJqhBrib1nc4DFRVEqVAmg=="
         }
       }
     },
     {
       "name": "bailian",
-      "version": "0.1.0-rc.3",
+      "version": "0.1.0-rc.4",
       "summary": {
         "en": "Model provider (model-provider@2) for Alibaba Cloud Model Studio (Bailian) chat and embedding models",
         "zh": "阿里云百炼对话与嵌入模型（model-provider@2）"
@@ -472,14 +472,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-bailian",
-          "version": "0.1.0-rc.3",
-          "integrity": "sha512-PO1OkkudR95/QfKRhqh3NordPwMbqCI+clVuncyPT0N+e0TrWFH4GRAPHrLxk5A+JRxtDFbH/xooTvA3Z59sSg=="
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-1vGODHZVyjRBNr6owS281WLhKu3EuDXWheU0G6TShYWJCf/ZoqKW3Hiel6TqQx3RU2a9L9paXliOysHru4aGMQ=="
         }
       }
     },
     {
       "name": "deepseek",
-      "version": "0.1.0-rc.3",
+      "version": "0.1.0-rc.4",
       "summary": {
         "en": "Model provider (model-provider@2) for DeepSeek chat models through the Chat Completions API",
         "zh": "DeepSeek 对话模型（model-provider@2），通过 Chat Completions API 调用"
@@ -502,8 +502,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-deepseek",
-          "version": "0.1.0-rc.3",
-          "integrity": "sha512-EimgC0KDbwlKmUM1l9pD5hPDaSvMFkPEdXVErZxwRRS4hTjAx493n/1mlrRm169JDSYzWw9cUU5SnzgiNWm4gA=="
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-caF96MqiEmc7LKDsbfMHUrvFCdfFhp5Ba3qzE9GXfL0/zR8cKGU3MGbGyseJbW0pWrg5V1CrGiZIO8SUOo9UiA=="
         }
       }
     },
