@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-openai
 
+## 0.1.0-rc.5
+
+### Patch Changes
+
+- 70a5937: Official vendor icons: the Model Studio mark for Bailian, the Volcengine mark for Ark and the OpenAI
+  Blossom for OpenAI, in place of the generic icon.
+
 ## 0.1.0-rc.4
 
 ### Patch Changes
