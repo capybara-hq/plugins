@@ -114,16 +114,16 @@ describe("example-board behind embed tokens", () => {
     ui = `/api/v1/orgs/${orgId}/ui`;
   });
 
-  it("is listed with its icon; the conversation embed keeps its old place and is a right panel", async () => {
+  it("is listed with its icon; the conversation embed is the conversation's right panel", async () => {
     await enable(owner, orgId, "example-board");
     const r = await owner({ method: "GET", url: `/api/v1/orgs/${orgId}/ui/contributions` });
     expect(r.statusCode, r.body).toBe(200);
     const items = (r.json() as { items: Record<string, unknown>[] }).items.filter(
       (i) => i.plugin === "example-board",
     );
-    expect(items.map((i) => [i.id, i.place, i.legacyPlace, i.icon])).toEqual([
-      ["board", "page", undefined, "layout-grid"],
-      ["board-conv", "panel", "conversation", "layout-grid"],
+    expect(items.map((i) => [i.id, i.slot, i.icon])).toEqual([
+      ["board", "org.page", "layout-grid"],
+      ["board-conv", "conversation.panel", "layout-grid"],
     ]);
   });
 
