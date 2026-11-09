@@ -8,9 +8,15 @@ the model list, endpoints and embeddings use plain `fetch`.
 
 | Field | Notes |
 |---|---|
-| `apiKey` | secret; required per call (may be absent at load); overridable per organization |
+| `apiKey` | secret; required; overridable per organization |
 | `region` | `cn-beijing` (default) or `cn-shanghai`; overridable per organization |
 | `management.accessKeyId`, `management.secretAccessKey` | optional, advanced; both secret, so an organization's copy starts without the pair; overridable per organization; list custom `ep-` endpoints |
+
+The key is required, so a deployment without one shows the provider as needing configuration
+rather than as failing to list its models. The platform may leave it empty for the organizations
+to fill in (the kernel loads the extension with required overridable fields optional): each
+organization following the platform then needs configuration and is never called, and an
+organization copy brings its own key.
 
 An organization that sets its own copy is resolved as a whole: only its values count, so the
 platform's key and management keys never sign an organization's call. A copy without a key fails

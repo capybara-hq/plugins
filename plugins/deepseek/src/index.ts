@@ -17,12 +17,15 @@ import { streamChat } from "./map-stream.js";
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
 
 /**
- * Deployment config. Both fields are org-overridable, so the platform's copy may lack the key:
- * the key is required per call (not at load), and read from the per-call `opts.config`.
+ * Deployment config. Both fields are org-overridable. The key is required, so a deployment without
+ * one shows the provider as needing configuration rather than as failing to list its models. The
+ * platform may leave it empty (the kernel's load gate makes required overridable fields optional
+ * for the platform's copy): orgs following the platform then need configuration and are never
+ * called, and an org copy brings its own key.
  */
 const DeploymentConfig = z.object({
   apiKey: orgAccess(
-    ui(secret(z.string().min(1).optional()), { label: { zh: "API 密钥", en: "API key" } }),
+    ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
     "override",
   ),
   baseUrl: orgAccess(
@@ -32,6 +35,9 @@ const DeploymentConfig = z.object({
     "override",
   ),
 });
+
+/** A call's config: the key may be absent (left to the orgs), `auth` before any request. */
+const CallConfig = DeploymentConfig.partial({ apiKey: true });
 
 export interface DeepSeekDefaults {
   apiKey?: string | undefined;
@@ -53,7 +59,7 @@ function resolve(defaults: DeepSeekDefaults, config: unknown): { apiKey: string;
     }
     return { apiKey: defaults.apiKey, baseUrl: defaults.baseUrl ?? DEFAULT_BASE_URL };
   }
-  const parsed = DeploymentConfig.safeParse(config);
+  const parsed = CallConfig.safeParse(config);
   if (!parsed.success) {
     throw new ModelError("invalid_request", "DeepSeek: the extension config is invalid");
   }
@@ -107,7 +113,7 @@ export default defineExtension({
   config: { deployment: DeploymentConfig },
   setup(ctx) {
     // Lenient: the platform's config may lack the (overridable) key
-    const cfg = DeploymentConfig.safeParse(ctx.config ?? {});
+    const cfg = CallConfig.safeParse(ctx.config ?? {});
     ctx.provide(
       MODEL_PROVIDER_EXTENSION_POINT_V2,
       createDeepSeekProvider({
