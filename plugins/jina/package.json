@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-jina",
-  "version": "0.1.0-rc.3",
+  "version": "0.1.0-rc.4",
   "description": "Web search and page reading (web-search@1, web-fetch@1) through Jina's search and reader APIs",
   "license": "Apache-2.0",
   "repository": {
