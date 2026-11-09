@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-openai-compatible
 
+## 0.1.0-rc.5
+
+### Patch Changes
+
+- f1b7696: Build and test against @capybara-hq/plugin-sdk 0.1.0-rc.10, @capybara-hq/testing 0.1.0-rc.13 and
+  @capybara-hq/plugin-tools 0.1.0-rc.11 (setup guides v2).
+
 ## 0.1.0-rc.4
 
 ### Patch Changes

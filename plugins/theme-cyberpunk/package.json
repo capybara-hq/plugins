@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-theme-cyberpunk",
-  "version": "0.1.0-rc.0",
+  "version": "0.1.0-rc.1",
   "description": "Cyberpunk theme: neon yellow on deep blue-black with cyan glow, techno fonts and a neon pixel capybara",
   "license": "Apache-2.0 AND OFL-1.1",
   "repository": {

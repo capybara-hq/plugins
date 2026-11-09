@@ -1,5 +1,13 @@
 # @capybara-hq/plugin-sandbox-e2b
 
+## 0.1.0-rc.8
+
+### Patch Changes
+
+- f1b7696: Build and test against @capybara-hq/plugin-sdk 0.1.0-rc.10, @capybara-hq/testing 0.1.0-rc.13 and
+  @capybara-hq/plugin-tools 0.1.0-rc.11 (setup guides v2).
+- fb5d4cd: Follow core's rename of environments to devices: sandbox resource names are now `cap-device-<id>` (Docker egress proxy and volumes derive from it), and the docs, error text and tests use device vocabulary.
+
 ## 0.1.0-rc.7
 
 ### Patch Changes

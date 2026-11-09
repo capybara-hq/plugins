@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "anthropic",
-      "version": "0.1.0-rc.3",
+      "version": "0.1.0-rc.4",
       "summary": {
         "en": "Anthropic model provider (model-provider@2) using the official SDK and the native Messages API"
       },
@@ -34,14 +34,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-anthropic",
-          "version": "0.1.0-rc.3",
-          "integrity": "sha512-cxwrakiYPC+wmYK0TwUABFqOgumqPytMC8ir0Yv6x1H82fgTz5gxRRE6JPP5WacsdgEUvsZWf7hTheX++5ko8g=="
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-Nv0kGQFotJXqTZNryT7IupW7UBbUAxYjiNhVhJk3bRvjCOajqk965CSF6yd/nNFv+ofswSxdWra/Ls2WWcH0LA=="
         }
       }
     },
     {
       "name": "connector-mcp",
-      "version": "0.1.0-rc.3",
+      "version": "0.1.0-rc.4",
       "summary": {
         "en": "MCP connector (connector@1): tools and resources of remote MCP servers over Streamable HTTP"
       },
@@ -58,14 +58,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-connector-mcp",
-          "version": "0.1.0-rc.3",
-          "integrity": "sha512-cSuFK+DA7+UZV+Oj1W5XPyse2qNvWWCKIV35A06Q7ewLDjnuxvy+eW1zMi5eJaQxvPEbw/YXD6LeKX8N5QU6VA=="
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-DRPlCE/Zxz80s0P0TK0LR2C76FtrYBqhJ6F4A1XrEEBXwwkXfN6o4Dpj9MnrgJNUPXPI+NTDr0FqcrHNUAEumA=="
         }
       }
     },
     {
       "name": "connector-openapi",
-      "version": "0.1.0-rc.4",
+      "version": "0.1.0-rc.5",
       "summary": {
         "en": "OpenAPI connector (connector@1): one tool per operation of an OpenAPI 3.0 / 3.1 HTTP API"
       },
@@ -82,14 +82,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-connector-openapi",
-          "version": "0.1.0-rc.4",
-          "integrity": "sha512-96ojdvs24r2y3vqjsokP2W8yIDQjKzhZ9fJW3tcdNMThpbvb/vwwmaTw89D62ypUfqd8CvQawtyp4ZoxbeCSBg=="
+          "version": "0.1.0-rc.5",
+          "integrity": "sha512-dCO9vWCrw4kmBqtSdQ8B6uLI2gWXXenChQaQb2pmcIft6ks7901vMhnhxOCrPzL3zxCTM0x8//k1+67ZO6zUJQ=="
         }
       }
     },
     {
       "name": "lark",
-      "version": "0.1.0-rc.3",
+      "version": "0.1.0-rc.4",
       "summary": {
         "en": "Lark (channel@1 bot over the Lark long connection with interactive cards, identity-source@1 web login, directory@1)"
       },
@@ -125,14 +125,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-lark",
-          "version": "0.1.0-rc.3",
-          "integrity": "sha512-xcC38OMG+SR+Yo7zrR+OmWjOQVUYXB46qvt1egfPFeiRHDgIyanapqiJpu6JnQlBoHkyODYbC9WfN1ZanfCdLg=="
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-8rMy2x4sVOTeehao8I9kj8USmENM6YTJo4EAWlP5GPLoHtcItMWUX0iH0iX6IyazkSfWEzdyILis179o5sPbnA=="
         }
       }
     },
     {
       "name": "object-store-s3",
-      "version": "0.1.0-rc.3",
+      "version": "0.1.0-rc.4",
       "summary": {
         "en": "Object storage (object-store@1) on any S3-compatible service (AWS S3, MinIO, Ceph, OSS, TOS, ...) using the official @aws-sdk/client-s3"
       },
@@ -162,14 +162,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-object-store-s3",
-          "version": "0.1.0-rc.3",
-          "integrity": "sha512-ZYpC8vFdW8Nw/TIU5UmcPJpL2IK5IeJl4EpqDuWCvjU8ey+CmuvIwHDDVx4oOW5UTYyF5S3gzqIBXCCHWo1tGw=="
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-omMBGp/qH9EHbjDzP3yctC0cmbVeRk0Gf6UzcbgHigggktPAh41DujaeQKKennblGqtbjHEqZroJxqN389Znxw=="
         }
       }
     },
     {
       "name": "openai",
-      "version": "0.1.0-rc.3",
+      "version": "0.1.0-rc.4",
       "summary": {
         "en": "OpenAI model provider (model-provider@2) using the official SDK and the native Responses API"
       },
@@ -194,14 +194,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-openai",
-          "version": "0.1.0-rc.3",
-          "integrity": "sha512-NobYYjC1TJLVMlQFgmnoQaHuzcOskW799XaxX4adn7fUd6tsSGp5rZs9mutSCV7CSIWRD4LydMKclKIBnWnGhQ=="
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-tf6yywGBmcjDknMFnkJeKU14MYnEWsCoZyup2N4bf8Q2OHjAF5o5Xx2Bj0s3fg5IIpWEVyrKY85at0FJNIqF/A=="
         }
       }
     },
     {
       "name": "openai-compatible",
-      "version": "0.1.0-rc.4",
+      "version": "0.1.0-rc.5",
       "summary": {
         "en": "Model provider (model-provider@2) for Chat Completions-compatible services (vLLM, DeepSeek, Qwen, ...) using the official openai SDK"
       },
@@ -222,14 +222,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-openai-compatible",
-          "version": "0.1.0-rc.4",
-          "integrity": "sha512-39UFgwvOwMaFFSYVlsKBHTJmZxORXdFoMaB31B/Lta6NjAZdlDleu8h+VDBUcbuwnFEcd03T3M007X1f0/djjQ=="
+          "version": "0.1.0-rc.5",
+          "integrity": "sha512-sgHPilMjnxO5Is9fqTPYLU1KqGDJPV+l3gwTPNaSu3HPUKikdm3C6cpykVNeAZgz03q58lROv4V5YiflGvtZbw=="
         }
       }
     },
     {
       "name": "sandbox-docker",
-      "version": "0.1.0-rc.7",
+      "version": "0.1.0-rc.8",
       "summary": {
         "en": "Conversation sandboxes (sandbox@1) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with an egress allowlist proxy"
       },
@@ -254,14 +254,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-sandbox-docker",
-          "version": "0.1.0-rc.7",
-          "integrity": "sha512-SJPr2hYWfidaYS8sClFMEyvOe3cpdip2fPDmyPHG0k/GJxcRNOUy6VRryij3IGbUR8zlxBbbAsDr+dgMtvh/Ug=="
+          "version": "0.1.0-rc.8",
+          "integrity": "sha512-dWX90zfMafGq9xddGVjAgPCn8g9EPAFDORjYGwDrq/3Z1qS4D1LbepyKBLuESQZlHAKHOyJbriEpWR5ybO6J2g=="
         }
       }
     },
     {
       "name": "sandbox-e2b",
-      "version": "0.1.0-rc.7",
+      "version": "0.1.0-rc.8",
       "summary": {
         "en": "Devices (sandbox@2) as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, E2B egress controls"
       },
@@ -287,14 +287,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-sandbox-e2b",
-          "version": "0.1.0-rc.7",
-          "integrity": "sha512-ap7GuBaZAn84v7VZM33trfQy6Nq31mi9SGFyWjVCOnX0Oyduw6XSUNiyl64P1qifqIYHqqHJ9Yuxl2u0zZMEYg=="
+          "version": "0.1.0-rc.8",
+          "integrity": "sha512-LkTs4jYZ1pE4ShWzFc0AIDwqNPl98KLmbMbgrBMkJUV/iublfxKP7Xv0C+hrD/fMQR5DTbJXnZW02l0/yjmpEg=="
         }
       }
     },
     {
       "name": "slack",
-      "version": "0.1.0-rc.4",
+      "version": "0.1.0-rc.5",
       "summary": {
         "en": "Slack (channel@1 bot over Socket Mode with Block Kit cards, identity-source@1 Sign in with Slack, directory@1)"
       },
@@ -316,7 +316,10 @@
           "permissions.network:wss-primary.slack.com",
           "provides:channel@1",
           "provides:directory@1",
-          "provides:identity-source@1"
+          "provides:identity-source@1",
+          "setup.check:app-token",
+          "setup.check:bot-scopes",
+          "setup.check:bot-token"
         ],
         "sensitive": [
           "config.deployment.secret:clientSecret",
@@ -329,14 +332,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-slack",
-          "version": "0.1.0-rc.4",
-          "integrity": "sha512-sTh1RqZIZHORQEVrMh/MVim+AJtelPKb444Vm6gXLhulFHsCVU/7kmPD5ATSZ8mdZqgoyVE5Xi/ZtA0vgXrhcA=="
+          "version": "0.1.0-rc.5",
+          "integrity": "sha512-1t84UDuvgKy5s/Wd3tMkMtsumywrpcwC6PiRiaFEk9WwsyHdrnK0SR+v/9/0F5zxriAMjUG1kpWaBHZgPHhDoQ=="
         }
       }
     },
     {
       "name": "todo",
-      "version": "0.1.0-rc.3",
+      "version": "0.1.0-rc.4",
       "summary": {
         "en": "Todo list tool for agents: plugin__todo__write keeps a per-conversation task list in PostgreSQL"
       },
@@ -361,14 +364,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-todo",
-          "version": "0.1.0-rc.3",
-          "integrity": "sha512-sz6QGVsgPgGEHxNaBvrmHIH0qDCZZ1VC0OFmjmCJG8aXJCI2b6PC1wIFTEphBubpPMh1ff66m0EyWDVIykMVTA=="
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-KXDetwdjkP/Ie/5mgfr17qra9cBMVFPpjF7TlkXaW6yOH9zsJm9FSpzZrXOqP4qH2LgGEgwdcpG/ddOz555A4g=="
         }
       }
     },
     {
       "name": "jina",
-      "version": "0.1.0-rc.3",
+      "version": "0.1.0-rc.4",
       "summary": {
         "en": "Web search and page reading (web-search@1, web-fetch@1) through Jina's search and reader APIs"
       },
@@ -393,14 +396,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-jina",
-          "version": "0.1.0-rc.3",
-          "integrity": "sha512-oRBKRLiWeDFBnCvj72gDn6r58Ok1IiWUE3wPm8ASLGPtV7RtvUXjlpC4cr4wyhNnb++JfOK54f4Lco8+BgRP1A=="
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-PLzAynQ336rhCZc3527dLrAQq5cHK4iJW9QgKXsi/LsAiVkptaV01UMXjAWPhtk934fIn2665N46DSKz9sfsBg=="
         }
       }
     },
     {
       "name": "ark",
-      "version": "0.1.0-rc.2",
+      "version": "0.1.0-rc.3",
       "summary": {
         "en": "Model provider (model-provider@2) for Volcengine Ark chat and embedding models",
         "zh": "火山方舟对话与嵌入模型（model-provider@2）"
@@ -432,14 +435,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-ark",
-          "version": "0.1.0-rc.2",
-          "integrity": "sha512-r+Msl7l+JariBIRJcqzztD0sC59yM7GteBDlV9BJqGuSHPRkPbLwVoLr6OAgV9EaAxW+7CwM+nnZ6wEZ4JlV1g=="
+          "version": "0.1.0-rc.3",
+          "integrity": "sha512-wtMYbamI7jR3CZXJvi3B0zx2k/swYcTzzlGYE4XihbjKdq2RWu2nK6E8cvZsvIa8ZyJRkILk2HvvK9nCGN98Dg=="
         }
       }
     },
     {
       "name": "bailian",
-      "version": "0.1.0-rc.2",
+      "version": "0.1.0-rc.3",
       "summary": {
         "en": "Model provider (model-provider@2) for Alibaba Cloud Model Studio (Bailian) chat and embedding models",
         "zh": "阿里云百炼对话与嵌入模型（model-provider@2）"
@@ -469,14 +472,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-bailian",
-          "version": "0.1.0-rc.2",
-          "integrity": "sha512-tFZpVmxNn0NvCnNsmC9fK9XchtDId4/7VvIOEUUx65TTlh7q+ASk0+F5IjGIQL2nmf5qGedFH5m2m6j+cBCDPA=="
+          "version": "0.1.0-rc.3",
+          "integrity": "sha512-PO1OkkudR95/QfKRhqh3NordPwMbqCI+clVuncyPT0N+e0TrWFH4GRAPHrLxk5A+JRxtDFbH/xooTvA3Z59sSg=="
         }
       }
     },
     {
       "name": "deepseek",
-      "version": "0.1.0-rc.2",
+      "version": "0.1.0-rc.3",
       "summary": {
         "en": "Model provider (model-provider@2) for DeepSeek chat models through the Chat Completions API",
         "zh": "DeepSeek 对话模型（model-provider@2），通过 Chat Completions API 调用"
@@ -499,14 +502,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-deepseek",
-          "version": "0.1.0-rc.2",
-          "integrity": "sha512-XTpngVtta+hMIMdYrTYQxebJmfI4HWSZOXXzXnewstiGdMNhkCtaub1Dg2TdCTYRTzywc5vM7I609ad7AjTfoQ=="
+          "version": "0.1.0-rc.3",
+          "integrity": "sha512-EimgC0KDbwlKmUM1l9pD5hPDaSvMFkPEdXVErZxwRRS4hTjAx493n/1mlrRm169JDSYzWw9cUU5SnzgiNWm4gA=="
         }
       }
     },
     {
       "name": "telegram",
-      "version": "0.1.0-rc.2",
+      "version": "0.1.0-rc.3",
       "summary": {
         "en": "Telegram (channel@1 bot over the Bot API: long polling or webhook, inline keyboard cards)",
         "zh": "Telegram 机器人渠道（channel@1，Bot API：长轮询或 webhook，内联键盘卡片）"
@@ -528,14 +531,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-telegram",
-          "version": "0.1.0-rc.2",
-          "integrity": "sha512-Zs8G0lW52t8A2TKZuwpHrG/0GmAPNRQHZR2+u8A2OMinHP6elAptf0BEYYjsWs0X6Ifc3ft5qxeQkCVDgMpPLA=="
+          "version": "0.1.0-rc.3",
+          "integrity": "sha512-4WFj/kXgKC99gSxUzJzMtgUpW7pjHBLIKd5lQeSEoHdbYGEWSMGHn1sDcpmI3RiW7cwnt8tv5mAE70+XYYO5nA=="
         }
       }
     },
     {
       "name": "theme-cyberpunk",
-      "version": "0.1.0-rc.0",
+      "version": "0.1.0-rc.1",
       "summary": {
         "en": "Cyberpunk theme: neon yellow on deep blue-black with cyan glow, techno fonts and a neon pixel capybara",
         "zh": "赛博朋克主题：深蓝黑底上的霓虹黄与青色辉光，科技感字体，霓虹像素水豚标志"
@@ -553,8 +556,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-theme-cyberpunk",
-          "version": "0.1.0-rc.0",
-          "integrity": "sha512-q8ZxMcO8RA4t81rufMSxjnPVufqKbtsZ5pLOI22OvN46vvPHy1tQTLCMWPPDiwLb6Och/iDqCm/+Kx+8dIAMtw=="
+          "version": "0.1.0-rc.1",
+          "integrity": "sha512-XaF+BZyhMBJGBflY1vJ9yTZOYkQdn0M0dzmSy1zIquWDN17YOQ8Yt8pJf+O+/Khc+/ocV09s1jlu9mvmyxaZKw=="
         }
       }
     }
