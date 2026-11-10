@@ -168,9 +168,11 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
       if (typeof me?.id !== "number" || !me.username) {
         throw new Error("Telegram getMe returned no bot user");
       }
-      if (me.can_read_all_group_messages) {
+      // With privacy mode on, Telegram delivers group commands and replies to the bot but not a
+      // plain @mention (verified live 2026-11-10, although BotFather's text says otherwise).
+      if (!me.can_read_all_group_messages) {
         o.log.warn(
-          "telegram: the bot can read all group messages (privacy mode is off); only mentions and replies to the bot are forwarded",
+          "telegram: privacy mode is on, so in groups the bot gets only commands and replies to its messages, not plain @mentions; turn privacy mode off in BotFather (then remove and re-add the bot to each group) or make the bot a group admin",
           { botId: me.id },
         );
       }
