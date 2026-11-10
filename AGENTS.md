@@ -141,7 +141,14 @@ workers and other tests' child processes run plain Node. This is temporary, unti
 
 - The required statuses are `ci-ok` and `issue-linked`. `ci-ok` aggregates every job in
   `.github/workflows/ci.yml`, which must all feed into it. `issue-linked` is set by
-  `.github/workflows/community.yml` (the shared gate `gate.yml@v1` from `capybara-hq/.github`).
+  `.github/workflows/community.yml` (the shared gate `gate.yml@v2` from `capybara-hq/.github`).
+  No workflow uses `pull_request_target` (GitHub restricts it by default from 2026-12-02):
+  `pr-event.yml` runs on `pull_request` with no permissions and only uploads the PR number;
+  `community.yml` and `cla.yml` (status `cla`) listen on `workflow_run`, validate the number (a PR
+  of this repository whose head is the run's head SHA) and never check out PR code. `workflow_run`
+  runs the listener files from `main`, so changes to them take effect once merged; a first-time
+  contributor's checks wait for "Approve and run". Details: the `capybara-hq/.github` README,
+  "Issue gate and CLA".
 - **PRs run what the diff affects; pushes to `main` run everything.** The plan is computed by
   `tools/ci/src/affected.ts` (rules unit-tested in `tools/ci/test`); keep this table, that file and
   the comments in `ci.yml` in sync:

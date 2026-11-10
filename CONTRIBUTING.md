@@ -60,4 +60,6 @@ never commit or paste them.
 ## CLA
 
 Contributions need the Capybara CLA ([CLA.md in core](https://github.com/capybara-hq/core/blob/main/CLA.md));
-the CLA bot asks on your first pull request.
+the CLA check (status `cla`) asks on your first pull request: reply with the sentence
+`I have read the CLA Document and I hereby sign the CLA` (comment `recheck` to re-run it). If this is
+your first contribution, the check runs after a maintainer approves the workflows of your PR.
