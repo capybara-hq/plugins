@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-theme-cyberpunk
 
+## 0.1.0-rc.7
+
+### Patch Changes
+
+- e4ebe8d: Drop the run-colour line on the properties panel's edge: the cards' chamfered corners showed it as
+  stray ticks between the sections. The run HUD keeps its own status bar.
+
 ## 0.1.0-rc.6
 
 ### Patch Changes
