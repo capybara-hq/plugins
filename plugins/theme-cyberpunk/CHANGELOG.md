@@ -1,5 +1,11 @@
 # @capybara-hq/plugin-theme-cyberpunk
 
+## 0.1.0-rc.8
+
+### Patch Changes
+
+- f147822: No glowing write head under the reply being written; the scan beam over it stays.
+
 ## 0.1.0-rc.7
 
 ### Patch Changes
