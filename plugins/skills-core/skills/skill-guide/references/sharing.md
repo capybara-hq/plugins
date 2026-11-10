@@ -10,8 +10,7 @@ Read this before sharing a skill with the org, or when you register a new versio
 3. An org admin confirms it in the inbox. When the owner is an org admin it is shared at once.
    Until an admin decides, the skill stays this agent's own and keeps working.
 
-Only the agent's owner can share. You never decide a share yourself, and you cannot read other
-people's pending requests beyond what the tools return.
+Only the agent's owner can share. You never decide a share yourself.
 
 ## After sharing
 

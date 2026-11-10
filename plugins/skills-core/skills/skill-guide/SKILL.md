@@ -44,6 +44,7 @@ Frontmatter rules:
   doubled hyphen), equal to the folder name.
 - `description`: 1-1024 characters. Say what the skill does and when to use it. It is the only text
   the model sees before loading the skill, so put the trigger words people will actually use in it.
+  It must not contain XML tags (registration refuses it).
 
 Optional fields (license, compatibility, tool allow-lists, manual-only and sub-agent invocation):
 read [references/format.md](references/format.md) when you need one of them.
@@ -80,10 +81,19 @@ read [references/format.md](references/format.md) when you need one of them.
 
 Limits: 10 MB per file, 50 MB in total, 1000 files.
 
+Refusals to expect:
+
+- Sub-agents cannot register or share skills; only the conversation the person talks in can.
+- An agent has at most 50 skills.
+- The deployment may disallow custom org skills; then sharing and new versions of shared skills are
+  refused.
+- Sharing a skill that is already waiting for an admin's decision is refused.
+- Sharing under a name the org already uses is refused: rename the skill and register it again.
+
 ## Sharing with the org
 
 A skill you register belongs to this agent. To make it available to the whole org, the owner asks
-you to share it (or does it on the agent page): call `Platform` `agents.share-skill` with the skill id
-(read it from `agents.skills`). An org admin has to confirm it in the inbox; when the owner is an org
+you to share it (or does it on the agent page): call `Platform` `agents.share-skill` with
+`{ "agentId": "<this agent's id, from agents.list>", "skillId": "<the skill's id, from agents.skills>" }`. An org admin has to confirm it in the inbox; when the owner is an org
 admin it is immediate. Read [references/sharing.md](references/sharing.md) before sharing or when you
 upgrade an org skill: it covers versions, the maintainer role and name conflicts.
