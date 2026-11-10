@@ -181,6 +181,32 @@ describe("run HUD", () => {
     expect(row("Approvals")).toBe("—");
   });
 
+  it("ticks while running on a timer it clears when the run stops and on unmount", () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      const cleared = vi.spyOn(window, "clearInterval");
+      const tick = () => document.querySelector(".cx-theme-cyberpunk-hud-ticker")?.textContent;
+      const h = renderHud({});
+      expect(vi.getTimerCount()).toBe(0);
+      h.setRunState("running");
+      expect(vi.getTimerCount()).toBe(1);
+      act(() => vi.advanceTimersByTime(1_500));
+      expect(tick()).toBe("T+00:01.5");
+      h.setRunState("idle");
+      expect(cleared).toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      act(() => vi.advanceTimersByTime(5_000));
+      expect(tick()).toBe("T+00:01.5"); // frozen at the last value
+      h.setRunState("running");
+      expect(vi.getTimerCount()).toBe(1);
+      host?.unmount();
+      host = undefined;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("ticks the elapsed time of the run", () => {
     expect(ticker(0)).toBe("T+00:00.0");
     expect(ticker(12_345)).toBe("T+00:12.3");

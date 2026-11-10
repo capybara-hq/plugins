@@ -325,28 +325,6 @@
       radial-gradient(ellipse at center, transparent 82%, rgba(2, 4, 10, 0.12) 100%);
     animation: cx-theme-cyberpunk-flicker 9s steps(1) infinite;
   }
-  /* A brighter copy of the lines, faded in while a run goes. */
-  & .cx-theme-cyberpunk-scanlines::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: repeating-linear-gradient(
-      to bottom,
-      rgba(0, 229, 255, 0.05) 0 1px,
-      transparent 1px 3px
-    );
-    opacity: 0;
-  }
-  & .cx-theme-cyberpunk-scanlines::after {
-    content: "";
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 0;
-    height: 160px;
-    background: linear-gradient(to bottom, transparent, rgba(0, 229, 255, 0.07), transparent);
-    opacity: 0;
-  }
 
   /* ---------- Run effects on the parts themselves ---------- */
 
@@ -361,6 +339,8 @@
   & [data-cap-part~="message.assistant"][aria-busy="true"] {
     position: relative;
     overflow: clip;
+    /* room for a focus ring (2px + 2px offset) of a control flush with the reply's edge */
+    overflow-clip-margin: 4px;
   }
   /* A scan beam passing over the reply. */
   & [data-cap-part~="message.assistant"][aria-busy="true"]::before {
@@ -541,8 +521,9 @@
 /* ---------- Run states ---------- */
 
 /*
- * Running: the light sweeps along the title bar, the HUD bars move like an equalizer, the scanlines
- * brighten and a beam passes over the reply (component). Calm, transform and opacity only.
+ * Running: the light sweeps along the title bar, the HUD bars move like an equalizer, a beam passes
+ * over the reply and a light along the composer. Nothing moves across the whole screen (the
+ * scanlines stay still). Calm, transform and opacity only.
  */
 :root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=running"]) {
   --cx-theme-cyberpunk-hud: var(--cb-accent);
@@ -574,16 +555,10 @@
     animation-duration: 0.75s;
     animation-delay: -0.7s;
   }
-  & .cx-theme-cyberpunk-scanlines::before {
-    animation: cx-theme-cyberpunk-breathe 2.6s ease-in-out infinite;
-  }
-  & .cx-theme-cyberpunk-scanlines::after {
-    opacity: 1;
-    animation: cx-theme-cyberpunk-sweep 3.4s linear infinite;
-  }
   /* A light travelling along the composer's top edge, another back along its bottom edge. */
   & [data-cap-part~="composer"] {
     overflow: clip;
+    overflow-clip-margin: 4px;
   }
   & [data-cap-part~="composer"]::before,
   & [data-cap-part~="composer"]::after {
@@ -656,17 +631,6 @@
   }
 }
 
-/*
- * The scanlines sit above every layer; while a dialog or sheet is open their run additions (the
- * brighter lines, the sweep) step back so nothing moves over the modal.
- */
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]):has([data-cap-part~="dialog"]) {
-  & .cx-theme-cyberpunk-scanlines::before,
-  & .cx-theme-cyberpunk-scanlines::after {
-    display: none;
-  }
-}
-
 /* ---------- Reduced motion: lines and colours stay, nothing moves, no boot screen ---------- */
 
 /*
@@ -682,13 +646,10 @@
     & .cx-theme-cyberpunk-glitch-layer,
     & .cx-theme-cyberpunk-brand-rail,
     & .cx-theme-cyberpunk-hero-sub::after,
-    & .cx-theme-cyberpunk-scanlines,
-    & .cx-theme-cyberpunk-scanlines::before,
-    & .cx-theme-cyberpunk-scanlines::after {
+    & .cx-theme-cyberpunk-scanlines {
       animation: none;
     }
     & .cx-theme-cyberpunk-boot,
-    & .cx-theme-cyberpunk-scanlines::after,
     & [data-cap-part~="message.assistant"][aria-busy="true"]::before,
     & [data-cap-part~="message.assistant"][aria-busy="true"]::after,
     & [data-cap-part~="composer"]::before,
@@ -705,13 +666,10 @@
   & .cx-theme-cyberpunk-glitch-layer,
   & .cx-theme-cyberpunk-brand-rail,
   & .cx-theme-cyberpunk-hero-sub::after,
-  & .cx-theme-cyberpunk-scanlines,
-  & .cx-theme-cyberpunk-scanlines::before,
-  & .cx-theme-cyberpunk-scanlines::after {
+  & .cx-theme-cyberpunk-scanlines {
     animation: none;
   }
   & .cx-theme-cyberpunk-boot,
-  & .cx-theme-cyberpunk-scanlines::after,
   & [data-cap-part~="message.assistant"][aria-busy="true"]::before,
   & [data-cap-part~="message.assistant"][aria-busy="true"]::after,
   & [data-cap-part~="composer"]::before,
@@ -899,14 +857,6 @@
   92% {
     opacity: 0.55;
     transform: none;
-  }
-}
-@keyframes cx-theme-cyberpunk-sweep {
-  0% {
-    transform: translateY(-160px);
-  }
-  100% {
-    transform: translateY(100vh);
   }
 }
 @keyframes cx-theme-cyberpunk-show {
