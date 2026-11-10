@@ -593,7 +593,7 @@
   }
 }
 
-/* ---------- Reduced motion: lines and colours stay, nothing moves, no boot screen ---------- */
+/* ---------- Reduced motion: lines and colours stay, nothing moves, no boot screen or cover ---------- */
 
 /*
  * [data-cap-state] twice gives these the weight of the run-state rules above, so coming later
@@ -612,6 +612,7 @@
       animation: none;
     }
     & .cx-theme-cyberpunk-boot,
+    & [data-cap-part~="shell"]::after,
     & [data-cap-part~="message.assistant"][aria-busy="true"]::before,
     & [data-cap-part~="composer"]::before,
     & [data-cap-part~="composer"]::after {
@@ -631,10 +632,38 @@
     animation: none;
   }
   & .cx-theme-cyberpunk-boot,
+  & [data-cap-part~="shell"]::after,
   & [data-cap-part~="message.assistant"][aria-busy="true"]::before,
   & [data-cap-part~="composer"]::before,
   & [data-cap-part~="composer"]::after {
     display: none;
+  }
+}
+
+/* ---------- First paint of a new sign-in: a cover until the boot screen takes over ---------- */
+
+/*
+ * The boot screen is client code: it mounts after hydration, so the server-rendered page would
+ * show first. On the first workspace document of a sign-in (`sign-in=new`, rendered by the server)
+ * the boot screen's own backdrop covers the shell (the whole window) from the first paint, until
+ * the component is in: the boot screen itself, or its hidden `boot-gate` marker when it does not
+ * play. Should the component never come (failed, switched off), the cover fades by itself after
+ * 5 s. It comes after the reduced-motion blocks, which hide it (it sets no `display`).
+ */
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="sign-in=new"]):not(
+  :has(.cx-theme-cyberpunk-boot, .cx-theme-cyberpunk-boot-gate)
+) {
+  & [data-cap-part~="shell"]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: var(--cb-z-decoration, 2147483000);
+    pointer-events: none;
+    background-color: var(--cb-bg);
+    background-image:
+      repeating-linear-gradient(to bottom, rgba(0, 229, 255, 0.05) 0 1px, transparent 1px 3px),
+      radial-gradient(ellipse at center, rgba(0, 229, 255, 0.08), transparent 70%);
+    animation: cx-theme-cyberpunk-cover-out 0.3s linear 5s forwards;
   }
 }
 
@@ -820,6 +849,13 @@
   }
 }
 /* The boot screen switching off: collapse to a bright line, then shrink to nothing. */
+/* The first-paint cover's fallback: gone if the boot screen never came. */
+@keyframes cx-theme-cyberpunk-cover-out {
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
 @keyframes cx-theme-cyberpunk-boot-out {
   0% {
     transform: none;
