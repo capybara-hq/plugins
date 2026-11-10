@@ -1,9 +1,11 @@
 /**
  * Markdown -> Telegram HTML (https://core.telegram.org/bots/api#html-style).
  * Supported tags: b, i, s, code, pre (+ code class="language-x"), a href, blockquote. Headings become bold
- * lines, lists use "•" (numbers are kept). Only `&lt;`, `&gt;`, `&amp;` and `&quot;` are valid entities.
+ * lines, lists use "•" (numbers are kept), tables become lists (tables.ts). Only `&lt;`, `&gt;`, `&amp;` and `&quot;` are valid entities.
  * Telegram's 4096 limit counts the visible text after entity parsing (UTF-16 code units).
  */
+
+import { tablesToLists } from "./tables.js";
 
 export const TEXT_LIMIT = 4096;
 
@@ -121,9 +123,12 @@ function codeBlock(lang: string, lines: string[]): string {
   return l === "" ? `<pre>${body}</pre>` : `<pre><code class="language-${l}">${body}</code></pre>`;
 }
 
-/** Converts a model reply from Markdown to Telegram HTML (mentions neutralised outside code). */
+/**
+ * Converts a model reply from Markdown to Telegram HTML (mentions neutralised outside code). The
+ * HTML style has no tables: each table becomes a list first (tables.ts).
+ */
 export function markdownToTelegramHtml(md: string): string {
-  const lines = md.replace(/\r\n?/g, "\n").replaceAll("\u0000", "").split("\n");
+  const lines = tablesToLists(md.replace(/\r\n?/g, "\n").replaceAll("\u0000", "")).split("\n");
   const out: string[] = [];
   let fence: { lang: string; lines: string[] } | undefined;
   let quote: string[] | undefined;
@@ -221,7 +226,7 @@ export function fitHtml(lead: string, body: string, limit = TEXT_LIMIT): string 
 /**
  * Splits Telegram HTML into parts of at most `limit` visible characters. Never cuts inside a tag or entity;
  * open tags are closed at the end of a part and reopened at the start of the next. Prefers cutting at a
- * newline or space.
+ * newline (in the second half of the part), then at a space.
  */
 export function splitHtml(html: string, limit = TEXT_LIMIT): string[] {
   const tokens = tokenise(html);
@@ -231,6 +236,8 @@ export function splitHtml(html: string, limit = TEXT_LIMIT): string[] {
   let stack: string[][] = []; // [open tag text, name]
   let prefix = "";
   let cand: { i: number; vis: number; stack: string[][] } | undefined;
+  // The last newline in the part: a cut there keeps lines (a list item, a table row) whole.
+  let nl: typeof cand;
 
   const emit = (toks: Token[], count: number, at: string[][]) => {
     if (count > 0) parts.push(prefix + toks.map((t) => t.text).join("") + closers(at));
@@ -245,6 +252,7 @@ export function splitHtml(html: string, limit = TEXT_LIMIT): string[] {
       continue;
     }
     if (vis + t.len > limit) {
+      if (nl && nl.vis >= limit / 2) cand = nl;
       if (cand && cand.vis >= limit / 2) {
         emit(cur.slice(0, cand.i), cand.vis, cand.stack);
         const rest = cur.slice(cand.i + 1);
@@ -258,8 +266,10 @@ export function splitHtml(html: string, limit = TEXT_LIMIT): string[] {
         cur = [];
       }
       cand = undefined;
+      nl = undefined;
     }
     if (/^\s$/.test(t.text)) cand = { i: cur.length, vis, stack: [...stack] };
+    if (t.text === "\n") nl = cand;
     cur.push(t);
     vis += t.len;
   }

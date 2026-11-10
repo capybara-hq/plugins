@@ -106,3 +106,36 @@ describe("splitMrkdwn", () => {
     expect(chunks.join("")).toBe("😀".repeat(15));
   });
 });
+
+describe("markdownToMrkdwn tables", () => {
+  it("a table becomes a list with mrkdwn inline formatting; text around it stays", () => {
+    const md = [
+      "**实际情况**",
+      "| 尝试 | 结果 |",
+      "|---|---|",
+      "| 列出会话（第 2 次） | 报错：`The user has not connected Slack`（提示已弹出连接卡片） |",
+      "",
+      "以上是结果。",
+    ].join("\n");
+    expect(markdownToMrkdwn(md)).toBe(
+      [
+        "*实际情况*",
+        "• *列出会话（第 2 次）* — 报错：`The user has not connected Slack`（提示已弹出连接卡片）",
+        "",
+        "以上是结果。",
+      ].join("\n"),
+    );
+  });
+
+  it("cells keep the escaping and mention guards (& < >, <!channel>, link URLs)", () => {
+    const md = "| who | note |\n|---|---|\n| <!channel> & co | [x](https://a.example/?q=<b>) |";
+    expect(markdownToMrkdwn(md)).toBe(
+      "• *&lt;!channel&gt; &amp; co* — <https://a.example/?q=%3Cb%3E|x>",
+    );
+  });
+
+  it("a table in a code fence is left as code", () => {
+    const md = "```\n| a | b |\n|---|---|\n```";
+    expect(markdownToMrkdwn(md)).toBe(md);
+  });
+});

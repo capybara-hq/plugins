@@ -2,8 +2,11 @@
  * Markdown → Slack mrkdwn（https://docs.slack.dev/messaging/formatting-message-text ，2026-10-20 查阅）：
  * 粗体 `*x*`、斜体 `_x_`、删除线 `~x~`、行内代码与代码块（不支持语言标注）、链接 `<url|text>`、引用 `>`；
  * 没有标题与列表语法——标题转为粗体行，无序列表转为「•」，有序列表原样保留。
+ * No table syntax either: tables become lists (tables.ts).
  * 文本里的 `&`、`<`、`>` 必须转义为 `&amp;`、`&lt;`、`&gt;`（Slack 用它们做控制序列）。
  */
+
+import { tablesToLists } from "./tables.js";
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -69,11 +72,14 @@ function convertLine(line: string): string {
   return inline(line);
 }
 
-/** 把模型回复的 Markdown 转为 Slack mrkdwn。 */
+/**
+ * Converts a model reply from Markdown to Slack mrkdwn. mrkdwn has no tables: each table becomes a
+ * list first (see tables.ts); {@link renderSend} sends native table blocks where it can.
+ */
 export function markdownToMrkdwn(md: string): string {
   const out: string[] = [];
   let inFence = false;
-  for (const line of md.replace(/\r\n?/g, "\n").split("\n")) {
+  for (const line of tablesToLists(md).split("\n")) {
     if (/^\s*(```|~~~)/.test(line)) {
       out.push("```");
       inFence = !inFence;
