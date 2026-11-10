@@ -283,7 +283,9 @@ describe("Lark webhook inbound", () => {
       status: 401,
     });
     // Within the window still passes
-    expect((await handle(channel(), request(body, { timestamp: now - 290, receivedAt: at }))).kind).toBe("events");
+    expect(
+      (await handle(channel(), request(body, { timestamp: now - 290, receivedAt: at }))).kind,
+    ).toBe("events");
   });
 
   it("decryption failure → 400", async () => {
