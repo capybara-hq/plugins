@@ -113,15 +113,18 @@
   [data-cap-part~="sidebar.item"][aria-current="page"] {
   box-shadow: inset 2px 0 0 var(--cb-accent);
 }
+/* Conversation links carry no padding of their own: indent their text so the active bar keeps a gap
+   (every row, so the text never shifts when a row becomes current). */
+[data-cap-state~="theme=theme-cyberpunk/cyberpunk"]
+[data-cap-part~="sidebar.item"][href^="/chat/"] {
+  padding-inline-start: var(--cb-space-2);
+}
 [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] [data-cap-part~="title-bar"] {
   box-shadow: inset 0 -1px 0 rgba(0, 229, 255, 0.16);
 }
 [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] [data-cap-part~="status-bar"] {
   box-shadow: inset 0 1px 0 rgba(0, 229, 255, 0.16);
   letter-spacing: 0.04em;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] [data-cap-part~="message.user"] {
-  box-shadow: inset 2px 0 0 var(--cx-theme-cyberpunk-cyan);
 }
 [data-cap-state~="theme=theme-cyberpunk/cyberpunk"]
   [data-cap-part~="tool-row"][aria-expanded="true"] {
