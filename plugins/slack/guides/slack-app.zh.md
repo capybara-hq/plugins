@@ -7,10 +7,11 @@
 ## 1. 用 manifest 创建应用
 
 打开 <https://api.slack.com/apps>，选择 **Create New App → From a manifest**，选中你的工作区，
-粘贴下面的 manifest。它会登记插件需要的机器人权限、事件和斜杠命令。
+粘贴下面的 manifest。
 
 ::: mode long_connection
-Socket Mode 不需要公网地址：由 Slack 与 Capybara 之间保持一条长连接。
+Socket Mode 不需要公网地址：由 Slack 与 Capybara 之间保持一条长连接。这份 manifest 会登记插件需要的
+机器人权限、事件和斜杠命令。
 
 ```yaml title="应用 manifest（Socket Mode）"
 # Slack app manifest for the Capybara Slack plugin, Socket Mode (long connection).
@@ -26,7 +27,7 @@ features:
     messages_tab_enabled: true
     messages_tab_read_only_enabled: false
   bot_user:
-    display_name: capybara
+    display_name: Capybara
     always_online: true
   slash_commands:
     - command: /new
@@ -70,7 +71,52 @@ settings:
   org_deploy_enabled: false
   token_rotation_enabled: false
 ```
+:::
 
+::: mode webhook
+Webhook 模式下，Slack 把事件、卡片点击和斜杠命令发到这个渠道连接的地址，而这个地址要等连接保存后
+才存在。先用这份基础 manifest：它只登记机器人和权限，不含任何地址。保存之后，第 5 步再补上地址。
+
+```yaml title="基础应用 manifest（Webhook）"
+# Slack app manifest for the Capybara Slack plugin, webhook inbound mode, first step: no
+# addresses yet. Step 5 replaces it with the full manifest once the connection is saved.
+# Reference: https://docs.slack.dev/reference/app-manifest (checked 2026-11-09).
+display_information:
+  # Slack caps app names at 35 characters; shorten it in the app settings if it is longer.
+  name: "{{connectionName}}"
+  description: Chat with your organization's Capybara agents.
+  background_color: "#3d2f24"
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: Capybara
+    always_online: true
+oauth_config:
+  # Sign in with Slack (identity-source@1).
+  redirect_urls:
+    - "{{signInCallbackUrl}}"
+  scopes:
+    bot:
+      - chat:write # post and update replies and cards
+      - commands # slash commands /new, /env, /capybara
+      - im:write # conversations.open: tell the bot's own DM from other DMs
+      - im:history # message.im: direct messages to the bot
+      - app_mentions:read # app_mention: @capybara in channels
+      - channels:history # message.channels: thread replies in public channels
+      - groups:history # message.groups: thread replies in private channels
+      - users:read # users.info; team_join / user_change; users.list
+      - users:read.email # directory@1: email addresses in users.list
+settings:
+  socket_mode_enabled: false
+  org_deploy_enabled: false
+  token_rotation_enabled: false
+```
+:::
+
+::: mode long_connection
 ## 2. 创建应用级令牌
 
 在 **Basic Information → App-Level Tokens** 选择 **Generate Token and Scopes**，添加权限
@@ -80,7 +126,30 @@ settings:
 :::
 
 ::: mode webhook
-Webhook 模式下，Slack 把事件、卡片点击和斜杠命令发到这个渠道连接的地址，并在保存时校验该地址。
+## 2. 复制签名密钥
+
+把 **Basic Information → App Credentials → Signing Secret** 填进下方的 **签名密钥**。每个 webhook
+请求都用它校验；不填则所有请求都会被拒绝。
+:::
+
+## 3. 安装应用并复制机器人令牌
+
+选择 **Install App → Install to Workspace**，把 **Bot User OAuth Token**（`xoxb-…`）填进下方的
+**机器人令牌**。
+
+::check bot-token 机器人令牌可用
+::check bot-scopes 应用具备 manifest 中的全部权限
+
+## 4. 保存渠道
+
+填好本页其余字段并保存，保存时 Capybara 会校验机器人令牌。使用 Socket Mode 时到这里就完成了：机器人
+会自动连上，可以开始收消息。
+
+::: mode webhook
+## 5. 让 Slack 指向这个连接
+
+保存之后，下面的 manifest 会带上这个连接的地址 `{{webhookUrl}}`（保存前按原样显示）。在应用里打开
+**App Manifest**，用这份 manifest 整体替换并保存。它会加上斜杠命令、事件订阅和交互，全部发往这个地址。
 
 ```yaml title="应用 manifest（Webhook）"
 # Slack app manifest for the Capybara Slack plugin, webhook inbound mode.
@@ -96,7 +165,7 @@ features:
     messages_tab_enabled: true
     messages_tab_read_only_enabled: false
   bot_user:
-    display_name: capybara
+    display_name: Capybara
     always_online: true
   slash_commands:
     - command: /new
@@ -146,26 +215,13 @@ settings:
   token_rotation_enabled: false
 ```
 
-创建应用或保存 **Event Subscriptions** 时，Slack 会校验 Request URL `{{webhookUrl}}`，由 Capybara
-应答校验，所以要先保存渠道连接。若 Slack 提示地址未通过校验，先在这里保存连接，再到
-**Event Subscriptions** 重试。
-
-## 2. 复制签名密钥
-
-把 **Basic Information → App Credentials → Signing Secret** 填进下方的 **签名密钥**。每个 webhook
-请求都用它校验；不填则所有请求都会被拒绝。
+保存时 Slack 会校验 Request URL；连接已经存在，Capybara 会应答校验。Slack 要求时重新安装应用。
 
 ::check capybara:webhook-public Webhook 地址可从公网访问
 ::check capybara:webhook-received Slack 已送达一个签名有效的请求
 :::
 
-## 3. 安装应用并复制机器人令牌
-
-选择 **Install App → Install to Workspace**，把 **Bot User OAuth Token**（`xoxb-…`）填进下方的
-**机器人令牌**。
-
-::check bot-token 机器人令牌可用
-::check bot-scopes 应用具备 manifest 中的全部权限
+---
 
 ## Slack 登录
 

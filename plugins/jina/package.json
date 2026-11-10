@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-jina",
-  "version": "0.1.0-rc.4",
+  "version": "0.1.0-rc.5",
   "description": "Web search and page reading (web-search@1, web-fetch@1) through Jina's search and reader APIs",
   "license": "Apache-2.0",
   "repository": {
@@ -27,11 +27,11 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.10",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.11",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@capybara-hq/plugin-model-fake": "^0.1.0-rc.10",
-    "@capybara-hq/testing": "^0.1.0-rc.13"
+    "@capybara-hq/plugin-model-fake": "^0.1.0-rc.11",
+    "@capybara-hq/testing": "^0.1.0-rc.14"
   }
 }

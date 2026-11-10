@@ -84,3 +84,16 @@ export function toChannelSendError(e: unknown): ChannelSendError {
       return new ChannelSendError("Slack API call failed", { retryable: true, cause: e });
   }
 }
+
+/**
+ * True when a send failed because Slack refused the message's blocks or attachments
+ * (`invalid_blocks`, `invalid_blocks_format`, `invalid_attachments`, e.g. a table block it does not
+ * accept): the message can still go out as text.
+ */
+export function blocksRejected(e: unknown): boolean {
+  const cause = e instanceof ChannelSendError ? e.cause : e;
+  const code = platformErrorCode(cause);
+  return (
+    code === "invalid_blocks" || code === "invalid_blocks_format" || code === "invalid_attachments"
+  );
+}

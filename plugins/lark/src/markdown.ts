@@ -10,6 +10,11 @@
  *
  * 防注入（与 Slack 的 `<!channel>` 同等关键）：模型文本不能借这些标签 @ 所有人 / 任何人或改写卡片。
  * - 代码之外：`&` → `&#38;`、`<` → `&#60;`、`\` → `&#92;`（反斜杠不能用来抵消下文给方括号加的转义）。于是任何 `<tag` 都不成立；模型写的实体（`&#60;at …`）也只会原样显示。
+ *   An escaped pipe `\|` becomes `&#124;`: a literal `|` that does not split a table cell.
+ * - Tables (GFM pipe syntax) render natively: per the page above, at most four tables per rich text
+ *   component and five body rows per page (more rows are paginated). {@link splitMarkdown} keeps a
+ *   table in one card when it fits, repeats the header row when it must split one, and starts a new
+ *   card before a fifth table.
  * - 链接（与 Slack 的 mrkdwn.ts 一致）：只有地址为 `http(s)://` 或 `mailto:` 的 `[文字](地址)` 与 `<地址>` 自动链接
  *   做成链接——地址里会破坏语法的字符（空格、括号、方括号、`<` `>` `"` `\`）百分号编码，地址里不做实体转义；
  *   其余写法（`javascript:`、`lark://`、`data:` 等地址、图片 `![…](…)`、引用式链接 `[x][1]` / `[1]: …`）一律把
@@ -115,6 +120,12 @@ function escapeText(s: string): string {
         }
       }
     }
+    if (c === "\\" && s[i + 1] === "|") {
+      // `\|` is a literal pipe (in a table cell, not a delimiter); the entity keeps it one
+      out += "&#124;";
+      i += 2;
+      continue;
+    }
     out += escChar(c);
     i++;
   }
@@ -210,7 +221,26 @@ export function toCardMarkdown(md: string): string {
     fence = fenceOpener(line);
     out.push(fence !== undefined ? neutralizeCode(line) : convertLine(line));
   }
-  return out.join("\n");
+  return spaceTables(out).join("\n");
+}
+
+/**
+ * A blank line before and after every table: a table right under a paragraph line may not start
+ * a table in every renderer, and in GFM a text line right after a table is one more row.
+ */
+function spaceTables(lines: string[]): string[] {
+  const tables = findTables(lines);
+  if (tables.size === 0) return lines;
+  const out: string[] = [];
+  lines.forEach((line, i) => {
+    if (tables.has(i) && i > 0 && (lines[i - 1] ?? "").trim() !== "") out.push("");
+    out.push(line);
+    const next = lines[i + 1];
+    if ([...tables.values()].includes(i + 1) && next !== undefined && next.trim() !== "") {
+      out.push("");
+    }
+  });
+  return out;
 }
 
 /**
@@ -268,13 +298,64 @@ function cut(s: string, max: number): [string, string] {
   return [s.slice(0, at), rest];
 }
 
+/** Most tables Lark renders in one rich text component. */
+export const MAX_TABLES = 4;
+
+/** Cells of a table row split on unescaped pipes; undefined when the line has no pipe. */
+function rowCells(line: string): string[] | undefined {
+  let t = line.trim();
+  if (!/(^|[^\\])\|/.test(t)) return undefined;
+  if (t.startsWith("|")) t = t.slice(1);
+  if (t.endsWith("|") && !t.endsWith("\\|")) t = t.slice(0, -1);
+  return t.split(/(?<!\\)\|/).map((c) => c.trim());
+}
+
+const tableLine = (l: string) => !/^\s{4,}/.test(l) && !/^\s*>/.test(l);
+
+/**
+ * The GFM tables among card Markdown lines, outside code fences: start index → end index
+ * (exclusive). A header row, a delimiter row with as many cells, then rows with a pipe up to a
+ * blank line.
+ */
+function findTables(lines: string[]): Map<number, number> {
+  const found = new Map<number, number>();
+  let fence: Fence | undefined;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] as string;
+    if (fence !== undefined) {
+      if (fenceCloses(line, fence)) fence = undefined;
+      continue;
+    }
+    fence = fenceOpener(line);
+    if (fence !== undefined || !tableLine(line)) continue;
+    const head = rowCells(line);
+    const next = lines[i + 1];
+    const delim = next !== undefined && tableLine(next) ? rowCells(next) : undefined;
+    if (!head || !delim || delim.length !== head.length) continue;
+    if (!delim.every((c) => /^:?-+:?$/.test(c))) continue;
+    let j = i + 2;
+    while (j < lines.length) {
+      const l = lines[j] as string;
+      if (l.trim() === "" || !tableLine(l) || fenceOpener(l) || !rowCells(l)) break;
+      j++;
+    }
+    found.set(i, j);
+    i = j - 1;
+  }
+  return found;
+}
+
 /**
  * 把（已转换的）卡片 Markdown 拆成每段不超过 `limit` 个 UTF-16 码元：按行装箱（段首 / 段尾的空行去掉），
  * 单行过长时优先在空格处切；切在代码块中间时本段补上同字符、同长度的收尾围栏，下一段用原开头（含 info）重新打开。
  */
 export function splitMarkdown(text: string, limit: number): string[] {
-  if (text.length <= limit) return [text];
+  const lines = text.split("\n");
+  const tables = findTables(lines);
+  if (text.length <= limit && tables.size <= MAX_TABLES) return [text];
   const out: string[] = [];
+  // Tables in the current part (Lark renders at most MAX_TABLES per component)
+  let count = 0;
   let cur: string[] = [];
   let len = 0;
   // 当前打开的围栏（与 toCardMarkdown 同一套判定）；重开时用同样的字符、长度与 info，收尾用同样的字符与长度
@@ -296,9 +377,48 @@ export function splitMarkdown(text: string, limit: number): string[] {
     if (s.trim() !== "" && !emptyBlock) out.push(s);
     cur = [];
     len = 0;
+    count = 0;
     if (open !== undefined && !final) push(opener(open));
   };
-  for (const line of text.split("\n")) {
+  const room = () => limit - (cur.length > 0 ? len + 1 : 0);
+  const size = (ls: string[]) => ls.join("\n").length;
+  /**
+   * A table (never inside a fence): whole in the current part when it fits, else whole in a new
+   * part, else split by rows with the header and delimiter rows repeated in every part.
+   */
+  const addTable = (rows: string[]) => {
+    const head = rows.slice(0, 2);
+    if (cur.length > 0 && (count >= MAX_TABLES || size(rows) > room())) flush();
+    if (size(rows) <= room()) {
+      for (const r of rows) push(r);
+      count++;
+      return;
+    }
+    for (const r of head) push(r);
+    count++;
+    for (const r of rows.slice(2)) {
+      if (r.length > room()) {
+        flush();
+        for (const h of head) push(h);
+        count++;
+      }
+      if (r.length <= room()) push(r);
+      else addLine(r);
+    }
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const end = tables.get(i);
+    if (end !== undefined) {
+      addTable(lines.slice(i, end));
+      i = end - 1;
+      continue;
+    }
+    addLine(lines[i] as string);
+  }
+  flush(true);
+  return out;
+
+  function addLine(line: string) {
     const opens = open === undefined ? fenceOpener(line) : undefined;
     const closes = open !== undefined && fenceCloses(line, open);
     const inside = opens ?? (closes ? undefined : open);
@@ -331,6 +451,4 @@ export function splitMarkdown(text: string, limit: number): string[] {
     if (opens !== undefined) open = opens;
     else if (closes) open = undefined;
   }
-  flush(true);
-  return out;
 }

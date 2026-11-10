@@ -3,7 +3,6 @@ import {
   checkThemeReadability,
   mergeThemeSchemes,
   type ParsedTheme,
-  parsePluginManifest,
   parseThemeFile,
   sanitizeThemeSvg,
   THEME_LIMITS,
@@ -93,12 +92,9 @@ describe("cyberpunk theme", () => {
     }
   });
 
-  it("plugin.json lists the theme and parses", () => {
-    const m = parsePluginManifest(JSON.parse(text(".capybara-plugin/plugin.json")));
-    expect(m).not.toHaveProperty("errors");
-    expect((m as { themes?: { path: string }[] }).themes).toEqual([
-      { path: "./themes/cyberpunk.json" },
-    ]);
+  it("plugin.json lists the theme (the packed manifest is parsed in pack.test.ts)", () => {
+    const source = JSON.parse(text(".capybara-plugin/plugin.json")) as { themes?: unknown };
+    expect(source.themes).toEqual([{ path: "./themes/cyberpunk.json" }]);
   });
 
   it("carries no third-party game IP in its text", () => {
@@ -110,6 +106,8 @@ describe("cyberpunk theme", () => {
       "logo.svg",
       "favicon.svg",
       ...readdirSync(new URL("themes/", root)).map((f) => `themes/${f}`),
+      ...readdirSync(new URL("src/", root)).map((f) => `src/${f}`),
+      "client/styles/cyberpunk.css",
     ];
     for (const f of textFiles) expect(text(f), f).not.toMatch(banned);
   });

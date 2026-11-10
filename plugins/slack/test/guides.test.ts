@@ -57,7 +57,7 @@ type AppManifest = {
   display_information: { name: string };
   features: {
     bot_user: { display_name: string };
-    slash_commands: {
+    slash_commands?: {
       command: string;
       url?: string;
       should_escape: boolean;
@@ -66,22 +66,30 @@ type AppManifest = {
   };
   oauth_config: { redirect_urls: string[]; scopes: { bot: string[]; user?: string[] } };
   settings: {
-    event_subscriptions: { request_url?: string; bot_events: string[] };
-    interactivity: { is_enabled: boolean; request_url?: string };
+    event_subscriptions?: { request_url?: string; bot_events: string[] };
+    interactivity?: { is_enabled: boolean; request_url?: string };
     socket_mode_enabled: boolean;
     token_rotation_enabled: boolean;
   };
 };
 
-const appManifest = (mode: string): AppManifest => {
+/** The manifests of a mode, in order: one for long connection; basic then full for webhook. */
+const appManifests = (mode: string): AppManifest[] => {
   const r = render("slack-app", "channel-connection", mode, "admin");
   expect(r.unresolved).toEqual([]);
   const blocks = codeBlocks(r);
-  expect(blocks).toHaveLength(1);
-  const [b] = blocks;
-  if (!b) throw new Error("no code block");
-  expect(b.language).toBe("yaml");
-  return parse(b.text) as AppManifest;
+  expect(blocks).toHaveLength(mode === "webhook" ? 2 : 1);
+  return blocks.map((b) => {
+    expect(b.language).toBe("yaml");
+    return parse(b.text) as AppManifest;
+  });
+};
+
+/** The manifest with the slash commands and events: the only one, or the webhook full one. */
+const appManifest = (mode: string): AppManifest => {
+  const m = appManifests(mode).at(-1);
+  if (!m) throw new Error("no code block");
+  return m;
 };
 
 const BOT_EVENTS = [
@@ -138,22 +146,22 @@ describe("guides/slack-app.md", () => {
     it(`${mode}: renders to a manifest with the plugin's scopes, events and commands`, () => {
       const m = appManifest(mode);
       expect(m.display_information.name).toBe(values.connectionName);
-      expect(m.features.bot_user.display_name).toBe("capybara");
+      expect(m.features.bot_user.display_name).toBe("Capybara");
       expect(m.oauth_config.redirect_urls).toEqual([values.signInCallbackUrl]);
       // The bot-scopes check compares against exactly these scopes
       expect([...m.oauth_config.scopes.bot].sort()).toEqual([...REQUIRED_BOT_SCOPES].sort());
       expect(m.oauth_config.scopes.user).toBeUndefined();
-      expect([...m.settings.event_subscriptions.bot_events].sort()).toEqual(BOT_EVENTS);
-      expect(m.settings.interactivity.is_enabled).toBe(true);
+      expect([...(m.settings.event_subscriptions?.bot_events ?? [])].sort()).toEqual(BOT_EVENTS);
+      expect(m.settings.interactivity?.is_enabled).toBe(true);
       expect(m.settings.token_rotation_enabled).toBe(false);
-      expect(m.features.slash_commands.map((c) => c.command)).toEqual([
+      expect(m.features.slash_commands?.map((c) => c.command)).toEqual([
         "/new",
         "/env",
         "/capybara",
       ]);
       // Text arrives as typed (no <@U…> rewriting of mentions)
-      expect(m.features.slash_commands.every((c) => c.should_escape === false)).toBe(true);
-      expect(m.features.slash_commands.find((c) => c.command === "/capybara")?.usage_hint).toBe(
+      expect(m.features.slash_commands?.every((c) => c.should_escape === false)).toBe(true);
+      expect(m.features.slash_commands?.find((c) => c.command === "/capybara")?.usage_hint).toBe(
         "<skill> [args]",
       );
     });
@@ -169,9 +177,9 @@ describe("guides/slack-app.md", () => {
   it("long_connection: Socket Mode on, no request URLs, the app token check", () => {
     const m = appManifest("long_connection");
     expect(m.settings.socket_mode_enabled).toBe(true);
-    expect(m.settings.event_subscriptions.request_url).toBeUndefined();
-    expect(m.settings.interactivity.request_url).toBeUndefined();
-    expect(m.features.slash_commands.every((c) => c.url === undefined)).toBe(true);
+    expect(m.settings.event_subscriptions?.request_url).toBeUndefined();
+    expect(m.settings.interactivity?.request_url).toBeUndefined();
+    expect(m.features.slash_commands?.every((c) => c.url === undefined)).toBe(true);
     const r = render("slack-app", "channel-connection", "long_connection", "admin");
     expect(r.checks.map((c) => [c.id, c.source])).toEqual([
       ["app-token", "plugin"],
@@ -181,25 +189,57 @@ describe("guides/slack-app.md", () => {
     ]);
   });
 
-  it("webhook: Socket Mode off, events, clicks and slash commands go to the webhook URL", () => {
+  it("webhook: a basic manifest without addresses comes before saving", () => {
+    const [basic, full] = appManifests("webhook");
+    if (!basic || !full) throw new Error("expected two manifests");
+    expect(basic.display_information.name).toBe(values.connectionName);
+    expect(basic.features.bot_user.display_name).toBe("Capybara");
+    expect(basic.features.slash_commands).toBeUndefined();
+    expect(basic.settings.event_subscriptions).toBeUndefined();
+    expect(basic.settings.interactivity).toBeUndefined();
+    expect(basic.settings).toEqual({
+      socket_mode_enabled: false,
+      org_deploy_enabled: false,
+      token_rotation_enabled: false,
+    });
+    // The same bot and Sign in with Slack settings as the full manifest
+    expect(basic.oauth_config).toEqual(full.oauth_config);
+    const [basicBlock] = codeBlocks(render("slack-app", "channel-connection", "webhook", "admin"));
+    expect(basicBlock?.text).not.toContain(values.webhookUrl);
+  });
+
+  it("webhook: the full manifest sends events, clicks and slash commands to the webhook URL", () => {
     const m = appManifest("webhook");
     expect(m.settings.socket_mode_enabled).toBe(false);
-    expect(m.settings.event_subscriptions.request_url).toBe(values.webhookUrl);
-    expect(m.settings.interactivity.request_url).toBe(values.webhookUrl);
-    expect(m.features.slash_commands.map((c) => c.url)).toEqual([
+    expect(m.settings.event_subscriptions?.request_url).toBe(values.webhookUrl);
+    expect(m.settings.interactivity?.request_url).toBe(values.webhookUrl);
+    expect(m.features.slash_commands?.map((c) => c.url)).toEqual([
       values.webhookUrl,
       values.webhookUrl,
       values.webhookUrl,
     ]);
     const r = render("slack-app", "channel-connection", "webhook", "admin");
     expect(r.checks.map((c) => c.id)).toEqual([
-      "capybara:webhook-public",
-      "capybara:webhook-received",
       "bot-token",
       "bot-scopes",
+      "capybara:webhook-public",
+      "capybara:webhook-received",
       "capybara:public-url",
     ]);
   });
+
+  for (const mode of ["long_connection", "webhook"] as const) {
+    it(`${mode}: one thematic break, then the reference material`, () => {
+      for (const locale of ["en", "zh"] as const) {
+        const r = render("slack-app", "channel-connection", mode, "admin", locale);
+        const md = r.blocks.flatMap((b) => (b.kind === "markdown" ? [b.text] : [])).join("\n");
+        const lines = md.split("\n");
+        expect(lines.filter((l) => l === "***")).toHaveLength(1);
+        const signIn = locale === "en" ? "## Sign in with Slack" : "## Slack 登录";
+        expect(lines.indexOf(signIn)).toBeGreaterThan(lines.indexOf("***"));
+      }
+    });
+  }
 
   it("each mode shows only its own steps", () => {
     const text = (mode: string) =>
@@ -216,7 +256,7 @@ describe("guides/slack-app.md", () => {
     const { webhookUrl: _, ...rest } = values;
     const r = render("slack-app", "channel-connection", "webhook", "admin", "en", rest);
     expect(r.unresolved).toEqual(["webhookUrl"]);
-    const [b] = codeBlocks(r);
+    const b = codeBlocks(r).at(-1);
     expect(b?.text).toContain('request_url: "{{webhookUrl}}"');
     expect(() => parse(b?.text ?? "")).not.toThrow();
   });

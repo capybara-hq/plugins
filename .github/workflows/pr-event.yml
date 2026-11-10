@@ -1,0 +1,26 @@
+# Records which pull request an event was about, for the privileged workflow_run listeners
+# (community.yml: the issue gate; cla.yml: the CLA check). It runs with no permissions and no
+# secrets, also for fork PRs, and is all that runs on the pull_request event itself: it reads
+# nothing but the event's PR number and checks out nothing. The listeners treat the artifact as
+# untrusted (a PR can change this file) and accept it only when the PR's head is the run's head SHA.
+# The listeners read only this workflow's name `pr-event`, the artifact name `pr-event` and its
+# file `number`: keep them. Shared with capybara-hq/.github (README "Issue gate and CLA").
+name: pr-event
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, closed]
+permissions: {}
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Record the PR number
+        env:
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: mkdir -p pr-event && printf '%s\n' "$NUMBER" > pr-event/number
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr-event
+          path: pr-event/number
+          retention-days: 1

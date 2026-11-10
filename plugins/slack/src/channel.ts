@@ -13,7 +13,7 @@ import { LogLevel, type Logger as SlackLogger, SocketModeClient } from "@slack/s
 import { type FetchFunction, WebClient } from "@slack/web-api";
 import { z } from "zod";
 import { parseBlockActions } from "./actions.js";
-import { renderSend, renderUpdate } from "./blocks.js";
+import { renderSend, renderUpdate, type SlackPost } from "./blocks.js";
 import {
   ephemeral,
   escapeSlack,
@@ -23,7 +23,7 @@ import {
   typedCommand,
 } from "./commands.js";
 import { workspaceTokenProblem } from "./config.js";
-import { platformErrorCode, toChannelSendError } from "./errors.js";
+import { blocksRejected, platformErrorCode, toChannelSendError } from "./errors.js";
 import { eventToInbound, type SlackProfile, userInfoProfile } from "./inbound.js";
 import { handleSlackWebhook, type SlackEnvelope, type SlashOutcome } from "./webhook.js";
 
@@ -666,25 +666,38 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
       const client = web(c.botToken, signal);
       const threadTs = threadTsOf(target);
       let last: string | undefined;
-      for (const p of renderSend(message, locale)) {
-        let r: { channel?: string; ts?: string };
+      const post = async (p: SlackPost) => {
         try {
-          r = (await client.apiCall("chat.postMessage", {
+          return (await client.apiCall("chat.postMessage", {
             channel: target.chatId,
             text: p.text,
             ...(p.blocks !== undefined && { blocks: p.blocks }),
             ...(threadTs !== undefined && { thread_ts: threadTs }),
-          })) as typeof r;
+          })) as { channel?: string; ts?: string };
         } catch (e) {
           throw toChannelSendError(e);
         }
-        if (!r.ts) {
-          throw new ChannelSendError("Slack returned no message ts", {
-            retryable: false,
-            reason: "rejected",
+      };
+      for (const p of renderSend(message, locale)) {
+        const sent: { channel?: string; ts?: string }[] = [];
+        try {
+          sent.push(await post(p));
+        } catch (e) {
+          if (!p.fallback || !blocksRejected(e)) throw e;
+          log.warn("slack: Slack rejected a table block; the table is sent as a list", {
+            error: e instanceof Error ? e.message : String(e),
           });
+          for (const f of p.fallback) sent.push(await post(f));
         }
-        last = `${r.channel ?? target.chatId}:${r.ts}`;
+        for (const r of sent) {
+          if (!r.ts) {
+            throw new ChannelSendError("Slack returned no message ts", {
+              retryable: false,
+              reason: "rejected",
+            });
+          }
+          last = `${r.channel ?? target.chatId}:${r.ts}`;
+        }
       }
       if (last === undefined) throw new ChannelSendError("nothing to send", { retryable: false });
       return { messageId: last };
@@ -694,15 +707,33 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
       const p = renderUpdate(message, locale);
       const { channel, ts } = parseMessageId(messageId);
       const c = parse(config);
+      const edit = async (q: SlackPost) => {
+        try {
+          await web(c.botToken, signal).apiCall("chat.update", {
+            channel,
+            ts,
+            text: q.text,
+            ...(q.blocks !== undefined && { blocks: q.blocks }),
+          });
+        } catch (e) {
+          throw toChannelSendError(e);
+        }
+      };
       try {
-        await web(c.botToken, signal).apiCall("chat.update", {
-          channel,
-          ts,
-          text: p.text,
-          ...(p.blocks !== undefined && { blocks: p.blocks }),
-        });
+        await edit(p);
       } catch (e) {
-        throw toChannelSendError(e);
+        if (!p.fallback || !blocksRejected(e)) throw e;
+        const only = p.fallback.length === 1 ? p.fallback[0] : undefined;
+        if (!only) {
+          throw new ChannelSendError("message too long for a single Slack message", {
+            retryable: false,
+            reason: "too_large",
+          });
+        }
+        log.warn("slack: Slack rejected a table block; the table is sent as a list", {
+          error: e instanceof Error ? e.message : String(e),
+        });
+        await edit(only);
       }
     },
   };

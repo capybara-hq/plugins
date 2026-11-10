@@ -1,7 +1,7 @@
 {
   "name": "@capybara-hq/plugin-theme-cyberpunk",
-  "version": "0.1.0-rc.1",
-  "description": "Cyberpunk theme: neon yellow on deep blue-black with cyan glow, techno fonts and a neon pixel capybara",
+  "version": "0.1.0-rc.2",
+  "description": "Cyberpunk theme and UI: neon yellow on deep blue-black, a run-state HUD, scanlines, a boot screen, a glitch CYBERBARA wordmark and opt-in synthesized sound",
   "license": "Apache-2.0 AND OFL-1.1",
   "repository": {
     "type": "git",
@@ -10,11 +10,25 @@
   },
   "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/theme-cyberpunk#readme",
   "type": "module",
+  "imports": {
+    "#client-testing": "@capybara-hq/plugin-client/testing"
+  },
   "files": [
     "OFL-JetBrainsMono.txt",
     "OFL-ChakraPetch.txt"
   ],
+  "scripts": {
+    "build": "tsc -b"
+  },
   "devDependencies": {
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.10"
+    "@capybara-hq/plugin-client": "^0.1.0-rc.1",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.11",
+    "@types/react": "^19.3.0",
+    "jsdom": "^30.1.3",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "peerDependencies": {
+    "@capybara-hq/plugin-client": "^0.1.0-rc.1"
   }
 }

@@ -53,6 +53,12 @@
       "path": "plugins/telegram"
     },
     {
+      "path": "plugins/theme-cyberpunk"
+    },
+    {
+      "path": "plugins/theme-cyberpunk/test"
+    },
+    {
       "path": "plugins/todo"
     },
     {
