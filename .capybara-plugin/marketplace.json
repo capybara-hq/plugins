@@ -595,7 +595,7 @@
         "npm": {
           "package": "@capybara-hq/plugin-skills-core",
           "version": "0.1.0-rc.0",
-          "integrity": "sha512-ZDVaHKf/mJCayxB61hx57wgR0vtccxhpt4umjuovsLwbp4NsNiPv5/FgZyf3r1hllcECy9FmSA6zIutmnQSd+Q=="
+          "integrity": "sha512-U3R+B3QcklCQyye22bQU1aJq05oLW4Fr3hfmLHuPFOq5jNt30mDc0zNPSDLr6MFDdUI/OJkkX7wvkyKa+zRPAQ=="
         }
       }
     }

@@ -4,12 +4,12 @@ Read this when you need an optional frontmatter field, or the package limits.
 
 ## Optional frontmatter fields
 
-These are Agent Skills fields; Capybara does not validate or enforce them.
+These are Agent Skills fields. `compatibility` is validated; Capybara does not validate or enforce `license`, `metadata` or `allowed-tools`.
 
 | Field | Meaning |
 |---|---|
 | `license` | License name or a reference to a bundled license file. |
-| `compatibility` | Free text on environment requirements (tools, network, runtimes). |
+| `compatibility` | A string of 1-500 characters on environment requirements (tools, network, runtimes). |
 | `metadata` | A map of string keys to string values for your own bookkeeping. |
 | `allowed-tools` | Tools the skill expects to use. |
 
