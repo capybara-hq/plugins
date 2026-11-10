@@ -22,7 +22,7 @@ export function hudData(args: UiRenderArgs, now: Date = new Date()): HudData {
  */
 export default defineExtension({
   name: "theme-cyberpunk",
-  version: "0.1.0-rc.7",
+  version: "0.1.0-rc.8",
   sdk: "^0.1.0-rc.11",
   provides: [],
   ui: [
