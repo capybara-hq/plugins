@@ -15,12 +15,6 @@ export const WORDMARK = "CYBERBARA";
 /** `useClientStorage` key (local scope) of the sound toggle: "on" or absent (off, the default). */
 export const SOUND_KEY = "sound";
 
-/**
- * `useClientStorage` key (session scope) set once the boot screen has played in this browser
- * session: the gate while the host has no sign-in id.
- */
-export const BOOT_KEY = "booted";
-
 /** `useClientStorage` key (local scope): the sign-in id the boot screen last played for. */
 export const BOOT_SIGN_IN_KEY = "booted-sign-in";
 

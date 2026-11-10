@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
+
+import { type FakeHost, renderWithFakeHost } from "@capybara-hq/plugin-client/testing";
 import { createElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-// = @capybara-hq/plugin-client/testing, through package.json "imports" (see README, Tests)
-import { type FakeHost, renderWithFakeHost } from "#client-testing";
 import { FxLayer, measureFx, RunFx } from "../src/fx.js";
 
 let host: FakeHost | undefined;

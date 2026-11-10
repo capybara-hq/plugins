@@ -2,12 +2,12 @@ import {
   useClientStorage,
   useLocale,
   usePrefersReducedMotion,
+  useSignIn,
   useTheme,
 } from "@capybara-hq/plugin-client";
 import { type AnimationEvent, useEffect, useState } from "react";
 import { RunFx } from "./fx.js";
-import { BOOT_KEY, BOOT_SIGN_IN_KEY, cx, THEME_KEY, WORDMARK } from "./shared.js";
-import { useSignInId } from "./sign-in.js";
+import { BOOT_SIGN_IN_KEY, cx, THEME_KEY, WORDMARK } from "./shared.js";
 
 /** The boot screen's own exit animation (plugin CSS); its end removes the screen. */
 export const BOOT_OUT_ANIMATION = "cx-theme-cyberpunk-boot-out";
@@ -58,24 +58,22 @@ interface GateStorage {
 }
 
 /**
- * Whether the boot screen plays: once per sign-in when the host gives a sign-in id (it plays when
- * the id differs from the one it last played for, kept in local storage, so a new tab or window of
- * the same sign-in does not replay it), else once per browser session.
+ * Whether the boot screen plays: once per sign-in. It plays when the sign-in id (`useSignIn().id`)
+ * differs from the one it last played for, kept in local storage, so a reload or a new tab or
+ * window of the same sign-in does not replay it, and the next sign-in does.
  */
-export function bootDue(storage: GateStorage, signInId: string | null): boolean {
-  if (signInId !== null) return storage.get(BOOT_SIGN_IN_KEY) !== signInId;
-  return storage.get(BOOT_KEY, "session") === null;
+export function bootDue(storage: GateStorage, signInId: string): boolean {
+  return storage.get(BOOT_SIGN_IN_KEY) !== signInId;
 }
 
-/** Records that the boot screen played (for this sign-in, or for this browser session). */
-export function markBooted(storage: GateStorage, signInId: string | null): void {
-  if (signInId !== null) storage.set(BOOT_SIGN_IN_KEY, signInId);
-  else storage.set(BOOT_KEY, "1", "session");
+/** Records that the boot screen played for this sign-in. */
+export function markBooted(storage: GateStorage, signInId: string): void {
+  storage.set(BOOT_SIGN_IN_KEY, signInId);
 }
 
 /**
- * The boot screen itself: plays once per sign-in ({@link bootDue}), never under reduced motion. It never blocks input: the decoration layer and the screen take no pointer
- * events; it ends by itself after about 1.9 s (at most {@link BOOT_MAX_MS}): the card fades, then
+ * The boot screen itself: plays once per sign-in ({@link bootDue}), never under reduced motion.
+ * It never blocks input: the decoration layer and the screen take no pointer events; it ends by itself after about 1.9 s (at most {@link BOOT_MAX_MS}): the card fades, then
  * the opaque screen collapses to a line like a CRT switching off, so the page never shows through
  * it. Skip or Escape ends it at once.
  */
@@ -83,7 +81,7 @@ export function BootScreen() {
   const storage = useClientStorage();
   const reducedMotion = usePrefersReducedMotion();
   const { t } = useLocale();
-  const signInId = useSignInId();
+  const signInId = useSignIn().id;
   const [show, setShow] = useState(() => !reducedMotion && bootDue(storage, signInId));
 
   // Mark it played first, so a reload during the animation does not replay it.

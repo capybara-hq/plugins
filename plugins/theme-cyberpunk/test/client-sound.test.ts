@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
+
+import { type FakeHost, renderWithFakeHost } from "@capybara-hq/plugin-client/testing";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-// = @capybara-hq/plugin-client/testing, through package.json "imports" (see README, Tests)
-import { type FakeHost, renderWithFakeHost } from "#client-testing";
 import extension from "../src/client.js";
 import { playCue } from "../src/sound.js";
 import { FakeAudioContext } from "./fake-design.js";

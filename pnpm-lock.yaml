@@ -377,8 +377,8 @@ importers:
   plugins/theme-cyberpunk:
     devDependencies:
       '@capybara-hq/plugin-client':
-        specifier: ^0.1.0-rc.1
-        version: 0.1.0-rc.1(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        specifier: ^0.1.0-rc.3
+        version: 0.1.0-rc.3(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@capybara-hq/plugin-sdk':
         specifier: ^0.1.0-rc.13
         version: 0.1.0-rc.13
@@ -704,8 +704,8 @@ packages:
     resolution: {integrity: sha512-RuD7+dZe50SIyeQHy3s4Te9w6jhgPIYoO6wly1fzLrlwnQMqAEePUAyDH+DTy21KuN1471o1dJzb/Den84tYgg==}
     engines: {node: '>=24'}
 
-  '@capybara-hq/plugin-client@0.1.0-rc.1':
-    resolution: {integrity: sha512-7in9AIxgCXGqZRoBKdMwC0PvQB7o6NL1V6IhE09dnjf7Ik932s0vYJBGuGPkEIsJRid3QSbUdE9SPrMwao7UOQ==}
+  '@capybara-hq/plugin-client@0.1.0-rc.3':
+    resolution: {integrity: sha512-23fFkmGpVFWiodtgzMofugmxDE42GyYwQg+mWV8J45SwjRjyUjg7jDwM0pIB14GOh7airA+uKUU3uu7hq/MoKQ==}
     peerDependencies:
       react: ^19.3.1
       react-dom: ^19.3.1
@@ -4893,7 +4893,7 @@ snapshots:
       - utf-8-validate
       - ws
 
-  '@capybara-hq/plugin-client@0.1.0-rc.1(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+  '@capybara-hq/plugin-client@0.1.0-rc.3(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
       react: 19.3.1
     optionalDependencies:

@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
+
+import { type FakeHost, renderWithFakeHost } from "@capybara-hq/plugin-client/testing";
 import { act, createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-// = @capybara-hq/plugin-client/testing, through package.json "imports" (see README, Tests)
-import { type FakeHost, renderWithFakeHost } from "#client-testing";
 import { Brand, brandPanel, GlitchBrand, Hero } from "../src/brand.js";
 import { BOOT_MAX_MS, BOOT_OUT_ANIMATION, Boot, BootScreen, Scanlines } from "../src/overlay.js";
 
-const BOOTED = "cap-ext:theme-cyberpunk:booted";
+const BOOTED = "cap-ext:theme-cyberpunk:booted-sign-in";
 let host: FakeHost | undefined;
 
 function render(
@@ -47,18 +47,18 @@ afterEach(() => {
 });
 
 describe("boot screen", () => {
-  it("plays once per session: the first mount shows it and marks the session", () => {
+  it("plays once per sign-in: the first mount shows it and records the sign-in", () => {
     render(createElement(BootScreen));
     expect(boot()).not.toBeNull();
-    expect(sessionStorage.getItem(BOOTED)).toBe("1");
+    expect(localStorage.getItem(BOOTED)).toBe("test-sign-in");
     render(createElement(BootScreen));
     expect(boot()).toBeNull();
   });
 
-  it("is skipped under reduced motion (and the session is not marked)", () => {
+  it("is skipped under reduced motion (and the sign-in is not recorded)", () => {
     render(createElement(BootScreen), true);
     expect(boot()).toBeNull();
-    expect(sessionStorage.getItem(BOOTED)).toBeNull();
+    expect(localStorage.getItem(BOOTED)).toBeNull();
   });
 
   it("lines its statuses up in one column", () => {
@@ -85,14 +85,14 @@ describe("boot screen", () => {
     act(() => document.querySelector<HTMLButtonElement>(".cx-theme-cyberpunk-boot-skip")?.click());
     expect(boot()).toBeNull();
 
-    sessionStorage.clear();
+    localStorage.clear();
     render(createElement(BootScreen));
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     });
     expect(boot()).toBeNull();
 
-    sessionStorage.clear();
+    localStorage.clear();
     render(createElement(BootScreen));
     const el = boot();
     act(() =>
@@ -136,7 +136,7 @@ describe("boot screen", () => {
     // the fake host's theme is the built-in one (key null)
     render(createElement(Boot));
     expect(boot()).toBeNull();
-    expect(sessionStorage.getItem(BOOTED)).toBeNull();
+    expect(localStorage.getItem(BOOTED)).toBeNull();
     render(createElement(Scanlines));
     expect(document.querySelector(".cx-theme-cyberpunk-scanlines")).toBeNull();
   });
@@ -153,6 +153,7 @@ describe("brand and hero", () => {
         slot: "shell.brand",
         builtin,
         collapsed: false,
+        panel: "full",
       }),
     );
     expect(document.querySelector('[data-testid="builtin"]')).not.toBeNull();
@@ -170,10 +171,9 @@ describe("brand and hero", () => {
   });
 
   it("the brand follows the panel it is drawn in", () => {
-    expect(brandPanel({ collapsed: true })).toBe("rail");
-    expect(brandPanel({ collapsed: false })).toBe("full");
-    expect(brandPanel({ collapsed: false, panel: "rail" })).toBe("rail");
-    expect(brandPanel({ collapsed: true, panel: "drawer" })).toBe("full");
+    expect(brandPanel("rail")).toBe("rail");
+    expect(brandPanel("full")).toBe("full");
+    expect(brandPanel("drawer")).toBe("full");
 
     render(createElement(GlitchBrand, { panel: "rail", builtin }));
     expect(

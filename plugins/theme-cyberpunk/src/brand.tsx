@@ -21,11 +21,9 @@ export function Glitch({ text, className }: { text: string; className?: string }
   );
 }
 
-/** Which sidebar panel the brand is drawn in (the host may pass `panel`; else `collapsed` decides). */
-export function brandPanel(props: { collapsed: boolean; panel?: unknown }): "rail" | "full" {
-  if (props.panel === "rail") return "rail";
-  if (props.panel === "full" || props.panel === "drawer") return "full";
-  return props.collapsed ? "rail" : "full";
+/** The brand's layout for the sidebar panel it is drawn in: the drawer is a full sidebar. */
+export function brandPanel(panel: "full" | "rail" | "drawer"): "rail" | "full" {
+  return panel === "rail" ? "rail" : "full";
 }
 
 /**
@@ -52,7 +50,7 @@ export function GlitchBrand({ panel, builtin }: { panel: "rail" | "full"; builti
 export function Brand(props: ComponentProps<"shell.brand">) {
   const { key } = useTheme();
   if (key !== THEME_KEY) return <>{props.builtin}</>;
-  return <GlitchBrand panel={brandPanel(props)} builtin={props.builtin} />;
+  return <GlitchBrand panel={brandPanel(props.panel)} builtin={props.builtin} />;
 }
 
 /** The cyberpunk new-conversation hero: the big neon capybara, a status line and the greeting. */

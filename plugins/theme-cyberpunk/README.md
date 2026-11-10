@@ -80,8 +80,8 @@ The cues and the HUD follow the toggle, not the theme: listeners get no theme
   screen never blocks input (clicks and keys reach the page underneath), ends by itself after about
   two seconds, and **Skip** (or Escape) ends it at once; Skip is the only interactive element.
 - The boot screen plays once per sign-in: it keys on the sign-in id of `useSignIn()` (kept in local
-  client storage, so new tabs of the same sign-in do not replay it). Where the host does not offer
-  `useSignIn` yet (plugin-client before it), it plays once per browser session instead.
+  client storage), so a reload or a new tab of the same sign-in does not replay it and the next
+  sign-in does. It needs `@capybara-hq/plugin-client` 0.1.0-rc.3 or later (the peer range).
 - The glitch copies of the wordmark and the greeting are hidden from assistive tech; the brand
   reads as `CYBERBARA`. All HUD colours are bright on the theme's dark panels.
 
@@ -118,15 +118,13 @@ data, the localized role, "—" before any count, session counts recorded by the
 HUD once each, the run ticker, the stored sound toggle), the run effects (where they go, what each
 state draws, nothing when idle or under reduced motion),
 the sound listeners (silent by default, under reduced motion and before a user gesture; one cue
-for a burst; suspended contexts closed), the boot screen (once per sign-in with a sign-in id, once
-per session without, the status column, reduced motion, Skip / Escape / end of animation, the
+for a burst; suspended contexts closed), the boot screen (once per sign-in id: not again in a
+reload or a new tab of the same sign-in, again after a new one; the status column, reduced motion, Skip / Escape / end of animation, the
 deadline, no listener left), the stylesheet (every rule scoped through `:root:has`, bevels on every
 chamfered part, no uppercase, soft edges, run animations on transform and opacity only, reduced
 motion outweighs the run-state rules) and
-the theme fallbacks of the brand and hero. The tests import the fake host as `#client-testing`
-(`package.json` `imports`) because `plugin-test-imports` of `@capybara-hq/plugin-tools`
-0.1.0-rc.12 does not list `@capybara-hq/plugin-client` yet; switch to the package name once it
-does. The client tests run in jsdom and are type-checked by `test/tsconfig.json` (DOM and JSX).
+the theme fallbacks of the brand and hero (and its layout per sidebar panel). The client tests
+run in jsdom and are type-checked by `test/tsconfig.json` (DOM and JSX).
 
 ## The theme `cyberpunk`
 

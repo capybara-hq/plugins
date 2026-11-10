@@ -27,14 +27,12 @@ const STATE_LABEL: Record<RunState, Label> = {
   failed: { en: "FAULT", zh: "故障" },
 };
 
-// capybara:allow-module-state read-only constant: the client events the HUD counts
 const HUD_EVENTS: readonly CapybaraEventType[] = [
   "run.started",
   "tool.finished",
   "approval.requested",
 ];
 
-// capybara:allow-module-state read-only constant: the event that starts the run clock
 const RUN_START: readonly CapybaraEventType[] = ["run.started"];
 
 /** Shown for a count this browser has not seen anything of yet. */
