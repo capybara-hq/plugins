@@ -1,19 +1,23 @@
 /**
  * GFM pipe tables in model replies (https://github.github.com/gfm/#tables-extension- , checked
  * 2026-11-10): finding them and the readable list that replaces a table where no native table
- * can be used. The same parser lives in the slack plugin (plugins share no code); keep the two in
+ * can be used (rich.ts renders the native one). The same parser lives in the slack plugin (plugins share no code); keep the two in
  * step. Fences follow html.ts: opened by ``` or ~~~, closed by a line of only ``` or ~~~.
  *
  * A table is a header row with an unescaped `|`, directly followed by a delimiter row
  * (`|---|:--:|`) with the same number of cells, then body rows until a blank line, a line without
  * a `|` or a code fence. Fenced code is never searched, nor lines indented four spaces or more
- * (indented code) or quoted (`>`). `\|` in a cell is a literal pipe; the alignment row is dropped.
+ * (indented code) or quoted (`>`). `\|` in a cell is a literal pipe; the alignment row gives `align`.
  * Body rows are padded or cut to the header's width, as GFM does.
  */
+
+export type Align = "left" | "center" | "right" | undefined;
 
 export interface MdTable {
   header: string[];
   rows: string[][];
+  /** Per column, from the delimiter row (`:--` left, `:-:` center, `--:` right, `---` none). */
+  align: Align[];
 }
 
 export type Segment = { kind: "text"; lines: string[] } | { kind: "table"; table: MdTable };
@@ -46,10 +50,22 @@ export function splitRow(line: string): string[] | undefined {
 
 const candidate = (line: string) => !/^\s{4,}/.test(line) && !/^\s*>/.test(line);
 
-function delimiterRow(line: string | undefined, width: number): boolean {
-  if (line === undefined || !candidate(line)) return false;
+/** The column alignments of a delimiter row of `width` cells, or undefined when it is none. */
+function delimiterRow(line: string | undefined, width: number): Align[] | undefined {
+  if (line === undefined || !candidate(line)) return undefined;
   const cells = splitRow(line);
-  return cells !== undefined && cells.length === width && cells.every((c) => DELIM_CELL.test(c));
+  if (cells === undefined || cells.length !== width || !cells.every((c) => DELIM_CELL.test(c))) {
+    return undefined;
+  }
+  return cells.map((c) =>
+    c.startsWith(":")
+      ? c.endsWith(":")
+        ? "center"
+        : "left"
+      : c.endsWith(":")
+        ? "right"
+        : undefined,
+  );
 }
 
 const fit = (cells: string[], width: number) =>
@@ -73,7 +89,8 @@ export function segmentTables(md: string): Segment[] {
       continue;
     }
     const header = !inFence && candidate(line) ? splitRow(line) : undefined;
-    if (!header || !delimiterRow(lines[i + 1], header.length)) {
+    const align = header && delimiterRow(lines[i + 1], header.length);
+    if (!header || !align) {
       text.push(line);
       continue;
     }
@@ -87,14 +104,14 @@ export function segmentTables(md: string): Segment[] {
       rows.push(fit(cells, header.length));
     }
     flushText();
-    out.push({ kind: "table", table: { header, rows } });
+    out.push({ kind: "table", table: { header, rows, align } });
     i = j - 1;
   }
   flushText();
   return out;
 }
 
-const BR = /<br\s*\/?>/gi;
+export const BR = /<br\s*\/?>/gi;
 const CJK_END = /[⺀-鿿가-힯豈-﫿＀-￯]$/u;
 /** Indent of the `header: value` lines under a row's first cell. */
 const INDENT = "   ";
