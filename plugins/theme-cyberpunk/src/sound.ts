@@ -58,7 +58,6 @@ function cueSeconds(list: Tone[]): number {
 }
 
 /** When the cue playing now ends (performance.now() ms): cues never overlap or pile up. */
-// capybara:allow-module-state browser-only state, one per document: the end of the current cue
 let playingUntil = 0;
 
 /**

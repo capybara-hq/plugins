@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
+
+import { type FakeHost, renderWithFakeHost } from "@capybara-hq/plugin-client/testing";
 import { act, createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-// = @capybara-hq/plugin-client/testing, through package.json "imports" (see README, Tests)
-import { type FakeHost, renderWithFakeHost } from "#client-testing";
 import extension from "../src/client.js";
-import { RunHud } from "../src/hud.js";
+import { RunHud, ticker } from "../src/hud.js";
 import { button, FakeAudioContext, installRicherDesign, row } from "./fake-design.js";
 
 const conversationId = "conv_0001abcdef";
@@ -150,7 +150,7 @@ describe("run HUD", () => {
     expect(FakeAudioContext.contexts).toBe(0);
   });
 
-  it("uses the viewer's language", () => {
+  it("uses the viewer's language, the role included", () => {
     const h = renderWithFakeHost(
       createElement(RunHud, {
         plugin: "theme-cyberpunk",
@@ -164,9 +164,28 @@ describe("run HUD", () => {
         args: { conversationId },
         locale: "zh",
         runState: "running",
+        view: { blocks: [], data: { operator: "owner", uplink: at } },
       },
     );
     host = h;
+    installRicherDesign();
+    h.rerender();
     expect(state()).toBe("运行中");
+    expect(row("操作员")).toBe("所有者");
+  });
+
+  it("shows a dash, not zero, for counts it has seen nothing of", () => {
+    renderHud({});
+    expect(row("Runs")).toBe("—");
+    expect(row("Tools")).toBe("—");
+    expect(row("Approvals")).toBe("—");
+  });
+
+  it("ticks the elapsed time of the run", () => {
+    expect(ticker(0)).toBe("T+00:00.0");
+    expect(ticker(12_345)).toBe("T+00:12.3");
+    expect(ticker(125_000)).toBe("T+02:05.0");
+    renderHud({});
+    expect(document.querySelector(".cx-theme-cyberpunk-hud-ticker")?.textContent).toBe("T+--:--.-");
   });
 });

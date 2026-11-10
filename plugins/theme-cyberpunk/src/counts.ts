@@ -39,9 +39,10 @@ function read(storage: ClientStorage, conversationId: string): Stored {
   }
 }
 
-/** The counts of a conversation (zero when nothing was counted in this session). */
-export function readCounts(storage: ClientStorage, conversationId: string): Counts {
-  return read(storage, conversationId).counts;
+/** The counts of a conversation, or null when this browser session has seen no event of it yet. */
+export function readCounts(storage: ClientStorage, conversationId: string): Counts | null {
+  const stored = read(storage, conversationId);
+  return stored.seq < 0 ? null : stored.counts;
 }
 
 /** The counts after one client event. */

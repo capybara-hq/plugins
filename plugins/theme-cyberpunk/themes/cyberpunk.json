@@ -2,8 +2,8 @@
   "$schema": "https://capybarahq.com/schemas/theme.v1.schema.json",
   "name": { "en": "Cyberpunk", "zh": "赛博朋克" },
   "description": {
-    "en": "Neon yellow on deep blue-black, cyan glow, sharp corners and a techno type pair.",
-    "zh": "深蓝黑底上的霓虹黄，青色辉光，直角与科技感字体。"
+    "en": "Neon yellow on deep blue-black, cyan glow, chamfered corners and a techno type pair.",
+    "zh": "深蓝黑底上的霓虹黄，青色辉光，切角与科技感字体。"
   },
   "schemes": {
     "dark": {
@@ -17,19 +17,19 @@
         "selected": "#1D2945",
         "hover": "#141C33",
         "line-soft": "#151D33",
-        "line": "#24324F",
-        "line-strong": "#36496F",
+        "line": "#34486E",
+        "line-strong": "#4E6796",
         "line-card": "rgba(0,229,255,0.14)",
         "scroll-thumb": "rgba(0,229,255,0.24)",
         "ink": "#E6F4FF",
         "muted": "#93A7C6",
-        "faint": "#56688A",
+        "faint": "#7084A8",
         "disabled": "#71829F",
         "accent": "#FFE600",
         "accent-hover": "#FFF04D",
         "accent-press": "#E6CF00",
         "on-accent": "#0A0B00",
-        "focus-ring": "rgba(0,229,255,0.45)",
+        "focus-ring": "rgba(255,230,0,0.35)",
         "ok": "#3DFFA2",
         "fail": "#FF5470",
         "warn": "#FF9F1C",

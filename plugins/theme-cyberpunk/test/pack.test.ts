@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +18,12 @@ afterAll(() => rmSync(out, { recursive: true, force: true }));
 
 const cli = (...args: string[]) =>
   execFileSync("pnpm", ["exec", "capybara-plugin", ...args], { encoding: "utf8" });
+
+/** stdout and stderr of a command (check prints its warnings on stderr). */
+const cliAll = (...args: string[]) => {
+  const r = spawnSync("pnpm", ["exec", "capybara-plugin", ...args], { encoding: "utf8" });
+  return `${r.stdout}${r.stderr}`;
+};
 
 /** The files of a gzipped tar by name (ustar headers; enough for npm-pack tarballs). */
 function tarFiles(tgz: Buffer): Map<string, Buffer> {
@@ -42,9 +48,11 @@ function tarFiles(tgz: Buffer): Map<string, Buffer> {
 
 describe("theme-cyberpunk package", () => {
   it("passes capybara-plugin check", () => {
-    const report = cli("check", "--plugins", "plugins/theme-cyberpunk");
+    const report = cliAll("check", "--plugins", "plugins/theme-cyberpunk");
     expect(report).toContain("[Themes] passed");
     expect(report).toContain("All plugin checks passed");
+    // check prints its findings, warnings included, on stderr: none at all
+    expect(report.split("\n").filter((l) => /^\s+\S+:\d+ \S+ /.test(l))).toEqual([]);
     expect(report).not.toMatch(/warning/);
   }, 60_000);
 

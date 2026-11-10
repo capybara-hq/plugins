@@ -10,9 +10,6 @@
   },
   "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/theme-cyberpunk#readme",
   "type": "module",
-  "imports": {
-    "#client-testing": "@capybara-hq/plugin-client/testing"
-  },
   "files": [
     "OFL-JetBrainsMono.txt",
     "OFL-ChakraPetch.txt"
@@ -21,14 +18,14 @@
     "build": "tsc -b"
   },
   "devDependencies": {
-    "@capybara-hq/plugin-client": "^0.1.0-rc.1",
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.13",
+    "@capybara-hq/plugin-client": "^0.1.0-rc.4",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.14",
     "@types/react": "^19.3.0",
     "jsdom": "^30.1.3",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
   "peerDependencies": {
-    "@capybara-hq/plugin-client": "^0.1.0-rc.1"
+    "@capybara-hq/plugin-client": "^0.1.0-rc.4"
   }
 }

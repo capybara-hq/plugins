@@ -36,10 +36,10 @@ describe("cyberpunk theme", () => {
     expect(checkThemeReadability("dark", dark)).toEqual([]);
   });
 
-  it("keeps the brand: neon yellow accent, cyan secondary, sharp corners, own wordmark", () => {
+  it("keeps the brand: neon yellow accent and focus, square base corners, own wordmark", () => {
     const dark = parsed().schemes.dark;
     expect(dark?.color?.accent).toBe("#FFE600");
-    expect(dark?.color?.["focus-ring"]).toBe("rgba(0,229,255,0.45)");
+    expect(dark?.color?.["focus-ring"]).toBe("rgba(255,230,0,0.35)");
     expect(dark?.radius).toEqual({ sm: 0, md: 2, bubble: 2 });
     expect(parsed().logo?.wordmark).toBe("CYBERBARA");
   });
