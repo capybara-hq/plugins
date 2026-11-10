@@ -1,5 +1,11 @@
 # @capybara-hq/plugin-lark
 
+## 0.1.0-rc.9
+
+### Patch Changes
+
+- 8ef540a: The plugin icon is the Lark logo instead of a generic chat bubble.
+
 ## 0.1.0-rc.8
 
 ### Patch Changes

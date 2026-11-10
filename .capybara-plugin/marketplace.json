@@ -89,7 +89,7 @@
     },
     {
       "name": "lark",
-      "version": "0.1.0-rc.8",
+      "version": "0.1.0-rc.9",
       "summary": {
         "en": "Lark (channel@1 bot over the Lark long connection with interactive cards, identity-source@1 web login, directory@1)"
       },
@@ -125,8 +125,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-lark",
-          "version": "0.1.0-rc.8",
-          "integrity": "sha512-yd/oMVLwBFsDZXvNkMKefEQ58kLOcSEGj5t0Os9io78B+WL2/gNBCbRR8pz76powuR0f70gcJmXmBC8t/5QbJg=="
+          "version": "0.1.0-rc.9",
+          "integrity": "sha512-kONdfgSMQ6Hb0iaqhv52fK+uc4NiEnVncDgS4W9471YjwJZy5BlQsmWEvx6CQEaOfUriQwqAfkimV9i2bI7K8Q=="
         }
       }
     },
