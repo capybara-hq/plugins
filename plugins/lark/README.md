@@ -225,7 +225,8 @@ The deployment-level config lives under the kernel config `extensionConfig.lark`
 
 ## Icon
 
-`icon.svg`: the Lark (Feishu) logo (owner: ByteDance, Lark / Feishu), taken on 2026-11-10 from Lark's own repository https://github.com/larksuite/lark-samples (file
+`icon.svg`: the Lark (Feishu) logo (owner: ByteDance, Lark / Feishu), taken on 2026-11-10 from
+Lark's own repository https://github.com/larksuite/lark-samples (file
 `web_app_with_auth/python/public/svg/icon.svg`, commit 55d8cbbf230f); Lark publishes no brand or
 press page with its logo. It is a trademark of its owner, used only to identify the service this
 plugin connects to; the plugin is not affiliated with or endorsed by the owner. The artwork is
