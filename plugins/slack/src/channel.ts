@@ -29,9 +29,11 @@ import { handleSlackWebhook, type SlackEnvelope, type SlashOutcome } from "./web
 
 /**
  * 渠道连接配置：应用级令牌（Socket Mode，`connections:write`）与机器人令牌。都走密钥存储。
- * `appToken` is optional because webhook mode doesn't use it; `connect` (Socket Mode) refuses to
- * start without one. `signingSecret` (Basic Information → Signing Secret) is only needed in webhook inbound mode;
- * without it every webhook request is rejected with 401.
+ * `appToken` is optional in the schema because webhook mode doesn't use it; `connect` (Socket Mode)
+ * refuses to start without one. `signingSecret` (Basic Information → Signing Secret) is only needed
+ * in webhook inbound mode; without it every webhook request is rejected with 401. The
+ * `inboundModes` hints tie each to its mode: forms draw and require it only there, and the kernel
+ * refuses a connection whose mode lacks it (core channel inbound mode fields spec).
  */
 export const SlackConnection = z.object({
   appToken: ui(
@@ -48,6 +50,7 @@ export const SlackConnection = z.object({
         en: "xapp-…, required for Socket Mode (Basic Information → App-Level Tokens, scope connections:write).",
       },
       placeholder: "xapp-…",
+      inboundModes: ["long_connection"],
     },
   ),
   botToken: ui(secret(z.string().regex(/^xoxb-/, "must be a bot token starting with xoxb-")), {
@@ -61,9 +64,10 @@ export const SlackConnection = z.object({
   signingSecret: ui(secret(z.string().min(1).optional()), {
     label: { zh: "签名密钥", en: "Signing secret" },
     help: {
-      zh: "仅 webhook 模式需要；Socket Mode 留空。",
-      en: "Only needed in webhook mode; leave empty for Socket Mode.",
+      zh: "Basic Information → App Credentials → Signing Secret，用来校验 Slack 发来的每个请求。",
+      en: "Basic Information → App Credentials → Signing Secret; every request from Slack is verified with it.",
     },
+    inboundModes: ["webhook"],
   }),
 });
 type SlackConnectionConfig = z.infer<typeof SlackConnection>;

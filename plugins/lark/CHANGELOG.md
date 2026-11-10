@@ -1,5 +1,13 @@
 # @capybara-hq/plugin-lark
 
+## 0.1.0-rc.6
+
+### Patch Changes
+
+- 55df138: Markdown tables in replies render reliably in cards: a blank line around each table, escaped pipes
+  kept inside cells, a table never split across cards when it fits (otherwise split by rows with the
+  header repeated), and at most four tables per card.
+
 ## 0.1.0-rc.5
 
 ### Patch Changes
