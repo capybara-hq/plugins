@@ -21,11 +21,14 @@ Verified live on 2026-11-08 against a real bot: verify, send, edit, a 5000-chara
 1. In Telegram, open [@BotFather](https://t.me/BotFather) and send `/newbot`. Pick a display name and a username
    (it must end in `bot`). BotFather replies with the bot token, such as `123456:ABC-DEF…`
    ([Bot API: authorizing your bot](https://core.telegram.org/bots/api#authorizing-your-bot)). Treat it like a password.
-2. **Privacy mode** (`/setprivacy`): leave it **enabled** (the default). With it on, a bot in a group receives only
-   commands, mentions of the bot and replies to the bot's own messages, which is exactly what this plugin forwards
-   ([Bot API: `getMe`, `can_read_all_group_messages`](https://core.telegram.org/bots/api#getme)).
-   If you turn it off the bot receives every group message; the plugin still forwards only mentions and replies to
-   the bot, and `verify` logs a warning. Telegram applies a privacy change to a group only after the bot is removed from the group and added again.
+2. **Privacy mode** (`/setprivacy`): for groups, turn it **off** (`Disable`), or make the bot an admin of
+   each group it joins. With privacy mode on (the default), Telegram delivers group commands addressed to the
+   bot (`/cmd@botname`) and replies to the bot's messages, but **not** a plain `@botname` mention, although
+   BotFather's description says otherwise (verified live 2026-11-10;
+   [Bot API: privacy mode](https://core.telegram.org/bots/features#privacy-mode)). With it off the bot receives
+   every group message; the plugin still forwards only mentions of the bot and replies to it, everything else
+   is dropped. Telegram applies a privacy change to a group only after the bot is removed from the group and
+   added again. `verify` logs a warning while privacy mode is on. Private chats work either way.
 3. **Groups** (`/setjoingroups`): enable it if people should add the bot to groups, disable it for a private-only bot.
 4. **Topics in private chats**: leave the bot's topic mode off. It is not supported (see [Behavior](#behavior)); `verify` warns when it is on.
 5. In the Capybara org settings, enable the `telegram` plugin, then **create a new channel connection** under Channels:
