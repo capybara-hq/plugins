@@ -14,6 +14,7 @@ import { toChannelSendError } from "./errors.js";
 import { fitHtml, markdownToTelegramHtml, splitHtml } from "./html.js";
 import { chatMigration, updateToInbound } from "./inbound.js";
 import { runLongPolling } from "./poll.js";
+import { markdownToRichHtml } from "./rich.js";
 import { threadStore } from "./threads.js";
 import { answerWebhookCallback, handleTelegramWebhook, webhookBotIdentity } from "./webhook.js";
 
@@ -65,6 +66,22 @@ const urlButtonRejected = (e: unknown) =>
   e instanceof TelegramApiError &&
   (e.errorCode ?? e.status) === 400 &&
   /button URL|Wrong HTTP URL|BUTTON_URL_INVALID/i.test(e.description ?? "");
+
+/** Telegram refused a rich message for its content (or does not know the method): use plain HTML. */
+const richRefused = (e: unknown) => {
+  if (!(e instanceof TelegramApiError)) return false;
+  const mapped = toChannelSendError(e);
+  return !mapped.retryable && (mapped.reason === "rejected" || mapped.reason === "too_large");
+};
+
+const notModified = (e: unknown) =>
+  e instanceof TelegramApiError && /message is not modified/i.test(e.description ?? "");
+
+/** The rich HTML of a text-only reply with a table; undefined when it goes out as plain HTML. */
+const richOf = (message: ChannelSendArgs["message"]) =>
+  (message.cards ?? []).length === 0 && message.text.trim() !== ""
+    ? markdownToRichHtml(message.text)
+    : undefined;
 
 export function createTelegramChannel(o: TelegramChannelOptions): Channel {
   const apiFor = (config: unknown, signal?: AbortSignal) => {
@@ -126,6 +143,42 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
       o.log.warn("telegram: Telegram rejected a card's URL button; the link is sent as text");
       return attempt(post.withoutUrlButtons);
     }
+  }
+
+  const warnRichFallback = (e: unknown, method: string) =>
+    o.log.warn("telegram: Telegram refused a rich message; the reply is sent as plain HTML", {
+      method,
+      ...(e instanceof TelegramApiError && { error: e.description ?? e.message }),
+    });
+
+  /** Sends one rich message; undefined when Telegram refused it for its content (fall back). */
+  async function sendRich(
+    api: { call<T>(m: string, p?: Record<string, unknown>): Promise<T> },
+    target: ChannelTarget,
+    html: string,
+    extra: Record<string, unknown>,
+  ): Promise<number | undefined> {
+    let r: { message_id?: number } | undefined;
+    try {
+      r = await api.call<{ message_id?: number } | undefined>("sendRichMessage", {
+        chat_id: target.chatId,
+        rich_message: { html },
+        ...extra,
+      });
+    } catch (e) {
+      if (richRefused(e)) {
+        warnRichFallback(e, "sendRichMessage");
+        return undefined;
+      }
+      throw toChannelSendError(e);
+    }
+    if (typeof r?.message_id !== "number") {
+      throw new ChannelSendError("Telegram returned no message id", {
+        retryable: false,
+        reason: "rejected",
+      });
+    }
+    return r.message_id;
   }
 
   async function sendOne(
@@ -256,8 +309,11 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
 
     async send({ config, target, message, locale, signal }) {
       const { call, botId } = apiFor(config, signal);
-      const posts = await render(message, locale, botId);
-      if (posts.length === 0) throw new ChannelSendError("nothing to send", { retryable: false });
+      const rich = richOf(message);
+      const posts = rich === undefined ? await render(message, locale, botId) : [];
+      if (rich === undefined && posts.length === 0) {
+        throw new ChannelSendError("nothing to send", { retryable: false });
+      }
       const store = threadStore(o.kv, botId);
       const inThread = target.chatType === "group" && target.threadId !== undefined;
       const extra: Record<string, unknown> = {};
@@ -269,21 +325,31 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
         const topic = await store.topicOf(target.threadId);
         if (topic !== undefined) extra.message_thread_id = topic;
       }
+      const record = async (sent: number) => {
+        if (!inThread || target.threadId === undefined) return;
+        // The message is delivered: a failing record must not fail the send (the kernel would
+        // resend it). Only a later reply to this message loses its thread.
+        try {
+          await store.recordSent(target.chatId, sent, target.threadId);
+        } catch {
+          o.log.warn("telegram: could not record a sent message's thread", {
+            chatId: target.chatId,
+            messageId: sent,
+          });
+        }
+      };
+      if (rich !== undefined) {
+        const sent = await sendRich({ call }, target, rich, extra);
+        if (sent !== undefined) {
+          await record(sent);
+          return { messageId: `${target.chatId}:${sent}` };
+        }
+        posts.push(...(await render(message, locale, botId)));
+      }
       let last = 0;
       for (const post of posts) {
         last = await sendOne({ call }, target, post, extra);
-        if (inThread && target.threadId !== undefined) {
-          // The message is delivered: a failing record must not fail the send (the kernel would
-          // resend it). Only a later reply to this message loses its thread.
-          try {
-            await store.recordSent(target.chatId, last, target.threadId);
-          } catch {
-            o.log.warn("telegram: could not record a sent message's thread", {
-              chatId: target.chatId,
-              messageId: last,
-            });
-          }
-        }
+        await record(last);
       }
       return { messageId: `${target.chatId}:${last}` };
     },
@@ -291,6 +357,23 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
     async update({ config, messageId, message, locale, signal }) {
       const { call, botId } = apiFor(config, signal);
       const { chatId, messageId: id } = parseMessageId(messageId);
+      // A reply with a table is edited into a rich message (Telegram turns a text message into a
+      // rich one and back on edit); refused content falls back to the plain HTML edit below.
+      const rich = richOf(message);
+      if (rich !== undefined) {
+        try {
+          await call("editMessageText", {
+            chat_id: chatId,
+            message_id: id,
+            rich_message: { html: rich },
+          });
+          return;
+        } catch (e) {
+          if (notModified(e)) return;
+          if (!richRefused(e)) throw toChannelSendError(e);
+          warnRichFallback(e, "editMessageText");
+        }
+      }
       // Like Slack: an update that renders to several messages (long text, several cards) is too
       // large; the kernel then sends the full message fresh. Without reply_markup an edit removes
       // an inline keyboard.
@@ -310,9 +393,7 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
           }),
         );
       } catch (e) {
-        if (e instanceof TelegramApiError && /message is not modified/i.test(e.description ?? "")) {
-          return;
-        }
+        if (notModified(e)) return;
         throw toChannelSendError(e);
       }
     },
