@@ -1,5 +1,16 @@
 # @capybara-hq/plugin-telegram
 
+## 0.1.0-rc.7
+
+### Patch Changes
+
+- 667bb15: Group mentions need privacy mode off (or the bot as a group admin): with it on Telegram delivers
+  only commands and replies to the bot. The README says so and `verify` warns while privacy mode is
+  on, instead of warning when it is off.
+- ec95022: Tables in replies render as real tables: a reply with a Markdown table is sent (and edited while it
+  streams) as a Bot API rich message with a native table. When Telegram refuses the rich message, the
+  reply goes out as plain HTML with each table as a list, as before.
+
 ## 0.1.0-rc.6
 
 ### Patch Changes

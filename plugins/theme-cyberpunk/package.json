@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-theme-cyberpunk",
-  "version": "0.1.0-rc.3",
+  "version": "0.1.0-rc.4",
   "description": "Cyberpunk theme and UI: neon yellow on deep blue-black, a run-state HUD, scanlines, a boot screen, a glitch CYBERBARA wordmark and opt-in synthesized sound",
   "license": "Apache-2.0 AND OFL-1.1",
   "repository": {
