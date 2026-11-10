@@ -115,7 +115,8 @@
 }
 /* Conversation links carry no padding of their own: indent their text so the active bar keeps a gap
    (every row, so the text never shifts when a row becomes current). */
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] [data-cap-part~="sidebar.item"][href^="/chat/"] {
+[data-cap-state~="theme=theme-cyberpunk/cyberpunk"]
+[data-cap-part~="sidebar.item"][href^="/chat/"] {
   padding-inline-start: var(--cb-space-2);
 }
 [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] [data-cap-part~="title-bar"] {
