@@ -27,7 +27,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.12",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.13",
     "openai": "^7.36.0",
     "zod": "^4.6.7"
   },

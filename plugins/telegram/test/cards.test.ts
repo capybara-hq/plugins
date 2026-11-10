@@ -31,12 +31,18 @@ const approval = (
   ...patch,
 });
 const question = (
-  patch: { multiSelect?: boolean; allowOther?: boolean; options?: string[] } = {},
+  patch: {
+    multiSelect?: boolean;
+    allowOther?: boolean;
+    options?: string[];
+    textReply?: "plain" | "mention";
+  } = {},
 ): ChannelCard => ({
   kind: "question",
   id: "q1",
   state: "pending",
   webUrl: "https://cap.example/c/2",
+  ...(patch.textReply && { textReply: patch.textReply }),
   form: {
     title: "Pick one",
     fields: [
@@ -141,6 +147,48 @@ describe("renderCards", () => {
       expect(b).toEqual([{ text: "Open on web", url: "https://cap.example/c/2" }]);
       expect(data.size).toBe(0);
     }
+  });
+
+  it("allowOther with a text reply: option buttons, no Other button, and the hint", async () => {
+    const { tokens } = setup();
+    const [p] = await renderCards(
+      [question({ allowOther: true, textReply: "plain" })],
+      "en",
+      tokens,
+      log,
+    );
+    expect(buttons(p as never).map((x) => x.text)).toEqual(["dev", "prod", "Open on web"]);
+    expect(p?.html).toContain("You can also just reply with text");
+    // The link line before the hint still becomes the URL button.
+    expect(p?.html).not.toContain("cap.example");
+    expect(p?.withoutUrlButtons?.html).toContain('href="https://cap.example/c/2"');
+    expect(p?.withoutUrlButtons?.html).toContain("You can also just reply with text");
+  });
+
+  it("mention hint in zh", async () => {
+    const [p] = await renderCards([question({ textReply: "mention" })], "zh", setup().tokens, log);
+    expect(p?.html).toContain("也可以在本话题 @我 回复文字");
+  });
+
+  it("multi-select with allowOther and a text reply: still only the web link, plus the hint", async () => {
+    const { tokens, data } = setup();
+    const [p] = await renderCards(
+      [question({ multiSelect: true, allowOther: true, textReply: "plain" })],
+      "en",
+      tokens,
+      log,
+    );
+    expect(buttons(p as never)).toEqual([{ text: "Open on web", url: "https://cap.example/c/2" }]);
+    expect(data.size).toBe(0);
+    expect(p?.html).toContain("You can also just reply with text");
+  });
+
+  it("skipped question: its state label, no option buttons and no hint", async () => {
+    const c = { ...question({ textReply: "plain" }), state: "skipped" } as ChannelCard;
+    const [p] = await renderCards([c], "zh", setup().tokens, log);
+    expect(buttons(p as never).map((x) => x.text)).toEqual(["在网页上查看"]);
+    expect(p?.html).toContain("已跳过（已直接回复）");
+    expect(p?.html).not.toContain("也可以直接回复文字");
   });
 
   it("answered question has no option buttons", async () => {

@@ -310,6 +310,47 @@ describe("renderSend: question card", () => {
     expect(buttons(card as LarkCard).map(label)).toEqual(["Answer on the web"]);
   });
 
+  const replying = (card: ChannelCard, textReply: "plain" | "mention"): ChannelCard =>
+    ({ ...card, textReply }) as ChannelCard;
+
+  it("allowOther with a text reply: option buttons, no Other button, and the hint", () => {
+    const c = replying(question(false, ["a", "b"], true), "plain");
+    const [card] = renderSend({ text: "", cards: [c] }, "en", "d");
+    expect(buttons(card as LarkCard).map(label)).toEqual(["a", "b", "Answer on the web"]);
+    expect(markdown(card as LarkCard)).toContain("You can also just reply with text");
+  });
+
+  it("without a text reply: no hint", () => {
+    const [card] = renderSend({ text: "", cards: [question(false, ["a", "b"])] }, "en", "d");
+    expect(markdown(card as LarkCard)).not.toContain("reply with text");
+  });
+
+  it("multi-select with allowOther and a text reply: the multi-select form, mention hint (zh)", () => {
+    const c = replying(question(true, ["a", "b", "c"], true), "mention");
+    const [card] = renderSend({ text: "", cards: [c] }, "zh", "g");
+    const select = walk(card as LarkCard).find((e) => e.tag === "multi_select_static");
+    expect(select?.options).toHaveLength(3);
+    expect(buttons(card as LarkCard).map(label)).toEqual(["提交", "到网页上回答"]);
+    expect(markdown(card as LarkCard)).toContain("也可以在本话题 @我 回复文字");
+  });
+
+  it("skipped: its state label, grey header, no inputs and no hint", () => {
+    const c = { ...replying(question(false, ["a"]), "plain"), state: "skipped" } as ChannelCard;
+    const [card] = renderSend({ text: "", cards: [c] }, "zh", "d");
+    expect(card?.header).toMatchObject({ template: "grey" });
+    expect(markdown(card as LarkCard)).toContain("已跳过（已直接回复）");
+    expect(markdown(card as LarkCard)).not.toContain("也可以直接回复文字");
+    expect(buttons(card as LarkCard).map(label)).toEqual(["详情"]);
+  });
+
+  it("an unknown future state shows its name, never undefined", () => {
+    const c = { ...question(false, ["a"]), state: "withdrawn" } as unknown as ChannelCard;
+    const [card] = renderSend({ text: "", cards: [c] }, "en", "d");
+    expect(markdown(card as LarkCard)).toContain("withdrawn");
+    expect(JSON.stringify(card)).not.toContain("undefined");
+    expect(card?.header).toMatchObject({ template: "grey" });
+  });
+
   it("answered: status + summary, details link", () => {
     const c = { ...question(false, ["a"]), state: "answered", answerSummary: "a" } as ChannelCard;
     const [card] = renderSend({ text: "", cards: [c] }, "en", "d");
