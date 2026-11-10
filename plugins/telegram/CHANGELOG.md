@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-telegram
 
+## 0.1.0-rc.5
+
+### Patch Changes
+
+- 55df138: Markdown tables in replies are shown as lists (one item per row, led by its first cell in bold)
+  instead of raw pipes; long messages split at line ends where they can.
+
 ## 0.1.0-rc.4
 
 ### Patch Changes

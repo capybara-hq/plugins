@@ -1,5 +1,15 @@
 # @capybara-hq/plugin-slack
 
+## 0.1.0-rc.7
+
+### Patch Changes
+
+- 55df138: Markdown tables in replies are sent as native Block Kit table blocks (one per message, split by
+  rows past 100 rows or 10,000 characters, with the header repeated); the notification text, tables
+  over 20 columns and messages Slack rejects show each row as a list item instead of raw pipes.
+- 368f9a1: The app-level token belongs to long connection and the signing secret to webhook (`inboundModes`
+  hints): 新建渠道 and the credentials tab draw and require each only in its mode.
+
 ## 0.1.0-rc.6
 
 ### Patch Changes
