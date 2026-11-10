@@ -7,6 +7,7 @@ import { BootScreen } from "../src/overlay.js";
 const STORED = "cap-ext:theme-cyberpunk:booted-sign-in";
 let host: FakeHost | undefined;
 const boot = () => document.querySelector(".cx-theme-cyberpunk-boot");
+const gate = () => document.querySelector(".cx-theme-cyberpunk-boot-gate");
 
 /** Mounts the boot screen for a sign-in (the host's `useSignIn().id`). */
 function render(signInId: string): void {
@@ -48,5 +49,14 @@ describe("boot screen, once per sign-in", () => {
     render("sign-in-2");
     expect(boot()).not.toBeNull();
     expect(localStorage.getItem(STORED)).toBe("sign-in-2");
+  });
+
+  it("leaves a hidden gate marker whenever it does not play, so the first-paint cover lifts", () => {
+    render("sign-in-1");
+    expect(gate()).toBeNull(); // the boot screen itself is the marker while it plays
+    render("sign-in-1"); // not due
+    expect(boot()).toBeNull();
+    expect(gate()).not.toBeNull();
+    expect((gate() as HTMLElement).hidden).toBe(true);
   });
 });

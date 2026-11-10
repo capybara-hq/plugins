@@ -89,6 +89,12 @@ The cues and the HUD follow the toggle, not the theme: listeners get no theme
   (core 0.1.0-rc.19 and later: kernel rc.19, plugin-client 0.1.0-rc.4, the peer range); an
   older host loads no client code of this plugin (the built-in brand, hero and no HUD), while its
   theme and stylesheet still apply.
+- The page does not show before the boot screen: on the first workspace document of a sign-in the
+  web host renders `sign-in=new` in `data-cap-state` from the server on, and the stylesheet covers
+  the shell with the boot screen's backdrop from the first paint until the component is in (the
+  boot screen, or a hidden marker when it does not play). The cover takes no pointer events, is
+  off under reduced motion and fades by itself after 5 s if the component never comes. A web host
+  without the token (before core's `sign-in=new`) simply shows no cover.
 - The glitch copies of the wordmark and the greeting are hidden from assistive tech; the brand
   reads as `CYBERBARA`. All HUD colours are bright on the theme's dark panels.
 

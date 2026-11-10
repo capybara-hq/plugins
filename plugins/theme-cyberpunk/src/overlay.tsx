@@ -63,6 +63,15 @@ export function markBooted(storage: GateStorage, signInId: string): void {
 }
 
 /**
+ * What the boot screen leaves when it is not showing (not due, ended, skipped, reduced motion): a
+ * hidden marker that tells the stylesheet the component is in, so the first-paint cover of a new
+ * sign-in (`sign-in=new`) lifts.
+ */
+function BootGate() {
+  return <span hidden className={cx("boot-gate")} />;
+}
+
+/**
  * The boot screen itself: plays once per sign-in ({@link bootDue}), never under reduced motion.
  * It never blocks input: the decoration layer and the screen take no pointer events; it ends by itself after about 1.9 s (at most {@link BOOT_MAX_MS}): the card fades, then
  * the opaque screen collapses to a line like a CRT switching off, so the page never shows through
@@ -103,7 +112,7 @@ export function BootScreen() {
     };
   }, [show]);
 
-  if (!show || reducedMotion) return null;
+  if (!show || reducedMotion) return <BootGate />;
   const onAnimationEnd = (e: AnimationEvent<HTMLDivElement>) => {
     if (e.target === e.currentTarget && e.animationName === BOOT_OUT_ANIMATION) setShow(false);
   };

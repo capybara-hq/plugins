@@ -131,6 +131,24 @@ describe("cyberpunk.css", () => {
     }
   });
 
+  it("covers the shell on the first document of a sign-in until the boot component is in", () => {
+    const cover = styleRules.find(
+      (r) =>
+        r.chain[0]?.includes('[data-cap-state~="sign-in=new"]') &&
+        r.chain[r.chain.length - 1] === '& [data-cap-part~="shell"]::after',
+    );
+    expect(cover).toBeDefined();
+    const top = cover?.chain[0] ?? "";
+    expect(top).toContain(THEME);
+    // it lifts once the boot screen or its gate marker is in
+    expect(top).toMatch(
+      /:not\(\s*:has\(\.cx-theme-cyberpunk-boot, \.cx-theme-cyberpunk-boot-gate\)\s*\)/,
+    );
+    // never blocks input, and fades by itself should the component never come
+    expect(cover?.body).toContain("pointer-events: none");
+    expect(cover?.body).toMatch(/animation: cx-theme-cyberpunk-cover-out [^;]* 5s forwards/);
+  });
+
   it("stops every animation under reduced motion, outweighing the run-state rules", () => {
     const media = styleRules.filter(
       (r) => r.chain[0] === "@media (prefers-reduced-motion: reduce)",
