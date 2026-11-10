@@ -538,7 +538,7 @@
     },
     {
       "name": "theme-cyberpunk",
-      "version": "0.1.0-rc.2",
+      "version": "0.1.0-rc.3",
       "summary": {
         "en": "Cyberpunk theme and UI: neon yellow on deep blue-black, a run-state HUD, scanlines, a boot screen, a glitch CYBERBARA wordmark and opt-in synthesized sound",
         "zh": "赛博朋克主题与界面：深蓝黑底上的霓虹黄，运行状态 HUD、扫描线、启动画面、故障风 CYBERBARA 字标，以及可选的合成音效"
@@ -570,8 +570,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-theme-cyberpunk",
-          "version": "0.1.0-rc.2",
-          "integrity": "sha512-YNDqOKlSArAbiYKF8RCMR/sqoCM7PODYamf8pk9DGRAMwTWWZH+KNaoOaqmDkmI27ZszyTnWTK9sjy4+g4waeQ=="
+          "version": "0.1.0-rc.3",
+          "integrity": "sha512-CxLNndeC+3vUpMdVheLChQyqvm/pwW1ISHx3dGLFnrn5yJ6Ghta4zxN57xJOZI64aqu80qeZai98CrjwfOTAcg=="
         }
       }
     }

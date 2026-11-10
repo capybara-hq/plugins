@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-theme-cyberpunk
 
+## 0.1.0-rc.3
+
+### Patch Changes
+
+- 56efcf9: Keep a gap between the active conversation's bar and its title, and drop the user message bar that
+  sat far from the bubble.
+
 ## 0.1.0-rc.2
 
 ### Patch Changes
