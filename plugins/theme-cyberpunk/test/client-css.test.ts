@@ -146,14 +146,40 @@ describe("cyberpunk.css", () => {
       .filter((r) => r.body.includes("animation: none"))
       .map(flat)
       .join(",");
-    for (const target of [
-      '[data-cap-part~="title-bar"]::after',
-      ".cx-theme-cyberpunk-hud-meter > span",
-      ".cx-theme-cyberpunk-scanlines::after",
-      ".cx-theme-cyberpunk-glitch-layer",
-    ]) {
-      expect(stopped, target).toContain(target);
-      expect(token, target).toContain(target);
+    const hidden = (rules: Rule[]) =>
+      rules
+        .filter((r) => r.body.includes("display: none"))
+        .map(flat)
+        .join(",");
+    const reducedMedia = { stopped, hidden: hidden(media) };
+    const reducedToken = {
+      stopped: token,
+      hidden: hidden(
+        styleRules.filter((r) => r.chain[0]?.includes('[data-cap-state~="motion=reduced"]')),
+      ),
+    };
+    // Every animated selector (outside the keyframes and the reduced-motion blocks) is stopped or
+    // hidden by both blocks: through itself, or through the element that hides or stops it.
+    const animated = styleRules.filter(
+      (r) =>
+        /(^|;)\s*animation:\s*(?!none)/.test(r.body) &&
+        r.chain[0] !== "@media (prefers-reduced-motion: reduce)" &&
+        !r.chain[0]?.includes("motion=reduced"),
+    );
+    expect(animated.length).toBeGreaterThan(10);
+    for (const r of animated) {
+      const target = (r.chain[r.chain.length - 1] ?? "")
+        .replace(/^& /, "")
+        .replace(/:nth-child\([^)]*\)/g, "");
+      const via = target.startsWith(".cx-theme-cyberpunk-boot")
+        ? ".cx-theme-cyberpunk-boot"
+        : /glitch-[ab]$/.test(target)
+          ? ".cx-theme-cyberpunk-glitch-layer"
+          : target;
+      for (const block of [reducedMedia, reducedToken]) {
+        const covered = block.stopped.includes(via) || block.hidden.includes(via);
+        expect(covered, `${flat(r)} via ${via}`).toBe(true);
+      }
     }
   });
 });

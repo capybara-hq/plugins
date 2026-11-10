@@ -31,15 +31,26 @@
    */
   @supports (corner-shape: bevel) {
     & [data-cap-part~="card"],
+    & [data-cap-part~="stat-card"],
     & [data-cap-part~="section"],
     & [data-cap-part~="composer"],
-    & [data-cap-part~="dialog"] {
+    & [data-cap-part~="dialog"],
+    & [data-cap-part~="menu"],
+    & [data-cap-part~="code-block"],
+    & [data-cap-part~="message.user.bubble"] {
       border-radius: 0 var(--cx-theme-cyberpunk-cut) 0 var(--cx-theme-cyberpunk-cut);
       corner-shape: bevel;
     }
     & [data-cap-part~="button"],
-    & [data-cap-part~="input"] {
+    & [data-cap-part~="input"],
+    & [data-cap-part~="segmented"],
+    & [data-cap-part~="agent-chip"] {
       border-radius: var(--cx-theme-cyberpunk-cut-sm) 0;
+      corner-shape: bevel;
+    }
+    & [data-cap-part~="switch"],
+    & [data-cap-part~="org-avatar"] {
+      border-radius: 4px 0;
       corner-shape: bevel;
     }
   }
@@ -68,6 +79,31 @@
   }
   & [data-cap-part~="input"]:is(:disabled, :has(:disabled)) {
     border-color: var(--cb-line);
+  }
+
+  /* Switches: a square knob; off reads as a clear outline with a light knob. */
+  & [data-cap-part~="switch.knob"] {
+    border-radius: 0;
+  }
+  & [data-cap-part~="switch"][aria-checked="false"] {
+    background: var(--cb-line);
+    box-shadow: inset 0 0 0 1px var(--cb-line-strong);
+  }
+  & [data-cap-part~="switch"][aria-checked="false"] [data-cap-part~="switch.knob"] {
+    background: color-mix(in srgb, var(--cb-ink) 78%, transparent);
+  }
+
+  /* The org initial: a neon tag instead of the brightest block of the sidebar. */
+  & [data-cap-part~="org-avatar"] {
+    background: color-mix(in srgb, var(--cb-accent) 14%, var(--cb-panel));
+    color: var(--cb-accent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cb-accent) 45%, transparent);
+  }
+
+  /* The selected agent chip: the neon edge, not a white outline. */
+  & [data-cap-part~="agent-chip"][aria-pressed="true"] {
+    border-color: var(--cb-accent);
+    box-shadow: 0 0 10px rgba(255, 230, 0, 0.16);
   }
 
   /* The composer shows focus as a soft inner line in the one focus colour. */
@@ -312,23 +348,26 @@
     opacity: 0;
   }
 
-  /* ---------- Run effects (inside the scanlines component, positioned on parts) ---------- */
+  /* ---------- Run effects on the parts themselves ---------- */
 
-  & .cx-theme-cyberpunk-fx {
-    position: fixed;
+  /*
+   * The reply being written (`message.assistant` with `aria-busy`) and the composer carry their run
+   * effects as pseudo-elements: nothing is drawn or computed outside a run, and whatever covers the
+   * part (a sheet, a dialog, a menu, the drawer) covers its effects too.
+   */
+  & [data-cap-part~="composer"] {
+    position: relative;
+  }
+  & [data-cap-part~="message.assistant"][aria-busy="true"] {
+    position: relative;
+    overflow: clip;
+  }
+  /* A scan beam passing over the reply. */
+  & [data-cap-part~="message.assistant"][aria-busy="true"]::before {
+    content: "";
+    position: absolute;
     inset: 0;
     pointer-events: none;
-  }
-  & .cx-theme-cyberpunk-fx-box {
-    position: absolute;
-    left: 0;
-    top: 0;
-    overflow: hidden;
-  }
-  /* A scan beam passing over the reply being written. */
-  & .cx-theme-cyberpunk-fx-beam {
-    position: absolute;
-    inset: 0;
     background: linear-gradient(
       180deg,
       transparent 0 42%,
@@ -339,13 +378,15 @@
     );
     animation: cx-theme-cyberpunk-beam 2.4s ease-in-out infinite;
   }
-  /* Its leading edge: the write head under the newest line, with a short glitch now and then. */
-  & .cx-theme-cyberpunk-fx-edge {
+  /* Its write head: a glowing line under the newest text, with a short glitch now and then. */
+  & [data-cap-part~="message.assistant"][aria-busy="true"]::after {
+    content: "";
     position: absolute;
     left: 0;
     right: 0;
     bottom: 0;
     height: 2px;
+    pointer-events: none;
     background: linear-gradient(
       90deg,
       transparent,
@@ -355,36 +396,6 @@
     box-shadow: 0 0 10px var(--cx-theme-cyberpunk-cyan);
     opacity: 0.55;
     animation: cx-theme-cyberpunk-head 2.6s steps(1) infinite;
-  }
-  /* The composer: a light travelling along its border while running, a slow pulse while waiting. */
-  & .cx-theme-cyberpunk-fx-composer {
-    border-radius: 0 var(--cx-theme-cyberpunk-cut) 0 var(--cx-theme-cyberpunk-cut);
-    corner-shape: bevel;
-  }
-  & .cx-theme-cyberpunk-fx-comet {
-    position: absolute;
-    left: 0;
-    width: 22%;
-    height: 1px;
-    background: linear-gradient(90deg, transparent, var(--cx-theme-cyberpunk-hud), transparent);
-    box-shadow: 0 0 8px var(--cx-theme-cyberpunk-hud);
-  }
-  & .cx-theme-cyberpunk-fx-comet:first-child {
-    top: 0;
-    animation: cx-theme-cyberpunk-comet 2.8s linear infinite;
-  }
-  & .cx-theme-cyberpunk-fx-comet:nth-child(2) {
-    bottom: 0;
-    animation: cx-theme-cyberpunk-comet 2.8s linear -1.4s infinite reverse;
-  }
-  & .cx-theme-cyberpunk-fx-ring {
-    position: absolute;
-    inset: 0;
-    border: 1px solid var(--cx-theme-cyberpunk-hud);
-    border-radius: inherit;
-    corner-shape: bevel;
-    box-shadow: inset 0 0 12px color-mix(in srgb, var(--cx-theme-cyberpunk-hud) 30%, transparent);
-    animation: cx-theme-cyberpunk-breathe 1.8s ease-in-out infinite;
   }
 
   /* ---------- Boot screen (component boot, slot shell.overlay) ---------- */
@@ -570,6 +581,29 @@
     opacity: 1;
     animation: cx-theme-cyberpunk-sweep 3.4s linear infinite;
   }
+  /* A light travelling along the composer's top edge, another back along its bottom edge. */
+  & [data-cap-part~="composer"] {
+    overflow: clip;
+  }
+  & [data-cap-part~="composer"]::before,
+  & [data-cap-part~="composer"]::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    width: 22%;
+    height: 1px;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, var(--cb-accent), transparent);
+    box-shadow: 0 0 8px var(--cb-accent);
+  }
+  & [data-cap-part~="composer"]::before {
+    top: 0;
+    animation: cx-theme-cyberpunk-comet 2.8s linear infinite;
+  }
+  & [data-cap-part~="composer"]::after {
+    bottom: 0;
+    animation: cx-theme-cyberpunk-comet 2.8s linear -1.4s infinite reverse;
+  }
 }
 
 /* Waiting for input: everything holds, in cyan, breathing slowly. */
@@ -585,6 +619,18 @@
   }
   & .cx-theme-cyberpunk-hud-meter > span {
     transform: scaleY(0.5);
+    animation: cx-theme-cyberpunk-breathe 1.8s ease-in-out infinite;
+  }
+  /* The composer's outline breathes: it is the person's turn. */
+  & [data-cap-part~="composer"]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border: 1px solid var(--cx-theme-cyberpunk-cyan);
+    border-radius: inherit;
+    corner-shape: bevel;
+    box-shadow: inset 0 0 12px rgba(0, 229, 255, 0.3);
     animation: cx-theme-cyberpunk-breathe 1.8s ease-in-out infinite;
   }
 }
@@ -610,6 +656,17 @@
   }
 }
 
+/*
+ * The scanlines sit above every layer; while a dialog or sheet is open their run additions (the
+ * brighter lines, the sweep) step back so nothing moves over the modal.
+ */
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]):has([data-cap-part~="dialog"]) {
+  & .cx-theme-cyberpunk-scanlines::before,
+  & .cx-theme-cyberpunk-scanlines::after {
+    display: none;
+  }
+}
+
 /* ---------- Reduced motion: lines and colours stay, nothing moves, no boot screen ---------- */
 
 /*
@@ -630,8 +687,12 @@
     & .cx-theme-cyberpunk-scanlines::after {
       animation: none;
     }
-    & .cx-theme-cyberpunk-fx,
-    & .cx-theme-cyberpunk-boot {
+    & .cx-theme-cyberpunk-boot,
+    & .cx-theme-cyberpunk-scanlines::after,
+    & [data-cap-part~="message.assistant"][aria-busy="true"]::before,
+    & [data-cap-part~="message.assistant"][aria-busy="true"]::after,
+    & [data-cap-part~="composer"]::before,
+    & [data-cap-part~="composer"]::after {
       display: none;
     }
   }
@@ -649,8 +710,12 @@
   & .cx-theme-cyberpunk-scanlines::after {
     animation: none;
   }
-  & .cx-theme-cyberpunk-fx,
-  & .cx-theme-cyberpunk-boot {
+  & .cx-theme-cyberpunk-boot,
+  & .cx-theme-cyberpunk-scanlines::after,
+  & [data-cap-part~="message.assistant"][aria-busy="true"]::before,
+  & [data-cap-part~="message.assistant"][aria-busy="true"]::after,
+  & [data-cap-part~="composer"]::before,
+  & [data-cap-part~="composer"]::after {
     display: none;
   }
 }

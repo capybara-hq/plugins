@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +18,28 @@ afterAll(() => rmSync(out, { recursive: true, force: true }));
 
 const cli = (...args: string[]) =>
   execFileSync("pnpm", ["exec", "capybara-plugin", ...args], { encoding: "utf8" });
+
+/** stdout and stderr of a command (check prints its warnings on stderr). */
+const cliAll = (...args: string[]) => {
+  const r = spawnSync("pnpm", ["exec", "capybara-plugin", ...args], { encoding: "utf8" });
+  return `${r.stdout}${r.stderr}`;
+};
+
+/**
+ * Parts core added after the toolchain this repository pins (core #159; plugin-sdk's UI_PARTS
+ * gains them in the next rc): until then `check` calls them unknown. Drop this list with the bump.
+ */
+const NEW_PARTS = [
+  "message.user.bubble",
+  "code-block",
+  "menu",
+  "segmented",
+  "stat-card",
+  "switch",
+  "switch.knob",
+  "org-avatar",
+  "agent-chip",
+];
 
 /** The files of a gzipped tar by name (ustar headers; enough for npm-pack tarballs). */
 function tarFiles(tgz: Buffer): Map<string, Buffer> {
@@ -42,10 +64,14 @@ function tarFiles(tgz: Buffer): Map<string, Buffer> {
 
 describe("theme-cyberpunk package", () => {
   it("passes capybara-plugin check", () => {
-    const report = cli("check", "--plugins", "plugins/theme-cyberpunk");
+    const report = cliAll("check", "--plugins", "plugins/theme-cyberpunk");
     expect(report).toContain("[Themes] passed");
     expect(report).toContain("All plugin checks passed");
-    expect(report).not.toMatch(/warning/);
+    const warnings = report
+      .split("\n")
+      .filter((l) => /^\s+\S+:\d+ \S+ /.test(l))
+      .filter((l) => !NEW_PARTS.some((p) => l.includes(`ui-part-unknown data-cap-part "${p}"`)));
+    expect(warnings).toEqual([]);
   }, 60_000);
 
   it("packs the theme, fonts, logo, favicon, font licenses and the client build", () => {

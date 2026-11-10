@@ -59,31 +59,18 @@ export function ticker(ms: number): string {
 
 /**
  * The elapsed time of the current run, from its `run.started` event (or from when this panel saw
- * it running), ticking on animation frames while it runs (every second under reduced motion) and
- * frozen at the last value once it stops. Null before this panel has seen a run.
+ * it running), ticking every 100 ms while it runs (every second under reduced motion) and frozen
+ * at the last value once it stops. Null before this panel has seen a run. A browser timer of this
+ * document only, cleared when the run stops or the panel unmounts.
  */
 function useRunClock(state: RunState, startedAt: number | null): number | null {
   const reducedMotion = usePrefersReducedMotion();
   const [now, setNow] = useState<number | null>(null);
   useEffect(() => {
     if (state !== "running" || startedAt === null) return;
-    let frame = 0;
-    let last = 0;
-    const step = reducedMotion ? 1000 : 100;
-    const tick = (t: number) => {
-      if (t - last >= step) {
-        last = t;
-        setNow(Date.now());
-      }
-      frame = window.requestAnimationFrame(tick);
-    };
     setNow(Date.now());
-    if (typeof window.requestAnimationFrame === "function") {
-      frame = window.requestAnimationFrame(tick);
-    }
-    return () => {
-      if (typeof window.cancelAnimationFrame === "function") window.cancelAnimationFrame(frame);
-    };
+    const timer = window.setInterval(() => setNow(Date.now()), reducedMotion ? 1000 : 100);
+    return () => window.clearInterval(timer);
   }, [state, startedAt, reducedMotion]);
   return startedAt === null || now === null ? null : Math.max(0, now - startedAt);
 }

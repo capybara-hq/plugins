@@ -6,7 +6,6 @@ import {
   useTheme,
 } from "@capybara-hq/plugin-client";
 import { type AnimationEvent, useEffect, useState } from "react";
-import { RunFx } from "./fx.js";
 import { BOOT_SIGN_IN_KEY, cx, THEME_KEY, WORDMARK } from "./shared.js";
 
 /** The boot screen's own exit animation (plugin CSS); its end removes the screen. */
@@ -18,19 +17,11 @@ export const BOOT_OUT_ANIMATION = "cx-theme-cyberpunk-boot-out";
  */
 export const BOOT_MAX_MS = 2400;
 
-/**
- * `shell.overlay`: CRT scanlines and a light vignette, plus the run effects ({@link RunFx});
- * decorative only (no pointer events, aria-hidden).
- */
+/** `shell.overlay`: CRT scanlines and a light vignette, decorative only (no pointer events, aria-hidden). */
 export function Scanlines() {
   const { key } = useTheme();
   if (key !== THEME_KEY) return null;
-  return (
-    <>
-      <div aria-hidden="true" className={cx("scanlines")} />
-      <RunFx />
-    </>
-  );
+  return <div aria-hidden="true" className={cx("scanlines")} />;
 }
 
 /** A boot line: a label and an optional status shown in the right-hand column. */

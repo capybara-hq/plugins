@@ -31,11 +31,14 @@ palette, the properties sheet below 1100 px and the sidebar drawer. The componen
 | `brand` | `shell.brand` (replaceable) | The neon mark (the theme logo through the design `Logo`) and a glitch `CYBERBARA` wordmark in the full sidebar and the drawer, in place of the built-in row; the built-in mark with a flicker in the rail |
 | `hero` | `conversation.empty` (replaceable) | The new-conversation hero: the big neon capybara, a status line and the greeting with a glitch |
 
-The decoration CSS bevels cards, sections, dialogs, the composer, buttons and inputs with
-`corner-shape: bevel`: the border, the background and the focus ring all follow the diagonal, so
-outlines are continuous and focus rings stay whole (a browser without `corner-shape` keeps square
-corners). Inputs get a border that reads at 3:1 on the ground; focus is one colour, the neon
-yellow, everywhere; selected text is neon. Primary buttons keep their text as written.
+The decoration CSS bevels cards, stat cards, sections, dialogs, menus, code blocks, the user's
+message bubbles, the composer, buttons, inputs, segmented controls, agent chips, switches and the
+org initial with `corner-shape: bevel`: the border, the background and the focus ring all follow
+the diagonal, so outlines are continuous and focus rings stay whole (a browser without
+`corner-shape` keeps square corners). Input borders read at 3:1 or more on the page, panel and
+raised grounds; focus is one colour, the neon yellow, everywhere; selected text is neon. Switches
+get a square knob that reads when off, the org initial becomes a neon tag, and the selected agent
+chip a neon edge. Primary buttons keep their text as written.
 
 ### Run effects
 
@@ -51,9 +54,12 @@ idle green), moves only `transform` and `opacity`, shifts no layout and stops un
 - **Failed**: one short red glitch on the title bar edge and the HUD state, then a steady red line
   and a flat meter.
 
-The beam, the write head and the composer light are drawn in the decoration layer over the parts
-they belong to, found by their public names (the last `message.assistant` of the `thread`, the
-`composer`), so the host's markup is never touched.
+The beam and the write head are pseudo-elements of the reply being written (the
+`message.assistant` part while it carries `aria-busy`), the composer light those of the
+`composer` part: nothing runs or is measured outside a run, and a sheet, dialog, menu or the
+drawer opened over them covers them. Only the scanlines live in the decoration layer above
+everything; while a dialog or sheet is open their run additions (the brighter lines, the sweep)
+step back.
 
 `.capybara-plugin/plugin.json` suggests the appearance (`suggestedAppearance`): the theme
 `cyberpunk` and the replacements `shell.brand` → `brand`, `conversation.empty` → `hero`. Nothing is
@@ -81,7 +87,9 @@ The cues and the HUD follow the toggle, not the theme: listeners get no theme
   two seconds, and **Skip** (or Escape) ends it at once; Skip is the only interactive element.
 - The boot screen plays once per sign-in: it keys on the sign-in id of `useSignIn()` (kept in local
   client storage), so a reload or a new tab of the same sign-in does not replay it and the next
-  sign-in does. It needs `@capybara-hq/plugin-client` 0.1.0-rc.3 or later (the peer range).
+  sign-in does. It needs a Capybara whose web host offers `useSignIn` (core #156: plugin-client
+  0.1.0-rc.3, kernel 0.1.0-rc.18 and later); an older host loads no client code of this plugin
+  (the built-in brand, hero and no HUD), while its theme and stylesheet still apply.
 - The glitch copies of the wordmark and the greeting are hidden from assistive tech; the brand
   reads as `CYBERBARA`. All HUD colours are bright on the theme's dark panels.
 
@@ -94,12 +102,12 @@ The cues and the HUD follow the toggle, not the theme: listeners get no theme
    sets the platform default theme to Cyberpunk and the platform's `shell.brand` and
    `conversation.empty` picks to `brand` and `hero`, then reloads the page. (An org admin can do
    the same for one org on the workspace 扩展 page.)
-3. Open the workspace: the boot screen plays once after sign-in, the sidebar shows the glitch wordmark, the new
-   conversation shows the cyberpunk hero, scanlines sit over the page. Start a conversation: the
-   HUD in the properties panel reads 运行中 (RUNNING) in yellow while the run goes, 等待输入
-   (AWAITING INPUT) in cyan when it waits for input, 故障 (FAULT) in red on a failure and 待命
-   (STANDBY) in green when idle. Turn sound on in the HUD to hear the cues. Tab through `/agents`: the focused
-   card's ring is whole.
+3. Open the workspace: the boot screen plays once after sign-in, the sidebar shows the glitch
+   wordmark, the new conversation shows the cyberpunk hero, scanlines sit over the page. Start a
+   conversation: the HUD in the properties panel reads 运行中 (RUNNING) in yellow while the run
+   goes, 等待输入 (AWAITING INPUT) in cyan when it waits for input, 故障 (FAULT) in red on a
+   failure and 待命 (STANDBY) in green when idle. Turn sound on in the HUD to hear the cues. Tab
+   through `/agents`: the focused card's ring is whole.
 4. `?safe-ui=1` (or 平台设置 › 插件界面代码 off, or disabling the plugin's client code) removes
    every component, the overlays and the plugin CSS: the built-in brand, hero and composer return.
    The L0 theme (palette, fonts, the neon logo and its `CYBERBARA` wordmark) **stays**, because a
@@ -114,17 +122,16 @@ or 个人设置 › 偏好设置 › 外观.
 `test/` covers the theme (tokens, readability, fonts, logo), the pack (`capybara-plugin check` with
 no warning, the packed files and manifest), the extension manifest and the HUD view data, and the
 client code with the fake host of `@capybara-hq/plugin-client/testing`: the HUD (run states, view
-data, the localized role, "—" before any count, session counts recorded by the listeners and the
-HUD once each, the run ticker, the stored sound toggle), the run effects (where they go, what each
-state draws, nothing when idle or under reduced motion),
-the sound listeners (silent by default, under reduced motion and before a user gesture; one cue
-for a burst; suspended contexts closed), the boot screen (once per sign-in id: not again in a
-reload or a new tab of the same sign-in, again after a new one; the status column, reduced motion, Skip / Escape / end of animation, the
-deadline, no listener left), the stylesheet (every rule scoped through `:root:has`, bevels on every
-chamfered part, no uppercase, soft edges, run animations on transform and opacity only, reduced
-motion outweighs the run-state rules) and
-the theme fallbacks of the brand and hero (and its layout per sidebar panel). The client tests
-run in jsdom and are type-checked by `test/tsconfig.json` (DOM and JSX).
+data, the localized role, "—" before any count, session counts recorded by the listeners and the HUD
+once each, the run ticker, the stored sound toggle), the sound listeners (silent by default, under
+reduced motion and before a user gesture; one cue for a burst; suspended contexts closed), the boot
+screen (once per sign-in id: not again in a reload or a new tab of the same sign-in, again after a
+new one; the status column, reduced motion, Skip / Escape / end of animation, the deadline, no
+listener left), the stylesheet (every rule scoped through `:root:has`, bevels on every chamfered
+part, no uppercase, soft edges, run animations on transform and opacity only, every animated
+selector stopped or hidden by both reduced-motion blocks, which outweigh the run-state rules) and
+the theme fallbacks of the brand and hero (and its layout per sidebar panel). The client tests run
+in jsdom and are type-checked by `test/tsconfig.json` (DOM and JSX).
 
 ## The theme `cyberpunk`
 
@@ -137,10 +144,10 @@ run in jsdom and are type-checked by `test/tsconfig.json` (DOM and JSX).
   | `panel` / `raised` / `sidebar` | `#0C1120` / `#101629` / `#0A0E1B` | surfaces |
   | `hover` / `selected` / `sidebar-active` | `#141C33` / `#1D2945` / `#1B2642` | states |
   | `ink` / `muted` / `faint` | `#E6F4FF` / `#93A7C6` / `#7084A8` | text (`faint` 5.2:1 on `bg`, 3.8:1 on `selected`) |
-  | `line` / `line-strong` | `#34486E` / `#4A6290` | dividers and borders (`line-strong` 3.2:1 on `bg`, used for input borders) |
+  | `line` / `line-strong` | `#34486E` / `#4E6796` | dividers and borders (`line-strong` for input borders: 3.5:1 on `bg`, 3.3:1 on `panel`, 3.2:1 on `raised`) |
   | `accent` / `on-accent` | `#FFE600` / `#0A0B00` | neon yellow and the text on it |
   | `line-card`, `scroll-thumb` | cyan `rgba(0,229,255,…)` | cyan secondary touches |
-  | `focus-ring` | `rgba(255,230,0,0.35)` | one focus colour: the neon yellow of every focus outline |
+  | `focus-ring` | `rgba(255,230,0,0.35)` | the halo around focused inputs and selects, in the neon yellow of the focus outline (`accent`) |
   | `ok` / `warn` / `fail` | `#3DFFA2` / `#FF9F1C` / `#FF5470` | status |
   | shadows | cyan glow, e.g. `0 0 16px rgba(0,229,255,0.12)` | depth |
   | radius | `sm` 0, `md` 2, `bubble` 2 | square base corners, chamfered by the plugin CSS |
@@ -159,8 +166,8 @@ run in jsdom and are type-checked by `test/tsconfig.json` (DOM and JSX).
 
 ## Fonts and licenses
 
-The plugin's own files (theme, logo, code, styles, docs) are under Apache-2.0 (`LICENSE`). The fonts are under
-the SIL Open Font License 1.1, whose full text ships next to them:
+The plugin's own files (theme, logo, code, styles, docs) are under Apache-2.0 (`LICENSE`). The
+fonts are under the SIL Open Font License 1.1, whose full text ships next to them:
 
 | Font | Files | Source | License |
 |---|---|---|---|
@@ -174,24 +181,27 @@ the SIL Open Font License 1.1, whose full text ships next to them:
 水豚标志，字标为 `CYBERBARA`。
 
 - **主题（L0）**：只有深色一种配色，通过全部对比度与分隔度下限。
-- **组件（L1-L2）**：对话属性面板里的运行 HUD（运行状态 待命 / 运行中 / 等待输入 / 故障、信号条、
-  本次运行用时 `T+` 计时、均衡器式信号条、操作员角色、上行时间、本标签页实时看到的运行 / 工具调用 / 审批
-  次数（还没看到时显示“—”）、音效开关）；覆盖层的扫描线与不透明的终端启动画面（每次登录一次，约两秒，
-  像显像管关机一样收成一条线结束）；侧栏品牌位的故障风字标；新对话页的赛博朋克欢迎区。
-- **装饰（L3）**：卡片、分区、对话框、输入框与按钮切角（`corner-shape: bevel`，边框与焦点环沿斜边连续）；
-  焦点统一为霓虹黄；所有规则都经 `:root:has(…)` 生效，对话框、菜单、⌘K、属性抽屉与侧栏抽屉同样适用。
-- **运行动效**：运行中标题栏底边有亮光扫过，HUD 信号条像均衡器一样跳动，扫描线变亮，正在生成的回复上有
-  扫描光束与带轻微故障效果的“写入头”，输入框边框上有一道光绕行；等待输入时整体青色缓慢呼吸；失败时红色
-  闪一下故障，随后保持红线与平直的信号条。只动 transform 与 opacity，不引起布局变化。
+- **组件（L1-L2）**：对话属性面板里的运行 HUD（运行状态 待命 / 运行中 / 等待输入 / 故障、本次运
+  行用时 `T+` 计时、均衡器式信号条、操作员角色、上行时间、本标签页实时看到的运行 / 工具调用 / 审
+  批次数（还没看到时显示“—”）、音效开关）；覆盖层的扫描线与不透明的终端启动画面（每次登录一次，约两
+  秒，像显像管关机一样收成一条线结束）；侧栏品牌位的故障风字标；新对话页的赛博朋克欢迎区。
+- **装饰（L3）**：卡片、统计卡片、分区、对话框、菜单、代码块、用户消息气泡、输入框、按钮、分段控件、
+  智能体标签、开关与组织首字母块切角（`corner-shape: bevel`，边框与焦点环沿斜边连续）；焦点统一为霓
+  虹黄；开关滑块改为方形且关闭时清晰可辨，组织首字母块改为霓虹标签，选中的智能体标签用霓虹描边；所有
+  规则都经 `:root:has(…)` 生效，对话框、菜单、⌘K、属性抽屉与侧栏抽屉同样适用。
+- **运行动效**：运行中标题栏底边有亮光扫过，HUD 信号条像均衡器一样跳动，扫描线变亮，正在生成的回复上
+  有扫描光束与带轻微故障效果的“写入头”，输入框边框上有一道光绕行；等待输入时整体青色缓慢呼吸；失败时
+  红色闪一下故障，随后保持红线与平直的信号条。只动 transform 与 opacity，不引起布局变化；光束、写入
+  头与输入框光效是回复和输入框自身的伪元素，运行之外不做任何计算，打开的抽屉或对话框会自然盖住它们。
 
 全部装饰只在选用本主题时生效；换成别的主题后，品牌位与欢迎区回到内置样式。音效用 Web Audio 合成，
 **默认关闭**，在 HUD 里点“音效：关 / 开”开启（只对本浏览器生效）。系统开启“减少动态效果”时不播放
-启动画面与运行动效、停止所有动画（颜色与线条保留），也不播放音效。覆盖层只做装饰，不接收鼠标事件，启动画面约两秒后自动结束，
-可点“跳过”或按 Esc 立即结束。
+启动画面与运行动效、停止所有动画（颜色与线条保留），也不播放音效。覆盖层只做装饰，不接收鼠标事件，
+启动画面约两秒后自动结束，可点“跳过”或按 Esc 立即结束。
 
 验收：超级管理员导入插件并批准权限（`permissions.client` 与各 `ui.component:*` 为敏感权限），在插件
 详情页点“应用此插件的外观”，即把平台默认主题设为赛博朋克，并把 `shell.brand`、`conversation.empty`
-换成本插件的组件，页面随后重新加载。`?safe-ui=1`、关闭“插件界面代码”或停用插件会移除全部组件、覆盖层与插件
-样式，但 L0 主题（配色、字体、霓虹标志）仍然生效，因为主题是声明式的，不属于客户端代码；要回到官方
-外观，在外观设置里换成别的主题。
+换成本插件的组件，页面随后重新加载。`?safe-ui=1`、关闭“插件界面代码”或停用插件会移除全部组件、
+覆盖层与插件样式，但 L0 主题（配色、字体、霓虹标志）仍然生效，因为主题是声明式的，不属于客户端代码；
+要回到官方外观，在外观设置里换成别的主题。
 字体均为 SIL OFL 1.1 授权，许可证全文随插件分发。
