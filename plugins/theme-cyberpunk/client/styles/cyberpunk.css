@@ -158,19 +158,6 @@
     opacity: 0;
   }
 
-  /* The properties panel's inner edge: a 1px line fading out at both ends, in the run colour. */
-  & [data-cap-part~="properties-panel"] {
-    background-image: linear-gradient(
-      180deg,
-      transparent,
-      var(--cx-theme-cyberpunk-panel-edge, transparent) 25% 75%,
-      transparent
-    );
-    background-repeat: no-repeat;
-    background-size: 1px 100%;
-    background-position: 0 0;
-  }
-
   /* ---------- Run HUD (component run-hud) ---------- */
 
   & .cx-theme-cyberpunk-hud {
@@ -524,7 +511,6 @@
  */
 :root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=running"]) {
   --cx-theme-cyberpunk-hud: var(--cb-accent);
-  --cx-theme-cyberpunk-panel-edge: rgba(255, 230, 0, 0.32);
 
   & [data-cap-part~="title-bar"] {
     --cx-theme-cyberpunk-edge: color-mix(in srgb, var(--cb-accent) 40%, transparent);
@@ -581,7 +567,6 @@
 /* Waiting for input: everything holds, in cyan, breathing slowly. */
 :root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=waiting"]) {
   --cx-theme-cyberpunk-hud: var(--cx-theme-cyberpunk-cyan);
-  --cx-theme-cyberpunk-panel-edge: rgba(0, 229, 255, 0.32);
 
   & [data-cap-part~="title-bar"] {
     --cx-theme-cyberpunk-edge: rgba(0, 229, 255, 0.45);
@@ -610,7 +595,6 @@
 /* Failed: one red glitch, then a steady red line and a flat meter. */
 :root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=failed"]) {
   --cx-theme-cyberpunk-hud: var(--cb-fail);
-  --cx-theme-cyberpunk-panel-edge: rgba(255, 84, 112, 0.4);
 
   & [data-cap-part~="title-bar"] {
     --cx-theme-cyberpunk-edge: color-mix(in srgb, var(--cb-fail) 50%, transparent);
