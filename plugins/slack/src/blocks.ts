@@ -12,6 +12,8 @@ import {
   multiBlockId,
 } from "./actions.js";
 import { markdownToMrkdwn, splitMrkdwn } from "./mrkdwn.js";
+import { tableBlocks } from "./table-block.js";
+import { segmentTables, tableToListMarkdown } from "./tables.js";
 
 /**
  * 消息与卡片 → Slack 消息（`text` + Block Kit `blocks`）。Slack 的限制（2026-10-20 查阅）：
@@ -29,6 +31,8 @@ export type Block = Record<string, unknown>;
 export interface SlackPost {
   text: string;
   blocks?: Block[];
+  /** The same content as text only, sent instead when Slack rejects `blocks` (a table block). */
+  fallback?: SlackPost[];
 }
 
 /** 一条消息 `text` 的上限。 */
@@ -369,21 +373,73 @@ function cardHeadline(card: ChannelCard, locale: Locale): string | undefined {
 }
 
 /**
- * 一条出站消息 → 按序发送的若干条 Slack 消息。文本先转 mrkdwn：没有卡片时按 4000 拆；有卡片时按 3000 拆
- * （最后一段要放进 section 块），卡片挂在最后一条上（发送方返回的就是这条的 id，之后更新卡片编辑的也是它）。
- * 带 blocks 的消息 `text` 作通知 / 无障碍的退回文本。
+ * An outbound message → the Slack messages to send, in order. The text becomes mrkdwn, split at
+ * 4000 without cards and at 3000 with cards (the last part goes into a section block); the cards go
+ * on the last message (its id is the one returned, and later card updates edit it). In a message
+ * with blocks, `text` is the notification and accessibility fallback.
+ *
+ * Markdown tables become native table blocks (table-block.ts): one table per message, as its last
+ * block, after a section with the text before it (that text split at 3000 when longer, the earlier
+ * parts sent as messages of their own). A table too large for one block is sent as several
+ * messages, each with the header row. Such a message carries `fallback`: the same content as
+ * text only (the table as a list), sent instead when Slack rejects the blocks. A table that can't be
+ * a native table (over 20 columns) is a list in the text.
  */
 export function renderSend(message: OutboundMessage, locale: Locale): SlackPost[] {
-  const mrkdwn = markdownToMrkdwn(message.text);
-  const cards = message.cards ?? [];
+  const posts: SlackPost[] = [];
+  let pending: string[] = [];
+  for (const seg of segmentTables(message.text)) {
+    const tables = seg.kind === "table" ? tableBlocks(seg.table) : undefined;
+    if (seg.kind === "text" || !tables) {
+      pending.push(...(seg.kind === "text" ? seg.lines : tableToListMarkdown(seg.table)));
+      continue;
+    }
+    const list = markdownToMrkdwn(tableToListMarkdown(seg.table).join("\n"));
+    tables.forEach((table, i) => {
+      const lead = i === 0 ? markdownToMrkdwn(trimBlank(pending).join("\n")) : "";
+      const chunks = lead.trim() === "" ? [] : splitMrkdwn(lead, SECTION_TEXT_LIMIT);
+      const last = chunks.pop();
+      posts.push(...chunks.map((text) => ({ text })));
+      const full = [last, list].filter((t) => t !== undefined && t.trim() !== "").join("\n\n");
+      posts.push({
+        text: trunc(full, TEXT_LIMIT),
+        blocks: [...(last !== undefined ? [section(last)] : []), table],
+        fallback: splitMrkdwn(full, TEXT_LIMIT).map((text) => ({ text })),
+      });
+    });
+    pending = [];
+  }
+  const rest = (posts.length > 0 ? trimBlank(pending) : pending).join("\n");
+  const trailing = posts.length > 0 ? rest : message.text;
+  return [...posts, ...renderText(rest, trailing, message.cards ?? [], locale, posts.length > 0)];
+}
+
+/** The lines without blank lines at the start and the end. */
+function trimBlank(lines: string[]): string[] {
+  let a = 0;
+  let b = lines.length;
+  while (a < b && (lines[a] ?? "").trim() === "") a++;
+  while (b > a && (lines[b - 1] ?? "").trim() === "") b--;
+  return lines.slice(a, b);
+}
+
+/** The text after the last table (or the whole text) and the cards, as {@link renderSend} sends them. */
+function renderText(
+  md: string,
+  headlineText: string,
+  cards: ChannelCard[],
+  locale: Locale,
+  afterTable: boolean,
+): SlackPost[] {
+  const mrkdwn = markdownToMrkdwn(md);
   if (cards.length === 0) {
-    if (mrkdwn.trim() === "") return [{ text: "…" }];
+    if (mrkdwn.trim() === "") return afterTable ? [] : [{ text: "…" }];
     return splitMrkdwn(mrkdwn, TEXT_LIMIT).map((text) => ({ text }));
   }
   const chunks = mrkdwn.trim() === "" ? [] : splitMrkdwn(mrkdwn, SECTION_TEXT_LIMIT);
   const last = chunks.pop();
   const posts: SlackPost[] = chunks.map((text) => ({ text }));
-  const dup = cards.some((c) => cardHeadline(c, locale)?.trim() === message.text.trim());
+  const dup = cards.some((c) => cardHeadline(c, locale)?.trim() === headlineText.trim());
   const blocks: Block[] = last !== undefined && !dup ? [section(last)] : [];
   cards.forEach((c, i) => {
     if (i > 0) blocks.push({ type: "divider" });

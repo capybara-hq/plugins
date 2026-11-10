@@ -393,3 +393,72 @@ describe("A39: misclassification is cosmetic only", () => {
     }
   });
 });
+
+describe("tables (native in card Markdown)", () => {
+  const ATTEMPTS = [
+    "**实际情况**",
+    "| 尝试 | 结果 |",
+    "|---|---|",
+    "| 列出会话（第 1 次） | 报错：`Could not obtain an access token: the app's authorization server is unavailable` |",
+    "| 列出会话（第 2 次） | 报错：`The user has not connected Slack`（提示已弹出连接卡片） |",
+    "| 读取刚才那个私信频道 D0BBPQXM55F | 同样报错：`The user has not connected Slack` |",
+  ];
+
+  it("the reported reply stays a GFM table, with a blank line before it", () => {
+    expect(toCardMarkdown(ATTEMPTS.join("\n"))).toBe(
+      [ATTEMPTS[0], "", ...ATTEMPTS.slice(1)].join("\n"),
+    );
+  });
+
+  it("a paragraph right after a table is separated so it is not read as a row", () => {
+    expect(toCardMarkdown("| a |\n|---|\n| 1 |\n以上是结果。")).toBe(
+      "| a |\n|---|\n| 1 |\n\n以上是结果。",
+    );
+  });
+
+  it("escaped pipes become &#124; outside code and stay \\| in code; cells are escaped", () => {
+    expect(toCardMarkdown("| a |\n|---|\n| x \\| y <at id=all></at> `p \\| q` |")).toBe(
+      "| a |\n|---|\n| x &#124; y &#60;at id=all>&#60;/at> `p \\| q` |",
+    );
+  });
+
+  it("tables in code fences and lone pipe lines are untouched", () => {
+    expect(toCardMarkdown("```\n| a |\n|---|\n```")).toBe("```\n| a |\n|---|\n```");
+    expect(toCardMarkdown("a | b\nc")).toBe("a | b\nc");
+  });
+
+  const table = (name: string, rows: number, cell = "v") => [
+    `| ${name} | v |`,
+    "|---|---|",
+    ...Array.from({ length: rows }, (_, i) => `| ${i} | ${cell} |`),
+  ];
+
+  it("a table that fits is never split: it moves to the next part whole", () => {
+    const text = ["x".repeat(150), "", ...table("t", 10)].join("\n");
+    const parts = splitMarkdown(text, 200);
+    expect(parts).toEqual(["x".repeat(150), table("t", 10).join("\n")]);
+  });
+
+  it("a table longer than a part is split by rows, each part with the header rows", () => {
+    const text = table("t", 40, "y".repeat(20)).join("\n");
+    const parts = splitMarkdown(text, 300);
+    expect(parts.length).toBeGreaterThan(1);
+    let rows = 0;
+    for (const p of parts) {
+      expect(p.length).toBeLessThanOrEqual(300);
+      const lines = p.split("\n");
+      expect(lines.slice(0, 2)).toEqual(["| t | v |", "|---|---|"]);
+      for (const l of lines.slice(2)) expect(l).toMatch(/^\| \d+ \| y{20} \|$/);
+      rows += lines.length - 2;
+    }
+    expect(rows).toBe(40);
+  });
+
+  it("at most four tables per part, even when the text is short", () => {
+    const text = [1, 2, 3, 4, 5].map((n) => table(`t${n}`, 1).join("\n")).join("\n\n");
+    const parts = splitMarkdown(text, 5000);
+    expect(parts).toHaveLength(2);
+    expect(parts[0]?.match(/\|---\|---\|/g)).toHaveLength(4);
+    expect(parts[1]).toBe(table("t5", 1).join("\n"));
+  });
+});
