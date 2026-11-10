@@ -14,7 +14,7 @@ global (one person has the same id for every bot), so one person is one identity
 
 The Telegram docs cited here are the [Bot API reference](https://core.telegram.org/bots/api) (Bot API 10.3), consulted on 2026-11-08.
 
-Verified live on 2026-11-08 against a real bot: verify, send, edit, a 5000-character split send and a card with an inline callback keyboard, in a private chat and in a basic group. Not covered live: a person clicking a card button, webhook mode and forum supergroups.
+Verified live on 2026-11-08 against a real bot: verify, send, edit, a 5000-character split send and a card with an inline callback keyboard, in a private chat and in a basic group. Verified live on 2026-11-10: a reply with a table sent as a rich message, and a plain draft edited into one and edited again, in a private chat (live test `rich table`; in Node, a slow IPv4 connect can lose to an unreachable IPv6 address: run it with `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=3000` if every call fails with a network error). Not covered live: a person clicking a card button, webhook mode and forum supergroups.
 
 ## Create the bot
 
@@ -88,13 +88,22 @@ The deployment-level config lives under the kernel config `extensionConfig.teleg
 - **Format**: the model reply's Markdown is converted to Telegram HTML (`parse_mode: "HTML"`); everything else is escaped.
   Link previews are off. Links are limited to http(s): `tg://` and other schemes stay plain text, so model text cannot produce `tg://user?id=…` mentions.
   A raw `@username` in model text would notify people, so the converter puts a U+2060 WORD JOINER after the `@` outside code and links, and Telegram no longer parses it as a mention.
-- **Limit and splitting**: one message holds at most 4096 characters after entity parsing
+- **Tables**: a reply with a Markdown (GFM) table is sent as a [rich message](https://core.telegram.org/bots/api/rich-messages)
+  (Bot API 10.1: [`sendRichMessage`](https://core.telegram.org/bots/api#sendrichmessage), and `editMessageText` with `rich_message` while it streams),
+  so the table renders natively (bordered, striped, column alignment from the delimiter row). The rest of the reply goes through the same converter
+  as plain replies (escaping, http(s)-only links, the mention guard), as rich HTML with `<br>` line breaks (rich HTML collapses bare newlines).
+  A rich message holds up to 32768 characters, so such a reply is never split. A table wider than 20 columns becomes the list described below;
+  a reply over 500 blocks (table rows count) or 32768 characters, or one with cards, is sent as plain HTML.
+  When Telegram refuses the rich message for its content (any 400, or 404 from a Bot API server without the method), the same reply is sent or edited
+  as plain HTML, where each table is a list (one item per row, led by its first cell); flood waits, 5xx and a blocked bot are not retried as plain HTML.
+  Telegram turns a text message into a rich one and back on edit, so streaming keeps the send-then-edit flow (no delete and resend, no extra notification).
+- **Limit and splitting**: one plain message holds at most 4096 characters after entity parsing
   ([`sendMessage`, `text`](https://core.telegram.org/bots/api#sendmessage)); longer text is split into several messages and the last id is returned.
   An edit that would need several messages reports `too_large` and the kernel sends a new message instead.
 - **Streaming edits**: replies are sent and then edited ([`editMessageText`](https://core.telegram.org/bots/api#editmessagetext)); `minEditIntervalMs = 3000`.
   Telegram's limit for a group is about 20 messages per minute ([Broadcasting to users, FAQ](https://core.telegram.org/bots/faq))
   and edits count; a 429 is honored through `retry_after`. "message is not modified" on an edit counts as success.
-  [`sendMessageDraft`](https://core.telegram.org/bots/api#sendmessagedraft) is not used: it exists only in private chats, is a 30-second preview that must be followed by a real
+  [`sendMessageDraft`](https://core.telegram.org/bots/api#sendmessagedraft) and `sendRichMessageDraft` are not used: it exists only in private chats, is a 30-second preview that must be followed by a real
   `sendMessage`, and does not fit the kernel's send-then-edit model.
 - **Idempotency**: the Bot API has no idempotent send, so `idempotencyKey` is ignored. A send whose response is lost and is retried can show the message twice; the alternative (never retrying) would lose messages.
 - **Permission manifest**: `network: ["api.telegram.org"]`, shown only and not enforced.

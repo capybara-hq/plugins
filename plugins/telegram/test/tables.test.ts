@@ -8,6 +8,16 @@ describe("segmentTables (telegram fence rules)", () => {
     expect(tablesToLists(md)).toBe("```\n```js\n| a |\n|---|\n```\n- **1**");
   });
 
+  it("reads the column alignment from the delimiter row", () => {
+    const [seg] = segmentTables("| a | b | c | d |\n|:--|:-:|--:|---|");
+    expect(seg?.kind === "table" && seg.table.align).toEqual([
+      "left",
+      "center",
+      "right",
+      undefined,
+    ]);
+  });
+
   it("alignment rows, escaped pipes and CJK cells", () => {
     expect(tablesToLists("| 名称 | 说明 |\n|:--|--:|\n| `a\\|b` | 或 |")).toBe("- `a|b` — 或");
   });
