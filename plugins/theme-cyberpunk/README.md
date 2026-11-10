@@ -26,7 +26,7 @@ palette, the properties sheet below 1100 px and the sidebar drawer. The componen
 | Contribution | Slot | What it does |
 |---|---|---|
 | `run-hud` | `conversation.properties.section` (after the context section) | The run state in the viewer's language (zh 待命 / 运行中 / 等待输入 / 故障, en STANDBY / RUNNING / AWAITING INPUT / FAULT) with a `T+MM:SS.s` ticker of the run's time and an equalizer-style signal meter; the viewer's role (localized) and the last uplink time from its server view; the runs, tool calls and approvals of the conversation seen live in this browser tab (counted by the extension's listeners from the page's first load, kept in session client storage; "—" until it has seen one, since earlier history is not counted); and the sound toggle |
-| `scanlines` | `shell.overlay` | CRT scanlines and a very light vignette over the workspace, brighter while a run goes, plus the run effects (below) |
+| `scanlines` | `shell.overlay` | Static CRT scanlines and a very light vignette over the workspace |
 | `boot` | `shell.overlay` | A short opaque terminal boot screen (boot lines with a right-aligned status column, then a progress bar), once per sign-in, about two seconds, ending like a CRT switching off |
 | `brand` | `shell.brand` (replaceable) | The neon mark (the theme logo through the design `Logo`) and a glitch `CYBERBARA` wordmark in the full sidebar and the drawer, in place of the built-in row; the built-in mark with a flicker in the rail |
 | `hero` | `conversation.empty` (replaceable) | The new-conversation hero: the big neon capybara, a status line and the greeting with a glitch |
@@ -46,9 +46,9 @@ Everything follows the run state (`run=running` neon yellow, `run=waiting` cyan,
 idle green), moves only `transform` and `opacity`, shifts no layout and stops under reduced motion:
 
 - **Running**: a light sweeps along the title bar's fading bottom edge; the HUD bars move like an
-  equalizer next to the run's `T+` ticker; the scanlines brighten and a soft band sweeps down the
-  screen; a scan beam passes over the reply being written, with a glowing write head under its
-  newest line that glitches now and then; a light travels along the composer's border.
+  equalizer next to the run's `T+` ticker; a scan beam passes over the reply being written, with a
+  glowing write head under its newest line that glitches now and then; a light travels along the
+  composer's border. Nothing moves across the whole screen: the scanlines stay still.
 - **Waiting for input**: everything holds in cyan and breathes slowly (the HUD, the composer's
   outline).
 - **Failed**: one short red glitch on the title bar edge and the HUD state, then a steady red line
@@ -57,9 +57,8 @@ idle green), moves only `transform` and `opacity`, shifts no layout and stops un
 The beam and the write head are pseudo-elements of the reply being written (the
 `message.assistant` part while it carries `aria-busy`), the composer light those of the
 `composer` part: nothing runs or is measured outside a run, and a sheet, dialog, menu or the
-drawer opened over them covers them. Only the scanlines live in the decoration layer above
-everything; while a dialog or sheet is open their run additions (the brighter lines, the sweep)
-step back.
+drawer opened over them covers them. Only the static scanlines live in the decoration layer
+above everything; they take no part in a run.
 
 `.capybara-plugin/plugin.json` suggests the appearance (`suggestedAppearance`): the theme
 `cyberpunk` and the replacements `shell.brand` → `brand`, `conversation.empty` → `hero`. Nothing is
@@ -87,9 +86,10 @@ The cues and the HUD follow the toggle, not the theme: listeners get no theme
   two seconds, and **Skip** (or Escape) ends it at once; Skip is the only interactive element.
 - The boot screen plays once per sign-in: it keys on the sign-in id of `useSignIn()` (kept in local
   client storage), so a reload or a new tab of the same sign-in does not replay it and the next
-  sign-in does. It needs a Capybara whose web host offers `useSignIn` (core #156: plugin-client
-  0.1.0-rc.3, kernel 0.1.0-rc.18 and later); an older host loads no client code of this plugin
-  (the built-in brand, hero and no HUD), while its theme and stylesheet still apply.
+  sign-in does. It needs a Capybara whose web host offers `useSignIn` and the UI parts it styles
+  (core 0.1.0-rc.19 and later: kernel rc.19, plugin-client 0.1.0-rc.4, the peer range); an
+  older host loads no client code of this plugin (the built-in brand, hero and no HUD), while its
+  theme and stylesheet still apply.
 - The glitch copies of the wordmark and the greeting are hidden from assistive tech; the brand
   reads as `CYBERBARA`. All HUD colours are bright on the theme's dark panels.
 
@@ -189,10 +189,11 @@ fonts are under the SIL Open Font License 1.1, whose full text ships next to the
   智能体标签、开关与组织首字母块切角（`corner-shape: bevel`，边框与焦点环沿斜边连续）；焦点统一为霓
   虹黄；开关滑块改为方形且关闭时清晰可辨，组织首字母块改为霓虹标签，选中的智能体标签用霓虹描边；所有
   规则都经 `:root:has(…)` 生效，对话框、菜单、⌘K、属性抽屉与侧栏抽屉同样适用。
-- **运行动效**：运行中标题栏底边有亮光扫过，HUD 信号条像均衡器一样跳动，扫描线变亮，正在生成的回复上
-  有扫描光束与带轻微故障效果的“写入头”，输入框边框上有一道光绕行；等待输入时整体青色缓慢呼吸；失败时
-  红色闪一下故障，随后保持红线与平直的信号条。只动 transform 与 opacity，不引起布局变化；光束、写入
-  头与输入框光效是回复和输入框自身的伪元素，运行之外不做任何计算，打开的抽屉或对话框会自然盖住它们。
+- **运行动效**：运行中标题栏底边有亮光扫过，HUD 信号条像均衡器一样跳动，正在生成的回复上有扫描光束与
+  带轻微故障效果的“写入头”，输入框边框上有一道光绕行；等待输入时整体青色缓慢呼吸；失败时红色闪一下故
+  障，随后保持红线与平直的信号条。只动 transform 与 opacity，不引起布局变化；光束、写入头与输入框光
+  效是回复和输入框自身的伪元素，运行之外不做任何计算，打开的抽屉或对话框会自然盖住它们；扫描线保持静
+  止，不随运行变化。
 
 全部装饰只在选用本主题时生效；换成别的主题后，品牌位与欢迎区回到内置样式。音效用 Web Audio 合成，
 **默认关闭**，在 HUD 里点“音效：关 / 开”开启（只对本浏览器生效）。系统开启“减少动态效果”时不播放
