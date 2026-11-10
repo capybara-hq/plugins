@@ -88,9 +88,16 @@ const waitFor = async <T>(fn: () => T | undefined, ms = 5000, what = "condition"
 /** A webhook request as the kernel hands it over (lowercase headers, raw bytes). */
 function request(
   body: string,
-  o: { sign?: boolean; timestamp?: number; tamper?: boolean; key?: string } = {},
+  o: {
+    sign?: boolean;
+    timestamp?: number;
+    tamper?: boolean;
+    key?: string;
+    /** When the kernel received it (ms); defaults to now. */
+    receivedAt?: number;
+  } = {},
 ) {
-  const now = Date.now();
+  const now = o.receivedAt ?? Date.now();
   const headers: Record<string, string> = {
     "content-type": "application/json; charset=utf-8",
     ...(o.sign !== false &&
@@ -249,10 +256,12 @@ describe("Lark webhook inbound", () => {
 
   it("rejects 401: timestamp 301 s off, one byte changed, unsigned, wrong token", async () => {
     const body = encryptLarkWebhook(dmEvent("x"), ENCRYPT_KEY);
-    const now = Math.floor(Date.now() / 1000);
+    // One clock for the signatures and the receipt: a busy machine must not move the window
+    const at = Date.now();
+    const now = Math.floor(at / 1000);
     for (const req of [
-      request(body, { timestamp: now - 301 }),
-      request(body, { timestamp: now + 301 }),
+      request(body, { timestamp: now - 301, receivedAt: at }),
+      request(body, { timestamp: now + 301, receivedAt: at }),
       request(body, { tamper: true }),
       request(body, { sign: false }),
       request(body, { key: "another-key" }),
@@ -274,7 +283,7 @@ describe("Lark webhook inbound", () => {
       status: 401,
     });
     // Within the window still passes
-    expect((await handle(channel(), request(body, { timestamp: now - 290 }))).kind).toBe("events");
+    expect((await handle(channel(), request(body, { timestamp: now - 290, receivedAt: at }))).kind).toBe("events");
   });
 
   it("decryption failure → 400", async () => {
