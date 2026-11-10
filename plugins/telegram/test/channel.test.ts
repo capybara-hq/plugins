@@ -93,14 +93,18 @@ describe("verify", () => {
     expect(r.tenantId).not.toBe("global");
   });
 
-  it("warns about privacy mode off and private-chat topics, never with the token", async () => {
+  it("warns about privacy mode on (no plain @mentions in groups) and private-chat topics, never with the token", async () => {
+    // privacy mode off, topics on: only the topics warning
     warnings.length = 0;
     await make().verify({ config: { botToken: "222:loud" }, signal: signal() });
-    expect(warnings).toHaveLength(2);
+    expect(warnings).toHaveLength(1);
+    expect(warnings.join(" ")).toContain("topic");
     expect(warnings.join(" ")).not.toContain("loud");
+    // privacy mode on (the default): the group mention warning
     warnings.length = 0;
     await make().verify({ config, signal: signal() });
-    expect(warnings).toHaveLength(0);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("privacy mode is on");
   });
 });
 
