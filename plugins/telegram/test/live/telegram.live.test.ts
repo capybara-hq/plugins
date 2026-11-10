@@ -14,7 +14,9 @@ import { createTelegramChannel } from "../../src/channel.js";
  * - `CAPYBARA_TEST_TELEGRAM_GROUP_ID` (optional, the bot is a member): the same send / edit / card
  *   checks in a group.
  * - Checks: `verify`; send, then edit; a 5000-character send that splits; a card with buttons
- *   (nobody clicks it; it is edited to its decided state so no live button stays).
+ *   (nobody clicks it; it is edited to its decided state so no live button stays); a reply with a
+ *   table streamed like the kernel does (plain draft, then edits into a rich message with a native
+ *   table) and a table sent directly as a rich message, with no fallback to the plain list.
  *
  * The test messages and cards stay in the chat (there is no cleanup); use a throwaway chat or group.
  *
@@ -39,7 +41,8 @@ if (!LIVE) {
 }
 
 const API = "https://api.telegram.org";
-const log = { info: () => {}, warn: () => {}, error: () => {} };
+const warnings: string[] = [];
+const log = { info: () => {}, warn: (m: string) => void warnings.push(m), error: () => {} };
 const config = () => ({ botToken: TOKEN as string });
 const timeout = (ms: number) => AbortSignal.timeout(ms);
 /** Test-only in-memory kv (the real one is the kernel's): get / set honoring the TTL. */
@@ -146,4 +149,45 @@ describe.skipIf(!READY)("Telegram live", () => {
       120_000,
     );
   }
+
+  it("live: a reply with a table streams into a rich message and sends as one", async () => {
+    const base = {
+      config: config(),
+      target: { chatId: CHAT_ID as string, chatType: "dm" as const },
+      locale: "en" as const,
+    };
+    const head = `[capybara test] rich table ${stamp}\n\nScores **so far**:`;
+    const table = "| Name | Score | Note |\n|:--|--:|:-:|\n| **alpha** | 42 | `ok` |";
+    const full = `${table}\n| 北京 | 7 | line<br>break |\n| @nobody | 0 | [link](https://example.com) |`;
+    warnings.length = 0;
+    // The kernel's streaming: a first draft (no table yet), then edits as the reply grows.
+    const draft = await channel.send({ ...base, message: { text: head }, signal: timeout(20_000) });
+    await channel.update({
+      ...base,
+      messageId: draft.messageId,
+      message: { text: `${head}\n\n${table}` },
+      signal: timeout(20_000),
+    });
+    const final = { text: `${head}\n\n${full}\n\nDone.` };
+    await channel.update({
+      ...base,
+      messageId: draft.messageId,
+      message: final,
+      signal: timeout(20_000),
+    });
+    // The finalisation repeats the last edit: "message is not modified" counts as success.
+    await channel.update({
+      ...base,
+      messageId: draft.messageId,
+      message: final,
+      signal: timeout(20_000),
+    });
+    // Sent directly (a reply that arrives in one piece).
+    await channel.send({
+      ...base,
+      message: { text: `[capybara test] rich table sent at once ${stamp}\n\n${full}` },
+      signal: timeout(20_000),
+    });
+    expect(warnings.filter((w) => w.includes("rich message"))).toEqual([]);
+  }, 120_000);
 });

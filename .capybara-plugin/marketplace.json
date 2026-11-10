@@ -509,7 +509,7 @@
     },
     {
       "name": "telegram",
-      "version": "0.1.0-rc.6",
+      "version": "0.1.0-rc.7",
       "summary": {
         "en": "Telegram (channel@1 bot over the Bot API: long polling or webhook, inline keyboard cards)",
         "zh": "Telegram 机器人渠道（channel@1，Bot API：长轮询或 webhook，内联键盘卡片）"
@@ -531,14 +531,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-telegram",
-          "version": "0.1.0-rc.6",
-          "integrity": "sha512-Z/OVgZuB/PZ+6cdsDAgPFPD9wka9YQbVADma8kO9LLal+YD15dFDDc94G2YiQkdo2HwYsOPaZ3xtN4bllrGZpQ=="
+          "version": "0.1.0-rc.7",
+          "integrity": "sha512-Czf9PUFSFixqlWsscxJ0ONcfLqTp2uK6s8akcJGpGBjoJnOP9Cv4WGjlzZfRuxnEcOOe7Bck3XyK0SEOMT0P5A=="
         }
       }
     },
     {
       "name": "theme-cyberpunk",
-      "version": "0.1.0-rc.3",
+      "version": "0.1.0-rc.4",
       "summary": {
         "en": "Cyberpunk theme and UI: neon yellow on deep blue-black, a run-state HUD, scanlines, a boot screen, a glitch CYBERBARA wordmark and opt-in synthesized sound",
         "zh": "赛博朋克主题与界面：深蓝黑底上的霓虹黄，运行状态 HUD、扫描线、启动画面、故障风 CYBERBARA 字标，以及可选的合成音效"
@@ -570,8 +570,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-theme-cyberpunk",
-          "version": "0.1.0-rc.3",
-          "integrity": "sha512-CxLNndeC+3vUpMdVheLChQyqvm/pwW1ISHx3dGLFnrn5yJ6Ghta4zxN57xJOZI64aqu80qeZai98CrjwfOTAcg=="
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-7VsbObf5g3Lo7zgLbMZi7CkgN1IZpkrC1rnfgzD+fVdTkAq+UG4nEIi/Tqq85xEYA9/FwHKBmSIQK0cNEFlF4w=="
         }
       }
     }

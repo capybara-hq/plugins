@@ -1,7 +1,8 @@
 /**
  * Markdown -> Telegram HTML (https://core.telegram.org/bots/api#html-style).
  * Supported tags: b, i, s, code, pre (+ code class="language-x"), a href, blockquote. Headings become bold
- * lines, lists use "•" (numbers are kept), tables become lists (tables.ts). Only `&lt;`, `&gt;`, `&amp;` and `&quot;` are valid entities.
+ * lines, lists use "•" (numbers are kept), tables become lists (tables.ts; a reply with a table
+ * goes out as a rich message instead when it can, rich.ts). Only `&lt;`, `&gt;`, `&amp;` and `&quot;` are valid entities.
  * Telegram's 4096 limit counts the visible text after entity parsing (UTF-16 code units).
  */
 
@@ -30,7 +31,7 @@ const WORD_JOINER = "\u2060";
  * only an `@` right after `/` is kept (`https://medium.com/@user/post`): Telegram ends a URL at
  * punctuation such as `,` `)` `、`, so `https://x.com,@bob` would otherwise leave `@bob` live.
  */
-function neutraliseHtmlMentions(html: string): string {
+export function neutraliseHtmlMentions(html: string): string {
   return html.replace(
     /(<pre[\s\S]*?<\/pre>)|(<code>[\s\S]*?<\/code>)|(<a [^>]*>)|(https?:\/\/[^\s<]+)|(?<![A-Za-z0-9_])@(?=(?:<[^>]+>)*[A-Za-z0-9_])/g,
     (m, pre?: string, code?: string, a?: string, url?: string) =>
@@ -96,7 +97,7 @@ function formatSpan(seg: string): string {
 }
 
 /** One line of inline content: code spans verbatim (escaped only), the rest formatted. */
-function inline(line: string): string {
+export function inline(line: string): string {
   let out = "";
   let last = 0;
   for (const m of line.matchAll(/`([^`\n]+)`/g)) {
@@ -123,12 +124,15 @@ function codeBlock(lang: string, lines: string[]): string {
   return l === "" ? `<pre>${body}</pre>` : `<pre><code class="language-${l}">${body}</code></pre>`;
 }
 
+/** CRLF / CR to LF; NUL (the converter's placeholder marker) dropped. */
+export const normaliseMarkdown = (md: string): string =>
+  md.replace(/\r\n?/g, "\n").replaceAll("\u0000", "");
+
 /**
- * Converts a model reply from Markdown to Telegram HTML (mentions neutralised outside code). The
- * HTML style has no tables: each table becomes a list first (tables.ts).
+ * Markdown lines (without tables) to Telegram HTML, one output line per input line except fenced
+ * code (one `<pre>`) and quotes (one `<blockquote>`). Mentions are not neutralised here.
  */
-export function markdownToTelegramHtml(md: string): string {
-  const lines = tablesToLists(md.replace(/\r\n?/g, "\n").replaceAll("\u0000", "")).split("\n");
+export function convertLines(lines: string[]): string {
   const out: string[] = [];
   let fence: { lang: string; lines: string[] } | undefined;
   let quote: string[] | undefined;
@@ -161,7 +165,15 @@ export function markdownToTelegramHtml(md: string): string {
   }
   if (fence) out.push(codeBlock(fence.lang, fence.lines));
   closeQuote();
-  return neutraliseHtmlMentions(out.join("\n"));
+  return out.join("\n");
+}
+
+/**
+ * Converts a model reply from Markdown to Telegram HTML (mentions neutralised outside code). The
+ * HTML style has no tables: each table becomes a list first (tables.ts).
+ */
+export function markdownToTelegramHtml(md: string): string {
+  return neutraliseHtmlMentions(convertLines(tablesToLists(normaliseMarkdown(md)).split("\n")));
 }
 
 type Token =
