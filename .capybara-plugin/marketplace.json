@@ -89,7 +89,7 @@
     },
     {
       "name": "lark",
-      "version": "0.1.0-rc.6",
+      "version": "0.1.0-rc.7",
       "summary": {
         "en": "Lark (channel@1 bot over the Lark long connection with interactive cards, identity-source@1 web login, directory@1)"
       },
@@ -125,8 +125,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-lark",
-          "version": "0.1.0-rc.6",
-          "integrity": "sha512-3Q0X7IRfjp6hIkujgPkd1KnLSQPO+FAYXzwjSdW2hOsfotmY7k0yrxhegiNpwz1wTGFcUvF0ziLK9KctXOlYpg=="
+          "version": "0.1.0-rc.7",
+          "integrity": "sha512-jObAkWiSXzVCj7RSJshhXp2Ada2qQVUjk8emZNbMd0Dxvh/jG0PfOtrL9GE2BROdCqX24HUmtWjVidMGmdFdbw=="
         }
       }
     },
@@ -294,7 +294,7 @@
     },
     {
       "name": "slack",
-      "version": "0.1.0-rc.7",
+      "version": "0.1.0-rc.8",
       "summary": {
         "en": "Slack (channel@1 bot over Socket Mode with Block Kit cards, identity-source@1 Sign in with Slack, directory@1)"
       },
@@ -332,8 +332,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-slack",
-          "version": "0.1.0-rc.7",
-          "integrity": "sha512-5Ha7vB4R845632yTH1Z2jNoxkNsn8JvIqnDS3AX8DMvudiW+BS8QUxSj+OqvYwLsJC0V5VaOOxq1/8CH37Gsng=="
+          "version": "0.1.0-rc.8",
+          "integrity": "sha512-Un0i0Mz75WVvDVq2WmhC9M5bi5p5lCdIl9ilj4K7V9NmX3pphduZ+bXVBYYZkw+tr/wdjGzmZSkTRvd+CcLKZQ=="
         }
       }
     },
@@ -509,7 +509,7 @@
     },
     {
       "name": "telegram",
-      "version": "0.1.0-rc.5",
+      "version": "0.1.0-rc.6",
       "summary": {
         "en": "Telegram (channel@1 bot over the Bot API: long polling or webhook, inline keyboard cards)",
         "zh": "Telegram 机器人渠道（channel@1，Bot API：长轮询或 webhook，内联键盘卡片）"
@@ -531,8 +531,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-telegram",
-          "version": "0.1.0-rc.5",
-          "integrity": "sha512-q5zET+vEC20q3G27ZrgKtFdI2YSUWygOZTOtytgJAf9JPJ5R3JEw+ntKYjuK/KlhrWZ9IuzqM8tNZlWiCvzHOA=="
+          "version": "0.1.0-rc.6",
+          "integrity": "sha512-Z/OVgZuB/PZ+6cdsDAgPFPD9wka9YQbVADma8kO9LLal+YD15dFDDc94G2YiQkdo2HwYsOPaZ3xtN4bllrGZpQ=="
         }
       }
     },
