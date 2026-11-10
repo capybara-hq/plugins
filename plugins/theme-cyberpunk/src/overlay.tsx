@@ -5,7 +5,9 @@ import {
   useTheme,
 } from "@capybara-hq/plugin-client";
 import { type AnimationEvent, useEffect, useState } from "react";
-import { BOOT_KEY, cx, THEME_KEY, WORDMARK } from "./shared.js";
+import { RunFx } from "./fx.js";
+import { BOOT_KEY, BOOT_SIGN_IN_KEY, cx, THEME_KEY, WORDMARK } from "./shared.js";
+import { useSignInId } from "./sign-in.js";
 
 /** The boot screen's own exit animation (plugin CSS); its end removes the screen. */
 export const BOOT_OUT_ANIMATION = "cx-theme-cyberpunk-boot-out";
@@ -16,43 +18,78 @@ export const BOOT_OUT_ANIMATION = "cx-theme-cyberpunk-boot-out";
  */
 export const BOOT_MAX_MS = 2400;
 
-/** `shell.overlay`: CRT scanlines and a vignette, decorative only (no pointer events, aria-hidden). */
+/**
+ * `shell.overlay`: CRT scanlines and a light vignette, plus the run effects ({@link RunFx});
+ * decorative only (no pointer events, aria-hidden).
+ */
 export function Scanlines() {
   const { key } = useTheme();
   if (key !== THEME_KEY) return null;
-  return <div aria-hidden="true" className={cx("scanlines")} />;
+  return (
+    <>
+      <div aria-hidden="true" className={cx("scanlines")} />
+      <RunFx />
+    </>
+  );
+}
+
+/** A boot line: a label and an optional status shown in the right-hand column. */
+interface BootLine {
+  label: string;
+  status?: string;
 }
 
 /** The boot lines, in order (status text only; never content a person needs). */
-function bootLines(t: (text: { en: string; zh: string }) => string): string[] {
+function bootLines(t: (text: { en: string; zh: string }) => string): BootLine[] {
   return [
-    `${WORDMARK} OS v0.1 · ${t({ en: "cold start", zh: "冷启动" })}`,
-    `${t({ en: "neural link", zh: "神经链路" })} ........ [ OK ]`,
-    `${t({ en: "optic overlay", zh: "视觉叠层" })} ...... [ OK ]`,
-    `${t({ en: "agent uplink", zh: "智能体上行" })} ....... [ OK ]`,
-    `${t({ en: "audio bus (muted)", zh: "音频总线（静音）" })} .. [ OK ]`,
-    `${t({ en: "welcome back, operator", zh: "欢迎回来，操作员" })}`,
+    { label: `${WORDMARK} OS v0.1 · ${t({ en: "cold start", zh: "冷启动" })}` },
+    { label: t({ en: "neural link", zh: "神经链路" }), status: "OK" },
+    { label: t({ en: "optic overlay", zh: "视觉叠层" }), status: "OK" },
+    { label: t({ en: "agent uplink", zh: "智能体上行" }), status: "OK" },
+    { label: t({ en: "audio bus", zh: "音频总线" }), status: t({ en: "MUTED", zh: "静音" }) },
+    { label: t({ en: "welcome back, operator", zh: "欢迎回来，操作员" }) },
   ];
 }
 
+/** Storage the boot gate reads and writes. */
+interface GateStorage {
+  get(key: string, scope?: "local" | "session"): string | null;
+  set(key: string, value: string | null, scope?: "local" | "session"): void;
+}
+
 /**
- * The boot screen itself: plays once per browser session (session client storage), never under
- * reduced motion. It never blocks input: the decoration layer and the screen take no pointer
- * events, it ends by itself after about 1.9 s (at most {@link BOOT_MAX_MS}), and Skip or Escape
- * ends it at once.
+ * Whether the boot screen plays: once per sign-in when the host gives a sign-in id (it plays when
+ * the id differs from the one it last played for, kept in local storage, so a new tab or window of
+ * the same sign-in does not replay it), else once per browser session.
+ */
+export function bootDue(storage: GateStorage, signInId: string | null): boolean {
+  if (signInId !== null) return storage.get(BOOT_SIGN_IN_KEY) !== signInId;
+  return storage.get(BOOT_KEY, "session") === null;
+}
+
+/** Records that the boot screen played (for this sign-in, or for this browser session). */
+export function markBooted(storage: GateStorage, signInId: string | null): void {
+  if (signInId !== null) storage.set(BOOT_SIGN_IN_KEY, signInId);
+  else storage.set(BOOT_KEY, "1", "session");
+}
+
+/**
+ * The boot screen itself: plays once per sign-in ({@link bootDue}), never under reduced motion. It never blocks input: the decoration layer and the screen take no pointer
+ * events; it ends by itself after about 1.9 s (at most {@link BOOT_MAX_MS}): the card fades, then
+ * the opaque screen collapses to a line like a CRT switching off, so the page never shows through
+ * it. Skip or Escape ends it at once.
  */
 export function BootScreen() {
   const storage = useClientStorage();
   const reducedMotion = usePrefersReducedMotion();
   const { t } = useLocale();
-  const [show, setShow] = useState(
-    () => !reducedMotion && storage.get(BOOT_KEY, "session") === null,
-  );
+  const signInId = useSignInId();
+  const [show, setShow] = useState(() => !reducedMotion && bootDue(storage, signInId));
 
-  // Mark the session first, so a reload during the animation does not replay it.
+  // Mark it played first, so a reload during the animation does not replay it.
   useEffect(() => {
-    if (show) storage.set(BOOT_KEY, "1", "session");
-  }, [show, storage]);
+    if (show) markBooted(storage, signInId);
+  }, [show, storage, signInId]);
 
   useEffect(() => {
     if (!show) return;
@@ -89,8 +126,14 @@ export function BootScreen() {
           <span>TTY-01</span>
         </div>
         {bootLines(t).map((line) => (
-          <div key={line} className={cx("boot-line")}>
-            {line}
+          <div key={line.label} className={cx("boot-line")}>
+            <span className={cx("boot-label")}>{line.label}</span>
+            {line.status === undefined ? null : (
+              <>
+                <span className={cx("boot-leader")} />
+                <span className={cx("boot-status")}>{`[ ${line.status} ]`}</span>
+              </>
+            )}
           </div>
         ))}
         <div className={cx("boot-track")}>

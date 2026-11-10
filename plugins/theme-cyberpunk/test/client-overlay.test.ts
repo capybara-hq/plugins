@@ -61,6 +61,15 @@ describe("boot screen", () => {
     expect(sessionStorage.getItem(BOOTED)).toBeNull();
   });
 
+  it("lines its statuses up in one column", () => {
+    render(createElement(BootScreen));
+    const statuses = [...document.querySelectorAll(".cx-theme-cyberpunk-boot-status")].map(
+      (e) => e.textContent,
+    );
+    expect(statuses).toEqual(["[ OK ]", "[ OK ]", "[ OK ]", "[ MUTED ]"]);
+    expect(document.querySelectorAll(".cx-theme-cyberpunk-boot-leader")).toHaveLength(4);
+  });
+
   it("is decorative: lines hidden from assistive tech, only Skip is interactive", () => {
     render(createElement(BootScreen));
     expect(

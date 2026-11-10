@@ -2,535 +2,657 @@
  * theme-cyberpunk decoration (UI customization L3). The packer wraps this file in
  * @layer extensions, so it wins over the design and theme layers without !important.
  *
- * Every rule hangs off the shell's state token theme=theme-cyberpunk/cyberpunk: a person who
- * picks another theme gets none of it. Selectors use only [data-cap-part], [data-cap-state] and
- * the plugin's own cx-theme-cyberpunk-* classes. Animations stop under reduced motion (the media
- * query for the first paint, the motion=reduced token after hydration).
+ * Scoping, one rule for the whole file: every rule hangs off
+ *   :root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"])
+ * (and the run states off :root:has([...theme...][data-cap-state~="run=..."])), never off the
+ * shell element itself. Dialogs, menus, the command palette, the properties sheet and the sidebar
+ * drawer are portaled out of the shell, and :root reaches them all; the custom properties below are
+ * declared on :root for the same reason. A person who picks another theme gets none of it.
+ * Selectors use only [data-cap-part], [data-cap-state] and the plugin's own cx-theme-cyberpunk-*
+ * classes. Animations move transform and opacity only, and stop under reduced motion (the media
+ * query for the first paint, the motion=reduced token after hydration; both at the end).
  */
 
-/* Palette additions (the theme's tokens stay the source for everything else). */
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] {
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) {
   --cx-theme-cyberpunk-cyan: #00e5ff;
   --cx-theme-cyberpunk-magenta: #ff2a6d;
+  /* The run colour: idle green, running neon yellow, waiting cyan, failed red. */
   --cx-theme-cyberpunk-hud: var(--cb-ok);
   --cx-theme-cyberpunk-cut: 10px;
   --cx-theme-cyberpunk-cut-sm: 6px;
-}
 
-/* The HUD colour follows the run state. */
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=running"] {
-  --cx-theme-cyberpunk-hud: var(--cb-accent);
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=waiting"] {
-  --cx-theme-cyberpunk-hud: var(--cx-theme-cyberpunk-cyan);
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=failed"] {
-  --cx-theme-cyberpunk-hud: var(--cb-fail);
-}
+  /* ---------- Chamfered corners ---------- */
 
-/* ---------- Chamfered corners ---------- */
+  /*
+   * One technique for every part: a bevelled border-radius (corner-shape, CSS Borders 4). The
+   * border, the background, inset shadows and the focus outline all follow the diagonal. Cards,
+   * sections, dialogs and the composer bevel the top-right and bottom-left corners; buttons and
+   * inputs the top-left and bottom-right. A browser without corner-shape keeps square corners.
+   */
+  @supports (corner-shape: bevel) {
+    & [data-cap-part~="card"],
+    & [data-cap-part~="section"],
+    & [data-cap-part~="composer"],
+    & [data-cap-part~="dialog"] {
+      border-radius: 0 var(--cx-theme-cyberpunk-cut) 0 var(--cx-theme-cyberpunk-cut);
+      corner-shape: bevel;
+    }
+    & [data-cap-part~="button"],
+    & [data-cap-part~="input"] {
+      border-radius: var(--cx-theme-cyberpunk-cut-sm) 0;
+      corner-shape: bevel;
+    }
+  }
 
-/*
- * One technique for every part: a bevelled border-radius (corner-shape, CSS Borders 4). The border,
- * the background, inset shadows and the focus outline all follow the diagonal, so no outline stops
- * at a corner and no focus ring is clipped. Cards, sections, dialogs and the composer bevel the
- * top-right and bottom-left corners, buttons the top-left and bottom-right. A browser without
- * corner-shape keeps square corners. Dialogs are portaled out of the shell, so they are matched
- * through :root:has(the shell token).
- */
-@supports (corner-shape: bevel) {
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] [data-cap-part~="card"],
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] [data-cap-part~="section"],
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] [data-cap-part~="composer"],
-  :root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) [data-cap-part~="dialog"] {
+  /* Primary buttons: larger bevels and a pressed shade on hover (their text stays as written). */
+  & [data-cap-part~="button.primary"] {
+    --cx-theme-cyberpunk-cut-sm: 9px;
+    letter-spacing: 0.04em;
+  }
+  & [data-cap-part~="button.primary"]:hover:not(:disabled) {
+    box-shadow: inset 0 -2px 0 rgba(10, 11, 0, 0.35);
+  }
+
+  /* Inputs: a border that reads at 3:1 on the ground; neon on focus, red when invalid. */
+  & [data-cap-part~="input"] {
+    border-color: var(--cb-line-strong);
+  }
+  & [data-cap-part~="input"]:hover {
+    border-color: color-mix(in srgb, var(--cb-line-strong) 70%, var(--cb-ink));
+  }
+  & [data-cap-part~="input"]:is(:focus-within, :focus-visible, [aria-expanded="true"]) {
+    border-color: var(--cb-accent);
+  }
+  & [data-cap-part~="input"]:is([aria-invalid="true"], :has([aria-invalid="true"])) {
+    border-color: var(--cb-fail);
+  }
+  & [data-cap-part~="input"]:is(:disabled, :has(:disabled)) {
+    border-color: var(--cb-line);
+  }
+
+  /* The composer shows focus as a soft inner line in the one focus colour. */
+  & [data-cap-part~="composer"]:focus-within {
+    box-shadow:
+      var(--cb-shadow-float),
+      inset 0 0 0 1px rgba(255, 230, 0, 0.45);
+  }
+
+  /* ---------- Shell touches ---------- */
+
+  & [data-cap-part~="sidebar.brand"] {
+    box-shadow: inset 0 -1px 0 rgba(0, 229, 255, 0.18);
+  }
+  & [data-cap-part~="sidebar.item"][aria-current="page"] {
+    box-shadow: inset 2px 0 0 var(--cb-accent);
+  }
+  /* Conversation links carry no padding of their own: indent their text so the active bar keeps a
+     gap (every row, so the text never shifts when a row becomes current). */
+  & [data-cap-part~="sidebar.item"][href^="/chat/"] {
+    padding-inline-start: var(--cb-space-2);
+  }
+  & [data-cap-part~="status-bar"] {
+    box-shadow: inset 0 1px 0 rgba(0, 229, 255, 0.16);
+    letter-spacing: 0.04em;
+  }
+  & [data-cap-part~="tool-row"][aria-expanded="true"] {
+    box-shadow: inset 2px 0 0 rgba(0, 229, 255, 0.5);
+  }
+
+  /*
+   * The title bar's bottom edge: a 1px line fading out toward both ends, in the run colour (faint
+   * cyan when idle). The run states add a moving light on ::after (below).
+   */
+  & [data-cap-part~="title-bar"] {
+    --cx-theme-cyberpunk-edge: rgba(0, 229, 255, 0.22);
+    background-image: linear-gradient(
+      90deg,
+      transparent,
+      var(--cx-theme-cyberpunk-edge) 30% 70%,
+      transparent
+    );
+    background-repeat: no-repeat;
+    background-size: 100% 1px;
+    background-position: 0 100%;
+  }
+  & [data-cap-part~="title-bar"]::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 18%;
+    height: 1px;
+    pointer-events: none;
+    opacity: 0;
+  }
+
+  /* The properties panel's inner edge: a 1px line fading out at both ends, in the run colour. */
+  & [data-cap-part~="properties-panel"] {
+    background-image: linear-gradient(
+      180deg,
+      transparent,
+      var(--cx-theme-cyberpunk-panel-edge, transparent) 25% 75%,
+      transparent
+    );
+    background-repeat: no-repeat;
+    background-size: 1px 100%;
+    background-position: 0 0;
+  }
+
+  /* ---------- Run HUD (component run-hud) ---------- */
+
+  & .cx-theme-cyberpunk-hud {
+    display: grid;
+    gap: 10px;
+    padding-left: 10px;
+    border-left: 2px solid var(--cx-theme-cyberpunk-hud);
+    font-family: var(--cb-font);
+  }
+  & .cx-theme-cyberpunk-hud-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  & .cx-theme-cyberpunk-hud-dot {
+    width: 8px;
+    height: 8px;
+    background: var(--cx-theme-cyberpunk-hud);
+    box-shadow: 0 0 8px var(--cx-theme-cyberpunk-hud);
+  }
+  & .cx-theme-cyberpunk-hud-state {
+    color: var(--cx-theme-cyberpunk-hud);
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.14em;
+    text-shadow: 0 0 6px color-mix(in srgb, var(--cx-theme-cyberpunk-hud) 45%, transparent);
+  }
+  & .cx-theme-cyberpunk-hud-ticker {
+    margin-left: auto;
+    color: var(--cx-theme-cyberpunk-hud);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.06em;
+    opacity: 0.85;
+  }
+  /* The signal meter: equalizer bars (scaled, never resized). */
+  & .cx-theme-cyberpunk-hud-meter {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 16px;
+  }
+  & .cx-theme-cyberpunk-hud-meter > span {
+    flex: 1;
+    height: 100%;
+    background: color-mix(in srgb, var(--cx-theme-cyberpunk-hud) 45%, transparent);
+    transform: scaleY(0.25);
+    transform-origin: bottom;
+  }
+  & .cx-theme-cyberpunk-hud-meter > span:nth-child(3n + 2) {
+    transform: scaleY(0.4);
+  }
+  & .cx-theme-cyberpunk-hud-meter > span:nth-child(4n) {
+    transform: scaleY(0.32);
+  }
+
+  /* ---------- Glitch text (wordmark and hero) ---------- */
+
+  & .cx-theme-cyberpunk-glitch {
+    position: relative;
+    display: inline-block;
+  }
+  & .cx-theme-cyberpunk-glitch-layer {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+  & .cx-theme-cyberpunk-glitch-a {
+    color: var(--cx-theme-cyberpunk-cyan);
+    animation: cx-theme-cyberpunk-glitch-a 9s steps(1) infinite;
+  }
+  & .cx-theme-cyberpunk-glitch-b {
+    color: var(--cx-theme-cyberpunk-magenta);
+    animation: cx-theme-cyberpunk-glitch-b 9s steps(1) infinite;
+  }
+
+  /* ---------- Brand (component brand, slot shell.brand) ---------- */
+
+  & .cx-theme-cyberpunk-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+  & .cx-theme-cyberpunk-brand-mark {
+    display: inline-flex;
+    filter: drop-shadow(0 0 6px rgba(255, 230, 0, 0.35));
+  }
+  & .cx-theme-cyberpunk-brand-word {
+    color: var(--cb-accent);
+    font: 700 14px / 1 var(--cb-font);
+    letter-spacing: 0.2em;
+    text-shadow: 0 0 8px rgba(255, 230, 0, 0.45);
+    white-space: nowrap;
+  }
+  & .cx-theme-cyberpunk-brand-rail {
+    animation: cx-theme-cyberpunk-flicker 7s steps(1) infinite;
+  }
+
+  /* ---------- Hero (component hero, slot conversation.empty) ---------- */
+
+  & .cx-theme-cyberpunk-hero {
+    display: grid;
+    justify-items: center;
+    gap: 12px;
+    text-align: center;
+    padding: 8px 16px;
+  }
+  & .cx-theme-cyberpunk-hero-mark {
+    display: inline-flex;
+    filter: drop-shadow(0 0 14px rgba(255, 230, 0, 0.3))
+      drop-shadow(3px 0 0 rgba(0, 229, 255, 0.55));
+  }
+  & .cx-theme-cyberpunk-hero-kicker {
+    margin: 0;
+    color: var(--cx-theme-cyberpunk-cyan);
+    font: 500 12px / 1.4 var(--cb-font);
+    letter-spacing: 0.24em;
+  }
+  & .cx-theme-cyberpunk-hero-title {
+    margin: 0;
+    color: var(--cb-ink);
+    font: 700 clamp(24px, 4vw, 34px) / 1.2 var(--cb-font-prose);
+    letter-spacing: 0.02em;
+    text-shadow: 0 0 18px rgba(0, 229, 255, 0.25);
+  }
+  & .cx-theme-cyberpunk-hero-sub {
+    margin: 0;
+    color: var(--cb-muted);
+    font: 400 14px / 1.5 var(--cb-font);
+  }
+  & .cx-theme-cyberpunk-hero-sub::after {
+    content: "_";
+    margin-left: 2px;
+    color: var(--cb-accent);
+    animation: cx-theme-cyberpunk-blink 1s steps(1) infinite;
+  }
+
+  /* ---------- Scanlines (component scanlines, slot shell.overlay) ---------- */
+
+  /* A light vignette only far out in the corners, so corner controls keep their contrast. */
+  & .cx-theme-cyberpunk-scanlines {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background:
+      repeating-linear-gradient(to bottom, rgba(0, 229, 255, 0.035) 0 1px, transparent 1px 3px),
+      radial-gradient(ellipse at center, transparent 82%, rgba(2, 4, 10, 0.12) 100%);
+    animation: cx-theme-cyberpunk-flicker 9s steps(1) infinite;
+  }
+  /* A brighter copy of the lines, faded in while a run goes. */
+  & .cx-theme-cyberpunk-scanlines::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0, 229, 255, 0.05) 0 1px,
+      transparent 1px 3px
+    );
+    opacity: 0;
+  }
+  & .cx-theme-cyberpunk-scanlines::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 160px;
+    background: linear-gradient(to bottom, transparent, rgba(0, 229, 255, 0.07), transparent);
+    opacity: 0;
+  }
+
+  /* ---------- Run effects (inside the scanlines component, positioned on parts) ---------- */
+
+  & .cx-theme-cyberpunk-fx {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+  }
+  & .cx-theme-cyberpunk-fx-box {
+    position: absolute;
+    left: 0;
+    top: 0;
+    overflow: hidden;
+  }
+  /* A scan beam passing over the reply being written. */
+  & .cx-theme-cyberpunk-fx-beam {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      180deg,
+      transparent 0 42%,
+      rgba(0, 229, 255, 0.05) 47%,
+      rgba(0, 229, 255, 0.14) 50%,
+      rgba(0, 229, 255, 0.05) 53%,
+      transparent 58% 100%
+    );
+    animation: cx-theme-cyberpunk-beam 2.4s ease-in-out infinite;
+  }
+  /* Its leading edge: the write head under the newest line, with a short glitch now and then. */
+  & .cx-theme-cyberpunk-fx-edge {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      var(--cx-theme-cyberpunk-cyan) 18% 82%,
+      transparent
+    );
+    box-shadow: 0 0 10px var(--cx-theme-cyberpunk-cyan);
+    opacity: 0.55;
+    animation: cx-theme-cyberpunk-head 2.6s steps(1) infinite;
+  }
+  /* The composer: a light travelling along its border while running, a slow pulse while waiting. */
+  & .cx-theme-cyberpunk-fx-composer {
     border-radius: 0 var(--cx-theme-cyberpunk-cut) 0 var(--cx-theme-cyberpunk-cut);
     corner-shape: bevel;
   }
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"] [data-cap-part~="button"] {
-    border-radius: var(--cx-theme-cyberpunk-cut-sm) 0;
+  & .cx-theme-cyberpunk-fx-comet {
+    position: absolute;
+    left: 0;
+    width: 22%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--cx-theme-cyberpunk-hud), transparent);
+    box-shadow: 0 0 8px var(--cx-theme-cyberpunk-hud);
+  }
+  & .cx-theme-cyberpunk-fx-comet:first-child {
+    top: 0;
+    animation: cx-theme-cyberpunk-comet 2.8s linear infinite;
+  }
+  & .cx-theme-cyberpunk-fx-comet:nth-child(2) {
+    bottom: 0;
+    animation: cx-theme-cyberpunk-comet 2.8s linear -1.4s infinite reverse;
+  }
+  & .cx-theme-cyberpunk-fx-ring {
+    position: absolute;
+    inset: 0;
+    border: 1px solid var(--cx-theme-cyberpunk-hud);
+    border-radius: inherit;
     corner-shape: bevel;
+    box-shadow: inset 0 0 12px color-mix(in srgb, var(--cx-theme-cyberpunk-hud) 30%, transparent);
+    animation: cx-theme-cyberpunk-breathe 1.8s ease-in-out infinite;
+  }
+
+  /* ---------- Boot screen (component boot, slot shell.overlay) ---------- */
+
+  /*
+   * An opaque full-viewport terminal. It ends like a CRT switching off: the card fades, then the
+   * screen collapses to a bright line and vanishes, so the page is never seen through it.
+   */
+  & .cx-theme-cyberpunk-boot {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+    background-color: var(--cb-bg);
+    background-image:
+      repeating-linear-gradient(to bottom, rgba(0, 229, 255, 0.05) 0 1px, transparent 1px 3px),
+      radial-gradient(ellipse at center, rgba(0, 229, 255, 0.08), transparent 70%);
+    transform-origin: center;
+    animation: cx-theme-cyberpunk-boot-out 0.4s ease-in 1.5s forwards;
+  }
+  & .cx-theme-cyberpunk-boot::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: #c8f5ff;
+    box-shadow: 0 0 40px rgba(0, 229, 255, 0.9);
+    opacity: 0;
+    animation: cx-theme-cyberpunk-boot-glow 0.4s ease-in 1.5s forwards;
+  }
+  & .cx-theme-cyberpunk-boot-screen {
+    display: grid;
+    gap: 6px;
+    width: min(520px, calc(100vw - 48px));
+    padding: 20px 24px 22px;
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    background: rgba(12, 17, 32, 0.9);
+    box-shadow: 0 0 32px rgba(0, 229, 255, 0.12);
+    border-radius: 0 14px;
+    corner-shape: bevel;
+    color: var(--cb-ink);
+    font: 500 13px / 1.6 var(--cb-font);
+    text-shadow: 0 0 6px rgba(0, 229, 255, 0.35);
+    animation: cx-theme-cyberpunk-fade-out 0.14s linear 1.36s forwards;
+  }
+  & .cx-theme-cyberpunk-boot-head {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(0, 229, 255, 0.2);
+    color: var(--cx-theme-cyberpunk-cyan);
+    font-size: 11px;
+    letter-spacing: 0.24em;
+  }
+  /* A line: the label, a dotted leader, the status in a right-aligned column. */
+  & .cx-theme-cyberpunk-boot-line {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    white-space: nowrap;
+    opacity: 0;
+    animation: cx-theme-cyberpunk-show 0.01s steps(1) forwards;
+  }
+  & .cx-theme-cyberpunk-boot-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  & .cx-theme-cyberpunk-boot-leader {
+    flex: 1;
+    min-width: 16px;
+    border-bottom: 1px dotted rgba(230, 244, 255, 0.35);
+  }
+  & .cx-theme-cyberpunk-boot-status {
+    flex: none;
+    color: var(--cb-ok);
+  }
+  & .cx-theme-cyberpunk-boot-line:nth-child(2) {
+    color: var(--cb-accent);
+    animation-delay: 0.05s;
+  }
+  & .cx-theme-cyberpunk-boot-line:nth-child(3) {
+    animation-delay: 0.25s;
+  }
+  & .cx-theme-cyberpunk-boot-line:nth-child(4) {
+    animation-delay: 0.45s;
+  }
+  & .cx-theme-cyberpunk-boot-line:nth-child(5) {
+    animation-delay: 0.65s;
+  }
+  & .cx-theme-cyberpunk-boot-line:nth-child(6) {
+    animation-delay: 0.85s;
+  }
+  & .cx-theme-cyberpunk-boot-line:nth-child(7) {
+    color: var(--cx-theme-cyberpunk-cyan);
+    animation-delay: 1.05s;
+  }
+  & .cx-theme-cyberpunk-boot-track {
+    height: 4px;
+    margin-top: 12px;
+    background: rgba(255, 230, 0, 0.12);
+  }
+  & .cx-theme-cyberpunk-boot-bar {
+    height: 100%;
+    background: var(--cb-accent);
+    box-shadow: 0 0 10px rgba(255, 230, 0, 0.6);
+    transform: scaleX(0);
+    transform-origin: left center;
+    animation: cx-theme-cyberpunk-load 1.25s ease-out forwards;
+  }
+  & .cx-theme-cyberpunk-boot-skip {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    padding: 6px 14px;
+    border: 1px solid var(--cb-accent);
+    border-radius: 6px 0;
+    corner-shape: bevel;
+    background: var(--cb-bg);
+    color: var(--cb-accent);
+    font: 600 12px / 1.4 var(--cb-font);
+    letter-spacing: 0.12em;
+    cursor: pointer;
+    pointer-events: auto;
+  }
+  & .cx-theme-cyberpunk-boot-skip:hover {
+    background: var(--cb-accent);
+    color: var(--cb-on-accent);
+  }
+  & .cx-theme-cyberpunk-boot-skip:focus-visible {
+    outline: 2px solid var(--cb-accent);
+    outline-offset: 2px;
   }
 }
 
-/* The composer shows focus as a soft inner line (its float shadow stays). */
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] [data-cap-part~="composer"]:focus-within {
-  box-shadow:
-    var(--cb-shadow-float),
-    inset 0 0 0 1px rgba(0, 229, 255, 0.4);
+/* Selected text: the neon, readable. */
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) ::selection {
+  background: rgba(255, 230, 0, 0.3);
+  color: #ffffff;
 }
 
-/* Primary buttons: larger bevels, uppercase tracking, a pressed shade on hover. */
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] [data-cap-part~="button.primary"] {
-  --cx-theme-cyberpunk-cut-sm: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"]
-  [data-cap-part~="button.primary"]:hover:not(:disabled) {
-  box-shadow: inset 0 -2px 0 rgba(10, 11, 0, 0.35);
-}
+/* ---------- Run states ---------- */
 
-/* ---------- Shell touches ---------- */
-
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] [data-cap-part~="sidebar.brand"] {
-  box-shadow: inset 0 -1px 0 rgba(0, 229, 255, 0.18);
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"]
-  [data-cap-part~="sidebar.item"][aria-current="page"] {
-  box-shadow: inset 2px 0 0 var(--cb-accent);
-}
-/* Conversation links carry no padding of their own: indent their text so the active bar keeps a gap
-   (every row, so the text never shifts when a row becomes current). */
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"]
-[data-cap-part~="sidebar.item"][href^="/chat/"] {
-  padding-inline-start: var(--cb-space-2);
-}
 /*
- * The title bar's bottom edge: a 1px line that fades out toward both ends, in the run colour
- * (faint cyan when idle); while a run goes a bright segment sweeps along it.
+ * Running: the light sweeps along the title bar, the HUD bars move like an equalizer, the scanlines
+ * brighten and a beam passes over the reply (component). Calm, transform and opacity only.
  */
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] [data-cap-part~="title-bar"] {
-  --cx-theme-cyberpunk-edge: rgba(0, 229, 255, 0.22);
-  background-image: linear-gradient(
-    90deg,
-    transparent,
-    var(--cx-theme-cyberpunk-edge) 30% 70%,
-    transparent
-  );
-  background-repeat: no-repeat;
-  background-size: 100% 1px;
-  background-position: 0 100%;
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=running"]) {
+  --cx-theme-cyberpunk-hud: var(--cb-accent);
+  --cx-theme-cyberpunk-panel-edge: rgba(255, 230, 0, 0.32);
+
+  & [data-cap-part~="title-bar"] {
+    --cx-theme-cyberpunk-edge: color-mix(in srgb, var(--cb-accent) 40%, transparent);
+  }
+  & [data-cap-part~="title-bar"]::after {
+    background: linear-gradient(90deg, transparent, var(--cb-accent), transparent);
+    box-shadow: 0 0 6px rgba(255, 230, 0, 0.6);
+    animation: cx-theme-cyberpunk-edge-x 3.2s ease-in-out infinite;
+  }
+  & .cx-theme-cyberpunk-hud-dot {
+    animation: cx-theme-cyberpunk-pulse 0.9s ease-in-out infinite;
+  }
+  & .cx-theme-cyberpunk-hud-meter > span {
+    animation: cx-theme-cyberpunk-eq 0.9s ease-in-out infinite alternate;
+  }
+  & .cx-theme-cyberpunk-hud-meter > span:nth-child(2n) {
+    animation-duration: 0.62s;
+    animation-delay: -0.2s;
+  }
+  & .cx-theme-cyberpunk-hud-meter > span:nth-child(3n) {
+    animation-duration: 1.1s;
+    animation-delay: -0.45s;
+  }
+  & .cx-theme-cyberpunk-hud-meter > span:nth-child(5n) {
+    animation-duration: 0.75s;
+    animation-delay: -0.7s;
+  }
+  & .cx-theme-cyberpunk-scanlines::before {
+    animation: cx-theme-cyberpunk-breathe 2.6s ease-in-out infinite;
+  }
+  & .cx-theme-cyberpunk-scanlines::after {
+    opacity: 1;
+    animation: cx-theme-cyberpunk-sweep 3.4s linear infinite;
+  }
 }
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] [data-cap-part~="status-bar"] {
-  box-shadow: inset 0 1px 0 rgba(0, 229, 255, 0.16);
-  letter-spacing: 0.04em;
+
+/* Waiting for input: everything holds, in cyan, breathing slowly. */
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=waiting"]) {
+  --cx-theme-cyberpunk-hud: var(--cx-theme-cyberpunk-cyan);
+  --cx-theme-cyberpunk-panel-edge: rgba(0, 229, 255, 0.32);
+
+  & [data-cap-part~="title-bar"] {
+    --cx-theme-cyberpunk-edge: rgba(0, 229, 255, 0.45);
+  }
+  & .cx-theme-cyberpunk-hud-dot {
+    animation: cx-theme-cyberpunk-breathe 1.8s ease-in-out infinite;
+  }
+  & .cx-theme-cyberpunk-hud-meter > span {
+    transform: scaleY(0.5);
+    animation: cx-theme-cyberpunk-breathe 1.8s ease-in-out infinite;
+  }
 }
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"]
-  [data-cap-part~="tool-row"][aria-expanded="true"] {
-  box-shadow: inset 2px 0 0 rgba(0, 229, 255, 0.5);
+
+/* Failed: one red glitch, then a steady red line and a flat meter. */
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=failed"]) {
+  --cx-theme-cyberpunk-hud: var(--cb-fail);
+  --cx-theme-cyberpunk-panel-edge: rgba(255, 84, 112, 0.4);
+
+  & [data-cap-part~="title-bar"] {
+    --cx-theme-cyberpunk-edge: color-mix(in srgb, var(--cb-fail) 50%, transparent);
+  }
+  & [data-cap-part~="title-bar"]::after {
+    width: 100%;
+    background: linear-gradient(90deg, transparent, var(--cb-fail) 30% 70%, transparent);
+    animation: cx-theme-cyberpunk-fault 0.6s steps(1) 1 forwards;
+  }
+  & .cx-theme-cyberpunk-hud-state {
+    animation: cx-theme-cyberpunk-glitch-once 0.6s steps(1) 1;
+  }
+  & .cx-theme-cyberpunk-hud-meter > span {
+    transform: scaleY(0.12);
+  }
 }
+
+/* ---------- Reduced motion: lines and colours stay, nothing moves, no boot screen ---------- */
 
 /*
- * Run state on the page, kept soft: the title bar edge and the properties panel edge take the run
- * colour at low strength, with a slow bright segment sweeping along them while a run goes (static
- * under reduced motion); the composer gets a soft inner line and glow while it waits for input.
- */
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=running"]
-[data-cap-part~="title-bar"],
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=waiting"]
-  [data-cap-part~="title-bar"],
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=failed"]
-  [data-cap-part~="title-bar"] {
-  --cx-theme-cyberpunk-edge: color-mix(in srgb, var(--cx-theme-cyberpunk-hud) 45%, transparent);
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=running"]
-  [data-cap-part~="title-bar"] {
-  background-image:
-    linear-gradient(90deg, transparent, var(--cx-theme-cyberpunk-hud), transparent),
-    linear-gradient(
-      90deg,
-      transparent,
-      color-mix(in srgb, var(--cx-theme-cyberpunk-hud) 22%, transparent),
-      transparent
-    ),
-    linear-gradient(90deg, transparent, var(--cx-theme-cyberpunk-edge) 30% 70%, transparent);
-  background-size:
-    18% 1px,
-    18% 3px,
-    100% 1px;
-  background-position:
-    -40% 100%,
-    -40% 100%,
-    0 100%;
-  animation: cx-theme-cyberpunk-edge-x 3.6s ease-in-out infinite;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=running"]
-  [data-cap-part~="properties-panel"],
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=waiting"]
-  [data-cap-part~="properties-panel"],
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=failed"]
-  [data-cap-part~="properties-panel"] {
-  background-image:
-    linear-gradient(180deg, transparent, var(--cx-theme-cyberpunk-hud), transparent),
-    linear-gradient(
-      180deg,
-      transparent,
-      color-mix(in srgb, var(--cx-theme-cyberpunk-hud) 40%, transparent) 25% 75%,
-      transparent
-    );
-  background-repeat: no-repeat;
-  background-size:
-    1px 0,
-    1px 100%;
-  background-position:
-    0 -40%,
-    0 0;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=running"]
-  [data-cap-part~="properties-panel"] {
-  background-size:
-    1px 16%,
-    1px 100%;
-  animation: cx-theme-cyberpunk-edge-y 3.6s ease-in-out infinite;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=waiting"]
-  [data-cap-part~="composer"] {
-  box-shadow:
-    var(--cb-shadow-float),
-    inset 0 0 0 1px color-mix(in srgb, var(--cx-theme-cyberpunk-hud) 50%, transparent),
-    0 0 14px color-mix(in srgb, var(--cx-theme-cyberpunk-hud) 14%, transparent);
-}
-
-/* ---------- Run HUD (component run-hud) ---------- */
-
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-hud {
-  display: grid;
-  gap: 10px;
-  padding-left: 10px;
-  border-left: 2px solid var(--cx-theme-cyberpunk-hud);
-  font-family: var(--cb-font);
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-hud-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-hud-dot {
-  width: 8px;
-  height: 8px;
-  background: var(--cx-theme-cyberpunk-hud);
-  box-shadow: 0 0 8px var(--cx-theme-cyberpunk-hud);
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-hud-state {
-  color: var(--cx-theme-cyberpunk-hud);
-  font-weight: 700;
-  font-size: 13px;
-  letter-spacing: 0.14em;
-  text-shadow: 0 0 6px color-mix(in srgb, var(--cx-theme-cyberpunk-hud) 45%, transparent);
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-hud-meter {
-  display: flex;
-  gap: 3px;
-  height: 6px;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-hud-meter > span {
-  flex: 1;
-  background: color-mix(in srgb, var(--cx-theme-cyberpunk-hud) 28%, transparent);
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=running"]
-  .cx-theme-cyberpunk-hud-dot {
-  animation: cx-theme-cyberpunk-pulse 0.9s ease-in-out infinite;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=running"]
-  .cx-theme-cyberpunk-hud-meter
-  > span {
-  animation: cx-theme-cyberpunk-meter 1.1s ease-in-out infinite;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=running"]
-  .cx-theme-cyberpunk-hud-meter
-  > span:nth-child(2n) {
-  animation-delay: 0.18s;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=running"]
-  .cx-theme-cyberpunk-hud-meter
-  > span:nth-child(3n) {
-  animation-delay: 0.37s;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=waiting"]
-  .cx-theme-cyberpunk-hud-meter
-  > span:nth-child(odd) {
-  background: var(--cx-theme-cyberpunk-hud);
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=failed"]
-  .cx-theme-cyberpunk-hud-meter
-  > span {
-  background: var(--cx-theme-cyberpunk-hud);
-  animation: cx-theme-cyberpunk-blink 1.2s steps(1) infinite;
-}
-
-/* ---------- Glitch text (wordmark and hero) ---------- */
-
-/*
- * The brand is also drawn in the drawer, which is portaled out of the shell: these rules match
- * through :root:has(the shell token) so they hold in every sidebar panel.
- */
-
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-glitch {
-  position: relative;
-  display: inline-block;
-}
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-glitch-layer {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  pointer-events: none;
-}
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-glitch-a {
-  color: var(--cx-theme-cyberpunk-cyan);
-  animation: cx-theme-cyberpunk-glitch-a 4.6s steps(1) infinite;
-}
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-glitch-b {
-  color: var(--cx-theme-cyberpunk-magenta);
-  animation: cx-theme-cyberpunk-glitch-b 4.6s steps(1) infinite;
-}
-
-/* ---------- Brand (component brand, slot shell.brand) ---------- */
-
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-brand-mark {
-  display: inline-flex;
-  filter: drop-shadow(0 0 6px rgba(255, 230, 0, 0.35));
-}
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-brand-word {
-  color: var(--cb-accent);
-  font: 700 14px / 1 var(--cb-font);
-  letter-spacing: 0.2em;
-  text-shadow: 0 0 8px rgba(255, 230, 0, 0.45);
-  white-space: nowrap;
-}
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-brand-rail {
-  animation: cx-theme-cyberpunk-flicker 7s steps(1) infinite;
-}
-
-/* ---------- Hero (component hero, slot conversation.empty) ---------- */
-
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-hero {
-  display: grid;
-  justify-items: center;
-  gap: 12px;
-  text-align: center;
-  padding: 8px 16px;
-}
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-hero-mark {
-  display: inline-flex;
-  filter: drop-shadow(0 0 14px rgba(255, 230, 0, 0.3)) drop-shadow(3px 0 0 rgba(0, 229, 255, 0.55));
-}
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-hero-kicker {
-  margin: 0;
-  color: var(--cx-theme-cyberpunk-cyan);
-  font: 500 12px / 1.4 var(--cb-font);
-  letter-spacing: 0.24em;
-}
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-hero-title {
-  margin: 0;
-  color: var(--cb-ink);
-  font: 700 clamp(24px, 4vw, 34px) / 1.2 var(--cb-font-prose);
-  letter-spacing: 0.02em;
-  text-shadow: 0 0 18px rgba(0, 229, 255, 0.25);
-}
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-hero-sub {
-  margin: 0;
-  color: var(--cb-muted);
-  font: 400 14px / 1.5 var(--cb-font);
-}
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-hero-sub::after {
-  content: "_";
-  margin-left: 2px;
-  color: var(--cb-accent);
-  animation: cx-theme-cyberpunk-blink 1s steps(1) infinite;
-}
-
-/* ---------- Scanlines (component scanlines, slot shell.overlay) ---------- */
-
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-scanlines {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  background:
-    repeating-linear-gradient(to bottom, rgba(0, 229, 255, 0.035) 0 1px, transparent 1px 3px),
-    radial-gradient(ellipse at center, transparent 70%, rgba(2, 4, 10, 0.28) 100%);
-  animation: cx-theme-cyberpunk-flicker 9s steps(1) infinite;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="run=running"]
-  .cx-theme-cyberpunk-scanlines::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  height: 140px;
-  background: linear-gradient(to bottom, transparent, rgba(0, 229, 255, 0.05), transparent);
-  animation: cx-theme-cyberpunk-sweep 3.2s linear infinite;
-}
-
-/* ---------- Boot screen (component boot, slot shell.overlay) ---------- */
-
-/* An opaque full-viewport terminal: nothing of the page shows through until it fades out. */
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot {
-  position: fixed;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  pointer-events: none;
-  background-color: var(--cb-bg);
-  background-image:
-    repeating-linear-gradient(to bottom, rgba(0, 229, 255, 0.05) 0 1px, transparent 1px 3px),
-    radial-gradient(ellipse at center, rgba(0, 229, 255, 0.08), transparent 70%);
-  animation: cx-theme-cyberpunk-boot-out 0.35s ease-in 1.55s forwards;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-screen {
-  display: grid;
-  gap: 6px;
-  width: min(520px, calc(100vw - 48px));
-  padding: 20px 24px 22px;
-  border: 1px solid rgba(0, 229, 255, 0.35);
-  background: rgba(12, 17, 32, 0.9);
-  box-shadow: 0 0 32px rgba(0, 229, 255, 0.12);
-  border-radius: 0 14px;
-  corner-shape: bevel;
-  color: var(--cb-ink);
-  font: 500 13px / 1.6 var(--cb-font);
-  text-shadow: 0 0 6px rgba(0, 229, 255, 0.35);
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-head {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 8px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid rgba(0, 229, 255, 0.2);
-  color: var(--cx-theme-cyberpunk-cyan);
-  font-size: 11px;
-  letter-spacing: 0.24em;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-line {
-  opacity: 0;
-  white-space: pre;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  animation: cx-theme-cyberpunk-show 0.01s steps(1) forwards;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-line:nth-child(2) {
-  color: var(--cb-accent);
-  animation-delay: 0.05s;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-line:nth-child(3) {
-  animation-delay: 0.25s;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-line:nth-child(4) {
-  animation-delay: 0.45s;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-line:nth-child(5) {
-  animation-delay: 0.65s;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-line:nth-child(6) {
-  animation-delay: 0.85s;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-line:nth-child(7) {
-  color: var(--cx-theme-cyberpunk-cyan);
-  animation-delay: 1.1s;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-track {
-  height: 4px;
-  margin-top: 12px;
-  background: rgba(255, 230, 0, 0.12);
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-bar {
-  height: 100%;
-  background: var(--cb-accent);
-  box-shadow: 0 0 10px rgba(255, 230, 0, 0.6);
-  transform: scaleX(0);
-  transform-origin: left center;
-  animation: cx-theme-cyberpunk-load 1.35s ease-out forwards;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-skip {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  padding: 6px 14px;
-  border: 1px solid var(--cb-accent);
-  background: var(--cb-bg);
-  color: var(--cb-accent);
-  font: 600 12px / 1.4 var(--cb-font);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  cursor: pointer;
-  pointer-events: auto;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-skip:hover {
-  background: var(--cb-accent);
-  color: var(--cb-on-accent);
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"] .cx-theme-cyberpunk-boot-skip:focus-visible {
-  outline: 2px solid var(--cx-theme-cyberpunk-cyan);
-  outline-offset: 2px;
-}
-
-/* ---------- Reduced motion: no animation, no boot screen ---------- */
-
-/*
- * The extra [data-cap-state] matches the specificity of the run-state rules
- * ([theme][run=...] .x), so this block wins over them by coming later.
+ * [data-cap-state] twice gives these the weight of the run-state rules above, so coming later
+ * they win; the token copy below does the same after hydration.
  */
 @media (prefers-reduced-motion: reduce) {
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state] .cx-theme-cyberpunk-hud-dot,
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state]
-    .cx-theme-cyberpunk-hud-meter
-    > span,
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state]
-    .cx-theme-cyberpunk-glitch-layer,
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state]
-    .cx-theme-cyberpunk-brand-rail,
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state]
-    .cx-theme-cyberpunk-hero-sub::after,
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state] .cx-theme-cyberpunk-scanlines,
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state]
-    .cx-theme-cyberpunk-scanlines::after,
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state] [data-cap-part~="title-bar"],
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state]
-    [data-cap-part~="properties-panel"] {
+  :root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state]) {
+    & [data-cap-part~="title-bar"]::after,
+    & .cx-theme-cyberpunk-hud-dot,
+    & .cx-theme-cyberpunk-hud-state,
+    & .cx-theme-cyberpunk-hud-meter > span,
+    & .cx-theme-cyberpunk-glitch-layer,
+    & .cx-theme-cyberpunk-brand-rail,
+    & .cx-theme-cyberpunk-hero-sub::after,
+    & .cx-theme-cyberpunk-scanlines,
+    & .cx-theme-cyberpunk-scanlines::before,
+    & .cx-theme-cyberpunk-scanlines::after {
+      animation: none;
+    }
+    & .cx-theme-cyberpunk-fx,
+    & .cx-theme-cyberpunk-boot {
+      display: none;
+    }
+  }
+}
+:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"]) {
+  & [data-cap-part~="title-bar"]::after,
+  & .cx-theme-cyberpunk-hud-dot,
+  & .cx-theme-cyberpunk-hud-state,
+  & .cx-theme-cyberpunk-hud-meter > span,
+  & .cx-theme-cyberpunk-glitch-layer,
+  & .cx-theme-cyberpunk-brand-rail,
+  & .cx-theme-cyberpunk-hero-sub::after,
+  & .cx-theme-cyberpunk-scanlines,
+  & .cx-theme-cyberpunk-scanlines::before,
+  & .cx-theme-cyberpunk-scanlines::after {
     animation: none;
   }
-  [data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state] .cx-theme-cyberpunk-boot {
+  & .cx-theme-cyberpunk-fx,
+  & .cx-theme-cyberpunk-boot {
     display: none;
   }
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"]
-  .cx-theme-cyberpunk-hud-dot,
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"]
-  .cx-theme-cyberpunk-hud-meter
-  > span,
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"]
-  .cx-theme-cyberpunk-glitch-layer,
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"]
-  .cx-theme-cyberpunk-brand-rail,
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"]
-  .cx-theme-cyberpunk-hero-sub::after,
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"]
-  .cx-theme-cyberpunk-scanlines,
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"]
-  .cx-theme-cyberpunk-scanlines::after,
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"]
-  [data-cap-part~="title-bar"],
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"]
-  [data-cap-part~="properties-panel"] {
-  animation: none;
-}
-[data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"]
-  .cx-theme-cyberpunk-boot {
-  display: none;
-}
-
-/* The portaled brand (drawer) under reduced motion: same weight as its rules, later in the file. */
-@media (prefers-reduced-motion: reduce) {
-  :root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-glitch-layer,
-  :root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"]) .cx-theme-cyberpunk-brand-rail,
-  :root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"])
-    .cx-theme-cyberpunk-hero-sub::after {
-    animation: none;
-  }
-}
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"])
-  .cx-theme-cyberpunk-glitch-layer,
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"])
-  .cx-theme-cyberpunk-brand-rail,
-:root:has([data-cap-state~="theme=theme-cyberpunk/cyberpunk"][data-cap-state~="motion=reduced"])
-  .cx-theme-cyberpunk-hero-sub::after {
-  animation: none;
 }
 
 /* ---------- Keyframes ---------- */
@@ -544,13 +666,24 @@
     opacity: 0.35;
   }
 }
-@keyframes cx-theme-cyberpunk-meter {
+@keyframes cx-theme-cyberpunk-breathe {
   0%,
   100% {
-    background: color-mix(in srgb, var(--cx-theme-cyberpunk-hud) 28%, transparent);
+    opacity: 0.35;
   }
   50% {
-    background: var(--cx-theme-cyberpunk-hud);
+    opacity: 1;
+  }
+}
+@keyframes cx-theme-cyberpunk-eq {
+  0% {
+    transform: scaleY(0.18);
+  }
+  45% {
+    transform: scaleY(0.95);
+  }
+  100% {
+    transform: scaleY(0.4);
   }
 }
 @keyframes cx-theme-cyberpunk-blink {
@@ -561,25 +694,22 @@
     opacity: 0.25;
   }
 }
+/* A rare, light glitch: one short jump every 9 s, the magenta copy fainter than the cyan. */
 @keyframes cx-theme-cyberpunk-glitch-a {
   0% {
     opacity: 0;
     transform: none;
   }
-  88% {
-    opacity: 0.85;
-    transform: translate(-3px, -1px);
-    clip-path: inset(8% 0 58% 0);
-  }
-  90% {
-    transform: translate(2px, 1px);
-    clip-path: inset(62% 0 6% 0);
-  }
-  92% {
-    transform: translate(-1px, 0);
-    clip-path: inset(30% 0 40% 0);
-  }
   94% {
+    opacity: 0.7;
+    transform: translate(-2px, 0);
+    clip-path: inset(10% 0 55% 0);
+  }
+  95% {
+    transform: translate(1px, 0);
+    clip-path: inset(58% 0 10% 0);
+  }
+  96% {
     opacity: 0;
     transform: none;
   }
@@ -589,22 +719,32 @@
     opacity: 0;
     transform: none;
   }
-  89% {
-    opacity: 0.85;
-    transform: translate(3px, 1px);
-    clip-path: inset(55% 0 12% 0);
+  94.5% {
+    opacity: 0.35;
+    transform: translate(2px, 0);
+    clip-path: inset(52% 0 18% 0);
   }
-  91% {
-    transform: translate(-2px, -1px);
-    clip-path: inset(14% 0 66% 0);
-  }
-  93% {
-    transform: translate(1px, 0);
-    clip-path: inset(44% 0 30% 0);
-  }
-  95% {
+  95.5% {
     opacity: 0;
     transform: none;
+  }
+}
+@keyframes cx-theme-cyberpunk-glitch-once {
+  0% {
+    transform: translate(-2px, 0);
+    opacity: 0.6;
+  }
+  15% {
+    transform: translate(2px, 0) skewX(-8deg);
+    opacity: 1;
+  }
+  30% {
+    transform: translate(-1px, 0);
+    opacity: 0.5;
+  }
+  45% {
+    transform: none;
+    opacity: 1;
   }
 }
 @keyframes cx-theme-cyberpunk-flicker {
@@ -624,35 +764,81 @@
     opacity: 1;
   }
 }
+/* The title bar light: 18% wide, so 555% of its width carries it across the bar. */
 @keyframes cx-theme-cyberpunk-edge-x {
   0% {
-    background-position:
-      -40% 100%,
-      -40% 100%,
-      0 100%;
+    opacity: 0;
+    transform: translateX(-100%);
+  }
+  12%,
+  88% {
+    opacity: 1;
   }
   100% {
-    background-position:
-      140% 100%,
-      140% 100%,
-      0 100%;
+    opacity: 0;
+    transform: translateX(555%);
   }
 }
-@keyframes cx-theme-cyberpunk-edge-y {
+@keyframes cx-theme-cyberpunk-fault {
   0% {
-    background-position:
-      0 -40%,
-      0 0;
+    opacity: 1;
+    transform: translateX(-6px);
+  }
+  12% {
+    opacity: 0.2;
+  }
+  24% {
+    opacity: 1;
+    transform: translateX(4px);
+  }
+  36% {
+    opacity: 0.4;
+    transform: none;
+  }
+  48%,
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* The composer light: 22% wide, so 455% of its width carries it along the edge. */
+@keyframes cx-theme-cyberpunk-comet {
+  0% {
+    transform: translateX(-100%);
   }
   100% {
-    background-position:
-      0 140%,
-      0 0;
+    transform: translateX(455%);
+  }
+}
+@keyframes cx-theme-cyberpunk-beam {
+  0% {
+    transform: translateY(-58%);
+  }
+  100% {
+    transform: translateY(58%);
+  }
+}
+@keyframes cx-theme-cyberpunk-head {
+  0% {
+    opacity: 0.55;
+    transform: none;
+  }
+  88% {
+    opacity: 0.9;
+    transform: translateX(-3px);
+  }
+  90% {
+    opacity: 0.3;
+    transform: translateX(4px);
+  }
+  92% {
+    opacity: 0.55;
+    transform: none;
   }
 }
 @keyframes cx-theme-cyberpunk-sweep {
   0% {
-    transform: translateY(-140px);
+    transform: translateY(-160px);
   }
   100% {
     transform: translateY(100vh);
@@ -663,6 +849,11 @@
     opacity: 1;
   }
 }
+@keyframes cx-theme-cyberpunk-fade-out {
+  to {
+    opacity: 0;
+  }
+}
 @keyframes cx-theme-cyberpunk-load {
   0% {
     transform: scaleX(0);
@@ -671,9 +862,27 @@
     transform: scaleX(1);
   }
 }
+/* The boot screen switching off: collapse to a bright line, then shrink to nothing. */
 @keyframes cx-theme-cyberpunk-boot-out {
-  to {
+  0% {
+    transform: none;
+  }
+  55% {
+    transform: scaleY(0.006);
+    opacity: 1;
+  }
+  100% {
+    transform: scaleY(0.006) scaleX(0);
     opacity: 0;
-    visibility: hidden;
+  }
+}
+/* The collapsing screen glows: a bright layer fades in as it becomes a line. */
+@keyframes cx-theme-cyberpunk-boot-glow {
+  0% {
+    opacity: 0;
+  }
+  55%,
+  100% {
+    opacity: 1;
   }
 }
