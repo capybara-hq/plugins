@@ -31,7 +31,7 @@
     "@aws-sdk/lib-storage": "^3.1154.0",
     "@aws-sdk/s3-presigned-post": "^3.1154.0",
     "@aws-sdk/s3-request-presigner": "^3.1154.0",
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.13",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.14",
     "zod": "^4.6.7"
   },
   "devDependencies": {

@@ -25,22 +25,6 @@ const cliAll = (...args: string[]) => {
   return `${r.stdout}${r.stderr}`;
 };
 
-/**
- * Parts core added after the toolchain this repository pins (core #159; plugin-sdk's UI_PARTS
- * gains them in the next rc): until then `check` calls them unknown. Drop this list with the bump.
- */
-const NEW_PARTS = [
-  "message.user.bubble",
-  "code-block",
-  "menu",
-  "segmented",
-  "stat-card",
-  "switch",
-  "switch.knob",
-  "org-avatar",
-  "agent-chip",
-];
-
 /** The files of a gzipped tar by name (ustar headers; enough for npm-pack tarballs). */
 function tarFiles(tgz: Buffer): Map<string, Buffer> {
   const tar = gunzipSync(tgz);
@@ -67,11 +51,9 @@ describe("theme-cyberpunk package", () => {
     const report = cliAll("check", "--plugins", "plugins/theme-cyberpunk");
     expect(report).toContain("[Themes] passed");
     expect(report).toContain("All plugin checks passed");
-    const warnings = report
-      .split("\n")
-      .filter((l) => /^\s+\S+:\d+ \S+ /.test(l))
-      .filter((l) => !NEW_PARTS.some((p) => l.includes(`ui-part-unknown data-cap-part "${p}"`)));
-    expect(warnings).toEqual([]);
+    // check prints its findings, warnings included, on stderr: none at all
+    expect(report.split("\n").filter((l) => /^\s+\S+:\d+ \S+ /.test(l))).toEqual([]);
+    expect(report).not.toMatch(/warning/);
   }, 60_000);
 
   it("packs the theme, fonts, logo, favicon, font licenses and the client build", () => {
