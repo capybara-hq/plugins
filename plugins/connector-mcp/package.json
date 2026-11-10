@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-connector-mcp",
-  "version": "0.1.0-rc.4",
+  "version": "0.1.0-rc.5",
   "description": "MCP connector (connector@1): tools and resources of remote MCP servers over Streamable HTTP",
   "license": "Apache-2.0",
   "repository": {
@@ -27,12 +27,12 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.10",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.11",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@capybara-hq/plugin-model-fake": "^0.1.0-rc.10",
-    "@capybara-hq/testing": "^0.1.0-rc.13"
+    "@capybara-hq/plugin-model-fake": "^0.1.0-rc.11",
+    "@capybara-hq/testing": "^0.1.0-rc.14"
   }
 }

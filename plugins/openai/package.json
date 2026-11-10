@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-openai",
-  "version": "0.1.0-rc.5",
+  "version": "0.1.0-rc.6",
   "description": "OpenAI model provider (model-provider@2) using the official SDK and the native Responses API",
   "license": "Apache-2.0",
   "repository": {
@@ -27,11 +27,11 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.10",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.11",
     "openai": "^7.36.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@capybara-hq/testing": "^0.1.0-rc.13"
+    "@capybara-hq/testing": "^0.1.0-rc.14"
   }
 }

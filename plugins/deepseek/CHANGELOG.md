@@ -1,5 +1,13 @@
 # @capybara-hq/plugin-deepseek
 
+## 0.1.0-rc.5
+
+### Patch Changes
+
+- bd696b4: Build and test against @capybara-hq/plugin-sdk 0.1.0-rc.11, @capybara-hq/testing 0.1.0-rc.14,
+  @capybara-hq/plugin-tools 0.1.0-rc.12 and @capybara-hq/plugin-model-fake 0.1.0-rc.11 (client
+  extensions).
+
 ## 0.1.0-rc.4
 
 ### Patch Changes
