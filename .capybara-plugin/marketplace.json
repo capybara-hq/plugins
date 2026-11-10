@@ -574,6 +574,30 @@
           "integrity": "sha512-OvVpJLaLomNjvYVSNShEbbO4OiNK3KFghjpk/O6Tk1ULvBoFBeFQP8ONx3+ydueLE0wHEkIn6HIwA/9fkmDt0g=="
         }
       }
+    },
+    {
+      "name": "skills-core",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Core skills every agent can use; today skill-guide, which teaches an agent to write, register, test and share its own skills",
+        "zh": "每个智能体都能用的核心技能；目前是 skill-guide，教智能体编写、注册、测试并分享自己的技能"
+      },
+      "displayName": {
+        "zh": "核心技能",
+        "en": "Core skills"
+      },
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/skills-core#readme",
+      "permissions": {
+        "keys": [],
+        "sensitive": []
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-skills-core",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-z9p1w66s7zZI8YxZq2HD74Q0/OJe9iThIGvh4Yhf2LQNrhuCp4Fx2T1LzkGgk90VAKMKHd6ZATHYp5kaAXRU4w=="
+        }
+      }
     }
   ]
 }
