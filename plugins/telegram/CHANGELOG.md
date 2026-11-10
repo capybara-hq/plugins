@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-telegram
 
+## 0.1.0-rc.8
+
+### Patch Changes
+
+- 202e2c0: Build and test against @capybara-hq/plugin-sdk 0.1.0-rc.14 and @capybara-hq/plugin-model-fake
+  0.1.0-rc.14 (the new UI parts).
+
 ## 0.1.0-rc.7
 
 ### Patch Changes

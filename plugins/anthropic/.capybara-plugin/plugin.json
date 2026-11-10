@@ -5,7 +5,7 @@
     "zh": "Anthropic",
     "en": "Anthropic"
   },
-  "version": "0.1.0-rc.5",
+  "version": "0.1.0-rc.6",
   "publisher": "Capybara",
   "icon": "./icon.svg",
   "description": "Anthropic model provider (model-provider@2) using the official SDK and the native Messages API",

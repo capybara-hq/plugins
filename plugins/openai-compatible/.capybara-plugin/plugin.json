@@ -5,7 +5,7 @@
     "zh": "OpenAI 兼容模型",
     "en": "OpenAI-compatible models"
   },
-  "version": "0.1.0-rc.6",
+  "version": "0.1.0-rc.7",
   "publisher": "Capybara",
   "icon": "./icon.svg",
   "description": "Model provider (model-provider@2) for Chat Completions-compatible services (vLLM, DeepSeek, Qwen, ...) using the official openai SDK",
