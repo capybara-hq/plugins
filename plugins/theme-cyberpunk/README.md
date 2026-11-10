@@ -29,11 +29,15 @@ plain design).
 | `brand` | `shell.brand` (replaceable) | The neon mark (the theme logo through the design `Logo`) and a glitch `CYBERBARA` wordmark in the full sidebar and the drawer, in place of the built-in row; the built-in mark with a flicker in the rail |
 | `hero` | `conversation.empty` (replaceable) | The new-conversation hero: the big neon capybara, a status line and the greeting with a glitch |
 
-The decoration CSS chamfers cards, sections, dialogs, the composer and buttons (larger cuts and
-uppercase on primary buttons; no clipping while a button, card or section has or holds keyboard
-focus, so focus rings drawn outside the box stay whole), and colours the HUD,
-the properties panel edge, the title bar line and the composer by the run state
-(`run=running` neon yellow, `run=waiting` cyan, `run=failed` red, idle green).
+The decoration CSS bevels cards, sections, dialogs, the composer and buttons (larger bevels and
+uppercase on primary buttons) with `corner-shape: bevel`: the border, the background and the focus
+ring all follow the diagonal, so outlines are continuous and focus rings stay whole (a browser
+without `corner-shape` keeps square corners). It colours the HUD and, softly, the page by the run
+state (`run=running` neon yellow, `run=waiting` cyan, `run=failed` red, idle green): the title
+bar's bottom edge is a 1px line that fades out toward both ends, with a slow bright segment
+sweeping along it while a run goes; the properties panel gets the same faint edge on its left;
+the composer gets a soft inner line and glow while it waits for input. Under reduced motion the
+lines stay, static.
 
 `.capybara-plugin/plugin.json` suggests the appearance (`suggestedAppearance`): the theme
 `cyberpunk` and the replacements `shell.brand` → `brand`, `conversation.empty` → `hero`. Nothing is
@@ -126,8 +130,9 @@ does. The client tests run in jsdom and are type-checked by `test/tsconfig.json`
   built-in stacks (Sarasa Mono SC, Source Han Sans SC).
 - **Logo**: [`logo.svg`](./logo.svg), Capybara's 14×10 pixel capybara redrawn in neon: a yellow
   body, a cyan eye and a one-pixel cyan offset like a misaligned display. The favicon
-  [`favicon.svg`](./favicon.svg) is the same mark on a square dark ground (also the plugin
-  icon). The wordmark reads `CYBERBARA`.
+  [`favicon.svg`](./favicon.svg) is the same mark, cyan offset included, on a transparent 16×16
+  ground (also the plugin icon, so it sits in any icon tile; the cyan copy outlines it on light
+  tab bars). The wordmark reads `CYBERBARA`.
 
 ## Fonts and licenses
 
@@ -150,8 +155,9 @@ the SIL Open Font License 1.1, whose full text ships next to them:
   操作员角色、上行时间、本浏览器会话里实时看到的运行 / 工具 / 审批次数、音效开关）；覆盖层的扫描线与
   不透明的终端启动画面（每个浏览器会话一次，约两秒）；侧栏品牌位的
   故障风字标；新对话页的赛博朋克欢迎区。
-- **装饰（L3）**：卡片、分区、对话框、输入框与按钮切角；HUD、属性面板边线、标题栏与输入框随运行状态
-  变色（运行中黄、等待输入青、失败红、空闲绿）。
+- **装饰（L3）**：卡片、分区、对话框、输入框与按钮切角（`corner-shape: bevel`，边框与焦点环沿斜边连续）；
+  HUD 随运行状态变色（运行中黄、等待输入青、失败红、空闲绿），标题栏底边是两端渐隐的细线，运行中有一段
+  亮光缓慢扫过，属性面板左边线同样处理，等待输入时输入框带柔和的内描边与辉光。
 
 全部装饰只在选用本主题时生效；换成别的主题后，品牌位与欢迎区回到内置样式。音效用 Web Audio 合成，
 **默认关闭**，在 HUD 里点“音效：关 / 开”开启（只对本浏览器生效）。系统开启“减少动态效果”时不播放
