@@ -3,6 +3,8 @@ import {
   ChannelSendError,
   type OutboundMessage,
   questionRenderableInline,
+  questionStateLabel,
+  questionTextReplyHint,
 } from "@capybara-hq/plugin-sdk";
 import {
   type ActionValue,
@@ -82,6 +84,7 @@ const T = {
     questionStates: {
       pending: "Pending",
       answered: "Answered",
+      skipped: "Skipped (replied instead)",
       expired: "Expired",
       cancelled: "Cancelled",
     },
@@ -117,6 +120,7 @@ const T = {
     questionStates: {
       pending: "待回答",
       answered: "已回答",
+      skipped: "已跳过（已直接回复）",
       expired: "已过期",
       cancelled: "已取消",
     },
@@ -131,9 +135,10 @@ const APPROVAL_COLOR = {
   expired: "grey",
   cancelled: "grey",
 } as const;
-const QUESTION_COLOR = {
+const QUESTION_COLOR: Record<string, string> = {
   pending: "blue",
   answered: "green",
+  skipped: "grey",
   expired: "grey",
   cancelled: "grey",
 } as const;
@@ -285,7 +290,10 @@ function questionInputs(
   const t = T[locale];
   const web = link(t.answerOnWeb, c.webUrl);
   const f = c.form.fields[0];
-  if (!questionRenderableInline(c.form) || !f || !("enum" in f.schema)) return actions([], web);
+  // With textReply the Other path is a plain reply, so a field with allowOther still gets its
+  // controls, never an Other button.
+  const inline = questionRenderableInline(c.form, { textReply: c.textReply !== undefined });
+  if (!inline || !f || !("enum" in f.schema)) return actions([], web);
   const options = f.schema.enum;
   try {
     if (!f.multiSelect) {
@@ -325,6 +333,12 @@ function questionInputs(
   }
 }
 
+/** The state's label; a state this plugin does not know (a newer kernel) uses the SDK's label. */
+function questionState(state: string, locale: Locale): string {
+  const states: Record<string, string> = T[locale].questionStates;
+  return states[state] ?? escapePlain(questionStateLabel(state, locale));
+}
+
 function question(
   c: Extract<ChannelCard, { kind: "question" }>,
   locale: Locale,
@@ -342,8 +356,10 @@ function question(
   const elements: El[] = lines.length > 0 ? [md(lines.join("\n"))] : [];
   if (c.state === "pending") {
     elements.push(...questionInputs(c, locale, chat));
+    if (c.textReply !== undefined)
+      elements.push(md(`*${escapePlain(questionTextReplyHint(c.textReply, locale))}*`));
   } else {
-    const status = `${t.status}${escapePlain(t.sep)}${t.questionStates[c.state]}`;
+    const status = `${t.status}${escapePlain(t.sep)}${questionState(c.state, locale)}`;
     const answer = c.answerSummary
       ? `\n${t.answer}${escapePlain(t.sep)}${escapePlain(c.answerSummary)}`
       : "";
@@ -353,7 +369,7 @@ function question(
   return {
     header: {
       title: plain(trunc(`${t.question}${t.sep}${title}`, 200)),
-      template: QUESTION_COLOR[c.state],
+      template: QUESTION_COLOR[c.state] ?? "grey",
     },
     elements,
     headline: title,

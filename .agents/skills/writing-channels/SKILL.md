@@ -115,7 +115,7 @@ Sub-agents' approvals and questions arrive as ordinary `approval` / `question` c
 | `kind` | Content | Interaction |
 |---|---|---|
 | `approval` | title, `toolName` (`<display name> [<tool>]`, just the name for a builtin; the display name comes from plugin and connector metadata, so escape it for Markdown / IM text; approval cards carry no `appName`), agent, argument preview (redacted by the kernel, ≤500 characters), optional `scopes`, `expiresAt`, `state`, `decidedBy`, `webUrl` | when `pending`, one approve button per scope + reject + web link; otherwise no buttons, only the state and a "details" link |
-| `question` | `form` (`InputForm`), `state`, `answerSummary`, `webUrl` | when `questionRenderableInline(form)` (exactly one enum field, single-select ≤5 / multi-select ≤10, no "other") it is answered in the IM, else only the web link |
+| `question` | `form` (`InputForm`), `state` (incl. `skipped`: the person replied instead), `answerSummary`, `webUrl`, optional `textReply` (`plain` in a DM, `mention` in a group thread) | when `questionRenderableInline(form, { textReply: card.textReply !== undefined })` (exactly one enum field, single-select ≤5 / multi-select ≤10; "other" only with `textReply`, and never as a button: Other is a plain reply) it is answered in the IM, else only the web link; a pending card with `textReply` adds `questionTextReplyHint(mode, locale)`; label states with your own table and fall back to `questionStateLabel(state, locale)` for one you don't know |
 | `connect` | `appName` (escape it too), `url` | link button |
 | `bind` | `text`, `url` | link button (sent only in direct messages) |
 

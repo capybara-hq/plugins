@@ -187,6 +187,62 @@ describe("renderCard: question", () => {
     expect(bs.map((b) => b.text.text)).toEqual(["Answer on the web"]);
   });
 
+  const withOther = (card: ChannelCard): ChannelCard => {
+    if (card.kind !== "question") throw new Error();
+    const [f] = card.form.fields;
+    if (!f) throw new Error();
+    return { ...card, form: { ...card.form, fields: [{ ...f, allowOther: true }] } };
+  };
+
+  it("allowOther with a text reply: option buttons, no Other button, and the hint", () => {
+    const blocks = renderCard(
+      withOther(question(false, 3, { textReply: "plain" })),
+      "en",
+    ) as Block[];
+    expect(buttons(blocks).map((b) => b.text.text)).toEqual([
+      "env0",
+      "env1",
+      "env2",
+      "Answer on the web",
+    ]);
+    const hint = blocks.at(-1);
+    expect(hint?.type).toBe("context");
+    expect(allText([hint as Block])).toContain("You can also just reply with text");
+  });
+
+  it("allowOther without a text reply: only the web link, no hint", () => {
+    const blocks = renderCard(withOther(question(false, 3)), "en") as Block[];
+    expect(buttons(blocks).map((b) => b.text.text)).toEqual(["Answer on the web"]);
+    expect(blocks.some((b) => b.type === "context")).toBe(false);
+  });
+
+  it("multi-select with allowOther and a text reply: checkboxes, mention hint (zh)", () => {
+    const blocks = renderCard(
+      withOther(question(true, 4, { textReply: "mention" })),
+      "zh",
+    ) as Block[];
+    const cb = elements(blocks).find((e) => e.type === "checkboxes");
+    expect(cb?.options).toHaveLength(4);
+    expect(buttons(blocks).map((b) => b.text.text)).toEqual(["提交", "到网页上回答"]);
+    expect(allText(blocks)).toContain("也可以在本话题 @我 回复文字");
+  });
+
+  it("skipped: its state label, no inputs and no hint", () => {
+    const blocks = renderCard(
+      question(false, 3, { state: "skipped", textReply: "plain" }),
+      "zh",
+    ) as Block[];
+    expect(buttons(blocks).map((b) => b.text.text)).toEqual(["详情"]);
+    expect(allText(blocks)).toContain("已跳过（已直接回复）");
+    expect(allText(blocks)).not.toContain("也可以直接回复文字");
+  });
+
+  it("an unknown future state shows its name, never undefined", () => {
+    const blocks = renderCard(question(false, 3, { state: "withdrawn" }), "en") as Block[];
+    expect(allText(blocks)).toContain("withdrawn");
+    expect(allText(blocks)).not.toContain("undefined");
+  });
+
   it("answered: no inputs, answer summary shown", () => {
     const blocks = renderCard(
       question(false, 3, { state: "answered", answerSummary: "env: env1" }),

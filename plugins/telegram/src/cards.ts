@@ -61,15 +61,18 @@ const urlButton = (text: string, url: string): Button[] => (isHttp(url) ? [{ tex
 
 /**
  * Card text without the line that carries the card's link (it becomes a URL button), and that line
- * as HTML with the link, for when Telegram rejects the button.
+ * as HTML with the link, for when Telegram rejects the button. The link line is the last one, or
+ * the one before a pending question's text-reply hint.
  */
 function cardText(card: ChannelCard, locale: Locale): { body: string; linkLine?: string } {
   const url = card.kind === "connect" || card.kind === "bind" ? card.url : card.webUrl;
   const lines = renderCardAsText(card, locale).split("\n");
-  const last = lines[lines.length - 1];
-  if (lines.length > 1 && last?.endsWith(url)) {
-    lines.pop();
-    const label = markdownToTelegramHtml(last.slice(0, last.length - url.length));
+  let at = lines.length - 1;
+  if (card.kind === "question" && card.state === "pending" && card.textReply !== undefined) at--;
+  const line = lines[at];
+  if (at > 0 && line?.endsWith(url)) {
+    lines.splice(at, 1);
+    const label = markdownToTelegramHtml(line.slice(0, line.length - url.length));
     return { body: markdownToTelegramHtml(lines.join("\n")), linkLine: `${label}${htmlLink(url)}` };
   }
   return { body: markdownToTelegramHtml(lines.join("\n")) };
@@ -137,7 +140,9 @@ async function keyboard(
         card.state === "pending" &&
         f &&
         !f.multiSelect &&
-        questionRenderableInline(card.form) &&
+        // With textReply the Other path is a plain reply: a field with allowOther still gets its
+        // option buttons, never an Other button.
+        questionRenderableInline(card.form, { textReply: card.textReply !== undefined }) &&
         "enum" in f.schema
       ) {
         for (const option of f.schema.enum) {

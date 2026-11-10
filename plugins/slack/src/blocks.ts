@@ -3,6 +3,8 @@ import {
   ChannelSendError,
   type OutboundMessage,
   questionRenderableInline,
+  questionStateLabel,
+  questionTextReplyHint,
   renderCardAsText,
 } from "@capybara-hq/plugin-sdk";
 import {
@@ -79,6 +81,7 @@ const T = {
     questionStates: {
       pending: "Pending",
       answered: "Answered",
+      skipped: "Skipped (replied instead)",
       expired: "Expired",
       cancelled: "Cancelled",
     },
@@ -113,6 +116,7 @@ const T = {
     questionStates: {
       pending: "待回答",
       answered: "已回答",
+      skipped: "已跳过（已直接回复）",
       expired: "已过期",
       cancelled: "已取消",
     },
@@ -281,7 +285,10 @@ function questionInputs(c: Extract<ChannelCard, { kind: "question" }>, locale: L
   const t = T[locale];
   const web = link("cap_link_web", t.answerOnWeb, c.webUrl);
   const f = c.form.fields[0];
-  if (!questionRenderableInline(c.form) || !f || !("enum" in f.schema)) return [actions([web])];
+  // With textReply the Other path is a plain reply, so a field with allowOther still gets its
+  // controls, never an Other button.
+  const inline = questionRenderableInline(c.form, { textReply: c.textReply !== undefined });
+  if (!inline || !f || !("enum" in f.schema)) return [actions([web])];
   const options = f.schema.enum;
   try {
     if (!f.multiSelect) {
@@ -317,6 +324,12 @@ function questionInputs(c: Extract<ChannelCard, { kind: "question" }>, locale: L
   }
 }
 
+/** The state's label; a state this plugin does not know (a newer kernel) uses the SDK's label. */
+function questionState(state: string, locale: Locale): string {
+  const states: Record<string, string> = T[locale].questionStates;
+  return states[state] ?? esc(questionStateLabel(state, locale));
+}
+
 function questionBlocks(c: Extract<ChannelCard, { kind: "question" }>, locale: Locale): Block[] {
   const t = T[locale];
   const title = textOf(c.form.title, locale);
@@ -328,8 +341,13 @@ function questionBlocks(c: Extract<ChannelCard, { kind: "question" }>, locale: L
     if (f.description !== undefined) lines.push(`_${esc(textOf(f.description, locale))}_`);
   }
   const blocks: Block[] = [section(lines.join("\n"))];
-  if (c.state === "pending") return [...blocks, ...questionInputs(c, locale)];
-  const status = `${t.status}${t.sep}${t.questionStates[c.state]}`;
+  if (c.state === "pending") {
+    blocks.push(...questionInputs(c, locale));
+    if (c.textReply !== undefined)
+      blocks.push(context(esc(questionTextReplyHint(c.textReply, locale))));
+    return blocks;
+  }
+  const status = `${t.status}${t.sep}${questionState(c.state, locale)}`;
   const answer = c.answerSummary ? `\n${t.answer}${t.sep}${esc(c.answerSummary)}` : "";
   blocks.push(context(`${status}${answer}`));
   blocks.push(actions([link("cap_link_web", t.details, c.webUrl)]));
