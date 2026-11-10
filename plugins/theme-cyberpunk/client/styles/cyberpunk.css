@@ -342,25 +342,6 @@
     );
     animation: cx-theme-cyberpunk-beam 2.4s ease-in-out infinite;
   }
-  /* Its write head: a glowing line under the newest text, with a short glitch now and then. */
-  & [data-cap-part~="message.assistant"][aria-busy="true"]::after {
-    content: "";
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    height: 2px;
-    pointer-events: none;
-    background: linear-gradient(
-      90deg,
-      transparent,
-      var(--cx-theme-cyberpunk-cyan) 18% 82%,
-      transparent
-    );
-    box-shadow: 0 0 10px var(--cx-theme-cyberpunk-cyan);
-    opacity: 0.55;
-    animation: cx-theme-cyberpunk-head 2.6s steps(1) infinite;
-  }
 
   /* ---------- Boot screen (component boot, slot shell.overlay) ---------- */
 
@@ -632,7 +613,6 @@
     }
     & .cx-theme-cyberpunk-boot,
     & [data-cap-part~="message.assistant"][aria-busy="true"]::before,
-    & [data-cap-part~="message.assistant"][aria-busy="true"]::after,
     & [data-cap-part~="composer"]::before,
     & [data-cap-part~="composer"]::after {
       display: none;
@@ -652,7 +632,6 @@
   }
   & .cx-theme-cyberpunk-boot,
   & [data-cap-part~="message.assistant"][aria-busy="true"]::before,
-  & [data-cap-part~="message.assistant"][aria-busy="true"]::after,
   & [data-cap-part~="composer"]::before,
   & [data-cap-part~="composer"]::after {
     display: none;
@@ -820,24 +799,6 @@
   }
   100% {
     transform: translateY(58%);
-  }
-}
-@keyframes cx-theme-cyberpunk-head {
-  0% {
-    opacity: 0.55;
-    transform: none;
-  }
-  88% {
-    opacity: 0.9;
-    transform: translateX(-3px);
-  }
-  90% {
-    opacity: 0.3;
-    transform: translateX(4px);
-  }
-  92% {
-    opacity: 0.55;
-    transform: none;
   }
 }
 @keyframes cx-theme-cyberpunk-show {

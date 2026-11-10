@@ -46,16 +46,15 @@ Everything follows the run state (`run=running` neon yellow, `run=waiting` cyan,
 idle green), moves only `transform` and `opacity`, shifts no layout and stops under reduced motion:
 
 - **Running**: a light sweeps along the title bar's fading bottom edge; the HUD bars move like an
-  equalizer next to the run's `T+` ticker; a scan beam passes over the reply being written, with a
-  glowing write head under its newest line that glitches now and then; a light travels along the
-  composer's border. Nothing moves across the whole screen: the scanlines stay still.
+  equalizer next to the run's `T+` ticker; a scan beam passes over the reply being written; a light
+  travels along the composer's border. Nothing moves across the whole screen: the scanlines stay still.
 - **Waiting for input**: everything holds in cyan and breathes slowly (the HUD, the composer's
   outline).
 - **Failed**: one short red glitch on the title bar edge and the HUD state, then a steady red line
   and a flat meter.
 
-The beam and the write head are pseudo-elements of the reply being written (the
-`message.assistant` part while it carries `aria-busy`), the composer light those of the
+The beam is a pseudo-element of the reply being written (the `message.assistant` part while it
+carries `aria-busy`), the composer light one of the
 `composer` part: nothing runs or is measured outside a run, and a sheet, dialog, menu or the
 drawer opened over them covers them. Only the static scanlines live in the decoration layer
 above everything; they take no part in a run.

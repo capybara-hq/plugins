@@ -117,7 +117,7 @@ describe("cyberpunk.css", () => {
   });
 
   it("moves only transform and opacity in the run animations", () => {
-    for (const name of ["edge-x", "eq", "comet", "beam", "head", "breathe"]) {
+    for (const name of ["edge-x", "eq", "comet", "beam", "breathe"]) {
       const kf = all.filter((r) => r.chain[0] === `@keyframes cx-theme-cyberpunk-${name}`);
       expect(kf.length, name).toBeGreaterThan(0);
       for (const step of kf.slice(1)) {
