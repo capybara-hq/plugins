@@ -1,0 +1,21 @@
+{
+  "$schema": "https://capybarahq.com/schemas/plugin.v1.schema.json",
+  "schemaVersion": 1,
+  "name": "skills-core",
+  "displayName": {
+    "zh": "核心技能",
+    "en": "Core skills"
+  },
+  "version": "0.1.0-rc.0",
+  "publisher": "Capybara",
+  "description": {
+    "en": "Core skills every agent can use; today skill-guide, which teaches an agent to write, register, test and share its own skills",
+    "zh": "每个智能体都能用的核心技能；目前是 skill-guide，教智能体编写、注册、测试并分享自己的技能"
+  },
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/skills-core#readme",
+  "skills": [
+    {
+      "path": "./skills/skill-guide"
+    }
+  ]
+}
