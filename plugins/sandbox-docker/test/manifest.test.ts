@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { SANDBOX_EXTENSION_POINT } from "@capybara-hq/plugin-sdk";
+import { SANDBOX_EXTENSION_POINT, type SandboxLimits } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import plugin, {
   createDockerSandbox,
@@ -10,6 +10,17 @@ import plugin, {
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
   version: string;
+};
+
+/** Open egress at the open tier. */
+const OPEN: SandboxLimits = {
+  cpu: 1,
+  memoryMb: 256,
+  diskMb: 256,
+  egress: "open",
+  allowHosts: [],
+  tier: "open",
+  devHosts: [],
 };
 
 describe("decodeOutput", () => {
@@ -112,7 +123,7 @@ describe("egress open with openEgress off (no Docker needed)", () => {
       sbx.create({
         name: "cap-00000000-0000-4000-8000-000000000001",
         image: "capybara-sandbox:latest",
-        limits: { cpu: 1, memoryMb: 256, diskMb: 256, egress: "open", allowHosts: [] },
+        limits: { ...OPEN },
         fileSystem: { id: "cap-00000000-0000-4000-8000-000000000001" },
         signal: AbortSignal.timeout(5000),
       }),
@@ -120,7 +131,7 @@ describe("egress open with openEgress off (no Docker needed)", () => {
     await expect(
       sbx.update(
         { id: "cap-00000000-0000-4000-8000-000000000001" },
-        { cpu: 1, memoryMb: 256, diskMb: 256, egress: "open", allowHosts: [] },
+        { ...OPEN },
         AbortSignal.timeout(5000),
       ),
     ).rejects.toThrow(/openEgress is "off"/);
@@ -136,7 +147,7 @@ describe("egress open with openEgress off (no Docker needed)", () => {
     await expect(
       sbx.create({
         name: "cap-device-00000000-0000-4000-8000-000000000001",
-        limits: { cpu: 1, memoryMb: 256, diskMb: 256, egress: "none", allowHosts: [] },
+        limits: { ...OPEN, egress: "none", tier: "strict" },
         fileSystem: { id: "cap-device-00000000-0000-4000-8000-000000000001" },
         signal: AbortSignal.timeout(5000),
       }),

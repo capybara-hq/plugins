@@ -5,6 +5,7 @@ import {
   type SandboxActor,
   type SandboxLimits,
   type SandboxProvider,
+  type SandboxTier,
 } from "@capybara-hq/plugin-sdk";
 import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -14,7 +15,6 @@ import {
   execArgv,
   IN_SANDBOX_GRACE_SECONDS,
 } from "../src/index.js";
-import type { SandboxTier, TierLimits } from "../src/provider.js";
 import {
   buildTestImages,
   cleanupTestResources,
@@ -50,6 +50,8 @@ const limits = (egress: SandboxLimits["egress"], allowHosts: string[] = []): San
   diskMb: 1024,
   egress,
   allowHosts,
+  tier: egress === "open" ? "open" : "strict",
+  devHosts: [],
 });
 
 describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => {
@@ -658,10 +660,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       egress: SandboxLimits["egress"],
       tier: SandboxTier,
       allowHosts: string[] = [],
-    ): SandboxLimits => {
-      const l: TierLimits = { ...limits(egress, allowHosts), tier };
-      return l;
-    };
+    ): SandboxLimits => ({ ...limits(egress, allowHosts), tier });
     const envOf = async (container: string) => (await inspect(container)).Config.Env;
     const proxied = () =>
       createDockerSandbox(

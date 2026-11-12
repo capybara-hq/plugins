@@ -94,6 +94,8 @@ const allowlist: SandboxLimits = {
   diskMb: 5120,
   egress: "allowlist",
   allowHosts: ["pypi.org"],
+  tier: "strict",
+  devHosts: [],
 };
 
 describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {

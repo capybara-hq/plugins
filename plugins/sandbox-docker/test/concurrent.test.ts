@@ -34,6 +34,8 @@ const limits = (egress: SandboxLimits["egress"], allowHosts: string[] = []): San
   diskMb: 1024,
   egress,
   allowHosts,
+  tier: egress === "open" ? "open" : "strict",
+  devHosts: [],
 });
 
 describe.skipIf(!dockerAvailable)("sandbox-docker concurrent exec", { timeout: 120_000 }, () => {

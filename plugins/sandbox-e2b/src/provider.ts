@@ -5,7 +5,6 @@ import {
   type Logger,
   SANDBOX_TAG_RE,
   SandboxGoneError,
-  type SandboxHandle,
   type SandboxLimits,
   type SandboxProvider,
   validateAllowHost,
@@ -56,31 +55,6 @@ export interface E2BSandboxConfig {
 
 /** The values of the `openEgress` setting (the same three values as sandbox-docker's). */
 export type OpenEgress = "off" | "proxy" | "direct";
-
-// TODO(sdk): drop the local types when the SDK with tiers is released (capybara-hq/core#190)
-/** A sandbox tier (sandbox tiers spec §7.1). */
-export type SandboxTier = "strict" | "dev" | "open";
-/**
- * {@link SandboxLimits} with the tier fields of the SDK with tiers. Absent `tier` = `strict`.
- * `allowHosts` is final (the kernel already joined the dev hosts in at `dev`): a cloud provider
- * never reads `devHosts`; `defaultTier` only exists in local exec args.
- */
-export type TieredSandboxLimits = SandboxLimits & {
-  tier?: SandboxTier;
-  devHosts?: string[];
-  defaultTier?: SandboxTier;
-};
-/** {@link SandboxProvider} with the optional members of the SDK with tiers. */
-export type TieredSandboxProvider = SandboxProvider & {
-  /** Applies new limits to a running instance without recreating it. */
-  update?(
-    h: SandboxHandle,
-    limits: TieredSandboxLimits,
-    signal: AbortSignal,
-  ): Promise<"updated" | "recreate">;
-  /** Where `create`-time limits are fixed; absent = `"instance"`. */
-  readonly limitsApplyAt?: "instance" | "fileSystem";
-};
 
 /**
  * **仅测试**的选项：只有直接调用 {@link createE2BSandbox} 的代码能传，插件的部署配置设不了（index.ts 的
@@ -375,7 +349,7 @@ export function createE2BSandbox(
   /** `signal`: the extension's lifetime (`ctx.signal`); a template build in flight stops with it. */
   deps: { log: Logger; signal?: AbortSignal },
   test: E2BSandboxTestOptions = {},
-): TieredSandboxProvider {
+): SandboxProvider {
   const api = createE2BApi(cfg.apiUrl ?? `https://api.${cfg.domain}`, cfg.apiKey);
   const enc = encodeURIComponent;
 
@@ -799,7 +773,7 @@ export function createE2BSandbox(
    * `allowHosts` is final at every tier (README "Egress").
    */
   const egressOf = (
-    limits: TieredSandboxLimits,
+    limits: SandboxLimits,
     name: string,
   ): { kind: "none" | "open" } | { kind: "allowlist"; hosts: string[] } => {
     if (limits.egress === "open") {

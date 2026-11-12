@@ -1,12 +1,10 @@
-import type { SandboxLimits } from "@capybara-hq/plugin-sdk";
+import type { SandboxLimits, SandboxTier } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import {
   egressProxyEnv,
   type InstancePlan,
   planInstance,
-  type SandboxTier,
   sandboxEnv,
-  type TierLimits,
   updateDecision,
 } from "../src/provider.js";
 
@@ -23,15 +21,17 @@ const limits = (
   tier?: SandboxTier,
   o: { memoryMb?: number; allowHosts?: string[] } = {},
 ): SandboxLimits => {
-  const l: TierLimits = {
+  const l = {
     cpu: 1,
     memoryMb: o.memoryMb ?? 2048,
     diskMb: 1024,
     egress,
     allowHosts: o.allowHosts ?? (egress === "allowlist" ? L : []),
+    devHosts: [],
     ...(tier !== undefined && { tier }),
   };
-  return l;
+  // absent tier: what a kernel older than the tiers SDK sends
+  return l as SandboxLimits;
 };
 
 /** The labels `create` puts on a container for a plan (as provider.ts planLabels does). */
