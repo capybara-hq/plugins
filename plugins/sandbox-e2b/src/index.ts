@@ -4,7 +4,6 @@ import {
   createE2BSandbox,
   type E2BSandboxConfig,
   HOSTNAME_RE,
-  OPEN_EGRESS,
   publishedImage,
 } from "./provider.js";
 
@@ -17,7 +16,6 @@ export {
   exitCodeOf,
   IN_SANDBOX_GRACE_SECONDS,
   METADATA_NAME,
-  OPEN_EGRESS,
   type OpenEgress,
   publishedImage,
   type SandboxTier,
@@ -76,7 +74,7 @@ export const DeploymentConfig = z.strictObject(
      * (default) and `"direct"` both mean `allow_internet_access: true` (E2B checks no destination
      * IP); `"off"` refuses open (README "Egress").
      */
-    openEgress: ui(z.enum(OPEN_EGRESS).default("proxy"), {
+    openEgress: ui(z.enum(["off", "proxy", "direct"]).default("proxy"), {
       label: { zh: "开放出站", en: "Open egress" },
       options: [
         {

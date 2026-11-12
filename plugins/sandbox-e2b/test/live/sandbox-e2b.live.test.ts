@@ -62,6 +62,8 @@ import {
  * - [ ] allowlist 请求体（`network.allowOut` 域名 + `denyOut: ["0.0.0.0/0"]`）被接受，`*.` 通配生效；
  * - [ ] 列表接口的 `metadata` 过滤（`k=v` 经 URL 编码后作为 query 值）与 `x-next-token` 分页；
  * - [ ] SendSignal 对不存在的 pid 回 404 `not_found`；
+ * - [ ] the image's ENV (cache variables such as `npm_config_cache`, `NODE_USE_ENV_PROXY`) reaches
+ *   envd processes in a template built with `fromImage` (logged as `[e2b-live] image env: …`);
  * - [ ] pause 已暂停回 409，DELETE 不存在回 404（均为 `{code, message}` 格式）。
  * - [ ] concurrent processes (phase C): envd runs several `process.Start` streams of one sandbox
  *   side by side; `killTagged` (pgrep on `/tmp/.capybara-exec-<tag>-`) kills only that holder's;
@@ -258,6 +260,17 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
       );
     console.info(`[e2b-live] paused network update: ${outcome}`);
     expect(await sbx.resume(h, sig())).toBe("resumed");
+  });
+
+  it("records whether the template carries the image's ENV into processes (README)", async () => {
+    // the cache variables and NODE_USE_ENV_PROXY of the image's ENV: a template built with
+    // fromImage may or may not keep them; logged until confirmed
+    const r = await run(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion
+      'printf "%s|%s|%s" "${npm_config_cache:-unset}" "${XDG_CACHE_HOME:-unset}" "${NODE_USE_ENV_PROXY:-unset}"',
+    );
+    console.info(`[e2b-live] image env: ${r.stdout}`);
+    expect(r.exitCode).toBe(0);
   });
 
   it("concurrent processes and uploads (phase C)", async () => {

@@ -54,9 +54,8 @@ export interface E2BSandboxConfig {
   openEgress: OpenEgress;
 }
 
-/** The values of the `openEgress` setting (shared with sandbox-docker). */
-export const OPEN_EGRESS = ["off", "proxy", "direct"] as const;
-export type OpenEgress = (typeof OPEN_EGRESS)[number];
+/** The values of the `openEgress` setting (the same three values as sandbox-docker's). */
+export type OpenEgress = "off" | "proxy" | "direct";
 
 // TODO(sdk): drop the local types when the SDK with tiers is released (capybara-hq/core#190)
 /** A sandbox tier (sandbox tiers spec §7.1). */

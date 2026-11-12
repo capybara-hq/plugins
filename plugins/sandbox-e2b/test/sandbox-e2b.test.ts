@@ -737,6 +737,8 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     const updates = new Map<string, unknown[]>();
     /** Sandbox ids whose next network update answers E2B's 404 although connect succeeded. */
     const vanishOnUpdate = new Set<string>();
+    /** Sandbox ids whose next network update answers this status (E2B's error format). */
+    const failUpdate = new Map<string, number>();
     let proxy: Awaited<ReturnType<typeof proxyOf>>;
     let s: ReturnType<typeof make>;
     beforeAll(async () => {
@@ -748,6 +750,11 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
         const id = decodeURIComponent(m[1]);
         if (fake.sandboxes.get(id)?.state !== "running" || vanishOnUpdate.delete(id)) {
           return { status: 404, body: { code: 404, message: `sandbox ${id} not found` } };
+        }
+        const status = failUpdate.get(id);
+        if (status !== undefined) {
+          failUpdate.delete(id);
+          return { status, body: { code: status, message: "update failed" } };
         }
         updates.set(id, [...(updates.get(id) ?? []), JSON.parse(body.toString("utf8"))]);
         return { status: 204, body: undefined };
@@ -813,12 +820,38 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       expect(isSandboxGoneError(e2)).toBe(true);
     });
 
-    it("other failures stay ordinary errors", async () => {
+    it("other failures stay ordinary errors (at connect, and 401 / 5xx on the update)", async () => {
       const h = await provision(s, limits("none"));
       fake.failNext({ method: "POST", path: /\/connect$/ }, 500, "boom");
       const e = await s.update?.(h, limits("none"), sig()).catch((x: unknown) => x);
       expect(e).toBeInstanceOf(Error);
       expect(isSandboxGoneError(e)).toBe(false);
+      for (const status of [401, 500, 503]) {
+        failUpdate.set(h.id, status);
+        const u = await s.update?.(h, limits("none"), sig()).catch((x: unknown) => x);
+        expect(u).toBeInstanceOf(Error);
+        expect(String((u as Error).message)).toMatch(new RegExp(`HTTP ${status}`));
+        expect(isSandboxGoneError(u)).toBe(false);
+      }
+      expect(updates.get(h.id)).toBeUndefined();
+    });
+
+    it("abort: an aborted call rejects at once; an abort during resume rejects with its reason", async () => {
+      const h = await provision(s, limits("none"));
+      await s.suspend(h, sig());
+      const before = AbortSignal.abort(new Error("stop early"));
+      await expect(s.update?.(h, limits("none"), before)).rejects.toThrow(/stop early/);
+      const connects = () =>
+        fake.calls.filter((c) => c.path === `/v2/sandboxes/${h.id}/connect`).length;
+      const seen = connects();
+      fake.hangNext({ method: "POST", path: /\/connect$/ });
+      const ac = new AbortController();
+      const p = s.update?.(h, limits("none"), ac.signal);
+      // the hanging connect reached the fake (so the hang is used up, not left for later tests)
+      await waitFor(() => connects() > seen);
+      ac.abort(new Error("stop now"));
+      await expect(p).rejects.toThrow(/stop now/);
+      expect(updates.get(h.id)).toBeUndefined();
     });
   });
 

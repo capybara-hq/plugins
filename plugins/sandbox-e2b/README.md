@@ -43,6 +43,11 @@ did not build or you did not name. The result is memoised per provider instance 
 starting at once may both build (wasteful but correct). An alias that exists does not mean its build is ready (another replica's build in flight,
 or a failed build): when creating a sandbox from it answers E2B's 404, the plugin builds the alias itself, polls until ready and retries once.
 CPU and memory are the kernel's defaults (1 core, 2048 MB); E2B templates are amd64.
+**Unverified: the image's `ENV`.** The image sets the package cache variables (`npm_config_cache`, `PIP_CACHE_DIR`, `XDG_CACHE_HOME`, …,
+all under `/workspace/.cache`) and `NODE_USE_ENV_PROXY=1` with `ENV`. Whether a template built with `fromImage` (or your own
+`fromDockerfile` template) passes them to the processes envd starts is not yet confirmed on real E2B; the live test logs it
+(`[e2b-live] image env: …`). Without them caches land in the tools' defaults under `HOME` (`/workspace`), so they still persist with the
+files. `NODE_USE_ENV_PROXY` has no effect on E2B (no proxy variables are set there).
 
 **Your own template.** Set `template` to a template name or id, for example one built from `plugins/sandbox-docker/image/Dockerfile`
 (E2B's Template SDK parses the Dockerfile's FROM / RUN / COPY / ADD / WORKDIR / USER / ENV / ARG / CMD / ENTRYPOINT). From the repository root:
