@@ -57,7 +57,8 @@ describe.skipIf(!dockerAvailable)("sandbox-docker concurrent exec", { timeout: 1
       },
       { labels: { [TEST_LABEL]: RUN } },
     );
-  }, 600_000);
+    // a cold run builds the sandbox image (about 1.5 GB) once, shared by the files
+  }, 1_200_000);
 
   afterAll(async () => {
     await cleanupTestResources(RUN);

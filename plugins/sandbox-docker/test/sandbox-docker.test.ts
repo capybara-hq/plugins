@@ -93,7 +93,8 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       // 仅测试：allowed.example.com / denied.example.com 都固定到本地目标（后者不在白名单里，照样被拒）
       egressTestHosts: { "allowed.example.com": targetIp, "denied.example.com": targetIp },
     });
-  }, 600_000);
+    // a cold run builds the sandbox image (about 1.5 GB) once, shared by the files
+  }, 1_200_000);
 
   afterAll(async () => {
     await target?.stop();
@@ -733,6 +734,14 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
         expect((await sh(h.id, "curl -sS --max-time 10 http://allowed.example.com/")).stdout).toBe(
           "hello-egress",
         );
+        // SOCKS5 on 1080 with the same host list
+        const socks = `--socks5-hostname ${name}-egress:1080 --noproxy '' --max-time 10`;
+        expect((await sh(h.id, `curl -sS ${socks} http://allowed.example.com/`)).stdout).toBe(
+          "hello-egress",
+        );
+        expect((await sh(h.id, `curl -sS ${socks} http://denied.example.com/`)).exitCode).not.toBe(
+          0,
+        );
         const direct = await sh(h.id, `curl -sS --noproxy '*' --max-time 3 http://${targetIp}/`);
         expect(direct.exitCode).not.toBe(0);
       } finally {
@@ -757,6 +766,28 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
         const pe = await envOf(`${name}-egress`);
         expect(pe).toEqual(expect.arrayContaining(["MODE=open", "SOCKS_PORT=1080"]));
         expect(pe.some((e) => e.startsWith("ALLOW_HOSTS="))).toBe(false);
+        // any public host (here a pinned test name, as a public one would resolve) over HTTP,
+        // CONNECT and SOCKS5, with no host list
+        expect((await sh(h.id, "curl -sS --max-time 10 http://denied.example.com/")).stdout).toBe(
+          "hello-egress",
+        );
+        expect(
+          (await sh(h.id, "curl -sS -p --max-time 10 http://allowed.example.com/")).stdout,
+        ).toBe("hello-egress");
+        expect(
+          (
+            await sh(
+              h.id,
+              `curl -sS --socks5-hostname ${name}-egress:1080 --noproxy '' --max-time 10 http://allowed.example.com/`,
+            )
+          ).stdout,
+        ).toBe("hello-egress");
+        // private addresses stay refused
+        const priv = await sh(
+          h.id,
+          `curl -sS -o /dev/null -w '%{http_code}' --max-time 10 http://${targetIp}/`,
+        );
+        expect(priv.stdout).toBe("403");
         // no route around the proxy
         const direct = await sh(h.id, `curl -sS --noproxy '*' --max-time 3 http://${targetIp}/`);
         expect(direct.exitCode).not.toBe(0);
@@ -840,6 +871,36 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
         await p.destroy(h, sig());
       }
       expect(await p.update(h, tiered("open", "open"), sig())).toBe("recreate");
+    });
+
+    it("update: a new proxy that never becomes ready is removed, and resume rebuilds it from the labels", async () => {
+      const p = proxied();
+      // an "egress proxy" image that never serves /healthz: the sandbox image
+      const broken = createDockerSandbox(
+        { ...cfg, openEgress: "proxy", egressProxyImage: images.sandboxImage },
+        { labels: { [TEST_LABEL]: RUN } },
+      );
+      const name = sbxName();
+      const h = await newSandbox(p, {
+        name,
+        image: images.sandboxImage,
+        limits: tiered("allowlist", "dev", ["allowed.example.com"]),
+        signal: sig(),
+      });
+      try {
+        await expect(broken.update(h, tiered("open", "open"), sig())).rejects.toThrow(
+          /did not become ready/,
+        );
+        // the half-made wider proxy is gone, not left for resume to start
+        expect(await exists("container", `${name}-egress`)).toBe(false);
+        expect(await p.resume(h, sig())).toBe("resumed");
+        expect(await envOf(`${name}-egress`)).toContain("MODE=dev");
+        expect((await sh(h.id, "curl -sS --max-time 10 http://allowed.example.com/")).stdout).toBe(
+          "hello-egress",
+        );
+      } finally {
+        await p.destroy(h, sig());
+      }
     });
   });
 

@@ -1,14 +1,17 @@
 import { execFile, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
+import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { GenericContainer, Wait } from "testcontainers";
 
 /**
  * The environment shared by the tests that need Docker: detects Docker / runsc, builds the test
- * images (unique tags, removed at the end), starts the socket proxy (the plugin reaches Docker only
- * through it; its config is test/sandbox-proxy/haproxy.cfg, a copy of capybara-hq/core's
- * docker/sandbox-proxy/haproxy.cfg) and removes what the tests left behind, by label. The plugin's
+ * images (tagged by content, built once and shared by the files and later runs), starts the socket
+ * proxy (the plugin reaches Docker only through it; its config is test/sandbox-proxy/haproxy.cfg, a
+ * copy of capybara-hq/core's docker/sandbox-proxy/haproxy.cfg) and removes what the tests left behind, by label. The plugin's
  * kernel-level smoke tests (sandbox-tools.smoke.test.ts, sandbox-artifacts.dual.test.ts) use it too.
  */
 
@@ -41,23 +44,73 @@ export interface TestImages {
   remove(): Promise<void>;
 }
 
-/** 用插件里的 Dockerfile 构建沙箱镜像与出站代理镜像（唯一标签；层有缓存，重复构建很快）。 */
+/** A tag that names the content of a build context: every file's path and bytes. */
+async function contentTag(dir: string): Promise<string> {
+  const h = createHash("sha256");
+  const files = (await readdir(dir, { recursive: true, withFileTypes: true }))
+    .filter((e) => e.isFile())
+    .map((e) => join(e.parentPath, e.name))
+    .sort();
+  for (const f of files) {
+    h.update(relative(dir, f))
+      .update("\0")
+      .update(await readFile(f))
+      .update("\0");
+  }
+  return `test-${h.digest("hex").slice(0, 12)}`;
+}
+
+const imageExists = (image: string) =>
+  run("docker", ["image", "inspect", image]).then(
+    () => true,
+    () => false,
+  );
+
+/**
+ * Builds `image` from `dir` unless it exists. The test files run in separate worker processes and
+ * all want the same images: a lock directory makes one of them build while the others wait, so a
+ * cold run builds the (large) sandbox image once instead of once per file.
+ */
+async function ensureImage(image: string, dir: string): Promise<void> {
+  if (await imageExists(image)) return;
+  const lock = join(tmpdir(), `capybara-test-build-${image.replace(/[^a-zA-Z0-9-]/g, "-")}.lock`);
+  for (;;) {
+    try {
+      await mkdir(lock);
+      break;
+    } catch {
+      // a lock left by a killed run expires after 30 minutes
+      const age = await stat(lock).then(
+        (s) => Date.now() - s.mtimeMs,
+        () => 0,
+      );
+      if (age > 30 * 60_000) await rm(lock, { recursive: true, force: true });
+      await new Promise((r) => setTimeout(r, 2000));
+      if (await imageExists(image)) return;
+    }
+  }
+  try {
+    if (!(await imageExists(image))) {
+      await run("docker", ["build", "-q", "-t", image, dir], { maxBuffer: 64 * 1024 * 1024 });
+    }
+  } finally {
+    await rm(lock, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The sandbox image and the egress proxy image built from the plugin's Dockerfiles, tagged by
+ * their content (`test-<sha256 of the build context>`): files and runs share them, and a run after
+ * a change builds new tags. They are kept after the run (`remove` does nothing) for the next run;
+ * clean up with `docker rmi` of the `capybara-sandbox*:test-*` tags.
+ */
 export async function buildTestImages(): Promise<TestImages> {
-  const tag = `test-${randomUUID().slice(0, 8)}`;
-  const sandboxImage = `capybara-sandbox:${tag}`;
-  const egressImage = `capybara-sandbox-egress:${tag}`;
-  const opts = { maxBuffer: 64 * 1024 * 1024 };
-  await Promise.all([
-    run("docker", ["build", "-q", "-t", sandboxImage, `${pluginRoot}image`], opts),
-    run("docker", ["build", "-q", "-t", egressImage, `${pluginRoot}egress-proxy`], opts),
-  ]);
-  return {
-    sandboxImage,
-    egressImage,
-    remove: async () => {
-      await run("docker", ["rmi", sandboxImage, egressImage]).catch(() => undefined);
-    },
-  };
+  const sandboxDir = `${pluginRoot}image`;
+  const egressDir = `${pluginRoot}egress-proxy`;
+  const sandboxImage = `capybara-sandbox:${await contentTag(sandboxDir)}`;
+  const egressImage = `capybara-sandbox-egress:${await contentTag(egressDir)}`;
+  await Promise.all([ensureImage(sandboxImage, sandboxDir), ensureImage(egressImage, egressDir)]);
+  return { sandboxImage, egressImage, remove: async () => undefined };
 }
 
 export interface SocketProxy {

@@ -41,10 +41,15 @@ plugin upgrade moves both images with it and the kernel never needs to know the 
   depend on them), procps, util-linux (`setsid`), curl, git, jq, python3 (with pip / venv) and so on; it runs as the non-root user `sandbox`
   (uid 1000), with HOME and the working directory at `/workspace`. **One image serves every tier**: what limits `strict` is the
   policy, not missing binaries, so a device that changes tier keeps its toolchain:
-  - Node 22 LTS (the official tarball, checksum-pinned), pnpm and yarn (corepack shims; `COREPACK_HOME` and its downloads
-    under `/workspace/.cache/corepack`, no download prompt), `NODE_USE_ENV_PROXY=1` so Node's own `fetch` uses the proxy;
+  - Node 22 LTS (the official tarball, checksum-pinned), pnpm (installed globally) and yarn (a corepack shim; `COREPACK_HOME`
+    and its downloads under `/workspace/.cache/corepack`, no download prompt), `NODE_USE_ENV_PROXY=1` so Node's own `fetch`
+    uses the proxy. The root file system is read-only, so `npm install -g` goes to `npm_config_prefix=/workspace/.cache/npm-global`
+    (its `bin` is on `PATH`), and a pnpm version a project picks with its `packageManager` field is downloaded into pnpm's home
+    under HOME (`/workspace/.local/share/pnpm`);
   - `openssh-client`, `netcat-openbsd` (`nc -X 5`, used by `GIT_SSH_COMMAND` in the `dev` / `open` tiers), `socat`,
-    `build-essential` and `pkg-config` (native npm / pip modules);
+    `build-essential` and `pkg-config` (native npm / pip modules); `/etc/ssh/ssh_known_hosts` holds the published host keys
+    of github.com, gitlab.com and bitbucket.org (other ssh hosts: add their key to `~/.ssh/known_hosts` in the workspace, or
+    pass `-o StrictHostKeyChecking=accept-new` knowingly);
   - the Chromium runtime libraries (the Debian set `playwright install-deps chromium` installs), `fonts-liberation`
     and `fonts-noto-cjk`, but **no browser binary**: Playwright downloads its own into `PLAYWRIGHT_BROWSERS_PATH`
     (`/workspace/.cache/ms-playwright`, from `cdn.playwright.dev` / `playwright.download.prss.microsoft.com`, both in the
@@ -63,7 +68,9 @@ plugin upgrade moves both images with it and the kernel never needs to know the 
   `sandbox.image` to the sandbox image and this plugin's `egressProxyImage` to the egress image.
 - Local development: in a [capybara-hq/core](https://github.com/capybara-hq/core) checkout, `docker compose -f docker/compose.dev.yaml --profile sandbox up -d` ([`docker/compose.dev.yaml`](https://github.com/capybara-hq/core/blob/main/docker/compose.dev.yaml)) builds both images and starts the socket proxy
   (`127.0.0.1:2375`, **for local development only**, see the deployment requirements below). If an image is not local the plugin tries to pull it once.
-- **In a deployment, pre-pull both images on every Docker node** (`docker pull …`): if an image is not local
+- **Size**: the sandbox image is about 1.5 GB unpacked (about 390 MB compressed to download), mostly the toolchain, the
+  Chromium libraries and the CJK fonts.
+- **In a deployment, pre-pull both images on every Docker node** (with the image size above this matters) (`docker pull …`): if an image is not local
   the plugin pulls it only when a device's instance is first created, and a pull of several hundred MB eats into the time limit of that tool call (`tools.timeoutMs` plus the lock wait and a 3-minute margin);
   when it is slow that call fails, and the next one tries again.
 
@@ -211,7 +218,7 @@ The second parameter of `createDockerSandbox(config, testOptions)` can be passed
 ## Tests
 
 `test/egress-proxy.test.ts`, `test/manifest.test.ts` and `test/tiers.test.ts` (what each tier and egress builds, and when `update` may keep the container) do not need Docker; `test/sandbox-docker.test.ts` and `test/concurrent.test.ts` need Docker (the whole group is skipped without it),
-builds a uniquely tagged test image, starts the socket proxy, and cleans up by label at the end; the runsc cases run only when the daemon has runsc registered.
+builds the test images once (tagged by the content of their build context, shared by the test files and kept for later runs; remove old `capybara-sandbox*:test-*` tags with `docker rmi`), starts the socket proxy, and cleans up by label at the end; the runsc cases run only when the daemon has runsc registered.
 Through a real kernel: `test/sandbox-tools.smoke.test.ts` (the kernel's sandbox tools in one process) and `test/sandbox-artifacts.dual.test.ts` (the M5 segment 2 flow across two replicas: attachments, delivery, takeover after a killed replica, idle suspend and resume). The socket proxy starts from `test/sandbox-proxy/haproxy.cfg`, an exact copy of capybara-hq/core's [`docker/sandbox-proxy/haproxy.cfg`](https://github.com/capybara-hq/core/tree/main/docker/sandbox-proxy/haproxy.cfg). Nothing in this repository compares them; core's `check:bootstrap --network` (rule `bootstrap-haproxy`) will check the copy against the commit core pins.
 
 ## Icon

@@ -1144,15 +1144,28 @@ export function createDockerSandbox(
         return "recreate";
       }
       // Replace the egress proxy with the new mode and hosts; the container, its environment
-      // and its internal network stay. Open connections through the old proxy end. If this
-      // fails half-way, resume rebuilds the proxy from the container labels (a lower bound).
+      // and its internal network stay. Open connections through the old proxy end.
       const n = sandboxResourceNames(h.id);
       await api
         .json("DELETE", `/containers/${enc(n.egress)}`, { query: { force: true }, signal })
         .catch(ignore(404));
       await ensureSharedNetwork(signal);
       await ensureInternalNetwork(h.id, signal);
-      await createEgress(h.id, plan.mode, plan.allowHosts, signal);
+      try {
+        await createEgress(h.id, plan.mode, plan.allowHosts, signal);
+      } catch (e) {
+        // A proxy that was made but never became ready (or the call was aborted) may allow more
+        // than the labels record, and resume would just start it again: drop it, so the next
+        // resume rebuilds the proxy from the labels (the lower bound). The kernel treats a
+        // failed update as a recreate.
+        await api
+          .json("DELETE", `/containers/${enc(n.egress)}`, {
+            query: { force: true },
+            signal: AbortSignal.timeout(60_000),
+          })
+          .catch(() => undefined);
+        throw e;
+      }
       // a suspended instance keeps its proxy stopped too
       if (!c.State.Running) {
         await api

@@ -177,7 +177,8 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     const org = await at(1, "POST", "/api/v1/orgs", { name: "Acme" });
     expect(org.status, JSON.stringify(org.json)).toBe(201);
     base = `/api/v1/orgs/${(org.json.org as { id: string }).id}`;
-  }, 600_000);
+    // a cold run builds the sandbox image (about 1.5 GB) once, shared by the files
+  }, 1_200_000);
 
   afterAll(async () => {
     await h?.stop();
