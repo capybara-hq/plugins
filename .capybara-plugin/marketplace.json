@@ -339,7 +339,7 @@
     },
     {
       "name": "todo",
-      "version": "0.1.0-rc.7",
+      "version": "0.1.0-rc.8",
       "summary": {
         "en": "Todo list tool for agents: plugin__todo__write keeps a per-conversation todo list in PostgreSQL"
       },
@@ -364,8 +364,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-todo",
-          "version": "0.1.0-rc.7",
-          "integrity": "sha512-ZMoC09CDxgKw6gCkvmc2kl72Uar37ykTIYJogJiBphTnwEzTNkEcj9SnTE0jjWJph1XIaUjZVt4GGaCSWPcFwA=="
+          "version": "0.1.0-rc.8",
+          "integrity": "sha512-xNdzvAmOQmBaDj29hsvbhMJINy2xe+ILTqG+cQhUfsyar7gUJaVOehseufvIq+cVbTjkI2tW7XlwGrtP3E3NtA=="
         }
       }
     },
