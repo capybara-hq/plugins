@@ -40,7 +40,7 @@ describe("sandbox-docker manifest", () => {
       endpoint: "tcp://sandbox-proxy:2375",
       runtime: "runc",
       network: "capybara-sandbox",
-      allowOpenEgress: false,
+      openEgress: "proxy",
     });
     expect(() => DeploymentConfig.parse({ endpoint: "tcp://x:1", network: "sandboxes" })).toThrow(
       /start with 'cap'/,
@@ -70,6 +70,29 @@ describe("sandbox-docker manifest", () => {
     ).toBe("e:1");
   });
 
+  it("deployment config: openEgress values; allowOpenEgress fails with a pointer to openEgress", () => {
+    for (const v of ["off", "proxy", "direct"] as const) {
+      expect(DeploymentConfig.parse({ endpoint: "tcp://x:1", openEgress: v }).openEgress).toBe(v);
+    }
+    expect(() => DeploymentConfig.parse({ endpoint: "tcp://x:1", openEgress: true })).toThrow();
+    for (const allowOpenEgress of [true, false]) {
+      const r = DeploymentConfig.safeParse({ endpoint: "tcp://x:1", allowOpenEgress });
+      expect(r.success).toBe(false);
+      expect(r.error?.issues[0]?.message).toMatch(/allowOpenEgress was replaced by openEgress/);
+    }
+    // other unknown keys keep the plain message
+    const other = DeploymentConfig.safeParse({ endpoint: "tcp://x:1", foo: 1 });
+    expect(other.error?.issues[0]?.message).toMatch(/Unrecognized key/);
+  });
+
+  it("the provider declares update and limitsApplyAt instance", () => {
+    const sbx = createDockerSandbox(
+      providerConfig(DeploymentConfig.parse({ endpoint: "tcp://127.0.0.1:9" })),
+    );
+    expect(sbx.limitsApplyAt).toBe("instance");
+    expect(typeof sbx.update).toBe("function");
+  });
+
   it("test-only egress overrides cannot be set from plugin config", () => {
     expect(() =>
       DeploymentConfig.parse({
@@ -80,10 +103,10 @@ describe("sandbox-docker manifest", () => {
   });
 });
 
-describe("egress open without allowOpenEgress (no Docker needed)", () => {
-  it("create refuses before touching Docker, naming the plugin setting", async () => {
+describe("egress open with openEgress off (no Docker needed)", () => {
+  it("create and update refuse before touching Docker, naming the plugin setting", async () => {
     const sbx = createDockerSandbox(
-      providerConfig(DeploymentConfig.parse({ endpoint: "tcp://127.0.0.1:9" })),
+      providerConfig(DeploymentConfig.parse({ endpoint: "tcp://127.0.0.1:9", openEgress: "off" })),
     );
     await expect(
       sbx.create({
@@ -93,7 +116,14 @@ describe("egress open without allowOpenEgress (no Docker needed)", () => {
         fileSystem: { id: "cap-00000000-0000-4000-8000-000000000001" },
         signal: AbortSignal.timeout(5000),
       }),
-    ).rejects.toThrow(/extensionConfig\."sandbox-docker"\.allowOpenEgress/);
+    ).rejects.toThrow(/extensionConfig\."sandbox-docker"\.openEgress/);
+    await expect(
+      sbx.update(
+        { id: "cap-00000000-0000-4000-8000-000000000001" },
+        { cpu: 1, memoryMb: 256, diskMb: 256, egress: "open", allowHosts: [] },
+        AbortSignal.timeout(5000),
+      ),
+    ).rejects.toThrow(/openEgress is "off"/);
   });
 
   it("create without image and without a default image refuses before touching Docker", async () => {

@@ -69,7 +69,7 @@ describe("sandbox-e2b manifest", () => {
       domain: "e2b.app",
       timeoutSeconds: 3600,
       domainAllowlist: true,
-      allowOpenEgress: false,
+      openEgress: "proxy",
     });
     const c = DeploymentConfig.parse({ apiKey: "e2b_x", template: "capybara-sandbox" });
     expect(c).toEqual({
@@ -78,7 +78,7 @@ describe("sandbox-e2b manifest", () => {
       domain: "e2b.app",
       timeoutSeconds: 3600,
       domainAllowlist: true,
-      allowOpenEgress: false,
+      openEgress: "proxy",
     });
     expect(
       DeploymentConfig.parse({
@@ -102,6 +102,21 @@ describe("sandbox-e2b manifest", () => {
     expect(() =>
       DeploymentConfig.parse({ apiKey: "k", template: "t", timeoutSeconds: 90_000 }),
     ).toThrow();
+  });
+
+  it('openEgress: "off" | "proxy" | "direct"; the old allowOpenEgress points to it', () => {
+    for (const openEgress of ["off", "proxy", "direct"] as const) {
+      expect(DeploymentConfig.parse({ apiKey: "k", openEgress }).openEgress).toBe(openEgress);
+    }
+    expect(() => DeploymentConfig.parse({ apiKey: "k", openEgress: true })).toThrow();
+    const r = DeploymentConfig.safeParse({ apiKey: "k", allowOpenEgress: true });
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.map((i) => i.message).join("\n")).toMatch(
+      /allowOpenEgress was replaced by openEgress/,
+    );
+    // any other unknown key keeps the plain message
+    const other = DeploymentConfig.safeParse({ apiKey: "k", nope: 1 });
+    expect(other.error?.issues[0]?.message).toMatch(/Unrecognized key/);
   });
 
   it("apiKey is a secret the kernel can reach and redact", () => {

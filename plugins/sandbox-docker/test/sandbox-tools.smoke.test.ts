@@ -98,7 +98,8 @@ describe.skipIf(!dockerAvailable)(
         // this file wants the warnings
         { resolveFrom: PLUGIN_DIR, log: { level: "warn", write: (line) => warnings.push(line) } },
       );
-    }, 600_000);
+      // a cold run builds the sandbox image (about 1.5 GB) once, shared by the files
+    }, 1_200_000);
 
     afterAll(async () => {
       await k?.close();

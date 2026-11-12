@@ -93,6 +93,7 @@ describe("proxy server", () => {
       // 目标服务在随机端口上：测试里放行它（默认只放行 443、80）
       connectPorts: [targetPort, 443],
       lookup,
+      log: () => {},
     });
     await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", r));
     proxyPort = (proxy.address() as AddressInfo).port;
