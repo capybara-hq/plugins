@@ -23,6 +23,7 @@ npm; the kernel verifies each download against that integrity.
 | [`object-store-s3`](plugins/object-store-s3) | Object storage on S3-compatible services (`object-store@1`) |
 | [`todo`](plugins/todo) | A per-conversation todo list tool for agents |
 | [`theme-cyberpunk`](plugins/theme-cyberpunk) | The Cyberpunk theme (declarative, no extension): neon yellow on deep blue-black, techno fonts, a neon pixel capybara |
+| [`github`](plugins/github) | GitHub connector templates (declarative, no extension): issues, pull requests, reviews, repositories and Actions through GitHub's remote MCP server, per person with OAuth or a personal access token |
 | [`skills-core`](plugins/skills-core) | Core skills (declarative, no extension): `skill-guide` teaches an agent to write, register, test and share its own skills |
 | [`example-counter`](plugins/example-counter), [`example-board`](plugins/example-board) | Reference implementations for plugin authors (not published) |
 

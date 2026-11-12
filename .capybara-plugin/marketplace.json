@@ -598,6 +598,31 @@
           "integrity": "sha512-U3R+B3QcklCQyye22bQU1aJq05oLW4Fr3hfmLHuPFOq5jNt30mDc0zNPSDLr6MFDdUI/OJkkX7wvkyKa+zRPAQ=="
         }
       }
+    },
+    {
+      "name": "github",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Agents work with GitHub as the connected person: issues, pull requests, reviews, repositories and Actions runs, through GitHub's remote MCP server. Members connect with OAuth (a GitHub App or OAuth App the org admin registers) or, when the admin allows it, a personal access token",
+        "zh": "智能体以连接者本人的身份使用 GitHub：issue、拉取请求、评审、仓库与 Actions 运行，经 GitHub 的远程 MCP 服务器。成员用 OAuth（组织管理员注册的 GitHub App 或 OAuth App）连接，或在管理员允许时用个人访问令牌连接"
+      },
+      "displayName": {
+        "zh": "GitHub",
+        "en": "GitHub"
+      },
+      "icon": "./plugins/github/icon.svg",
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/github#readme",
+      "permissions": {
+        "keys": [],
+        "sensitive": []
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-github",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-g0CfJNkbsgwFJYlWwcA5dQ+ZaUCcN09nrKBw5Sqg/5D7azYry9J/ySXTL516iYNKhVSoJz4zEDLPqkxMmkkx5w=="
+        }
+      }
     }
   ]
 }

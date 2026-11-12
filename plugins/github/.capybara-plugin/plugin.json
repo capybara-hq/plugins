@@ -1,0 +1,43 @@
+{
+  "$schema": "https://capybarahq.com/schemas/plugin.v1.schema.json",
+  "schemaVersion": 1,
+  "name": "github",
+  "displayName": {
+    "zh": "GitHub",
+    "en": "GitHub"
+  },
+  "version": "0.1.0-rc.0",
+  "publisher": "Capybara",
+  "description": {
+    "en": "Agents work with GitHub as the connected person: issues, pull requests, reviews, repositories and Actions runs, through GitHub's remote MCP server. Members connect with OAuth (a GitHub App or OAuth App the org admin registers) or, when the admin allows it, a personal access token",
+    "zh": "智能体以连接者本人的身份使用 GitHub：issue、拉取请求、评审、仓库与 Actions 运行，经 GitHub 的远程 MCP 服务器。成员用 OAuth（组织管理员注册的 GitHub App 或 OAuth App）连接，或在管理员允许时用个人访问令牌连接"
+  },
+  "icon": "./icon.svg",
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/github#readme",
+  "dependencies": [
+    {
+      "name": "connector-mcp",
+      "version": "^0.1.0-rc.1"
+    }
+  ],
+  "connectorTemplates": [
+    {
+      "path": "./connectors/github.json"
+    },
+    {
+      "path": "./connectors/github-pat.json"
+    }
+  ],
+  "setupGuides": [
+    {
+      "id": "github-oauth",
+      "place": "connector-template",
+      "template": "github"
+    },
+    {
+      "id": "github-pat",
+      "place": "connector-template",
+      "template": "github-pat"
+    }
+  ]
+}

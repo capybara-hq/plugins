@@ -1,0 +1,18 @@
+{
+  "name": "@capybara-hq/plugin-github",
+  "version": "0.1.0-rc.0",
+  "description": "GitHub connector templates: issues, pull requests, reviews, repositories and Actions through GitHub's remote MCP server, as the connected person (GitHub App / OAuth App or a personal access token)",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/capybara-hq/plugins.git",
+    "directory": "plugins/github"
+  },
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/github#readme",
+  "type": "module",
+  "files": [],
+  "devDependencies": {
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.14",
+    "yaml": "^2.9.1"
+  }
+}
