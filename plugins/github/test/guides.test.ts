@@ -10,9 +10,8 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 /**
- * The setup guides of the two connector templates: `guides/github-oauth.md` (template `github`)
- * and `guides/github-pat.md` (template `github-pat`), each with a zh document whose code blocks
- * are byte-equal. The plugin has no extension, so only kernel checks appear.
+ * The setup guide of the connector template: `guides/github-oauth.md` (template `github`), with a
+ * zh document whose code blocks are byte-equal. The plugin has no extension, so only kernel checks appear.
  */
 const root = new URL("../", import.meta.url);
 const read = (p: string) => readFileSync(new URL(p, root), "utf8");
@@ -51,7 +50,7 @@ const codeBlocks = (r: RenderedSetupGuideDoc) =>
 const prose = (r: RenderedSetupGuideDoc) =>
   r.blocks.flatMap((b) => (b.kind === "markdown" ? [b.text] : [])).join("\n");
 
-/** The permissions the GitHub App and the fine-grained token are asked for. */
+/** The repository permissions the GitHub App is asked for. */
 const REPOSITORY_PERMISSIONS = {
   Actions: "Read and write",
   Checks: "Read-only",
@@ -64,17 +63,16 @@ const REPOSITORY_PERMISSIONS = {
 };
 
 describe("plugin.json setupGuides", () => {
-  it("declares one guide per connector template", () => {
+  it("declares the connector template's guide", () => {
     const m = JSON.parse(read(".capybara-plugin/plugin.json"));
     const parsed = parsePluginManifest(m);
     expect("errors" in parsed ? parsed.errors : []).toEqual([]);
     expect(m.setupGuides).toEqual([
       { id: "github-oauth", place: "connector-template", template: "github" },
-      { id: "github-pat", place: "connector-template", template: "github-pat" },
     ]);
   });
 
-  for (const id of ["github-oauth", "github-pat"]) {
+  for (const id of ["github-oauth"]) {
     it(`${id}: en and zh validate without errors or warnings`, () => {
       const issues = validateSetupGuide({
         place: "connector-template",
@@ -132,27 +130,5 @@ describe("guides/github-oauth.md", () => {
     expect(r.checks.map((c) => c.id)).toEqual(["capybara:connector-connected"]);
     expect(prose(r)).toContain("Connect your GitHub account");
     expect(prose(r)).not.toContain("Register a GitHub App");
-  });
-});
-
-describe("guides/github-pat.md", () => {
-  it("admin: when to switch the template on, no token settings", () => {
-    const r = render("github-pat", "admin");
-    expect(r.unresolved).toEqual([]);
-    expect(codeBlocks(r)).toEqual([]);
-    expect(r.checks.map((c) => c.id)).toEqual(["capybara:connector-tools"]);
-  });
-
-  it("member: a fine-grained token with the GitHub App's permissions except Checks", () => {
-    const r = render("github-pat", "member");
-    expect(r.unresolved).toEqual([]);
-    const blocks = codeBlocks(r);
-    expect(blocks).toHaveLength(1);
-    const s = parse(blocks[0]?.text ?? "") as Record<string, unknown>;
-    // fine-grained tokens have no Checks permission
-    const { Checks: _checks, ...patPermissions } = REPOSITORY_PERMISSIONS;
-    expect(s["Repository permissions"]).toEqual(patPermissions);
-    expect(s["Repository access"]).toBe("Only select repositories");
-    expect(r.checks.map((c) => c.id)).toEqual(["capybara:connector-connected"]);
   });
 });

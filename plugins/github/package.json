@@ -1,7 +1,7 @@
 {
   "name": "@capybara-hq/plugin-github",
   "version": "0.1.0-rc.0",
-  "description": "GitHub connector templates: issues, pull requests, reviews, repositories and Actions through GitHub's remote MCP server, as the connected person (GitHub App / OAuth App or a personal access token)",
+  "description": "GitHub connector template: issues, pull requests, reviews, repositories and Actions through GitHub's remote MCP server, as the connected person (OAuth through a GitHub App or OAuth App)",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

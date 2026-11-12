@@ -1,6 +1,6 @@
 # @capybara-hq/plugin-github
 
-GitHub connector templates (declarative: no extension). Agents work with GitHub **as the
+The GitHub connector template (declarative: no extension). Agents work with GitHub **as the
 person using them**: issues, pull requests, comments and reviews, repository files and branches,
 and Actions runs and logs, through [GitHub's remote MCP server](https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md)
 (`https://api.githubcopilot.com/mcp/`) on the [`connector-mcp`](../connector-mcp) connector.
@@ -8,14 +8,13 @@ and Actions runs and logs, through [GitHub's remote MCP server](https://github.c
 | Template | Auth | Default |
 |---|---|---|
 | `github` | Per-person OAuth (`oauth_code`, MCP discovery, manual client): the org admin registers a GitHub App (recommended: fine-grained permissions, per-installation repositories, tokens that expire after eight hours and are refreshed) or an OAuth App (classic scopes `repo`, `read:org`, `read:user`, `user:email`, `workflow`) | on |
-| `github-pat` | Per-person personal access token (`bearer`) | off: an org admin switches it on where tokens are allowed |
 
 GitHub does not support dynamic client registration, so the OAuth template always needs a client
 the org admin enters.
 
 ## Tools and policies
 
-Both templates set the endpoint header `X-MCP-Toolsets: context,repos,issues,pull_requests,users,actions`
+The template sets the endpoint header `X-MCP-Toolsets: context,repos,issues,pull_requests,users,actions`
 (GitHub's default toolsets plus `actions` for CI status). The header and the URL are editable per
 org (`editableEndpoint`): add toolsets, set `X-MCP-Readonly: true`, or point the URL at a GitHub
 Enterprise Cloud data residency host (`https://copilot-api.<subdomain>.ghe.com/mcp`). GitHub
@@ -32,17 +31,20 @@ annotation (read-only: allow, else ask) and goes through the drift review.
 
 `guides/github-oauth.md` (template `github`: GitHub App settings, the OAuth App alternative, the
 kernel checks `public-url`, `oauth-client`, `oauth-token-endpoint`, `connector-tools`, and how a
-member connects and revokes) and `guides/github-pat.md` (template `github-pat`: when to allow
-tokens, and the fine-grained token a member creates), each with a Chinese version. Preview with
+member connects and revokes), with a Chinese version. Preview with
 `capybara-plugin guide github-oauth --audience admin` from this directory.
 
 ## Tests
 
 ```bash
 pnpm exec vitest run plugins/github
-# live, against GitHub (opens and closes an issue in the scratch repository):
+# live, against GitHub (lists the tools and calls get_me; read-only):
 CAPYBARA_TEST_LIVE_TOOLS=1 pnpm exec vitest run plugins/github/test/live -t live
 ```
 
-The live test needs `CAPYBARA_TEST_GITHUB_MCP_TOKEN` (a personal access token) and
-`CAPYBARA_TEST_GITHUB_REPO` (`owner/name`). Keep them in an env file outside the repository.
+The live test needs `CAPYBARA_TEST_GITHUB_MCP_TOKEN`: a personal access token stands in for a
+member's OAuth token, since the OAuth flow needs a browser. Keep it in an env file outside the
+repository.
+
+A personal access token template was dropped before release: OAuth through a GitHub App gives
+expiring tokens, per-installation repositories and admin control, which a member-made token does not.

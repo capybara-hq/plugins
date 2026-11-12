@@ -7,9 +7,8 @@ import {
 import { describe, expect, it } from "vitest";
 
 /**
- * The GitHub connector templates: `connectors/github.json` (per-person OAuth through a GitHub App
- * or OAuth App) and `connectors/github-pat.json` (per-person personal access token, off by
- * default), both on connector-mcp against GitHub's remote MCP server.
+ * The GitHub connector template `connectors/github.json`: per-person OAuth through a GitHub App
+ * or OAuth App, on connector-mcp against GitHub's remote MCP server.
  */
 const root = new URL("../", import.meta.url);
 const read = (p: string) => readFileSync(new URL(p, root), "utf8");
@@ -29,7 +28,6 @@ interface TemplateFile {
   };
 }
 const oauth = JSON.parse(read("connectors/github.json")) as TemplateFile;
-const pat = JSON.parse(read("connectors/github-pat.json")) as TemplateFile;
 
 /**
  * Tool names of github/github-mcp-server (checked 2026-11-12 at 6fbcd00, `pkg/github` and the
@@ -94,11 +92,8 @@ const MUST_ASK = [
   "actions_run_trigger",
 ];
 
-describe("connectors/github.json and connectors/github-pat.json", () => {
-  for (const [name, file] of [
-    ["github", oauth],
-    ["github-pat", pat],
-  ] as const) {
+describe("connectors/github.json", () => {
+  for (const [name, file] of [["github", oauth]] as const) {
     it(`${name}: is a valid connector template file`, () => {
       const parsed = parseConnectorTemplateFile(file);
       expect("errors" in parsed ? parsed.errors : []).toEqual([]);
@@ -133,15 +128,6 @@ describe("connectors/github.json and connectors/github-pat.json", () => {
     expect(oauth.defaultEnabled).toBeUndefined();
   });
 
-  it("github-pat: a personal bearer token, switched off until an org admin allows tokens", () => {
-    expect(pat.template.auth).toEqual({ type: "bearer", ownership: "personal" });
-    expect(pat.defaultEnabled).toBe(false);
-  });
-
-  it("both templates carry the same policies", () => {
-    expect(pat.template.defaultToolPolicies).toEqual(oauth.template.defaultToolPolicies);
-  });
-
   it("reads are allowed, writes ask, deleting a repository is denied", () => {
     const p = oauth.template.defaultToolPolicies;
     for (const t of READ_TOOLS) expect(p[t], t).toBe("allow");
@@ -161,18 +147,14 @@ describe("connectors/github.json and connectors/github-pat.json", () => {
     }
   });
 
-  it("plugin.json lists both templates and depends on connector-mcp at the templates' range", () => {
+  it("plugin.json lists the template and depends on connector-mcp at the templates' range", () => {
     const m = JSON.parse(read(".capybara-plugin/plugin.json"));
     const parsed = parsePluginManifest(m);
     expect("errors" in parsed ? parsed.errors : []).toEqual([]);
-    expect(m.connectorTemplates).toEqual([
-      { path: "./connectors/github.json" },
-      { path: "./connectors/github-pat.json" },
-    ]);
+    expect(m.connectorTemplates).toEqual([{ path: "./connectors/github.json" }]);
     expect(m.dependencies).toEqual([
       { name: "connector-mcp", version: oauth.template.pluginVersion },
     ]);
-    expect(pat.template.pluginVersion).toBe(oauth.template.pluginVersion);
     expect(oauth.template.pluginVersion).toMatch(/^\^0\.1\.0-rc\.\d+$/);
   });
 });

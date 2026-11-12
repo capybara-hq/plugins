@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
  * Live check of the GitHub connector templates against GitHub's remote MCP server:
  * `CAPYBARA_TEST_LIVE_TOOLS=1 pnpm exec vitest run plugins/github/test/live -t live`.
  *
- * Needs `CAPYBARA_TEST_GITHUB_MCP_TOKEN` (a personal access token: fine-grained with the
- * permissions of guides/github-pat.md, or classic with `repo`); values starting with 「替换为」
+ * Needs `CAPYBARA_TEST_GITHUB_MCP_TOKEN` (a personal access token with read access to a
+ * repository: the template's OAuth flow needs a browser, so the live check uses a token instead); values starting with 「替换为」
  * count as unset. The token is never printed. Read-only: it lists the tools and calls `get_me`.
  *
  * It speaks MCP (Streamable HTTP) to the template's endpoint with its headers, the way
@@ -36,7 +36,6 @@ interface Template {
 const read = (p: string) =>
   JSON.parse(readFileSync(new URL(`../../${p}`, import.meta.url), "utf8")) as Template;
 const oauth = read("connectors/github.json");
-const pat = read("connectors/github-pat.json");
 
 interface McpTool {
   name: string;
@@ -84,8 +83,7 @@ async function mcpSession(tpl: Template) {
 
 describe.skipIf(!LIVE)("live", { timeout: 120_000 }, () => {
   it("live GitHub MCP: the templates' toolsets, tool names and read-only policies match", async () => {
-    expect(pat.template.endpoint).toEqual(oauth.template.endpoint);
-    const call = await mcpSession(pat);
+    const call = await mcpSession(oauth);
     const tools: McpTool[] = [];
     let cursor: string | undefined;
     do {
@@ -104,7 +102,7 @@ describe.skipIf(!LIVE)("live", { timeout: 120_000 }, () => {
     // Tool keys hold only [a-zA-Z0-9_-]; GitHub's names have no dots
     for (const n of names) expect(n).toMatch(/^[a-z0-9_]+$/);
     // Every listed tool has a template policy (a new upstream tool shows up here)
-    const policies = pat.template.defaultToolPolicies;
+    const policies = oauth.template.defaultToolPolicies;
     expect(names.filter((n) => !(n in policies))).toEqual([]);
     // The template allows exactly the tools GitHub annotates read-only
     for (const t of tools) {
