@@ -48,16 +48,14 @@ const BLOCKED_V4 = [
   ["224.0.0.0", 4], // multicast
   ["240.0.0.0", 4], // reserved and broadcast
 ];
+// IPv6 is default deny: only global unicast 2000::/3 is reachable, minus the special-purpose
+// blocks below (addresses that embed an IPv4 address are judged by it first, see
+// isForbiddenAddress).
 // capybara:allow-module-state read-only constant table (egress proxy container, not the kernel)
 const BLOCKED_V6 = [
-  ["::", 128],
-  ["::1", 128],
-  ["100::", 64],
-  ["2001:db8::", 32],
-  ["fc00::", 7], // ULA
-  ["fe80::", 10], // link-local
-  ["fec0::", 10],
-  ["ff00::", 8], // multicast
+  ["2001::", 23], // IETF protocol assignments, including Teredo 2001::/32 and benchmarking
+  ["2001:db8::", 32], // documentation
+  ["3fff::", 20], // documentation
 ];
 
 // capybara:allow-module-state address table built once at start, read-only (proxy container)
@@ -102,8 +100,11 @@ export function isForbiddenAddress(ip) {
   const zeros = (from, to) => g.slice(from, to).every((x) => x === 0);
   if (zeros(0, 5) && g[5] === 0xffff) return isForbiddenAddress(v4Of(g[6], g[7]));
   if (zeros(0, 6) && (g[6] !== 0 || g[7] > 1)) return isForbiddenAddress(v4Of(g[6], g[7]));
-  if (g[0] === 0x64 && g[1] === 0xff9b) return isForbiddenAddress(v4Of(g[6], g[7]));
+  if (g[0] === 0x64 && g[1] === 0xff9b && zeros(2, 6)) return isForbiddenAddress(v4Of(g[6], g[7]));
   if (g[0] === 0x2002) return isForbiddenAddress(v4Of(g[1], g[2]));
+  // Everything outside global unicast 2000::/3 (loopback, ULA, link-local, multicast, the local-use
+  // NAT64 prefix 64:ff9b:1::/48, SIIT ::ffff:0:0:0/96, 5f00::/16, ...) is forbidden.
+  if ((g[0] & 0xe000) !== 0x2000) return true;
   const canonical = g.map((x) => x.toString(16)).join(":");
   return blocked.check(canonical, "ipv6");
 }
@@ -169,19 +170,21 @@ export async function resolveTarget(host, opts) {
   }
   const h = normalizeHost(raw);
   const pinned = Object.hasOwn(opts.testHosts, h) ? opts.testHosts[h] : undefined;
-  if (mode === "open") {
-    if (isIP(h) !== 0) {
-      if (isForbiddenAddress(h)) {
-        throw new Refused(
-          403,
-          `Outbound access to ${h} is blocked: it is a private or reserved address.`,
-        );
-      }
-      return [h];
+  if (mode === "open" && isIP(h) !== 0) {
+    if (isForbiddenAddress(h)) {
+      throw new Refused(
+        403,
+        `Outbound access to ${h} is blocked: it is a private or reserved address.`,
+      );
     }
-    const err = pinned === undefined ? publicNameError(h) : null;
+    return [h];
+  }
+  // Every mode: a name must have the shape of a public DNS name (pinned test names excepted).
+  if (isIP(h) === 0 && pinned === undefined) {
+    const err = publicNameError(h);
     if (err !== null) throw new Refused(403, `Outbound access to ${h} is blocked: ${err}.`);
-  } else if (!hostAllowed(h, opts.allowHosts)) {
+  }
+  if (mode !== "open" && !hostAllowed(h, opts.allowHosts)) {
     throw new Refused(
       403,
       `Outbound access to ${h} is blocked by the sandbox egress allowlist. Allowed hosts: ${opts.allowHosts.join(", ") || "(none)"}.`,
@@ -204,8 +207,14 @@ export async function resolveTarget(host, opts) {
   return addrs.map((a) => a.address);
 }
 
-/** Connect to the checked addresses in turn; resolve with the first that connects, else reject with the last error. */
-export function connectAny(ips, port) {
+/** Each address gets this long to connect before the next one is tried. */
+const CONNECT_TIMEOUT_MS = 10_000;
+
+/**
+ * Connect to the checked addresses in turn; resolve with the first that connects, else reject with
+ * the last error. Each attempt is bounded by AbortSignal.timeout (plugins use no timers).
+ */
+export function connectAny(ips, port, timeoutMs = CONNECT_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const attempt = (i, lastError) => {
       if (i >= ips.length) {
@@ -213,11 +222,21 @@ export function connectAny(ips, port) {
         return;
       }
       const s = connect({ host: ips[i], port, allowHalfOpen: true });
+      const deadline = AbortSignal.timeout(timeoutMs);
+      const onTimeout = () => {
+        const e = Object.assign(new Error(`connect to ${ips[i]}:${port} timed out`), {
+          code: "ETIMEDOUT",
+        });
+        s.destroy(e);
+      };
+      deadline.addEventListener("abort", onTimeout, { once: true });
       s.once("connect", () => {
+        deadline.removeEventListener("abort", onTimeout);
         s.removeAllListeners("error");
         resolve(s);
       });
       s.once("error", (e) => {
+        deadline.removeEventListener("abort", onTimeout);
         s.destroy();
         attempt(i + 1, e);
       });
@@ -290,8 +309,15 @@ function proxyOptions(cfg) {
   };
 }
 
-/** A host for logs: quoted, so control characters cannot forge log lines. */
-const q = (s) => JSON.stringify(String(s));
+/** A host for logs: quoted, every non-printable-ASCII character escaped, so nothing can forge log lines. */
+const q = (s) =>
+  JSON.stringify(String(s)).replace(
+    /[^\x20-\x7e]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+
+/** Concurrent connections each listener accepts. */
+const MAX_CONNECTIONS = 512;
 
 /**
  * Create the HTTP proxy server (not listening): absolute-URL HTTP forwarding, CONNECT tunnels and
@@ -300,7 +326,7 @@ const q = (s) => JSON.stringify(String(s));
  */
 export function createEgressProxy(cfg) {
   const opts = proxyOptions(cfg);
-  // strict: only the listed CONNECT ports; dev / open: any port 1-65535.
+  // strict: only the listed ports (CONNECT and HTTP); dev / open: any port 1-65535.
   const connectPorts = opts.mode === "strict" ? (cfg.connectPorts ?? DEFAULT_CONNECT_PORTS) : null;
   const refuse = (res, e, target) => {
     const status = e instanceof Refused ? e.status : 502;
@@ -335,10 +361,22 @@ export function createEgressProxy(cfg) {
       );
       return;
     }
+    const port = url.port === "" ? 80 : Number(url.port);
+    if (connectPorts !== null && !connectPorts.includes(port)) {
+      refuse(
+        res,
+        new Refused(
+          403,
+          `Port ${port} is not allowed (allowed ports: ${connectPorts.join(", ")}).`,
+        ),
+        url.host,
+      );
+      return;
+    }
     let sock;
     try {
       const ips = await resolveTarget(url.hostname, opts);
-      sock = await connectAny(ips, url.port === "" ? 80 : Number(url.port)).catch(() => {
+      sock = await connectAny(ips, port).catch(() => {
         throw new Refused(502, `Cannot connect to ${url.host}.`);
       });
     } catch (e) {
@@ -405,6 +443,7 @@ export function createEgressProxy(cfg) {
     splice(socket, up);
   });
   server.on("clientError", (_e, socket) => socket.destroy());
+  server.maxConnections = MAX_CONNECTIONS;
   return server;
 }
 
@@ -509,16 +548,22 @@ function parseSocks(buf, stage) {
  */
 export function createSocksProxy(cfg) {
   const opts = proxyOptions(cfg);
+  const handshakeMs = cfg.handshakeMs ?? SOCKS_HANDSHAKE_MS;
   // Half-open both ways: a client that shuts down its write side (nc on end of input) still gets
   // the rest of the response.
-  return createNetServer({ allowHalfOpen: true }, (socket) => {
+  const server = createNetServer({ allowHalfOpen: true }, (socket) => {
     let buf = Buffer.alloc(0);
     let stage = "greeting";
     let busy = false;
-    socket.setTimeout(SOCKS_HANDSHAKE_MS, () => {
-      opts.log("egress refused socks: handshake timed out");
+    // Absolute deadline: the handshake (and any refusal reply) must be over by then, or the
+    // socket is destroyed. Removed only once a tunnel is up. Plugins use no timers.
+    const deadline = AbortSignal.timeout(handshakeMs);
+    const onDeadline = () => {
+      if (!busy) opts.log("egress refused socks: handshake timed out");
       socket.destroy();
-    });
+    };
+    deadline.addEventListener("abort", onDeadline, { once: true });
+    socket.once("close", () => deadline.removeEventListener("abort", onDeadline));
     socket.on("error", () => socket.destroy());
     // The client gave up during the handshake: nothing left to answer.
     socket.on("end", () => {
@@ -580,7 +625,7 @@ export function createSocksProxy(cfg) {
         up.destroy();
         return;
       }
-      socket.setTimeout(0);
+      deadline.removeEventListener("abort", onDeadline);
       socket.removeAllListeners("data");
       socket.write(version === 5 ? reply5(SOCKS5_OK) : Buffer.from([0, 0x5a, 0, 0, 0, 0, 0, 0]));
       if (rest.length > 0) up.write(rest);
@@ -642,10 +687,14 @@ export function createSocksProxy(cfg) {
     };
 
     socket.on("data", (chunk) => {
+      // After a refusal (or while a target is being opened) input is discarded, never buffered.
+      if (busy) return;
       buf = Buffer.concat([buf, chunk]);
       step();
     });
   });
+  server.maxConnections = MAX_CONNECTIONS;
+  return server;
 }
 
 /**

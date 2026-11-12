@@ -32,9 +32,14 @@ export function resolveTarget(
     lookup: (host: string) => Promise<{ address: string }[]>;
   },
 ): Promise<string[]>;
-export function connectAny(ips: string[], port: number): Promise<Socket>;
+export function connectAny(ips: string[], port: number, timeoutMs?: number): Promise<Socket>;
 export function createEgressProxy(cfg: EgressProxyConfig): Server;
-export function createSocksProxy(cfg: Omit<EgressProxyConfig, "connectPorts">): NetServer;
+export function createSocksProxy(
+  cfg: Omit<EgressProxyConfig, "connectPorts"> & {
+    /** Absolute deadline for the handshake and any refusal reply, default 30 000 ms. */
+    handshakeMs?: number;
+  },
+): NetServer;
 export function main(env?: Record<string, string | undefined>): {
   http: Server;
   socks: NetServer | null;

@@ -3,8 +3,10 @@ import { createServer, type Server } from "node:http";
 import { type AddressInfo, connect, type Server as NetServer } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  connectAny,
   createEgressProxy,
   createSocksProxy,
+  isForbiddenAddress,
   main,
   resolveTarget,
 } from "../egress-proxy/proxy.mjs";
@@ -395,5 +397,173 @@ describe("resolveTarget", () => {
       /malformed/,
     );
     await expect(resolveTarget("0x7f.1", { ...base, mode: "open" })).rejects.toThrow(/malformed/);
+  });
+});
+
+describe("hardening", () => {
+  it("strict mode limits plain HTTP forwarding to the allowed ports", async () => {
+    const { server, port } = await listen(
+      createEgressProxy({
+        allowHosts: ["allowed.example.com"],
+        testHosts: { "allowed.example.com": "127.0.0.1" },
+        log: quiet,
+      }),
+    );
+    try {
+      const out = await new Promise<string>((resolve, reject) => {
+        const s = connect(port, "127.0.0.1");
+        let buf = "";
+        s.on("data", (c: Buffer) => {
+          buf += c.toString();
+        });
+        s.on("end", () => resolve(buf));
+        s.on("error", reject);
+        s.write(
+          `GET http://allowed.example.com:${targetPort}/ HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`,
+        );
+      });
+      expect(out).toMatch(/^HTTP\/1\.1 403/);
+      expect(out).toContain(`Port ${targetPort} is not allowed`);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((r) => server.close(r));
+    }
+  });
+
+  it("caps concurrent connections on both listeners", () => {
+    expect(createEgressProxy({ log: quiet }).maxConnections).toBe(512);
+    expect(createSocksProxy({ mode: "dev", log: quiet }).maxConnections).toBe(512);
+  });
+
+  describe("SOCKS deadlines", () => {
+    let socks: NetServer;
+    let port: number;
+    const logs: string[] = [];
+    beforeAll(async () => {
+      ({ server: socks, port } = await listen(
+        createSocksProxy({
+          mode: "dev",
+          allowHosts: ["allowed.example.com"],
+          testHosts: { "allowed.example.com": "127.0.0.1" },
+          handshakeMs: 300,
+          log: (m) => logs.push(m),
+        }),
+      ));
+    });
+    afterAll(async () => {
+      await new Promise((r) => socks?.close(r));
+    });
+
+    /** Keep writing `chunk` every tick until the server closes; resolve with ms elapsed and bytes read. */
+    const flood = (first: Buffer[], chunk: Buffer) =>
+      new Promise<{ ms: number; got: Buffer }>((resolve) => {
+        const started = Date.now();
+        const s = connect(port, "127.0.0.1");
+        let got = Buffer.alloc(0);
+        let open = true;
+        s.on("data", (c: Buffer) => {
+          got = Buffer.concat([got, c]);
+        });
+        s.on("error", () => {});
+        s.on("close", () => {
+          open = false;
+          resolve({ ms: Date.now() - started, got });
+        });
+        for (const c of first) s.write(c);
+        const pump = () => {
+          if (!open) return;
+          if (s.write(chunk)) setImmediate(pump);
+          else s.once("drain", pump);
+        };
+        pump();
+      });
+
+    it("closes a stalled handshake at the deadline", async () => {
+      const r = await flood([Buffer.from([5])], Buffer.alloc(0));
+      expect(r.ms).toBeGreaterThanOrEqual(250);
+      expect(r.ms).toBeLessThan(3000);
+      expect(logs.some((l) => l.includes("handshake timed out"))).toBe(true);
+    });
+
+    it("discards input after a refusal and still closes at the absolute deadline", async () => {
+      const r = await flood([greeting, domainReq("denied.org", 22)], Buffer.alloc(64 * 1024));
+      expect([...r.got]).toEqual([5, 0, 5, 2, 0, 1, 0, 0, 0, 0, 0, 0]);
+      expect(r.ms).toBeLessThan(3000);
+    });
+
+    it("keeps an established tunnel past the deadline", async () => {
+      const s = connect(port, "127.0.0.1");
+      s.on("error", () => {});
+      s.write(Buffer.concat([greeting, domainReq("allowed.example.com", targetPort)]));
+      await new Promise((r) => s.once("data", r));
+      await new Promise((r) => setTimeout(r, 500));
+      expect(s.destroyed).toBe(false);
+      const body = await new Promise<string>((resolve) => {
+        let buf = "";
+        s.on("data", (c: Buffer) => {
+          buf += c.toString();
+        });
+        s.on("close", () => resolve(buf));
+        s.write(httpGet);
+      });
+      expect(body).toContain("hello from target GET /s");
+    });
+  });
+
+  it("bounds each connect attempt", async () => {
+    const started = Date.now();
+    // TEST-NET-1: normally unroutable, so the attempt hangs until the deadline (or fails fast).
+    await expect(connectAny(["192.0.2.1"], 9, 200)).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it.each([
+    "2001::1",
+    "2001:0:4136:e378::1",
+    "2001:db8::1",
+    "3fff::1",
+    "5f00::1",
+    "64:ff9b:1::808:808",
+    "::ffff:0:808:808",
+    "fec0::1",
+    "100::1",
+    "4000::1",
+  ])("IPv6 %s is forbidden (default deny outside 2000::/3)", (ip) => {
+    expect(isForbiddenAddress(ip)).toBe(true);
+  });
+
+  it.each(["2a00:1450:4001::1", "2606:4700::1111", "64:ff9b::808:808", "2002:808:808::1"])(
+    "IPv6 %s is allowed",
+    (ip) => {
+      expect(isForbiddenAddress(ip)).toBe(false);
+    },
+  );
+
+  it("escapes every non-ASCII character in log lines", async () => {
+    const logs: string[] = [];
+    const { server, port } = await listen(
+      createSocksProxy({ mode: "dev", allowHosts: [], log: (m) => logs.push(m) }),
+    );
+    try {
+      await raw(port, [greeting, domainReq("\u00e9vil\u0085x.com", 22)]);
+      const line = logs.find((l) => l.includes("vil")) ?? "";
+      expect(line).toMatch(/^[\x20-\x7e]+$/);
+      expect(line).toContain("\\u00e9vil\\u0085x.com");
+    } finally {
+      await new Promise((r) => server.close(r));
+    }
+  });
+
+  it("checks the public name shape in strict and dev too", async () => {
+    const opts = { allowHosts: ["*.example.com"], testHosts: {}, lookup };
+    for (const mode of ["strict", "dev"] as const) {
+      await expect(resolveTarget("a_b.example.com", { ...opts, mode })).rejects.toThrow(
+        /malformed/,
+      );
+      await expect(resolveTarget("-a.example.com", { ...opts, mode })).rejects.toThrow(/malformed/);
+      await expect(resolveTarget("public.example.com", { ...opts, mode })).resolves.toEqual([
+        "8.8.8.8",
+      ]);
+    }
   });
 });
