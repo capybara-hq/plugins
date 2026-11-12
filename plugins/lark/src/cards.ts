@@ -80,6 +80,7 @@ const T = {
       denied: "Denied",
       expired: "Expired",
       cancelled: "Cancelled",
+      skipped: "Skipped (replied instead)",
     },
     questionStates: {
       pending: "Pending",
@@ -116,6 +117,7 @@ const T = {
       denied: "已拒绝",
       expired: "已过期",
       cancelled: "已取消",
+      skipped: "已跳过（已直接回复）",
     },
     questionStates: {
       pending: "待回答",
@@ -134,6 +136,7 @@ const APPROVAL_COLOR = {
   denied: "red",
   expired: "grey",
   cancelled: "grey",
+  skipped: "grey",
 } as const;
 const QUESTION_COLOR: Record<string, string> = {
   pending: "blue",

@@ -32,7 +32,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
-    "@capybara-hq/plugin-model-fake": "0.1.0-rc.14",
+    "@capybara-hq/plugin-model-fake": "0.1.0-rc.17",
     "@capybara-hq/plugin-sdk": "0.1.0-rc.17",
     "@capybara-hq/plugin-tools": "0.1.0-rc.13",
     "@capybara-hq/testing": "0.1.0-rc.15",
