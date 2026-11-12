@@ -105,7 +105,7 @@ export function createDeepSeekProvider(defaults: DeepSeekDefaults): ModelProvide
 /** DeepSeek model provider plugin: native Chat Completions, thinking mode, `/models` listing. */
 export default defineExtension({
   name: "deepseek",
-  version: "0.1.0-rc.6",
+  version: "0.1.0-rc.7",
   sdk: "^0.1.0-rc.4",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
   // Default host; a changed baseUrl is display-only here, the platform does not intercept
