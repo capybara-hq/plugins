@@ -14,6 +14,7 @@ import {
   execArgv,
   IN_SANDBOX_GRACE_SECONDS,
 } from "../src/index.js";
+import type { SandboxTier, TierLimits } from "../src/provider.js";
 import {
   buildTestImages,
   cleanupTestResources,
@@ -29,9 +30,10 @@ import {
 /**
  * sandbox@2 on real Docker (through the socket proxy of capybara-hq/core's docker/sandbox-proxy):
  * file systems (volumes) that outlive instances (containers), lifecycle, exec timeout and abort,
- * file reads and writes, read-only /skills, same-name rebuild, gone semantics, the three egress
- * modes (none / allowlist / open) and the security settings; the runsc cases run only when runsc
- * is installed. Skipped as a whole without Docker.
+ * file reads and writes, read-only /skills, same-name rebuild, gone semantics, the egress
+ * modes and tiers (none, the proxy in strict / dev / open mode, the bridge), update, and the
+ * security settings; the runsc cases run only when runsc is installed. Skipped as a whole
+ * without Docker.
  */
 
 const RUN = randomUUID().slice(0, 8);
@@ -83,7 +85,8 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       runtime: "runc",
       network: netName,
       egressProxyImage: images.egressImage,
-      allowOpenEgress: true,
+      // the bridge test below; the open-through-proxy tests use their own provider
+      openEgress: "direct",
     };
     sbx = createDockerSandbox(cfg, {
       labels: { [TEST_LABEL]: RUN },
@@ -117,9 +120,11 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
 
   const inspect = async (name: string) =>
     JSON.parse(await docker("inspect", name))[0] as {
+      Id: string;
       State: { Running: boolean };
-      Config: { User: string; Env: string[] };
+      Config: { User: string; Env: string[]; Labels: Record<string, string> };
       HostConfig: {
+        ShmSize: number;
         ReadonlyRootfs: boolean;
         CapDrop: string[];
         SecurityOpt: string[];
@@ -631,7 +636,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
     }
   });
 
-  it("egress open: a plain bridge network", async () => {
+  it("egress open with openEgress direct: a plain bridge network", async () => {
     const h = await newSandbox(sbx, {
       name: sbxName(),
       image: images.sandboxImage,
@@ -645,6 +650,197 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
     } finally {
       await sbx.destroy(h, sig());
     }
+  });
+
+  describe("tiers", () => {
+    const tiered = (
+      egress: SandboxLimits["egress"],
+      tier: SandboxTier,
+      allowHosts: string[] = [],
+    ): SandboxLimits => {
+      const l: TierLimits = { ...limits(egress, allowHosts), tier };
+      return l;
+    };
+    const envOf = async (container: string) => (await inspect(container)).Config.Env;
+    const proxied = () =>
+      createDockerSandbox(
+        { ...cfg, openEgress: "proxy" },
+        {
+          labels: { [TEST_LABEL]: RUN },
+          egressTestHosts: { "allowed.example.com": targetIp, "denied.example.com": targetIp },
+        },
+      );
+
+    it("strict: the strict proxy, HTTP proxy variables only, Docker's default shm", async () => {
+      const name = sbxName();
+      const h = await newSandbox(sbx, {
+        name,
+        image: images.sandboxImage,
+        limits: tiered("allowlist", "strict", ["allowed.example.com"]),
+        signal: sig(),
+      });
+      try {
+        const c = await inspect(name);
+        expect(c.HostConfig.ShmSize).toBe(64 * 1024 * 1024);
+        expect(c.Config.Env.some((e) => /^(ALL_PROXY|GIT_SSH_COMMAND)=/.test(e))).toBe(false);
+        expect(c.Config.Labels).toMatchObject({
+          "dev.capybara.sandbox.tier": "strict",
+          "dev.capybara.sandbox.egress-mode": "strict",
+        });
+        const pe = await envOf(`${name}-egress`);
+        expect(pe).toContain("MODE=strict");
+        expect(pe.some((e) => e.startsWith("SOCKS_PORT="))).toBe(false);
+        expect((await sh(h.id, "curl -sS --max-time 10 http://allowed.example.com/")).stdout).toBe(
+          "hello-egress",
+        );
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+    });
+
+    it("dev: the dev proxy with SOCKS, ALL_PROXY / GRPC_PROXY / GIT_SSH_COMMAND, shm of memory / 4", async () => {
+      const name = sbxName();
+      const h = await newSandbox(sbx, {
+        name,
+        image: images.sandboxImage,
+        limits: tiered("allowlist", "dev", ["allowed.example.com"]),
+        signal: sig(),
+      });
+      try {
+        const c = await inspect(name);
+        // memoryMb 512 -> 128 MiB
+        expect(c.HostConfig.ShmSize).toBe(128 * 1024 * 1024);
+        expect((await sh(h.id, "df -k --output=size /dev/shm | tail -1")).stdout.trim()).toBe(
+          "131072",
+        );
+        const proxy = `http://${name}-egress:3128`;
+        expect(c.Config.Env).toEqual(
+          expect.arrayContaining([
+            `HTTPS_PROXY=${proxy}`,
+            `ALL_PROXY=${proxy}`,
+            `GRPC_PROXY=${proxy}`,
+            `GIT_SSH_COMMAND=ssh -o ProxyCommand='nc -X 5 -x ${name}-egress:1080 %h %p'`,
+          ]),
+        );
+        const pe = await envOf(`${name}-egress`);
+        expect(pe).toEqual(
+          expect.arrayContaining([
+            "MODE=dev",
+            "SOCKS_PORT=1080",
+            'ALLOW_HOSTS=["allowed.example.com"]',
+          ]),
+        );
+        expect((await sh(h.id, "curl -sS --max-time 10 http://allowed.example.com/")).stdout).toBe(
+          "hello-egress",
+        );
+        const direct = await sh(h.id, `curl -sS --noproxy '*' --max-time 3 http://${targetIp}/`);
+        expect(direct.exitCode).not.toBe(0);
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+    });
+
+    it("open through the proxy: the internal network and a proxy in open mode with no host list", async () => {
+      const p = proxied();
+      const name = sbxName();
+      const h = await newSandbox(p, {
+        name,
+        image: images.sandboxImage,
+        limits: tiered("open", "open"),
+        signal: sig(),
+      });
+      try {
+        const c = await inspect(name);
+        expect(c.HostConfig.NetworkMode).toBe(`${name}-net`);
+        expect(c.HostConfig.ShmSize).toBe(128 * 1024 * 1024);
+        expect(c.Config.Env).toContain(`ALL_PROXY=http://${name}-egress:3128`);
+        const pe = await envOf(`${name}-egress`);
+        expect(pe).toEqual(expect.arrayContaining(["MODE=open", "SOCKS_PORT=1080"]));
+        expect(pe.some((e) => e.startsWith("ALLOW_HOSTS="))).toBe(false);
+        // no route around the proxy
+        const direct = await sh(h.id, `curl -sS --noproxy '*' --max-time 3 http://${targetIp}/`);
+        expect(direct.exitCode).not.toBe(0);
+      } finally {
+        await p.destroy(h, sig());
+      }
+    });
+
+    it("none stays without a network in the dev tier (shm still applies)", async () => {
+      const name = sbxName();
+      const h = await newSandbox(sbx, {
+        name,
+        image: images.sandboxImage,
+        limits: tiered("none", "dev"),
+        signal: sig(),
+      });
+      try {
+        const c = await inspect(name);
+        expect(c.HostConfig.NetworkMode).toBe("none");
+        expect(c.HostConfig.ShmSize).toBe(128 * 1024 * 1024);
+        expect(await exists("container", `${name}-egress`)).toBe(false);
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+    });
+
+    it("update: dev to open swaps only the proxy; narrowing, strict and a gone container recreate", async () => {
+      const p = proxied();
+      const name = sbxName();
+      const dev = tiered("allowlist", "dev", ["allowed.example.com"]);
+      const h = await newSandbox(p, {
+        name,
+        image: images.sandboxImage,
+        limits: dev,
+        signal: sig(),
+      });
+      try {
+        await p.writeFile(h, "/workspace/keep.txt", enc.encode("kept"), sig());
+        const id = (await inspect(name)).Id;
+
+        expect(await p.update(h, tiered("open", "open"), sig())).toBe("updated");
+        expect((await inspect(name)).Id).toBe(id);
+        const pe = await envOf(`${name}-egress`);
+        expect(pe).toContain("MODE=open");
+        expect(pe.some((e) => e.startsWith("ALLOW_HOSTS="))).toBe(false);
+        expect((await inspect(`${name}-egress`)).State.Running).toBe(true);
+        const r = await p.exec(h, {
+          ...who(),
+          command: "cat /workspace/keep.txt; echo; echo $ALL_PROXY",
+          timeoutMs: 30_000,
+          maxOutputBytes: 10_000,
+          signal: sig(),
+        });
+        expect(r.stdout).toBe(`kept\nhttp://${name}-egress:3128\n`);
+
+        // a suspended instance keeps its new proxy stopped
+        await p.suspend(h, sig());
+        expect(await p.update(h, tiered("open", "open"), sig())).toBe("updated");
+        expect((await inspect(`${name}-egress`)).State.Running).toBe(false);
+
+        // a lost proxy is rebuilt from the labels: the create-time dev proxy, never wider
+        await docker("rm", "-f", `${name}-egress`);
+        expect(await p.resume(h, sig())).toBe("resumed");
+        expect(await envOf(`${name}-egress`)).toContain("MODE=dev");
+        expect((await sh(h.id, "curl -sS --max-time 10 http://allowed.example.com/")).stdout).toBe(
+          "hello-egress",
+        );
+
+        // back to dev with the recorded hosts (the labels' lower bound): in place; fewer
+        // hosts, another tier or no network: recreate
+        expect(await p.update(h, dev, sig())).toBe("updated");
+        expect(await p.update(h, tiered("allowlist", "dev", ["other.example.com"]), sig())).toBe(
+          "recreate",
+        );
+        expect(
+          await p.update(h, tiered("allowlist", "strict", ["allowed.example.com"]), sig()),
+        ).toBe("recreate");
+        expect(await p.update(h, tiered("none", "dev"), sig())).toBe("recreate");
+        expect((await inspect(name)).Id).toBe(id);
+      } finally {
+        await p.destroy(h, sig());
+      }
+      expect(await p.update(h, tiered("open", "open"), sig())).toBe("recreate");
+    });
   });
 
   it("the socket proxy refuses Engine API calls the plugin does not need", async () => {
@@ -850,9 +1046,9 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
     });
   });
 
-  it("egress open is refused unless allowOpenEgress is set", async () => {
+  it("egress open is refused when openEgress is off", async () => {
     const strict = createDockerSandbox(
-      { ...cfg, allowOpenEgress: false },
+      { ...cfg, openEgress: "off" },
       { labels: { [TEST_LABEL]: RUN } },
     );
     await expect(
@@ -863,7 +1059,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
         fileSystem: { id: sbxName() },
         signal: sig(),
       }),
-    ).rejects.toThrow(/allowOpenEgress/);
+    ).rejects.toThrow(/openEgress is "off"/);
   });
 
   it("when the kill exec itself cannot start (pid limit), the container is restarted with a warn", async () => {
