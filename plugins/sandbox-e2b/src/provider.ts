@@ -5,12 +5,14 @@ import {
   type Logger,
   SANDBOX_TAG_RE,
   SandboxGoneError,
+  type SandboxHandle,
   type SandboxLimits,
   type SandboxProvider,
   validateAllowHost,
   validateSandboxPath,
 } from "@capybara-hq/plugin-sdk";
 import {
+  ALL_TRAFFIC,
   abortReason,
   createE2BApi,
   ENVD_PORT,
@@ -21,6 +23,7 @@ import {
   isE2BNotFound,
   isStatus,
   type StartRequest,
+  updateNetwork,
 } from "./e2b-api.js";
 
 /** 部署配置（见 index.ts 的 DeploymentConfig）。 */
@@ -44,9 +47,40 @@ export interface E2BSandboxConfig {
   timeoutSeconds: number;
   /** E2B 支持按域名的出站白名单；false 时 allowlist 退化为 none 并打告警。 */
   domainAllowlist: boolean;
-  /** 允许 `egress: "open"`。 */
-  allowOpenEgress: boolean;
+  /**
+   * What `egress: "open"` does: `"off"` refuses it; `"proxy"` and `"direct"` both mean
+   * `allow_internet_access: true` (E2B has no egress proxy of ours).
+   */
+  openEgress: OpenEgress;
 }
+
+/** The values of the `openEgress` setting (the same three values as sandbox-docker's). */
+export type OpenEgress = "off" | "proxy" | "direct";
+
+// TODO(sdk): drop the local types when the SDK with tiers is released (capybara-hq/core#190)
+/** A sandbox tier (sandbox tiers spec §7.1). */
+export type SandboxTier = "strict" | "dev" | "open";
+/**
+ * {@link SandboxLimits} with the tier fields of the SDK with tiers. Absent `tier` = `strict`.
+ * `allowHosts` is final (the kernel already joined the dev hosts in at `dev`): a cloud provider
+ * never reads `devHosts`; `defaultTier` only exists in local exec args.
+ */
+export type TieredSandboxLimits = SandboxLimits & {
+  tier?: SandboxTier;
+  devHosts?: string[];
+  defaultTier?: SandboxTier;
+};
+/** {@link SandboxProvider} with the optional members of the SDK with tiers. */
+export type TieredSandboxProvider = SandboxProvider & {
+  /** Applies new limits to a running instance without recreating it. */
+  update?(
+    h: SandboxHandle,
+    limits: TieredSandboxLimits,
+    signal: AbortSignal,
+  ): Promise<"updated" | "recreate">;
+  /** Where `create`-time limits are fixed; absent = `"instance"`. */
+  readonly limitsApplyAt?: "instance" | "fileSystem";
+};
 
 /**
  * **仅测试**的选项：只有直接调用 {@link createE2BSandbox} 的代码能传，插件的部署配置设不了（index.ts 的
@@ -341,7 +375,7 @@ export function createE2BSandbox(
   /** `signal`: the extension's lifetime (`ctx.signal`); a template build in flight stops with it. */
   deps: { log: Logger; signal?: AbortSignal },
   test: E2BSandboxTestOptions = {},
-): SandboxProvider {
+): TieredSandboxProvider {
   const api = createE2BApi(cfg.apiUrl ?? `https://api.${cfg.domain}`, cfg.apiKey);
   const enc = encodeURIComponent;
 
@@ -759,40 +793,62 @@ export function createE2BSandbox(
 
   const stderrOf = (r: RunResult) => r.stderr.toString("utf8").trim().slice(0, 500);
 
+  /**
+   * The E2B egress of `limits`: open only when `openEgress` allows it (refused otherwise); an
+   * allowlist degrades to none without domain allowlist support, and an empty one is none.
+   * `allowHosts` is final at every tier (README "Egress").
+   */
+  const egressOf = (
+    limits: TieredSandboxLimits,
+    name: string,
+  ): { kind: "none" | "open" } | { kind: "allowlist"; hosts: string[] } => {
+    if (limits.egress === "open") {
+      if (cfg.openEgress === "off") {
+        throw new Error(
+          'Sandbox egress "open" (the open sandbox tier) is refused: the sandbox-e2b plugin setting openEgress is "off". Set extensionConfig."sandbox-e2b".openEgress to "proxy" (trusted environments only), or lower the sandbox tier (sandbox.tiers.max) to "dev" or "strict".',
+        );
+      }
+      return { kind: "open" };
+    }
+    if (limits.egress === "allowlist" && !cfg.domainAllowlist) {
+      deps.log.warn(
+        "sandbox-e2b: domain allowlists are disabled for this deployment (domainAllowlist is false); egress allowlist degraded to none",
+        { name },
+      );
+      return { kind: "none" };
+    }
+    if (limits.egress === "allowlist" && limits.allowHosts.length > 0) {
+      return { kind: "allowlist", hosts: [...limits.allowHosts] };
+    }
+    return { kind: "none" };
+  };
+
   // ---------- 契约 ----------
 
   return {
     // envd runs every process.Start independently; connect on a running sandbox only extends its
     // timeout, so concurrent auto-starts are idempotent (a 409 from a resume in flight is retried)
     concurrentExec: true,
+    // the instance is the file system's sandbox resumed: create-time limits are those of
+    // createFileSystem; `update` is the only way to change them without a file reset
+    limitsApplyAt: "fileSystem",
     async createFileSystem({ name, limits, signal }) {
       signal.throwIfAborted();
       if (!NAME_RE.test(name)) throw new Error(`invalid sandbox name: ${name}`);
       checkLimits(limits);
-      if (limits.egress === "open" && !cfg.allowOpenEgress) {
-        throw new Error(
-          'Sandbox egress "open" (sandbox.limits.egress) is refused: the sandbox-e2b plugin setting allowOpenEgress is false. Set extensionConfig."sandbox-e2b".allowOpenEgress to true (trusted environments only), or set sandbox.limits.egress to "allowlist" or "none".',
-        );
-      }
-      let egress = limits.egress;
-      if (egress === "allowlist" && !cfg.domainAllowlist) {
-        deps.log.warn(
-          "sandbox-e2b: domain allowlists are disabled for this deployment (domainAllowlist is false); egress allowlist degraded to none",
-          { name },
-        );
-        egress = "none";
-      }
+      const egress = egressOf(limits, name);
       // made before under this name (the kernel stopped before recording the handle): return it
       const [existing] = await idsByName(name, "running,paused", signal);
       if (existing !== undefined) {
         checkId(existing);
         return { id: existing };
       }
-      // limits (egress) are fixed here, for the life of the file system (README "Egress")
+      // the egress is set here; `update` changes it on the running sandbox (README "Egress").
+      // One template for every tier: the tier changes only the network.
       const network =
-        egress === "allowlist" && limits.allowHosts.length > 0
-          ? { network: { allowOut: [...limits.allowHosts], denyOut: ["0.0.0.0/0"] } }
-          : { allow_internet_access: egress === "open" };
+        egress.kind === "allowlist"
+          ? { network: { allowOut: egress.hosts, denyOut: [ALL_TRAFFIC] } }
+          : { allow_internet_access: egress.kind === "open" };
       const createFrom = (templateID: string) =>
         api.json<SandboxInfo>("POST", "/v2/sandboxes", {
           body: {
@@ -824,6 +880,41 @@ export function createE2BSandbox(
       // the file system lives on as a paused sandbox until an instance connects it
       await pause(r.data.sandboxID, signal, false);
       return { id: r.data.sandboxID };
+    },
+
+    /**
+     * Applies the egress of `limits` to the running sandbox (`PUT /sandboxes/{id}/network`, which
+     * replaces the whole egress configuration). E2B updates only running sandboxes (a paused one
+     * answers E2B's 404), so the sandbox is connected (resumed) first; the kernel calls `update`
+     * right after `resume` anyway. A sandbox that is gone → SandboxGoneError. cpu / memory / disk
+     * are fixed by the template and never change here.
+     */
+    async update(h, limits, signal) {
+      signal.throwIfAborted();
+      checkLimits(limits);
+      const egress = egressOf(limits, h.id);
+      await attach(h.id, signal);
+      try {
+        await updateNetwork(
+          api,
+          h.id,
+          egress.kind === "allowlist"
+            ? { allowOut: egress.hosts, denyOut: [ALL_TRAFFIC] }
+            : { allow_internet_access: egress.kind === "open" },
+          signal,
+        );
+      } catch (e) {
+        if (isE2BNotFound(e)) {
+          throw new SandboxGoneError(`E2B sandbox ${h.id} no longer exists`, { cause: e });
+        }
+        throw e;
+      }
+      deps.log.info("sandbox-e2b: sandbox network updated", {
+        sandboxId: h.id,
+        tier: limits.tier ?? "strict",
+        egress: egress.kind,
+      });
+      return "updated";
     },
 
     async destroyFileSystem(fs, signal) {
