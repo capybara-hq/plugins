@@ -229,7 +229,7 @@
     },
     {
       "name": "sandbox-docker",
-      "version": "0.1.0-rc.10",
+      "version": "0.1.0-rc.11",
       "summary": {
         "en": "Conversation sandboxes (sandbox@1) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with an egress allowlist proxy"
       },
@@ -241,10 +241,10 @@
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-docker#readme",
       "permissions": {
         "keys": [
-          "config.deployment:allowOpenEgress",
           "config.deployment:egressProxyImage",
           "config.deployment:endpoint",
           "config.deployment:network",
+          "config.deployment:openEgress",
           "config.deployment:runtime",
           "config.deployment:volumeDriver",
           "provides:sandbox@2"
@@ -254,14 +254,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-sandbox-docker",
-          "version": "0.1.0-rc.10",
-          "integrity": "sha512-nDdaWCgrGoAfOiaKMVGheCLTlbFtSo10+8sgPSmJCO4z2LJW0qDMuN7rPwd3QnFsBReNeBwDB5fT6eHscNWDqw=="
+          "version": "0.1.0-rc.11",
+          "integrity": "sha512-ElRgSAjkqIyZNhAdjQUyBwxlrn+eLAuHSe1CGi0N/rRgmtyI7nyc1D7jyD/5yfBgvT+AD+6PHDImWUV0Qkyobw=="
         }
       }
     },
     {
       "name": "sandbox-e2b",
-      "version": "0.1.0-rc.10",
+      "version": "0.1.0-rc.11",
       "summary": {
         "en": "Devices (sandbox@2) as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, E2B egress controls"
       },
@@ -274,10 +274,10 @@
       "permissions": {
         "keys": [
           "config.deployment.secret:apiKey",
-          "config.deployment:allowOpenEgress",
           "config.deployment:apiUrl",
           "config.deployment:domain",
           "config.deployment:domainAllowlist",
+          "config.deployment:openEgress",
           "config.deployment:template",
           "config.deployment:timeoutSeconds",
           "provides:sandbox@2"
@@ -287,8 +287,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-sandbox-e2b",
-          "version": "0.1.0-rc.10",
-          "integrity": "sha512-UWcRp2ko2lbuaO0yD7HZGJuKKKgt7sgtsFr7yrgFl2iyUrePSo0BOdjEXSVies2zolI3HSsQW2w1U3tj261rPA=="
+          "version": "0.1.0-rc.11",
+          "integrity": "sha512-TXcZ51eYFLddC3nLfaFUIUXuKliCwayOMJYPoG71zwono+Z9bG6TL42Y2t8hdeXCsuM93XFa/8JZt32hSHorZg=="
         }
       }
     },
@@ -601,7 +601,7 @@
     },
     {
       "name": "github",
-      "version": "0.1.0-rc.0",
+      "version": "0.1.0-rc.1",
       "summary": {
         "en": "Agents work with GitHub as the connected person: issues, pull requests, reviews, repositories and Actions runs, through GitHub's remote MCP server. Each member connects with OAuth through a GitHub App (or OAuth App) the org admin registers",
         "zh": "智能体以连接者本人的身份使用 GitHub：issue、拉取请求、评审、仓库与 Actions 运行，经 GitHub 的远程 MCP 服务器。每位成员通过组织管理员注册的 GitHub App（或 OAuth App）用 OAuth 连接"
@@ -619,8 +619,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-github",
-          "version": "0.1.0-rc.0",
-          "integrity": "sha512-g0CfJNkbsgwFJYlWwcA5dQ+ZaUCcN09nrKBw5Sqg/5D7azYry9J/ySXTL516iYNKhVSoJz4zEDLPqkxMmkkx5w=="
+          "version": "0.1.0-rc.1",
+          "integrity": "sha512-bbs/eYsyQIuIBcORHgI5zf2NCfoIwluO4yBD7iTb1JRvs4t5ktfafd28q1VIYtcNEBOgYZdfu4+H7HOJUg3FaA=="
         }
       }
     }
