@@ -29,12 +29,11 @@ token** on GitHub (`https://github.com/settings/personal-access-tokens/new`) and
 ```yaml title="Fine-grained token (GitHub connector)"
 # Personal access token for the "{{templateName}}" connector template ({{pluginName}} {{pluginVersion}}).
 # Reference: https://docs.github.com/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens (checked 2026-11-12).
-Resource owner: the organization that owns the repositories
+Resource owner: (your account or the organization that owns the repositories)
 Expiration: 90 days or less
 Repository access: Only select repositories
 Repository permissions:
   Actions: Read and write
-  Checks: Read-only
   Commit statuses: Read-only
   Contents: Read and write
   Issues: Read and write
@@ -45,6 +44,7 @@ Organization permissions:
   Members: Read-only
 ```
 
+Fine-grained tokens have no Checks permission; Actions and Commit statuses cover CI status.
 A classic token works too (scopes `repo`, `read:org`, `read:user`, `user:email`, `workflow`); with
 one, GitHub hides the tools the token's scopes do not cover.
 

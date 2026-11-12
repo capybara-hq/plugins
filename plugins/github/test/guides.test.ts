@@ -143,13 +143,15 @@ describe("guides/github-pat.md", () => {
     expect(r.checks.map((c) => c.id)).toEqual(["capybara:connector-tools"]);
   });
 
-  it("member: a fine-grained token with the same permissions as the GitHub App", () => {
+  it("member: a fine-grained token with the GitHub App's permissions except Checks", () => {
     const r = render("github-pat", "member");
     expect(r.unresolved).toEqual([]);
     const blocks = codeBlocks(r);
     expect(blocks).toHaveLength(1);
     const s = parse(blocks[0]?.text ?? "") as Record<string, unknown>;
-    expect(s["Repository permissions"]).toEqual(REPOSITORY_PERMISSIONS);
+    // fine-grained tokens have no Checks permission
+    const { Checks: _checks, ...patPermissions } = REPOSITORY_PERMISSIONS;
+    expect(s["Repository permissions"]).toEqual(patPermissions);
     expect(s["Repository access"]).toBe("Only select repositories");
     expect(r.checks.map((c) => c.id)).toEqual(["capybara:connector-connected"]);
   });

@@ -25,12 +25,11 @@ Generate new token**（`https://github.com/settings/personal-access-tokens/new`�
 ```yaml title="细粒度令牌（GitHub 连接器）"
 # Personal access token for the "{{templateName}}" connector template ({{pluginName}} {{pluginVersion}}).
 # Reference: https://docs.github.com/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens (checked 2026-11-12).
-Resource owner: the organization that owns the repositories
+Resource owner: (your account or the organization that owns the repositories)
 Expiration: 90 days or less
 Repository access: Only select repositories
 Repository permissions:
   Actions: Read and write
-  Checks: Read-only
   Commit statuses: Read-only
   Contents: Read and write
   Issues: Read and write
@@ -41,6 +40,7 @@ Organization permissions:
   Members: Read-only
 ```
 
+细粒度令牌没有 Checks 权限；CI 状态由 Actions 和 Commit statuses 覆盖。
 也可以用经典令牌（scope 为 `repo`、`read:org`、`read:user`、`user:email`、`workflow`）；这时 GitHub 会隐藏
 令牌 scope 覆盖不到的工具。
 

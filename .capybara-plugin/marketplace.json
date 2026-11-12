@@ -620,7 +620,7 @@
         "npm": {
           "package": "@capybara-hq/plugin-github",
           "version": "0.1.0-rc.0",
-          "integrity": "sha512-YU2aJbVaYe5+9nZ/uwksQZz3LySAaD0oWd5UC6+GI7VSGAjMiwWy036fPP4xC6N687btR48xRgZbYnGNlAoznA=="
+          "integrity": "sha512-g0CfJNkbsgwFJYlWwcA5dQ+ZaUCcN09nrKBw5Sqg/5D7azYry9J/ySXTL516iYNKhVSoJz4zEDLPqkxMmkkx5w=="
         }
       }
     }
