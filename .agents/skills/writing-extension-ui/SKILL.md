@@ -35,7 +35,7 @@ A contribution appears only in **orgs where this extension is enabled**; kind vi
 | Place | Where | Notes |
 |---|---|---|
 | `panel` | A right panel opened from the extension's icon in the conversation title bar | Full height, one at a time; the old `place: "conversation"` means `panel` and keeps working |
-| `section` | A section of the conversation's properties panel | Rendered `dense`; a `badge` shows as the section's value (todo's "1 / 3") |
+| `section` | A section of the conversation's properties panel | Rendered `dense`; a `badge` shows as the section's value (todo's "1 / 3"); a view with nothing to show (no blocks, or only empty lists) is not drawn at all, so return `{ blocks: [] }` to hide the section (todo before the first write) |
 | `inline` | An inline card in the stream | **Hangs off a tool result**: the tool returns `card: { view: "<inline view id>", key? }` in its `ToolResult` (display only, never in the model's context). A card naming no `inline` contribution of the same extension is dropped with a warning and the result still succeeds. Extensions cannot write card events into the log themselves |
 | `page` | An org page under "Extensions", route `/p/<plugin>/<id>` | Member and above |
 | `file-preview` | An embed previewer of `file-preview@1` (below) | Embed only |
@@ -158,7 +158,7 @@ A tool can return a sentence meant only for people, shown on the tool-call row i
 ```ts
 return {
   content: [{ type: "text", text: renderTodos(todos) }],
-  display: { summary: { zh: `更新任务清单（${n} 项）`, en: `Updated task list (${n} items)` } },
+  display: { summary: { zh: `更新待办（${n} 项）`, en: `Updated todos (${n} items)` } },
 };
 ```
 
