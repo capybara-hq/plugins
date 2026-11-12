@@ -8,6 +8,11 @@
  *     秒；暂停的沙箱会被恢复；404 = 不存在）、`POST /sandboxes/{id}/pause`（404 不存在、409 已暂停）、
  *     `DELETE /sandboxes/{id}`（404 不存在）、`GET /v2/sandboxes?metadata=&state=&limit=&nextToken=`
  *     （分页游标在响应头 `x-next-token`）；错误体 `{code, message}`；默认地址 `https://api.<domain>`。
+ *   - Network update (checked 2026-11-12, `SandboxApi.updateNetwork` / `buildNetworkUpdateBody`):
+ *     `PUT /sandboxes/{id}/network` with the flat body `SandboxNetworkUpdateConfig`
+ *     (`allow_internet_access`, `allowOut`, `denyOut`, `egressProxy`, `rules`), 204 on success; it
+ *     replaces the whole egress configuration (an omitted field is cleared) and works only on a
+ *     running sandbox (404 when missing, and E2B's 404 on a paused one too, see README "Egress").
  *   - Pause body `{memory: false}` (`Sandbox.pause(id, { mode: "filesystem" })`: processes end, files
  *     stay) and create's `autoPauseMemory: false` (`lifecycle.onTimeout: { action: "pause", mode:
  *     "filesystem" }`).
@@ -37,6 +42,31 @@ export const ENVD_PORT = 49983;
 const API_TIMEOUT_MS = 60_000;
 /** envd 每隔多少秒发一次保活事件（官方 SDK 用 50）。 */
 const KEEPALIVE_SECONDS = 50;
+
+/** The CIDR of all traffic (the SDK's `ALL_TRAFFIC`): `denyOut` of an allowlist. */
+export const ALL_TRAFFIC = "0.0.0.0/0";
+
+/**
+ * The body of `PUT /sandboxes/{id}/network` this plugin sends (a subset of E2B's
+ * `SandboxNetworkUpdateConfig`): either internet access on / off, or an allowlist with
+ * everything else denied.
+ */
+export type NetworkUpdate =
+  | { allow_internet_access: boolean }
+  | { allowOut: string[]; denyOut: string[] };
+
+/**
+ * Replaces the egress configuration of a running sandbox (`Sandbox.updateNetwork` of
+ * `e2b@2.58.0`). The caller checks `id` and maps E2B's 404 (missing, or paused) itself.
+ */
+export async function updateNetwork(
+  api: E2BApi,
+  id: string,
+  body: NetworkUpdate,
+  signal: AbortSignal,
+): Promise<void> {
+  await api.json("PUT", `/sandboxes/${encodeURIComponent(id)}/network`, { body, signal });
+}
 
 /** 控制面或 envd 返回的非 2xx。 */
 export class E2BHttpError extends Error {

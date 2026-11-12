@@ -4,6 +4,7 @@ import {
   createE2BSandbox,
   type E2BSandboxConfig,
   HOSTNAME_RE,
+  OPEN_EGRESS,
   publishedImage,
 } from "./provider.js";
 
@@ -16,7 +17,12 @@ export {
   exitCodeOf,
   IN_SANDBOX_GRACE_SECONDS,
   METADATA_NAME,
+  OPEN_EGRESS,
+  type OpenEgress,
   publishedImage,
+  type SandboxTier,
+  type TieredSandboxLimits,
+  type TieredSandboxProvider,
   templateAlias,
 } from "./provider.js";
 
@@ -24,11 +30,12 @@ export {
 const MAX_TIMEOUT_SECONDS = 86_400;
 
 /**
- * 部署配置（一个部署一份）。strict：多出的键报错，所以只供测试用的选项（{@link E2BSandboxTestOptions}）
- * 不可能经插件配置打开。
+ * The deployment config (one per deployment). Strict: extra keys are errors, so the test-only
+ * options ({@link E2BSandboxTestOptions}) can never be set from plugin config, and the removed
+ * `allowOpenEgress` fails with a pointer to `openEgress`.
  */
-export const DeploymentConfig = z
-  .object({
+export const DeploymentConfig = z.strictObject(
+  {
     /** E2B API key（`e2b_…`）。 */
     apiKey: ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
     /** 控制面 API 地址；不填为 `https://api.<domain>`。自托管 E2B 填自己的地址。 */
@@ -64,12 +71,43 @@ export const DeploymentConfig = z
     domainAllowlist: ui(z.boolean().default(true), {
       label: { zh: "按域名出站白名单", en: "Domain egress allowlist" },
     }),
-    /** Allow `sandbox.limits.egress = "open"` (default false); when false, `createFileSystem` refuses open. */
-    allowOpenEgress: ui(z.boolean().default(false), {
-      label: { zh: "允许开放出站", en: "Allow open egress" },
+    /**
+     * What `egress: "open"` (the `open` tier) does. E2B has no egress proxy of ours, so `"proxy"`
+     * (default) and `"direct"` both mean `allow_internet_access: true` (E2B checks no destination
+     * IP); `"off"` refuses open (README "Egress").
+     */
+    openEgress: ui(z.enum(OPEN_EGRESS).default("proxy"), {
+      label: { zh: "开放出站", en: "Open egress" },
+      options: [
+        {
+          value: "off",
+          label: { zh: "关闭", en: "Off" },
+          help: { zh: "拒绝开放出站", en: "Refuse open egress" },
+        },
+        {
+          value: "proxy",
+          label: { zh: "开放", en: "On" },
+          help: {
+            zh: "允许访问互联网（E2B 不检查目标地址）",
+            en: "Allow internet access (E2B checks no destination address)",
+          },
+        },
+        {
+          value: "direct",
+          label: { zh: "直连", en: "Direct" },
+          help: { zh: "在 E2B 上与「开放」相同", en: "Same as On on E2B" },
+        },
+      ],
     }),
-  })
-  .strict();
+  },
+  {
+    // the old key fails with a pointer to its replacement (pre-0.1.0: no compatibility layer)
+    error: (iss) =>
+      iss.code === "unrecognized_keys" && iss.keys.includes("allowOpenEgress")
+        ? 'allowOpenEgress was replaced by openEgress: "off" | "proxy" | "direct" (default "proxy"); use openEgress: "off" for allowOpenEgress: false'
+        : undefined,
+  },
+);
 
 /**
  * The provider config from the deployment config: the template, when not set, is built from the

@@ -22,6 +22,7 @@ import {
   IN_SANDBOX_GRACE_SECONDS,
   METADATA_NAME,
   publishedImage,
+  type TieredSandboxLimits,
   templateAlias,
 } from "../src/index.js";
 
@@ -78,14 +79,18 @@ const provision = async (
  */
 const proxyOf = async (
   target: FakeE2BServer,
-  override: (method: string, path: string) => { status: number; body: unknown } | undefined,
+  override: (
+    method: string,
+    path: string,
+    body: Buffer,
+  ) => { status: number; body: unknown } | undefined,
 ) => {
   const server = createServer((req, res) => {
     void (async () => {
       const chunks: Buffer[] = [];
       for await (const c of req) chunks.push(c as Buffer);
       const path = new URL(req.url ?? "/", "http://x").pathname;
-      const own = override(req.method ?? "GET", path);
+      const own = override(req.method ?? "GET", path, Buffer.concat(chunks));
       if (own) {
         res
           .writeHead(own.status, { "content-type": "application/json" })
@@ -164,7 +169,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       defaultImage: IMAGE,
       timeoutSeconds: 3600,
       domainAllowlist: true,
-      allowOpenEgress: false,
+      openEgress: "off",
     };
   });
   afterAll(async () => {
@@ -667,7 +672,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     });
   });
 
-  describe("egress (fixed when the file system is created)", () => {
+  describe("egress (set when the file system is created)", () => {
     beforeAll(() => {
       sbx = make();
     });
@@ -695,11 +700,28 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       expect(fake.sandboxes.get(fs.id)?.allowInternetAccess).toBe(false);
     });
 
-    it("open requires allowOpenEgress", async () => {
-      await expect(fsWith(sbx, limits("open"))).rejects.toThrow(/allowOpenEgress/);
-      const fs = await fsWith(make({ allowOpenEgress: true }), limits("open"));
-      expect(fake.sandboxes.get(fs.id)?.allowInternetAccess).toBe(true);
-      expect(createdBody().network).toBeUndefined();
+    it('open is refused at openEgress "off"; "proxy" and "direct" both allow internet access', async () => {
+      await expect(fsWith(sbx, limits("open"))).rejects.toThrow(/openEgress is "off"/);
+      for (const openEgress of ["proxy", "direct"] as const) {
+        const fs = await fsWith(make({ openEgress }), limits("open"));
+        expect(fake.sandboxes.get(fs.id)?.allowInternetAccess).toBe(true);
+        expect(createdBody().network).toBeUndefined();
+      }
+    });
+
+    it("dev tier: allowHosts is final, devHosts never read; one template for every tier", async () => {
+      const l: TieredSandboxLimits = {
+        ...limits("allowlist", ["pypi.org", "registry.npmjs.org"]),
+        tier: "dev",
+        devHosts: ["github.com"],
+      };
+      const fs = await fsWith(sbx, l);
+      expect(fake.sandboxes.get(fs.id)?.network).toEqual({
+        allowOut: ["pypi.org", "registry.npmjs.org"],
+        denyOut: ["0.0.0.0/0"],
+      });
+      const strict = await fsWith(sbx, limits("none"));
+      expect(fake.sandboxes.get(fs.id)?.templateID).toBe(fake.sandboxes.get(strict.id)?.templateID);
     });
 
     it("without domain allowlist support, allowlist degrades to none with a warning", async () => {
@@ -707,6 +729,96 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       expect(fake.sandboxes.get(fs.id)?.allowInternetAccess).toBe(false);
       expect(createdBody().network).toBeUndefined();
       expect(warns.join("\n")).toMatch(/allowlist/);
+    });
+  });
+
+  describe("update (network of a running sandbox)", () => {
+    /** Network update bodies the stub accepted, by sandbox id. */
+    const updates = new Map<string, unknown[]>();
+    /** Sandbox ids whose next network update answers E2B's 404 although connect succeeded. */
+    const vanishOnUpdate = new Set<string>();
+    let proxy: Awaited<ReturnType<typeof proxyOf>>;
+    let s: ReturnType<typeof make>;
+    beforeAll(async () => {
+      // the fake E2B has no network route: play E2B's answer here (204 when running, E2B's
+      // 404 when paused or missing, as verified on E2B 2026-11-08)
+      proxy = await proxyOf(fake, (method, path, body) => {
+        const m = /^\/sandboxes\/([^/]+)\/network$/.exec(path);
+        if (method !== "PUT" || !m?.[1]) return undefined;
+        const id = decodeURIComponent(m[1]);
+        if (fake.sandboxes.get(id)?.state !== "running" || vanishOnUpdate.delete(id)) {
+          return { status: 404, body: { code: 404, message: `sandbox ${id} not found` } };
+        }
+        updates.set(id, [...(updates.get(id) ?? []), JSON.parse(body.toString("utf8"))]);
+        return { status: 204, body: undefined };
+      });
+      s = make({ apiUrl: proxy.url, openEgress: "proxy" });
+    });
+    afterAll(async () => {
+      await proxy?.close();
+    });
+
+    it('declares limitsApplyAt "fileSystem"', () => {
+      expect(s.limitsApplyAt).toBe("fileSystem");
+    });
+
+    it("resumes a suspended sandbox first, then replaces its egress", async () => {
+      const h = await provision(s, limits("none"));
+      await s.suspend(h, sig());
+      expect(fake.sandboxes.get(h.id)?.state).toBe("paused");
+      const dev: TieredSandboxLimits = {
+        ...limits("allowlist", ["pypi.org"]),
+        tier: "dev",
+        devHosts: ["github.com"],
+      };
+      // the stub answers 404 for a paused sandbox, so "updated" means it was resumed first
+      expect(await s.update?.(h, dev, sig())).toBe("updated");
+      expect(fake.sandboxes.get(h.id)?.state).toBe("running");
+      expect(await s.update?.(h, { ...limits("open"), tier: "open" }, sig())).toBe("updated");
+      expect(await s.update?.(h, limits("none"), sig())).toBe("updated");
+      expect(await s.update?.(h, limits("allowlist", []), sig())).toBe("updated");
+      expect(updates.get(h.id)).toEqual([
+        { allowOut: ["pypi.org"], denyOut: ["0.0.0.0/0"] },
+        { allow_internet_access: true },
+        { allow_internet_access: false },
+        { allow_internet_access: false },
+      ]);
+    });
+
+    it('refuses open at openEgress "off" without touching the sandbox', async () => {
+      const off = make({ apiUrl: proxy.url, openEgress: "off" });
+      const h = await provision(off, limits("none"));
+      await expect(off.update?.(h, { ...limits("open"), tier: "open" }, sig())).rejects.toThrow(
+        /openEgress is "off"/,
+      );
+      expect(updates.get(h.id)).toBeUndefined();
+    });
+
+    it("without domain allowlist support, an allowlist update degrades to none", async () => {
+      const noDomains = make({ apiUrl: proxy.url, domainAllowlist: false });
+      const h = await provision(noDomains, limits("none"));
+      expect(await noDomains.update?.(h, limits("allowlist", ["pypi.org"]), sig())).toBe("updated");
+      expect(updates.get(h.id)).toEqual([{ allow_internet_access: false }]);
+      expect(warns.join("\n")).toMatch(/allowlist/);
+    });
+
+    it("a sandbox that is gone → SandboxGoneError (at connect or at the network update)", async () => {
+      const a = await provision(s, limits("none"));
+      await fake.expire(a.id);
+      const e1 = await s.update?.(a, limits("none"), sig()).catch((x: unknown) => x);
+      expect(isSandboxGoneError(e1)).toBe(true);
+      const b = await provision(s, limits("none"));
+      vanishOnUpdate.add(b.id);
+      const e2 = await s.update?.(b, limits("none"), sig()).catch((x: unknown) => x);
+      expect(isSandboxGoneError(e2)).toBe(true);
+    });
+
+    it("other failures stay ordinary errors", async () => {
+      const h = await provision(s, limits("none"));
+      fake.failNext({ method: "POST", path: /\/connect$/ }, 500, "boom");
+      const e = await s.update?.(h, limits("none"), sig()).catch((x: unknown) => x);
+      expect(e).toBeInstanceOf(Error);
+      expect(isSandboxGoneError(e)).toBe(false);
     });
   });
 
