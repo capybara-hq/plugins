@@ -18,9 +18,6 @@ export {
   METADATA_NAME,
   type OpenEgress,
   publishedImage,
-  type SandboxTier,
-  type TieredSandboxLimits,
-  type TieredSandboxProvider,
   templateAlias,
 } from "./provider.js";
 

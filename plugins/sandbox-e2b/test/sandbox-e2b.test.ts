@@ -22,7 +22,6 @@ import {
   IN_SANDBOX_GRACE_SECONDS,
   METADATA_NAME,
   publishedImage,
-  type TieredSandboxLimits,
   templateAlias,
 } from "../src/index.js";
 
@@ -46,6 +45,8 @@ const limits = (
   diskMb: 5120,
   egress,
   allowHosts,
+  tier: egress === "open" ? "open" : "strict",
+  devHosts: [],
 });
 /** The image the template is built from in these tests, and its alias. */
 const IMAGE = publishedImage("0.0.0-test.1");
@@ -710,7 +711,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     });
 
     it("dev tier: allowHosts is final, devHosts never read; one template for every tier", async () => {
-      const l: TieredSandboxLimits = {
+      const l: SandboxLimits = {
         ...limits("allowlist", ["pypi.org", "registry.npmjs.org"]),
         tier: "dev",
         devHosts: ["github.com"],
@@ -773,7 +774,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       const h = await provision(s, limits("none"));
       await s.suspend(h, sig());
       expect(fake.sandboxes.get(h.id)?.state).toBe("paused");
-      const dev: TieredSandboxLimits = {
+      const dev: SandboxLimits = {
         ...limits("allowlist", ["pypi.org"]),
         tier: "dev",
         devHosts: ["github.com"],

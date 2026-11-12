@@ -9,6 +9,7 @@ import {
   type SandboxHandle,
   type SandboxLimits,
   type SandboxProvider,
+  type SandboxTier,
   validateAllowHost,
   validateSandboxPath,
 } from "@capybara-hq/plugin-sdk";
@@ -29,29 +30,14 @@ export function publishedImages(version: string): { sandbox: string; egress: str
   };
 }
 
-// TODO(sdk): drop the local types when the SDK with tiers is released (capybara-hq/core#190)
-/** The sandbox tier (`SandboxLimits.tier` in the SDK with tiers). */
-export type SandboxTier = "strict" | "dev" | "open";
 /**
- * `SandboxLimits` with the tier. An SDK without tiers never sends it: absent = `strict`. The
- * kernel already merges the dev hosts into `allowHosts` (final), so `devHosts` is never read.
+ * The SDK's provider with `update` always present: it applies new limits to an existing instance,
+ * `"updated"` when only the egress proxy had to change (recreated with the new mode and hosts),
+ * `"recreate"` when the container itself must be recreated (network, environment or shm size
+ * differ, or the container is gone). Limits are fixed when the instance (container) is created.
  */
-export type TierLimits = SandboxLimits & { tier?: SandboxTier };
-/** The provider with the optional methods of the SDK with tiers (`update`, `limitsApplyAt`). */
-export interface DockerSandboxProvider extends SandboxProvider {
-  /**
-   * Applies new limits to an existing instance: `"updated"` when only the egress proxy had to
-   * change (recreated with the new mode and hosts), `"recreate"` when the container itself must
-   * be recreated (network, environment or shm size differ, or the container is gone).
-   */
-  update(
-    h: SandboxHandle,
-    limits: SandboxLimits,
-    signal: AbortSignal,
-  ): Promise<"updated" | "recreate">;
-  /** Limits are fixed when the instance (container) is created. */
-  readonly limitsApplyAt: "instance";
-}
+export type DockerSandboxProvider = SandboxProvider &
+  Required<Pick<SandboxProvider, "update">> & { readonly limitsApplyAt: "instance" };
 
 /**
  * How a sandbox with egress `open` reaches the network: `off` refuses it, `proxy` goes through
@@ -189,7 +175,8 @@ export function planInstance(
   limits: SandboxLimits,
   openEgress: OpenEgress = "proxy",
 ): InstancePlan {
-  const tier = (limits as TierLimits).tier ?? "strict";
+  // A kernel older than the tiers SDK sends no tier: absent = strict.
+  const tier: SandboxTier = limits.tier ?? "strict";
   if (tier !== "strict" && tier !== "dev" && tier !== "open")
     throw new Error(`unknown sandbox tier: ${String(tier)}`);
   const shmBytes =
