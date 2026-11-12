@@ -5,7 +5,7 @@
     "zh": "阿里云百炼模型",
     "en": "Alibaba Cloud Model Studio models"
   },
-  "version": "0.1.0-rc.6",
+  "version": "0.1.0-rc.7",
   "publisher": "Capybara",
   "icon": "./icon.svg",
   "description": {

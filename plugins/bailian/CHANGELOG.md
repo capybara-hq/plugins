@@ -1,5 +1,15 @@
 # @capybara-hq/plugin-bailian
 
+## 0.1.0-rc.7
+
+### Patch Changes
+
+- 4210a66: Build and test against @capybara-hq/plugin-sdk 0.1.0-rc.17 (the SDK with sandbox tiers) and
+  @capybara-hq/plugin-model-fake 0.1.0-rc.17. sandbox-docker and sandbox-e2b drop their local tier
+  types (`SandboxTier`, `TierLimits`, `TieredSandboxLimits`, `TieredSandboxProvider`) for the SDK's
+  `SandboxLimits.tier`, `update` and `limitsApplyAt`. lark and slack label the approval state
+  `skipped` (the person sent a message instead of deciding).
+
 ## 0.1.0-rc.6
 
 ### Patch Changes
