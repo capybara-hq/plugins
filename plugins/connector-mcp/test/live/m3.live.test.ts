@@ -117,7 +117,7 @@ async function install(payload: Record<string, unknown>): Promise<AppView> {
   return (res.json() as { connector: AppView }).connector;
 }
 
-async function agentFor(connectorId: string, tools: "all" | string[]): Promise<string> {
+async function agentFor(): Promise<string> {
   const res = await req({
     method: "POST",
     url: `/api/v1/orgs/${orgId}/agents`,
@@ -126,7 +126,8 @@ async function agentFor(connectorId: string, tools: "all" | string[]): Promise<s
         name: "Live",
         instructions: "Be helpful.",
         model: { provider: "model-fake", model: "fake-1" },
-        tools: [{ kind: "connector", connectorId, tools }],
+        // every tool is on unless turned off (the agent API's disabledTools)
+        disabledTools: [],
       },
       visibility: "org",
     },
@@ -178,6 +179,12 @@ async function runTool(
   const result = ofType(done, "tool_result").at(-1)?.payload;
   expect(result?.toolKey).toBe(key);
   return { result: result as ToolResult, approved, evs: done };
+}
+
+/** Loads deferred connector tools: ToolSearch with their names (they are not loaded up front). */
+async function loadTools(convId: string, names: string[]): Promise<void> {
+  const r = await runTool(convId, "ToolSearch", { query: names.join(" "), max_results: 10 });
+  expect(r.result.isError, r.result.content.slice(0, 500)).toBe(false);
 }
 
 /**
@@ -268,11 +275,12 @@ describe.skipIf(!LIVE)("live", { timeout: 300_000 }, () => {
     console.info(
       `[m3-live] deepwiki tools=${names.join(",")} read_wiki_structure policy=${structure.defaultPolicy} arg=${repoArg}`,
     );
-    const agentId = await agentFor(app.id, ["read_wiki_structure"]);
+    const agentId = await agentFor();
     const convId = await createConv(req, orgId, agentId);
+    await loadTools(convId, ["read_wiki_structure"]);
     const r = await runTool(
       convId,
-      "deepwiki__read_wiki_structure",
+      "mcp__deepwiki__read_wiki_structure",
       { [repoArg]: "facebook/react" },
       { approve: true },
     );
@@ -305,9 +313,12 @@ describe.skipIf(!LIVE)("live", { timeout: 300_000 }, () => {
       );
       expect(readTool).toBeDefined();
       expect(createTool).toBeDefined();
-      const refs = [...new Set([readTool, createTool, closeTool].filter((x) => x !== undefined))];
-      const agentId = await agentFor(app.id, refs as string[]);
+      const agentId = await agentFor();
       const convId = await createConv(req, orgId, agentId);
+      await loadTools(
+        convId,
+        [...new Set([readTool, createTool, closeTool])].filter((x) => x !== undefined),
+      );
 
       // 只读：直接执行
       const readArgs =
@@ -316,7 +327,7 @@ describe.skipIf(!LIVE)("live", { timeout: 300_000 }, () => {
           : readTool === "search_issues"
             ? { query: `repo:${owner}/${repo}` }
             : { owner, repo };
-      const read = await runTool(convId, `github__${readTool}`, readArgs);
+      const read = await runTool(convId, `mcp__github__${readTool}`, readArgs);
       console.info(
         `[m3-live] github ${readTool} isError=${read.result.isError} approval=${read.approved}`,
       );
@@ -331,7 +342,7 @@ describe.skipIf(!LIVE)("live", { timeout: 300_000 }, () => {
           createTool === "issue_write"
             ? { method: "create", owner, repo, title, body: "Automated test; closed right away." }
             : { owner, repo, title, body: "Automated test; closed right away." };
-        const created = await runTool(convId, `github__${createTool}`, createArgs, {
+        const created = await runTool(convId, `mcp__github__${createTool}`, createArgs, {
           approve: true,
         });
         issueNumber = issueNumberOf(created.result.content, owner, repo);
@@ -351,7 +362,7 @@ describe.skipIf(!LIVE)("live", { timeout: 300_000 }, () => {
             closeTool === "issue_write"
               ? { method: "update", owner, repo, issue_number: issueNumber, state: closed }
               : { owner, repo, issue_number: issueNumber, state: closed };
-          const close = await runTool(convId, `github__${closeTool}`, closeArgs, {
+          const close = await runTool(convId, `mcp__github__${closeTool}`, closeArgs, {
             approve: true,
           });
           console.info(
