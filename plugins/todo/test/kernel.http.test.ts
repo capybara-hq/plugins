@@ -82,7 +82,9 @@ describe("todo in a kernel", () => {
         view: { badge?: string; blocks: { type: string; items?: unknown[] }[] };
       };
     };
-    expect((await view()).view.badge).toBe("0/0");
+    // before the first write: no badge, and the section is an empty view (not drawn by the host)
+    expect((await view()).view.badge).toBeUndefined();
+    expect((await view("tasks-section")).view).toEqual({ blocks: [] });
 
     const todos = {
       todos: [
@@ -118,7 +120,7 @@ describe("todo in a kernel", () => {
       toolKey: "plugin__todo__write",
       isError: false,
       content: "Todo list updated (3 items):\n[x] Plan\n[>] Building\n[ ] Ship",
-      display: { summary: { zh: "更新任务清单（3 项）", en: "Updated task list (3 items)" } },
+      display: { summary: { zh: "更新待办（3 项）", en: "Updated todos (3 items)" } },
       card: { plugin: "todo", view: "tasks-card", key: expect.any(String) },
     });
 

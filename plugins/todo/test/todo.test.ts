@@ -80,7 +80,8 @@ describe("todo 插件", { timeout: 60_000 }, () => {
     expect(registered[0]?.spec.name).toBe("write");
     expect(registered[0]?.spec.defaultPolicy).toBe("allow");
     expect(views).toEqual(["tasks-panel", "tasks-section", "tasks-card"]);
-    const title = { zh: "任务", en: "Tasks" };
+    // titled 待办 / Todos, never "tasks" (that reads as background or scheduled tasks)
+    const title = { zh: "待办", en: "Todos" };
     expect(todo.ui).toEqual([
       { id: "tasks-panel", title, place: "panel", kind: "view", icon: "list-checks" },
       { id: "tasks-section", title, place: "section", kind: "view", icon: "list-checks" },
@@ -123,6 +124,12 @@ describe("todo 插件", { timeout: 60_000 }, () => {
     });
   });
 
+  it("the section of an empty list is a view with no blocks (the host does not draw it)", () => {
+    const v = tasksSectionView([]);
+    expect(validateUiView(v)).toEqual([]);
+    expect(v).toEqual({ blocks: [] });
+  });
+
   it("the inline card: the checklist with ⤢ opening the panel", () => {
     const v = tasksCardView(THREE);
     expect(validateUiView(v)).toEqual([]);
@@ -131,7 +138,7 @@ describe("todo 插件", { timeout: 60_000 }, () => {
     expect(v.blocks).toHaveLength(1);
   });
 
-  it("the panel: badge 已完成/总数, a checklist whose items carry ids (进行中显示 activeForm)", () => {
+  it("the panel: badge done/total, a checklist whose items carry ids (in progress shows activeForm)", () => {
     expect(
       tasksView([
         { content: "Plan", status: "completed", activeForm: "Planning" },
@@ -151,7 +158,8 @@ describe("todo 插件", { timeout: 60_000 }, () => {
         },
       ],
     });
-    expect(tasksView([])).toEqual({ badge: "0/0", blocks: [{ type: "checklist", items: [] }] });
+    // an empty list has no badge (no "0/0")
+    expect(tasksView([])).toEqual({ blocks: [{ type: "checklist", items: [] }] });
   });
 
   it("渲染：[x] / [>] / [ ]，进行中显示 activeForm", () => {
@@ -180,9 +188,9 @@ describe("todo 插件", { timeout: 60_000 }, () => {
     ];
     const r1 = await writeA({ todos: first }, call("conv-1"));
     expect(text(r1)).toBe("Todo list updated (2 items):\n[>] Planning\n[ ] Build");
-    // 显示摘要（不进模型上下文）与写入后的刷新通知
+    // the display summary (never in the model context) and the refreshes after the write
     expect("display" in r1 && r1.display).toEqual({
-      summary: { zh: "更新任务清单（2 项）", en: "Updated task list (2 items)" },
+      summary: { zh: "更新待办（2 项）", en: "Updated todos (2 items)" },
     });
     // the inline card under the call (display only), keyed by a snapshot of the list at this call
     const card1 = "card" in r1 ? r1.card : undefined;

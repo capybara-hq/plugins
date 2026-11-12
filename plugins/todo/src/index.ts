@@ -164,7 +164,7 @@ export async function readSnapshot(
 
 /** The right panel (title-bar icon) with the full list. */
 export const TASKS_PANEL = "tasks-panel";
-/** The "Tasks" section of the properties panel. */
+/** The 「待办」 / "Todos" section of the properties panel. */
 export const TASKS_SECTION = "tasks-section";
 /** The inline card under each `plugin__todo__write` call. */
 export const TASKS_CARD = "tasks-card";
@@ -175,8 +175,11 @@ export const TASKS_LEGACY = "tasks";
 const TASKS_ALL = [TASKS_PANEL, TASKS_SECTION, TASKS_CARD, TASKS_LEGACY] as const;
 
 const label = (t: Todo) => (t.status === "in_progress" ? t.activeForm : t.content);
-const badge = (todos: Todo[]) =>
-  `${todos.filter((t) => t.status === "completed").length}/${todos.length}`;
+/** done/total; no badge on an empty list (a "0/0" says nothing). */
+const badge = (todos: Todo[]): Pick<UiView, "badge"> =>
+  todos.length === 0
+    ? {}
+    : { badge: `${todos.filter((t) => t.status === "completed").length}/${todos.length}` };
 
 /**
  * The panel: badge done/total and a checklist (in-progress items show activeForm); each item's
@@ -184,7 +187,7 @@ const badge = (todos: Todo[]) =>
  */
 export function tasksView(todos: Todo[]): UiView {
   return {
-    badge: badge(todos),
+    ...badge(todos),
     blocks: [
       {
         type: "checklist",
@@ -194,10 +197,15 @@ export function tasksView(todos: Todo[]): UiView {
   };
 }
 
-/** The properties section: badge done/total; every item opens the panel at that item. */
+/**
+ * The properties section: badge done/total; every item opens the panel at that item. An empty list
+ * is a view with no blocks, which the host does not draw at all: the section appears with the
+ * agent's first to-do.
+ */
 export function tasksSectionView(todos: Todo[]): UiView {
+  if (todos.length === 0) return { blocks: [] };
   return {
-    badge: badge(todos),
+    ...badge(todos),
     open: { contribution: TASKS_PANEL },
     blocks: [
       {
@@ -215,7 +223,7 @@ export function tasksSectionView(todos: Todo[]): UiView {
 /** The inline card: the checklist, with ⤢ in its title row opening the panel. */
 export function tasksCardView(todos: Todo[]): UiView {
   return {
-    badge: badge(todos),
+    ...badge(todos),
     open: { contribution: TASKS_PANEL },
     blocks: [
       { type: "checklist", items: todos.map((t) => ({ text: label(t), status: t.status })) },
@@ -224,8 +232,8 @@ export function tasksCardView(todos: Todo[]): UiView {
 }
 
 /**
- * `plugin__todo__write` 的处理函数：写入后通知界面刷新任务清单的各个位置（刷新失败不影响写入结果），结果带一张
- * 行内卡片（`card`，只给界面显示）。
+ * The `plugin__todo__write` handler: after writing it refreshes every place showing the list (a
+ * failed refresh does not affect the result); the result carries an inline card (`card`, UI only).
  */
 export function writeHandler(db: Db, ui: Pick<ExtensionContext["ui"], "invalidate">): ToolHandler {
   return async (input, ctx) => {
@@ -248,8 +256,8 @@ export function writeHandler(db: Db, ui: Pick<ExtensionContext["ui"], "invalidat
       content: [{ type: "text", text: renderTodos(todos) }],
       display: {
         summary: {
-          zh: `更新任务清单（${todos.length} 项）`,
-          en: `Updated task list (${todos.length} items)`,
+          zh: `更新待办（${todos.length} 项）`,
+          en: `Updated todos (${todos.length} items)`,
         },
       },
       card: { view: TASKS_CARD, key: snapshot },
@@ -258,13 +266,16 @@ export function writeHandler(db: Db, ui: Pick<ExtensionContext["ui"], "invalidat
 }
 
 /**
- * todo 插件：一个工具 `write`（模型可见名 `plugin__todo__write`），清单存在本插件 schema，各副本读写一致。
- * 对话页上三个位置（UI refresh B）：右侧面板 `tasks-panel`、属性面板的「任务」小节 `tasks-section`
- * （条目打开面板里的那一项）、每次写入下面的行内卡片 `tasks-card`（shows the list as of that call,
- * from a snapshot row）；旧 id `tasks` 作为面板的别名保留一个版本。
- * 写入后经 `ctx.ui.invalidate` 实时刷新。
+ * The todo plugin: one tool `write` (model-visible name `plugin__todo__write`); the list lives in
+ * this plugin's schema, so every replica reads and writes the same one. Three places on the
+ * conversation page (UI refresh B), all titled 「待办」 / "Todos" (never "tasks": that reads as
+ * background or scheduled tasks): the right panel `tasks-panel`, the properties section
+ * `tasks-section` (its items open the panel at that item; hidden while the list is empty) and the
+ * inline card `tasks-card` under each write (the list as of that call, from a snapshot row); the old
+ * id `tasks` stays as an alias of the panel for one release. Writes refresh them through
+ * `ctx.ui.invalidate`. The contribution ids keep their old names (arrangements store them).
  */
-const title = { zh: "任务", en: "Tasks" };
+const title = { zh: "待办", en: "Todos" };
 
 export default defineExtension({
   name: "todo",
