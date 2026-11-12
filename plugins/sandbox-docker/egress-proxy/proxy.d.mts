@@ -1,22 +1,41 @@
 import type { Server } from "node:http";
-import type { Socket } from "node:net";
+import type { Server as NetServer, Socket } from "node:net";
+
+/** strict: allowlist, CONNECT to listed ports; dev: allowlist, any port, SOCKS; open: any public host, any port, SOCKS. */
+export type EgressProxyMode = "strict" | "dev" | "open";
 
 export interface EgressProxyConfig {
-  allowHosts: string[];
-  /** 仅测试：主机名 → 固定 IP（豁免私有地址检查，仍须在白名单里）。 */
+  /** Default "strict". */
+  mode?: EgressProxyMode;
+  /** Allowed host names (strict / dev); ignored in open mode. */
+  allowHosts?: string[];
+  /** Test only: host name -> pinned IP (exempt from the private address check; strict / dev still need the allowlist). */
   testHosts?: Record<string, string>;
-  /** CONNECT 放行的端口，默认 [443, 80]。 */
+  /** Ports CONNECT allows in strict mode, default [443, 80]; dev / open allow any port. */
   connectPorts?: number[];
   lookup?: (host: string) => Promise<{ address: string }[]>;
+  /** Receives one English line per refusal; default console.warn. */
+  log?: (msg: string) => void;
 }
 
+export const MODES: readonly EgressProxyMode[];
 export function isForbiddenAddress(ip: string): boolean;
 export function normalizeHost(host: string): string;
 export function hostAllowed(host: string, allowHosts: string[]): boolean;
+export function publicNameError(host: string): string | null;
 export function resolveTarget(
   host: string,
-  opts: Required<Omit<EgressProxyConfig, "connectPorts">>,
+  opts: {
+    mode?: EgressProxyMode;
+    allowHosts: string[];
+    testHosts: Record<string, string>;
+    lookup: (host: string) => Promise<{ address: string }[]>;
+  },
 ): Promise<string[]>;
 export function connectAny(ips: string[], port: number): Promise<Socket>;
 export function createEgressProxy(cfg: EgressProxyConfig): Server;
-export function main(env?: Record<string, string | undefined>): Server;
+export function createSocksProxy(cfg: Omit<EgressProxyConfig, "connectPorts">): NetServer;
+export function main(env?: Record<string, string | undefined>): {
+  http: Server;
+  socks: NetServer | null;
+};

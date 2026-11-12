@@ -1,28 +1,42 @@
-// Capybara 沙箱出站代理：每个 allowlist 沙箱一个，跑在只有它与沙箱的内部网络上，另一只脚接出站网络。
+// Capybara sandbox egress proxy: one per proxied sandbox, on an internal network shared only with
+// that sandbox; its other leg joins the outbound network.
 //
-// - 只放行 ALLOW_HOSTS（JSON 字符串数组，规则同 plugin-sdk 的 validateAllowHost）里的主机名：
-//   精确匹配，或 `*.example.com` 匹配它的任意子域（不含 example.com 本身）；
-// - 先解析，再检查**解析出的每一个 IP**：私有、回环、链路本地（含 169.254.169.254 元数据）、CGNAT、ULA、
-//   未指定、组播、保留与文档地址一律拒绝（挡 DNS 重绑定，如 10.0.0.1.nip.io），然后直连检查过的那个 IP，
-//   不再二次解析；
-// - HTTPS 走 CONNECT 隧道（默认只放行 443、80 端口，ALLOW_CONNECT_PORTS 逗号分隔可改），HTTP 走绝对 URL 转发；
-//   IP 字面量主机名永远不在白名单里；第一个地址连不上时依次试其余检查过的地址；
-// - 仅测试：CAPYBARA_EGRESS_TEST_HOSTS（JSON 对象 主机名 → IP）把主机名固定解析到给定 IP 并豁免私有地址
-//   检查（仍要在白名单里）。插件的部署配置设不了它，只有直接调用 createDockerSandbox 的测试能设。
+// Modes (env MODE, default "strict"):
+// - strict: hosts from ALLOW_HOSTS (JSON array of names, rules as plugin-sdk's validateAllowHost:
+//   an exact name, or `*.example.com` for any subdomain, not example.com itself). HTTP by absolute
+//   URL, CONNECT only to ALLOW_CONNECT_PORTS (comma separated, default 443,80). No SOCKS listener.
+// - dev: hosts from ALLOW_HOSTS; HTTP and CONNECT to any port 1-65535; plus a SOCKS listener on
+//   SOCKS_PORT (default 1080).
+// - open: any public host name (shape as validateAllowHost, no list), and IP literals when the
+//   address is public; any port; plus the SOCKS listener. ALLOW_HOSTS is ignored.
+// The SOCKS listener speaks SOCKS5 (no-auth, CONNECT only; ATYP domain / IPv4 / IPv6) and SOCKS4a
+// (CONNECT only; for `socat ... SOCKS4A:`). IP literals are only accepted in open mode.
 //
-// 无依赖，Node ≥ 22。错误文本给模型看（经 curl / pip 等输出），用英文。
+// Every mode: refuse malformed names (control characters, bad labels); resolve, then check EVERY
+// resolved IP: private, loopback, link-local (including the 169.254.169.254 metadata address),
+// CGNAT, ULA, unspecified, multicast, reserved and documentation addresses are refused (this blocks
+// DNS rebinding such as 10.0.0.1.nip.io); then connect to an address that was checked, never
+// resolving a second time. When the first address cannot be reached the next checked one is tried.
+//
+// Test only: CAPYBARA_EGRESS_TEST_HOSTS (JSON object name -> IP) pins a name to an IP and exempts
+// it from the private address check (in strict / dev it must still be on the allowlist; in open
+// mode a pinned name is allowed). The plugin's deployment config cannot set it; only tests that
+// call createDockerSandbox directly can.
+//
+// Dependency-free, Node >= 22. Error text reaches the model (through curl / pip output): English.
 import { lookup as dnsLookup } from "node:dns/promises";
 import { createServer, request as httpRequest } from "node:http";
-import { BlockList, connect, isIP } from "node:net";
+import { BlockList, connect, createServer as createNetServer, isIP } from "node:net";
 
-// 本文件跑在出站代理容器里（不在内核进程里），下面几个模块级对象都是启动后只读的常量表。
-// capybara:allow-module-state 只读常量表（出站代理容器内，不在内核进程里）
+// This file runs in the egress proxy container (not in the kernel process); the module-level
+// objects below are constant tables, read-only after start.
+// capybara:allow-module-state read-only constant table (egress proxy container, not the kernel)
 const BLOCKED_V4 = [
-  ["0.0.0.0", 8], // 未指定 / 本网
+  ["0.0.0.0", 8], // unspecified / this network
   ["10.0.0.0", 8],
   ["100.64.0.0", 10], // CGNAT
   ["127.0.0.0", 8],
-  ["169.254.0.0", 16], // 链路本地（含云元数据 169.254.169.254）
+  ["169.254.0.0", 16], // link-local (including cloud metadata 169.254.169.254)
   ["172.16.0.0", 12],
   ["192.0.0.0", 24],
   ["192.0.2.0", 24],
@@ -31,32 +45,32 @@ const BLOCKED_V4 = [
   ["198.18.0.0", 15],
   ["198.51.100.0", 24],
   ["203.0.113.0", 24],
-  ["224.0.0.0", 4], // 组播
-  ["240.0.0.0", 4], // 保留与广播
+  ["224.0.0.0", 4], // multicast
+  ["240.0.0.0", 4], // reserved and broadcast
 ];
-// capybara:allow-module-state 只读常量表（出站代理容器内，不在内核进程里）
+// capybara:allow-module-state read-only constant table (egress proxy container, not the kernel)
 const BLOCKED_V6 = [
   ["::", 128],
   ["::1", 128],
   ["100::", 64],
   ["2001:db8::", 32],
   ["fc00::", 7], // ULA
-  ["fe80::", 10], // 链路本地
+  ["fe80::", 10], // link-local
   ["fec0::", 10],
-  ["ff00::", 8], // 组播
+  ["ff00::", 8], // multicast
 ];
 
-// capybara:allow-module-state 启动时建好的只读地址表（出站代理容器内，不在内核进程里）
+// capybara:allow-module-state address table built once at start, read-only (proxy container)
 const blocked = new BlockList();
 for (const [a, p] of BLOCKED_V4) blocked.addSubnet(a, p, "ipv4");
 for (const [a, p] of BLOCKED_V6) blocked.addSubnet(a, p, "ipv6");
 
-/** 十六位一组的 IPv6 → 8 个数字；解析失败返回 null。 */
+/** IPv6 text -> 8 numbers of 16 bits; null when it does not parse. */
 function v6Groups(ip) {
   let s = ip.toLowerCase();
   const zone = s.indexOf("%");
   if (zone >= 0) s = s.slice(0, zone);
-  // 末尾的点分 IPv4（::ffff:1.2.3.4）
+  // trailing dotted IPv4 (::ffff:1.2.3.4)
   const m = s.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
   if (m) {
     const b = m[2].split(".").map(Number);
@@ -75,8 +89,9 @@ function v6Groups(ip) {
 const v4Of = (hi, lo) => `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
 
 /**
- * 解析出的 IP 是否禁止连接。内嵌 IPv4 的 IPv6（IPv4 映射 ::ffff:0:0/96、IPv4 兼容 ::/96、NAT64 64:ff9b::/96、
- * 6to4 2002::/16）按内嵌的 IPv4 判断；不认识的格式一律禁止。
+ * Whether connecting to a resolved IP is forbidden. IPv6 addresses that embed an IPv4 address
+ * (IPv4-mapped ::ffff:0:0/96, IPv4-compatible ::/96, NAT64 64:ff9b::/96, 6to4 2002::/16) are
+ * judged by the embedded IPv4; anything unrecognised is forbidden.
  */
 export function isForbiddenAddress(ip) {
   const family = isIP(ip);
@@ -93,7 +108,7 @@ export function isForbiddenAddress(ip) {
   return blocked.check(canonical, "ipv6");
 }
 
-/** 规范化主机名：小写、去掉末尾的点与 IPv6 方括号。 */
+/** Normalise a host name: lowercase, without trailing dots and IPv6 brackets. */
 export function normalizeHost(host) {
   let h = String(host).trim().toLowerCase();
   if (h.startsWith("[") && h.endsWith("]")) h = h.slice(1, -1);
@@ -101,14 +116,39 @@ export function normalizeHost(host) {
   return h;
 }
 
-/** 主机名是否在白名单里：精确匹配，或 `*.x` 匹配 x 的任意子域（不含 x 本身）。IP 字面量永远不匹配。 */
+/** Whether a host is on the allowlist: exact, or `*.x` for any subdomain of x (not x). Never an IP literal. */
 export function hostAllowed(host, allowHosts) {
   const h = normalizeHost(host);
   if (h === "" || isIP(h) !== 0) return false;
   return allowHosts.some((p) => (p.startsWith("*.") ? h.endsWith(p.slice(1)) : h === p));
 }
 
+const LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * Why a normalised host name is not a public DNS name (null when it is): the shape rules of
+ * plugin-sdk's validateAllowHost without the wildcard (lowercase LDH labels, at least two labels,
+ * a top-level label starting with a letter, no .local / .internal / .localhost).
+ */
+export function publicNameError(h) {
+  if (h.length === 0 || h.length > 253) return "host name is empty or too long";
+  const labels = h.split(".");
+  if (!labels.every((l) => LABEL.test(l))) return "host name is malformed";
+  if (labels.length < 2) return "single-label host names are not allowed";
+  const tld = labels[labels.length - 1];
+  if (!/^[a-z]/.test(tld)) return "host name is malformed";
+  if (["local", "internal", "localhost"].includes(tld)) {
+    return "internal-only domains (.local, .internal, .localhost) are not allowed";
+  }
+  return null;
+}
+
+/** Proxy modes. */
+// capybara:allow-module-state read-only constant list (egress proxy container, not the kernel)
+export const MODES = Object.freeze(["strict", "dev", "open"]);
+
 class Refused extends Error {
+  /** @param {number} status 400 malformed, 403 not allowed, 502 cannot resolve or connect */
   constructor(status, message) {
     super(message);
     this.status = status;
@@ -116,18 +156,37 @@ class Refused extends Error {
 }
 
 /**
- * 决定能连哪些 IP：白名单检查 → 解析 → 每个地址都不能是禁止地址。返回检查过的全部地址（按解析顺序）。
- * @param {{ allowHosts: string[]; testHosts: Record<string, string>; lookup: (h: string) => Promise<{ address: string }[]> }} opts
+ * Decide which IPs may be connected to: host check for the mode -> resolve -> no address may be
+ * forbidden. Returns every checked address (in resolution order).
+ * @param {{ mode?: "strict" | "dev" | "open"; allowHosts: string[]; testHosts: Record<string, string>; lookup: (h: string) => Promise<{ address: string }[]> }} opts
  */
 export async function resolveTarget(host, opts) {
-  const h = normalizeHost(host);
-  if (!hostAllowed(h, opts.allowHosts)) {
+  const mode = opts.mode ?? "strict";
+  const raw = String(host);
+  // Control characters, spaces and other bytes no host name or IP literal contains.
+  if (!/^[\x21-\x7e]+$/.test(raw) || /[/\\@?#%]/.test(raw)) {
+    throw new Refused(400, "Malformed host name.");
+  }
+  const h = normalizeHost(raw);
+  const pinned = Object.hasOwn(opts.testHosts, h) ? opts.testHosts[h] : undefined;
+  if (mode === "open") {
+    if (isIP(h) !== 0) {
+      if (isForbiddenAddress(h)) {
+        throw new Refused(
+          403,
+          `Outbound access to ${h} is blocked: it is a private or reserved address.`,
+        );
+      }
+      return [h];
+    }
+    const err = pinned === undefined ? publicNameError(h) : null;
+    if (err !== null) throw new Refused(403, `Outbound access to ${h} is blocked: ${err}.`);
+  } else if (!hostAllowed(h, opts.allowHosts)) {
     throw new Refused(
       403,
       `Outbound access to ${h} is blocked by the sandbox egress allowlist. Allowed hosts: ${opts.allowHosts.join(", ") || "(none)"}.`,
     );
   }
-  const pinned = Object.hasOwn(opts.testHosts, h) ? opts.testHosts[h] : undefined;
   if (pinned !== undefined) return [pinned];
   let addrs;
   try {
@@ -145,7 +204,7 @@ export async function resolveTarget(host, opts) {
   return addrs.map((a) => a.address);
 }
 
-/** 依次连接检查过的地址，第一个连上的返回；都连不上抛最后的错误。 */
+/** Connect to the checked addresses in turn; resolve with the first that connects, else reject with the last error. */
 export function connectAny(ips, port) {
   return new Promise((resolve, reject) => {
     const attempt = (i, lastError) => {
@@ -153,7 +212,7 @@ export function connectAny(ips, port) {
         reject(lastError ?? new Error("no address"));
         return;
       }
-      const s = connect({ host: ips[i], port });
+      const s = connect({ host: ips[i], port, allowHalfOpen: true });
       s.once("connect", () => {
         s.removeAllListeners("error");
         resolve(s);
@@ -167,7 +226,7 @@ export function connectAny(ips, port) {
   });
 }
 
-// capybara:allow-module-state 只读常量表（出站代理容器内，不在内核进程里）
+// capybara:allow-module-state read-only constant table (egress proxy container, not the kernel)
 const HOP_BY_HOP = new Set([
   "connection",
   "keep-alive",
@@ -180,7 +239,7 @@ const HOP_BY_HOP = new Set([
   "upgrade",
 ]);
 
-/** 去掉逐跳头（含 Connection 里列出的）。 */
+/** Drop hop-by-hop headers (including those listed in Connection). */
 function forwardHeaders(headers) {
   const listed = String(headers.connection ?? "")
     .split(",")
@@ -193,7 +252,7 @@ function forwardHeaders(headers) {
   return out;
 }
 
-/** `host:port`（含 `[v6]:port`）→ [host, port]。 */
+/** `host:port` (also `[v6]:port`) -> [host, port]. */
 function splitHostPort(s) {
   const m = String(s).match(/^\[?([^\]]*?)\]?:(\d{1,5})$/);
   if (!m) return null;
@@ -201,26 +260,52 @@ function splitHostPort(s) {
   return port > 0 && port < 65536 ? [m[1], port] : null;
 }
 
-const defaultLookup = (h) => dnsLookup(h, { all: true, verbatim: true });
+/** Pipe two sockets both ways; either side failing or closing tears down the other. */
+function splice(client, up) {
+  up.on("error", () => client.destroy());
+  client.on("error", () => up.destroy());
+  client.on("close", () => up.destroy());
+  up.on("close", () => client.destroy());
+  up.pipe(client);
+  client.pipe(up);
+}
 
-/** CONNECT 默认只放行这些端口（ALLOW_CONNECT_PORTS 可改）。 */
-// capybara:allow-module-state 只读常量（出站代理容器内，不在内核进程里）
+const defaultLookup = (h) => dnsLookup(h, { all: true, verbatim: true });
+const defaultLog = (msg) => console.warn(msg);
+
+/** Ports CONNECT allows in strict mode by default (ALLOW_CONNECT_PORTS changes it). */
+// capybara:allow-module-state read-only constant (egress proxy container, not the kernel)
 const DEFAULT_CONNECT_PORTS = [443, 80];
 
-/**
- * 建代理服务器（未监听）。
- * @param {{ allowHosts: string[]; testHosts?: Record<string, string>; connectPorts?: number[]; lookup?: (h: string) => Promise<{ address: string }[]> }} cfg
- */
-export function createEgressProxy(cfg) {
-  const opts = {
-    allowHosts: cfg.allowHosts.map((h) => h.toLowerCase()),
+/** Shared options for both listeners. */
+function proxyOptions(cfg) {
+  const mode = cfg.mode ?? "strict";
+  if (!MODES.includes(mode)) throw new Error(`Unknown egress proxy mode ${JSON.stringify(mode)}.`);
+  return {
+    mode,
+    allowHosts: (cfg.allowHosts ?? []).map((h) => h.toLowerCase()),
     testHosts: cfg.testHosts ?? {},
     lookup: cfg.lookup ?? defaultLookup,
+    log: cfg.log ?? defaultLog,
   };
-  const connectPorts = cfg.connectPorts ?? DEFAULT_CONNECT_PORTS;
-  const refuse = (res, e) => {
+}
+
+/** A host for logs: quoted, so control characters cannot forge log lines. */
+const q = (s) => JSON.stringify(String(s));
+
+/**
+ * Create the HTTP proxy server (not listening): absolute-URL HTTP forwarding, CONNECT tunnels and
+ * GET /healthz.
+ * @param {{ mode?: "strict" | "dev" | "open"; allowHosts?: string[]; testHosts?: Record<string, string>; connectPorts?: number[]; lookup?: (h: string) => Promise<{ address: string }[]>; log?: (msg: string) => void }} cfg
+ */
+export function createEgressProxy(cfg) {
+  const opts = proxyOptions(cfg);
+  // strict: only the listed CONNECT ports; dev / open: any port 1-65535.
+  const connectPorts = opts.mode === "strict" ? (cfg.connectPorts ?? DEFAULT_CONNECT_PORTS) : null;
+  const refuse = (res, e, target) => {
     const status = e instanceof Refused ? e.status : 502;
     const msg = e instanceof Refused ? e.message : "Upstream connection failed.";
+    opts.log(`egress refused http ${q(target)}: ${msg}`);
     if (!res.headersSent)
       res.writeHead(status, { "content-type": "text/plain", connection: "close" });
     res.end(`${msg}\n`);
@@ -235,11 +320,19 @@ export function createEgressProxy(cfg) {
     try {
       url = new URL(req.url);
     } catch {
-      refuse(res, new Refused(400, "This is an HTTP proxy: request an absolute http:// URL."));
+      refuse(
+        res,
+        new Refused(400, "This is an HTTP proxy: request an absolute http:// URL."),
+        req.url,
+      );
       return;
     }
     if (url.protocol !== "http:") {
-      refuse(res, new Refused(400, "Only http:// URLs can be proxied; use CONNECT for https."));
+      refuse(
+        res,
+        new Refused(400, "Only http:// URLs can be proxied; use CONNECT for https."),
+        req.url,
+      );
       return;
     }
     let sock;
@@ -249,12 +342,12 @@ export function createEgressProxy(cfg) {
         throw new Refused(502, `Cannot connect to ${url.host}.`);
       });
     } catch (e) {
-      refuse(res, e);
+      refuse(res, e, url.host);
       return;
     }
     const headers = forwardHeaders(req.headers);
     headers.host = url.host;
-    // 每个请求一条上游连接（不进连接池，不会被别的主机复用）
+    // One upstream connection per request (no pool, never reused for another host).
     headers.connection = "close";
     const up = httpRequest({
       createConnection: () => sock,
@@ -267,7 +360,7 @@ export function createEgressProxy(cfg) {
       res.writeHead(r.statusCode ?? 502, forwardHeaders(r.headers));
       r.pipe(res);
     });
-    up.on("error", (e) => refuse(res, e));
+    up.on("error", (e) => refuse(res, e, url.host));
     req.on("aborted", () => up.destroy());
     req.pipe(up);
   });
@@ -276,15 +369,17 @@ export function createEgressProxy(cfg) {
     socket.on("error", () => socket.destroy());
     const hp = splitHostPort(req.url);
     const fail = (status, msg) => {
+      opts.log(`egress refused connect ${q(req.url)}: ${msg}`);
+      const reason = status === 403 ? "Forbidden" : status === 400 ? "Bad Request" : "Bad Gateway";
       socket.end(
-        `HTTP/1.1 ${status} ${status === 403 ? "Forbidden" : "Bad Gateway"}\r\ncontent-type: text/plain\r\nconnection: close\r\n\r\n${msg}\n`,
+        `HTTP/1.1 ${status} ${reason}\r\ncontent-type: text/plain\r\nconnection: close\r\n\r\n${msg}\n`,
       );
     };
     if (hp === null) {
       fail(400, "CONNECT needs host:port.");
       return;
     }
-    if (!connectPorts.includes(hp[1])) {
+    if (connectPorts !== null && !connectPorts.includes(hp[1])) {
       fail(
         403,
         `CONNECT to port ${hp[1]} is not allowed (allowed ports: ${connectPorts.join(", ")}).`,
@@ -305,33 +400,290 @@ export function createEgressProxy(cfg) {
       fail(502, `Cannot connect to ${hp[0]}:${hp[1]}.`);
       return;
     }
-    up.on("error", () => socket.destroy());
-    socket.on("close", () => up.destroy());
     socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
     if (head.length > 0) up.write(head);
-    up.pipe(socket);
-    socket.pipe(up);
+    splice(socket, up);
   });
   server.on("clientError", (_e, socket) => socket.destroy());
   return server;
 }
 
-/** 容器入口：从环境变量读配置并监听（PORT，默认 3128）。 */
+// SOCKS5 reply codes (RFC 1928 section 6).
+const SOCKS5_OK = 0x00;
+const SOCKS5_FAILURE = 0x01;
+const SOCKS5_NOT_ALLOWED = 0x02;
+const SOCKS5_NET_UNREACHABLE = 0x03;
+const SOCKS5_HOST_UNREACHABLE = 0x04;
+const SOCKS5_CONN_REFUSED = 0x05;
+const SOCKS5_TTL_EXPIRED = 0x06;
+const SOCKS5_CMD_UNSUPPORTED = 0x07;
+const SOCKS5_ATYP_UNSUPPORTED = 0x08;
+
+/** Handshake must finish within this time and this many bytes. */
+const SOCKS_HANDSHAKE_MS = 30_000;
+const SOCKS_HANDSHAKE_MAX = 1024;
+
+/** Map a connect error to a SOCKS5 reply code. */
+function socks5ConnectCode(e) {
+  switch (e?.code) {
+    case "ECONNREFUSED":
+      return SOCKS5_CONN_REFUSED;
+    case "ENETUNREACH":
+      return SOCKS5_NET_UNREACHABLE;
+    case "EHOSTUNREACH":
+      return SOCKS5_HOST_UNREACHABLE;
+    case "ETIMEDOUT":
+      return SOCKS5_TTL_EXPIRED;
+    default:
+      return SOCKS5_FAILURE;
+  }
+}
+
+/**
+ * Parse the buffered SOCKS handshake. Returns { need: true } while more bytes are needed, or a
+ * parsed step. Only the parts that can be judged from the bytes are decided here.
+ */
+function parseSocks(buf, stage) {
+  if (buf.length < 1) return { need: true };
+  if (stage === "greeting") {
+    const ver = buf[0];
+    if (ver === 5) {
+      if (buf.length < 2) return { need: true };
+      const n = buf[1];
+      if (buf.length < 2 + n) return { need: true };
+      return { kind: "greeting5", methods: [...buf.subarray(2, 2 + n)], used: 2 + n };
+    }
+    if (ver === 4) {
+      // VER CMD DSTPORT(2) DSTIP(4) USERID\0 [HOST\0 for SOCKS4a]
+      if (buf.length < 9) return { need: true };
+      const userEnd = buf.indexOf(0, 8);
+      if (userEnd < 0) return { need: true };
+      const cmd = buf[1];
+      const port = buf.readUInt16BE(2);
+      const ip = buf.subarray(4, 8);
+      const is4a = ip[0] === 0 && ip[1] === 0 && ip[2] === 0 && ip[3] !== 0;
+      if (!is4a) {
+        return { kind: "request4", cmd, port, host: [...ip].join("."), used: userEnd + 1 };
+      }
+      const hostEnd = buf.indexOf(0, userEnd + 1);
+      if (hostEnd < 0) return { need: true };
+      const host = buf.subarray(userEnd + 1, hostEnd).toString("latin1");
+      return { kind: "request4", cmd, port, host, used: hostEnd + 1 };
+    }
+    return { kind: "bad", reason: `unknown SOCKS version ${ver}` };
+  }
+  // stage === "request": VER CMD RSV ATYP DST.ADDR DST.PORT
+  if (buf.length < 4) return { need: true };
+  if (buf[0] !== 5) return { kind: "bad", reason: `bad SOCKS5 request version ${buf[0]}` };
+  const cmd = buf[1];
+  const atyp = buf[3];
+  let host;
+  let end;
+  if (atyp === 0x01) {
+    end = 4 + 4;
+    if (buf.length < end + 2) return { need: true };
+    host = [...buf.subarray(4, 8)].join(".");
+  } else if (atyp === 0x04) {
+    end = 4 + 16;
+    if (buf.length < end + 2) return { need: true };
+    const parts = [];
+    for (let i = 4; i < 20; i += 2) parts.push(buf.readUInt16BE(i).toString(16));
+    host = parts.join(":");
+  } else if (atyp === 0x03) {
+    if (buf.length < 5) return { need: true };
+    const len = buf[4];
+    end = 5 + len;
+    if (buf.length < end + 2) return { need: true };
+    host = buf.subarray(5, end).toString("latin1");
+  } else {
+    return { kind: "request5", cmd, atyp, used: buf.length };
+  }
+  return { kind: "request5", cmd, atyp, host, port: buf.readUInt16BE(end), used: end + 2 };
+}
+
+/**
+ * Create the SOCKS listener (not listening): SOCKS5 with no authentication and CONNECT only, and
+ * SOCKS4a CONNECT. Same host and resolved-address checks as the HTTP proxy for the mode; any port.
+ * IP literals (SOCKS5 ATYP IPv4 / IPv6, plain SOCKS4) are only allowed in open mode, when public.
+ * @param {{ mode?: "strict" | "dev" | "open"; allowHosts?: string[]; testHosts?: Record<string, string>; lookup?: (h: string) => Promise<{ address: string }[]>; log?: (msg: string) => void }} cfg
+ */
+export function createSocksProxy(cfg) {
+  const opts = proxyOptions(cfg);
+  // Half-open both ways: a client that shuts down its write side (nc on end of input) still gets
+  // the rest of the response.
+  return createNetServer({ allowHalfOpen: true }, (socket) => {
+    let buf = Buffer.alloc(0);
+    let stage = "greeting";
+    let busy = false;
+    socket.setTimeout(SOCKS_HANDSHAKE_MS, () => {
+      opts.log("egress refused socks: handshake timed out");
+      socket.destroy();
+    });
+    socket.on("error", () => socket.destroy());
+    // The client gave up during the handshake: nothing left to answer.
+    socket.on("end", () => {
+      if (!busy) socket.destroy();
+    });
+
+    const reply5 = (code) => {
+      // BND.ADDR 0.0.0.0, BND.PORT 0: clients do not use them for CONNECT.
+      return Buffer.from([5, code, 0, 1, 0, 0, 0, 0, 0, 0]);
+    };
+    // After a refusal: stop parsing, send the reply and keep reading (discarding) until the client
+    // closes, so unread input cannot turn the close into a reset that loses the reply.
+    const finish = (bytes) => {
+      busy = true;
+      socket.end(bytes);
+      socket.resume();
+    };
+    const refuse5 = (code, target, reason) => {
+      opts.log(`egress refused socks5 ${q(target)}: ${reason}`);
+      finish(reply5(code));
+    };
+    const refuse4 = (target, reason) => {
+      opts.log(`egress refused socks4 ${q(target)}: ${reason}`);
+      finish(Buffer.from([0, 0x5b, 0, 0, 0, 0, 0, 0]));
+    };
+
+    /** Check, resolve and connect; then reply and splice. */
+    const open = async (version, host, port, rest) => {
+      busy = true;
+      socket.pause();
+      const target = `${host}:${port}`;
+      const isLiteral = isIP(normalizeHost(host)) !== 0;
+      const deny = (code, reason) =>
+        version === 5 ? refuse5(code, target, reason) : refuse4(target, reason);
+      if (port < 1 || port > 65535) {
+        deny(SOCKS5_NOT_ALLOWED, `port ${port} is not allowed.`);
+        return;
+      }
+      if (isLiteral && opts.mode !== "open") {
+        deny(SOCKS5_NOT_ALLOWED, "IP address destinations are not allowed; send a host name.");
+        return;
+      }
+      let ips;
+      try {
+        ips = await resolveTarget(host, opts);
+      } catch (e) {
+        const status = e instanceof Refused ? e.status : 502;
+        deny(status === 502 ? SOCKS5_HOST_UNREACHABLE : SOCKS5_NOT_ALLOWED, e.message);
+        return;
+      }
+      let up;
+      try {
+        up = await connectAny(ips, port);
+      } catch (e) {
+        deny(socks5ConnectCode(e), `Cannot connect to ${target}.`);
+        return;
+      }
+      if (socket.destroyed) {
+        up.destroy();
+        return;
+      }
+      socket.setTimeout(0);
+      socket.removeAllListeners("data");
+      socket.write(version === 5 ? reply5(SOCKS5_OK) : Buffer.from([0, 0x5a, 0, 0, 0, 0, 0, 0]));
+      if (rest.length > 0) up.write(rest);
+      splice(socket, up);
+      socket.resume();
+    };
+
+    const step = () => {
+      while (!busy) {
+        const p = parseSocks(buf, stage);
+        if (p.need) {
+          if (buf.length > SOCKS_HANDSHAKE_MAX) {
+            opts.log("egress refused socks: handshake too long");
+            socket.destroy();
+          }
+          return;
+        }
+        if (p.kind === "bad") {
+          opts.log(`egress refused socks: ${p.reason}`);
+          socket.destroy();
+          return;
+        }
+        buf = buf.subarray(p.used);
+        if (p.kind === "greeting5") {
+          if (!p.methods.includes(0x00)) {
+            opts.log("egress refused socks5: client offers no supported authentication method");
+            finish(Buffer.from([5, 0xff]));
+            return;
+          }
+          socket.write(Buffer.from([5, 0x00]));
+          stage = "request";
+          continue;
+        }
+        if (p.kind === "request4") {
+          if (p.cmd !== 1) {
+            refuse4(`${p.host}:${p.port}`, `SOCKS4 command ${p.cmd} is not supported.`);
+            return;
+          }
+          void open(4, p.host, p.port, buf);
+          return;
+        }
+        // request5
+        if (p.atyp !== 0x01 && p.atyp !== 0x03 && p.atyp !== 0x04) {
+          refuse5(SOCKS5_ATYP_UNSUPPORTED, "?", `address type ${p.atyp} is not supported.`);
+          return;
+        }
+        if (p.cmd !== 1) {
+          const name = p.cmd === 2 ? "BIND" : p.cmd === 3 ? "UDP ASSOCIATE" : `command ${p.cmd}`;
+          refuse5(
+            SOCKS5_CMD_UNSUPPORTED,
+            `${p.host}:${p.port}`,
+            `${name} is not supported; only CONNECT.`,
+          );
+          return;
+        }
+        void open(5, p.host, p.port, buf);
+        return;
+      }
+    };
+
+    socket.on("data", (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      step();
+    });
+  });
+}
+
+/**
+ * Container entry: read the config from the environment and listen. PORT (default 3128) for the
+ * HTTP proxy; SOCKS_PORT (default 1080) for the SOCKS listener in dev / open mode.
+ * @returns {{ http: import("node:http").Server; socks: import("node:net").Server | null }}
+ */
 export function main(env = process.env) {
-  const allowHosts = JSON.parse(env.ALLOW_HOSTS ?? "[]");
+  const mode = env.MODE === undefined || env.MODE === "" ? "strict" : env.MODE;
+  if (!MODES.includes(mode)) {
+    throw new Error(`Unknown MODE ${JSON.stringify(mode)}; expected strict, dev or open.`);
+  }
+  const allowHosts = mode === "open" ? [] : JSON.parse(env.ALLOW_HOSTS ?? "[]");
   const testHosts = JSON.parse(env.CAPYBARA_EGRESS_TEST_HOSTS ?? "{}");
   const port = Number(env.PORT ?? 3128);
+  const socksPort = Number(env.SOCKS_PORT ?? 1080);
   const connectPorts = env.ALLOW_CONNECT_PORTS
     ? env.ALLOW_CONNECT_PORTS.split(",").map((p) => Number(p.trim()))
     : undefined;
-  const server = createEgressProxy({ allowHosts, testHosts, connectPorts });
-  server.listen(port, () => {
-    console.log(`egress proxy listening on ${port}; allow: ${allowHosts.join(", ") || "(none)"}`);
+  const http = createEgressProxy({ mode, allowHosts, testHosts, connectPorts });
+  const hosts = mode === "open" ? "any public host" : allowHosts.join(", ") || "(none)";
+  http.listen(port, () => {
+    console.log(`egress proxy (${mode}) listening on ${port}; allow: ${hosts}`);
   });
-  const stop = () => server.close(() => process.exit(0));
+  let socks = null;
+  if (mode !== "strict") {
+    socks = createSocksProxy({ mode, allowHosts, testHosts });
+    socks.listen(socksPort, () => {
+      console.log(`egress SOCKS proxy (${mode}) listening on ${socksPort}`);
+    });
+  }
+  const stop = () => {
+    socks?.close();
+    http.close(() => process.exit(0));
+  };
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);
-  return server;
+  return { http, socks };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) main();
