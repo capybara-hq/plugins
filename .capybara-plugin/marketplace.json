@@ -675,7 +675,7 @@
         "npm": {
           "package": "@capybara-hq/plugin-memory",
           "version": "0.1.0-rc.0",
-          "integrity": "sha512-kvhVGYcNZmLC4GBfvLBXV3uNs+RbQeJfXeYte7ynVb6MjU/dPD+oOCijAFMflSnwk8GFyH2vsYi/zseJUbWmTQ=="
+          "integrity": "sha512-bPRwlyuMYWvrNQJA20r7nNzZdmZ1JVu5oGzptu2WXog9ni73JS2zo658M8WbEhrH6LBZQrU6U6Q9AiQgUO0Isg=="
         }
       }
     }
