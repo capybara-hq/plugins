@@ -3,6 +3,7 @@ import {
   Button,
   Icon,
   KeyValue,
+  Select,
   Spinner,
   Stack,
   Text,
@@ -167,6 +168,22 @@ export function MemoryPage() {
     return v === "graph" || v === "list" ? v : null;
   });
   const [fitSignal, setFitSignal] = useState(0);
+  // The whole page, the element the 全屏 button takes to the browser's fullscreen.
+  const pageRef = useRef<HTMLDivElement | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  useEffect(() => {
+    const onChange = () => setFullscreen(document.fullscreenElement === pageRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement === pageRef.current) {
+      void document.exitFullscreen();
+      return;
+    }
+    // A refusal (no permission, an unsupported element) leaves the page as it is
+    void pageRef.current?.requestFullscreen?.().catch(() => {});
+  };
 
   const adopt = useCallback((d: MemoryPageData, force: boolean) => {
     setLoaded((cur) => {
@@ -432,7 +449,13 @@ export function MemoryPage() {
   const empty = nodes.length === 0;
 
   return (
-    <div className="cx-memory-page" data-panel={openId !== null ? "open" : "closed"}>
+    <div
+      ref={pageRef}
+      className="cx-memory-page"
+      data-panel={openId !== null ? "open" : "closed"}
+      data-empty={empty && hits === null ? "true" : "false"}
+      data-fullscreen={fullscreen ? "true" : "false"}
+    >
       <form
         className="cx-memory-toolbar"
         onSubmit={(e: FormEvent) => {
@@ -442,81 +465,72 @@ export function MemoryPage() {
       >
         <label className="cx-memory-field">
           <span className="cx-memory-field-label">{t(COPY.agent)}</span>
-          <select
-            className="cx-memory-select"
+          <Select
             value={data.selection.agentId ?? ""}
+            placeholder="—"
             disabled={busy || data.agents.length === 0}
+            options={data.agents.map((a) => ({ value: a.id, label: a.name }))}
             onChange={(e) =>
               void select({ agentId: e.target.value, accountId: data.selection.accountId })
             }
-          >
-            {data.selection.agentId === null ? <option value="">—</option> : null}
-            {data.agents.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
-          </select>
+          />
         </label>
         {data.canAdmin && data.members !== undefined ? (
           <label className="cx-memory-field">
             <span className="cx-memory-field-label">{t(COPY.member)}</span>
-            <select
-              className="cx-memory-select"
-              data-testid="memory-member-select"
+            <Select
               value={data.selection.accountId}
               disabled={busy}
+              options={data.members.map((m) => ({ value: m.id, label: m.name }))}
               onChange={(e) => void select({ accountId: e.target.value })}
-            >
-              {data.members.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
+            />
           </label>
         ) : null}
-        <div className="cx-memory-search">
-          <Icon name="search" size={14} />
-          <input
-            className="cx-memory-input"
-            type="search"
-            value={query}
-            placeholder={t(COPY.search)}
-            aria-label={t(COPY.search)}
-            maxLength={500}
-            disabled={data.selection.agentId === null}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") setQuery("");
-            }}
-          />
-        </div>
+        {empty ? null : (
+          <div className="cx-memory-search">
+            <Icon name="search" size={14} />
+            <input
+              className="cx-memory-input"
+              type="search"
+              value={query}
+              placeholder={t(COPY.search)}
+              aria-label={t(COPY.search)}
+              maxLength={500}
+              disabled={data.selection.agentId === null}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setQuery("");
+              }}
+            />
+          </div>
+        )}
         <div className="cx-memory-toolbar-end">
           <Text variant="small" tone="muted">
             {loaded.cursor !== null
               ? t(loadingMore(nodes.length, data.total))
               : t(count(Math.max(data.total, nodes.length)))}
           </Text>
-          <fieldset className="cx-memory-toggle">
-            <legend className="cx-memory-sr">{t(COPY.view)}</legend>
-            <button
-              type="button"
-              className="cx-memory-toggle-item"
-              aria-pressed={shown === "graph"}
-              onClick={() => setShown("graph")}
-            >
-              {t(COPY.graph)}
-            </button>
-            <button
-              type="button"
-              className="cx-memory-toggle-item"
-              aria-pressed={shown === "list"}
-              onClick={() => setShown("list")}
-            >
-              {t(COPY.list)}
-            </button>
-          </fieldset>
+          {empty ? null : (
+            <fieldset className="cx-memory-toggle">
+              <legend className="cx-memory-sr">{t(COPY.view)}</legend>
+              <button
+                type="button"
+                className="cx-memory-toggle-item"
+                aria-pressed={shown === "graph"}
+                onClick={() => setShown("graph")}
+              >
+                {t(COPY.graph)}
+              </button>
+              <button
+                type="button"
+                className="cx-memory-toggle-item"
+                aria-pressed={shown === "list"}
+                onClick={() => setShown("list")}
+              >
+                {t(COPY.list)}
+              </button>
+            </fieldset>
+          )}
           {shown === "graph" && !empty ? (
             <Button
               variant="ghost"
@@ -524,9 +538,17 @@ export function MemoryPage() {
               aria-label={t(COPY.fit)}
               onClick={() => setFitSignal((n) => n + 1)}
             >
-              <Icon name="maximize-2" size={14} />
+              <Icon name="zoom-in" size={14} />
             </Button>
           ) : null}
+          <Button
+            variant="ghost"
+            title={fullscreen ? t(COPY.exitFullscreen) : t(COPY.fullscreen)}
+            aria-label={fullscreen ? t(COPY.exitFullscreen) : t(COPY.fullscreen)}
+            onClick={toggleFullscreen}
+          >
+            <Icon name={fullscreen ? "minimize-2" : "maximize-2"} size={14} />
+          </Button>
         </div>
       </form>
 
