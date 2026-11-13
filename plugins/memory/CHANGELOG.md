@@ -1,0 +1,1 @@
+# @capybara-hq/plugin-memory

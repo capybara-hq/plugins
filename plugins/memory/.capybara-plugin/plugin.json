@@ -1,0 +1,17 @@
+{
+  "$schema": "https://capybarahq.com/schemas/plugin.v1.schema.json",
+  "schemaVersion": 1,
+  "name": "memory",
+  "displayName": {
+    "zh": "记忆",
+    "en": "Memory"
+  },
+  "version": "0.1.0-rc.0",
+  "publisher": "Capybara",
+  "icon": "./icon.svg",
+  "description": {
+    "en": "Memory for agents: each agent remembers each member across conversations, with an index at run start, memory tools, hybrid search and a memory page",
+    "zh": "智能体记忆：每个智能体跨会话记住每位成员，运行开始时给出记忆索引，提供记忆工具、混合检索和记忆页面"
+  },
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/memory#readme"
+}

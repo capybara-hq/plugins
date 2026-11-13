@@ -32,6 +32,12 @@
       "path": "plugins/lark"
     },
     {
+      "path": "plugins/memory"
+    },
+    {
+      "path": "plugins/memory/test"
+    },
+    {
       "path": "plugins/object-store-s3"
     },
     {
