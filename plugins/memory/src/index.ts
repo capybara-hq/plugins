@@ -3,6 +3,7 @@ import {
   type ContextProvider,
   defineExtension,
 } from "@capybara-hq/plugin-sdk";
+import { registerCleanup } from "./cleanup.js";
 import { provideMemoryContext } from "./context.js";
 import { EMBED_QUEUE, type EmbedJob, runEmbedJob } from "./embed.js";
 import { registerTools } from "./tools.js";
@@ -37,5 +38,7 @@ export default defineExtension({
     registerTools(ctx);
     const provider: ContextProvider = { provide: (req) => provideMemoryContext(ctx.db, req) };
     ctx.provide(CONTEXT_EXTENSION_POINT, provider);
+    // member, agent and org removal delete the memories they owned
+    registerCleanup(ctx);
   },
 });
