@@ -71,6 +71,9 @@
       "path": "tools/checks"
     },
     {
+      "path": "tools/icons"
+    },
+    {
       "path": "tools/ci"
     },
     {

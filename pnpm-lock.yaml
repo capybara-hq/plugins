@@ -470,6 +470,9 @@ importers:
 
   tools/checks:
     dependencies:
+      '@capybara-hq/icons':
+        specifier: workspace:*
+        version: link:../icons
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
@@ -481,6 +484,8 @@ importers:
       '@capybara-hq/ci':
         specifier: workspace:*
         version: link:../ci
+
+  tools/icons: {}
 
   tools/worktree:
     dependencies:

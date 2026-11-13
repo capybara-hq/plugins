@@ -25,7 +25,8 @@ permissions: {}
 #     SDK boundary, extension state under multiple replicas, the permission manifest, packing,
 #     the tool design rules, migrations, plugin-test-imports, plugin-release-metadata); on PRs with
 #     `--base`, which also rejects an edit, deletion or rename of an applied migration;
-#   - check:synced-skills (the shared skills match their recorded hashes) and
+#   - check:plugin-icons (every functional published plugin's icon is the composed capybara form),
+#     check:synced-skills (the shared skills match their recorded hashes) and
 #     check:skills-frontmatter (English, valid YAML, description <= 1024 characters);
 #   - `capybara-plugin marketplace --check`: every public plugin has its
 #     .capybara-plugin/marketplace.json entry at its current version; on PRs with `--base`, a
@@ -109,6 +110,7 @@ jobs:
           else
             pnpm exec capybara-plugin check
           fi
+      - run: pnpm check:plugin-icons
       - run: pnpm check:synced-skills
       - run: pnpm check:skills-frontmatter
       - name: Marketplace manifest
