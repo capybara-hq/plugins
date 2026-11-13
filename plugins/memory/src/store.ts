@@ -1,6 +1,7 @@
-import type { ExtensionContext } from "@capybara-hq/plugin-sdk";
+import { type ExtensionContext, ToolError } from "@capybara-hq/plugin-sdk";
 import { sql } from "kysely";
 import { type MemoryType, parseLinks, parsePath } from "./paths.js";
+import { segmentMemory } from "./segment.js";
 
 /**
  * Memory rows. Every function takes the owner first and filters on all three of its ids: a memory
@@ -44,8 +45,11 @@ export const MAX_BODY_BYTES = 8 * 1024;
 /** Most memories one (org, agent, member) keeps. */
 export const MAX_MEMORIES_PER_OWNER = 1000;
 
-/** A store refusal whose message is written for the model (English, says what to do). */
-export class MemoryError extends Error {}
+/**
+ * A store refusal whose message is written for the model (English, says what to do). It is a
+ * {@link ToolError}, so a tool handler lets it through and the model gets the message as is.
+ */
+export class MemoryError extends ToolError {}
 
 /** The path is not a valid memory path. */
 export class MemoryPathError extends MemoryError {}
@@ -170,6 +174,11 @@ function selectOwned(db: Db, owner: Owner) {
     .where("account_id", "=", owner.accountId);
 }
 
+/** The keyword search tokens of a memory, as a `simple` tsvector expression. */
+function tokensOf(m: { path: string; description: string; body: string }) {
+  return sql`to_tsvector('simple', ${segmentMemory(m).join(" ")})`;
+}
+
 /** Serialises writes of one owner (the per-owner cap and the link rows) within a transaction. */
 async function lockOwner(trx: Db, owner: Owner): Promise<void> {
   const key = JSON.stringify(["memory", owner.orgId, owner.agentId, owner.accountId]);
@@ -267,6 +276,7 @@ export async function put(
           type,
           description,
           body: input.body,
+          tokens: tokensOf({ path, description, body: input.body }),
           created_in: input.conversationId,
         })
         .returning("id")
@@ -280,6 +290,7 @@ export async function put(
       .set({
         description,
         body: input.body,
+        tokens: tokensOf({ path, description, body: input.body }),
         embedding: null,
         embedding_model: null,
         updated_at: sql`now()`,
@@ -325,6 +336,11 @@ export async function edit(
       .set({
         body: nextBody,
         ...(newDescription === undefined ? {} : { description: newDescription }),
+        tokens: tokensOf({
+          path: p.path,
+          description: newDescription ?? row.description,
+          body: nextBody,
+        }),
         embedding: null,
         embedding_model: null,
         updated_at: sql`now()`,
@@ -338,6 +354,13 @@ export async function edit(
       .executeTakeFirstOrThrow();
     return toRow(updated);
   });
+}
+
+/** The owner's memories with these ids (others' ids are ignored), in no particular order. */
+export async function getByIds(db: Db, owner: Owner, ids: string[]): Promise<MemoryRow[]> {
+  if (ids.length === 0) return [];
+  const rows = await selectOwned(db, owner).where("id", "in", ids).execute();
+  return rows.map(toRow);
 }
 
 /** Deletes the owner's memory at `path`; false when there was none. Links to it become dangling. */
