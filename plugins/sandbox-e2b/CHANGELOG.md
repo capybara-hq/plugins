@@ -1,5 +1,13 @@
 # @capybara-hq/plugin-sandbox-e2b
 
+## 0.1.0-rc.13
+
+### Patch Changes
+
+- 2526db2: Build and test against @capybara-hq/plugin-sdk 0.1.0-rc.19 (context providers, conversation sources,
+  lifecycle hooks), @capybara-hq/plugin-model-fake 0.1.0-rc.19 and @capybara-hq/testing 0.1.0-rc.17
+  (pgvector test containers). No behaviour change.
+
 ## 0.1.0-rc.12
 
 ### Patch Changes

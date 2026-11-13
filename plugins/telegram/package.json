@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-telegram",
-  "version": "0.1.0-rc.9",
+  "version": "0.1.0-rc.10",
   "description": "Telegram (channel@1 bot over the Bot API: long polling or webhook, inline keyboard cards)",
   "license": "Apache-2.0",
   "repository": {
