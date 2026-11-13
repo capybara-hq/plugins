@@ -12,17 +12,17 @@ importers:
         specifier: ^2.5.15
         version: 2.5.15
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.17
-        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.17)(zod@4.6.7)
+        specifier: 0.1.0-rc.19
+        version: 0.1.0-rc.19(@capybara-hq/plugin-sdk@0.1.0-rc.19)(zod@4.6.7)
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: 0.1.0-rc.19
+        version: 0.1.0-rc.19
       '@capybara-hq/plugin-tools':
         specifier: 0.1.0-rc.13
         version: 0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)
       '@capybara-hq/testing':
-        specifier: 0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: 0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       '@changesets/cli':
         specifier: ^3.0.3
         version: 3.0.3
@@ -54,21 +54,21 @@ importers:
         specifier: ^0.135.0
         version: 0.135.0(zod@4.6.7)
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/ark:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       openai:
         specifier: ^7.36.0
         version: 7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7)
@@ -77,46 +77,46 @@ importers:
         version: 4.6.7
     devDependencies:
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/bailian:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/connector-mcp:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.1
-        version: 1.32.1(@cfworker/json-schema@4.1.6)(zod@4.6.7)
+        version: 1.32.2(@cfworker/json-schema@4.1.6)(zod@4.6.7)
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.17)(zod@4.6.7)
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19(@capybara-hq/plugin-sdk@0.1.0-rc.19)(zod@4.6.7)
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/connector-openapi:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
@@ -125,11 +125,11 @@ importers:
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.17)(zod@4.6.7)
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19(@capybara-hq/plugin-sdk@0.1.0-rc.19)(zod@4.6.7)
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       kysely:
         specifier: ^0.29.8
         version: 0.29.8
@@ -137,8 +137,8 @@ importers:
   plugins/deepseek:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       openai:
         specifier: ^7.36.0
         version: 7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7)
@@ -147,24 +147,24 @@ importers:
         version: 4.6.7
     devDependencies:
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/example-board:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.17)(zod@4.6.7)
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19(@capybara-hq/plugin-sdk@0.1.0-rc.19)(zod@4.6.7)
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       ioredis:
         specifier: ^6.0.0
         version: 6.0.0
@@ -172,15 +172,15 @@ importers:
   plugins/example-counter:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       '@types/pg':
         specifier: ^8.23.1
         version: 8.23.1
@@ -194,8 +194,8 @@ importers:
   plugins/github:
     devDependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
@@ -203,24 +203,24 @@ importers:
   plugins/jina:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.17)(zod@4.6.7)
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19(@capybara-hq/plugin-sdk@0.1.0-rc.19)(zod@4.6.7)
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/lark:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       '@larksuiteoapi/node-sdk':
         specifier: ^1.76.0
         version: 1.76.0
@@ -229,42 +229,42 @@ importers:
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.17)(zod@4.6.7)
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19(@capybara-hq/plugin-sdk@0.1.0-rc.19)(zod@4.6.7)
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/object-store-s3:
     dependencies:
       '@aws-sdk/client-s3':
         specifier: ^3.1154.0
-        version: 3.1154.0
+        version: 3.1165.0
       '@aws-sdk/lib-storage':
         specifier: ^3.1154.0
-        version: 3.1154.0(@aws-sdk/client-s3@3.1154.0)
+        version: 3.1154.0(@aws-sdk/client-s3@3.1165.0)
       '@aws-sdk/s3-presigned-post':
         specifier: ^3.1154.0
-        version: 3.1154.0
+        version: 3.1165.0
       '@aws-sdk/s3-request-presigner':
         specifier: ^3.1154.0
-        version: 3.1154.0
+        version: 3.1165.0
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/openai:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       openai:
         specifier: ^7.36.0
         version: 7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7)
@@ -273,14 +273,14 @@ importers:
         version: 4.6.7
     devDependencies:
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/openai-compatible:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       openai:
         specifier: ^7.36.0
         version: 7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7)
@@ -289,27 +289,27 @@ importers:
         version: 4.6.7
     devDependencies:
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/sandbox-docker:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.17)(zod@4.6.7)
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19(@capybara-hq/plugin-sdk@0.1.0-rc.19)(zod@4.6.7)
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       bullmq:
         specifier: ^6.3.15
-        version: 6.3.15(ioredis@6.0.0)(pg@8.23.1)
+        version: 6.7.2(ioredis@6.0.0)(pg@8.23.1)
       ioredis:
         specifier: ^6.0.0
         version: 6.0.0
@@ -323,45 +323,45 @@ importers:
   plugins/sandbox-e2b:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/skills-core: {}
 
   plugins/slack:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       '@slack/socket-mode':
         specifier: ^3.1.0
-        version: 3.1.0(undici@8.12.3)
+        version: 3.1.0(undici@8.12.4)
       '@slack/web-api':
         specifier: ^8.2.0
         version: 8.2.0
       jose:
         specifier: ^6.2.12
-        version: 6.2.12
+        version: 6.2.17
       undici:
         specifier: ^8.12.3
-        version: 8.12.3
+        version: 8.12.4
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.17)(zod@4.6.7)
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19(@capybara-hq/plugin-sdk@0.1.0-rc.19)(zod@4.6.7)
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       ioredis:
         specifier: ^6.0.0
         version: 6.0.0
@@ -372,18 +372,18 @@ importers:
   plugins/telegram:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.17)(zod@4.6.7)
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19(@capybara-hq/plugin-sdk@0.1.0-rc.19)(zod@4.6.7)
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/theme-cyberpunk:
     devDependencies:
@@ -391,8 +391,8 @@ importers:
         specifier: ^0.1.0-rc.4
         version: 0.1.0-rc.4(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       '@types/react':
         specifier: ^19.3.0
         version: 19.3.0
@@ -409,18 +409,18 @@ importers:
   plugins/todo:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: ^0.1.0-rc.17
-        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.17)(zod@4.6.7)
+        specifier: ^0.1.0-rc.19
+        version: 0.1.0-rc.19(@capybara-hq/plugin-sdk@0.1.0-rc.19)(zod@4.6.7)
       '@capybara-hq/testing':
-        specifier: ^0.1.0-rc.15
-        version: 0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        specifier: ^0.1.0-rc.17
+        version: 0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       '@types/pg':
         specifier: ^8.23.1
         version: 8.23.1
@@ -470,88 +470,44 @@ packages:
     resolution: {integrity: sha512-EgmJ7oEaGQECTn3H3wmnQpEy4hKY66VvM7VQndwPIQob3p877BgbyOUE3EX0LgXQCciF2H8KMdR+RznqjMNOLw==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
-  '@aws-sdk/checksums@3.1001.4':
-    resolution: {integrity: sha512-H8BiG/2DnfwydVxD1uDPLa1s1sfhRnVTbD2OwzfTr3WlJzgbIzICDXxBTlTMjbWNNCe4VS9X55fco+JI34L9kw==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/checksums@3.1002.4':
     resolution: {integrity: sha512-C3EkQ34SUaVFhALeGrxCJQx0DM0r6NLxUVoYtt9jh/SSK5CqyYvhLn2kgUxW+XoLYxeytpmxk809H7ay4YyMFw==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/client-s3@3.1154.0':
-    resolution: {integrity: sha512-2VRtQFM07lrpjmk6WNRghU7rKg4EX93kuvl4RHDp2NJEDxee57HRQRo72gM83Jr46OFUcqQf0KWTMataX2Q66Q==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/client-s3@3.1165.0':
     resolution: {integrity: sha512-6wcKobhqnJ89AEyHwvUAa8YTB2sLA4ISsSG6Ysn38XG8mHwtGfcMUrXKekshf2xKGCCA+88uoe3TXf9/BLshUg==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/core@3.978.4':
-    resolution: {integrity: sha512-JvGp6y9sPX8FSs2K/EmFMZcUfdkHxqGE45+oxwGC75OIh50j2e4cbx7zcR3BwNs2DSGqJdBja5h6Vy89iIDmRQ==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/core@3.980.2':
     resolution: {integrity: sha512-Q0hqjfLf1zvwB6aY6fi8pYrtgxHs8sqymhXH/iWBZM/wkokjT869Ws4F12nCD2KX3hiAvKku2cZplxM0cydX8A==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/credential-provider-env@3.972.75':
-    resolution: {integrity: sha512-nc8Epg98PcYoKNx0VFlwtmZSCP+tuJ1FLWqpslET/gp4h/WYuULSJqtxppM6ywKKDdzNJPvLD7ceRfmxm3Qdxw==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/credential-provider-env@3.972.83':
     resolution: {integrity: sha512-6+hlZC2mCIX9XnjO+x3MwJuR9U7whWiiP0CVq3SLrCluueze0Elce40ivWPuH0TArqHBNyF4y62V5clNDCjtVw==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/credential-provider-http@3.972.77':
-    resolution: {integrity: sha512-KkYFdIQwuw9IOHfEzK78slxmVWuhcm1w6YgE3V3WVxAeRRj9q5J9jlwzpY/oszWxd4SD96FTFkDdRGBdMFF2Mw==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/credential-provider-http@3.972.85':
     resolution: {integrity: sha512-Rm6vdrzm3eUoG+9frOhS9Q93WdqKq/5h+971aeazkTftwbz3AfYlATd7avn9aMkg2AHlafkbewm0yq/3Sc7GYA==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/credential-provider-ini@3.973.20':
-    resolution: {integrity: sha512-OSl2R/0zLkoeKEIy6oP2tu/bsSdY+DGgro2eOffMD2CcP8POv7rS14FY5Jzc5bjnqB1G9wv/aM1akHC2mdlhZw==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/credential-provider-ini@3.973.28':
     resolution: {integrity: sha512-hSXbMSuPeUY1/RjBC9vahy3ADVULVLU/wyGEXeoelVFYEs7Pki3RF37wROlHOmT8c4XARhJhvLLs+65sczEsoA==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/credential-provider-login@3.972.82':
-    resolution: {integrity: sha512-8jyDPtf1WPxeQ/5xlNpyxAD6P7YKwkYeNk8B2vFEDwkPWDvb7c3tQJG5/jbNWbF2yTMIH9tDTueBkdfovYIAPw==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/credential-provider-login@3.972.90':
     resolution: {integrity: sha512-Hzpp8qvA1qcpAB3xX1+VUwmuTJBPh9h5Ju6CdzzESXTym2JvsTR1NmlhmrufkLr5y+Bj5rj/xjtK4gYu1wA6KA==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/credential-provider-node@3.972.87':
-    resolution: {integrity: sha512-TKj2C0x4IMPSSOAlmeryX8fCPvvPS2pFJz2ikV9IGqyh6Ehsg4leMalCTVfV2rvMTrlGAe7X7nK0HZ3P0KZR9g==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/credential-provider-node@3.972.95':
     resolution: {integrity: sha512-3IIZ78pwRVLy+d2xn1yRAyEXRc2eCYQ9r5zO4QqDQuVHbOHe01nTWGqLkEM5JAp/vA0pmQTjPojg8JZ10C668Q==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/credential-provider-process@3.972.75':
-    resolution: {integrity: sha512-ZNm8T/HJNhpS8MikDVAsym8QyUSUuOUGiCkmI3TTya7G6xhOgfRLd2iK91HhQQyvRM36eo6Xm845hHVyfToA2w==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/credential-provider-process@3.972.83':
     resolution: {integrity: sha512-XejCj4/jfZuXmH6P3HCP4eW/7rfrxG70RhurqAvyoo8hevgDwLDW8xR79ww8ad+T/ZD7ERK6jV7CCFBLLBhiLQ==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/credential-provider-sso@3.973.19':
-    resolution: {integrity: sha512-qHGDAGesyWtRw3BapyFkYSUzVNrC1CWPS6+S2lf/MLMEkWB2gR3Bl6imVHy1nhImXKS+gcuUDzbu39BnsHJc1Q==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/credential-provider-sso@3.973.27':
     resolution: {integrity: sha512-lM9xX3+0PCW3H4QfIDk0PRlcJCeF7kV2Cv93MhWQgKRhxzdis5m9inBa801X0w+nq+ckzlYYxa4674etFTikvw==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/credential-provider-web-identity@3.972.81':
-    resolution: {integrity: sha512-nHkgkMIC6NHgqfI6UAQq5cCS4bUkNxkT+r9fXCq/X4IKfX/DHGZ8UM3T4b78OXpWK5OlzEzN4kxwyax0W/MUCA==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/credential-provider-web-identity@3.972.89':
@@ -564,64 +520,32 @@ packages:
     peerDependencies:
       '@aws-sdk/client-s3': ^3.1154.0
 
-  '@aws-sdk/middleware-sdk-s3@3.972.80':
-    resolution: {integrity: sha512-zX3lXN/9XOUAuGpxgt3wXwZrXhTjQYEgRsqa856PbZWpOtleUWmCMbhlkLfusPuhW24cOC/8JYR8hnRalrrIkQ==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/middleware-sdk-s3@3.972.88':
     resolution: {integrity: sha512-Bx5FZr1vhqPSnrJWwJjeO4dYFJ3SNrjaQbw76A1rIKWIxhGXct4dlQLCkgtS52Xh6RNip5ObEIQyEsGAd4fcPw==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/nested-clients@3.997.49':
-    resolution: {integrity: sha512-zjqIqzTYLRKhT7TPJDUreK9vG9PjhmnfLCaTaqArkRT7j+Ogl0tuXB7MpSd8rlRfRT+xTOeyNFWaOfyNcf51hg==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/nested-clients@3.998.2':
     resolution: {integrity: sha512-T1vNOfMdvdjXU4Nq267iTFoxZ2Bj0vEatkp66j8wBtrpDoX1mBWmxy7RL8O93S2oXo+BFEiXH3nWtLMd0svLnA==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/s3-presigned-post@3.1154.0':
-    resolution: {integrity: sha512-9btp/ibbuaSMjRufuUENcQKlVY1GqU98t+VtS8XK1WnDDRXb8vw6E3Y7K2lwtOJ2og4jiMK7AXF3l3p6dPT4fg==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/s3-presigned-post@3.1165.0':
     resolution: {integrity: sha512-eQvsA+k38EbQRd7zeTHU03dGQdv7ljBzta4oeNNfrX44gCILTMtlyr9ljTgx+4SawBuShzX1bgEiTJeNnAy5Rw==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/s3-request-presigner@3.1154.0':
-    resolution: {integrity: sha512-TR4tYLTDhGaGV+JNouo0JATMpVkoMYvbl4g0zPhJxT8lEM3tBT+OOHRwWLCIM40DM8ILWiscCLvIat4vGpe9Gw==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/s3-request-presigner@3.1165.0':
     resolution: {integrity: sha512-UxiU48TtdqtpwouOYBCfkZ0T5XEggwnrSvzSAkFt57TmnW2Z5NJsmenjDopKl0jub742g90U1Ih6si8IogAv5Q==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/signature-v4-multi-region@3.996.48':
-    resolution: {integrity: sha512-cFDXfEbXaGwbnpvR/DyqfxfjxpjXVRVthQLgkwvcfDS5u3+8G9WSj1X1Ag/pTRg/QOeOno1Tq3ycEdrKsCUcOA==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/signature-v4-multi-region@3.996.52':
     resolution: {integrity: sha512-6W6SjGc8OXUhMzNxU1X922ghD+PP1XvzmCk5Scui0jaYsLezycMYR1RaLp5xTIOUrhTXyb4DnAbPr3fBgmdnzg==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/token-providers@3.1153.0':
-    resolution: {integrity: sha512-6bKJ2OfLboxhzeJ3hBDeB8L6emCYf9DfdrjBAharLrY42J1RV/6jA6G8jvfNghzID8Yb40BdSY7jQMtWx9Ot0Q==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/token-providers@3.1165.0':
     resolution: {integrity: sha512-xYE0nhi3LLacRnoSuUzEv6riWczXXeOOoXeMVw97KBHMLmHKqxmc94leV4RMzEK/BNbZfCKmL5FQoOiuIBkp/g==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/types@3.974.6':
-    resolution: {integrity: sha512-v/clNZzZnDxGyvpHMOGpJKVXFAExJzUNAAjaWGdcx8QAcXLGwTaOkw33p5SHAi0YAioK32xB3hWwOekRVfmfKg==}
-    engines: {node: '>=20.0.0'}
-
   '@aws-sdk/types@3.975.1':
     resolution: {integrity: sha512-7rGxUkCB2QPoQOeJmonmAICTN2zrH+fpmi1p4Iwu72lnxNaMhOgqcbpyddifnM1DBb19TWQ1u6z/XjkaFNEDWw==}
-    engines: {node: '>=20.0.0'}
-
-  '@aws-sdk/xml-builder@3.972.41':
-    resolution: {integrity: sha512-ctjVSyCMegrWfXlx6VqzSBFI6UqmQ5ZlnfMhdLIiWmhoH8UAQxSCP5N3OpG7X3k4LnS7ou74C4mt20+bfTW2aQ==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/xml-builder@3.972.43':
@@ -711,8 +635,8 @@ packages:
     resolution: {integrity: sha512-0GEz8qJWokkUVYQYRukmkSHIFNoBH8QTreeHrAFbvz1XFYc3Y+puhMs8PQ5x8GNugiC2l5jvDBXKLbBIByeSBw==}
     hasBin: true
 
-  '@capybara-hq/kernel@0.1.0-rc.17':
-    resolution: {integrity: sha512-RuD7+dZe50SIyeQHy3s4Te9w6jhgPIYoO6wly1fzLrlwnQMqAEePUAyDH+DTy21KuN1471o1dJzb/Den84tYgg==}
+  '@capybara-hq/kernel@0.1.0-rc.25':
+    resolution: {integrity: sha512-c/UHdEndi99CtqzSyioDIv43K8mLlZV2MwMOKky/rKOYvssqn5moFnNjQ4MURphBe+/lA7BtlcwN4eDzkN5v/g==}
     engines: {node: '>=24'}
 
   '@capybara-hq/plugin-client@0.1.0-rc.4':
@@ -724,25 +648,25 @@ packages:
       react-dom:
         optional: true
 
-  '@capybara-hq/plugin-model-fake@0.1.0-rc.17':
-    resolution: {integrity: sha512-rDoOcAM2k2xjLg3QUGXRStkWr6RCfCsmJM/E4WtYQBTBbXVb4uHpgYPG0IGjicnnpTnTwgh17KxT2mcvg5NfKQ==}
+  '@capybara-hq/plugin-model-fake@0.1.0-rc.19':
+    resolution: {integrity: sha512-97FRl95j2hr1An9vyhw+f9OV1Jmrgb9kh+S6wiaeeBva7NBmbyjazTgw2g9p9sfA9y8fMp0qQoWmyBzyJqdKkw==}
     peerDependencies:
       '@capybara-hq/plugin-sdk': ^0.1.0-rc.0
       zod: ^4.6.7
 
-  '@capybara-hq/plugin-sdk@0.1.0-rc.17':
-    resolution: {integrity: sha512-2Su+kvQaqZLL93fB1vsKrUOuonMMtvhld59Z6EINNR8l/KooSdlT7/RPmHo9FfEp60qywKIHleSVirGbzHJO4Q==}
+  '@capybara-hq/plugin-sdk@0.1.0-rc.19':
+    resolution: {integrity: sha512-MO75LUxE0Q4PvXmrV6qQVm5llSI26YMTPLxHRXaF/z0FmSMA7F8+KT9kSTK55rj+I8ys58NUt40gTO8/ZTH0yg==}
 
   '@capybara-hq/plugin-tools@0.1.0-rc.13':
     resolution: {integrity: sha512-Szlc1+T7goyWM+zo1/Q2qUT7ffHf88W05t3xpOuBV3jfkIGFhBqdiSMmh/iRWSNOcsinP8MSwU5uRoJJnMDw9A==}
     engines: {node: '>=24'}
     hasBin: true
 
-  '@capybara-hq/testing@0.1.0-rc.15':
-    resolution: {integrity: sha512-MizD1UCeO17hd1r2gehiejPkEem/uoJo+bL80y92EVTzGj4CRlanr/YtQ1pIXvK9HdyN+SJpT0BkDdLmvhmqdw==}
+  '@capybara-hq/testing@0.1.0-rc.17':
+    resolution: {integrity: sha512-iFrOBXK3ZOWQ16MZb6KOEkcOvlSqpScy/tZnhlecGnC1uTY0lSZWejvxbWyc5gYFuC+iXXr/Uq4ocCvWe3uXpg==}
     engines: {node: '>=24'}
     peerDependencies:
-      '@capybara-hq/plugin-sdk': ^0.1.0-rc.12
+      '@capybara-hq/plugin-sdk': ^0.1.0-rc.19
       '@capybara-hq/plugin-tools': ^0.1.0-rc.13
       vitest: ^5.0.5
     peerDependenciesMeta:
@@ -1166,12 +1090,6 @@ packages:
     engines: {node: '>=6'}
     hasBin: true
 
-  '@hono/node-server@2.1.5':
-    resolution: {integrity: sha512-MgP/I06GdvsilDspMk/qmRzpk8LOUStP6jFAbSRi40W09DhoyUn+Mj7eyKICPqeYKybOjVFLVIAQzvu1bfIa7Q==}
-    engines: {node: '>=20'}
-    peerDependencies:
-      hono: ^4 || ^5.0.0-0
-
   '@hono/node-server@2.1.6':
     resolution: {integrity: sha512-p/KH9MnfNcsm3sR6x4lNgm5j+QN4Et8srKredl9DZfXiyZ1UQ3aQ2YVpFLbqktYN5JI+DB+VZFKM2PqE5hLKjQ==}
     engines: {node: '>=20'}
@@ -1259,16 +1177,6 @@ packages:
   '@microsoft/tsdoc@0.17.1':
     resolution: {integrity: sha512-VHyYyyoH63jFoO3shpw9Zfijk5v/9p/VrClW35z0/q6ooK7sSmxpzOkS4iZPxs3vO4XtBW4H38HRAKkAMIK7DA==}
 
-  '@modelcontextprotocol/sdk@1.32.1':
-    resolution: {integrity: sha512-2DdE+SJDtzLEEWzY1ZjY7Q+VcPhcV1KisD3zI4u0XZyktsjHum1mwbMI+JaulUBi2OZk+KJAi2uPXzxichPkdw==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      '@cfworker/json-schema': ^4.1.1
-      zod: ^3.25 || ^4.0
-    peerDependenciesMeta:
-      '@cfworker/json-schema':
-        optional: true
-
   '@modelcontextprotocol/sdk@1.32.2':
     resolution: {integrity: sha512-SWsVtH/0vULSQStoZ6xxH2K09Li8fXYTMC64ZeogCdpZ3XSi1eCPOByV1OpuJxuI3OcmHhosDWYyii07tpPsLw==}
     engines: {node: '>=18'}
@@ -1279,19 +1187,9 @@ packages:
       '@cfworker/json-schema':
         optional: true
 
-  '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4':
-    resolution: {integrity: sha512-LCkGo6JDfaBhgST7UpPWgNgLINpcpabaHfyz5OBx75nUYxBsaEPxjnyNjWpeb/xBup/682QnBfRBy2/LvPutZQ==}
-    cpu: [arm64]
-    os: [darwin]
-
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.7':
     resolution: {integrity: sha512-2zPHLn+MuGJ6GP/5jDrwa9Jy0CI+D3Ibpvopf5SFfmc1G9gdofR4uB7YrJAAp4vodn/7iDOciyv8bgkRPLw7cA==}
     cpu: [arm64]
-    os: [darwin]
-
-  '@msgpackr-extract/msgpackr-extract-darwin-x64@3.0.4':
-    resolution: {integrity: sha512-zExlW9zUJKZH/tOtVMttwjKa4Xm/3KcNjnE3dPN92uCktwavMxpgCA3MoJK/DOnTWsQgo224OaST27/mPNAf+w==}
-    cpu: [x64]
     os: [darwin]
 
   '@msgpackr-extract/msgpackr-extract-darwin-x64@3.0.7':
@@ -1299,19 +1197,9 @@ packages:
     cpu: [x64]
     os: [darwin]
 
-  '@msgpackr-extract/msgpackr-extract-linux-arm64@3.0.4':
-    resolution: {integrity: sha512-dgX0P/9wGPJeHFBG+ZmhgE6bmtMt7NP5CRBGyyktpopdk/mW4POnrpQsSLtKI1dwpc+pPLuXHDh6vvskyQE/sw==}
-    cpu: [arm64]
-    os: [linux]
-
   '@msgpackr-extract/msgpackr-extract-linux-arm64@3.0.7':
     resolution: {integrity: sha512-jcRydYARTW0gX5idJhxV7m3KkRUD7KtZLYFF1ZY18HrPqpGY0TCqPUTJCwka2kVfVOwfKs3ZmlPSmQb4S6xj7w==}
     cpu: [arm64]
-    os: [linux]
-
-  '@msgpackr-extract/msgpackr-extract-linux-arm@3.0.4':
-    resolution: {integrity: sha512-Tg3yX65f5GbtXLkrYEHE5oibZG9epyYWas7FogTTEJeDEF9JlXJzKgXaNhT3UXlTOeA+AfZpYZYZ0uPj7Cfquw==}
-    cpu: [arm]
     os: [linux]
 
   '@msgpackr-extract/msgpackr-extract-linux-arm@3.0.7':
@@ -1319,20 +1207,10 @@ packages:
     cpu: [arm]
     os: [linux]
 
-  '@msgpackr-extract/msgpackr-extract-linux-x64@3.0.4':
-    resolution: {integrity: sha512-8TNXMEjJc3QEy7R/x1INhgiU+XakDAFUzBhaz7+Rbrs8NH5UQeHQxxmzsSBJGyV6I1jW79undiQm8tOI+D+8FQ==}
-    cpu: [x64]
-    os: [linux]
-
   '@msgpackr-extract/msgpackr-extract-linux-x64@3.0.7':
     resolution: {integrity: sha512-A9xOmARctmUvHrBj5GGzGAigsZFnqE4kld5oprX3PyPbkVALV4jwBc17gPZrhSOvnXQc81hE9K7S2hDUCgialA==}
     cpu: [x64]
     os: [linux]
-
-  '@msgpackr-extract/msgpackr-extract-win32-x64@3.0.4':
-    resolution: {integrity: sha512-CmCXPQrkbwExx3j946/PtHWHbYJiCRBRDl4BlkRQcJB/YOwQxJRTpoo7aTsortjgoJ1x7opzTSxn7C+ASSLVjQ==}
-    cpu: [x64]
-    os: [win32]
 
   '@msgpackr-extract/msgpackr-extract-win32-x64@3.0.7':
     resolution: {integrity: sha512-PRBiOqK4mcR0rvm6nybO7pSOYRR2Zza0+43UK2IvbVGelzMqZViiZJmOWGuWOX678QKESO6YrHx36z43nSS6iQ==}
@@ -1800,10 +1678,6 @@ packages:
     resolution: {integrity: sha512-bIW8/8BLD/HLuHLIA2LfA7AhSokzui4swCbMJuwoRJxn/kzHVla6YEKLvN1nCFHK/DfX7g+4Wj3ess/ZSh/tWQ==}
     engines: {node: '>= 20', npm: '>=9.6.4'}
 
-  '@smithy/core@3.36.1':
-    resolution: {integrity: sha512-WC5W1Jrsfxu1y6LeqXMie7N14qmcdafij/Haye4feVlyMMXLGpYxBeOX6Ee1iRJbDzGG5LVman8U1rrt9MYFHA==}
-    engines: {node: '>=18.0.0'}
-
   '@smithy/core@3.39.0':
     resolution: {integrity: sha512-JJ/46AWQ4ipS1N2eZmUj7yzIhH8NhQIfAE+dce7NSB6dmFh+7hvD4pbofcoT4I0Xzfy/LNhZx3V2QhwYyAiqdg==}
     engines: {node: '>=18.0.0'}
@@ -1812,32 +1686,16 @@ packages:
     resolution: {integrity: sha512-A9uSdn72ozbRUSit0eib0TW7nXuNPlaeM0zcGkJ+nE6tFcSDbnmtwoxbTCFBukVQcszDAyvsd7+rTduPTXpygg==}
     engines: {node: '>=18.0.0'}
 
-  '@smithy/fetch-http-handler@5.8.0':
-    resolution: {integrity: sha512-ycSJu3tFAQ4v04CBB0agqFMVsSQ1iG3yw+SpgxRqKfaURpQD4CZ8Wn0zPMmSnOuTpTh65Vz+EA0rMrw089wvkA==}
-    engines: {node: '>=18.0.0'}
-
   '@smithy/fetch-http-handler@5.8.1':
     resolution: {integrity: sha512-h8BdMUrUBhMhMaeK7QqAdINRZezCGuYOCpcOZZ1ewxbHST9rdTd09xwNpvLTYfzDRehxQiReK4SKbdYZxBA+ew==}
-    engines: {node: '>=18.0.0'}
-
-  '@smithy/node-http-handler@4.12.1':
-    resolution: {integrity: sha512-ThMkboGeONWXAelq9FvGsuJC4rOi+qyC4/zhUF58xYpxUg5sQKx2VXZYJmtNjr4dSuBJ1HeJXETQILCz3wOHvw==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/node-http-handler@4.14.2':
     resolution: {integrity: sha512-i1uORV1v3qBqP43ayRKzIdm1q5x14tf8N4Dd06/QUX1Szm6VxHMrTsu20X5E63UFsaNZCRjI4SXG0jDmqYa+3w==}
     engines: {node: '>=18.0.0'}
 
-  '@smithy/signature-v4@5.7.4':
-    resolution: {integrity: sha512-tHy0K0VtqNd5Y7Y41h0a0Lhh0L1GzC08dTWg0F7vRJWFtTENg7IZikf3wQkanYIRdb7ngoIPMTmqgUi401fEeQ==}
-    engines: {node: '>=18.0.0'}
-
   '@smithy/signature-v4@5.7.5':
     resolution: {integrity: sha512-WPjdr5oWOk1LArpI4pavu+fSo+/evi0Re1olxGvqwuZopd4gYR1UGCi+Soyn/IjmafqbWs+ZC+3AKxJS3ZpwUg==}
-    engines: {node: '>=18.0.0'}
-
-  '@smithy/types@4.19.0':
-    resolution: {integrity: sha512-r7jh49VJxGerfAcTQA6gXcKc+98zOp/tqRwzYjgOE+iSQsP6cEU1hq2QzbuipmP68QtYdY9wKEhiCQZIzHgZ4Q==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/types@4.20.0':
@@ -2212,9 +2070,6 @@ packages:
     resolution: {integrity: sha512-2cGmJupaNgg+QUwVLAucDuWuoMZ6EX9iHDRswZ5lsNYEmwPaRknMPCLZz07yTzVq/83p4o/wzbDZbBrTvGGTIw==}
     engines: {node: '>=18'}
 
-  bowser@2.14.1:
-    resolution: {integrity: sha512-tzPjzCxygAKWFOJP011oxFHs57HzIhOEracIgAePE4pqB3LikALKnSzUyU4MGs9/iCEUuHlAJTjTc5M+u7YEGg==}
-
   bowser@2.15.0:
     resolution: {integrity: sha512-xic6KSZglg/I4ymp45fdM4GWfYpBK79Fxd/TOvJktlaPgQqqDxvmGwOPZl2V0dyeS3Lj5c180bLhXF43iyAjZQ==}
 
@@ -2241,24 +2096,6 @@ packages:
   buildcheck@0.0.7:
     resolution: {integrity: sha512-lHblz4ahamxpTmnsk+MNTRWsjYKv965MwOrSJyeD588rR3Jcu7swE+0wN5F+PbL5cjgu/9ObkhfzEPuofEMwLA==}
     engines: {node: '>=10.0.0'}
-
-  bullmq@6.3.15:
-    resolution: {integrity: sha512-J6EZH/DhfGnsIafSK2FfNJ6XtSAQnD4YM1vts5+jT4usLYkxV2uU72oKNpmyxUQl9U4sFEvK5MO5SJ+dGlwOLQ==}
-    engines: {node: '>=14.17.0'}
-    peerDependencies:
-      bullmq-otel: '>=2.0.0'
-      ioredis: '>=5.0.0'
-      pg: '>=8.0.0'
-      redis: '>=5.0.0'
-    peerDependenciesMeta:
-      bullmq-otel:
-        optional: true
-      ioredis:
-        optional: true
-      pg:
-        optional: true
-      redis:
-        optional: true
 
   bullmq@6.7.2:
     resolution: {integrity: sha512-JCoMvkTD9FAX8TY3qQXIkB+ybZYDpTqV09EshxwYjzn2oTdqagKUIF/GWjtYl9bahPO2DHm3sWjijFGHeIf6XQ==}
@@ -2429,10 +2266,6 @@ packages:
   crc32-stream@6.0.0:
     resolution: {integrity: sha512-piICUB6ei4IlTv1+653yq5+KoqfBYmj9bw6LqXoOneTMDXk5nM1qt12mFW1caG3LlJXEKW1Bp0WggEmIfQB34g==}
     engines: {node: '>= 14'}
-
-  cron-parser@5.10.2:
-    resolution: {integrity: sha512-JfAYMY0LZaWQTuict8PhtF/ksSnq8xefSDmQUnnoqvkPYkU/y3UP0DTWzJKFBz0P1IXsDG8q0vY3zHkoFZOhvw==}
-    engines: {node: '>=18'}
 
   cron-parser@5.10.3:
     resolution: {integrity: sha512-Fwlmlgiyoj5e7XDCy5T3ueFd3imgt714k7xjAzhkOBUrUgQxWtsjS7kWSEN3efDX34bebxBJAmPoCSisHvjlpw==}
@@ -2635,12 +2468,6 @@ packages:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
     engines: {node: '>=12.0.0'}
 
-  express-rate-limit@8.7.1:
-    resolution: {integrity: sha512-2FXbqkygil3mZiXzEtM0IjE/UBmBNot0J1GEVrJT4JbrvwOSoEtqtO+wHbiMQELWe1eNvHoYRg2dkjOid+6JkA==}
-    engines: {node: '>= 16'}
-    peerDependencies:
-      express: '>= 4.11'
-
   express-rate-limit@8.7.4:
     resolution: {integrity: sha512-LKBXzX700wz3zAGNNmVnjRI5mEbYkLv7UbMI4+9Xa+JPcg2UZh6AgY/2CZh9RrJjFM5ttC/N1lD+KzyFoZITCw==}
     engines: {node: '>= 16'}
@@ -2825,10 +2652,6 @@ packages:
   help-me@5.0.0:
     resolution: {integrity: sha512-7xgomUX6ADmcYzFik0HzAxh/73YlKR9bmFzf51CZwR+b6YtzU2m0u49hQCqV6SvlqIqsaxovfwdvbnsw3b/zpg==}
 
-  hono@4.13.13:
-    resolution: {integrity: sha512-CQ46U0ZkAGmbT/4UxdzzGJpacP2IeKgY4a5/tOI9AABbpOMfK739wfDXmv1usCk+3RkKj1hQy4/fjhiwa2xlrA==}
-    engines: {node: '>=16.9.0'}
-
   hono@4.13.17:
     resolution: {integrity: sha512-vZIcbkvjOR5hHRWERbGkr8fGfF0GGM1ooYkuH448iO3b2AdVEr3AXZSw4Z3Kn+1L5z0CVoVeyV29VGYmFh05kQ==}
     engines: {node: '>=16.9.0'}
@@ -2877,10 +2700,6 @@ packages:
   ioredis@6.0.0:
     resolution: {integrity: sha512-f+Dtubxfpf6KYFq7WVXJoOLn0bk4TJrMrN9SzeE+jrWrCWj7XX3fA6vkryafhADX+GMymRxgDJDOI33COkJc0w==}
     engines: {node: '>=20.0.0'}
-
-  ip-address@10.7.4:
-    resolution: {integrity: sha512-DWBMKyeM25D70nrIiTkgQth59/G+naKOTep6huF9j+GmeK3DMD60Zvxg5d5qQnz+38AHgou6ean2LECX+lrKDg==}
-    engines: {node: '>= 12'}
 
   ip-address@10.7.6:
     resolution: {integrity: sha512-00LYkM6byILa9eQIx6qoaXCM40xTLd56AZ4vyaPW3YTyb49VZYPo5xsiAq4tuQ54GH4R7gVdYScJ1B7B77PuTg==}
@@ -2954,12 +2773,6 @@ packages:
 
   jju@1.4.0:
     resolution: {integrity: sha512-8wb9Yw966OSxApiCt0K3yNJL8pnNeIv+OEq2YMidz4FKP6nonSRoOXc80iXY4JaN2FC11B9qsNmDsm+ZOfMROA==}
-
-  jose@6.2.12:
-    resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
-
-  jose@6.2.16:
-    resolution: {integrity: sha512-4LSJpbuBuPdGrONCdZUy0xnxtLf8eEz+EY0SMXdHQEBU7bgUHDVblU/JAjryv3wID9/LK7/YuwFwq+AQNfMscQ==}
 
   jose@6.2.17:
     resolution: {integrity: sha512-wOuK9V1yujQFH5S0ZWmLcDZN7+IKh9bUCC2ZPCf2HDlol3WWHy+PPyNjEI75FXRLMp3vDKQcupP59xhVU95hcg==}
@@ -3356,16 +3169,9 @@ packages:
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
 
-  msgpackr-extract@3.0.4:
-    resolution: {integrity: sha512-4kmO/MdyUIkLIvTPr8VHLil4AtoKIoniWPIEk5+CDy0xnWC84azhSFmuJ7PxZdsYtiP5kEeQsORAVIeMgxT+Hw==}
-    hasBin: true
-
   msgpackr-extract@3.0.7:
     resolution: {integrity: sha512-/dOQboWnkR1cjm88XyH/cGSivECGgyQu3814+bNUAq5wACQC8Ya/CViB9WApvWJ5Hya/JJQQmUeBFOZj8MLjGA==}
     hasBin: true
-
-  msgpackr@2.1.0:
-    resolution: {integrity: sha512-p/pBCVO63CsvvpkomUnNNag6+n38rULuDA6HHe70o2gtC8ODI52foF/4ko2qQcp6OiErJXTmrZeXmsGGHsIQNQ==}
 
   msgpackr@2.1.4:
     resolution: {integrity: sha512-TvP18sX5U3MXoHHSUZen/FagaNTEJObyb8OlnJcNbqN6Ux/oCwYJrHhCOzi31bItyW/Efz1IDnRDKQ23j4ZuvA==}
@@ -3388,6 +3194,7 @@ packages:
 
   node-abort-controller@3.1.1:
     resolution: {integrity: sha512-AGK2yQKIjRuqnc6VkX2Xj5d+QW8xZ87pa1UK6yA6ouUyuxfHuMP6umE5QK7UmTeOAymo+Zx1Fxiuw9rVx8taHQ==}
+    deprecated: This package is no longer needed on supported Node.js versions. Node.js 16+ includes AbortController and AbortSignal as built-in globals. All Node.js versions requiring this polyfill are end-of-life. Use the built-in globals instead.
 
   node-gyp-build-optional-packages@5.2.2:
     resolution: {integrity: sha512-s+w+rBWnpTMwSFbaE0UXsRlg7hU4FjekKU4eyAih5T8nJuNZT1nNsskXpxmeqSK9UzkBl6UgRlnKc8hz8IEqOw==}
@@ -3763,11 +3570,6 @@ packages:
   secure-json-parse@4.1.1:
     resolution: {integrity: sha512-lnd81MQEZKjhW/Gd2TQqdd4XP6QYNdDW/EP+I7nTrFHP9y2LmaGPIHk9xsnzcOiEr1c39c/e84xFgGviQKBTRw==}
 
-  semver@7.8.5:
-    resolution: {integrity: sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==}
-    engines: {node: '>=10'}
-    hasBin: true
-
   semver@7.8.6:
     resolution: {integrity: sha512-9lpSSU4Mly3mrtruwLs1eLK6+gzbzqeBFwRNjIjE+9LuDpWdYctrQlQ3ej1Ilgi7gknpsTRnPoLP8DpCHqHIJw==}
     engines: {node: '>=10'}
@@ -3968,6 +3770,7 @@ packages:
 
   tldts-core@7.4.20:
     resolution: {integrity: sha512-C630TWXZCZmLq0F2bW4QqwnaaxCQ/svpAqvJwnC4JvgEM5ohhBnGsEzTLSOXcN+xjz+kEaHS5uoWIw2klnqd0A==}
+    deprecated: Partial release, see https://github.com/remusao/tldts/issues/2735. Use >=7.4.22.
 
   tldts@7.4.19:
     resolution: {integrity: sha512-48dH6aSpQnpbzDUc4vIQZ1VjB8tkK+e8c1yx05/SZK+rkssgjEOlxDd/yU8/a4vGYQ9vRgJr9dwMq9TJ0b3X2Q==}
@@ -4044,14 +3847,6 @@ packages:
 
   undici-types@8.9.0:
     resolution: {integrity: sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==}
-
-  undici@8.12.2:
-    resolution: {integrity: sha512-XtuDWVdqTLr3NAxm2ly9/hU6kUsJOgGh1RASzMBbsw6aWCOaQzHdW+QQDfdERjfJ2V5vL5pRPa4RetO9UfivDg==}
-    engines: {node: '>=22.19.0'}
-
-  undici@8.12.3:
-    resolution: {integrity: sha512-+fdndUTwBP86cVjihTp21hZHo7d6oj1c/47XPA3lL8mM0XHs+C4EkcjmgRsFnFk2f/UONGDy9ItBItmXsLOQHw==}
-    engines: {node: '>=22.19.0'}
 
   undici@8.12.4:
     resolution: {integrity: sha512-8Mx+uNKKER2bA4AdtedkqRbwUCIJFr2nJckXRe5yrDqzePqwLP7VNcctN8/XdmDSbF7mS+jJKIszlL+vbam1VA==}
@@ -4213,18 +4008,6 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
-  ws@8.22.0:
-    resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
-    engines: {node: '>=10.0.0'}
-    peerDependencies:
-      bufferutil: ^4.0.1
-      utf-8-validate: '>=5.0.2'
-    peerDependenciesMeta:
-      bufferutil:
-        optional: true
-      utf-8-validate:
-        optional: true
-
   ws@8.22.2:
     resolution: {integrity: sha512-/rEZ2ejown2N5gxVTHUu9bVVC7ttu0/Tgzf5hbTOixR3Fs7mbbXgn2DbdbcKgJOmpQMtrIUWivtYuVMnp/W/yA==}
     engines: {node: '>=10.0.0'}
@@ -4317,14 +4100,6 @@ snapshots:
       is-potential-custom-element-name: 1.0.1
       lru-cache: 11.5.3
 
-  '@aws-sdk/checksums@3.1001.4':
-    dependencies:
-      '@aws-sdk/core': 3.978.4
-      '@aws-sdk/types': 3.974.6
-      '@smithy/core': 3.36.1
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
-
   '@aws-sdk/checksums@3.1002.4':
     dependencies:
       '@aws-sdk/core': 3.980.2
@@ -4332,20 +4107,6 @@ snapshots:
       '@smithy/core': 3.39.0
       '@smithy/types': 4.20.0
       tslib: 2.9.1
-
-  '@aws-sdk/client-s3@3.1154.0':
-    dependencies:
-      '@aws-sdk/checksums': 3.1001.4
-      '@aws-sdk/core': 3.978.4
-      '@aws-sdk/credential-provider-node': 3.972.87
-      '@aws-sdk/middleware-sdk-s3': 3.972.80
-      '@aws-sdk/signature-v4-multi-region': 3.996.48
-      '@aws-sdk/types': 3.974.6
-      '@smithy/core': 3.36.1
-      '@smithy/fetch-http-handler': 5.8.0
-      '@smithy/node-http-handler': 4.12.1
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
 
   '@aws-sdk/client-s3@3.1165.0':
     dependencies:
@@ -4361,17 +4122,6 @@ snapshots:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@aws-sdk/core@3.978.4':
-    dependencies:
-      '@aws-sdk/types': 3.974.6
-      '@aws-sdk/xml-builder': 3.972.41
-      '@aws/lambda-invoke-store': 0.3.0
-      '@smithy/core': 3.36.1
-      '@smithy/signature-v4': 5.7.4
-      '@smithy/types': 4.19.0
-      bowser: 2.14.1
-      tslib: 2.8.1
-
   '@aws-sdk/core@3.980.2':
     dependencies:
       '@aws-sdk/types': 3.975.1
@@ -4383,14 +4133,6 @@ snapshots:
       bowser: 2.15.0
       tslib: 2.9.1
 
-  '@aws-sdk/credential-provider-env@3.972.75':
-    dependencies:
-      '@aws-sdk/core': 3.978.4
-      '@aws-sdk/types': 3.974.6
-      '@smithy/core': 3.36.1
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
-
   '@aws-sdk/credential-provider-env@3.972.83':
     dependencies:
       '@aws-sdk/core': 3.980.2
@@ -4398,16 +4140,6 @@ snapshots:
       '@smithy/core': 3.39.0
       '@smithy/types': 4.20.0
       tslib: 2.9.1
-
-  '@aws-sdk/credential-provider-http@3.972.77':
-    dependencies:
-      '@aws-sdk/core': 3.978.4
-      '@aws-sdk/types': 3.974.6
-      '@smithy/core': 3.36.1
-      '@smithy/fetch-http-handler': 5.8.0
-      '@smithy/node-http-handler': 4.12.1
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
 
   '@aws-sdk/credential-provider-http@3.972.85':
     dependencies:
@@ -4418,22 +4150,6 @@ snapshots:
       '@smithy/node-http-handler': 4.14.2
       '@smithy/types': 4.20.0
       tslib: 2.9.1
-
-  '@aws-sdk/credential-provider-ini@3.973.20':
-    dependencies:
-      '@aws-sdk/core': 3.978.4
-      '@aws-sdk/credential-provider-env': 3.972.75
-      '@aws-sdk/credential-provider-http': 3.972.77
-      '@aws-sdk/credential-provider-login': 3.972.82
-      '@aws-sdk/credential-provider-process': 3.972.75
-      '@aws-sdk/credential-provider-sso': 3.973.19
-      '@aws-sdk/credential-provider-web-identity': 3.972.81
-      '@aws-sdk/nested-clients': 3.997.49
-      '@aws-sdk/types': 3.974.6
-      '@smithy/core': 3.36.1
-      '@smithy/credential-provider-imds': 4.5.2
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
 
   '@aws-sdk/credential-provider-ini@3.973.28':
     dependencies:
@@ -4451,15 +4167,6 @@ snapshots:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@aws-sdk/credential-provider-login@3.972.82':
-    dependencies:
-      '@aws-sdk/core': 3.978.4
-      '@aws-sdk/nested-clients': 3.997.49
-      '@aws-sdk/types': 3.974.6
-      '@smithy/core': 3.36.1
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
-
   '@aws-sdk/credential-provider-login@3.972.90':
     dependencies:
       '@aws-sdk/core': 3.980.2
@@ -4468,20 +4175,6 @@ snapshots:
       '@smithy/core': 3.39.0
       '@smithy/types': 4.20.0
       tslib: 2.9.1
-
-  '@aws-sdk/credential-provider-node@3.972.87':
-    dependencies:
-      '@aws-sdk/credential-provider-env': 3.972.75
-      '@aws-sdk/credential-provider-http': 3.972.77
-      '@aws-sdk/credential-provider-ini': 3.973.20
-      '@aws-sdk/credential-provider-process': 3.972.75
-      '@aws-sdk/credential-provider-sso': 3.973.19
-      '@aws-sdk/credential-provider-web-identity': 3.972.81
-      '@aws-sdk/types': 3.974.6
-      '@smithy/core': 3.36.1
-      '@smithy/credential-provider-imds': 4.5.2
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
 
   '@aws-sdk/credential-provider-node@3.972.95':
     dependencies:
@@ -4497,14 +4190,6 @@ snapshots:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@aws-sdk/credential-provider-process@3.972.75':
-    dependencies:
-      '@aws-sdk/core': 3.978.4
-      '@aws-sdk/types': 3.974.6
-      '@smithy/core': 3.36.1
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
-
   '@aws-sdk/credential-provider-process@3.972.83':
     dependencies:
       '@aws-sdk/core': 3.980.2
@@ -4512,16 +4197,6 @@ snapshots:
       '@smithy/core': 3.39.0
       '@smithy/types': 4.20.0
       tslib: 2.9.1
-
-  '@aws-sdk/credential-provider-sso@3.973.19':
-    dependencies:
-      '@aws-sdk/core': 3.978.4
-      '@aws-sdk/nested-clients': 3.997.49
-      '@aws-sdk/token-providers': 3.1153.0
-      '@aws-sdk/types': 3.974.6
-      '@smithy/core': 3.36.1
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
 
   '@aws-sdk/credential-provider-sso@3.973.27':
     dependencies:
@@ -4533,15 +4208,6 @@ snapshots:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@aws-sdk/credential-provider-web-identity@3.972.81':
-    dependencies:
-      '@aws-sdk/core': 3.978.4
-      '@aws-sdk/nested-clients': 3.997.49
-      '@aws-sdk/types': 3.974.6
-      '@smithy/core': 3.36.1
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
-
   '@aws-sdk/credential-provider-web-identity@3.972.89':
     dependencies:
       '@aws-sdk/core': 3.980.2
@@ -4551,24 +4217,15 @@ snapshots:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@aws-sdk/lib-storage@3.1154.0(@aws-sdk/client-s3@3.1154.0)':
+  '@aws-sdk/lib-storage@3.1154.0(@aws-sdk/client-s3@3.1165.0)':
     dependencies:
-      '@aws-sdk/client-s3': 3.1154.0
-      '@smithy/core': 3.36.1
-      '@smithy/types': 4.19.0
+      '@aws-sdk/client-s3': 3.1165.0
+      '@smithy/core': 3.39.0
+      '@smithy/types': 4.20.0
       buffer: 5.6.0
       events: 3.3.0
       stream-browserify: 3.0.0
-      tslib: 2.8.1
-
-  '@aws-sdk/middleware-sdk-s3@3.972.80':
-    dependencies:
-      '@aws-sdk/core': 3.978.4
-      '@aws-sdk/signature-v4-multi-region': 3.996.48
-      '@aws-sdk/types': 3.974.6
-      '@smithy/core': 3.36.1
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
+      tslib: 2.9.1
 
   '@aws-sdk/middleware-sdk-s3@3.972.88':
     dependencies:
@@ -4578,17 +4235,6 @@ snapshots:
       '@smithy/core': 3.39.0
       '@smithy/types': 4.20.0
       tslib: 2.9.1
-
-  '@aws-sdk/nested-clients@3.997.49':
-    dependencies:
-      '@aws-sdk/core': 3.978.4
-      '@aws-sdk/signature-v4-multi-region': 3.996.48
-      '@aws-sdk/types': 3.974.6
-      '@smithy/core': 3.36.1
-      '@smithy/fetch-http-handler': 5.8.0
-      '@smithy/node-http-handler': 4.12.1
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
 
   '@aws-sdk/nested-clients@3.998.2':
     dependencies:
@@ -4601,16 +4247,6 @@ snapshots:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@aws-sdk/s3-presigned-post@3.1154.0':
-    dependencies:
-      '@aws-sdk/client-s3': 3.1154.0
-      '@aws-sdk/core': 3.978.4
-      '@aws-sdk/types': 3.974.6
-      '@smithy/core': 3.36.1
-      '@smithy/signature-v4': 5.7.4
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
-
   '@aws-sdk/s3-presigned-post@3.1165.0':
     dependencies:
       '@aws-sdk/client-s3': 3.1165.0
@@ -4621,15 +4257,6 @@ snapshots:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@aws-sdk/s3-request-presigner@3.1154.0':
-    dependencies:
-      '@aws-sdk/core': 3.978.4
-      '@aws-sdk/signature-v4-multi-region': 3.996.48
-      '@aws-sdk/types': 3.974.6
-      '@smithy/core': 3.36.1
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
-
   '@aws-sdk/s3-request-presigner@3.1165.0':
     dependencies:
       '@aws-sdk/core': 3.980.2
@@ -4639,28 +4266,12 @@ snapshots:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@aws-sdk/signature-v4-multi-region@3.996.48':
-    dependencies:
-      '@aws-sdk/types': 3.974.6
-      '@smithy/signature-v4': 5.7.4
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
-
   '@aws-sdk/signature-v4-multi-region@3.996.52':
     dependencies:
       '@aws-sdk/types': 3.975.1
       '@smithy/signature-v4': 5.7.5
       '@smithy/types': 4.20.0
       tslib: 2.9.1
-
-  '@aws-sdk/token-providers@3.1153.0':
-    dependencies:
-      '@aws-sdk/core': 3.978.4
-      '@aws-sdk/nested-clients': 3.997.49
-      '@aws-sdk/types': 3.974.6
-      '@smithy/core': 3.36.1
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
 
   '@aws-sdk/token-providers@3.1165.0':
     dependencies:
@@ -4671,20 +4282,10 @@ snapshots:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@aws-sdk/types@3.974.6':
-    dependencies:
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
-
   '@aws-sdk/types@3.975.1':
     dependencies:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
-
-  '@aws-sdk/xml-builder@3.972.41':
-    dependencies:
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
 
   '@aws-sdk/xml-builder@3.972.43':
     dependencies:
@@ -4746,85 +4347,9 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@capybara-hq/kernel@0.1.0-rc.17(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)':
+  '@capybara-hq/kernel@0.1.0-rc.25(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)':
     dependencies:
-      '@capybara-hq/plugin-sdk': 0.1.0-rc.17
-      '@fastify/cookie': 11.1.5
-      '@fastify/static': 9.3.0
-      '@fastify/websocket': 11.3.7
-      '@langchain/core': 1.3.5(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.2)(zod@4.6.7))(ws@8.22.2)
-      '@langchain/langgraph': 1.7.2(@langchain/core@1.3.5(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(ws@8.22.2))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)
-      '@langchain/langgraph-checkpoint': 1.2.2(@langchain/core@1.3.5(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(ws@8.22.2))
-      '@nestjs/bullmq': 12.0.0(@nestjs/common@12.4.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.4.0(@nestjs/common@12.4.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(bullmq@6.7.2(ioredis@6.0.0)(pg@8.23.1))
-      '@nestjs/common': 12.4.0(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@nestjs/core': 12.4.0(@nestjs/common@12.4.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@nestjs/platform-fastify': 12.4.0(@fastify/static@9.3.0)(@nestjs/common@12.4.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.4.0(@nestjs/common@12.4.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(rxjs@7.8.2)
-      '@nestjs/schedule': 12.0.2(@nestjs/common@12.4.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.4.0(@nestjs/common@12.4.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))
-      '@nestjs/swagger': 12.0.5(@fastify/static@9.3.0)(@nestjs/common@12.4.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.4.0(@nestjs/common@12.4.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(typescript@7.0.2)
-      '@nestjs/terminus': 12.1.0(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@nestjs/common@12.4.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.4.0(@nestjs/common@12.4.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/swagger@12.0.5(@fastify/static@9.3.0)(@nestjs/common@12.4.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.4.0(@nestjs/common@12.4.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(typescript@7.0.2))(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@nestjs/throttler': 6.7.1(@nestjs/common@12.4.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.4.0(@nestjs/common@12.4.0(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)
-      ajv: 8.20.0
-      bullmq: 6.7.2(ioredis@6.0.0)(pg@8.23.1)
-      cron: 4.4.0
-      es-module-lexer: 2.3.2
-      fastify: 5.12.5
-      find-my-way: 9.9.0
-      ioredis: 6.0.0
-      isomorphic-git: 1.43.3
-      jose: 6.2.16
-      kysely: 0.29.8
-      pg: 8.23.1
-      pino: 10.4.0
-      pino-pretty: 13.2.0
-      reflect-metadata: 0.2.2
-      rxjs: 7.8.2
-      semver: 7.8.6
-      tar-stream: 3.2.2
-      undici: 8.12.4
-      yaml: 2.9.1
-      yauzl: 3.4.0
-      zod: 4.6.7
-    transitivePeerDependencies:
-      - '@fastify/multipart'
-      - '@fastify/view'
-      - '@grpc/grpc-js'
-      - '@grpc/proto-loader'
-      - '@mikro-orm/core'
-      - '@mikro-orm/nestjs'
-      - '@nestjs/axios'
-      - '@nestjs/microservices'
-      - '@nestjs/mongoose'
-      - '@nestjs/platform-express'
-      - '@nestjs/sequelize'
-      - '@nestjs/typeorm'
-      - '@nestjs/websockets'
-      - '@opentelemetry/api'
-      - '@opentelemetry/exporter-trace-otlp-proto'
-      - '@opentelemetry/sdk-trace-base'
-      - '@prisma/client'
-      - bare-abort-controller
-      - bare-buffer
-      - bufferutil
-      - bullmq-otel
-      - class-transformer
-      - class-validator
-      - mongoose
-      - openai
-      - pg-native
-      - react
-      - react-dom
-      - react-native-b4a
-      - redis
-      - sequelize
-      - supports-color
-      - typeorm
-      - typescript
-      - utf-8-validate
-      - ws
-
-  '@capybara-hq/kernel@0.1.0-rc.17(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)':
-    dependencies:
-      '@capybara-hq/plugin-sdk': 0.1.0-rc.17
+      '@capybara-hq/plugin-sdk': 0.1.0-rc.19
       '@fastify/cookie': 11.1.5
       '@fastify/static': 9.3.0
       '@fastify/websocket': 11.3.7
@@ -4847,7 +4372,7 @@ snapshots:
       find-my-way: 9.9.0
       ioredis: 6.0.0
       isomorphic-git: 1.43.3
-      jose: 6.2.16
+      jose: 6.2.17
       kysely: 0.29.8
       pg: 8.23.1
       pino: 10.4.0
@@ -4904,12 +4429,12 @@ snapshots:
     optionalDependencies:
       react-dom: 19.3.1(react@19.3.1)
 
-  '@capybara-hq/plugin-model-fake@0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.17)(zod@4.6.7)':
+  '@capybara-hq/plugin-model-fake@0.1.0-rc.19(@capybara-hq/plugin-sdk@0.1.0-rc.19)(zod@4.6.7)':
     dependencies:
-      '@capybara-hq/plugin-sdk': 0.1.0-rc.17
+      '@capybara-hq/plugin-sdk': 0.1.0-rc.19
       zod: 4.6.7
 
-  '@capybara-hq/plugin-sdk@0.1.0-rc.17':
+  '@capybara-hq/plugin-sdk@0.1.0-rc.19':
     dependencies:
       '@types/mdast': 4.0.4
       kysely: 0.29.8
@@ -4924,57 +4449,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)':
-    dependencies:
-      '@capybara-hq/kernel': 0.1.0-rc.17(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)
-      '@capybara-hq/plugin-sdk': 0.1.0-rc.17
-      es-module-lexer: 2.3.2
-      esbuild: 0.28.2
-      oxc-parser: 0.154.0
-      tar-stream: 3.2.2
-    transitivePeerDependencies:
-      - '@fastify/multipart'
-      - '@fastify/view'
-      - '@grpc/grpc-js'
-      - '@grpc/proto-loader'
-      - '@mikro-orm/core'
-      - '@mikro-orm/nestjs'
-      - '@nestjs/axios'
-      - '@nestjs/microservices'
-      - '@nestjs/mongoose'
-      - '@nestjs/platform-express'
-      - '@nestjs/sequelize'
-      - '@nestjs/typeorm'
-      - '@nestjs/websockets'
-      - '@opentelemetry/api'
-      - '@opentelemetry/exporter-trace-otlp-proto'
-      - '@opentelemetry/sdk-trace-base'
-      - '@prisma/client'
-      - bare-abort-controller
-      - bare-buffer
-      - bufferutil
-      - bullmq-otel
-      - class-transformer
-      - class-validator
-      - mongoose
-      - openai
-      - pg-native
-      - react
-      - react-dom
-      - react-native-b4a
-      - redis
-      - sequelize
-      - supports-color
-      - typeorm
-      - typescript
-      - utf-8-validate
-      - ws
-    optional: true
-
   '@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)':
     dependencies:
-      '@capybara-hq/kernel': 0.1.0-rc.17(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)
-      '@capybara-hq/plugin-sdk': 0.1.0-rc.17
+      '@capybara-hq/kernel': 0.1.0-rc.25(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)
+      '@capybara-hq/plugin-sdk': 0.1.0-rc.19
       es-module-lexer: 2.3.2
       esbuild: 0.28.2
       oxc-parser: 0.154.0
@@ -5017,71 +4495,13 @@ snapshots:
       - utf-8-validate
       - ws
 
-  '@capybara-hq/testing@0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))':
+  '@capybara-hq/testing@0.1.0-rc.17(@capybara-hq/plugin-sdk@0.1.0-rc.19)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))':
     dependencies:
       '@aws-sdk/client-s3': 3.1165.0
       '@aws-sdk/s3-presigned-post': 3.1165.0
       '@aws-sdk/s3-request-presigner': 3.1165.0
-      '@capybara-hq/kernel': 0.1.0-rc.17(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)
-      '@capybara-hq/plugin-sdk': 0.1.0-rc.17
-      '@modelcontextprotocol/sdk': 1.32.2(@cfworker/json-schema@4.1.6)(zod@4.6.7)
-      '@testcontainers/postgresql': 12.2.1
-      ioredis: 6.0.0
-      kysely: 0.29.8
-      pg: 8.23.1
-      protobufjs: 7.6.6
-      testcontainers: 12.2.1
-      tsx: 4.23.15
-      vitest: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1))
-      ws: 8.22.2
-      zod: 4.6.7
-    optionalDependencies:
-      '@capybara-hq/plugin-tools': 0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)
-    transitivePeerDependencies:
-      - '@cfworker/json-schema'
-      - '@fastify/multipart'
-      - '@fastify/view'
-      - '@grpc/grpc-js'
-      - '@grpc/proto-loader'
-      - '@mikro-orm/core'
-      - '@mikro-orm/nestjs'
-      - '@nestjs/axios'
-      - '@nestjs/microservices'
-      - '@nestjs/mongoose'
-      - '@nestjs/platform-express'
-      - '@nestjs/sequelize'
-      - '@nestjs/typeorm'
-      - '@nestjs/websockets'
-      - '@opentelemetry/api'
-      - '@opentelemetry/exporter-trace-otlp-proto'
-      - '@opentelemetry/sdk-trace-base'
-      - '@prisma/client'
-      - bare-abort-controller
-      - bare-buffer
-      - bufferutil
-      - bullmq-otel
-      - class-transformer
-      - class-validator
-      - mongoose
-      - openai
-      - pg-native
-      - react
-      - react-dom
-      - react-native-b4a
-      - redis
-      - sequelize
-      - supports-color
-      - typeorm
-      - typescript
-      - utf-8-validate
-
-  '@capybara-hq/testing@0.1.0-rc.15(@capybara-hq/plugin-sdk@0.1.0-rc.17)(@capybara-hq/plugin-tools@0.1.0-rc.13(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))':
-    dependencies:
-      '@aws-sdk/client-s3': 3.1165.0
-      '@aws-sdk/s3-presigned-post': 3.1165.0
-      '@aws-sdk/s3-request-presigner': 3.1165.0
-      '@capybara-hq/kernel': 0.1.0-rc.17(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)
-      '@capybara-hq/plugin-sdk': 0.1.0-rc.17
+      '@capybara-hq/kernel': 0.1.0-rc.25(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)
+      '@capybara-hq/plugin-sdk': 0.1.0-rc.19
       '@modelcontextprotocol/sdk': 1.32.2(@cfworker/json-schema@4.1.6)(zod@4.6.7)
       '@testcontainers/postgresql': 12.2.1
       ioredis: 6.0.0
@@ -5144,7 +4564,7 @@ snapshots:
       '@changesets/types': 7.0.0
       import-meta-resolve: 4.2.0
       jsonc-parser: 3.3.1
-      semver: 7.8.5
+      semver: 7.8.6
 
   '@changesets/assemble-release-plan@7.0.0':
     dependencies:
@@ -5152,7 +4572,7 @@ snapshots:
       '@changesets/get-dependents-graph': 3.0.0
       '@changesets/should-skip-package': 1.0.0
       '@changesets/types': 7.0.0
-      semver: 7.8.5
+      semver: 7.8.6
 
   '@changesets/changelog-git@1.0.0':
     dependencies:
@@ -5179,7 +4599,7 @@ snapshots:
       import-meta-resolve: 4.2.0
       launch-editor: 2.14.2
       package-manager-detector: 1.9.0
-      semver: 7.8.5
+      semver: 7.8.6
       tinyexec: 1.3.1
 
   '@changesets/config@4.0.1':
@@ -5200,7 +4620,7 @@ snapshots:
   '@changesets/get-dependents-graph@3.0.0':
     dependencies:
       '@changesets/types': 7.0.0
-      semver: 7.8.5
+      semver: 7.8.6
 
   '@changesets/git@4.0.1':
     dependencies:
@@ -5292,7 +4712,7 @@ snapshots:
   '@commitlint/is-ignored@21.2.3':
     dependencies:
       '@commitlint/types': 21.2.3
-      semver: 7.8.5
+      semver: 7.8.6
 
   '@commitlint/lint@21.2.3':
     dependencies:
@@ -5569,10 +4989,6 @@ snapshots:
       protobufjs: 7.6.6
       yargs: 17.7.3
 
-  '@hono/node-server@2.1.5(hono@4.13.13)':
-    dependencies:
-      hono: 4.13.13
-
   '@hono/node-server@2.1.6(hono@4.13.17)':
     dependencies:
       hono: 4.13.17
@@ -5604,22 +5020,6 @@ snapshots:
       debug: 4.4.3
     transitivePeerDependencies:
       - supports-color
-
-  '@langchain/core@1.3.5(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.2)(zod@4.6.7))(ws@8.22.2)':
-    dependencies:
-      '@cfworker/json-schema': 4.1.6
-      '@standard-schema/spec': 1.1.0
-      js-tiktoken: 1.0.21
-      langsmith: 0.11.8(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.2)(zod@4.6.7))(ws@8.22.2)
-      mustache: 4.2.0
-      p-queue: 6.6.2
-      zod: 4.6.7
-    transitivePeerDependencies:
-      - '@opentelemetry/api'
-      - '@opentelemetry/exporter-trace-otlp-proto'
-      - '@opentelemetry/sdk-trace-base'
-      - openai
-      - ws
 
   '@langchain/core@1.3.5(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(ws@8.22.2)':
     dependencies:
@@ -5674,7 +5074,7 @@ snapshots:
       lodash.pickby: 4.6.0
       protobufjs: 7.6.6
       qs: 6.16.1
-      ws: 8.22.0
+      ws: 8.22.2
     transitivePeerDependencies:
       - bufferutil
       - debug
@@ -5702,30 +5102,6 @@ snapshots:
 
   '@microsoft/tsdoc@0.17.1': {}
 
-  '@modelcontextprotocol/sdk@1.32.1(@cfworker/json-schema@4.1.6)(zod@4.6.7)':
-    dependencies:
-      '@hono/node-server': 2.1.5(hono@4.13.13)
-      ajv: 8.20.0
-      ajv-formats: 3.0.1(ajv@8.20.0)
-      content-type: 1.0.5
-      cors: 2.8.6
-      cross-spawn: 7.0.6
-      eventsource: 3.0.7
-      eventsource-parser: 3.1.1
-      express: 5.3.0
-      express-rate-limit: 8.7.1(express@5.3.0)
-      hono: 4.13.13
-      jose: 6.2.12
-      json-schema-typed: 8.0.2
-      pkce-challenge: 5.0.1
-      raw-body: 3.0.2
-      zod: 4.6.7
-      zod-to-json-schema: 3.25.2(zod@4.6.7)
-    optionalDependencies:
-      '@cfworker/json-schema': 4.1.6
-    transitivePeerDependencies:
-      - supports-color
-
   '@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.6)(zod@4.6.7)':
     dependencies:
       '@hono/node-server': 2.1.6(hono@4.13.17)
@@ -5750,37 +5126,19 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4':
-    optional: true
-
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.7':
-    optional: true
-
-  '@msgpackr-extract/msgpackr-extract-darwin-x64@3.0.4':
     optional: true
 
   '@msgpackr-extract/msgpackr-extract-darwin-x64@3.0.7':
     optional: true
 
-  '@msgpackr-extract/msgpackr-extract-linux-arm64@3.0.4':
-    optional: true
-
   '@msgpackr-extract/msgpackr-extract-linux-arm64@3.0.7':
-    optional: true
-
-  '@msgpackr-extract/msgpackr-extract-linux-arm@3.0.4':
     optional: true
 
   '@msgpackr-extract/msgpackr-extract-linux-arm@3.0.7':
     optional: true
 
-  '@msgpackr-extract/msgpackr-extract-linux-x64@3.0.4':
-    optional: true
-
   '@msgpackr-extract/msgpackr-extract-linux-x64@3.0.7':
-    optional: true
-
-  '@msgpackr-extract/msgpackr-extract-win32-x64@3.0.4':
     optional: true
 
   '@msgpackr-extract/msgpackr-extract-win32-x64@3.0.7':
@@ -6034,13 +5392,13 @@ snapshots:
     dependencies:
       '@types/node': 26.6.5
 
-  '@slack/socket-mode@3.1.0(undici@8.12.3)':
+  '@slack/socket-mode@3.1.0(undici@8.12.4)':
     dependencies:
       '@slack/logger': 5.0.0
       '@slack/web-api': 8.2.0
       '@types/node': 26.6.5
       eventemitter3: 5.0.4
-      undici: 8.12.3
+      undici: 8.12.4
 
   '@slack/types@3.2.0': {}
 
@@ -6055,11 +5413,6 @@ snapshots:
       p-retry: 4.6.2
       retry: 0.13.1
 
-  '@smithy/core@3.36.1':
-    dependencies:
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
-
   '@smithy/core@3.39.0':
     dependencies:
       '@smithy/types': 4.20.0
@@ -6067,15 +5420,9 @@ snapshots:
 
   '@smithy/credential-provider-imds@4.5.2':
     dependencies:
-      '@smithy/core': 3.36.1
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
-
-  '@smithy/fetch-http-handler@5.8.0':
-    dependencies:
-      '@smithy/core': 3.36.1
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
+      '@smithy/core': 3.39.0
+      '@smithy/types': 4.20.0
+      tslib: 2.9.1
 
   '@smithy/fetch-http-handler@5.8.1':
     dependencies:
@@ -6083,33 +5430,17 @@ snapshots:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@smithy/node-http-handler@4.12.1':
-    dependencies:
-      '@smithy/core': 3.36.1
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
-
   '@smithy/node-http-handler@4.14.2':
     dependencies:
       '@smithy/core': 3.39.0
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@smithy/signature-v4@5.7.4':
-    dependencies:
-      '@smithy/core': 3.36.1
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
-
   '@smithy/signature-v4@5.7.5':
     dependencies:
       '@smithy/core': 3.39.0
       '@smithy/types': 4.20.0
       tslib: 2.9.1
-
-  '@smithy/types@4.19.0':
-    dependencies:
-      tslib: 2.8.1
 
   '@smithy/types@4.20.0':
     dependencies:
@@ -6446,8 +5777,6 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  bowser@2.14.1: {}
-
   bowser@2.15.0: {}
 
   brace-expansion@2.1.7:
@@ -6477,17 +5806,6 @@ snapshots:
 
   buildcheck@0.0.7:
     optional: true
-
-  bullmq@6.3.15(ioredis@6.0.0)(pg@8.23.1):
-    dependencies:
-      cron-parser: 5.10.2
-      msgpackr: 2.1.0
-      node-abort-controller: 3.1.1
-      semver: 7.8.5
-      tslib: 2.8.1
-    optionalDependencies:
-      ioredis: 6.0.0
-      pg: 8.23.1
 
   bullmq@6.7.2(ioredis@6.0.0)(pg@8.23.1):
     dependencies:
@@ -6631,10 +5949,6 @@ snapshots:
     dependencies:
       crc-32: 1.2.2
       readable-stream: 4.8.0
-
-  cron-parser@5.10.2:
-    dependencies:
-      luxon: 3.7.2
 
   cron-parser@5.10.3:
     dependencies:
@@ -6845,14 +6159,6 @@ snapshots:
       eventsource-parser: 3.1.1
 
   expect-type@1.4.0: {}
-
-  express-rate-limit@8.7.1(express@5.3.0):
-    dependencies:
-      debug: 4.4.3
-      express: 5.3.0
-      ip-address: 10.7.4
-    transitivePeerDependencies:
-      - supports-color
 
   express-rate-limit@8.7.4(express@5.3.0):
     dependencies:
@@ -7105,8 +6411,6 @@ snapshots:
 
   help-me@5.0.0: {}
 
-  hono@4.13.13: {}
-
   hono@4.13.17: {}
 
   html-encoding-sniffer@7.0.0:
@@ -7161,8 +6465,6 @@ snapshots:
       standard-as-callback: 2.1.0
     transitivePeerDependencies:
       - supports-color
-
-  ip-address@10.7.4: {}
 
   ip-address@10.7.6: {}
 
@@ -7221,10 +6523,6 @@ snapshots:
   jiti@2.6.1: {}
 
   jju@1.4.0: {}
-
-  jose@6.2.12: {}
-
-  jose@6.2.16: {}
 
   jose@6.2.17: {}
 
@@ -7287,14 +6585,6 @@ snapshots:
   jsonc-parser@3.3.1: {}
 
   kysely@0.29.8: {}
-
-  langsmith@0.11.8(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.2)(zod@4.6.7))(ws@8.22.2):
-    dependencies:
-      p-queue: 6.6.2
-    optionalDependencies:
-      '@opentelemetry/api': 1.9.1
-      openai: 7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.2)(zod@4.6.7)
-      ws: 8.22.2
 
   langsmith@0.11.8(@opentelemetry/api@1.9.1)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(ws@8.22.2):
     dependencies:
@@ -7752,18 +7042,6 @@ snapshots:
 
   ms@2.1.3: {}
 
-  msgpackr-extract@3.0.4:
-    dependencies:
-      node-gyp-build-optional-packages: 5.2.2
-    optionalDependencies:
-      '@msgpackr-extract/msgpackr-extract-darwin-arm64': 3.0.4
-      '@msgpackr-extract/msgpackr-extract-darwin-x64': 3.0.4
-      '@msgpackr-extract/msgpackr-extract-linux-arm': 3.0.4
-      '@msgpackr-extract/msgpackr-extract-linux-arm64': 3.0.4
-      '@msgpackr-extract/msgpackr-extract-linux-x64': 3.0.4
-      '@msgpackr-extract/msgpackr-extract-win32-x64': 3.0.4
-    optional: true
-
   msgpackr-extract@3.0.7:
     dependencies:
       node-gyp-build-optional-packages: 5.2.2
@@ -7775,10 +7053,6 @@ snapshots:
       '@msgpackr-extract/msgpackr-extract-linux-x64': 3.0.7
       '@msgpackr-extract/msgpackr-extract-win32-x64': 3.0.7
     optional: true
-
-  msgpackr@2.1.0:
-    optionalDependencies:
-      msgpackr-extract: 3.0.4
 
   msgpackr@2.1.4:
     optionalDependencies:
@@ -7819,15 +7093,6 @@ snapshots:
   once@1.4.0:
     dependencies:
       wrappy: 1.0.2
-
-  openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.2)(zod@4.6.7):
-    optionalDependencies:
-      '@aws-sdk/credential-provider-node': 3.972.95
-      '@smithy/signature-v4': 5.7.5
-      undici: 8.12.3
-      ws: 8.22.2
-      zod: 4.6.7
-    optional: true
 
   openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7):
     optionalDependencies:
@@ -8201,8 +7466,6 @@ snapshots:
 
   secure-json-parse@4.1.1: {}
 
-  semver@7.8.5: {}
-
   semver@7.8.6: {}
 
   send@1.2.1:
@@ -8463,7 +7726,7 @@ snapshots:
       ssh-remote-port-forward: 1.0.4
       tar-fs: 3.1.3
       tmp: 0.2.7
-      undici: 8.12.2
+      undici: 8.12.4
     transitivePeerDependencies:
       - bare-abort-controller
       - bare-buffer
@@ -8579,10 +7842,6 @@ snapshots:
   undici-types@5.26.5: {}
 
   undici-types@8.9.0: {}
-
-  undici@8.12.2: {}
-
-  undici@8.12.3: {}
 
   undici@8.12.4: {}
 
@@ -8702,8 +7961,6 @@ snapshots:
       strip-ansi: 7.2.0
 
   wrappy@1.0.2: {}
-
-  ws@8.22.0: {}
 
   ws@8.22.2: {}
 
