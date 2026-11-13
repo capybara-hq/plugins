@@ -1,0 +1,40 @@
+{
+  "name": "@capybara-hq/plugin-memory",
+  "version": "0.1.0-rc.0",
+  "description": "Memory for agents: each agent remembers each member across conversations, with an index at run start, memory tools, hybrid search and a memory page",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/capybara-hq/plugins.git",
+    "directory": "plugins/memory"
+  },
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/memory#readme",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@capybara-hq/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "migrations"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.19",
+    "kysely": "^0.29.8"
+  },
+  "devDependencies": {
+    "@capybara-hq/plugin-model-fake": "^0.1.0-rc.19",
+    "@capybara-hq/testing": "^0.1.0-rc.17",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.1"
+  }
+}
