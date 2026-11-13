@@ -1,6 +1,6 @@
 import { type ExtensionContext, ToolError } from "@capybara-hq/plugin-sdk";
 import { sql } from "kysely";
-import { type MemoryType, parseLinks, parsePath } from "./paths.js";
+import { MEMORY_TYPES, type MemoryType, parseLinks, parsePath } from "./paths.js";
 import { segmentMemory } from "./segment.js";
 
 /**
@@ -354,6 +354,31 @@ export async function edit(
       .executeTakeFirstOrThrow();
     return toRow(updated);
   });
+}
+
+/** One line of the memory index. */
+export interface IndexEntry {
+  path: string;
+  type: MemoryType;
+  description: string;
+}
+
+/**
+ * The owner's memories for the index, in index order: by type (user, feedback, project,
+ * reference), then most recalled first, then by path. Only stable fields: no timestamps.
+ */
+export async function indexEntries(db: Db, owner: Owner): Promise<IndexEntry[]> {
+  const rows = await db
+    .selectFrom("memories")
+    .select(["path", "type", "description"])
+    .where("org_id", "=", owner.orgId)
+    .where("agent_id", "=", owner.agentId)
+    .where("account_id", "=", owner.accountId)
+    .orderBy(sql`array_position(${sql.val([...MEMORY_TYPES])}::text[], type)`)
+    .orderBy("recall_count", "desc")
+    .orderBy(sql`path COLLATE "C"`)
+    .execute();
+  return rows.map((r) => ({ path: r.path, type: r.type, description: r.description }));
 }
 
 /** The owner's memories with these ids (others' ids are ignored), in no particular order. */

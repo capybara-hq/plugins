@@ -3,6 +3,7 @@ import {
   type ContextProvider,
   defineExtension,
 } from "@capybara-hq/plugin-sdk";
+import { provideMemoryContext } from "./context.js";
 import { EMBED_QUEUE, type EmbedJob, runEmbedJob } from "./embed.js";
 import { registerTools } from "./tools.js";
 
@@ -34,7 +35,7 @@ export default defineExtension({
     ctx.queue.define<EmbedJob>(EMBED_QUEUE, (job) => runEmbedJob(ctx, job));
     // view, search, write, edit, delete (declared in permissions.tools; specs in tools.ts)
     registerTools(ctx);
-    const provider: ContextProvider = { provide: async () => null };
+    const provider: ContextProvider = { provide: (req) => provideMemoryContext(ctx.db, req) };
     ctx.provide(CONTEXT_EXTENSION_POINT, provider);
   },
 });
