@@ -110,11 +110,11 @@ function render(opts: {
   answer?: (c: Call) => { view?: { blocks: []; data: unknown }; toast?: string };
 }) {
   const h = renderWithFakeHost(
-    createElement(MemoryPage, { plugin: "memory", contribution: "memory-page", slot: SLOT }),
+    createElement(MemoryPage, { plugin: "memory", contribution: "overview", slot: SLOT }),
     {
       slot: SLOT,
       plugin: "memory",
-      contribution: "memory-page",
+      contribution: "overview",
       role: opts.role ?? "member",
       locale: opts.locale ?? "en",
       reducedMotion: opts.reducedMotion ?? true,
@@ -143,6 +143,9 @@ const buttons = (label: string) =>
   [...document.querySelectorAll("button")].filter(
     (b) => b.textContent === label || b.getAttribute("aria-label") === label,
   );
+/** The member select an admin gets (the fake host draws Select as a native select). */
+const memberSelect = () => document.querySelector<HTMLSelectElement>('select[aria-label="Member"]');
+
 const click = async (el: Element | undefined) => {
   if (el === undefined) throw new Error("nothing to click");
   await act(async () => {
@@ -194,7 +197,7 @@ afterEach(() => {
 describe("memory page", () => {
   it("is the org.page component of the client entry", () => {
     expect(extension.name).toBe("memory");
-    expect(extension.components?.["memory-page"]?.slot).toBe("org.page");
+    expect(extension.components?.["overview"]?.slot).toBe("org.page");
   });
 
   it("renders the memories: the count, the canvas and one list row per node", async () => {
@@ -302,10 +305,7 @@ describe("memory page", () => {
       }),
       answer: openAnswer,
     });
-    const select = document.querySelector<HTMLSelectElement>(
-      '[data-testid="memory-member-select"]',
-    );
-    expect(select?.value).toBe(BEN);
+    expect(memberSelect()?.value).toBe(BEN);
     expect(text()).toContain("You are viewing Ben's memories");
     await toList();
     await click(rows()[0]);
@@ -316,7 +316,7 @@ describe("memory page", () => {
 
   it("a member gets no member select", () => {
     render({});
-    expect(document.querySelector('[data-testid="memory-member-select"]')).toBeNull();
+    expect(memberSelect()).toBeNull();
   });
 
   it("an admin switching members calls `select` with the account and adopts the answer", async () => {
@@ -342,9 +342,7 @@ describe("memory page", () => {
       }),
       answer: (c) => (c.actionId === "select" ? { view: { blocks: [], data: benPage } } : {}),
     });
-    const select = document.querySelector(
-      '[data-testid="memory-member-select"]',
-    ) as HTMLSelectElement;
+    const select = memberSelect() as HTMLSelectElement;
     await act(async () => {
       select.value = BEN;
       select.dispatchEvent(new Event("change", { bubbles: true }));
@@ -448,9 +446,7 @@ describe("memory page", () => {
 
     // a search still running when the selection changes is dropped
     await searchFor("latte");
-    const select = document.querySelector(
-      '[data-testid="memory-member-select"]',
-    ) as HTMLSelectElement;
+    const select = memberSelect() as HTMLSelectElement;
     await act(async () => {
       select.value = BEN;
       select.dispatchEvent(new Event("change", { bubbles: true }));
@@ -482,6 +478,24 @@ describe("memory page", () => {
     });
     expect(text()).toContain("No memories yet");
     expect(document.querySelector("canvas")).toBeNull();
+  });
+
+  it("a selection with no memories keeps the toolbar thin: no search, no view toggle, a compact page", () => {
+    render({ data: pageData({ nodes: [], edges: [], total: 0 }) });
+    expect(text()).toContain("No memories yet");
+    expect(document.querySelector(".cx-memory-search")).toBeNull();
+    expect(document.querySelector(".cx-memory-toggle")).toBeNull();
+    expect(document.querySelector(".cx-memory-page")?.getAttribute("data-empty")).toBe("true");
+  });
+
+  it("offers full screen, and fit only while a graph is drawn", () => {
+    render({});
+    expect(buttons("Full screen")).toHaveLength(1);
+    expect(buttons("Fit to view")).toHaveLength(1);
+    host?.unmount();
+    render({ data: pageData({ nodes: [], edges: [], total: 0 }) });
+    expect(buttons("Full screen")).toHaveLength(1);
+    expect(buttons("Fit to view")).toHaveLength(0);
   });
 
   it("shows the no-access state to a guest", () => {

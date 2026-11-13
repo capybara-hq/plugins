@@ -22,6 +22,18 @@
   color: var(--cb-ink);
 }
 
+/* No memories: the page is as tall as what it shows, not a viewport-high empty box. */
+.cx-memory-page[data-empty="true"] {
+  height: auto;
+}
+
+/* 全屏: the page element is the fullscreen element and fills the screen. */
+.cx-memory-page[data-fullscreen="true"] {
+  height: 100dvh;
+  padding: var(--cb-space-4);
+  background: var(--cb-bg);
+}
+
 /* ---------- Top bar ---------- */
 
 .cx-memory-toolbar {
@@ -116,17 +128,45 @@
   opacity: 0.55;
 }
 
+/* The search is one field: the icon and the input share the border, so the focus ring goes round
+   the whole field (a ring on the input alone was clipped by the field's edge). */
 .cx-memory-search {
+  box-sizing: border-box;
   display: flex;
   flex: 1 1 220px;
   align-items: center;
   gap: var(--cb-space-2);
   max-width: 420px;
+  height: var(--cb-field-height, 32px);
+  padding: 0 var(--cb-space-2);
+  border: 1px solid var(--cb-line);
+  border-radius: var(--cb-radius-sm);
+  background: var(--cb-panel);
   color: var(--cb-muted);
+  transition: border-color var(--cb-motion) ease;
+}
+
+.cx-memory-search:hover {
+  border-color: var(--cb-line-strong);
+}
+
+.cx-memory-search:focus-within {
+  border-color: var(--cb-accent);
+  box-shadow: 0 0 0 3px var(--cb-focus-ring);
 }
 
 .cx-memory-search .cx-memory-input {
   flex: 1;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.cx-memory-search .cx-memory-input:hover,
+.cx-memory-search .cx-memory-input:focus-visible {
+  border: 0;
+  box-shadow: none;
 }
 
 .cx-memory-toolbar-end {
@@ -188,6 +228,11 @@
   min-height: 320px;
   padding: var(--cb-space-6);
   text-align: center;
+}
+
+/* No memories: a compact empty state, not a viewport-high blank panel. */
+.cx-memory-page[data-empty="true"] .cx-memory-state {
+  min-height: 220px;
 }
 
 .cx-memory-state-icon {

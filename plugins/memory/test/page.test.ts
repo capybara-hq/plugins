@@ -385,6 +385,6 @@ describe("memory page", { timeout: 60_000 }, () => {
       selection: { agentId: null, accountId: "acc-new" },
       nodes: [],
     });
-    expect(PAGE).toBe("memory-page");
+    expect(PAGE).toBe("overview");
   });
 });

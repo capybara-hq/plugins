@@ -33,6 +33,8 @@ export const COPY = {
   list: { zh: "列表", en: "List" },
   view: { zh: "显示方式", en: "View" },
   fit: { zh: "适配视图", en: "Fit to view" },
+  fullscreen: { zh: "全屏", en: "Full screen" },
+  exitFullscreen: { zh: "退出全屏", en: "Exit full screen" },
   loading: { zh: "正在载入记忆…", en: "Loading memories…" },
   failed: { zh: "记忆载入失败。", en: "Could not load the memories." },
   retry: { zh: "重试", en: "Retry" },
