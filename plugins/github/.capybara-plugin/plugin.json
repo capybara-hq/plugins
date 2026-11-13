@@ -6,7 +6,7 @@
     "zh": "GitHub",
     "en": "GitHub"
   },
-  "version": "0.1.0-rc.1",
+  "version": "0.1.0-rc.2",
   "publisher": "Capybara",
   "description": {
     "en": "Agents work with GitHub as the connected person: issues, pull requests, reviews, repositories and Actions runs, through GitHub's remote MCP server. Each member connects with OAuth through a GitHub App (or OAuth App) the org admin registers",
