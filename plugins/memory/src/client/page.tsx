@@ -64,7 +64,7 @@ import {
 } from "./i18n.js";
 
 /**
- * The memory page (`org.page` "memory-page"): a top bar (agent, member for admins, search), the
+ * The memory page (`org.page` "overview"): a top bar (agent, member for admins, search), the
  * directory neural tree on a canvas (or a list), and a side panel with the open memory.
  *
  * Data: the server view's `MemoryPageData`, then `more` until the cursor is null (nodes and edges

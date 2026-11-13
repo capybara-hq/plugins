@@ -170,7 +170,7 @@ describe("memory in a kernel", () => {
     // the memory page's server view, served by the kernel (the component's data)
     const page = await owner({
       method: "GET",
-      url: `/api/v1/orgs/${orgId}/ui/views/memory/memory-page?locale=en`,
+      url: `/api/v1/orgs/${orgId}/ui/views/memory/overview?locale=en`,
     });
     expect(page.statusCode, page.body).toBe(200);
     expect((page.json() as { view: { data: unknown } }).view.data).toMatchObject({

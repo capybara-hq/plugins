@@ -35,7 +35,7 @@ import {
 type Db = ExtensionContext["db"];
 
 /** The page's contribution id (manifest `ui`, `permissions.ui.components`). */
-export const PAGE = "memory-page";
+export const PAGE = "overview";
 
 /** Most memories one owner pair keeps, and so most nodes the page can list. */
 const MAX_NODES = 1000;

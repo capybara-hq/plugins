@@ -110,11 +110,11 @@ function render(opts: {
   answer?: (c: Call) => { view?: { blocks: []; data: unknown }; toast?: string };
 }) {
   const h = renderWithFakeHost(
-    createElement(MemoryPage, { plugin: "memory", contribution: "memory-page", slot: SLOT }),
+    createElement(MemoryPage, { plugin: "memory", contribution: "overview", slot: SLOT }),
     {
       slot: SLOT,
       plugin: "memory",
-      contribution: "memory-page",
+      contribution: "overview",
       role: opts.role ?? "member",
       locale: opts.locale ?? "en",
       reducedMotion: opts.reducedMotion ?? true,
@@ -202,7 +202,7 @@ afterEach(() => {
 describe("memory page", () => {
   it("is the org.page component of the client entry", () => {
     expect(extension.name).toBe("memory");
-    expect(extension.components?.["memory-page"]?.slot).toBe("org.page");
+    expect(extension.components?.["overview"]?.slot).toBe("org.page");
   });
 
   it("renders the memories: the count, the canvas and one list row per node", async () => {
