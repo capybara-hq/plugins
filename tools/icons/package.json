@@ -1,0 +1,17 @@
+{
+  "name": "@capybara-hq/icons",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "exports": {
+    "./bitmaps": "./src/bitmaps.ts",
+    "./compose": "./src/compose.ts"
+  }
+}

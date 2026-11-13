@@ -240,12 +240,13 @@ describe("ci.yml", () => {
     expect([...((wf.jobs["ci-ok"] as Job).needs as string[])].sort()).toEqual(others);
   });
 
-  it("the ci job runs the plugin checks, the skill checks and the marketplace check", () => {
+  it("the ci job runs the plugin checks, the icon and skill checks and the marketplace check", () => {
     const text = jobText(wf.jobs.ci as Job);
     expect(text).toContain('capybara-plugin check --base \\"$(git rev-parse HEAD^1)\\"');
     expect(text).toContain(
       'capybara-plugin marketplace --check --base \\"$(git rev-parse HEAD^1)\\"',
     );
+    expect(text).toContain("pnpm check:plugin-icons");
     expect(text).toContain("pnpm check:synced-skills");
     expect(text).toContain("pnpm check:skills-frontmatter");
     expect(text).toContain("pnpm lint");

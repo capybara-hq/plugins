@@ -8,6 +8,7 @@
   },
   "version": "0.1.0-rc.0",
   "publisher": "Capybara",
+  "icon": "./icon.svg",
   "description": {
     "en": "Core skills every agent can use; today skill-guide, which teaches an agent to write, register, test and share its own skills",
     "zh": "每个智能体都能用的核心技能；目前是 skill-guide，教智能体编写、注册、测试并分享自己的技能"

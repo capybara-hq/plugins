@@ -24,11 +24,13 @@ plugins. Data locations keep their old names (`plugin_<name>` schemas, `/plugin-
 | `tools/ci` | The CI plan for a diff (`tools/ci/src/affected.ts`, run by the `changes` job) |
 | `tools/dev` | `pnpm doctor:env` and `pnpm verify` (same JSON contract as core's) |
 | `tools/worktree` | `pnpm wt:new` / `wt:rm` / `wt:ls`, paired with `.claude/hooks/branch-safety.sh` |
-| `tools/checks` | `check:synced-skills`, `check:skills-frontmatter`, and the workflow layout tests |
+| `tools/checks` | `check:plugin-icons`, `check:synced-skills`, `check:skills-frontmatter`, and the workflow layout tests |
+| `tools/icons` | `pnpm icons:generate`: writes a functional plugin's composed `icon.svg` from the pixel capybara bitmap and one of the seven function glyphs |
 | `.agents/skills/` | Agent-facing skills (`.claude/skills` symlinks here): the author half of core's writing skills, plus `onboarding`, `contributing`, `reviewing-prs`, synced from `capybara-hq/.github` (edit them there and run the sync; `check:synced-skills` rejects in-place edits) |
 
 `tools/ci`, `tools/dev`, `tools/worktree` and the two skill checks are copies of core's, adapted to
-this repository; they move to `capybara-hq/.github` once a third repository needs them.
+this repository; `tools/icons` and `check:plugin-icons` are specific to this repository. They move
+to `capybara-hq/.github` once a third repository needs them.
 
 ## Dependencies
 
@@ -91,6 +93,11 @@ Package names are always `@capybara-hq/plugin-<name>`; `repository.url` is
   test titles are partly Chinese; when you touch a file, write new comments in English and translate
   the comments and test titles you edit. Model-facing text (tool descriptions, model-visible errors)
   is always English.
+- Plugin icons: a functional official plugin ships the composed icon (the pixel capybara plus its
+  function glyph, accent only, light and dark) and references it as `icon` in `plugin.json`; brand
+  plugins keep their own mark (the explicit list in `tools/checks/src/plugin-icons.ts`), and the
+  private example plugins are excluded. Regenerate with `pnpm icons:generate`; `check:plugin-icons`
+  is the authority.
 - **When a rule can be checked automatically, the check is the authority.** Every check has a test
   where a violating fixture makes it fail; a new check is proven red first.
 
@@ -100,7 +107,7 @@ Package names are always `@capybara-hq/plugin-<name>`; `repository.url` is
 pnpm install
 pnpm lint        # biome check
 pnpm typecheck   # tsc -b, plus the tests' tsconfig
-pnpm check       # capybara-plugin check (every plugin check) + the skill checks
+pnpm check       # capybara-plugin check (every plugin check) + the icon and skill checks
 pnpm check:marketplace   # capybara-plugin marketplace --check
 pnpm test        # vitest run (needs Docker: Testcontainers PostgreSQL / Valkey, sandbox-docker)
 pnpm exec vitest run plugins/<name>   # one plugin's tests, from the repo root
@@ -157,7 +164,7 @@ workers and other tests' child processes run plain Node. This is temporary, unti
   |---|---|---|
   | `ci`: `pnpm lint`, `pnpm typecheck` | full | cheap |
   | `capybara-plugin check` (dependency boundary, extension state, permissions incl. `perm-hooks` / `perm-ui`, plugin pack, tool design, migrations, `plugin-test-imports`, `plugin-release-metadata`); on PRs with `--base "$(git rev-parse HEAD^1)"`, which also fails when the diff edits, deletes or renames an applied migration | full | reads every plugin, seconds |
-  | `check:synced-skills`, `check:skills-frontmatter` | full | reads a few small files |
+  | `check:plugin-icons`, `check:synced-skills`, `check:skills-frontmatter` | full | reads every plugin's icon reference and a few small files |
   | `capybara-plugin marketplace --check`; on PRs with `--base "$(git rev-parse HEAD^1)"`: a plugin's version may only increase, a same version keeps its integrity, and changed entries match their packs | full | packs every public plugin, seconds; the release gate depends on it |
   | `pnpm pack-plugins` (artifact `plugin-packages`), commitlint (PRs) | full | cheap |
   | `test` (vitest; Docker on the runner; live tests skip without their env vars) | by diff | the changed plugins plus every plugin that depends on them (by `plugin.json` dependencies or package.json dependencies, transitively); `.claude/hooks/**` and `.claude/settings.json` run `tools/worktree`, `.agents/**` runs `tools/checks`; 2 shards on a full run, else 1 |
