@@ -167,6 +167,19 @@ describe("memory in a kernel", () => {
     expect(ctx2).toContain("- feedback/reply-in-chinese.md — Reply in Chinese");
     expect(req2?.tools).toEqual(expect.arrayContaining(["plugin__memory__view"]));
 
+    // the memory page's server view, served by the kernel (the component's data)
+    const page = await owner({
+      method: "GET",
+      url: `/api/v1/orgs/${orgId}/ui/views/memory/memory-page?locale=en`,
+    });
+    expect(page.statusCode, page.body).toBe(200);
+    expect((page.json() as { view: { data: unknown } }).view.data).toMatchObject({
+      canAdmin: true,
+      agents: [{ id: agentId, name: "Helper" }],
+      selection: { agentId },
+      nodes: [{ path: "feedback/reply-in-chinese.md", recalls: 0 }],
+    });
+
     // a group conversation: neither the context nor the memory tools. (The kernel stores the
     // source at creation from the channel inbound; setting it here stands in for a fake IM group.)
     const group = await createConversation(owner, orgId, agentId);

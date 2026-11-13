@@ -32,9 +32,16 @@
     "kysely": "^0.29.8"
   },
   "devDependencies": {
+    "@capybara-hq/plugin-client": "^0.1.0-rc.4",
     "@capybara-hq/plugin-model-fake": "^0.1.0-rc.19",
     "@capybara-hq/testing": "^0.1.0-rc.17",
     "@types/pg": "^8.23.1",
-    "pg": "^8.23.1"
+    "@types/react": "^19.3.0",
+    "pg": "^8.23.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "peerDependencies": {
+    "@capybara-hq/plugin-client": "^0.1.0-rc.4"
   }
 }

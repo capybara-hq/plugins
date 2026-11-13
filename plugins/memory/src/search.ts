@@ -124,7 +124,8 @@ function snippetOf(row: MemoryRow, tokens: string[]): string {
 
 /**
  * Searches the owner's memories for `query`; at most `limit` hits (1 to {@link MAX_SEARCH_LIMIT}),
- * best first. Never errors for lack of a model: keyword search alone answers then.
+ * best first. Never errors for lack of a model: keyword search alone answers then. The hits count
+ * as recalls unless `touch` is false (the memory page: only the model's use is a recall).
  */
 export async function search(
   ctx: MemoryDeps,
@@ -132,7 +133,7 @@ export async function search(
   owner: Owner,
   query: string,
   limit: number,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; touch?: boolean } = {},
 ): Promise<SearchHit[]> {
   const n = Math.max(1, Math.min(MAX_SEARCH_LIMIT, Math.floor(limit) || 1));
   const tokens = [...new Set(segment(query))];
@@ -160,10 +161,12 @@ export async function search(
     )
     .slice(0, n)
     .map((h) => ({ ...h, snippet: snippetOf(h.row, tokens) }));
-  await touch(
-    db,
-    owner,
-    hits.map((h) => h.row.id),
-  );
+  if (opts.touch !== false) {
+    await touch(
+      db,
+      owner,
+      hits.map((h) => h.row.id),
+    );
+  }
   return hits;
 }

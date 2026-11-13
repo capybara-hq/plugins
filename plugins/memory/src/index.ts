@@ -6,6 +6,7 @@ import {
 import { registerCleanup } from "./cleanup.js";
 import { provideMemoryContext } from "./context.js";
 import { EMBED_QUEUE, type EmbedJob, runEmbedJob } from "./embed.js";
+import { PAGE, registerPage } from "./page.js";
 import { registerTools } from "./tools.js";
 
 /**
@@ -19,7 +20,18 @@ export default defineExtension({
   version: "0.1.0-rc.0",
   sdk: "^0.1.0-rc.19",
   provides: [CONTEXT_EXTENSION_POINT],
+  ui: [
+    {
+      id: PAGE,
+      title: { zh: "记忆", en: "Memory" },
+      slot: "org.page",
+      kind: "component",
+      icon: "book",
+    },
+  ],
   permissions: {
+    client: true,
+    ui: { components: [PAGE] },
     tools: ["view", "search", "write", "edit", "delete"],
     hooks: ["org.member_removed", "agent.deleted", "org.deleted"],
     models: [
@@ -40,5 +52,7 @@ export default defineExtension({
     ctx.provide(CONTEXT_EXTENSION_POINT, provider);
     // member, agent and org removal delete the memories they owned
     registerCleanup(ctx);
+    // the memory page's data and actions (the client component draws it)
+    registerPage(ctx);
   },
 });
