@@ -144,12 +144,7 @@ const buttons = (label: string) =>
     (b) => b.textContent === label || b.getAttribute("aria-label") === label,
   );
 /** The member select an admin gets (the fake host draws Select as a native select). */
-const memberSelect = () => {
-  const field = [...document.querySelectorAll("label.cx-memory-field")].find(
-    (l) => l.querySelector(".cx-memory-field-label")?.textContent === "Member",
-  );
-  return (field?.querySelector("select") ?? null) as HTMLSelectElement | null;
-};
+const memberSelect = () => document.querySelector<HTMLSelectElement>('select[aria-label="Member"]');
 
 const click = async (el: Element | undefined) => {
   if (el === undefined) throw new Error("nothing to click");

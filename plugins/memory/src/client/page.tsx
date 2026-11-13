@@ -463,10 +463,11 @@ export function MemoryPage() {
           void runSearch(query);
         }}
       >
-        <label className="cx-memory-field">
+        <div className="cx-memory-field">
           <span className="cx-memory-field-label">{t(COPY.agent)}</span>
           <Select
             value={data.selection.agentId ?? ""}
+            aria-label={t(COPY.agent)}
             placeholder="—"
             disabled={busy || data.agents.length === 0}
             options={data.agents.map((a) => ({ value: a.id, label: a.name }))}
@@ -474,17 +475,18 @@ export function MemoryPage() {
               void select({ agentId: e.target.value, accountId: data.selection.accountId })
             }
           />
-        </label>
+        </div>
         {data.canAdmin && data.members !== undefined ? (
-          <label className="cx-memory-field">
+          <div className="cx-memory-field">
             <span className="cx-memory-field-label">{t(COPY.member)}</span>
             <Select
               value={data.selection.accountId}
+              aria-label={t(COPY.member)}
               disabled={busy}
               options={data.members.map((m) => ({ value: m.id, label: m.name }))}
               onChange={(e) => void select({ accountId: e.target.value })}
             />
-          </label>
+          </div>
         ) : null}
         {empty ? null : (
           <div className="cx-memory-search">

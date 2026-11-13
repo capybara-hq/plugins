@@ -27,10 +27,6 @@
   height: auto;
 }
 
-.cx-memory-page[data-empty="true"] .cx-memory-state {
-  min-height: 220px;
-}
-
 /* 全屏: the page element is the fullscreen element and fills the screen. */
 .cx-memory-page[data-fullscreen="true"] {
   height: 100dvh;
@@ -232,6 +228,11 @@
   min-height: 320px;
   padding: var(--cb-space-6);
   text-align: center;
+}
+
+/* No memories: a compact empty state, not a viewport-high blank panel. */
+.cx-memory-page[data-empty="true"] .cx-memory-state {
+  min-height: 220px;
 }
 
 .cx-memory-state-icon {

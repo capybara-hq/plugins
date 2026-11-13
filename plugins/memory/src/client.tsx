@@ -8,5 +8,5 @@ import { MemoryPage } from "./client/page.js";
  */
 export default defineClientExtension({
   name: "memory",
-  components: { "overview": defineComponent("org.page", MemoryPage) },
+  components: { overview: defineComponent("org.page", MemoryPage) },
 });
