@@ -8,5 +8,5 @@
     "types": ["node"]
   },
   "include": ["**/test/**/*.ts", "vitest.config.ts", "vitest.setup.ts", "commitlint.config.ts"],
-  "exclude": ["node_modules", "**/dist", "plugins/theme-cyberpunk/test"]
+  "exclude": ["node_modules", "**/dist", "plugins/memory/test", "plugins/theme-cyberpunk/test"]
 }
