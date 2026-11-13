@@ -623,6 +623,61 @@
           "integrity": "sha512-bbs/eYsyQIuIBcORHgI5zf2NCfoIwluO4yBD7iTb1JRvs4t5ktfafd28q1VIYtcNEBOgYZdfu4+H7HOJUg3FaA=="
         }
       }
+    },
+    {
+      "name": "memory",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Memory for agents: each agent remembers each member across conversations, with an index at run start, memory tools, hybrid search and a memory page",
+        "zh": "智能体记忆：每个智能体跨会话记住每位成员，运行开始时给出记忆索引，提供记忆工具、混合检索和记忆页面"
+      },
+      "displayName": {
+        "zh": "记忆",
+        "en": "Memory"
+      },
+      "icon": "./plugins/memory/icon.svg",
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/memory#readme",
+      "permissions": {
+        "keys": [
+          "permissions.client",
+          "permissions.hooks:agent.deleted",
+          "permissions.hooks:org.deleted",
+          "permissions.hooks:org.member_removed",
+          "permissions.models:memory.embed (embedding)",
+          "permissions.tools:delete",
+          "permissions.tools:edit",
+          "permissions.tools:search",
+          "permissions.tools:view",
+          "permissions.tools:write",
+          "provides:context@1",
+          "table:admin_access_log",
+          "table:memories",
+          "table:memory_links",
+          "table:memory_neighbors",
+          "table:owners",
+          "ui.component:memory-page"
+        ],
+        "sensitive": [
+          "permissions.client",
+          "permissions.hooks:agent.deleted",
+          "permissions.hooks:org.deleted",
+          "permissions.hooks:org.member_removed",
+          "permissions.tools:delete",
+          "permissions.tools:edit",
+          "permissions.tools:search",
+          "permissions.tools:view",
+          "permissions.tools:write",
+          "provides:context@1",
+          "ui.component:memory-page"
+        ]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-memory",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-kvhVGYcNZmLC4GBfvLBXV3uNs+RbQeJfXeYte7ynVb6MjU/dPD+oOCijAFMflSnwk8GFyH2vsYi/zseJUbWmTQ=="
+        }
+      }
     }
   ]
 }
