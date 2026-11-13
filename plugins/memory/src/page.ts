@@ -9,7 +9,7 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import { enqueueEmbed, type MemoryDeps } from "./embed.js";
 import type { MemoryType } from "./paths.js";
-import { search } from "./search.js";
+import { MAX_QUERY_LENGTH, search } from "./search.js";
 import {
   getByIds,
   linksOf,
@@ -476,9 +476,12 @@ async function detailOf(db: Db, owner: Owner, row: MemoryRow): Promise<MemoryDet
   };
 }
 
+/** A UUID in its canonical 8-4-4-4-12 form (memory ids are `uuid`; anything else is not found). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 async function memoryOf(db: Db, sel: Selection, payload: unknown): Promise<MemoryRow | null> {
   const id = optString(payload, "memoryId");
-  if (typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id)) return null;
+  if (typeof id !== "string" || !UUID_RE.test(id)) return null;
   const [row] = await getByIds(db, sel.owner, [id]);
   return row ?? null;
 }
@@ -519,7 +522,7 @@ export async function pageAction(ctx: MemoryDeps, args: UiActionArgs): Promise<U
     }
     case "search": {
       const query = field(payload, "query");
-      if (typeof query !== "string" || query.length > 500) return toast(T.invalid);
+      if (typeof query !== "string" || query.length > MAX_QUERY_LENGTH) return toast(T.invalid);
       await logAccess(db, caller, sel, "view", null);
       if (query.trim() === "") return viewOf({ hits: [] });
       const hits = await search(ctx, db, sel.owner, query, SEARCH_LIMIT, {
@@ -549,7 +552,7 @@ export async function pageAction(ctx: MemoryDeps, args: UiActionArgs): Promise<U
           conversationId: null,
         });
         // the text changed: re-embed through the queue (a page call does not wait for a model)
-        await enqueueEmbed(ctx.queue, sel.owner, saved.id).catch(() => {});
+        await enqueueEmbed(ctx.queue, sel.owner, saved).catch(() => {});
         return viewOf({ detail: await detailOf(db, sel.owner, saved) });
       } catch (e) {
         if (e instanceof MemoryError) {

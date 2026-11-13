@@ -65,10 +65,21 @@ export interface QueuedJob {
   opts: unknown;
 }
 
+/**
+ * A stand-in for `ctx.queue` that dedupes like the kernel's: a job id already added (pending,
+ * completed or failed and still retained) is not added again. The kernel keeps completed and
+ * failed jobs for a while (`removeOnComplete` / `removeOnFail`), so a reused id is a dropped job.
+ */
 export function fakeQueue(jobs: QueuedJob[]): ExtensionContext["queue"] {
+  const retained = new Set<string>();
   return {
     define() {},
     async add(name, data, opts) {
+      const id = (opts as { jobId?: string } | undefined)?.jobId;
+      if (id !== undefined) {
+        if (retained.has(id)) return;
+        retained.add(id);
+      }
       jobs.push({ name, data, opts });
     },
   };

@@ -8,7 +8,7 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import { EMBED_RETRY_DELAY_MS, embedMemory, enqueueEmbed, type MemoryDeps } from "./embed.js";
 import { MEMORY_TYPES, parsePath } from "./paths.js";
-import { MAX_SEARCH_LIMIT, search } from "./search.js";
+import { MAX_QUERY_LENGTH, MAX_SEARCH_LIMIT, search } from "./search.js";
 import {
   edit,
   get,
@@ -124,6 +124,7 @@ const SEARCH: ToolSpec = {
       query: {
         type: "string",
         minLength: 1,
+        maxLength: MAX_QUERY_LENGTH,
         description: 'Words or a question, in any language, e.g. "reply language" or "部署流程".',
       },
       limit: {
@@ -250,7 +251,7 @@ async function embedWithin(
   });
   if (await Promise.race([embedded, stopped])) return;
   try {
-    await enqueueEmbed(ctx.queue, owner, row.id, EMBED_RETRY_DELAY_MS);
+    await enqueueEmbed(ctx.queue, owner, row, EMBED_RETRY_DELAY_MS);
   } catch {
     // the memory is saved; a later search re-embeds memories without a vector
   }
@@ -328,6 +329,11 @@ function searchHandler(ctx: MemoryDeps): ToolHandler {
   return async (input, call) => {
     const owner = ownerOf(call);
     const query = str(input, "query");
+    if (query.length > MAX_QUERY_LENGTH) {
+      throw new ToolError(
+        `The query is ${query.length} characters, more than the ${MAX_QUERY_LENGTH} characters allowed. Use a shorter query: a few key words or a short question, not pasted text.`,
+      );
+    }
     const rawLimit = field(input, "limit");
     const limit = typeof rawLimit === "number" ? rawLimit : DEFAULT_SEARCH_LIMIT;
     const hits = await search(ctx, ctx.db, owner, query, limit, { signal: call.signal });
@@ -394,7 +400,7 @@ function deleteHandler(ctx: MemoryDeps): ToolHandler {
 
 /** Registers the five memory tools (call from `setup`). */
 export function registerTools(
-  ctx: Pick<ExtensionContext, "db" | "models" | "queue" | "tools">,
+  ctx: MemoryDeps & Pick<ExtensionContext, "tools">,
   opts: { embedWaitMs?: number } = {},
 ): void {
   const waitMs = opts.embedWaitMs ?? EMBED_WAIT_MS;

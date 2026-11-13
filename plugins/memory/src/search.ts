@@ -14,6 +14,8 @@ import { getByIds, type MemoryRow, type Owner, touch } from "./store.js";
 
 type Db = ExtensionContext["db"];
 
+/** Longest query, in characters (the tool's schema and the memory page's search box). */
+export const MAX_QUERY_LENGTH = 500;
 /** Most hits one search returns. */
 export const MAX_SEARCH_LIMIT = 20;
 /** Candidates taken from each ranking before fusion. */
@@ -62,7 +64,7 @@ async function keywordRank(db: Db, owner: Owner, tokens: string[]): Promise<stri
 async function enqueueStale(ctx: MemoryDeps, owner: Owner, model: string): Promise<void> {
   const stale = await ctx.db
     .selectFrom("memories")
-    .select("id")
+    .select(["id", "description", "body"])
     .where("org_id", "=", owner.orgId)
     .where("agent_id", "=", owner.agentId)
     .where("account_id", "=", owner.accountId)
@@ -73,7 +75,9 @@ async function enqueueStale(ctx: MemoryDeps, owner: Owner, model: string): Promi
     .orderBy("id")
     .limit(STALE_BATCH)
     .execute();
-  for (const { id } of stale) await enqueueEmbed(ctx.queue, owner, id as string);
+  for (const r of stale) {
+    await enqueueEmbed(ctx.queue, owner, { id: r.id, description: r.description, body: r.body });
+  }
 }
 
 async function semanticRank(
@@ -99,7 +103,15 @@ async function semanticRank(
     return [];
   }
   if (vector === undefined || vector.length === 0) return [];
-  await enqueueStale(ctx, owner, model);
+  try {
+    await enqueueStale(ctx, owner, model);
+  } catch (e) {
+    // re-embedding is best effort: a queue (Redis) failure must not fail the search
+    ctx.log?.warn("memory: could not enqueue stale memories for re-embedding", {
+      orgId: owner.orgId,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
   const near = await nearest(ctx.db, owner, vector, model, CANDIDATES);
   return near.filter((n) => n.score >= MIN_SIMILARITY).map((n) => n.id);
 }

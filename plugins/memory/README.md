@@ -11,10 +11,16 @@ What the plugin does:
 
 - **An index at run start** (`context@1`): a fixed English block that explains the memory system to
   the model (what to save, what not to save, check before writing, recalled memories are background
-  and may be stale), then one line per memory, `- <path> — <description>`, grouped by type and
-  ordered by recalls. At most 200 lines or 16 KB; past that the index ends with "N more memories
-  not listed". The text has no timestamps and a stable order, so it only changes when the memories
-  do (the kernel appends a new context event only then).
+  and may be stale), then one line per memory, `- <path> — <description>`, grouped by type (user,
+  feedback, project, reference) and ordered by path within a type. At most 200 lines (the "N more"
+  line included) or 16 KB; past that the index ends with "N more memories not listed". The text
+  has no timestamps, no recall counts and a stable order, so it only changes when a memory is
+  written, edited or deleted (the kernel appends a new context event only then).
+
+  > **Ruling (2026-11-13), a deviation from spec §5.2 the maintainer may overturn:** the spec
+  > orders each type by recall count. That would let every recall change the index text and so
+  > cause a new `plugin_context` event and a prompt-cache miss at the next run. The index orders by
+  > path instead (`COLLATE "C"`); recall counts are kept for the memory page's graph only.
 - **Five tools** the model uses on its own, like Claude Code saves memories without asking.
 - **Hybrid search**: keyword and semantic, merged by reciprocal rank fusion.
 - **A memory page** (记忆 / Memory, under the org's pages): the directory neural tree.

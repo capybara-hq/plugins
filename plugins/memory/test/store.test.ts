@@ -71,7 +71,7 @@ describe("store", () => {
       type: "feedback",
       description: "Reply in Chinese",
       body: "回复一律用中文",
-      embedding: null,
+      hasEmbedding: false,
       recallCount: 0,
       lastRecalledAt: null,
       createdIn: "conv-1",
@@ -159,6 +159,21 @@ describe("store", () => {
     ]);
     expect((await list(db, A, "proj")).map((r) => r.path)).toEqual([]);
     expect((await list(db, A, "/")).map((r) => r.path)).toHaveLength(3);
+  });
+
+  it("list matches a directory with a supplementary-plane character literally", async () => {
+    // U+20000 is two UTF-16 code units but one character in PostgreSQL
+    await write(A, "project/𠀀/plan.md");
+    await write(A, "project/𠀀x/other.md");
+    await write(A, "project/plan.md");
+    expect((await list(db, A, "project/𠀀")).map((r) => r.path)).toEqual(["project/𠀀/plan.md"]);
+    expect((await list(db, A, "project")).map((r) => r.path)).toHaveLength(3);
+  });
+
+  it("rows do not carry the vector, only whether there is one", async () => {
+    const { row } = await write(A, "user/role.md");
+    expect(row).not.toHaveProperty("embedding");
+    expect(row.hasEmbedding).toBe(false);
   });
 
   it("rejects an invalid path, a long description, a multi-line description and a large body", async () => {

@@ -3,14 +3,15 @@ import { type IndexEntry, indexEntries, type Owner, rememberOwner } from "./stor
 
 /**
  * The memory context (`context@1`): at each run start, the guidance below and the index of the
- * owner's memories. The text depends only on the memories' paths, descriptions, types and recall
- * order (no timestamps, a stable sort), so it stays byte-identical while nothing changed and the
- * kernel records it again only when the index really changed.
+ * owner's memories. The text depends only on the memories' paths, descriptions and types (no
+ * timestamps, no recall counts, a stable sort by type then path), so it stays byte-identical while
+ * no memory is written, edited or deleted, and the kernel records it again only then. Recalls
+ * never change it (see {@link indexEntries} for the ruling against spec §5.2's recall order).
  */
 
 type Db = ExtensionContext["db"];
 
-/** Most memory lines in the index. */
+/** Most lines in the index, the "N more" line included. */
 export const INDEX_MAX_LINES = 200;
 /** Largest index, in UTF-8 bytes (memory lines and the "N more" line). */
 export const INDEX_MAX_BYTES = 16 * 1024;
@@ -49,7 +50,8 @@ const bytes = (s: string): number => Buffer.byteLength(s, "utf8");
 
 /**
  * The index text: one line per memory in the given order, at most {@link INDEX_MAX_LINES} lines
- * and {@link INDEX_MAX_BYTES} bytes; past either cap it ends with the "N more" line.
+ * and {@link INDEX_MAX_BYTES} bytes in all; past either cap it keeps as many memory lines as fit
+ * with the "N more" line (at most {@link INDEX_MAX_LINES} - 1) and ends with that line.
  */
 export function renderIndex(entries: IndexEntry[]): string {
   if (entries.length === 0) return "No memories yet.";
@@ -59,7 +61,7 @@ export function renderIndex(entries: IndexEntry[]): string {
   // the longest prefix that leaves room for the "N more" line (lines are joined by "\n")
   let kept = 0;
   let size = 0;
-  while (kept < lines.length && kept < INDEX_MAX_LINES) {
+  while (kept < lines.length && kept < INDEX_MAX_LINES - 1) {
     const next = size + bytes(lines[kept] ?? "") + 1;
     if (next + bytes(MORE(lines.length - kept - 1)) > INDEX_MAX_BYTES) break;
     size = next;

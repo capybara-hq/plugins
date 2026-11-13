@@ -8,7 +8,7 @@ import type {
 import { ToolError } from "@capybara-hq/plugin-sdk";
 import { startTestPostgres, type TestContainer } from "@capybara-hq/testing";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { EMBED_QUEUE } from "../src/embed.js";
+import { EMBED_QUEUE, embedJobId } from "../src/embed.js";
 import { get, put } from "../src/store.js";
 import { NOT_AVAILABLE, registerTools } from "../src/tools.js";
 import { fakeModels, fakeQueue, type QueuedJob } from "./fakes.js";
@@ -179,9 +179,10 @@ describe("memory tools", { timeout: 60_000 }, () => {
     const text = await run("write", { path: "user/coffee", description: "Coffee", body: "x" });
     expect(text).toContain("Created memory user/coffee.md");
     const row = await get(db, A, "user/coffee.md");
+    if (row === null) throw new Error("not written");
     expect(jobs.map((j) => [j.name, (j.opts as { jobId: string }).jobId])).toContainEqual([
       EMBED_QUEUE,
-      `memory-embed-${row?.id}`,
+      embedJobId(row),
     ]);
   });
 
@@ -279,5 +280,18 @@ describe("memory tools", { timeout: 60_000 }, () => {
       "   回复一律用中文",
     ]);
     expect(await run("search", { query: "nothing-like-this" })).toContain("No memories match");
+  });
+
+  it("search refuses a query longer than 500 characters with an actionable error", async () => {
+    const { registered, run } = tools();
+    const query = registered.get("search")?.spec.inputSchema.properties as Record<
+      string,
+      { maxLength?: number }
+    >;
+    expect(query.query?.maxLength).toBe(500);
+    const err = await run("search", { query: "x".repeat(501) }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ToolError);
+    expect((err as Error).message).toMatch(/500 characters.*shorter/);
+    expect(await run("search", { query: "x".repeat(500) })).toContain("No memories match");
   });
 });

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ExtensionContext } from "@capybara-hq/plugin-sdk";
 import { sql } from "kysely";
 import { getByIds, type MemoryRow, type Owner } from "./store.js";
@@ -12,8 +13,9 @@ import { getByIds, type MemoryRow, type Owner } from "./store.js";
 
 type Db = ExtensionContext["db"];
 
-/** What the embedding and search code uses of `ctx`. */
-export type MemoryDeps = Pick<ExtensionContext, "db" | "models" | "queue">;
+/** What the embedding and search code uses of `ctx` (`log` is optional so tests can leave it out). */
+export type MemoryDeps = Pick<ExtensionContext, "db" | "models" | "queue"> &
+  Partial<Pick<ExtensionContext, "log">>;
 
 /** The model purpose the plugin declares (`permissions.models`). */
 export const EMBED_PURPOSE = "memory.embed";
@@ -33,12 +35,24 @@ export interface EmbedJob extends Owner {
 /** `provider/id`, as stored in `embedding_model`. */
 export const modelKey = (m: { provider: string; id: string }): string => `${m.provider}/${m.id}`;
 
-/** The job id of a memory's embedding job (no `:`; one pending job per memory). */
-export const embedJobId = (memoryId: string): string => `memory-embed-${memoryId}`;
-
 /** The text a memory's vector is made from. */
 export const documentText = (row: Pick<MemoryRow, "description" | "body">): string =>
   `${row.description}\n${row.body}`;
+
+/** What identifies one text of one memory: its id and the text its vector is made from. */
+export type EmbedTarget = Pick<MemoryRow, "id" | "description" | "body">;
+
+/**
+ * The job id of embedding one text of a memory: the memory's id and the first 12 hex digits of the
+ * SHA-256 of {@link documentText} (no `:`). The queue keeps completed and failed jobs for a while
+ * and dedupes on the id while it keeps them, so an id per memory alone would drop the job of a
+ * later edit; an id per text dedupes only repeats of the same text. The job reloads the latest row
+ * either way, so a job for an older text is harmless.
+ */
+export const embedJobId = (row: EmbedTarget): string => {
+  const digest = createHash("sha256").update(documentText(row)).digest("hex").slice(0, 12);
+  return `memory-embed-${row.id}-${digest}`;
+};
 
 function errorCode(e: unknown): string | undefined {
   if (typeof e !== "object" || e === null || !("code" in e)) return undefined;
@@ -55,21 +69,21 @@ export const isPermanentEmbedError = (e: unknown): boolean => {
   return code === "model.unconfigured" || code === "model.hook_denied";
 };
 
-/** Enqueues (re-)embedding a memory; one job per memory at a time (deterministic job id). */
+/** Enqueues (re-)embedding a memory's current text; one job per text (see {@link embedJobId}). */
 export async function enqueueEmbed(
   queue: MemoryDeps["queue"],
   owner: Owner,
-  memoryId: string,
+  row: EmbedTarget,
   delayMs?: number,
 ): Promise<void> {
   const data: EmbedJob = {
     orgId: owner.orgId,
     agentId: owner.agentId,
     accountId: owner.accountId,
-    memoryId,
+    memoryId: row.id,
   };
   await queue.add(EMBED_QUEUE, data, {
-    jobId: embedJobId(memoryId),
+    jobId: embedJobId(row),
     ...(delayMs === undefined ? {} : { delayMs }),
   });
 }
@@ -197,7 +211,7 @@ async function updateNeighbors(
 export async function computeEmbedding(
   ctx: MemoryDeps,
   owner: Owner,
-  row: MemoryRow,
+  row: EmbedTarget,
   signal?: AbortSignal,
 ): Promise<void> {
   const res = await ctx.models.embed({
@@ -233,14 +247,14 @@ export async function computeEmbedding(
 export async function embedMemory(
   ctx: MemoryDeps,
   owner: Owner,
-  row: MemoryRow,
+  row: EmbedTarget,
   opts: { signal?: AbortSignal } = {},
 ): Promise<void> {
   try {
     await computeEmbedding(ctx, owner, row, opts.signal);
   } catch (e) {
     if (isPermanentEmbedError(e)) return;
-    await enqueueEmbed(ctx.queue, owner, row.id, EMBED_RETRY_DELAY_MS);
+    await enqueueEmbed(ctx.queue, owner, row, EMBED_RETRY_DELAY_MS);
   }
 }
 
@@ -254,7 +268,7 @@ export async function runEmbedJob(ctx: MemoryDeps, job: EmbedJob): Promise<void>
   if (row === undefined) return;
   const target = await ctx.models.describe({ orgId: owner.orgId, purpose: EMBED_PURPOSE });
   if (target === null) return;
-  if (row.embedding !== null && row.embeddingModel === modelKey(target)) return;
+  if (row.hasEmbedding && row.embeddingModel === modelKey(target)) return;
   try {
     await computeEmbedding(ctx, owner, row);
   } catch (e) {

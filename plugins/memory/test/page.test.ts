@@ -357,6 +357,27 @@ describe("memory page", { timeout: 60_000 }, () => {
     expect(new Set(edges.map((e) => `${e.from}>${e.to}`)).size).toBe(299);
   });
 
+  it("a memoryId that is not a UUID is not found (never reaches the database)", async () => {
+    await write(own(MIA), "user/coffee.md", "Loves espresso");
+    const missing = await act(MIA, "member", "open", {
+      agentId: AGENT,
+      memoryId: "00000000-0000-4000-8000-000000000000",
+    });
+    expect(missing).toMatchObject({ toast: expect.anything() });
+    for (const memoryId of ["-".repeat(36), "0".repeat(36), `${"a".repeat(8)}-${"b".repeat(27)}`]) {
+      for (const actionId of ["open", "edit", "delete"]) {
+        expect(
+          await act(MIA, "member", actionId, {
+            agentId: AGENT,
+            memoryId,
+            description: "d",
+            body: "b",
+          }),
+        ).toEqual(missing);
+      }
+    }
+  });
+
   it("the first view of a member with no memories yet has no agent and no nodes", async () => {
     const data = await view("acc-new", "member");
     expect(data).toMatchObject({

@@ -89,7 +89,7 @@ describe("memory context", { timeout: 120_000 }, () => {
     expect(res).toEqual({ text: `${GUIDANCE}\n\nNo memories yet.` });
   });
 
-  it("lists memories by type (user, feedback, project, reference), then recalls, then path", async () => {
+  it("lists memories by type (user, feedback, project, reference), then path; recalls do not reorder", async () => {
     const ref = await write("reference/dash", "Dashboards");
     await write("project/b", "Project B");
     const pa = await write("project/a", "Project A");
@@ -106,9 +106,9 @@ describe("memory context", { timeout: 120_000 }, () => {
     expect(indexOf(res?.text ?? "")).toEqual([
       "- user/role.md — Role",
       "- feedback/tone.md — Tone",
-      "- project/c.md — Project C",
       "- project/a.md — Project A",
       "- project/b.md — Project B",
+      "- project/c.md — Project C",
       "- reference/dash.md — Dashboards",
     ]);
   });
@@ -116,9 +116,11 @@ describe("memory context", { timeout: 120_000 }, () => {
   it("stops at 200 lines with the 'N more' line", async () => {
     for (let i = 0; i < 250; i++) await write(`project/p${String(i).padStart(3, "0")}`, `P${i}`);
     const lines = indexOf((await provideMemoryContext(db, request()))?.text ?? "");
-    expect(lines).toHaveLength(INDEX_MAX_LINES + 1);
-    expect(lines[INDEX_MAX_LINES]).toBe(
-      "- … 50 more memories not listed; use plugin__memory__search or plugin__memory__view to find them, and consolidate.",
+    // 199 memory lines and the "N more" line: 200 lines in all
+    expect(lines).toHaveLength(INDEX_MAX_LINES);
+    expect(lines[INDEX_MAX_LINES - 2]).toBe("- project/p198.md — P198");
+    expect(lines[INDEX_MAX_LINES - 1]).toBe(
+      "- … 51 more memories not listed; use plugin__memory__search or plugin__memory__view to find them, and consolidate.",
     );
     expect(Buffer.byteLength(lines.join("\n"))).toBeLessThanOrEqual(INDEX_MAX_BYTES);
   });
@@ -136,13 +138,15 @@ describe("memory context", { timeout: 120_000 }, () => {
     );
   });
 
-  it("returns the same text when nothing changed, and after a recall that keeps the order", async () => {
+  it("returns the same text when nothing changed, and after any recalls", async () => {
     const a = await write("user/a", "A");
-    await write("user/b", "B");
-    await touch(db, A, [a.row.id]);
+    const b = await write("user/b", "B");
     const first = await provideMemoryContext(db, request());
     const second = await provideMemoryContext(db, request({ runId: "run-2" }));
     expect(second).toEqual(first);
+    // recalling b more often than a would have reordered a recall-ordered index
+    await touch(db, A, [b.row.id]);
+    await touch(db, A, [b.row.id]);
     await touch(db, A, [a.row.id]);
     expect(await provideMemoryContext(db, request({ runId: "run-3" }))).toEqual(first);
   });

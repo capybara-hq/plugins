@@ -18,7 +18,11 @@ export interface Owner {
   accountId: string;
 }
 
-/** A memory as the plugin uses it (the row without its search tokens). */
+/**
+ * A memory as the plugin uses it: the row without its search tokens and without the vector (a few
+ * KB per row that only the embedding code reads, straight from the column); `hasEmbedding` says
+ * whether there is one.
+ */
 export interface MemoryRow {
   id: string;
   orgId: string;
@@ -28,7 +32,7 @@ export interface MemoryRow {
   type: MemoryType;
   description: string;
   body: string;
-  embedding: number[] | null;
+  hasEmbedding: boolean;
   embeddingModel: string | null;
   recallCount: number;
   lastRecalledAt: Date | null;
@@ -115,13 +119,6 @@ function checkBody(body: string): void {
   }
 }
 
-/** Parses an embedding read as text: pgvector prints `[1,2]`, a `real[]` prints `{1,2}`. */
-function parseEmbedding(text: string | null): number[] | null {
-  if (text === null) return null;
-  const inner = text.slice(1, -1).trim();
-  return inner === "" ? [] : inner.split(",").map(Number);
-}
-
 /** The selected columns of a {@link MemoryRow}, with the owner filter applied by the caller. */
 // capybara:allow-module-state read-only column list
 const COLUMNS = [
@@ -154,7 +151,7 @@ function toRow(r: Raw): MemoryRow {
     type: r.type,
     description: r.description,
     body: r.body,
-    embedding: parseEmbedding(r.embedding_text ?? null),
+    hasEmbedding: r.has_embedding === true,
     embeddingModel: r.embedding_model,
     recallCount: r.recall_count,
     lastRecalledAt: r.last_recalled_at,
@@ -164,11 +161,11 @@ function toRow(r: Raw): MemoryRow {
   };
 }
 
-/** Selects memories of one owner (all three ids), with the embedding as text. */
+/** Selects memories of one owner (all three ids); whether a vector exists, never the vector. */
 function selectOwned(db: Db, owner: Owner) {
   return db
     .selectFrom("memories")
-    .select([...COLUMNS, sql<string | null>`embedding::text`.as("embedding_text")])
+    .select([...COLUMNS, sql<boolean>`embedding IS NOT NULL`.as("has_embedding")])
     .where("org_id", "=", owner.orgId)
     .where("agent_id", "=", owner.agentId)
     .where("account_id", "=", owner.accountId);
@@ -206,7 +203,8 @@ async function dropDerived(trx: Db, memoryId: string): Promise<void> {
 
 /**
  * The owner's memories, by path; with `dir`, only those under that directory (`/` or empty = all).
- * The directory is compared as a literal prefix, so `%` or `_` match only themselves.
+ * The directory is compared as a literal prefix (`starts_with`, counted in characters by
+ * PostgreSQL, not in UTF-16 units), so `%` or `_` match only themselves.
  */
 export async function list(db: Db, owner: Owner, dir?: string): Promise<MemoryRow[]> {
   let q = selectOwned(db, owner);
@@ -216,7 +214,7 @@ export async function list(db: Db, owner: Owner, dir?: string): Promise<MemoryRo
     .replace(/^\/+|\/+$/g, "");
   if (d !== "") {
     const prefix = `${d}/`;
-    q = q.where(sql<boolean>`left(path, ${prefix.length}) = ${prefix}`);
+    q = q.where(sql<boolean>`starts_with(path, ${prefix})`);
   }
   const rows = await q.orderBy("path").execute();
   return rows.map(toRow);
@@ -365,7 +363,12 @@ export interface IndexEntry {
 
 /**
  * The owner's memories for the index, in index order: by type (user, feedback, project,
- * reference), then most recalled first, then by path. Only stable fields: no timestamps.
+ * reference), then by path (`COLLATE "C"`, byte order). Only stable fields: no timestamps.
+ *
+ * Deviation from spec §5.2, a maintainer-overturnable call (2026-11-13): the spec orders each type
+ * by recall count. That makes every recall a possible change of the index text, and so a new
+ * `plugin_context` event and a cache miss at the next run start. Ordering by path keeps the text
+ * identical until a memory is written, edited or deleted; recall counts stay for the page graph.
  */
 export async function indexEntries(db: Db, owner: Owner): Promise<IndexEntry[]> {
   const rows = await db
@@ -375,7 +378,6 @@ export async function indexEntries(db: Db, owner: Owner): Promise<IndexEntry[]> 
     .where("agent_id", "=", owner.agentId)
     .where("account_id", "=", owner.accountId)
     .orderBy(sql`array_position(${sql.val([...MEMORY_TYPES])}::text[], type)`)
-    .orderBy("recall_count", "desc")
     .orderBy(sql`path COLLATE "C"`)
     .execute();
   return rows.map((r) => ({ path: r.path, type: r.type, description: r.description }));

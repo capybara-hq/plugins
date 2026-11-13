@@ -4,10 +4,12 @@ import {
   startTestPostgres,
   type TestContainer,
 } from "@capybara-hq/testing";
+import { sql } from "kysely";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   EMBED_QUEUE,
   EMBED_RETRY_DELAY_MS,
+  embedJobId,
   embedMemory,
   type MemoryDeps,
   runEmbedJob,
@@ -162,9 +164,10 @@ describe.each(schemas)("search on an $name schema", { timeout: 180_000 }, ({ sta
       {
         name: EMBED_QUEUE,
         data: { ...A, memoryId: row.id },
-        opts: { jobId: `memory-embed-${row.id}` },
+        opts: { jobId: embedJobId(row) },
       },
     ]);
+    expect(embedJobId(row)).toMatch(new RegExp(`^memory-embed-${row.id}-[0-9a-f]{12}$`));
     // the job re-embeds with the current model; then the vector path finds it
     await runEmbedJob(next, { ...A, memoryId: row.id });
     expect((await get(db, A, row.path))?.embeddingModel).toBe("fake/emb-2");
@@ -176,7 +179,7 @@ describe.each(schemas)("search on an $name schema", { timeout: 180_000 }, ({ sta
   it("embedMemory stores the vector; no model mapped is silent; a failure enqueues a retry", async () => {
     const row = await write(A, "user/morning.md", "Drinks a coffee", "Habit");
     await embedMemory(deps(fakeModels({ mapped: false })), A, row);
-    expect((await get(db, A, row.path))?.embedding).toBeNull();
+    expect((await get(db, A, row.path))?.hasEmbedding).toBe(false);
     expect(jobs).toEqual([]);
 
     await embedMemory(deps(fakeModels({ fail: true })), A, row);
@@ -184,14 +187,24 @@ describe.each(schemas)("search on an $name schema", { timeout: 180_000 }, ({ sta
       {
         name: EMBED_QUEUE,
         data: { ...A, memoryId: row.id },
-        opts: { jobId: `memory-embed-${row.id}`, delayMs: EMBED_RETRY_DELAY_MS },
+        opts: { jobId: embedJobId(row), delayMs: EMBED_RETRY_DELAY_MS },
       },
     ]);
 
     await embedMemory(deps(fakeModels()), A, row);
     const stored = await get(db, A, row.path);
-    expect(stored?.embedding).toHaveLength(5);
+    expect(stored?.hasEmbedding).toBe(true);
     expect(stored?.embeddingModel).toBe("fake/emb-1");
+    const { dims } = await db
+      .selectFrom("memories")
+      .select(
+        sql<number>`cardinality(string_to_array(trim(both '[]{}' from embedding::text), ','))`.as(
+          "dims",
+        ),
+      )
+      .where("id", "=", row.id)
+      .executeTakeFirstOrThrow();
+    expect(Number(dims)).toBe(5);
   });
 
   it("does not store a vector for text that changed while it was computed", async () => {
@@ -203,7 +216,49 @@ describe.each(schemas)("search on an $name schema", { timeout: 180_000 }, ({ sta
       conversationId: null,
     });
     await embedMemory(deps(fakeModels()), A, row);
-    expect((await get(db, A, row.path))?.embedding).toBeNull();
+    expect((await get(db, A, row.path))?.hasEmbedding).toBe(false);
+  });
+
+  it("re-enqueues a memory edited after its embedding job completed (the job id follows the text)", async () => {
+    const d = deps(fakeModels());
+    const row = await write(A, "user/morning.md", "Drinks a coffee every morning", "Habit");
+    await search(d, db, A, "espresso", 5);
+    expect(jobs.map((j) => j.data)).toEqual([{ ...A, memoryId: row.id }]);
+    await runEmbedJob(d, { ...A, memoryId: row.id });
+    expect((await get(db, A, row.path))?.hasEmbedding).toBe(true);
+
+    // the edit drops the vector; the completed job is still retained by the queue
+    const { row: edited } = await put(db, A, {
+      path: row.path,
+      description: "Habit",
+      body: "Drinks a latte every morning",
+      conversationId: null,
+    });
+    await search(d, db, A, "espresso", 5);
+    expect(jobs.map((j) => (j.opts as { jobId: string }).jobId)).toEqual([
+      embedJobId(row),
+      embedJobId(edited),
+    ]);
+    expect(embedJobId(edited)).not.toBe(embedJobId(row));
+    // the same text again is the same job (deduped while pending)
+    await search(d, db, A, "espresso", 5);
+    expect(jobs).toHaveLength(2);
+  });
+
+  it("still answers when enqueueing stale memories fails", async () => {
+    await write(A, "user/morning.md", "Drinks a coffee every morning", "Habit");
+    const broken: MemoryDeps = {
+      db,
+      models: fakeModels(),
+      queue: {
+        define() {},
+        async add() {
+          throw new Error("Redis is down");
+        },
+      },
+    };
+    const hits = await search(broken, db, A, "coffee", 5);
+    expect(hits.map((h) => h.row.path)).toEqual(["user/morning.md"]);
   });
 
   it("links near-identical memories as neighbours both ways, not dissimilar ones", async () => {
