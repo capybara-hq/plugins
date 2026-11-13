@@ -260,8 +260,13 @@ export function MemoryPage() {
     setDetail(null);
   }, []);
 
+  // every search, and every change of selection, takes the next number: only the answer to the
+  // latest search, made for the selection still shown, may set the results
+  const searchSeq = useRef(0);
+
   const select = useCallback(
     async (payload: Record<string, string>) => {
+      searchSeq.current += 1;
       setBusy(true);
       setNotice(null);
       try {
@@ -361,22 +366,30 @@ export function MemoryPage() {
     async (q: string) => {
       const cur = loadedRef.current;
       if (cur === null || cur.source.selection.agentId === null) return;
+      const seq = ++searchSeq.current;
       if (q.trim() === "") {
         setHits(null);
         return;
       }
+      // a later search or another selection made this answer stale
+      const stale = () =>
+        seq !== searchSeq.current ||
+        loadedRef.current === null ||
+        !sameSelection(loadedRef.current.source, cur.source);
       try {
         const r = await action("search", { payload: { ...selPayload(cur.source), query: q } });
+        if (stale()) return;
         const h = asHits(r.view?.data);
         if (h !== null) setHits(h);
       } catch (e) {
-        fail(e);
+        if (!stale()) fail(e);
       }
     },
     [action, fail],
   );
   useEffect(() => {
     if (query.trim() === "") {
+      searchSeq.current += 1;
       setHits(null);
       return;
     }

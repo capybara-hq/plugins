@@ -390,6 +390,78 @@ describe("memory page", () => {
     expect(text()).toContain("3 memories");
   });
 
+  it("only the latest search, for the current selection, sets the results", async () => {
+    const pending: { query: unknown; resolve: (v: unknown) => void }[] = [];
+    const hitsFor = (snippet: string) => ({
+      view: {
+        blocks: [] as [],
+        data: { hits: [{ id: "m1", path: "user/coffee.md", description: "d", snippet }] },
+      },
+    });
+    const benPage = pageData({
+      canAdmin: true,
+      editable: false,
+      members: [
+        { id: ME, name: "Mia" },
+        { id: BEN, name: "Ben" },
+      ],
+      selection: { agentId: AGENT, accountId: BEN },
+      nodes: [node("b1", "user/ben.md")],
+      total: 1,
+    });
+    render({
+      role: "admin",
+      data: pageData({
+        canAdmin: true,
+        members: [
+          { id: ME, name: "Mia" },
+          { id: BEN, name: "Ben" },
+        ],
+      }),
+      answer: ((c: Call) => {
+        if (c.actionId === "select") return { view: { blocks: [], data: benPage } };
+        if (c.actionId !== "search") return {};
+        return new Promise((resolve) => pending.push({ query: c.payload.query, resolve }));
+      }) as never,
+    });
+    const input = document.querySelector('input[type="search"]') as HTMLInputElement;
+    const searchFor = async (q: string) => {
+      await act(async () => {
+        const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+        set?.call(input, q);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => {
+        input.form?.requestSubmit();
+      });
+    };
+    await searchFor("coffee");
+    await searchFor("tea");
+    expect(pending.map((p) => p.query)).toEqual(["coffee", "tea"]);
+    // the newer answer arrives first; the older one must not replace it
+    await act(async () => pending[1]?.resolve(hitsFor("tea-snippet")));
+    await flush();
+    await act(async () => pending[0]?.resolve(hitsFor("coffee-snippet")));
+    await flush();
+    expect(text()).toContain("tea-snippet");
+    expect(text()).not.toContain("coffee-snippet");
+
+    // a search still running when the selection changes is dropped
+    await searchFor("latte");
+    const select = document.querySelector(
+      '[data-testid="memory-member-select"]',
+    ) as HTMLSelectElement;
+    await act(async () => {
+      select.value = BEN;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+    expect(text()).toContain("1 memory");
+    await act(async () => pending[2]?.resolve(hitsFor("latte-snippet")));
+    await flush();
+    expect(text()).not.toContain("latte-snippet");
+  });
+
   it("animates with motion, and stops under reduced motion (the layout settles once)", () => {
     render({ reducedMotion: true });
     expect(frames).toBe(0);
