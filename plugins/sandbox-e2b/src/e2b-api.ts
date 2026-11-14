@@ -11,8 +11,13 @@
  *   - Network update (checked 2026-11-12, `SandboxApi.updateNetwork` / `buildNetworkUpdateBody`):
  *     `PUT /sandboxes/{id}/network` with the flat body `SandboxNetworkUpdateConfig`
  *     (`allow_internet_access`, `allowOut`, `denyOut`, `egressProxy`, `rules`), 204 on success; it
- *     replaces the whole egress configuration (an omitted field is cleared) and works only on a
- *     running sandbox (404 when missing, and E2B's 404 on a paused one too, see README "Egress").
+ *     replaces the whole network configuration (an omitted field is cleared) and works only on a
+ *     running sandbox (404 when missing, and E2B's 404 on a paused one too, see README "Network
+ *     policy"). Live checks 2026-11-14: `allowOut` + `denyOut: ["0.0.0.0/0"]` filters a host's
+ *     resolved destination IP (a private IP for an allowed name is refused), and `denyOut` of
+ *     the private / loopback / link-local CIDRs is accepted (except `0.0.0.0/8`, which the API
+ *     rejects as invalid). The microVM metadata service at 169.254.169.254 is NOT filtered by any
+ *     of this, which is why the plugin refuses `open-public` instead of mapping it.
  *   - Pause body `{memory: false}` (`Sandbox.pause(id, { mode: "filesystem" })`: processes end, files
  *     stay) and create's `autoPauseMemory: false` (`lifecycle.onTimeout: { action: "pause", mode:
  *     "filesystem" }`).
@@ -43,7 +48,10 @@ const API_TIMEOUT_MS = 60_000;
 /** envd 每隔多少秒发一次保活事件（官方 SDK 用 50）。 */
 const KEEPALIVE_SECONDS = 50;
 
-/** The CIDR of all traffic (the SDK's `ALL_TRAFFIC`): `denyOut` of an allowlist. */
+/**
+ * The CIDR of all traffic (the SDK's `ALL_TRAFFIC`): `denyOut` of an allowlist. The provider never
+ * sends `allow_internet_access: true`: an open network is refused (README "Network policy").
+ */
 export const ALL_TRAFFIC = "0.0.0.0/0";
 
 /**
@@ -52,7 +60,7 @@ export const ALL_TRAFFIC = "0.0.0.0/0";
  * everything else denied.
  */
 export type NetworkUpdate =
-  | { allow_internet_access: boolean }
+  | { allow_internet_access: false }
   | { allowOut: string[]; denyOut: string[] };
 
 /**

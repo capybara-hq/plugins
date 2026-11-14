@@ -14,8 +14,8 @@ same image.
 | `apiUrl` | `https://api.<domain>` | Control plane API address; for self-hosted E2B, use your own address |
 | `domain` | `e2b.app` | Sandbox domain: the envd address is `https://49983-<sandbox id>.<domain>`; when the API returns the sandbox's own `domain`, the returned one wins |
 | `timeoutSeconds` | `3600` | Sandbox timeout (60–86400 seconds); when it expires E2B **auto-pauses** (does not delete), see "Lifecycle" |
-| `domainAllowlist` | `true` | Whether E2B supports a per-domain egress allowlist; set `false` for self-hosted versions that do not, and `allowlist` degrades to `none` with a warning |
-| `openEgress` | `"proxy"` | What `limits.network.kind: "open-public"` does: `"off"` refuses it (`createFileSystem` and `update` fail at once with an English error); `"proxy"` and `"direct"` both mean `allow_internet_access: true`, since E2B has no egress proxy of ours and E2B checks no destination IP (see "Network"). Replaces `allowOpenEgress`, which now fails the strict schema with a pointer to `openEgress` (`allowOpenEgress: false` → `openEgress: "off"`) |
+| `domainAllowlist` | `true` | Whether E2B supports a per-domain network allowlist; set `false` for self-hosted versions that do not, and an allowlist degrades to no network with a warning |
+| (removed) `openEgress` / `allowOpenEgress` | — | Both fail the strict schema with a pointer to the network policy. The plugin always refuses `open-public`: E2B cannot block the sandbox's metadata endpoint (see "Network policy") |
 
 ```bash
 export CAPYBARA_EXTENSIONS='["@capybara-hq/plugin-sandbox-e2b"]'
@@ -76,9 +76,9 @@ Then set `template` to `capybara-sandbox`. Image conventions (the plugin depends
 
 | `sandbox@2` | E2B call |
 |---|---|
-| `createFileSystem` | Lists by the metadata `capybara-sandbox-name=<name>` (`GET /v2/sandboxes?metadata=…&state=running,paused`, paginated) and returns an existing sandbox of that name (the kernel may have stopped before recording the handle); otherwise ensures the template (above), `POST /v2/sandboxes` (`templateID`, `metadata`, `timeout`, `autoPause: true`, `autoPauseMemory: false`, `secure: true`, egress settings), then pauses it without memory (`POST /sandboxes/{id}/pause` `{memory: false}`); the file system handle is E2B's sandbox id |
+| `createFileSystem` | Lists by the metadata `capybara-sandbox-name=<name>` (`GET /v2/sandboxes?metadata=…&state=running,paused`, paginated) and returns an existing sandbox of that name (the kernel may have stopped before recording the handle); otherwise ensures the template (above), `POST /v2/sandboxes` (`templateID`, `metadata`, `timeout`, `autoPause: true`, `autoPauseMemory: false`, `secure: true`, network settings), then pauses it without memory (`POST /sandboxes/{id}/pause` `{memory: false}`); the file system handle is E2B's sandbox id. An `open-public` network is refused before any E2B call |
 | `create` (instance) | `POST /v2/sandboxes/{id}/connect` `{timeout}` on the file system's sandbox (resumed; a 409 while another resume is in flight is retried); the instance handle carries the same id. E2B's 404 → `FileSystemGoneError` (the files are lost, never replaced by an empty sandbox); other failures, a bare 404 included, are ordinary errors. `image` and `limits` are ignored: they were fixed at `createFileSystem` |
-| `update` (`limitsApplyAt: "fileSystem"`) | Applies the new network to the running sandbox without recreating it: connect first (resumes a paused one), then `PUT /sandboxes/{id}/network` (see "Network"); returns `"updated"`. E2B's 404 at either step → `SandboxGoneError`; `open-public` with `openEgress: "off"` is refused before any call |
+| `update` (`limitsApplyAt: "fileSystem"`) | Applies the new network policy to the running sandbox without recreating it: connect first (resumes a paused one), then `PUT /sandboxes/{id}/network` (see "Network policy"); returns `"updated"`. E2B's 404 at either step → `SandboxGoneError`; `open-public` is refused before any call |
 | `resume` | `POST /v2/sandboxes/{id}/connect` (a paused one is resumed, and a running one gets its timeout pushed back); 404 → `gone` |
 | `suspend`, `destroy` (instance) | `POST /sandboxes/{id}/pause` `{memory: false}` (the SDK's `mode: "filesystem"`): every process ends, the files stay, like the Docker plugin stopping or removing its container; a missing one (404) or an already paused one (409) also counts as success |
 | `destroyByName` | Lists running sandboxes by the metadata name and pauses each without memory (files kept) |
@@ -134,60 +134,76 @@ or the device is recreated**; the timeout is pushed to at least "command timeout
 - **/skills is read-only**: `/skills` is owned by root (0755) and the sandbox user can only read it. `writeFile("/skills/…")` writes directly as root (`umask 022`,
   file mode 0644); the sandbox user cannot place symlinks in `/skills`, so root's writes cannot be redirected elsewhere.
 
-## Sandbox mode and network (`limits.mode`, `limits.network`)
+## Network policy (`limits.mode`, `limits.network`)
 
-The kernel passes the device's `mode` (`sandbox`: an OS sandbox whose network follows `limits.network`; `auto`: no OS
-sandbox) and its `network`: `open-public`, or `allowlist` with the final host list. This plugin takes the network as final
-and ignores `mode` (an E2B micro-VM is the boundary in both). Every mode uses **the same template** (one image for all);
-the network is the only thing that changes. cpu / memory / disk stay those of the template (see "Resources").
+The kernel sends the device's network as `limits.network` (`{ kind: "open-public" | "allowlist", hosts }`) with
+`limits.mode` (`auto` | `sandbox`). This plugin enforces the network and never reads any org setting. Every mode uses **the same
+template** (one image for all); the network policy changes only the network. cpu / memory / disk stay those of the template (see
+"Resources").
 
-E2B's egress control ([docs](https://docs.e2b.dev/sandbox/internet-access), verified 2026-10-21):
+E2B's network control ([docs](https://docs.e2b.dev/sandbox/internet-access); the mapping was verified against the live API on
+2026-11-14):
 
 | `limits.network` | Setting when creating the sandbox | Body of `update` (`PUT /sandboxes/{id}/network`) |
 |---|---|---|
-| `allowlist`, no hosts | `allow_internet_access: false` (equivalent to `denyOut: ["0.0.0.0/0"]`) | `{allow_internet_access: false}` |
-| `allowlist`, hosts | `network: { allowOut: hosts, denyOut: ["0.0.0.0/0"] }` | `{allowOut: hosts, denyOut: ["0.0.0.0/0"]}` |
-| `open-public` | `allow_internet_access: true`, at `openEgress` `"proxy"` or `"direct"`; refused at `"off"` | `{allow_internet_access: true}` |
+| `{ kind: "allowlist", hosts: [...] }` with hosts | `network: { allowOut: hosts, denyOut: ["0.0.0.0/0"] }` | `{ allowOut: hosts, denyOut: ["0.0.0.0/0"] }` |
+| `{ kind: "allowlist", hosts: [] }` | `allow_internet_access: false` | `{ allow_internet_access: false }` |
+| `{ kind: "open-public", hosts: [] }` | **refused** before any E2B call | **refused** before any E2B call |
 
-**`open-public` on E2B is plain internet access.** The Docker plugin's `open-public` sends egress through its egress proxy, which refuses
-private, loopback, link-local and metadata addresses; E2B has no such proxy of ours, so `"proxy"` and `"direct"` are the same here and
-**E2B checks no destination IP**: whatever E2B's own network lets through (on self-hosted E2B possibly the intranet and cloud metadata
-addresses) is reachable. Use `openEgress: "off"` where that is not acceptable.
+**`open-public` is refused (fail closed).** E2B can deny private and link-local CIDRs with `denyOut`, and a live check confirmed that
+the deny is enforced by resolved destination IP (so `curl --resolve example.com:80:10.0.0.1` is refused, while the same host on a
+public IP works). But the sandbox's own **metadata endpoint** is not subject to that filter: the Firecracker MMDS at
+`169.254.169.254` answers `GET /latest/meta-data/` (401 without a token) and hands out a token with `PUT /latest/api/token`, even with
+`denyOut: ["169.254.169.254/32"]`, with every private range denied, and with the network fully closed (`allow_internet_access:
+false`) — verified live on 2026-11-14. Since E2B cannot block that destination, `createFileSystem` and `update` refuse `open-public`
+with an English error before touching the sandbox, rather than opening the internet next to a reachable metadata service. Deployments
+that need open egress use the Docker plugin, whose egress proxy refuses private and metadata addresses by resolved IP; on E2B set the
+org's cloud network to an allowlist. The plugin never opens the network silently.
 
-**Non-HTTP ports are filtered only by IP.** E2B filters by domain only on port 80 (Host) and 443 (SNI). The allowlist holds domains only,
-so every other port is closed: no SSH (`git@github.com:…`, port 22) and no Postgres (5432) or other TCP to an allowed domain; clone over
-HTTPS instead. With `open-public` every port is reachable.
+`limits.mode` is validated but changes nothing on E2B: an E2B sandbox is always a cloud microVM (the container is the boundary), so
+`auto` and `sandbox` get the same network. **An older kernel is refused**: one that sends `tier` / `egress` / `allowHosts` (or a
+`network.kind` this plugin does not know) gets an English error instead of a guessed policy, so a plugin upgraded without its kernel
+never opens the network; upgrade the kernel and the sandbox plugins together.
 
-Limitations of `allowlist` (decided by E2B's implementation, written here for assessment):
+E2B's allowlist ([docs](https://docs.e2b.dev/sandbox/internet-access), verified 2026-10-21):
 
-- Per-domain filtering applies only to **HTTP on port 80 (by the Host header) and TLS on port 443 (by SNI)**; other ports are filtered only by IP / CIDR,
-  and with only domains in the allowlist they are always blocked. UDP (QUIC / HTTP3) does not support per-domain filtering.
-- When a domain allowlist is used, E2B automatically allows DNS to `8.8.8.8` (port 53), and the DNS queries themselves can be used to exfiltrate small amounts of data.
-- **E2B looks only at the Host header / SNI, and the docs do not say it checks the destination IP**: a sandbox can connect to ports 80 / 443 of any IP and write the Host / SNI as a domain on the allowlist
-  (such as `curl --resolve pypi.org:443:<any IP> https://pypi.org`), and so **may reach any address outside the allowlist** (including the intranet and cloud
-  metadata addresses, depending on whether E2B's own network allows them). The Docker plugin's egress proxy resolves the domain and checks every destination IP; the E2B version cannot do this.
+- Per-domain filtering applies only to **HTTP on port 80 (by the Host header) and TLS on port 443 (by SNI)**; other ports are filtered
+  only by IP / CIDR, and with only domains in the allowlist they are always blocked. UDP (QUIC / HTTP3) does not support per-domain
+  filtering.
+- When a domain allowlist is used, E2B automatically allows DNS to `8.8.8.8` (port 53), and the DNS queries themselves can be used to
+  exfiltrate small amounts of data.
+- **The per-domain allowlist is not a general destination-IP check.** A live check (2026-11-14) showed that an allowed Host / SNI
+  aimed at a *private* IP is refused (the `denyOut: ["0.0.0.0/0"]` plus private ranges win), but whether an allowed name may reach a
+  different *public* IP that it does not resolve to is undocumented: the plugin cannot resolve-and-pin the destination the way the
+  Docker egress proxy does. The sandbox's metadata endpoint is reachable regardless of the allowlist (see above).
 - Other sites on the same CDN / object storage may also be allowed along with it (the E2B docs say this too).
-- **For self-hosted E2B, network isolation is the operator's responsibility**: intranet services and cloud metadata addresses (169.254.169.254 and so on) that the sandbox node can reach must be blocked at E2B's node /
-  network layer; this plugin cannot do it for you.
-- If egress that "checks the destination IP after resolving" is wanted later, E2B's `network.egressProxy` can be used (SOCKS5, see SDK 2.58 `buildEgressProxyBody`):
-  it sends all sandbox egress to our own proxy (for example the same checks as the Docker plugin's egress proxy); this plugin does not use it yet.
-- A rejected TCP connection may look "connected" inside the sandbox; you only know it was rejected from the application layer (HTTP status, TLS handshake).
+- **For self-hosted E2B, network isolation is the operator's responsibility**: intranet services and cloud metadata addresses
+  (169.254.169.254 and so on) that the sandbox node can reach must be blocked at E2B's node / network layer; this plugin cannot do it
+  for you.
+- If an egress that "checks the destination IP after resolving" is wanted later, E2B's `network.egressProxy` can be used (SOCKS5, see
+  SDK 2.58 `buildEgressProxyBody`): it sends all sandbox egress to our own proxy (for example the same checks as the Docker plugin's
+  egress proxy); this plugin does not use it yet.
+- A rejected TCP connection may look "connected" inside the sandbox; you only know it was rejected from the application layer (HTTP
+  status, TLS handshake).
 - `*.example.com` matches subdomains (same as the Docker plugin, not including `example.com` itself).
-- For self-hosted E2B that does not support per-domain filtering, set `domainAllowlist: false`: `allowlist` degrades to `none` with a warning (it never silently opens up).
-- **The allowlist cannot stop data sent to allowlisted hosts** (the same as the Docker version): `git push` to github.com and publishing to npm / PyPI are within the allowlist,
-  and attachments in a conversation and data the agent has read can leak this way. Orgs that handle sensitive data should set `sandboxToolPolicy` to
-  `ask` in the org settings, and / or set the org's network to `none` (an empty allowlist cuts the network; an org gets `open-public` only when the platform's maximum allows it).
+- For self-hosted E2B that does not support per-domain filtering, set `domainAllowlist: false`: an allowlist degrades to no network with
+  a warning (it never silently opens up).
+- **The allowlist cannot stop data sent to allowlisted hosts** (the same as the Docker version): `git push` to github.com and publishing
+  to npm / PyPI are within the allowlist, and attachments in a conversation and data the agent has read can leak this way. Orgs that
+  handle sensitive data should set `sandboxToolPolicy` to `ask` in the org settings, and / or set the org's network to an empty
+  allowlist (no network at all; on E2B `open-public` is refused anyway).
 
 **Limits apply at the file system** (`limitsApplyAt: "fileSystem"`): an instance is the same E2B sandbox resumed, so `create` cannot
-change what `createFileSystem` set. A change of network reaches an existing device through **`update`**: the kernel calls it
-under the exclusive lease, right after `resume`, when the device's effective network differs from what its instance was
-made with. `update` sends `PUT /sandboxes/{id}/network` (the `e2b@2.58.0` SDK's `Sandbox.updateNetwork`), which replaces the whole egress
+change what `createFileSystem` set. A change of network policy reaches an existing device through **`update`**: the kernel calls it
+under the exclusive lease, right after `resume`, when the device's `mode` or `network.kind` differs from what its instance was made
+with. `update` sends `PUT /sandboxes/{id}/network` (the `e2b@2.58.0` SDK's `Sandbox.updateNetwork`), which replaces the whole network
 configuration at once, with no restart: running commands keep running, new connections follow the new rules. Its limits:
 
-- **Only a running sandbox can be updated**: a paused sandbox answers E2B's 404 (verified on E2B 2026-11-08; the live test keeps recording
-  it as `[e2b-live] paused network update: …`). `update` therefore connects first (a paused sandbox is resumed), then sends the update; a
-  404 after that means the sandbox is gone (`SandboxGoneError`).
-- **Only the network changes.** cpu / memory / disk and the template stay.
+- **Only a running sandbox can be updated**: a paused sandbox answers E2B's 404 (verified on E2B 2026-11-08; the live test keeps
+  recording it as `[e2b-live] paused network update: …`). `update` therefore connects first (a paused sandbox is resumed), then sends
+  the update; a 404 after that means the sandbox is gone (`SandboxGoneError`). A refused policy throws before the connect.
+- **Only the network changes.** cpu / memory / disk and the template stay; a later change of only the host list is not sent by the
+  kernel (it compares `mode` and `network.kind` only) and reaches the device on the next mode or kind change or a file reset.
 - Connections already open when the rules narrow are E2B's business; the docs do not say whether they are cut.
 
 **Command time limit**: a single command runs at most `sandbox.limits.maxCommandSeconds`, and no more than the time left in the run it belongs to (`runtime.maxRunSeconds`,
@@ -226,13 +242,16 @@ The third parameter of `createE2BSandbox(config, { log }, testOptions)` can be p
 
 - `test/sandbox-e2b.test.ts`: against `startFakeE2B` from `@capybara-hq/testing` (control plane API + envd, Connect stream protocol,
   commands really run in a local temp directory), covering each method, error mapping (404 → gone, 401 / 5xx → ordinary errors), abort, kill on timeout,
-  file reads and writes and the way `/skills` is written, network mapping (`open-public`, `openEgress`), `update` (against a stub of
+  file reads and writes and the way `/skills` is written, the network policy mapping (an allowlist, an empty allowlist as no network,
+  `open-public` and an older kernel's limits refused before any E2B call), `update` (against a stub of
   `PUT /sandboxes/{id}/network` in front of the fake, which has no network route: resume first, the bodies, gone and refused cases), and the reboot backstop when killing fails / the output stream does not end (the fake server's `memory: false` connect ends all processes);
   file systems and instances (files survive destroy and recreate, connect 404 → `FileSystemGoneError`, pause drops memory, cleanup by name), and the template
   auto-build (built once from the image, polled until ready, an existing alias reused, a not-ready alias rebuilt, a failed build not memoised).
 - `test/live`: real E2B, run only when `CAPYBARA_TEST_E2B_API_KEY` is set (optionally `CAPYBARA_TEST_E2B_TEMPLATE`, unset to exercise the auto-build,
   and `CAPYBARA_TEST_E2B_API_URL` / `CAPYBARA_TEST_E2B_DOMAIN`), otherwise skipped: the template, the file system created paused, the sandbox user, files, `/skills` read-only (including a write through a symlink being
-  rejected), the egress allowlist, output truncation, kill on timeout (including nohup child processes), abort, long periods with no output, a child process that escaped the session being killed by its environment marker,
+  rejected), the network allowlist and the `open-public` refusal, the metadata endpoint staying reachable under the allowlist (the
+  reason for the refusal), output truncation, kill on timeout (including nohup child processes), abort, long periods with no output, a
+  child process that escaped the session being killed by its environment marker,
   files surviving instance destroy, whether a paused sandbox's network rules can change, `destroyFileSystem` → `FileSystemGoneError`. The file header lists the "assumptions that can only be confirmed on real E2B"; check them one by one on the first run.
 
 ## Icon

@@ -16,7 +16,6 @@ export {
   exitCodeOf,
   IN_SANDBOX_GRACE_SECONDS,
   METADATA_NAME,
-  type OpenEgress,
   publishedImage,
   templateAlias,
 } from "./provider.js";
@@ -26,8 +25,9 @@ const MAX_TIMEOUT_SECONDS = 86_400;
 
 /**
  * The deployment config (one per deployment). Strict: extra keys are errors, so the test-only
- * options ({@link E2BSandboxTestOptions}) can never be set from plugin config, and the removed
- * `allowOpenEgress` fails with a pointer to `openEgress`.
+ * options ({@link E2BSandboxTestOptions}) can never be set from plugin config. The removed
+ * `openEgress` / `allowOpenEgress` keys fail with a pointer to the network policy: E2B cannot
+ * block its metadata endpoint, so the plugin refuses `open-public` outright.
  */
 export const DeploymentConfig = z.strictObject(
   {
@@ -60,46 +60,20 @@ export const DeploymentConfig = z.strictObject(
       label: { zh: "沙箱超时", en: "Sandbox timeout" },
     }),
     /**
-     * E2B 是否支持按域名的出站白名单（E2B 云：支持）。为 false 时（不支持的自托管版本）`allowlist` 退化为
-     * `none` 并打告警。
+     * Whether E2B supports a per-domain network allowlist (E2B cloud: yes). `false` (self-hosted
+     * versions without it) degrades an allowlist to no network with a warning. `open-public` is
+     * always refused: E2B cannot block the sandbox's metadata endpoint.
      */
     domainAllowlist: ui(z.boolean().default(true), {
       label: { zh: "按域名出站白名单", en: "Domain egress allowlist" },
     }),
-    /**
-     * What a `limits.network` of `open-public` does. E2B has no egress proxy of ours, so
-     * `"proxy"` (default) and `"direct"` both mean `allow_internet_access: true` (E2B checks no
-     * destination IP); `"off"` refuses it (README "Network").
-     */
-    openEgress: ui(z.enum(["off", "proxy", "direct"]).default("proxy"), {
-      label: { zh: "开放出站", en: "Open egress" },
-      options: [
-        {
-          value: "off",
-          label: { zh: "关闭", en: "Off" },
-          help: { zh: "拒绝开放出站", en: "Refuse open egress" },
-        },
-        {
-          value: "proxy",
-          label: { zh: "开放", en: "On" },
-          help: {
-            zh: "允许访问互联网（E2B 不检查目标地址）",
-            en: "Allow internet access (E2B checks no destination address)",
-          },
-        },
-        {
-          value: "direct",
-          label: { zh: "直连", en: "Direct" },
-          help: { zh: "在 E2B 上与「开放」相同", en: "Same as On on E2B" },
-        },
-      ],
-    }),
   },
   {
-    // the old key fails with a pointer to its replacement (pre-0.1.0: no compatibility layer)
+    // removed keys fail with a pointer to the network policy (pre-0.1.0: no compatibility layer)
     error: (iss) =>
-      iss.code === "unrecognized_keys" && iss.keys.includes("allowOpenEgress")
-        ? 'allowOpenEgress was replaced by openEgress: "off" | "proxy" | "direct" (default "proxy"); use openEgress: "off" for allowOpenEgress: false'
+      iss.code === "unrecognized_keys" &&
+      (iss.keys.includes("openEgress") || iss.keys.includes("allowOpenEgress"))
+        ? "openEgress / allowOpenEgress were removed: sandbox-e2b refuses an open network (E2B cannot block the sandbox metadata endpoint). Set the org cloud network to an allowlist instead."
         : undefined,
   },
 );
@@ -123,9 +97,7 @@ export function providerConfig(
 const plugin = defineExtension({
   name: "sandbox-e2b",
   version: "0.1.0-rc.13",
-  // The network contract (`limits.mode` / `limits.network`) is the SDK's from rc.22 on; a kernel
-  // that predates it gets no network (the safe direction).
-  sdk: "^0.1.0-rc.22",
+  sdk: "^0.1.0-rc.3",
   provides: [SANDBOX_EXTENSION_POINT],
   // 只用部署配置与 E2B 的 API，不用任何需要声明的平台能力
   permissions: {},
