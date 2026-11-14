@@ -29,21 +29,21 @@ import {
  * sandbox@2 on E2B, against the fake E2B (startFakeE2B of @capybara-hq/testing: control plane API +
  * envd, commands run on this machine): one E2B sandbox per device, kept by pausing it without
  * memory; template auto-build; gone / plain errors; exec output / timeout / abort kills; file reads
- * and writes, /skills written as root; egress mapping.
+ * and writes, /skills written as root; the network policy mapping (open-public refused).
  */
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const sig = () => AbortSignal.timeout(20_000);
 const sbxName = () => `cap-device-${randomUUID()}`;
-/** The networks a test names: `none` is an empty allowlist. */
-type TestNetwork = "none" | "allowlist" | "open";
-const limits = (network: TestNetwork = "none", hosts: string[] = []): SandboxLimits => ({
+const limits = (
+  network: SandboxLimits["network"] = { kind: "allowlist", hosts: [] },
+): SandboxLimits => ({
   cpu: 1,
   memoryMb: 2048,
   diskMb: 5120,
   mode: "sandbox",
-  network: network === "open" ? { kind: "open-public", hosts: [] } : { kind: "allowlist", hosts },
+  network,
 });
 /** The image the template is built from in these tests, and its alias. */
 const IMAGE = publishedImage("0.0.0-test.1");
@@ -167,7 +167,6 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       defaultImage: IMAGE,
       timeoutSeconds: 3600,
       domainAllowlist: true,
-      openEgress: "off",
     };
   });
   afterAll(async () => {
@@ -480,7 +479,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       await expect(
         sbx.createFileSystem({
           name: sbxName(),
-          limits: limits("allowlist", ["10.0.0.1"]),
+          limits: limits({ kind: "allowlist", hosts: ["10.0.0.1"] }),
           signal: sig(),
         }),
       ).rejects.toThrow(/invalid network host/);
@@ -670,63 +669,85 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     });
   });
 
-  describe("egress (set when the file system is created)", () => {
+  describe("network policy (set when the file system is created)", () => {
     beforeAll(() => {
       sbx = make();
     });
     const fsWith = (s: SandboxProvider, l: SandboxLimits) =>
       s.createFileSystem({ name: sbxName(), limits: l, signal: sig() });
 
-    it("none → no internet access", async () => {
-      const fs = await fsWith(sbx, limits("none"));
+    it("an empty allowlist means no network", async () => {
+      const fs = await fsWith(sbx, limits());
       expect(fake.sandboxes.get(fs.id)?.allowInternetAccess).toBe(false);
       expect(createdBody().network).toBeUndefined();
     });
 
-    it("allowlist → allowOut domains with everything else denied", async () => {
+    it("an allowlist allows exactly its hosts (allowOut, IPv4 and IPv6 private / loopback denied)", async () => {
       const hosts = ["registry.npmjs.org", "*.githubusercontent.com"];
-      const fs = await fsWith(sbx, limits("allowlist", hosts));
+      const fs = await fsWith(sbx, limits({ kind: "allowlist", hosts }));
       expect(fake.sandboxes.get(fs.id)?.network).toEqual({
         allowOut: hosts,
-        denyOut: ["0.0.0.0/0"],
+        denyOut: ["0.0.0.0/0", "fc00::/7", "fe80::/10", "::1/128"],
       });
       expect(createdBody().allow_internet_access).toBeUndefined();
     });
 
-    it("empty allowlist → no internet access", async () => {
-      const fs = await fsWith(sbx, limits("allowlist", []));
-      expect(fake.sandboxes.get(fs.id)?.allowInternetAccess).toBe(false);
+    it("open-public is refused before any E2B call (fail closed, never silently open)", async () => {
+      const before = fake.calls.length;
+      await expect(fsWith(sbx, limits({ kind: "open-public", hosts: [] }))).rejects.toThrow(
+        /open-public.*refused.*metadata endpoint/s,
+      );
+      expect(fake.calls.length).toBe(before);
     });
 
-    it('open is refused at openEgress "off"; "proxy" and "direct" both allow internet access', async () => {
-      await expect(fsWith(sbx, limits("open"))).rejects.toThrow(/openEgress is "off"/);
-      for (const openEgress of ["proxy", "direct"] as const) {
-        const fs = await fsWith(make({ openEgress }), limits("open"));
-        expect(fake.sandboxes.get(fs.id)?.allowInternetAccess).toBe(true);
-        expect(createdBody().network).toBeUndefined();
-      }
+    it("an older kernel's limits (tier / egress / allowHosts, no mode or network) are refused", async () => {
+      const before = fake.calls.length;
+      const old = {
+        cpu: 1,
+        memoryMb: 2048,
+        diskMb: 5120,
+        egress: "none",
+        allowHosts: [],
+        tier: "strict",
+        devHosts: [],
+      } as unknown as SandboxLimits;
+      await expect(fsWith(sbx, old)).rejects.toThrow(/no mode/);
+      const oldOpen = {
+        ...limits(),
+        mode: undefined,
+        network: { kind: "open", hosts: ["pypi.org"] },
+      } as unknown as SandboxLimits;
+      await expect(fsWith(sbx, oldOpen)).rejects.toThrow(/no mode/);
+      const badKind = {
+        ...limits(),
+        network: { kind: "open", hosts: ["pypi.org"] },
+      } as unknown as SandboxLimits;
+      await expect(fsWith(sbx, badKind)).rejects.toThrow(/no valid network/);
+      expect(fake.calls.length).toBe(before);
     });
 
-    it("hosts are final; every mode and network uses the same template", async () => {
-      const l = limits("allowlist", ["pypi.org", "registry.npmjs.org"]);
-      const fs = await fsWith(sbx, l);
-      expect(fake.sandboxes.get(fs.id)?.network).toEqual({
-        allowOut: ["pypi.org", "registry.npmjs.org"],
-        denyOut: ["0.0.0.0/0"],
-      });
-      // `auto` (no OS sandbox) changes nothing on E2B: the micro-VM is the boundary
-      const open = await fsWith(make({ openEgress: "proxy" }), {
-        ...limits("open"),
-        mode: "auto",
-      });
-      const strict = await fsWith(sbx, limits("none"));
-      expect(fake.sandboxes.get(open.id)?.templateID).toBe(
-        fake.sandboxes.get(strict.id)?.templateID,
+    it("validates the allowlist hosts", async () => {
+      await expect(fsWith(sbx, limits({ kind: "allowlist", hosts: ["10.0.0.1"] }))).rejects.toThrow(
+        /invalid network host/,
+      );
+      await expect(
+        fsWith(sbx, limits({ kind: "allowlist", hosts: ["not a host"] })),
+      ).rejects.toThrow(/invalid network host/);
+    });
+
+    it("one template for every network policy", async () => {
+      const allowed = await fsWith(sbx, limits({ kind: "allowlist", hosts: ["pypi.org"] }));
+      const none = await fsWith(sbx, limits());
+      expect(fake.sandboxes.get(allowed.id)?.templateID).toBe(
+        fake.sandboxes.get(none.id)?.templateID,
       );
     });
 
-    it("without domain allowlist support, allowlist degrades to none with a warning", async () => {
-      const fs = await fsWith(make({ domainAllowlist: false }), limits("allowlist", ["pypi.org"]));
+    it("without domain allowlist support, an allowlist degrades to none with a warning", async () => {
+      const fs = await fsWith(
+        make({ domainAllowlist: false }),
+        limits({ kind: "allowlist", hosts: ["pypi.org"] }),
+      );
       expect(fake.sandboxes.get(fs.id)?.allowInternetAccess).toBe(false);
       expect(createdBody().network).toBeUndefined();
       expect(warns.join("\n")).toMatch(/allowlist/);
@@ -760,7 +781,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
         updates.set(id, [...(updates.get(id) ?? []), JSON.parse(body.toString("utf8"))]);
         return { status: 204, body: undefined };
       });
-      s = make({ apiUrl: proxy.url, openEgress: "proxy" });
+      s = make({ apiUrl: proxy.url });
     });
     afterAll(async () => {
       await proxy?.close();
@@ -770,60 +791,110 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       expect(s.limitsApplyAt).toBe("fileSystem");
     });
 
-    it("resumes a suspended sandbox first, then replaces its egress", async () => {
-      const h = await provision(s, limits("none"));
+    it("resumes a suspended sandbox first, then replaces its network", async () => {
+      const h = await provision(s, limits());
       await s.suspend(h, sig());
       expect(fake.sandboxes.get(h.id)?.state).toBe("paused");
-      const dev: SandboxLimits = limits("allowlist", ["pypi.org"]);
       // the stub answers 404 for a paused sandbox, so "updated" means it was resumed first
-      expect(await s.update?.(h, dev, sig())).toBe("updated");
+      expect(await s.update?.(h, limits({ kind: "allowlist", hosts: ["pypi.org"] }), sig())).toBe(
+        "updated",
+      );
       expect(fake.sandboxes.get(h.id)?.state).toBe("running");
-      expect(await s.update?.(h, limits("open"), sig())).toBe("updated");
-      expect(await s.update?.(h, limits("none"), sig())).toBe("updated");
-      expect(await s.update?.(h, limits("allowlist", []), sig())).toBe("updated");
+      expect(
+        await s.update?.(
+          h,
+          limits({ kind: "allowlist", hosts: ["registry.npmjs.org", "*.githubusercontent.com"] }),
+          sig(),
+        ),
+      ).toBe("updated");
+      expect(await s.update?.(h, limits(), sig())).toBe("updated");
+      expect(await s.update?.(h, limits({ kind: "allowlist", hosts: [] }), sig())).toBe("updated");
       expect(updates.get(h.id)).toEqual([
-        { allowOut: ["pypi.org"], denyOut: ["0.0.0.0/0"] },
-        { allow_internet_access: true },
+        { allowOut: ["pypi.org"], denyOut: ["0.0.0.0/0", "fc00::/7", "fe80::/10", "::1/128"] },
+        {
+          allowOut: ["registry.npmjs.org", "*.githubusercontent.com"],
+          denyOut: ["0.0.0.0/0", "fc00::/7", "fe80::/10", "::1/128"],
+        },
         { allow_internet_access: false },
         { allow_internet_access: false },
       ]);
     });
 
-    it('refuses open at openEgress "off" without touching the sandbox', async () => {
-      const off = make({ apiUrl: proxy.url, openEgress: "off" });
-      const h = await provision(off, limits("none"));
-      await expect(off.update?.(h, limits("open"), sig())).rejects.toThrow(/openEgress is "off"/);
+    it("refuses open-public without touching the sandbox", async () => {
+      const h = await provision(s, limits());
+      const connects = () =>
+        fake.calls.filter((c) => c.path === `/v2/sandboxes/${h.id}/connect`).length;
+      const seen = connects();
+      await expect(
+        s.update?.(h, limits({ kind: "open-public", hosts: [] }), sig()),
+      ).rejects.toThrow(/open-public.*refused.*metadata endpoint/s);
+      expect(connects()).toBe(seen);
+      expect(updates.get(h.id)).toBeUndefined();
+    });
+
+    it("refuses an older kernel's limits without touching the sandbox", async () => {
+      const h = await provision(s, limits());
+      const connects = () =>
+        fake.calls.filter((c) => c.path === `/v2/sandboxes/${h.id}/connect`).length;
+      const seen = connects();
+      const old = {
+        cpu: 1,
+        memoryMb: 2048,
+        diskMb: 5120,
+        egress: "open",
+        allowHosts: [],
+        tier: "open",
+        devHosts: [],
+      } as unknown as SandboxLimits;
+      await expect(s.update?.(h, old, sig())).rejects.toThrow(/no mode/);
+      expect(connects()).toBe(seen);
+      expect(updates.get(h.id)).toBeUndefined();
+    });
+
+    it("refuses an unknown network kind without touching the sandbox", async () => {
+      const h = await provision(s, limits());
+      const connects = () =>
+        fake.calls.filter((c) => c.path === `/v2/sandboxes/${h.id}/connect`).length;
+      const seen = connects();
+      const badKind = {
+        ...limits(),
+        network: { kind: "open", hosts: ["pypi.org"] },
+      } as unknown as SandboxLimits;
+      await expect(s.update?.(h, badKind, sig())).rejects.toThrow(/no valid network/);
+      expect(connects()).toBe(seen);
       expect(updates.get(h.id)).toBeUndefined();
     });
 
     it("without domain allowlist support, an allowlist update degrades to none", async () => {
       const noDomains = make({ apiUrl: proxy.url, domainAllowlist: false });
-      const h = await provision(noDomains, limits("none"));
-      expect(await noDomains.update?.(h, limits("allowlist", ["pypi.org"]), sig())).toBe("updated");
+      const h = await provision(noDomains, limits());
+      expect(
+        await noDomains.update?.(h, limits({ kind: "allowlist", hosts: ["pypi.org"] }), sig()),
+      ).toBe("updated");
       expect(updates.get(h.id)).toEqual([{ allow_internet_access: false }]);
       expect(warns.join("\n")).toMatch(/allowlist/);
     });
 
     it("a sandbox that is gone → SandboxGoneError (at connect or at the network update)", async () => {
-      const a = await provision(s, limits("none"));
+      const a = await provision(s, limits());
       await fake.expire(a.id);
-      const e1 = await s.update?.(a, limits("none"), sig()).catch((x: unknown) => x);
+      const e1 = await s.update?.(a, limits(), sig()).catch((x: unknown) => x);
       expect(isSandboxGoneError(e1)).toBe(true);
-      const b = await provision(s, limits("none"));
+      const b = await provision(s, limits());
       vanishOnUpdate.add(b.id);
-      const e2 = await s.update?.(b, limits("none"), sig()).catch((x: unknown) => x);
+      const e2 = await s.update?.(b, limits(), sig()).catch((x: unknown) => x);
       expect(isSandboxGoneError(e2)).toBe(true);
     });
 
     it("other failures stay ordinary errors (at connect, and 401 / 5xx on the update)", async () => {
-      const h = await provision(s, limits("none"));
+      const h = await provision(s, limits());
       fake.failNext({ method: "POST", path: /\/connect$/ }, 500, "boom");
-      const e = await s.update?.(h, limits("none"), sig()).catch((x: unknown) => x);
+      const e = await s.update?.(h, limits(), sig()).catch((x: unknown) => x);
       expect(e).toBeInstanceOf(Error);
       expect(isSandboxGoneError(e)).toBe(false);
       for (const status of [401, 500, 503]) {
         failUpdate.set(h.id, status);
-        const u = await s.update?.(h, limits("none"), sig()).catch((x: unknown) => x);
+        const u = await s.update?.(h, limits(), sig()).catch((x: unknown) => x);
         expect(u).toBeInstanceOf(Error);
         expect(String((u as Error).message)).toMatch(new RegExp(`HTTP ${status}`));
         expect(isSandboxGoneError(u)).toBe(false);
@@ -832,16 +903,16 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     });
 
     it("abort: an aborted call rejects at once; an abort during resume rejects with its reason", async () => {
-      const h = await provision(s, limits("none"));
+      const h = await provision(s, limits());
       await s.suspend(h, sig());
       const before = AbortSignal.abort(new Error("stop early"));
-      await expect(s.update?.(h, limits("none"), before)).rejects.toThrow(/stop early/);
+      await expect(s.update?.(h, limits(), before)).rejects.toThrow(/stop early/);
       const connects = () =>
         fake.calls.filter((c) => c.path === `/v2/sandboxes/${h.id}/connect`).length;
       const seen = connects();
       fake.hangNext({ method: "POST", path: /\/connect$/ });
       const ac = new AbortController();
-      const p = s.update?.(h, limits("none"), ac.signal);
+      const p = s.update?.(h, limits(), ac.signal);
       // the hanging connect reached the fake (so the hang is used up, not left for later tests)
       await waitFor(() => connects() > seen);
       ac.abort(new Error("stop now"));

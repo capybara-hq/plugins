@@ -19,6 +19,7 @@ import {
   envdKill,
   envdStart,
   envdUpload,
+  IPV6_DENIED,
   isE2BNotFound,
   isStatus,
   type StartRequest,
@@ -46,15 +47,7 @@ export interface E2BSandboxConfig {
   timeoutSeconds: number;
   /** E2B 支持按域名的出站白名单；false 时 allowlist 退化为 none 并打告警。 */
   domainAllowlist: boolean;
-  /**
-   * What `egress: "open"` does: `"off"` refuses it; `"proxy"` and `"direct"` both mean
-   * `allow_internet_access: true` (E2B has no egress proxy of ours).
-   */
-  openEgress: OpenEgress;
 }
-
-/** The values of the `openEgress` setting (the same three values as sandbox-docker's). */
-export type OpenEgress = "off" | "proxy" | "direct";
 
 /**
  * **仅测试**的选项：只有直接调用 {@link createE2BSandbox} 的代码能传，插件的部署配置设不了（index.ts 的
@@ -342,6 +335,9 @@ interface SandboxInfo {
   envdAccessToken?: string | null;
   domain?: string | null;
 }
+
+/** What the plugin enforces for `limits.network`: an allowlist, or no network. Never open. */
+type NetworkPolicy = { kind: "none" } | { kind: "allowlist"; hosts: string[] };
 
 /** The `sandbox@2` provider on E2B (shared by the plugin setup and the tests). */
 export function createE2BSandbox(
@@ -768,22 +764,42 @@ export function createE2BSandbox(
   const stderrOf = (r: RunResult) => r.stderr.toString("utf8").trim().slice(0, 500);
 
   /**
-   * The E2B egress of `limits`: `open-public` only when `openEgress` allows it (refused
-   * otherwise); an allowlist degrades to none without domain allowlist support, and an empty one
-   * is none. The hosts are final (README "Network").
+   * The network this plugin enforces for `limits` (README "Network policy"): an allowlist of the
+   * given hosts, or no network at all. `open-public` is always refused: E2B cannot block the
+   * microVM metadata endpoint (Firecracker MMDS at 169.254.169.254), not even with `denyOut` of
+   * every private / loopback / link-local CIDR (verified live 2026-11-14), so opening the internet
+   * would expose it. The plugin never opens the network silently.
+   *
+   * `mode` (`auto` | `sandbox`) is validated but changes nothing here: both run in the same E2B
+   * microVM, where the container is the boundary. The kernel gives every auto-mode device the
+   * open network, so E2B cannot serve auto mode at all (README "Network policy"). A limits object
+   * without `mode` / `network` (an older kernel that sent `tier` / `egress` / `allowHosts`) is
+   * refused rather than guessed.
    */
-  const egressOf = (
-    limits: SandboxLimits,
-    name: string,
-  ): { kind: "none" | "open" } | { kind: "allowlist"; hosts: string[] } => {
-    const network = networkOf(limits);
-    if (network.kind === "open-public") {
-      if (cfg.openEgress === "off") {
-        throw new Error(
-          'Sandbox network "open-public" is refused: the sandbox-e2b plugin setting openEgress is "off". Set extensionConfig."sandbox-e2b".openEgress to "proxy" (trusted environments only), or have the org switch its cloud network to the allowlist.',
-        );
-      }
-      return { kind: "open" };
+  const networkOf = (limits: SandboxLimits, name: string): NetworkPolicy => {
+    const runtime = limits as { mode?: unknown; network?: unknown };
+    if (runtime.mode !== "auto" && runtime.mode !== "sandbox") {
+      throw new Error(
+        'sandbox-e2b: the sandbox limits carry no mode ("auto" | "sandbox"); this plugin implements the sandbox@2 limits that a kernel sends from 0.1.0-rc.29 on (limits.mode / limits.network). An older kernel sent tier / egress / allowHosts instead; upgrade the kernel and the sandbox plugins together, and never open the network as a fallback.',
+      );
+    }
+    const network = runtime.network as { kind?: unknown; hosts?: unknown } | undefined;
+    const kind = network?.kind;
+    const hosts = network?.hosts;
+    if (kind === "open-public") {
+      throw new Error(
+        'Sandbox network "open-public" is refused by the sandbox-e2b plugin: E2B cannot block the sandbox\'s metadata endpoint (Firecracker MMDS at 169.254.169.254) even with a denyOut of the private and link-local ranges (verified live), so internet access would expose it. Set the org cloud network to an allowlist (network kind "allowlist"), or run the device on the sandbox-docker provider. sandbox-e2b never opens the network silently.',
+      );
+    }
+    if (kind !== "allowlist" || !Array.isArray(hosts) || hosts.some((h) => typeof h !== "string")) {
+      throw new Error(
+        'sandbox-e2b: the sandbox limits carry no valid network (expected { kind: "allowlist", hosts } or { kind: "open-public", hosts }); this plugin implements the sandbox@2 limits that a kernel sends from 0.1.0-rc.29 on (limits.mode / limits.network). An older kernel sent tier / egress / allowHosts instead; upgrade the kernel and the sandbox plugins together.',
+      );
+    }
+    for (const host of hosts) {
+      const errors = validateAllowHost(host);
+      if (errors.length > 0)
+        throw new Error(`invalid network host ${JSON.stringify(host)}: ${errors.join("; ")}`);
     }
     if (!cfg.domainAllowlist) {
       deps.log.warn(
@@ -792,8 +808,7 @@ export function createE2BSandbox(
       );
       return { kind: "none" };
     }
-    if (network.hosts.length > 0) return { kind: "allowlist", hosts: [...network.hosts] };
-    return { kind: "none" };
+    return hosts.length > 0 ? { kind: "allowlist", hosts: [...hosts] } : { kind: "none" };
   };
 
   // ---------- 契约 ----------
@@ -809,19 +824,19 @@ export function createE2BSandbox(
       signal.throwIfAborted();
       if (!NAME_RE.test(name)) throw new Error(`invalid sandbox name: ${name}`);
       checkLimits(limits);
-      const egress = egressOf(limits, name);
+      // the network is set here; `update` changes it on the running sandbox (README "Network
+      // policy"). One template for every mode: the network policy changes only the network.
+      const policy = networkOf(limits, name);
       // made before under this name (the kernel stopped before recording the handle): return it
       const [existing] = await idsByName(name, "running,paused", signal);
       if (existing !== undefined) {
         checkId(existing);
         return { id: existing };
       }
-      // the network is set here; `update` changes it on the running sandbox (README "Network").
-      // One template for every mode and network: only the network changes here.
       const network =
-        egress.kind === "allowlist"
-          ? { network: { allowOut: egress.hosts, denyOut: [ALL_TRAFFIC] } }
-          : { allow_internet_access: egress.kind === "open" };
+        policy.kind === "allowlist"
+          ? { network: { allowOut: policy.hosts, denyOut: [ALL_TRAFFIC, ...IPV6_DENIED] } }
+          : { allow_internet_access: false };
       const createFrom = (templateID: string) =>
         api.json<SandboxInfo>("POST", "/v2/sandboxes", {
           body: {
@@ -856,24 +871,24 @@ export function createE2BSandbox(
     },
 
     /**
-     * Applies the egress of `limits` to the running sandbox (`PUT /sandboxes/{id}/network`, which
-     * replaces the whole egress configuration). E2B updates only running sandboxes (a paused one
-     * answers E2B's 404), so the sandbox is connected (resumed) first; the kernel calls `update`
-     * right after `resume` anyway. A sandbox that is gone → SandboxGoneError. cpu / memory / disk
-     * are fixed by the template and never change here.
+     * Applies the network policy of `limits` to the running sandbox (`PUT /sandboxes/{id}/network`,
+     * which replaces the whole network configuration). E2B updates only running sandboxes (a paused
+     * one answers E2B's 404), so the sandbox is connected (resumed) first; the kernel calls `update`
+     * right after `resume` anyway. A refused policy throws before any call. A sandbox that is gone →
+     * SandboxGoneError. cpu / memory / disk are fixed by the template and never change here.
      */
     async update(h, limits, signal) {
       signal.throwIfAborted();
       checkLimits(limits);
-      const egress = egressOf(limits, h.id);
+      const policy = networkOf(limits, h.id);
       await attach(h.id, signal);
       try {
         await updateNetwork(
           api,
           h.id,
-          egress.kind === "allowlist"
-            ? { allowOut: egress.hosts, denyOut: [ALL_TRAFFIC] }
-            : { allow_internet_access: egress.kind === "open" },
+          policy.kind === "allowlist"
+            ? { allowOut: policy.hosts, denyOut: [ALL_TRAFFIC, ...IPV6_DENIED] }
+            : { allow_internet_access: false },
           signal,
         );
       } catch (e) {
@@ -884,8 +899,8 @@ export function createE2BSandbox(
       }
       deps.log.info("sandbox-e2b: sandbox network updated", {
         sandboxId: h.id,
-        mode: limits.mode ?? "sandbox",
-        egress: egress.kind,
+        mode: limits.mode,
+        network: policy.kind,
       });
       return "updated";
     },
@@ -903,7 +918,7 @@ export function createE2BSandbox(
       signal.throwIfAborted();
       if (!NAME_RE.test(name)) throw new Error(`invalid sandbox name: ${name}`);
       // the instance is the file system's sandbox resumed: image and limits were fixed when the
-      // file system was created (README "Template", "Egress")
+      // file system was created (README "Template", "Network policy")
       try {
         await attach(fileSystem.id, signal);
       } catch (e) {
@@ -1149,26 +1164,8 @@ export function decodeOutput(buf: Buffer, truncated: boolean): string {
   return buf.subarray(0, end).toString("utf8");
 }
 
-/**
- * The network of `limits`; a kernel that predates the network contract sends none: that falls to
- * an empty allowlist (the safe direction), never to the open public network.
- */
-function networkOf(limits: SandboxLimits): SandboxLimits["network"] {
-  const network: SandboxLimits["network"] | undefined = limits.network;
-  if (network === undefined) return { kind: "allowlist", hosts: [] };
-  if (network.kind !== "open-public" && network.kind !== "allowlist") {
-    throw new Error(`unknown sandbox network kind: ${String(network.kind)}`);
-  }
-  return network;
-}
-
 function checkLimits(l: SandboxLimits): void {
   if (!(l.cpu > 0) || !(l.memoryMb > 0) || !(l.diskMb > 0)) {
     throw new Error("sandbox limits cpu, memoryMb and diskMb must be positive");
-  }
-  const network = networkOf(l);
-  for (const host of network.hosts) {
-    const errors = validateAllowHost(host);
-    if (errors.length > 0) throw new Error(`invalid network host ${host}: ${errors.join("; ")}`);
   }
 }

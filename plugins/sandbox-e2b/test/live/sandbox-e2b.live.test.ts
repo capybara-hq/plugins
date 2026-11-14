@@ -28,12 +28,12 @@ import {
  *   the outer environment; the code reads no credential file and prints none.
  * - Covers: the template auto-build (template unset), a file system created paused and an instance
  *   connecting it, the sandbox user and working directory, file reads and writes, /skills read-only
- *   for the sandbox user (a write through a symlink refused too), the egress allowlist, output
- *   truncation, timeout kills (nohup children too), abort, long silence (keepalive), a child
- *   that escaped the session killed by its environment marker, files surviving instance destroy (processes
- *   gone), createFileSystem by name, whether a paused sandbox's network rules can change (logged
- *   as `[e2b-live] paused network update: …`, recorded in README "Egress"), destroyFileSystem →
- *   FileSystemGoneError.
+ *   for the sandbox user (a write through a symlink refused too), the network allowlist and the
+ *   open-public refusal, output truncation, timeout kills (nohup children too), abort, long silence
+ *   (keepalive), a child that escaped the session killed by its environment marker, files surviving
+ *   instance destroy (processes gone), createFileSystem by name, whether a paused sandbox's network
+ *   rules can change (logged as `[e2b-live] paused network update: …`, recorded in README "Network
+ *   policy"), destroyFileSystem → FileSystemGoneError.
  *
  * 只能在真实 E2B 上确认的假设（第一次跑时逐条核对，失败时先看这里）：
  * - [ ] 模板里有 uid 1000 的 `sandbox` 用户（E2B 自带的是 `user`），envd 接受 `Authorization: Basic sandbox:`；
@@ -59,7 +59,17 @@ import {
  * - [ ] 暂停 / 过期的沙箱上 envd 回 502（不是 404），插件靠先 connect 判断 gone；
  * - [ ] 长流：几分钟无输出的命令靠 `Keepalive-Ping-Interval` 不被中间代理断开；
  * - [ ] `autoPause: true`：超时后暂停而不删除，/workspace 保留；
- * - [ ] allowlist 请求体（`network.allowOut` 域名 + `denyOut: ["0.0.0.0/0"]`）被接受，`*.` 通配生效；
+ * - [x] The metadata endpoint stays reachable whatever the network policy: with an allowlist
+ *   (everything denied) it still answers 401 on `GET /latest/meta-data/`,
+ *   `PUT /latest/api/token` answers 200 with a token, and that token unlocks the metadata
+ *   document (verified 2026-11-14). The same holds with
+ *   `denyOut: ["169.254.169.254/32"]` and with `denyOut` of every private range, so E2B cannot
+ *   block it: the plugin refuses `open-public` (fail closed). Re-check this item before ever
+ *   mapping `open-public` to internet access.
+ * - [ ] The allowlist body (`network.allowOut` domains + `denyOut:
+ *   ["0.0.0.0/0", "fc00::/7", "fe80::/10", "::1/128"]`) is accepted and a `*.` wildcard takes
+ *   effect; `denyOut` of private CIDRs blocks resolved destination IPs (verified 2026-11-14 with
+ *   `--resolve`; E2B rejects `::/0`, and the microVM has no public IPv6 route);
  * - [ ] 列表接口的 `metadata` 过滤（`k=v` 经 URL 编码后作为 query 值）与 `x-next-token` 分页；
  * - [ ] SendSignal 对不存在的 pid 回 404 `not_found`；
  * - [ ] the image's ENV (cache variables such as `npm_config_cache`, `NODE_USE_ENV_PROXY`) reaches
@@ -180,13 +190,52 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
     expect((await run("test -e /skills/demo/evil || echo absent")).stdout).toBe("absent\n");
   });
 
-  it("egress allowlist: allowed host reachable, others not", async () => {
+  it("network allowlist: allowed host reachable, others not", async () => {
     const ok = await run(
       "curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://pypi.org/simple/",
     );
     expect(ok.stdout).toMatch(/^[23]\d\d$/);
     const blocked = await run("curl -sS -o /dev/null --max-time 10 https://example.com/");
     expect(blocked.exitCode).not.toBe(0);
+  });
+
+  it("open-public is refused before any E2B call", async () => {
+    await expect(
+      sbx.createFileSystem({
+        name: `cap-device-live-${randomUUID()}`,
+        limits: { ...allowlist, network: { kind: "open-public", hosts: [] } },
+        signal: sig(),
+      }),
+    ).rejects.toThrow(/open-public.*refused.*metadata endpoint/s);
+  });
+
+  it("records that the metadata endpoint stays reachable under the allowlist", async () => {
+    // the reason open-public is refused: the Firecracker MMDS answers even when the sandbox has no
+    // other network access, a token is obtainable, and the token unlocks the metadata document, so
+    // no E2B network setting can block it. Re-check this item before ever mapping `open-public`.
+    const r = await run(
+      "curl -sS -o /dev/null -w '%{http_code}' --max-time 10 http://169.254.169.254/latest/meta-data/",
+    );
+    console.info(`[e2b-live] metadata endpoint under the allowlist: HTTP ${r.stdout.trim()}`);
+    expect(r.stdout.trim()).toBe("401");
+    // `curl -sS` exits 0 for any HTTP status, so assert the status itself, not the exit code
+    const tokenRes = await run(
+      "curl -sS -w '|HTTP:%{http_code}' --max-time 10 -X PUT -H 'X-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token",
+    );
+    expect(tokenRes.exitCode).toBe(0);
+    const [tokenBody = "", tokenStatus = ""] = tokenRes.stdout.trim().split("|HTTP:");
+    expect(tokenStatus).toBe("200");
+    const token = tokenBody.trim();
+    expect(token.length).toBeGreaterThan(0);
+    const meta = await run(
+      `curl -sS -w '|HTTP:%{http_code}' --max-time 10 -H 'X-metadata-token: ${token}' http://169.254.169.254/`,
+    );
+    const [body = "", status = ""] = meta.stdout.trim().split("|HTTP:");
+    expect(status).toBe("200");
+    // the MMDS document is a newline-separated key list (not JSON)
+    expect(body.split("\n").map((line) => line.trim())).toEqual(
+      expect.arrayContaining(["accessTokenHash", "address", "envID", "instanceID"]),
+    );
   });
 
   it("output is capped at maxOutputBytes", async () => {

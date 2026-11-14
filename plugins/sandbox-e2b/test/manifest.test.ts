@@ -69,7 +69,6 @@ describe("sandbox-e2b manifest", () => {
       domain: "e2b.app",
       timeoutSeconds: 3600,
       domainAllowlist: true,
-      openEgress: "proxy",
     });
     const c = DeploymentConfig.parse({ apiKey: "e2b_x", template: "capybara-sandbox" });
     expect(c).toEqual({
@@ -78,7 +77,6 @@ describe("sandbox-e2b manifest", () => {
       domain: "e2b.app",
       timeoutSeconds: 3600,
       domainAllowlist: true,
-      openEgress: "proxy",
     });
     expect(
       DeploymentConfig.parse({
@@ -104,16 +102,12 @@ describe("sandbox-e2b manifest", () => {
     ).toThrow();
   });
 
-  it('openEgress: "off" | "proxy" | "direct"; the old allowOpenEgress points to it', () => {
-    for (const openEgress of ["off", "proxy", "direct"] as const) {
-      expect(DeploymentConfig.parse({ apiKey: "k", openEgress }).openEgress).toBe(openEgress);
+  it("the removed openEgress / allowOpenEgress point at the network policy", () => {
+    for (const key of ["openEgress", "allowOpenEgress"]) {
+      const r = DeploymentConfig.safeParse({ apiKey: "k", [key]: "proxy" });
+      expect(r.success).toBe(false);
+      expect(r.error?.issues.map((i) => i.message).join("\n")).toMatch(/refuses an open network/);
     }
-    expect(() => DeploymentConfig.parse({ apiKey: "k", openEgress: true })).toThrow();
-    const r = DeploymentConfig.safeParse({ apiKey: "k", allowOpenEgress: true });
-    expect(r.success).toBe(false);
-    expect(r.error?.issues.map((i) => i.message).join("\n")).toMatch(
-      /allowOpenEgress was replaced by openEgress/,
-    );
     // any other unknown key keeps the plain message
     const other = DeploymentConfig.safeParse({ apiKey: "k", nope: 1 });
     expect(other.error?.issues[0]?.message).toMatch(/Unrecognized key/);

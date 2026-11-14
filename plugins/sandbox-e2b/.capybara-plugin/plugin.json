@@ -8,6 +8,9 @@
   "version": "0.1.0-rc.13",
   "publisher": "Capybara",
   "icon": "./icon.svg",
-  "description": "Devices (sandbox@2) as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, E2B egress controls",
+  "description": {
+    "en": "Devices (sandbox@2) as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, an E2B network allowlist (open-public is refused)",
+    "zh": "E2B 沙箱承载设备（sandbox@2，E2B 云或自托管）：暂停沙箱保留文件，从已发布镜像构建模板，E2B 网络为出站白名单（拒绝开放公网）"
+  },
   "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-e2b#readme"
 }
