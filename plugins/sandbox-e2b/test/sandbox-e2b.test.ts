@@ -36,17 +36,14 @@ const enc = new TextEncoder();
 const dec = new TextDecoder();
 const sig = () => AbortSignal.timeout(20_000);
 const sbxName = () => `cap-device-${randomUUID()}`;
-const limits = (
-  egress: SandboxLimits["egress"] = "none",
-  allowHosts: string[] = [],
-): SandboxLimits => ({
+/** The networks a test names: `none` is an empty allowlist. */
+type TestNetwork = "none" | "allowlist" | "open";
+const limits = (network: TestNetwork = "none", hosts: string[] = []): SandboxLimits => ({
   cpu: 1,
   memoryMb: 2048,
   diskMb: 5120,
-  egress,
-  allowHosts,
-  tier: egress === "open" ? "open" : "strict",
-  devHosts: [],
+  mode: "sandbox",
+  network: network === "open" ? { kind: "open-public", hosts: [] } : { kind: "allowlist", hosts },
 });
 /** The image the template is built from in these tests, and its alias. */
 const IMAGE = publishedImage("0.0.0-test.1");
@@ -486,7 +483,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
           limits: limits("allowlist", ["10.0.0.1"]),
           signal: sig(),
         }),
-      ).rejects.toThrow(/allowHosts/);
+      ).rejects.toThrow(/invalid network host/);
       await expect(
         sbx.createFileSystem({ name: sbxName(), limits: { ...limits(), cpu: 0 }, signal: sig() }),
       ).rejects.toThrow(/positive/);
@@ -710,19 +707,22 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       }
     });
 
-    it("dev tier: allowHosts is final, devHosts never read; one template for every tier", async () => {
-      const l: SandboxLimits = {
-        ...limits("allowlist", ["pypi.org", "registry.npmjs.org"]),
-        tier: "dev",
-        devHosts: ["github.com"],
-      };
+    it("hosts are final; every mode and network uses the same template", async () => {
+      const l = limits("allowlist", ["pypi.org", "registry.npmjs.org"]);
       const fs = await fsWith(sbx, l);
       expect(fake.sandboxes.get(fs.id)?.network).toEqual({
         allowOut: ["pypi.org", "registry.npmjs.org"],
         denyOut: ["0.0.0.0/0"],
       });
+      // `auto` (no OS sandbox) changes nothing on E2B: the micro-VM is the boundary
+      const open = await fsWith(make({ openEgress: "proxy" }), {
+        ...limits("open"),
+        mode: "auto",
+      });
       const strict = await fsWith(sbx, limits("none"));
-      expect(fake.sandboxes.get(fs.id)?.templateID).toBe(fake.sandboxes.get(strict.id)?.templateID);
+      expect(fake.sandboxes.get(open.id)?.templateID).toBe(
+        fake.sandboxes.get(strict.id)?.templateID,
+      );
     });
 
     it("without domain allowlist support, allowlist degrades to none with a warning", async () => {
@@ -774,15 +774,11 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       const h = await provision(s, limits("none"));
       await s.suspend(h, sig());
       expect(fake.sandboxes.get(h.id)?.state).toBe("paused");
-      const dev: SandboxLimits = {
-        ...limits("allowlist", ["pypi.org"]),
-        tier: "dev",
-        devHosts: ["github.com"],
-      };
+      const dev: SandboxLimits = limits("allowlist", ["pypi.org"]);
       // the stub answers 404 for a paused sandbox, so "updated" means it was resumed first
       expect(await s.update?.(h, dev, sig())).toBe("updated");
       expect(fake.sandboxes.get(h.id)?.state).toBe("running");
-      expect(await s.update?.(h, { ...limits("open"), tier: "open" }, sig())).toBe("updated");
+      expect(await s.update?.(h, limits("open"), sig())).toBe("updated");
       expect(await s.update?.(h, limits("none"), sig())).toBe("updated");
       expect(await s.update?.(h, limits("allowlist", []), sig())).toBe("updated");
       expect(updates.get(h.id)).toEqual([
@@ -796,9 +792,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     it('refuses open at openEgress "off" without touching the sandbox', async () => {
       const off = make({ apiUrl: proxy.url, openEgress: "off" });
       const h = await provision(off, limits("none"));
-      await expect(off.update?.(h, { ...limits("open"), tier: "open" }, sig())).rejects.toThrow(
-        /openEgress is "off"/,
-      );
+      await expect(off.update?.(h, limits("open"), sig())).rejects.toThrow(/openEgress is "off"/);
       expect(updates.get(h.id)).toBeUndefined();
     });
 
