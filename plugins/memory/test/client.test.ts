@@ -226,6 +226,52 @@ describe("memory page", () => {
     expect(buttons("Full screen")).toHaveLength(1);
   });
 
+  it("in fullscreen, Escape on the canvas closes the open panel first; the next one leaves", async () => {
+    render({ answer: openAnswer });
+    await flush();
+    const page = () => document.querySelector<HTMLElement>(".cx-memory-page");
+    await click(buttons("Full screen")[0]);
+    const canvas = document.querySelector("canvas") as HTMLCanvasElement;
+    const key = async (k: string) => {
+      await act(async () => {
+        canvas.focus();
+        canvas.dispatchEvent(
+          new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }),
+        );
+      });
+      await flush();
+    };
+    await key("ArrowRight");
+    await key("Enter");
+    expect(document.querySelector(".cx-memory-panel")).not.toBeNull();
+    await key("Escape");
+    expect(document.querySelector(".cx-memory-panel")).toBeNull();
+    expect(page()?.dataset.fullscreen).toBe("true");
+    await key("Escape");
+    expect(page()?.dataset.fullscreen).toBe("false");
+  });
+
+  it("in fullscreen, an Escape another layer already consumed does not leave", async () => {
+    render({});
+    await flush();
+    const page = () => document.querySelector<HTMLElement>(".cx-memory-page");
+    await click(buttons("Full screen")[0]);
+    // a dismissable layer (a dropdown, a dialog) takes the key in the capture phase
+    const consume = (e: KeyboardEvent) => e.preventDefault();
+    document.addEventListener("keydown", consume, true);
+    try {
+      await act(async () => {
+        document.body.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+        );
+      });
+      await flush();
+      expect(page()?.dataset.fullscreen).toBe("true");
+    } finally {
+      document.removeEventListener("keydown", consume, true);
+    }
+  });
+
   it("fetches the rest with `more` until the cursor is null and merges by id", async () => {
     const extra = node("m4", "reference/docs.md");
     render({
