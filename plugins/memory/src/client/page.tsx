@@ -174,7 +174,9 @@ export function MemoryPage() {
   useEffect(() => {
     if (!fullscreen) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      // An Escape something else consumed (the canvas closing the panel, a dropdown or dialog
+      // closing itself) is not also a request to leave fullscreen: one key, one action.
+      if (e.key !== "Escape" || e.defaultPrevented) return;
       // A text field keeps Escape (the search field clears itself with it)
       const t = e.target;
       if (t instanceof Element && t.closest("input, textarea, select") !== null) return;
@@ -937,6 +939,9 @@ function GraphView(props: GraphViewProps) {
       }
       return;
     } else if (e.key === "Escape") {
+      // consume the key only when it closed the open panel, so with nothing open it still
+      // reaches the page (fullscreen leaves on it)
+      if (propsRef.current.selectedId !== null) e.preventDefault();
       propsRef.current.onEscape();
       return;
     } else return;
