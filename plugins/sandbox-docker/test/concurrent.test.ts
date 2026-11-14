@@ -6,7 +6,7 @@ import type {
   SandboxProvider,
 } from "@capybara-hq/plugin-sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDockerSandbox, type SandboxNetwork } from "../src/index.js";
+import { createDockerSandbox } from "../src/index.js";
 import {
   buildTestImages,
   cleanupTestResources,
@@ -28,18 +28,14 @@ import {
 const RUN = randomUUID().slice(0, 8);
 const sig = () => AbortSignal.timeout(120_000);
 const actor: SandboxActor = { accountId: "acc-1", conversationId: "conv-1" };
-/**
- * The installed SDK predates the network contract: the test passes the shape the new kernel sends
- * (an empty allowlist means no network).
- */
-const limits = (hosts: string[] = []): SandboxLimits =>
-  ({
-    cpu: 1,
-    memoryMb: 512,
-    diskMb: 1024,
-    mode: "auto",
-    network: { kind: "allowlist", hosts } satisfies SandboxNetwork,
-  }) as unknown as SandboxLimits;
+/** An empty allowlist means no network. */
+const limits = (hosts: string[] = []): SandboxLimits => ({
+  cpu: 1,
+  memoryMb: 512,
+  diskMb: 1024,
+  mode: "auto",
+  network: { kind: "allowlist", hosts },
+});
 
 describe.skipIf(!dockerAvailable)("sandbox-docker concurrent exec", { timeout: 120_000 }, () => {
   let images: TestImages;

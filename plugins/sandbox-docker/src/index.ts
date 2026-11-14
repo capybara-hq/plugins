@@ -11,8 +11,6 @@ export {
   execArgv,
   IN_SANDBOX_GRACE_SECONDS,
   publishedImages,
-  type SandboxNetwork,
-  type SandboxNetworkLimits,
   sandboxResourceNames,
 } from "./provider.js";
 
@@ -106,10 +104,9 @@ export function providerConfig(
 const plugin = defineExtension({
   name: "sandbox-docker",
   version: "0.1.0-rc.13",
-  // The network contract (`limits.mode` / `limits.network`) needs the SDK from the auto-mode
-  // release; a kernel that predates it gets no network (the safe direction). The range stays wide
-  // until this repository upgrades its core packages.
-  sdk: "^0.1.0-rc.3",
+  // The network contract (`limits.mode` / `limits.network`) is the SDK's from rc.22 on; a kernel
+  // that predates it gets no network (the safe direction).
+  sdk: "^0.1.0-rc.22",
   provides: [SANDBOX_EXTENSION_POINT],
   // 只用部署配置与 Docker endpoint，不用任何需要声明的平台能力
   permissions: {},

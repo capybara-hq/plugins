@@ -6,19 +6,20 @@ import plugin, {
   DeploymentConfig,
   decodeOutput,
   providerConfig,
-  type SandboxNetwork,
 } from "../src/index.js";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
   version: string;
 };
 
-/**
- * Limits carrying the newer network contract; the installed SDK predates it, so the test passes
- * the shape the kernel sends (rc.22) through a cast.
- */
-const netLimits = (network: SandboxNetwork): SandboxLimits =>
-  ({ cpu: 1, memoryMb: 256, diskMb: 256, mode: "auto", network }) as unknown as SandboxLimits;
+/** Limits carrying the network contract the kernel sends (rc.22). */
+const netLimits = (network: SandboxLimits["network"]): SandboxLimits => ({
+  cpu: 1,
+  memoryMb: 256,
+  diskMb: 256,
+  mode: "auto",
+  network,
+});
 
 /** The open public network. */
 const OPEN = netLimits({ kind: "open-public", hosts: [] });
@@ -46,7 +47,7 @@ describe("sandbox-docker manifest", () => {
     expect(plugin.permissions).toEqual({});
     // the kernel checks this range against the installed SDK version; the network contract
     // itself needs the auto-mode SDK (the provider falls back safely with an older one)
-    expect(plugin.sdk).toBe("^0.1.0-rc.3");
+    expect(plugin.sdk).toBe("^0.1.0-rc.22");
   });
 
   it("deployment config: defaults, endpoint schemes", () => {

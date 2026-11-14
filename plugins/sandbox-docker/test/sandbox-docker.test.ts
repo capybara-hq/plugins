@@ -14,7 +14,6 @@ import {
   type DockerSandboxProvider,
   execArgv,
   IN_SANDBOX_GRACE_SECONDS,
-  type SandboxNetwork,
 } from "../src/index.js";
 import {
   buildTestImages,
@@ -44,11 +43,15 @@ const sbxName = () => `cap-${randomUUID()}`;
 const ACTOR: SandboxActor = { accountId: "acc-1", conversationId: "conv-1" };
 /** The `tag` and `actor` every `exec` carries in sandbox@2. */
 const who = () => ({ tag: randomUUID(), actor: ACTOR });
-const OPEN: SandboxNetwork = { kind: "open-public", hosts: [] };
-const allow = (hosts: string[] = []): SandboxNetwork => ({ kind: "allowlist", hosts });
-// The installed SDK predates the network contract: the test passes the shape the new kernel sends.
-const limits = (network: SandboxNetwork): SandboxLimits =>
-  ({ cpu: 1, memoryMb: 512, diskMb: 1024, mode: "auto", network }) as unknown as SandboxLimits;
+const OPEN: SandboxLimits["network"] = { kind: "open-public", hosts: [] };
+const allow = (hosts: string[] = []): SandboxLimits["network"] => ({ kind: "allowlist", hosts });
+const limits = (network: SandboxLimits["network"]): SandboxLimits => ({
+  cpu: 1,
+  memoryMb: 512,
+  diskMb: 1024,
+  mode: "auto",
+  network,
+});
 
 describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => {
   let images: TestImages;

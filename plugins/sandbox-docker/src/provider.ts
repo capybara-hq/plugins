@@ -7,6 +7,7 @@ import {
   SANDBOX_TAG_RE,
   SandboxGoneError,
   type SandboxHandle,
+  type SandboxLimits,
   type SandboxProvider,
   validateAllowHost,
   validateSandboxPath,
@@ -42,28 +43,7 @@ export type DockerSandboxProvider = SandboxProvider &
  * The egress proxy's modes: `open-public` reaches any public host on any port (private, loopback,
  * link-local and metadata addresses are refused by resolved IP), `allowlist` only the given hosts.
  */
-export type ProxyMode = "open-public" | "allowlist";
-
-/** The network of `@capybara-hq/plugin-sdk` rc.22 (`SandboxLimits.network`). */
-export interface SandboxNetwork {
-  kind: ProxyMode;
-  hosts: string[];
-}
-
-/**
- * `SandboxLimits` as this provider reads it. The installed SDK may predate the network contract;
- * limits from a kernel that sends neither field are assignable and fall to the safe empty
- * allowlist (no network), never to the open public network. Remove this local shape and use
- * `SandboxLimits` once the repository upgrades the SDK to rc.22.
- */
-export interface SandboxNetworkLimits {
-  cpu: number;
-  memoryMb: number;
-  diskMb: number;
-  /** `auto`: no OS sandbox (a cloud provider's container is the boundary); `sandbox` otherwise. */
-  mode?: "auto" | "sandbox" | undefined;
-  network?: SandboxNetwork | undefined;
-}
+export type ProxyMode = SandboxLimits["network"]["kind"];
 
 /** The network an instance gets: none (`NetworkMode: none`), or the egress proxy in one of its modes. */
 export type EgressMode = "none" | ProxyMode;
@@ -185,17 +165,17 @@ export function sandboxResourceNames(name: string) {
  * The network limits; a kernel that predates the network contract sends none: that falls to an
  * empty allowlist (the safe direction), never to the open public network.
  */
-function networkOf(limits: SandboxNetworkLimits): SandboxNetwork {
-  const network = limits.network;
+function networkOf(limits: SandboxLimits): SandboxLimits["network"] {
+  const network: SandboxLimits["network"] | undefined = limits.network;
   if (network === undefined) return { kind: "allowlist", hosts: [] };
   if (network.kind !== "open-public" && network.kind !== "allowlist") {
-    throw new Error(`unknown sandbox network kind: ${String((network as { kind: unknown }).kind)}`);
+    throw new Error(`unknown sandbox network kind: ${String(network.kind)}`);
   }
   return network;
 }
 
 /** The device mode; a kernel that predates it is recorded as `sandbox`. */
-function modeOf(limits: SandboxNetworkLimits): "auto" | "sandbox" {
+function modeOf(limits: SandboxLimits): "auto" | "sandbox" {
   return limits.mode === "auto" || limits.mode === "sandbox" ? limits.mode : "sandbox";
 }
 
@@ -205,10 +185,7 @@ function modeOf(limits: SandboxNetworkLimits): "auto" | "sandbox" {
  * port), and an empty list is no network at all. `refuseOpenNetwork` throws on `open-public` before
  * Docker is touched. Every instance gets the same `/dev/shm` profile, `min(1 GiB, memoryMb / 4)`.
  */
-export function planInstance(
-  limits: SandboxNetworkLimits,
-  refuseOpenNetwork = false,
-): InstancePlan {
+export function planInstance(limits: SandboxLimits, refuseOpenNetwork = false): InstancePlan {
   const network = networkOf(limits);
   const shmBytes = Math.min(GIB, Math.max(1, Math.floor(limits.memoryMb / 4)) * MIB);
   if (network.kind === "open-public") {
@@ -263,7 +240,7 @@ export function egressProxyEnv(
 }
 
 /** The labels that record a plan on the sandbox container. */
-function planLabels(limits: SandboxNetworkLimits, plan: InstancePlan): Record<string, string> {
+function planLabels(limits: SandboxLimits, plan: InstancePlan): Record<string, string> {
   return {
     [LABEL_MODE]: modeOf(limits),
     [LABEL_NET]: plan.mode,
@@ -1354,7 +1331,7 @@ export function decodeOutput(buf: Buffer, truncated: boolean): string {
   return buf.subarray(0, end).toString("utf8");
 }
 
-function checkLimits(l: SandboxNetworkLimits): void {
+function checkLimits(l: SandboxLimits): void {
   if (!(l.cpu > 0) || !(l.memoryMb > 0) || !(l.diskMb > 0)) {
     throw new Error("sandbox limits cpu, memoryMb and diskMb must be positive");
   }

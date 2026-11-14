@@ -1,9 +1,9 @@
+import type { SandboxLimits } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import {
   egressProxyEnv,
   type InstancePlan,
   planInstance,
-  type SandboxNetworkLimits,
   sandboxEnv,
   updateDecision,
 } from "../src/provider.js";
@@ -17,16 +17,16 @@ import {
 const MIB = 1024 * 1024;
 const L = ["registry.npmjs.org", "*.example.com"];
 
-const OPEN: SandboxNetworkLimits["network"] = { kind: "open-public", hosts: [] };
-const allow = (hosts: string[] = L): SandboxNetworkLimits["network"] => ({
+const OPEN: SandboxLimits["network"] = { kind: "open-public", hosts: [] };
+const allow = (hosts: string[] = L): SandboxLimits["network"] => ({
   kind: "allowlist",
   hosts,
 });
 
 const limits = (
-  network: SandboxNetworkLimits["network"],
-  o: { memoryMb?: number; mode?: SandboxNetworkLimits["mode"] } = {},
-): SandboxNetworkLimits => ({
+  network: SandboxLimits["network"],
+  o: { memoryMb?: number; mode?: SandboxLimits["mode"] } = {},
+): SandboxLimits => ({
   cpu: 1,
   memoryMb: o.memoryMb ?? 2048,
   diskMb: 1024,
@@ -89,18 +89,16 @@ describe("planInstance", () => {
       tier: "open",
       allowHosts: [],
       devHosts: [],
-    } as unknown as SandboxNetworkLimits;
+    } as unknown as SandboxLimits;
     expect(planInstance(old)).toMatchObject({ mode: "none", allowHosts: [] });
     // and a kernel that sends neither the network nor the old keys
-    const absent = { cpu: 1, memoryMb: 2048, diskMb: 1024 } as unknown as SandboxNetworkLimits;
+    const absent = { cpu: 1, memoryMb: 2048, diskMb: 1024 } as unknown as SandboxLimits;
     expect(planInstance(absent)).toMatchObject({ mode: "none", allowHosts: [] });
   });
 
   it("rejects an unknown network kind", () => {
     expect(() =>
-      planInstance(
-        limits({ kind: "wide", hosts: [] } as unknown as SandboxNetworkLimits["network"]),
-      ),
+      planInstance(limits({ kind: "wide", hosts: [] } as unknown as SandboxLimits["network"])),
     ).toThrow(/unknown sandbox network kind/);
   });
 });
@@ -169,7 +167,7 @@ describe("egressProxyEnv", () => {
 });
 
 describe("updateDecision", () => {
-  const at = (network: SandboxNetworkLimits["network"]) => planInstance(limits(network));
+  const at = (network: SandboxLimits["network"]) => planInstance(limits(network));
 
   it("allowlist to open-public widens: updated", () => {
     expect(updateDecision(labelsOf(at(allow())), at(OPEN))).toBe("updated");
