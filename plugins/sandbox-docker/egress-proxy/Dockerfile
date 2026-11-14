@@ -1,6 +1,6 @@
 # Capybara sandbox egress proxy image (deployment config egressProxyImage, default tag
-# capybara-sandbox-egress:latest). Env: MODE strict | dev | open, ALLOW_HOSTS, ALLOW_CONNECT_PORTS
-# (strict), PORT (3128), SOCKS_PORT (1080; dev / open only).
+# capybara-sandbox-egress:latest). Env: MODE open-public | allowlist, ALLOW_HOSTS (allowlist),
+# PORT (3128), SOCKS_PORT (1080).
 #   docker build -t capybara-sandbox-egress:latest plugins/sandbox-docker/egress-proxy
 # Multi-arch: docker buildx build --platform linux/amd64,linux/arm64 -t <registry>/capybara-sandbox-egress:<tag> \
 #   --push plugins/sandbox-docker/egress-proxy

@@ -35,8 +35,10 @@ import {
 
 /**
  * Smoke test (M5 T9): a real kernel + model-fake + this plugin (through the socket proxy of
- * capybara-hq/core's docker/sandbox-proxy) run a few of the kernel's sandbox tool cases (default allowlist egress, so
- * the egress proxy is created too). Skipped without Docker.
+ * capybara-hq/core's docker/sandbox-proxy) run a few of the kernel's sandbox tool cases. The
+ * installed kernel predates the `limits.network` contract, so the plugin gives the sandbox no
+ * network (the safe direction; a kernel from the auto-mode release sends open-public). Skipped
+ * without Docker.
  */
 
 const PLUGIN_DIR = fileURLToPath(new URL("../", import.meta.url));
@@ -174,12 +176,13 @@ describe.skipIf(!dockerAvailable)(
       const r = await call(
         conv,
         "Bash",
-        { description: "Test step", command: "pwd && id -un && echo $HTTPS_PROXY" },
+        { description: "Test step", command: "pwd && id -un && echo proxy=$HTTPS_PROXY" },
         1,
       );
       expect(r.isError, why(r.content)).toBe(false);
       expect(r.content.startsWith(SANDBOX_STARTED_NOTICE)).toBe(true);
-      expect(r.content).toMatch(/\/workspace\nsandbox\nhttp:\/\/cap-device-[0-9a-f-]+-egress:3128/);
+      // No `limits.network` from this kernel: no network, so no egress proxy variable.
+      expect(r.content).toMatch(/\/workspace\nsandbox\nproxy=\n/);
 
       const w = await call(
         conv,
@@ -206,14 +209,16 @@ describe.skipIf(!dockerAvailable)(
         6,
       );
       expect(gr.content).toContain("/workspace/src/a.txt:2:BETA");
-      // /skills 对命令只读
+      // /skills is a read-only mount (a write would pass command review as an ask; the mount
+      // table shows the property without one)
       const ro = await call(
         conv,
         "Bash",
-        { description: "Test step", command: "touch /skills/x" },
+        { description: "Test step", command: "grep ' /skills ' /proc/mounts" },
         7,
       );
-      expect(ro.content).toContain("Read-only file system");
+      expect(ro.isError, ro.content).toBe(false);
+      expect(ro.content).toContain(" ro,");
     });
 
     it("a timed-out command is stopped and the sandbox stays usable", async () => {

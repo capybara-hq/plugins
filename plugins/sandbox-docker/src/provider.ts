@@ -7,9 +7,7 @@ import {
   SANDBOX_TAG_RE,
   SandboxGoneError,
   type SandboxHandle,
-  type SandboxLimits,
   type SandboxProvider,
-  type SandboxTier,
   validateAllowHost,
   validateSandboxPath,
 } from "@capybara-hq/plugin-sdk";
@@ -31,44 +29,64 @@ export function publishedImages(version: string): { sandbox: string; egress: str
 }
 
 /**
- * The SDK's provider with `update` always present: it applies new limits to an existing instance,
- * `"updated"` when only the egress proxy had to change (recreated with the new mode and hosts),
- * `"recreate"` when the container itself must be recreated (network, environment or shm size
- * differ, or the container is gone). Limits are fixed when the instance (container) is created.
+ * The SDK's provider with `update` always present: it applies a new `limits.mode` / `limits.network`
+ * to an existing instance, `"updated"` when only the egress proxy had to change (recreated with the
+ * new mode and hosts), `"recreate"` when the container itself must be recreated (network or
+ * environment differ, or the container is gone). Limits are fixed when the instance (container) is
+ * created.
  */
 export type DockerSandboxProvider = SandboxProvider &
   Required<Pick<SandboxProvider, "update">> & { readonly limitsApplyAt: "instance" };
 
 /**
- * How a sandbox with egress `open` reaches the network: `off` refuses it, `proxy` goes through
- * the egress proxy in open mode (public hosts, any port), `direct` attaches the shared bridge.
+ * The egress proxy's modes: `open-public` reaches any public host on any port (private, loopback,
+ * link-local and metadata addresses are refused by resolved IP), `allowlist` only the given hosts.
  */
-export type OpenEgress = "off" | "proxy" | "direct";
+export type ProxyMode = "open-public" | "allowlist";
+
+/** The network of `@capybara-hq/plugin-sdk` rc.22 (`SandboxLimits.network`). */
+export interface SandboxNetwork {
+  kind: ProxyMode;
+  hosts: string[];
+}
 
 /**
- * The network an instance gets: `none`, `direct` (the shared bridge), or the egress proxy in one
- * of its modes (`strict`: allowlist on ports 443 / 80; `dev`: allowlist on any port plus SOCKS5;
- * `open`: any public host).
+ * `SandboxLimits` as this provider reads it. The installed SDK may predate the network contract;
+ * limits from a kernel that sends neither field are assignable and fall to the safe empty
+ * allowlist (no network), never to the open public network. Remove this local shape and use
+ * `SandboxLimits` once the repository upgrades the SDK to rc.22.
  */
-export type EgressMode = "none" | "direct" | ProxyMode;
-type ProxyMode = "strict" | "dev" | "open";
+export interface SandboxNetworkLimits {
+  cpu: number;
+  memoryMb: number;
+  diskMb: number;
+  /** `auto`: no OS sandbox (a cloud provider's container is the boundary); `sandbox` otherwise. */
+  mode?: "auto" | "sandbox" | undefined;
+  network?: SandboxNetwork | undefined;
+}
+
+/** The network an instance gets: none (`NetworkMode: none`), or the egress proxy in one of its modes. */
+export type EgressMode = "none" | ProxyMode;
 
 /** What `create` builds for given limits (pure; see {@link planInstance}). */
 export interface InstancePlan {
-  tier: SandboxTier;
+  /** `none` for an empty allowlist (the kill switch); otherwise the egress proxy's mode. */
   mode: EgressMode;
-  /** The proxy's host list (`strict` / `dev`); empty for the other modes. */
+  /** The proxy's host list (`allowlist`); empty otherwise. */
   allowHosts: string[];
-  /** `ShmSize` in bytes; null = Docker's default (64 MiB). */
-  shmBytes: number | null;
+  /** `ShmSize` in bytes (one profile for every instance). */
+  shmBytes: number;
 }
 
 /** The provider's config: the deployment config (index.ts DeploymentConfig) with images resolved. */
 export interface DockerSandboxConfig {
-  /** socket 代理地址：`tcp://host:port` 或 `unix:///path`。 */
+  /** Docker socket proxy address: `tcp://host:port` or `unix:///path`. */
   endpoint: string;
   runtime: "runc" | "runsc";
-  /** 共用的沙箱网络（`open` 的沙箱与各出站代理接在上面）；不存在时按 bridge、禁止容器互访创建。 */
+  /**
+   * The shared sandbox network: every egress proxy joins it for its outbound leg. Created as a
+   * bridge with container-to-container traffic disabled when it does not exist.
+   */
   network: string;
   egressProxyImage: string;
   /**
@@ -76,40 +94,43 @@ export interface DockerSandboxConfig {
    * with its own version). Without it, `create` without `image` fails.
    */
   defaultImage?: string | undefined;
-  /** 工作区卷的驱动；设了就带 `DriverOpts.size` 限制卷大小。 */
+  /** Driver of the workspace volume; when set, `DriverOpts.size` limits its size. */
   volumeDriver?: string | undefined;
   /**
-   * How `egress: "open"` is served (unset = `proxy`): `off` refuses it in `create`, `proxy` uses
-   * the egress proxy in open mode, `direct` the shared bridge (reaches the host and intranet too).
+   * Refuse `limits.network.kind === "open-public"` in `create` / `update` (default `false`): for
+   * locked-down deployments. The error names this setting so an operator can find it.
    */
-  openEgress?: OpenEgress | undefined;
+  refuseOpenNetwork?: boolean | undefined;
 }
 
 /**
- * **仅测试**的选项：只有直接调用 {@link createDockerSandbox} 的代码能传，插件的部署配置设不了（index.ts 的
- * 部署配置 schema 是 strict，多出的键直接报错）。
+ * **Test only** options: only code that calls {@link createDockerSandbox} directly can pass them;
+ * the plugin's deployment config cannot (index.ts's deployment schema is strict, extra keys throw).
  */
 export interface DockerSandboxTestOptions {
-  /** 给插件创建的所有容器、卷、网络额外打的标签（测试据此清理）。 */
+  /** Extra labels on every container, volume and network the plugin creates (tests clean up by them). */
   labels?: Record<string, string>;
   /**
-   * 出站代理把这些主机名固定解析到给定 IP，并豁免私有地址检查（主机名仍须在白名单里）。
-   * 用来把测试里的本地 HTTP 服务当作放行目标。
+   * The egress proxy pins these host names to the given IPs and exempts them from the private
+   * address check (in `allowlist` they must still be on the list). Lets a local HTTP service in a
+   * test stand in for an allowed target.
    */
   egressTestHosts?: Record<string, string>;
 }
 
-/** 沙箱用户（镜像里的 sandbox）：命令与文件操作以它运行。 */
+/** The sandbox user (the image's `sandbox`): commands and file operations run as it. */
 const SANDBOX_USER = "1000:1000";
 const ROOT_USER = "0:0";
 /**
- * 容器主进程（init 与 `sleep infinity`）的用户：root（能力全部去掉）。沙箱用户发不了信号给它们，
- * `kill 1`、`pkill sleep`、`kill -9 -1` 都停不掉容器。每个 exec 都显式指定用户，不会以它运行命令。
+ * The user of the container's main processes (init and `sleep infinity`): root, with every
+ * capability dropped. The sandbox user cannot signal them, so `kill 1`, `pkill sleep` and
+ * `kill -9 -1` cannot stop the container. Every exec names its user explicitly and never runs
+ * commands as this one.
  */
 const INIT_USER = ROOT_USER;
-/** 出站代理监听端口。 */
+/** The port the egress proxy listens on. */
 const PROXY_PORT = 3128;
-/** The egress proxy's SOCKS5 port (modes `dev` and `open`). */
+/** The egress proxy's SOCKS5 port. */
 const SOCKS_PORT = 1080;
 /** 沙箱内的进程数上限。 */
 const PIDS_LIMIT = 1024;
@@ -127,17 +148,16 @@ const STDERR_ROOM = 64 * 1024;
 const LABEL = "dev.capybara.sandbox";
 const LABEL_NAME = "dev.capybara.sandbox.name";
 const LABEL_ROLE = "dev.capybara.sandbox.role";
-const LABEL_EGRESS = "dev.capybara.sandbox.egress";
 const LABEL_ALLOW = "dev.capybara.sandbox.allow-hosts";
 /**
- * The tier, egress mode and shm size the container was created with. With the host list
- * (`LABEL_ALLOW`) they are a lower bound of what its egress proxy allows: `update` changes the
- * proxy in place only when the new proxy allows at least as much, so a proxy rebuilt from these
- * labels (resume, after it went missing) never allows more than the one in force.
+ * The device mode (`auto` / `sandbox`) and network (`open-public` / `allowlist`, with the host
+ * list in `LABEL_ALLOW`) the container was created with. The network and host list are a lower
+ * bound of what its egress proxy allows: `update` changes the proxy in place only when the new
+ * proxy allows at least as much, so a proxy rebuilt from these labels (resume, after it went
+ * missing) never allows more than the one in force.
  */
-const LABEL_TIER = "dev.capybara.sandbox.tier";
-const LABEL_MODE = "dev.capybara.sandbox.egress-mode";
-const LABEL_SHM = "dev.capybara.sandbox.shm";
+const LABEL_MODE = "dev.capybara.sandbox.mode";
+const LABEL_NET = "dev.capybara.sandbox.network";
 
 /**
  * Container / volume / network names: `create`'s and `createFileSystem`'s name
@@ -161,71 +181,72 @@ export function sandboxResourceNames(name: string) {
   };
 }
 
-const isProxyMode = (m: EgressMode): m is ProxyMode =>
-  m === "strict" || m === "dev" || m === "open";
-
 /**
- * What an instance gets for `limits` (pure, no Docker): the tier (absent = `strict`), the egress
- * mode and shm size. `none` egress is no network in every tier; `open` egress follows
- * `openEgress` (`off` throws); `allowlist` goes through the proxy, in `strict` mode for the
- * `strict` tier and in `dev` mode (any port, SOCKS5) above it. `dev` and `open` tiers get
- * `ShmSize = min(1 GiB, memoryMb / 4)`; `strict` keeps Docker's default.
+ * The network limits; a kernel that predates the network contract sends none: that falls to an
+ * empty allowlist (the safe direction), never to the open public network.
  */
-export function planInstance(
-  limits: SandboxLimits,
-  openEgress: OpenEgress = "proxy",
-): InstancePlan {
-  // A kernel older than the tiers SDK sends no tier: absent = strict.
-  const tier: SandboxTier = limits.tier ?? "strict";
-  if (tier !== "strict" && tier !== "dev" && tier !== "open")
-    throw new Error(`unknown sandbox tier: ${String(tier)}`);
-  const shmBytes =
-    tier === "strict" ? null : Math.min(GIB, Math.max(1, Math.floor(limits.memoryMb / 4)) * MIB);
-  if (limits.egress === "none") return { tier, mode: "none", allowHosts: [], shmBytes };
-  if (limits.egress === "open") {
-    if (openEgress === "off") {
-      throw new Error(
-        'Sandbox egress "open" is refused: the sandbox-docker plugin setting openEgress is "off". Set extensionConfig."sandbox-docker".openEgress to "proxy" (any public host through the egress proxy) or "direct" (the shared bridge; trusted environments only), or lower the sandbox tier or egress.',
-      );
-    }
-    return { tier, mode: openEgress === "direct" ? "direct" : "open", allowHosts: [], shmBytes };
+function networkOf(limits: SandboxNetworkLimits): SandboxNetwork {
+  const network = limits.network;
+  if (network === undefined) return { kind: "allowlist", hosts: [] };
+  if (network.kind !== "open-public" && network.kind !== "allowlist") {
+    throw new Error(`unknown sandbox network kind: ${String((network as { kind: unknown }).kind)}`);
   }
-  return {
-    tier,
-    mode: tier === "strict" ? "strict" : "dev",
-    allowHosts: [...limits.allowHosts],
-    shmBytes,
-  };
+  return network;
+}
+
+/** The device mode; a kernel that predates it is recorded as `sandbox`. */
+function modeOf(limits: SandboxNetworkLimits): "auto" | "sandbox" {
+  return limits.mode === "auto" || limits.mode === "sandbox" ? limits.mode : "sandbox";
 }
 
 /**
- * The sandbox container's environment for an egress mode: `HTTP(S)_PROXY` through the proxy;
- * in `dev` / `open` mode also `ALL_PROXY` and `GRPC_PROXY` (the proxy's CONNECT port) and
- * `GIT_SSH_COMMAND` through its SOCKS5 port, so ssh and gRPC clients work.
+ * What an instance gets for `limits` (pure, no Docker): the network and the shm size.
+ * `open-public` reaches any public host on any port; `allowlist` only the given hosts (on any
+ * port), and an empty list is no network at all. `refuseOpenNetwork` throws on `open-public` before
+ * Docker is touched. Every instance gets the same `/dev/shm` profile, `min(1 GiB, memoryMb / 4)`.
+ */
+export function planInstance(
+  limits: SandboxNetworkLimits,
+  refuseOpenNetwork = false,
+): InstancePlan {
+  const network = networkOf(limits);
+  const shmBytes = Math.min(GIB, Math.max(1, Math.floor(limits.memoryMb / 4)) * MIB);
+  if (network.kind === "open-public") {
+    if (refuseOpenNetwork) {
+      throw new Error(
+        'Sandbox network "open-public" is refused: the sandbox-docker plugin setting refuseOpenNetwork is true. Set extensionConfig."sandbox-docker".refuseOpenNetwork to false, or have the org switch its cloud network to the allowlist.',
+      );
+    }
+    return { mode: "open-public", allowHosts: [], shmBytes };
+  }
+  if (network.hosts.length === 0) return { mode: "none", allowHosts: [], shmBytes };
+  return { mode: "allowlist", allowHosts: [...network.hosts], shmBytes };
+}
+
+/**
+ * The sandbox container's environment: `HTTP(S)_PROXY` and `ALL_PROXY` / `GRPC_PROXY` through the
+ * proxy's CONNECT port and `GIT_SSH_COMMAND` through its SOCKS5 port, so HTTP clients, ssh, gRPC
+ * and SOCKS- or CONNECT-aware clients reach the network. No network: none of them.
  */
 export function sandboxEnv(name: string, mode: EgressMode): string[] {
   const env = ["HOME=/workspace", "LANG=C.UTF-8"];
-  if (!isProxyMode(mode)) return env;
+  if (mode === "none") return env;
   const host = sandboxResourceNames(name).egress;
   const proxy = `http://${host}:${PROXY_PORT}`;
-  env.push(
+  return [
+    ...env,
     `HTTP_PROXY=${proxy}`,
     `HTTPS_PROXY=${proxy}`,
     `http_proxy=${proxy}`,
     `https_proxy=${proxy}`,
     "NO_PROXY=localhost,127.0.0.1,::1",
     "no_proxy=localhost,127.0.0.1,::1",
-  );
-  if (mode !== "strict") {
-    env.push(
-      `ALL_PROXY=${proxy}`,
-      `all_proxy=${proxy}`,
-      `GRPC_PROXY=${proxy}`,
-      `grpc_proxy=${proxy}`,
-      `GIT_SSH_COMMAND=ssh -o ProxyCommand='nc -X 5 -x ${host}:${SOCKS_PORT} %h %p'`,
-    );
-  }
-  return env;
+    `ALL_PROXY=${proxy}`,
+    `all_proxy=${proxy}`,
+    `GRPC_PROXY=${proxy}`,
+    `grpc_proxy=${proxy}`,
+    `GIT_SSH_COMMAND=ssh -o ProxyCommand='nc -X 5 -x ${host}:${SOCKS_PORT} %h %p'`,
+  ];
 }
 
 /** The egress proxy container's environment (egress-proxy/proxy.mjs) for a mode and host list. */
@@ -234,55 +255,63 @@ export function egressProxyEnv(
   allowHosts: string[],
   testHosts?: Record<string, string>,
 ): string[] {
-  const env = [`MODE=${mode}`, `PORT=${PROXY_PORT}`];
-  // open mode has no host list: any public host
-  if (mode !== "open") env.push(`ALLOW_HOSTS=${JSON.stringify(allowHosts)}`);
-  if (mode !== "strict") env.push(`SOCKS_PORT=${SOCKS_PORT}`);
+  const env = [`MODE=${mode}`, `PORT=${PROXY_PORT}`, `SOCKS_PORT=${SOCKS_PORT}`];
+  // open-public has no host list: any public host
+  if (mode === "allowlist") env.push(`ALLOW_HOSTS=${JSON.stringify(allowHosts)}`);
   if (testHosts) env.push(`CAPYBARA_EGRESS_TEST_HOSTS=${JSON.stringify(testHosts)}`);
   return env;
 }
 
 /** The labels that record a plan on the sandbox container. */
-function planLabels(limits: SandboxLimits, plan: InstancePlan): Record<string, string> {
+function planLabels(limits: SandboxNetworkLimits, plan: InstancePlan): Record<string, string> {
   return {
-    [LABEL_EGRESS]: limits.egress,
-    [LABEL_TIER]: plan.tier,
-    [LABEL_MODE]: plan.mode,
+    [LABEL_MODE]: modeOf(limits),
+    [LABEL_NET]: plan.mode,
     [LABEL_ALLOW]: JSON.stringify(plan.allowHosts),
-    [LABEL_SHM]: String(plan.shmBytes ?? 0),
   };
 }
 
-/** The egress mode recorded on a sandbox container (containers made before tiers: from egress). */
-function labelMode(labels: Record<string, string>): EgressMode {
-  const m = labels[LABEL_MODE];
-  if (m === "none" || m === "direct" || m === "strict" || m === "dev" || m === "open") return m;
-  const egress = labels[LABEL_EGRESS];
-  return egress === "allowlist" ? "strict" : egress === "open" ? "direct" : "none";
+/**
+ * The network a container was created with; `null` when the labels are missing or unreadable (a
+ * container made by a provider without this contract).
+ */
+function labelNetwork(
+  labels: Record<string, string>,
+): { mode: EgressMode; allowHosts: string[] } | null {
+  const kind = labels[LABEL_NET];
+  if (kind !== "none" && kind !== "open-public" && kind !== "allowlist") return null;
+  let allowHosts: string[] = [];
+  try {
+    const parsed = JSON.parse(labels[LABEL_ALLOW] ?? "[]") as unknown;
+    if (Array.isArray(parsed)) allowHosts = parsed.filter((h) => typeof h === "string");
+  } catch {
+    return null;
+  }
+  return { mode: kind, allowHosts };
 }
-
-/** Which environment a mode gives the container: none, HTTP proxies only, or the full set. */
-const envClass = (m: EgressMode) => (!isProxyMode(m) ? "none" : m === "strict" ? "http" : "full");
 
 /**
  * Whether `update` may move an instance from its container `labels` to `plan` by recreating only
- * its egress proxy (pure). The container's network, environment and shm size cannot change, and
- * the new proxy must allow at least what the labels record (`dev` to `open`, or a host list that
- * keeps every recorded host), so a proxy rebuilt from the labels never allows more than the one
- * `update` put in place. Anything else is `"recreate"`.
+ * its egress proxy (pure). The container's environment is the same in both modes, and the new
+ * proxy must allow at least what the labels record (`allowlist` to `open-public`, or a host list
+ * that keeps every recorded host), so a proxy rebuilt from the labels never allows more than the
+ * one `update` put in place. Anything else is `"recreate"`.
  */
 export function updateDecision(
   labels: Record<string, string>,
   plan: InstancePlan,
 ): "updated" | "recreate" {
-  const from = labelMode(labels);
-  if (!isProxyMode(from) || !isProxyMode(plan.mode)) return "recreate";
-  if (envClass(from) !== envClass(plan.mode)) return "recreate";
-  if ((labels[LABEL_SHM] ?? "0") !== String(plan.shmBytes ?? 0)) return "recreate";
-  if (plan.mode === "open") return "updated";
-  if (from === "open") return "recreate";
-  const recorded = JSON.parse(labels[LABEL_ALLOW] ?? "[]") as string[];
-  return recorded.every((h) => plan.allowHosts.includes(h)) ? "updated" : "recreate";
+  const from = labelNetwork(labels);
+  // A container without this contract's labels may have no internal network at all: a proxy swap
+  // cannot give it one, so it must be recreated.
+  if (from === null) return "recreate";
+  // No network cannot be swapped for a proxy (and back) without recreating the container.
+  if (plan.mode === "none" || from.mode === "none") {
+    return plan.mode === from.mode ? "updated" : "recreate";
+  }
+  if (plan.mode === "open-public") return "updated";
+  if (from.mode === "open-public") return "recreate";
+  return from.allowHosts.every((h) => plan.allowHosts.includes(h)) ? "updated" : "recreate";
 }
 
 /**
@@ -608,7 +637,7 @@ export function createDockerSandbox(
         body: {
           Name: cfg.network,
           Driver: "bridge",
-          // 共用网络上的容器（open 的沙箱、各出站代理）互相不通
+          // Containers on the shared network (the egress proxies) cannot reach each other.
           Options: { "com.docker.network.bridge.enable_icc": "false" },
           Labels: { ...test.labels, [LABEL]: "1", [LABEL_ROLE]: "shared-network" },
         },
@@ -958,14 +987,12 @@ export function createDockerSandbox(
       throw e;
     }
     const labels = c.Config.Labels ?? {};
-    const mode = labelMode(labels);
-    if (mode === "direct") await ensureSharedNetwork(signal);
-    if (isProxyMode(mode)) {
-      const hosts = JSON.parse(labels[LABEL_ALLOW] ?? "[]") as string[];
-      await ensureEgressRunning(h.id, mode, hosts, signal);
-    }
+    // A container without this contract's labels resumes with no network (the kernel replaces it
+    // on use, since its applied limits are unknown).
+    const net = labelNetwork(labels) ?? { mode: "none", allowHosts: [] };
+    if (net.mode !== "none") await ensureEgressRunning(h.id, net.mode, net.allowHosts, signal);
     try {
-      // `docker pause` 过的：Running 仍为 true，exec 却回 409，要 unpause
+      // A `docker pause`d container still reports Running, but exec answers 409: unpause it.
       if (c.State.Paused) await unpause(h.id, signal);
       else if (!c.State.Running) await start(h.id, signal);
     } catch (e) {
@@ -1024,8 +1051,8 @@ export function createDockerSandbox(
           "sandbox-docker: create got no image and the provider has no default image",
         );
       }
-      // refuses open egress under openEgress "off" before Docker is touched
-      const plan = planInstance(limits, cfg.openEgress);
+      // refuses the open public network under refuseOpenNetwork before Docker is touched
+      const plan = planInstance(limits, cfg.refuseOpenNetwork);
       const n = sandboxResourceNames(name);
       const v = sandboxResourceNames(fileSystem.id);
       // Docker would create a missing mount source as a new, empty volume: check first
@@ -1039,10 +1066,9 @@ export function createDockerSandbox(
       await destroyByName(name, signal);
       try {
         let networkMode = "none";
-        if (plan.mode === "direct") {
-          await ensureSharedNetwork(signal);
-          networkMode = cfg.network;
-        } else if (isProxyMode(plan.mode)) {
+        if (plan.mode !== "none") {
+          // The sandbox joins only its internal network, which has no exit; its egress proxy is the
+          // only other member and joins the shared network for the outbound leg.
           await ensureSharedNetwork(signal);
           await ensureInternalNetwork(name, signal);
           await createEgress(name, plan.mode, plan.allowHosts, signal);
@@ -1050,7 +1076,7 @@ export function createDockerSandbox(
         }
 
         const memory = limits.memoryMb * MIB;
-        // /tmp 是 tmpfs（占内存配额）：取内存的一半，且不超过磁盘配额
+        // /tmp is tmpfs (it counts against the memory quota): half the memory, at most diskMb.
         const tmpMb = Math.max(16, Math.min(limits.diskMb, Math.floor(limits.memoryMb / 2)));
         await createContainer(
           n.container,
@@ -1073,13 +1099,14 @@ export function createDockerSandbox(
               SecurityOpt: ["no-new-privileges:true"],
               IpcMode: "private",
               NetworkMode: networkMode,
-              // dev / open tiers: room for browsers and other shared-memory users
-              ...(plan.shmBytes !== null && { ShmSize: plan.shmBytes }),
+              // One profile for every instance: room for browsers and other shared-memory users.
+              ShmSize: plan.shmBytes,
               Tmpfs: { "/tmp": `rw,nosuid,nodev,size=${tmpMb}m,mode=1777` },
               Mounts: [
                 { Type: "volume", Source: v.workspace, Target: "/workspace" },
                 { Type: "volume", Source: v.skills, Target: "/skills", ReadOnly: true },
-                // 同一个卷的可写挂载：只有 root 进得去（/opt/capybara 是 0700），插件经它写技能
+                // Writable mount of the same volume: only root can enter it (/opt/capybara is
+                // 0700), and the plugin writes skills through it.
                 { Type: "volume", Source: v.skills, Target: "/opt/capybara/skills" },
               ],
             },
@@ -1112,11 +1139,11 @@ export function createDockerSandbox(
 
     resume,
 
-    // Called under the kernel's exclusive lease when the effective tier or egress mode changed
+    // Called under the kernel's exclusive lease when the device mode or network changed
     async update(h, limits, signal) {
       signal.throwIfAborted();
       checkLimits(limits);
-      const plan = planInstance(limits, cfg.openEgress);
+      const plan = planInstance(limits, cfg.refuseOpenNetwork);
       let c: {
         State: { Running: boolean; Paused?: boolean };
         Config: { Labels: Record<string, string> | null };
@@ -1127,7 +1154,8 @@ export function createDockerSandbox(
         if (isStatus(e, 404)) return "recreate";
         throw e;
       }
-      if (!isProxyMode(plan.mode) || updateDecision(c.Config.Labels ?? {}, plan) === "recreate") {
+      // No network cannot be applied to a running proxy container in place.
+      if (plan.mode === "none" || updateDecision(c.Config.Labels ?? {}, plan) === "recreate") {
         return "recreate";
       }
       // Replace the egress proxy with the new mode and hosts; the container, its environment
@@ -1318,15 +1346,13 @@ export function decodeOutput(buf: Buffer, truncated: boolean): string {
   return buf.subarray(0, end).toString("utf8");
 }
 
-function checkLimits(l: SandboxLimits): void {
+function checkLimits(l: SandboxNetworkLimits): void {
   if (!(l.cpu > 0) || !(l.memoryMb > 0) || !(l.diskMb > 0)) {
     throw new Error("sandbox limits cpu, memoryMb and diskMb must be positive");
   }
-  if (l.egress === "allowlist") {
-    for (const host of l.allowHosts) {
-      const errors = validateAllowHost(host);
-      if (errors.length > 0)
-        throw new Error(`invalid allowHosts entry ${host}: ${errors.join("; ")}`);
-    }
+  for (const host of networkOf(l).hosts) {
+    const errors = validateAllowHost(host);
+    if (errors.length > 0)
+      throw new Error(`invalid network.hosts entry ${host}: ${errors.join("; ")}`);
   }
 }
