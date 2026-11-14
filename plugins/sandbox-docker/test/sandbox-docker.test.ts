@@ -822,7 +822,10 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
         signal: sig(),
       });
       try {
-        await expect(broken.update(h, limits(OPEN), sig())).rejects.toThrow(/did not become ready/);
+        // a wider allowlist is applied in place (allowlist to open-public would recreate instead)
+        await expect(
+          broken.update(h, limits(allow(["allowed.example.com", "pypi.org"])), sig()),
+        ).rejects.toThrow(/did not become ready/);
         // the half-made wider proxy is gone, not left for resume to start
         expect(await exists("container", `${name}-egress`)).toBe(false);
         expect(await sbx.resume(h, sig())).toBe("resumed");
