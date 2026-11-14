@@ -17,7 +17,7 @@ import { registerTools } from "./tools.js";
  */
 export default defineExtension({
   name: "memory",
-  version: "0.1.0-rc.1",
+  version: "0.1.0-rc.2",
   sdk: "^0.1.0-rc.19",
   provides: [CONTEXT_EXTENSION_POINT],
   ui: [

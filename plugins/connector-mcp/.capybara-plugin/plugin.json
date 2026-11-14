@@ -5,7 +5,7 @@
     "zh": "MCP 连接器",
     "en": "MCP connector"
   },
-  "version": "0.1.0-rc.8",
+  "version": "0.1.0-rc.9",
   "publisher": "Capybara",
   "icon": "./icon.svg",
   "description": "MCP connector (connector@1): tools and resources of remote MCP servers over Streamable HTTP",

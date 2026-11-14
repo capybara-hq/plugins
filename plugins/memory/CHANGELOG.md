@@ -1,5 +1,11 @@
 # @capybara-hq/plugin-memory
 
+## 0.1.0-rc.2
+
+### Patch Changes
+
+- 39ab73d: The composed Capybara icon with the plugin's function mark.
+
 ## 0.1.0-rc.1
 
 ### Patch Changes

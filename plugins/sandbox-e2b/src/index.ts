@@ -96,7 +96,7 @@ export function providerConfig(
  */
 const plugin = defineExtension({
   name: "sandbox-e2b",
-  version: "0.1.0-rc.13",
+  version: "0.1.0-rc.14",
   // The network contract (`limits.mode` / `limits.network`) is the SDK's from rc.22 on; a kernel
   // that predates it is refused by the provider rather than guessed.
   sdk: "^0.1.0-rc.22",

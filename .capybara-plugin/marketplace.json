@@ -41,7 +41,7 @@
     },
     {
       "name": "connector-mcp",
-      "version": "0.1.0-rc.8",
+      "version": "0.1.0-rc.9",
       "summary": {
         "en": "MCP connector (connector@1): tools and resources of remote MCP servers over Streamable HTTP"
       },
@@ -58,14 +58,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-connector-mcp",
-          "version": "0.1.0-rc.8",
-          "integrity": "sha512-v1nc7s41aNriv8fCYkUBqCNPgbabYzGiwjhjPrD9YYjA9f3bj11oI/XTGFdjqOILAOoUIanfpYbphbuEufoWjw=="
+          "version": "0.1.0-rc.9",
+          "integrity": "sha512-UU+QL78lXkFciPMJqXWdt7DygzGC+OaYe/tvkQwLs+kJH2F786htXQBr7hbZnpGy6VfppSQWLB/w3cRHoR+RiA=="
         }
       }
     },
     {
       "name": "connector-openapi",
-      "version": "0.1.0-rc.9",
+      "version": "0.1.0-rc.10",
       "summary": {
         "en": "OpenAPI connector (connector@1): one tool per operation of an OpenAPI 3.0 / 3.1 HTTP API"
       },
@@ -82,8 +82,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-connector-openapi",
-          "version": "0.1.0-rc.9",
-          "integrity": "sha512-wSTLBAT7JZh2OeFXKs2wUetZjuAR+IrCooa5uNuNT7f6DIsZffTcGqylEeQxq3nHmJOlUAomd6kDqMQmLBSyRg=="
+          "version": "0.1.0-rc.10",
+          "integrity": "sha512-SA3lpZdy+pFhtGC59cPx1IsQtadzXh6jwpxlz3dhMsmNpfXHMDxEJymyy11W1Np8vL6dD+COo9kvzrbhEKBlnw=="
         }
       }
     },
@@ -132,7 +132,7 @@
     },
     {
       "name": "object-store-s3",
-      "version": "0.1.0-rc.8",
+      "version": "0.1.0-rc.9",
       "summary": {
         "en": "Object storage (object-store@1) on any S3-compatible service (AWS S3, MinIO, Ceph, OSS, TOS, ...) using the official @aws-sdk/client-s3"
       },
@@ -162,8 +162,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-object-store-s3",
-          "version": "0.1.0-rc.8",
-          "integrity": "sha512-ETFKkUzEUvVcqIhhTq5TKHHBp30BPNY+SmT9kxrPlrXna98LEW4f4F0NHHKI2O2cj81daw2Aa0I0e3/i6VM19A=="
+          "version": "0.1.0-rc.9",
+          "integrity": "sha512-yqW5gM5+4sdY/nJWDyu7ltDLdUm6b4q9+R/yrCLJhMRCI7HQbxeqDWky29EiDjjsJD5BaiQ6N3a5Ua75ANll7g=="
         }
       }
     },
@@ -201,7 +201,7 @@
     },
     {
       "name": "openai-compatible",
-      "version": "0.1.0-rc.9",
+      "version": "0.1.0-rc.10",
       "summary": {
         "en": "Model provider (model-provider@2) for Chat Completions-compatible services (vLLM, DeepSeek, Qwen, ...) using the official openai SDK"
       },
@@ -222,14 +222,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-openai-compatible",
-          "version": "0.1.0-rc.9",
-          "integrity": "sha512-BuEPTISSdLtU48ROb+H4nYoSk4RTj2hGRMkx8rD5d8V3iGs8m8mcQlucX0O3Y1hPjJjredMFvGIXe3OzVvfH9w=="
+          "version": "0.1.0-rc.10",
+          "integrity": "sha512-Xqvl9tDGZhuLzXEEuEAoz+pZdtRg3baoLz1fjs1DQvEropXVQeF9LwV3dkfj/XF2cpRLBTMyZdxdzqebczl67A=="
         }
       }
     },
     {
       "name": "sandbox-docker",
-      "version": "0.1.0-rc.13",
+      "version": "0.1.0-rc.14",
       "summary": {
         "en": "Conversation sandboxes (sandbox@2) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist per org"
       },
@@ -244,7 +244,7 @@
           "config.deployment:egressProxyImage",
           "config.deployment:endpoint",
           "config.deployment:network",
-          "config.deployment:openEgress",
+          "config.deployment:refuseOpenNetwork",
           "config.deployment:runtime",
           "config.deployment:volumeDriver",
           "provides:sandbox@2"
@@ -254,14 +254,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-sandbox-docker",
-          "version": "0.1.0-rc.13",
-          "integrity": "sha512-SAhxsAWy6WVdjbWiVqcSBj3E1KIsR+NVCGoLMil45IeqBTWzY5ZuKTsxcNGoby98bc5xcqrHVhsv1Q/ZkGuABg=="
+          "version": "0.1.0-rc.14",
+          "integrity": "sha512-e64Re3gnU5uxQT/JH3mUolSyz0/Njen5CzMKl9brcsqouV7cY0sIjReLpnkBV0zNxmpMvK73WAO7OT7CZd5Kbg=="
         }
       }
     },
     {
       "name": "sandbox-e2b",
-      "version": "0.1.0-rc.13",
+      "version": "0.1.0-rc.14",
       "summary": {
         "en": "Devices (sandbox@2) as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, an E2B network allowlist (open-public is refused)",
         "zh": "E2B 沙箱承载设备（sandbox@2，E2B 云或自托管）：暂停沙箱保留文件，从已发布镜像构建模板，E2B 网络为出站白名单（拒绝开放公网）"
@@ -287,8 +287,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-sandbox-e2b",
-          "version": "0.1.0-rc.13",
-          "integrity": "sha512-uhZxh3PEQFxEtFThMcdUaKVMT/LxupIBD3kUokebUUJlINejLfj8vENcKpPbiUJq5cPSiB9fS/7/4WkY2I9evQ=="
+          "version": "0.1.0-rc.14",
+          "integrity": "sha512-NQ2TSPwhzQVIFITZn4VLl32PCvRvYktn4oUYr7/iKvsdeKpok3SDfFosTrZckSVwc/24JFW+nDCgFJKnx//q+A=="
         }
       }
     },
@@ -339,7 +339,7 @@
     },
     {
       "name": "todo",
-      "version": "0.1.0-rc.9",
+      "version": "0.1.0-rc.10",
       "summary": {
         "en": "Todo list tool for agents: plugin__todo__write keeps a per-conversation todo list in PostgreSQL"
       },
@@ -364,8 +364,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-todo",
-          "version": "0.1.0-rc.9",
-          "integrity": "sha512-7mG7nPosLhmLPw9rArgjvtyNVQpj7Dh5FMKfxvQmxd+7zFtkBiAEaRAY2FKyRS7NAkC5LZLwH5jcuJoA5SXuBg=="
+          "version": "0.1.0-rc.10",
+          "integrity": "sha512-9sRVd7MaUsUF5Uk0EDsRqIae492TDEGjOcH5IM+SxTY2NcQCiXVs4ck/N6kRuV65x5LzVcrGLBfyx/Zi+2229w=="
         }
       }
     },
@@ -538,7 +538,7 @@
     },
     {
       "name": "theme-cyberpunk",
-      "version": "0.1.0-rc.10",
+      "version": "0.1.0-rc.11",
       "summary": {
         "en": "Cyberpunk theme and UI: neon yellow on deep blue-black, a run-state HUD, scanlines, a boot screen, a glitch CYBERBARA wordmark and opt-in synthesized sound",
         "zh": "赛博朋克主题与界面：深蓝黑底上的霓虹黄，运行状态 HUD、扫描线、启动画面、故障风 CYBERBARA 字标，以及可选的合成音效"
@@ -570,14 +570,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-theme-cyberpunk",
-          "version": "0.1.0-rc.10",
-          "integrity": "sha512-gxRpFSKGE3T9a6b9oBjSSHIZcmf9JIH7OHpIKiPbJLeyK3Dc5Zs1LYohzZGh8pC2K9I3UeMJ7dxCT5edHLJuvA=="
+          "version": "0.1.0-rc.11",
+          "integrity": "sha512-PMTqBFjl96UZ5u7NR2bJllofXDDyUPsWV2L/vgvIQDZK5VYiFNDxBcznkJDMosFmc2mjh0h2xdtSmILZX1jqrg=="
         }
       }
     },
     {
       "name": "skills-core",
-      "version": "0.1.0-rc.0",
+      "version": "0.1.0-rc.1",
       "summary": {
         "en": "Core skills every agent can use; today skill-guide, which teaches an agent to write, register, test and share its own skills",
         "zh": "每个智能体都能用的核心技能；目前是 skill-guide，教智能体编写、注册、测试并分享自己的技能"
@@ -595,8 +595,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-skills-core",
-          "version": "0.1.0-rc.0",
-          "integrity": "sha512-U3R+B3QcklCQyye22bQU1aJq05oLW4Fr3hfmLHuPFOq5jNt30mDc0zNPSDLr6MFDdUI/OJkkX7wvkyKa+zRPAQ=="
+          "version": "0.1.0-rc.1",
+          "integrity": "sha512-eIad/YOTGMAjOQPEVrN6jfq/WHhpJUn5FifbELnFmRij1yo+mI4b/5/72DZ0cjsRXFWhUODen2IPmhYH/YZqWQ=="
         }
       }
     },
@@ -627,7 +627,7 @@
     },
     {
       "name": "memory",
-      "version": "0.1.0-rc.1",
+      "version": "0.1.0-rc.2",
       "summary": {
         "en": "Memory for agents: each agent remembers each member across conversations, with an index at run start, memory tools, hybrid search and a memory page",
         "zh": "智能体记忆：每个智能体跨会话记住每位成员，运行开始时给出记忆索引，提供记忆工具、混合检索和记忆页面"
@@ -675,8 +675,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-memory",
-          "version": "0.1.0-rc.1",
-          "integrity": "sha512-k/WGNR+pIHyUs5cidOyyFqOItbC/54d/PmiGwdX23y1ZQ+3NZTqJVAq3cImrY6axSqn3YZPPZokygSBESKisFQ=="
+          "version": "0.1.0-rc.2",
+          "integrity": "sha512-jfzuBlMAAvgWy33cPRhVCIAlMooKQOBGa8ti5dkTXWsqQr2s7lsNP+/A7HlY8URVmrFW826gVwvXXGybO5xZ7Q=="
         }
       }
     }
