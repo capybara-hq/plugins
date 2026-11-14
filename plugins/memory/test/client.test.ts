@@ -210,6 +210,22 @@ describe("memory page", () => {
     expect(rows().map((r) => r.dataset.memoryId)).toEqual(["m2", "m3", "m1"]);
   });
 
+  it("fills the page with the 全屏 button (no Fullscreen API) and leaves it with Escape", async () => {
+    render({});
+    await flush();
+    const page = () => document.querySelector<HTMLElement>(".cx-memory-page");
+    expect(page()?.dataset.fullscreen).toBe("false");
+    await click(buttons("Full screen")[0]);
+    expect(page()?.dataset.fullscreen).toBe("true");
+    expect(buttons("Exit full screen")).toHaveLength(1);
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    await flush();
+    expect(page()?.dataset.fullscreen).toBe("false");
+    expect(buttons("Full screen")).toHaveLength(1);
+  });
+
   it("fetches the rest with `more` until the cursor is null and merges by id", async () => {
     const extra = node("m4", "reference/docs.md");
     render({

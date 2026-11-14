@@ -168,22 +168,22 @@ export function MemoryPage() {
     return v === "graph" || v === "list" ? v : null;
   });
   const [fitSignal, setFitSignal] = useState(0);
-  // The whole page, the element the 全屏 button takes to the browser's fullscreen.
-  const pageRef = useRef<HTMLDivElement | null>(null);
+  // 全屏: the page fills the browser tab (a fixed overlay in the web page), not the display's
+  // fullscreen, so the tab and the browser stay; Escape leaves it.
   const [fullscreen, setFullscreen] = useState(false);
   useEffect(() => {
-    const onChange = () => setFullscreen(document.fullscreenElement === pageRef.current);
-    document.addEventListener("fullscreenchange", onChange);
-    return () => document.removeEventListener("fullscreenchange", onChange);
-  }, []);
-  const toggleFullscreen = () => {
-    if (document.fullscreenElement === pageRef.current) {
-      void document.exitFullscreen();
-      return;
-    }
-    // A refusal (no permission, an unsupported element) leaves the page as it is
-    void pageRef.current?.requestFullscreen?.().catch(() => {});
-  };
+    if (!fullscreen) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // A text field keeps Escape (the search field clears itself with it)
+      const t = e.target;
+      if (t instanceof Element && t.closest("input, textarea, select") !== null) return;
+      setFullscreen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [fullscreen]);
+  const toggleFullscreen = () => setFullscreen((full) => !full);
 
   const adopt = useCallback((d: MemoryPageData, force: boolean) => {
     setLoaded((cur) => {
@@ -450,7 +450,6 @@ export function MemoryPage() {
 
   return (
     <div
-      ref={pageRef}
       className="cx-memory-page"
       data-panel={openId !== null ? "open" : "closed"}
       data-empty={empty && hits === null ? "true" : "false"}
