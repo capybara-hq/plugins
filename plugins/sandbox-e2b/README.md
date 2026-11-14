@@ -146,36 +146,53 @@ E2B's network control ([docs](https://docs.e2b.dev/sandbox/internet-access); the
 
 | `limits.network` | Setting when creating the sandbox | Body of `update` (`PUT /sandboxes/{id}/network`) |
 |---|---|---|
-| `{ kind: "allowlist", hosts: [...] }` with hosts | `network: { allowOut: hosts, denyOut: ["0.0.0.0/0"] }` | `{ allowOut: hosts, denyOut: ["0.0.0.0/0"] }` |
+| `{ kind: "allowlist", hosts: [...] }` with hosts | `network: { allowOut: hosts, denyOut: DENIED }` | `{ allowOut: hosts, denyOut: DENIED }` |
 | `{ kind: "allowlist", hosts: [] }` | `allow_internet_access: false` | `{ allow_internet_access: false }` |
 | `{ kind: "open-public", hosts: [] }` | **refused** before any E2B call | **refused** before any E2B call |
 
-**`open-public` is refused (fail closed).** E2B can deny private and link-local CIDRs with `denyOut`, and a live check confirmed that
-the deny is enforced by resolved destination IP (so `curl --resolve example.com:80:10.0.0.1` is refused, while the same host on a
-public IP works). But the sandbox's own **metadata endpoint** is not subject to that filter: the Firecracker MMDS at
-`169.254.169.254` answers `GET /latest/meta-data/` (401 without a token) and hands out a token with `PUT /latest/api/token`, even with
-`denyOut: ["169.254.169.254/32"]`, with every private range denied, and with the network fully closed (`allow_internet_access:
-false`) — verified live on 2026-11-14. Since E2B cannot block that destination, `createFileSystem` and `update` refuse `open-public`
-with an English error before touching the sandbox, rather than opening the internet next to a reachable metadata service. Deployments
-that need open egress use the Docker plugin, whose egress proxy refuses private and metadata addresses by resolved IP; on E2B set the
-org's cloud network to an allowlist. The plugin never opens the network silently.
+`DENIED` is `["0.0.0.0/0", "fc00::/7", "fe80::/10", "::1/128"]`: all IPv4, plus IPv6 unique-local,
+link-local and loopback.
+
+**`open-public` is refused (fail closed).** E2B denies private and link-local destination CIDRs with `denyOut`, and a live check
+confirmed that the deny is enforced by resolved destination IPv4 (`curl --resolve example.com:80:10.0.0.1` is refused; the same Host
+aimed at a public IP is not — see the limitations below). But the sandbox's own **metadata endpoint** is not subject to that filter:
+the Firecracker MMDS at `169.254.169.254` answers `GET /latest/meta-data/` (401 without a token) and hands out a token with
+`PUT /latest/api/token`, even with `denyOut: ["169.254.169.254/32"]`, with every private range denied, and with the network fully
+closed (`allow_internet_access: false`) — verified live on 2026-11-14. Since E2B cannot block that destination, `createFileSystem`
+and `update` refuse `open-public` with an English error before touching the sandbox, rather than opening the internet next to a
+reachable metadata service. Deployments that need open egress use the Docker plugin, whose egress proxy refuses private and
+metadata addresses by resolved IP; on E2B set the org's cloud network to an allowlist. The plugin never opens the network silently.
 
 `limits.mode` is validated but changes nothing on E2B: an E2B sandbox is always a cloud microVM (the container is the boundary), so
-`auto` and `sandbox` get the same network. **An older kernel is refused**: one that sends `tier` / `egress` / `allowHosts` (or a
-`network.kind` this plugin does not know) gets an English error instead of a guessed policy, so a plugin upgraded without its kernel
-never opens the network; upgrade the kernel and the sandbox plugins together.
+both modes use the same template. **Auto mode cannot run on E2B at all**: the kernel gives every auto-mode device the `open-public`
+network, so the refusal above applies to every auto-mode device; the kernel surfaces it as `sandbox.open_network_refused` (409).
+Only `sandbox` mode runs, and only with an allowlist: the org's cloud network defaults to open, so an org admin must switch it to
+the allowlist (hosts) before any E2B device works; a sandbox-mode device whose org network is open is refused the same way.
+**An older kernel is refused**: one that sends `tier` / `egress` / `allowHosts` (or a `network.kind` this plugin does not know)
+gets an English error instead of a guessed policy, so a plugin upgraded without its kernel never opens the network; upgrade the
+kernel and the sandbox plugins together (the kernel first sends `limits.mode` / `limits.network` in 0.1.0-rc.29; the plugin needs
+`@capybara-hq/plugin-sdk` 0.1.0-rc.22, which declares them).
 
 E2B's allowlist ([docs](https://docs.e2b.dev/sandbox/internet-access), verified 2026-10-21):
 
 - Per-domain filtering applies only to **HTTP on port 80 (by the Host header) and TLS on port 443 (by SNI)**; other ports are filtered
   only by IP / CIDR, and with only domains in the allowlist they are always blocked. UDP (QUIC / HTTP3) does not support per-domain
   filtering.
-- When a domain allowlist is used, E2B automatically allows DNS to `8.8.8.8` (port 53), and the DNS queries themselves can be used to
-  exfiltrate small amounts of data.
-- **The per-domain allowlist is not a general destination-IP check.** A live check (2026-11-14) showed that an allowed Host / SNI
-  aimed at a *private* IP is refused (the `denyOut: ["0.0.0.0/0"]` plus private ranges win), but whether an allowed name may reach a
-  different *public* IP that it does not resolve to is undocumented: the plugin cannot resolve-and-pin the destination the way the
-  Docker egress proxy does. The sandbox's metadata endpoint is reachable regardless of the allowlist (see above).
+- When a domain allowlist is used, E2B automatically allows **all traffic** to `8.8.8.8`, not only DNS on port 53, and adding
+  `8.8.8.8/32` to `denyOut` does not remove it (E2B documents this). The DNS queries themselves can be used to exfiltrate small
+  amounts of data. E2B's `dnsServers` setting (up to 10 IPv4 addresses, or an empty list) is the only documented control; it has an
+  effect only when a domain is in `allowOut`.
+- **The per-domain allowlist is not a destination-IP control.** Domain matching inspects only the Host header on port 80 and the
+  SNI on 443; it does not check the destination IP. A live check (2026-11-14) showed that an allowed Host / SNI aimed at a
+  *private* IP is refused (the `denyOut` list wins), but the same Host / SNI aimed at any *public* IP is accepted: `curl --resolve
+  example.com:80:1.1.1.1` works. So an allowed name reaches any public IP on 80 / 443, and the plugin cannot resolve-and-pin the
+  destination the way the Docker egress proxy does. Only the destinations in `DENIED` are refused. The sandbox's metadata endpoint
+  is reachable regardless of the allowlist (see above).
+- **IPv6**: `DENIED` covers IPv6 loopback (`::1/128`), link-local (`fe80::/10`) and unique-local (`fc00::/7`) as well as all IPv4.
+  E2B rejects `::/0` as an invalid denied CIDR (live 2026-11-14), so public IPv6 is not denied by CIDR; it is unreachable anyway
+  because the microVM has no global IPv6 address or route: `ip -6 addr` shows only `::1/128` and a link-local address, and a
+  control sandbox without the IPv6 deny list could not reach public IPv6 either (verified live 2026-11-14). If E2B ever gives the
+  microVM public IPv6, this list does not cover it.
 - Other sites on the same CDN / object storage may also be allowed along with it (the E2B docs say this too).
 - **For self-hosted E2B, network isolation is the operator's responsibility**: intranet services and cloud metadata addresses
   (169.254.169.254 and so on) that the sandbox node can reach must be blocked at E2B's node / network layer; this plugin cannot do it

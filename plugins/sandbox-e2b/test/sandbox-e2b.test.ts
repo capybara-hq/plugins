@@ -682,12 +682,12 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       expect(createdBody().network).toBeUndefined();
     });
 
-    it("an allowlist allows exactly its hosts (allowOut, everything else denied)", async () => {
+    it("an allowlist allows exactly its hosts (allowOut, IPv4 and IPv6 private / loopback denied)", async () => {
       const hosts = ["registry.npmjs.org", "*.githubusercontent.com"];
       const fs = await fsWith(sbx, limits({ kind: "allowlist", hosts }));
       expect(fake.sandboxes.get(fs.id)?.network).toEqual({
         allowOut: hosts,
-        denyOut: ["0.0.0.0/0"],
+        denyOut: ["0.0.0.0/0", "fc00::/7", "fe80::/10", "::1/128"],
       });
       expect(createdBody().allow_internet_access).toBeUndefined();
     });
@@ -810,10 +810,10 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       expect(await s.update?.(h, limits(), sig())).toBe("updated");
       expect(await s.update?.(h, limits({ kind: "allowlist", hosts: [] }), sig())).toBe("updated");
       expect(updates.get(h.id)).toEqual([
-        { allowOut: ["pypi.org"], denyOut: ["0.0.0.0/0"] },
+        { allowOut: ["pypi.org"], denyOut: ["0.0.0.0/0", "fc00::/7", "fe80::/10", "::1/128"] },
         {
           allowOut: ["registry.npmjs.org", "*.githubusercontent.com"],
-          denyOut: ["0.0.0.0/0"],
+          denyOut: ["0.0.0.0/0", "fc00::/7", "fe80::/10", "::1/128"],
         },
         { allow_internet_access: false },
         { allow_internet_access: false },
@@ -834,6 +834,9 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
 
     it("refuses an older kernel's limits without touching the sandbox", async () => {
       const h = await provision(s, limits());
+      const connects = () =>
+        fake.calls.filter((c) => c.path === `/v2/sandboxes/${h.id}/connect`).length;
+      const seen = connects();
       const old = {
         cpu: 1,
         memoryMb: 2048,
@@ -844,6 +847,21 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
         devHosts: [],
       } as unknown as SandboxLimits;
       await expect(s.update?.(h, old, sig())).rejects.toThrow(/no mode/);
+      expect(connects()).toBe(seen);
+      expect(updates.get(h.id)).toBeUndefined();
+    });
+
+    it("refuses an unknown network kind without touching the sandbox", async () => {
+      const h = await provision(s, limits());
+      const connects = () =>
+        fake.calls.filter((c) => c.path === `/v2/sandboxes/${h.id}/connect`).length;
+      const seen = connects();
+      const badKind = {
+        ...limits(),
+        network: { kind: "open", hosts: ["pypi.org"] },
+      } as unknown as SandboxLimits;
+      await expect(s.update?.(h, badKind, sig())).rejects.toThrow(/no valid network/);
+      expect(connects()).toBe(seen);
       expect(updates.get(h.id)).toBeUndefined();
     });
 

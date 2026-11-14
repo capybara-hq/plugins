@@ -19,6 +19,7 @@ import {
   envdKill,
   envdStart,
   envdUpload,
+  IPV6_DENIED,
   isE2BNotFound,
   isStatus,
   type StartRequest,
@@ -770,14 +771,16 @@ export function createE2BSandbox(
    * would expose it. The plugin never opens the network silently.
    *
    * `mode` (`auto` | `sandbox`) is validated but changes nothing here: both run in the same E2B
-   * microVM, where the container is the boundary. A limits object without `mode` / `network` (an
-   * older kernel that sent `tier` / `egress` / `allowHosts`) is refused rather than guessed.
+   * microVM, where the container is the boundary. The kernel gives every auto-mode device the
+   * open network, so E2B cannot serve auto mode at all (README "Network policy"). A limits object
+   * without `mode` / `network` (an older kernel that sent `tier` / `egress` / `allowHosts`) is
+   * refused rather than guessed.
    */
   const networkOf = (limits: SandboxLimits, name: string): NetworkPolicy => {
     const runtime = limits as { mode?: unknown; network?: unknown };
     if (runtime.mode !== "auto" && runtime.mode !== "sandbox") {
       throw new Error(
-        'sandbox-e2b: the sandbox limits carry no mode ("auto" | "sandbox"); this plugin implements the sandbox@2 limits of kernel 0.1.0-rc.22 and later. An older kernel sent tier / egress / allowHosts instead; upgrade the kernel and the sandbox plugins together, and never open the network as a fallback.',
+        'sandbox-e2b: the sandbox limits carry no mode ("auto" | "sandbox"); this plugin implements the sandbox@2 limits that a kernel sends from 0.1.0-rc.29 on (limits.mode / limits.network). An older kernel sent tier / egress / allowHosts instead; upgrade the kernel and the sandbox plugins together, and never open the network as a fallback.',
       );
     }
     const network = runtime.network as { kind?: unknown; hosts?: unknown } | undefined;
@@ -790,7 +793,7 @@ export function createE2BSandbox(
     }
     if (kind !== "allowlist" || !Array.isArray(hosts) || hosts.some((h) => typeof h !== "string")) {
       throw new Error(
-        'sandbox-e2b: the sandbox limits carry no valid network (expected { kind: "allowlist", hosts } or { kind: "open-public", hosts }); this plugin implements the sandbox@2 limits of kernel 0.1.0-rc.22 and later. An older kernel sent tier / egress / allowHosts instead; upgrade the kernel and the sandbox plugins together.',
+        'sandbox-e2b: the sandbox limits carry no valid network (expected { kind: "allowlist", hosts } or { kind: "open-public", hosts }); this plugin implements the sandbox@2 limits that a kernel sends from 0.1.0-rc.29 on (limits.mode / limits.network). An older kernel sent tier / egress / allowHosts instead; upgrade the kernel and the sandbox plugins together.',
       );
     }
     for (const host of hosts) {
@@ -832,7 +835,7 @@ export function createE2BSandbox(
       }
       const network =
         policy.kind === "allowlist"
-          ? { network: { allowOut: policy.hosts, denyOut: [ALL_TRAFFIC] } }
+          ? { network: { allowOut: policy.hosts, denyOut: [ALL_TRAFFIC, ...IPV6_DENIED] } }
           : { allow_internet_access: false };
       const createFrom = (templateID: string) =>
         api.json<SandboxInfo>("POST", "/v2/sandboxes", {
@@ -884,7 +887,7 @@ export function createE2BSandbox(
           api,
           h.id,
           policy.kind === "allowlist"
-            ? { allowOut: policy.hosts, denyOut: [ALL_TRAFFIC] }
+            ? { allowOut: policy.hosts, denyOut: [ALL_TRAFFIC, ...IPV6_DENIED] }
             : { allow_internet_access: false },
           signal,
         );

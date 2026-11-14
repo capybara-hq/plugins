@@ -60,14 +60,16 @@ import {
  * - [ ] 长流：几分钟无输出的命令靠 `Keepalive-Ping-Interval` 不被中间代理断开；
  * - [ ] `autoPause: true`：超时后暂停而不删除，/workspace 保留；
  * - [x] The metadata endpoint stays reachable whatever the network policy: with an allowlist
- *   (everything denied) it still answers 401 on `GET /latest/meta-data/`, and
- *   `PUT /latest/api/token` answers 200 (verified 2026-11-14). The same holds with
+ *   (everything denied) it still answers 401 on `GET /latest/meta-data/`,
+ *   `PUT /latest/api/token` answers 200 with a token, and that token unlocks the metadata
+ *   document (verified 2026-11-14). The same holds with
  *   `denyOut: ["169.254.169.254/32"]` and with `denyOut` of every private range, so E2B cannot
  *   block it: the plugin refuses `open-public` (fail closed). Re-check this item before ever
  *   mapping `open-public` to internet access.
- * - [ ] The allowlist body (`network.allowOut` domains + `denyOut: ["0.0.0.0/0"]`) is accepted and
- *   a `*.` wildcard takes effect; `denyOut` of private CIDRs blocks resolved destination IPs
- *   (verified 2026-11-14 with `--resolve`);
+ * - [ ] The allowlist body (`network.allowOut` domains + `denyOut:
+ *   ["0.0.0.0/0", "fc00::/7", "fe80::/10", "::1/128"]`) is accepted and a `*.` wildcard takes
+ *   effect; `denyOut` of private CIDRs blocks resolved destination IPs (verified 2026-11-14 with
+ *   `--resolve`; E2B rejects `::/0`, and the microVM has no public IPv6 route);
  * - [ ] 列表接口的 `metadata` 过滤（`k=v` 经 URL 编码后作为 query 值）与 `x-next-token` 分页；
  * - [ ] SendSignal 对不存在的 pid 回 404 `not_found`；
  * - [ ] the image's ENV (cache variables such as `npm_config_cache`, `NODE_USE_ENV_PROXY`) reaches
@@ -209,12 +211,25 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
 
   it("records that the metadata endpoint stays reachable under the allowlist", async () => {
     // the reason open-public is refused: the Firecracker MMDS answers even when the sandbox has no
-    // other network access, and a token is obtainable, so no E2B network setting can block it
+    // other network access, a token is obtainable, and the token unlocks the metadata document, so
+    // no E2B network setting can block it. Re-check this item before ever mapping `open-public`.
     const r = await run(
       "curl -sS -o /dev/null -w '%{http_code}' --max-time 10 http://169.254.169.254/latest/meta-data/",
     );
     console.info(`[e2b-live] metadata endpoint under the allowlist: HTTP ${r.stdout.trim()}`);
     expect(r.stdout.trim()).toBe("401");
+    const token = await run(
+      "curl -sS --max-time 10 -X PUT -H 'X-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token",
+    );
+    expect(token.exitCode).toBe(0);
+    expect(token.stdout.trim().length).toBeGreaterThan(0);
+    const meta = await run(
+      `curl -sS -w '|HTTP:%{http_code}' --max-time 10 -H 'X-metadata-token: ${token.stdout.trim()}' http://169.254.169.254/`,
+    );
+    const [body = "", status = ""] = meta.stdout.trim().split("|HTTP:");
+    expect(status).toBe("200");
+    // the MMDS document is a newline-separated key list (not JSON)
+    expect(body).toMatch(/^instanceID$/m);
   });
 
   it("output is capped at maxOutputBytes", async () => {
