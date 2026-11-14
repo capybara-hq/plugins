@@ -218,18 +218,24 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
     );
     console.info(`[e2b-live] metadata endpoint under the allowlist: HTTP ${r.stdout.trim()}`);
     expect(r.stdout.trim()).toBe("401");
-    const token = await run(
-      "curl -sS --max-time 10 -X PUT -H 'X-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token",
+    // `curl -sS` exits 0 for any HTTP status, so assert the status itself, not the exit code
+    const tokenRes = await run(
+      "curl -sS -w '|HTTP:%{http_code}' --max-time 10 -X PUT -H 'X-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token",
     );
-    expect(token.exitCode).toBe(0);
-    expect(token.stdout.trim().length).toBeGreaterThan(0);
+    expect(tokenRes.exitCode).toBe(0);
+    const [tokenBody = "", tokenStatus = ""] = tokenRes.stdout.trim().split("|HTTP:");
+    expect(tokenStatus).toBe("200");
+    const token = tokenBody.trim();
+    expect(token.length).toBeGreaterThan(0);
     const meta = await run(
-      `curl -sS -w '|HTTP:%{http_code}' --max-time 10 -H 'X-metadata-token: ${token.stdout.trim()}' http://169.254.169.254/`,
+      `curl -sS -w '|HTTP:%{http_code}' --max-time 10 -H 'X-metadata-token: ${token}' http://169.254.169.254/`,
     );
     const [body = "", status = ""] = meta.stdout.trim().split("|HTTP:");
     expect(status).toBe("200");
     // the MMDS document is a newline-separated key list (not JSON)
-    expect(body).toMatch(/^instanceID$/m);
+    expect(body.split("\n").map((line) => line.trim())).toEqual(
+      expect.arrayContaining(["accessTokenHash", "address", "envID", "instanceID"]),
+    );
   });
 
   it("output is capped at maxOutputBytes", async () => {

@@ -165,7 +165,9 @@ metadata addresses by resolved IP; on E2B set the org's cloud network to an allo
 
 `limits.mode` is validated but changes nothing on E2B: an E2B sandbox is always a cloud microVM (the container is the boundary), so
 both modes use the same template. **Auto mode cannot run on E2B at all**: the kernel gives every auto-mode device the `open-public`
-network, so the refusal above applies to every auto-mode device; the kernel surfaces it as `sandbox.open_network_refused` (409).
+network, so the refusal above applies to every auto-mode device — except that the platform kill switch
+(`sandbox.limits.egress: "none"`) empties the allowlist even in auto mode, and that device then runs network-less instead of being
+refused; the kernel surfaces the refusal as `sandbox.open_network_refused` (409).
 Only `sandbox` mode runs, and only with an allowlist: the org's cloud network defaults to open, so an org admin must switch it to
 the allowlist (hosts) before any E2B device works; a sandbox-mode device whose org network is open is refused the same way.
 **An older kernel is refused**: one that sends `tier` / `egress` / `allowHosts` (or a `network.kind` this plugin does not know)
