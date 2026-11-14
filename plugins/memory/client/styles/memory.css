@@ -27,11 +27,18 @@
   height: auto;
 }
 
-/* 全屏: the page element is the fullscreen element and fills the screen. */
+/*
+ * 全屏: the page fills the browser tab as an overlay of the web page (the shell behind it stays
+ * in the document), never the display's fullscreen; below the sheets and dialogs (40 and up).
+ */
 .cx-memory-page[data-fullscreen="true"] {
-  height: 100dvh;
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  height: auto;
   padding: var(--cb-space-4);
   background: var(--cb-bg);
+  overflow: auto;
 }
 
 /* ---------- Top bar ---------- */
