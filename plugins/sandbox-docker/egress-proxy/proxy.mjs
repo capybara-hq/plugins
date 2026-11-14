@@ -212,15 +212,20 @@ const CONNECT_TIMEOUT_MS = 10_000;
 /**
  * Connect to the checked addresses in turn; resolve with the first that connects, else reject with
  * the last error. Each attempt is bounded by AbortSignal.timeout (plugins use no timers).
+ * @param {string[]} ips
+ * @param {number} port
+ * @param {number} [timeoutMs]
+ * @param {typeof connect} [connectFn] the transport; tests inject a fake so the deadline does not
+ *   depend on the host routing the address
  */
-export function connectAny(ips, port, timeoutMs = CONNECT_TIMEOUT_MS) {
+export function connectAny(ips, port, timeoutMs = CONNECT_TIMEOUT_MS, connectFn = connect) {
   return new Promise((resolve, reject) => {
     const attempt = (i, lastError) => {
       if (i >= ips.length) {
         reject(lastError ?? new Error("no address"));
         return;
       }
-      const s = connect({ host: ips[i], port, allowHalfOpen: true });
+      const s = connectFn({ host: ips[i], port, allowHalfOpen: true });
       const deadline = AbortSignal.timeout(timeoutMs);
       const onTimeout = () => {
         const e = Object.assign(new Error(`connect to ${ips[i]}:${port} timed out`), {

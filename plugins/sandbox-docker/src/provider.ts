@@ -305,13 +305,22 @@ export function updateDecision(
   // A container without this contract's labels may have no internal network at all: a proxy swap
   // cannot give it one, so it must be recreated.
   if (from === null) return "recreate";
-  // No network cannot be swapped for a proxy (and back) without recreating the container.
-  if (plan.mode === "none" || from.mode === "none") {
-    return plan.mode === from.mode ? "updated" : "recreate";
-  }
+  // No network is applied by recreating the container in every direction: `update` cannot add or
+  // remove an internal network in place, so `none` to `none` is a recreate too (the decision
+  // `update` makes for a `none` plan).
+  if (plan.mode === "none" || from.mode === "none") return "recreate";
   if (plan.mode === "open-public") return "updated";
   if (from.mode === "open-public") return "recreate";
   return from.allowHosts.every((h) => plan.allowHosts.includes(h)) ? "updated" : "recreate";
+}
+
+/**
+ * The proxy mode of a plan `update` applies in place. `updateDecision` answers `"recreate"` for
+ * every `none` plan, so this only narrows the type; a `none` reaching it would be a bug.
+ */
+function proxyModeOf(plan: InstancePlan): ProxyMode {
+  if (plan.mode === "none") throw new Error("no-network plan cannot be applied in place");
+  return plan.mode;
 }
 
 /**
@@ -1154,10 +1163,9 @@ export function createDockerSandbox(
         if (isStatus(e, 404)) return "recreate";
         throw e;
       }
-      // No network cannot be applied to a running proxy container in place.
-      if (plan.mode === "none" || updateDecision(c.Config.Labels ?? {}, plan) === "recreate") {
-        return "recreate";
-      }
+      // No network cannot be applied to a running proxy container in place (updateDecision agrees
+      // for a `none` plan and for every container without this contract's labels).
+      if (updateDecision(c.Config.Labels ?? {}, plan) === "recreate") return "recreate";
       // Replace the egress proxy with the new mode and hosts; the container, its environment
       // and its internal network stay. Open connections through the old proxy end.
       const n = sandboxResourceNames(h.id);
@@ -1167,7 +1175,7 @@ export function createDockerSandbox(
       await ensureSharedNetwork(signal);
       await ensureInternalNetwork(h.id, signal);
       try {
-        await createEgress(h.id, plan.mode, plan.allowHosts, signal);
+        await createEgress(h.id, proxyModeOf(plan), plan.allowHosts, signal);
       } catch (e) {
         // A proxy that was made but never became ready (or the call was aborted) may allow more
         // than the labels record, and resume would just start it again: drop it, so the next

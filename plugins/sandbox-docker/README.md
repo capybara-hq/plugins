@@ -160,6 +160,10 @@ maps the network to the egress proxy's mode; every instance uses the same contai
 | `{ kind: "allowlist", hosts }` | `allowlist` | only `hosts`, on any port |
 | `{ kind: "allowlist", hosts: [] }` (the kill switch) | none (`NetworkMode: none`) | nothing |
 
+A kernel that predates auto mode sends neither `limits.mode` nor `limits.network`; the plugin then gives the sandbox **no network at all**
+(the safe direction, never the open public network). Upgrades of this plugin go together with the auto-mode core release, which starts
+sending both fields; do not run the new plugin on an old kernel if the sandbox needs the network.
+
 - **Every instance with a non-empty network is proxied**: the sandbox joins only an `Internal` internal network, on which there is only its egress proxy; the
   proxy's other leg joins the shared network. A direct connection that bypasses the proxy does not work (the internal network has no
   exit; Docker's built-in DNS does not resolve external names for it either, verified on Docker 29). The proxy
@@ -200,7 +204,7 @@ an empty allowlist); `refuseOpenNetwork` lets a deployment refuse the open netwo
 The second parameter of `createDockerSandbox(config, testOptions)` can be passed only by code that calls it directly; the plugin config cannot set it:
 
 - `labels`: adds extra labels to all resources (tests clean up by label);
-- `egressTestHosts`: the egress proxy pins these host names to the given IPs and exempts them from the private-address check (they still must be on the allowlist),
+- `egressTestHosts`: the egress proxy pins these host names to the given IPs and exempts them from the private-address check (in `allowlist` mode they must also be on the list),
   so that a local HTTP service in a test can serve as an allowed target. It is passed in through the proxy container's environment variable `CAPYBARA_EGRESS_TEST_HOSTS`.
 
 ## Tests

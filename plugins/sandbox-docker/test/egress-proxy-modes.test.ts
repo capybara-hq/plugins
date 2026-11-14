@@ -67,6 +67,19 @@ const tunnel = (proxyPort: number, hostPort: string) =>
     s.write(`CONNECT ${hostPort} HTTP/1.1\r\nHost: ${hostPort}\r\n\r\n`);
   });
 
+/** Send an absolute-URL request to the proxy (plain HTTP forwarding); return everything read. */
+const absolute = (proxyPort: number, url: string) =>
+  new Promise<string>((resolve, reject) => {
+    const s = connect(proxyPort, "127.0.0.1");
+    let buf = "";
+    s.on("data", (c: Buffer) => {
+      buf += c.toString();
+    });
+    s.on("end", () => resolve(buf));
+    s.on("error", reject);
+    s.write(`GET ${url} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`);
+  });
+
 /** Write raw bytes to the SOCKS port and collect what comes back until the server closes. */
 const raw = (port: number, chunks: Buffer[], after?: (got: Buffer) => Buffer | null) =>
   new Promise<Buffer>((resolve, reject) => {
@@ -341,6 +354,15 @@ describe("open-public mode", () => {
     expect(got.subarray(12).toString()).toContain("hello from target GET /s");
   });
 
+  it("forwards plain HTTP on the absolute-URL path and refuses private targets there", async () => {
+    const out = await absolute(httpPort, `http://anything.open.org:${targetPort}/`);
+    expect(out).toMatch(/^HTTP\/1\.1 200/);
+    expect(out).toContain("hello from target GET /");
+    // The same resolved-address check guards HTTP forwarding (WHATWG URL canonicalises first).
+    expect(await absolute(httpPort, `http://127.0.0.1:${targetPort}/`)).toMatch(/^HTTP\/1\.1 403/);
+    expect(await absolute(httpPort, `http://10.1.2.3:80/`)).toMatch(/^HTTP\/1\.1 403/);
+  });
+
   it.each([
     ["loopback", "onetwentyseven.open.org"],
     ["10/8", "ten.open.org"],
@@ -527,10 +549,43 @@ describe("hardening", () => {
   });
 
   it("bounds each connect attempt", async () => {
+    // A fake transport that never connects: without the per-attempt deadline the promise would
+    // never settle (the test would time out), so this is deterministic. A real TEST-NET address is
+    // not a blackhole on every host: this one intercepts outbound TCP and accepts the connection.
+    let destroyed: (Error & { code?: string }) | undefined;
+    const hanging = () => {
+      const listeners = new Map<string, (e: Error) => void>();
+      const socket = {
+        once(ev: string, fn: (e: Error) => void) {
+          listeners.set(ev, fn);
+          return socket;
+        },
+        on(ev: string, fn: (e: Error) => void) {
+          listeners.set(ev, fn);
+          return socket;
+        },
+        removeAllListeners() {
+          listeners.clear();
+          return socket;
+        },
+        destroy(e?: Error) {
+          if (e !== undefined) destroyed = e;
+          const emit = listeners.get("error");
+          listeners.clear();
+          if (emit !== undefined && e !== undefined) queueMicrotask(() => emit(e));
+          return socket;
+        },
+      };
+      return socket;
+    };
     const started = Date.now();
-    // TEST-NET-1: normally unroutable, so the attempt hangs until the deadline (or fails fast).
-    await expect(connectAny(["192.0.2.1"], 9, 200)).rejects.toThrow();
-    expect(Date.now() - started).toBeLessThan(3000);
+    await expect(
+      connectAny(["192.0.2.1"], 9, 200, hanging as unknown as Parameters<typeof connectAny>[3]),
+    ).rejects.toThrow(/timed out/);
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(150);
+    expect(elapsed).toBeLessThan(2000);
+    expect(destroyed?.code).toBe("ETIMEDOUT");
   });
 
   it.each([

@@ -181,7 +181,12 @@ describe.skipIf(!dockerAvailable)(
       );
       expect(r.isError, why(r.content)).toBe(false);
       expect(r.content.startsWith(SANDBOX_STARTED_NOTICE)).toBe(true);
-      // No `limits.network` from this kernel: no network, so no egress proxy variable.
+      // TODO(auto-mode upgrade): the installed @capybara-hq/testing rc.17 links kernel rc.25, which
+      // predates auto mode and sends no `limits.network`; the plugin therefore gives this sandbox
+      // no network and this asserts that safe fallback. When the repository upgrades to testing
+      // rc.18 (kernel rc.29), the org default is open-public: change this to expect
+      // `proxy=http://cap-device-<id>-egress:3128` and add a curl to a private / metadata address
+      // that must be refused (403).
       expect(r.content).toMatch(/\/workspace\nsandbox\nproxy=\n/);
 
       const w = await call(

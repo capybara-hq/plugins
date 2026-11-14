@@ -78,9 +78,22 @@ describe("planInstance", () => {
     expect(planInstance(limits(OPEN)).mode).toBe("open-public");
   });
 
-  it("a kernel without the network contract falls to no network, never to open-public", () => {
-    const old = { cpu: 1, memoryMb: 2048, diskMb: 1024 } as unknown as SandboxNetworkLimits;
+  it("old limits, including an explicitly open egress, fall to no network, never open-public", () => {
+    // The pre-auto-mode limits shape: `egress: "open"` / `tier: "open"` must not open anything;
+    // only `limits.network` is read.
+    const old = {
+      cpu: 1,
+      memoryMb: 2048,
+      diskMb: 1024,
+      egress: "open",
+      tier: "open",
+      allowHosts: [],
+      devHosts: [],
+    } as unknown as SandboxNetworkLimits;
     expect(planInstance(old)).toMatchObject({ mode: "none", allowHosts: [] });
+    // and a kernel that sends neither the network nor the old keys
+    const absent = { cpu: 1, memoryMb: 2048, diskMb: 1024 } as unknown as SandboxNetworkLimits;
+    expect(planInstance(absent)).toMatchObject({ mode: "none", allowHosts: [] });
   });
 
   it("rejects an unknown network kind", () => {
@@ -177,10 +190,12 @@ describe("updateDecision", () => {
     expect(updateDecision(labelsOf(at(OPEN)), at(OPEN))).toBe("updated");
   });
 
-  it("no network cannot gain a proxy in place: recreate; none to none is updated", () => {
+  it("no network is recreated in every direction, the decision `update` makes", () => {
     expect(updateDecision(labelsOf(at(allow([]))), at(allow()))).toBe("recreate");
     expect(updateDecision(labelsOf(at(allow([]))), at(OPEN))).toBe("recreate");
-    expect(updateDecision(labelsOf(at(allow([]))), at(allow([])))).toBe("updated");
+    // `update` recreates a container whose plan is `none` (it cannot add or remove the internal
+    // network in place), so `none` to `none` is a recreate rather than a no-op "updated".
+    expect(updateDecision(labelsOf(at(allow([]))), at(allow([])))).toBe("recreate");
   });
 
   it("a proxy container cannot lose its network in place: recreate", () => {

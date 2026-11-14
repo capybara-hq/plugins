@@ -17,8 +17,9 @@
 #   （同一个卷的可写挂载）写入技能，沙箱用户进不去；
 # - 内核的工具要用 GNU find（-print0）、GNU grep（--null、-e … --）、coreutils、sh / bash；
 #   插件中止命令要用 setsid（util-linux）与 pkill（procps）、timeout 与 base64（coreutils）；
-# - one image for every tier (sandbox dev tiers spec §8): what limits a tier is the policy, not missing
-#   binaries. It carries Node 22 (official tarball, SHA256 pinned per architecture), pnpm (global, so
+# - one image for every sandbox mode (`auto` / `sandbox`): what a mode may do is set by policy (the
+#   sandbox tool policy and the egress network), not by missing binaries. It carries Node 22
+#   (official tarball, SHA256 pinned per architecture), pnpm (global, so
 #   `pnpm -v` works offline), yarn through corepack shims, ssh / nc / socat, a C toolchain, the
 #   Chromium runtime libraries (no browser binary: Playwright downloads its own into
 #   PLAYWRIGHT_BROWSERS_PATH), CJK fonts, and the published ssh host keys of github.com, gitlab.com
@@ -73,8 +74,8 @@ RUN groupadd --gid 1000 sandbox \
   && chmod 0755 /skills /opt/capybara/skills \
   && chmod 0700 /opt/capybara
 
-# ssh host keys of the common git hosts, so `git clone git@github.com:…` through the dev tier's SOCKS
-# proxy does not stop at "Host key verification failed". Copied from the hosts' own publications
+# ssh host keys of the common git hosts, so `git clone git@github.com:…` through the egress proxy's
+# SOCKS listener does not stop at "Host key verification failed". Copied from the hosts' own publications
 # (fetched 2026-11-12): GitHub https://api.github.com/meta (ssh_keys; also
 # https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints),
 # GitLab https://docs.gitlab.com/user/gitlab_com/#ssh-known_hosts-entries, Bitbucket

@@ -30,7 +30,13 @@ export function resolveTarget(
     lookup: (host: string) => Promise<{ address: string }[]>;
   },
 ): Promise<string[]>;
-export function connectAny(ips: string[], port: number, timeoutMs?: number): Promise<Socket>;
+export function connectAny(
+  ips: string[],
+  port: number,
+  timeoutMs?: number,
+  /** The transport; tests inject a fake so the per-attempt deadline is deterministic. */
+  connectFn?: (opts: { host: string; port: number; allowHalfOpen: boolean }) => Socket,
+): Promise<Socket>;
 export function createEgressProxy(cfg: EgressProxyConfig): Server;
 export function createSocksProxy(
   cfg: EgressProxyConfig & {
