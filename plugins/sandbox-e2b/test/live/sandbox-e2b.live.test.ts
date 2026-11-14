@@ -28,8 +28,9 @@ import {
  *   the outer environment; the code reads no credential file and prints none.
  * - Covers: the template auto-build (template unset), a file system created paused and an instance
  *   connecting it, the sandbox user and working directory, file reads and writes, /skills read-only
- *   for the sandbox user (a write through a symlink refused too), the network allowlist and the
- *   open-public refusal, output truncation, timeout kills (nohup children too), abort, long silence
+ *   for the sandbox user (a write through a symlink refused too), the network allowlist, open-public
+ *   (internet access with the local ranges denied, at create and by update; MMDS still answering),
+ *   output truncation, timeout kills (nohup children too), abort, long silence
  *   (keepalive), a child that escaped the session killed by its environment marker, files surviving
  *   instance destroy (processes gone), createFileSystem by name, whether a paused sandbox's network
  *   rules can change (logged as `[e2b-live] paused network update: …`, recorded in README "Network
@@ -64,8 +65,11 @@ import {
  *   `PUT /latest/api/token` answers 200 with a token, and that token unlocks the metadata
  *   document (verified 2026-11-14). The same holds with
  *   `denyOut: ["169.254.169.254/32"]` and with `denyOut` of every private range, so E2B cannot
- *   block it: the plugin refuses `open-public` (fail closed). Re-check this item before ever
- *   mapping `open-public` to internet access.
+ *   block it. It is a documented residual in both modes (README "Network policy", decision D1
+ *   of core's 2026-11-15 auto mode hardening spec); the open-public items log it again.
+ * - [ ] open-public (`allow_internet_access: true` + `denyOut` of the private, loopback, CGNAT
+ *   and link-local ranges, no `allowOut`) is accepted on create and by `PUT /network`; a public
+ *   host is reachable and `--resolve` to 10.0.0.1 / 100.64.0.1 / 192.168.0.1 is refused;
  * - [ ] The allowlist body (`network.allowOut` domains + `denyOut:
  *   ["0.0.0.0/0", "fc00::/7", "fe80::/10", "::1/128"]`) is accepted and a `*.` wildcard takes
  *   effect; `denyOut` of private CIDRs blocks resolved destination IPs (verified 2026-11-14 with
@@ -199,20 +203,81 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
     expect(blocked.exitCode).not.toBe(0);
   });
 
-  it("open-public is refused before any E2B call", async () => {
-    await expect(
-      sbx.createFileSystem({
-        name: `cap-device-live-${randomUUID()}`,
-        limits: { ...allowlist, network: { kind: "open-public", hosts: [] } },
-        signal: sig(),
-      }),
-    ).rejects.toThrow(/open-public.*refused.*metadata endpoint/s);
+  /** Whether a request to `host` aimed at `ip` gets through (`curl --resolve`, port 80). */
+  const reaches = async (target: SandboxHandle, ip: string) => {
+    const r = await sbx.exec(target, {
+      ...who(),
+      command: `curl -sS -o /dev/null --max-time 8 --resolve example.com:80:${ip} http://example.com/`,
+      timeoutMs: 30_000,
+      maxOutputBytes: 16 * 1024,
+      signal: AbortSignal.timeout(120_000),
+    });
+    return r.exitCode === 0;
+  };
+  /** The MMDS status code (logged: the documented residual). */
+  const mmds = async (target: SandboxHandle) => {
+    const r = await sbx.exec(target, {
+      ...who(),
+      command:
+        "curl -sS -o /dev/null -w '%{http_code}' --max-time 10 http://169.254.169.254/latest/meta-data/",
+      timeoutMs: 30_000,
+      maxOutputBytes: 16 * 1024,
+      signal: AbortSignal.timeout(120_000),
+    });
+    return r.stdout.trim();
+  };
+
+  it("open-public at create: a public host reachable, private / CGNAT destinations refused", async () => {
+    const openName = `cap-device-live-${randomUUID()}`;
+    const open: SandboxLimits = {
+      ...allowlist,
+      mode: "auto",
+      network: { kind: "open-public", hosts: [] },
+    };
+    try {
+      const ofs = await sbx.createFileSystem({ name: openName, limits: open, signal: sig() });
+      const oh = await sbx.create({ name: openName, limits: open, fileSystem: ofs, signal: sig() });
+      const pub = await sbx.exec(oh, {
+        ...who(),
+        command: "curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://example.com/",
+        timeoutMs: 30_000,
+        maxOutputBytes: 16 * 1024,
+        signal: AbortSignal.timeout(120_000),
+      });
+      expect(pub.stdout).toMatch(/^[23]\d\d$/);
+      for (const ip of ["10.0.0.1", "192.168.0.1", "172.16.0.1", "100.64.0.1"]) {
+        expect(await reaches(oh, ip), ip).toBe(false);
+      }
+      console.info(`[e2b-live] metadata endpoint under open-public: HTTP ${await mmds(oh)}`);
+    } finally {
+      await sbx.destroyFileSystemByName(openName, sig());
+    }
+  });
+
+  it("update: allowlist → open-public → allowlist", async () => {
+    const open: SandboxLimits = {
+      ...allowlist,
+      mode: "auto",
+      network: { kind: "open-public", hosts: [] },
+    };
+    expect(await sbx.update?.(h, open, sig())).toBe("updated");
+    const pub = await run(
+      "curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://example.com/",
+    );
+    expect(pub.stdout).toMatch(/^[23]\d\d$/);
+    expect(await reaches(h, "10.0.0.1")).toBe(false);
+    console.info(
+      `[e2b-live] metadata endpoint after the open-public update: HTTP ${await mmds(h)}`,
+    );
+    expect(await sbx.update?.(h, allowlist, sig())).toBe("updated");
+    const blocked = await run("curl -sS -o /dev/null --max-time 10 https://example.com/");
+    expect(blocked.exitCode).not.toBe(0);
   });
 
   it("records that the metadata endpoint stays reachable under the allowlist", async () => {
-    // the reason open-public is refused: the Firecracker MMDS answers even when the sandbox has no
-    // other network access, a token is obtainable, and the token unlocks the metadata document, so
-    // no E2B network setting can block it. Re-check this item before ever mapping `open-public`.
+    // the documented residual (README "Network policy"): the Firecracker MMDS answers even when
+    // the sandbox has no other network access, a token is obtainable, and the token unlocks the
+    // metadata document, so no E2B network setting can block it.
     const r = await run(
       "curl -sS -o /dev/null -w '%{http_code}' --max-time 10 http://169.254.169.254/latest/meta-data/",
     );

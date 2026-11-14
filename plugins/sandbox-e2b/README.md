@@ -15,7 +15,7 @@ same image.
 | `domain` | `e2b.app` | Sandbox domain: the envd address is `https://49983-<sandbox id>.<domain>`; when the API returns the sandbox's own `domain`, the returned one wins |
 | `timeoutSeconds` | `3600` | Sandbox timeout (60–86400 seconds); when it expires E2B **auto-pauses** (does not delete), see "Lifecycle" |
 | `domainAllowlist` | `true` | Whether E2B supports a per-domain network allowlist; set `false` for self-hosted versions that do not, and an allowlist degrades to no network with a warning |
-| (removed) `openEgress` / `allowOpenEgress` | — | Both fail the strict schema with a pointer to the network policy. The plugin always refuses `open-public`: E2B cannot block the sandbox's metadata endpoint (see "Network policy") |
+| (removed) `openEgress` / `allowOpenEgress` | — | Both fail the strict schema with a pointer to the network policy: the org's cloud network (`limits.network`) decides (see "Network policy") |
 
 ```bash
 export CAPYBARA_EXTENSIONS='["@capybara-hq/plugin-sandbox-e2b"]'
@@ -76,9 +76,9 @@ Then set `template` to `capybara-sandbox`. Image conventions (the plugin depends
 
 | `sandbox@2` | E2B call |
 |---|---|
-| `createFileSystem` | Lists by the metadata `capybara-sandbox-name=<name>` (`GET /v2/sandboxes?metadata=…&state=running,paused`, paginated) and returns an existing sandbox of that name (the kernel may have stopped before recording the handle); otherwise ensures the template (above), `POST /v2/sandboxes` (`templateID`, `metadata`, `timeout`, `autoPause: true`, `autoPauseMemory: false`, `secure: true`, network settings), then pauses it without memory (`POST /sandboxes/{id}/pause` `{memory: false}`); the file system handle is E2B's sandbox id. An `open-public` network is refused before any E2B call |
+| `createFileSystem` | Lists by the metadata `capybara-sandbox-name=<name>` (`GET /v2/sandboxes?metadata=…&state=running,paused`, paginated) and returns an existing sandbox of that name (the kernel may have stopped before recording the handle); otherwise ensures the template (above), `POST /v2/sandboxes` (`templateID`, `metadata`, `timeout`, `autoPause: true`, `autoPauseMemory: false`, `secure: true`, network settings), then pauses it without memory (`POST /sandboxes/{id}/pause` `{memory: false}`); the file system handle is E2B's sandbox id. An older kernel's limits are refused before any E2B call |
 | `create` (instance) | `POST /v2/sandboxes/{id}/connect` `{timeout}` on the file system's sandbox (resumed; a 409 while another resume is in flight is retried); the instance handle carries the same id. E2B's 404 → `FileSystemGoneError` (the files are lost, never replaced by an empty sandbox); other failures, a bare 404 included, are ordinary errors. `image` and `limits` are ignored: they were fixed at `createFileSystem` |
-| `update` (`limitsApplyAt: "fileSystem"`) | Applies the new network policy to the running sandbox without recreating it: connect first (resumes a paused one), then `PUT /sandboxes/{id}/network` (see "Network policy"); returns `"updated"`. E2B's 404 at either step → `SandboxGoneError`; `open-public` is refused before any call |
+| `update` (`limitsApplyAt: "fileSystem"`) | Applies the new network policy to the running sandbox without recreating it: connect first (resumes a paused one), then `PUT /sandboxes/{id}/network` (see "Network policy"); returns `"updated"`. E2B's 404 at either step → `SandboxGoneError`; an older kernel's limits are refused before any call |
 | `resume` | `POST /v2/sandboxes/{id}/connect` (a paused one is resumed, and a running one gets its timeout pushed back); 404 → `gone` |
 | `suspend`, `destroy` (instance) | `POST /sandboxes/{id}/pause` `{memory: false}` (the SDK's `mode: "filesystem"`): every process ends, the files stay, like the Docker plugin stopping or removing its container; a missing one (404) or an already paused one (409) also counts as success |
 | `destroyByName` | Lists running sandboxes by the metadata name and pauses each without memory (files kept) |
@@ -141,35 +141,34 @@ The kernel sends the device's network as `limits.network` (`{ kind: "open-public
 template** (one image for all); the network policy changes only the network. cpu / memory / disk stay those of the template (see
 "Resources").
 
-E2B's network control ([docs](https://docs.e2b.dev/sandbox/internet-access); the mapping was verified against the live API on
-2026-11-14):
+E2B's network control ([docs](https://docs.e2b.dev/sandbox/internet-access); the allowlist mapping was verified against the live
+API on 2026-11-14, the field names against the `e2b@2.58.0` SDK's `SandboxNetworkConfig` / `SandboxNetworkUpdateConfig`):
 
 | `limits.network` | Setting when creating the sandbox | Body of `update` (`PUT /sandboxes/{id}/network`) |
 |---|---|---|
 | `{ kind: "allowlist", hosts: [...] }` with hosts | `network: { allowOut: hosts, denyOut: DENIED }` | `{ allowOut: hosts, denyOut: DENIED }` |
 | `{ kind: "allowlist", hosts: [] }` | `allow_internet_access: false` | `{ allow_internet_access: false }` |
-| `{ kind: "open-public", hosts: [] }` | **refused** before any E2B call | **refused** before any E2B call |
+| `{ kind: "open-public", hosts }` | `allow_internet_access: true, network: { denyOut: OPEN_DENIED }` | `{ allow_internet_access: true, denyOut: OPEN_DENIED }` |
 
 `DENIED` is `["0.0.0.0/0", "fc00::/7", "fe80::/10", "::1/128"]`: all IPv4, plus IPv6 unique-local,
 link-local and loopback.
 
-**`open-public` is refused (fail closed).** E2B denies private and link-local destination CIDRs with `denyOut`, and a live check
-confirmed that the deny is enforced by resolved destination IPv4 (`curl --resolve example.com:80:10.0.0.1` is refused; the same Host
-aimed at a public IP is not — see the limitations below). But the sandbox's own **metadata endpoint** is not subject to that filter:
-the Firecracker MMDS at `169.254.169.254` answers `GET /latest/meta-data/` (401 without a token) and hands out a token with
-`PUT /latest/api/token`, even with `denyOut: ["169.254.169.254/32"]`, with every private range denied, and with the network fully
-closed (`allow_internet_access: false`) — verified live on 2026-11-14. Since E2B cannot block that destination, `createFileSystem`
-and `update` refuse `open-public` with an English error before touching the sandbox, rather than opening the internet next to a
-reachable metadata service. Deployments that need open egress use the Docker plugin, whose egress proxy refuses private and
-metadata addresses by resolved IP; on E2B set the org's cloud network to an allowlist. The plugin never opens the network silently.
+`OPEN_DENIED` is `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10",
+"fc00::/7", "fe80::/10", "::1/128"]`: the private, loopback, link-local and CGNAT ranges. `open-public` sends no `allowOut`
+(E2B's allowed entries take precedence over denied ones) and ignores its `hosts`. `0.0.0.0/8` is not listed: E2B rejects it as
+an invalid CIDR (live 2026-11-14). E2B enforces `denyOut` by resolved destination IPv4 (`curl --resolve example.com:80:10.0.0.1`
+is refused, verified live 2026-11-14), so a public name that resolves to a private address is refused too.
+
+**Residual: the E2B metadata endpoint (MMDS) is reachable in every mode.** The sandbox's own Firecracker MMDS at
+`169.254.169.254` is not subject to E2B's egress filter: it answers `GET /latest/meta-data/` (401 without a token) and hands out
+a token with `PUT /latest/api/token` even with `denyOut: ["169.254.169.254/32"]`, with every private range denied, under an
+allowlist and with the network fully closed (`allow_internet_access: false`) — verified live on 2026-11-14. Refusing
+`open-public` therefore removed no exposure, so the plugin maps it (decision D1 of core's 2026-11-15 auto mode hardening spec)
+and states the residual here instead. Deployments for which the MMDS exposure is not acceptable run their devices on the Docker
+plugin, whose egress proxy refuses private and metadata addresses by resolved IP.
 
 `limits.mode` is validated but changes nothing on E2B: an E2B sandbox is always a cloud microVM (the container is the boundary), so
-both modes use the same template. **Auto mode cannot run on E2B at all**: the kernel gives every auto-mode device the `open-public`
-network, so the refusal above applies to every auto-mode device — except that the platform kill switch
-(`sandbox.limits.egress: "none"`) empties the allowlist even in auto mode, and that device then runs network-less instead of being
-refused; the kernel surfaces the refusal as `sandbox.open_network_refused` (409).
-Only `sandbox` mode runs, and only with an allowlist: the org's cloud network defaults to open, so an org admin must switch it to
-the allowlist (hosts) before any E2B device works; a sandbox-mode device whose org network is open is refused the same way.
+both modes use the same template, and both follow `limits.network` (auto mode normally gets `open-public`).
 **An older kernel is refused**: one that sends `tier` / `egress` / `allowHosts` (or a `network.kind` this plugin does not know)
 gets an English error instead of a guessed policy, so a plugin upgraded without its kernel never opens the network; upgrade the
 kernel and the sandbox plugins together (the kernel first sends `limits.mode` / `limits.network` in 0.1.0-rc.29; the plugin needs
@@ -189,7 +188,7 @@ E2B's allowlist ([docs](https://docs.e2b.dev/sandbox/internet-access), verified 
   *private* IP is refused (the `denyOut` list wins), but the same Host / SNI aimed at any *public* IP is accepted: `curl --resolve
   example.com:80:1.1.1.1` works. So an allowed name reaches any public IP on 80 / 443, and the plugin cannot resolve-and-pin the
   destination the way the Docker egress proxy does. Only the destinations in `DENIED` are refused. The sandbox's metadata endpoint
-  is reachable regardless of the allowlist (see above).
+  is reachable regardless of the policy (see above).
 - **IPv6**: `DENIED` covers IPv6 loopback (`::1/128`), link-local (`fe80::/10`) and unique-local (`fc00::/7`) as well as all IPv4.
   E2B rejects `::/0` as an invalid denied CIDR (live 2026-11-14), so public IPv6 is not denied by CIDR; it is unreachable anyway
   because the microVM has no global IPv6 address or route: `ip -6 addr` shows only `::1/128` and a link-local address, and a
@@ -210,7 +209,7 @@ E2B's allowlist ([docs](https://docs.e2b.dev/sandbox/internet-access), verified 
 - **The allowlist cannot stop data sent to allowlisted hosts** (the same as the Docker version): `git push` to github.com and publishing
   to npm / PyPI are within the allowlist, and attachments in a conversation and data the agent has read can leak this way. Orgs that
   handle sensitive data should set `sandboxToolPolicy` to `ask` in the org settings, and / or set the org's network to an empty
-  allowlist (no network at all; on E2B `open-public` is refused anyway).
+  allowlist (no network at all).
 
 **Limits apply at the file system** (`limitsApplyAt: "fileSystem"`): an instance is the same E2B sandbox resumed, so `create` cannot
 change what `createFileSystem` set. A change of network policy reaches an existing device through **`update`**: the kernel calls it
@@ -220,7 +219,7 @@ configuration at once, with no restart: running commands keep running, new conne
 
 - **Only a running sandbox can be updated**: a paused sandbox answers E2B's 404 (verified on E2B 2026-11-08; the live test keeps
   recording it as `[e2b-live] paused network update: …`). `update` therefore connects first (a paused sandbox is resumed), then sends
-  the update; a 404 after that means the sandbox is gone (`SandboxGoneError`). A refused policy throws before the connect.
+  the update; a 404 after that means the sandbox is gone (`SandboxGoneError`). Limits the plugin cannot read throw before the connect.
 - **Only the network changes.** cpu / memory / disk and the template stay; a later change of only the host list is not sent by the
   kernel (it compares `mode` and `network.kind` only) and reaches the device on the next mode or kind change or a file reset.
 - Connections already open when the rules narrow are E2B's business; the docs do not say whether they are cut.
@@ -262,14 +261,14 @@ The third parameter of `createE2BSandbox(config, { log }, testOptions)` can be p
 - `test/sandbox-e2b.test.ts`: against `startFakeE2B` from `@capybara-hq/testing` (control plane API + envd, Connect stream protocol,
   commands really run in a local temp directory), covering each method, error mapping (404 → gone, 401 / 5xx → ordinary errors), abort, kill on timeout,
   file reads and writes and the way `/skills` is written, the network policy mapping (an allowlist, an empty allowlist as no network,
-  `open-public` and an older kernel's limits refused before any E2B call), `update` (against a stub of
+  `open-public` as internet access with `OPEN_DENIED`, an older kernel's limits refused before any E2B call), `update` (against a stub of
   `PUT /sandboxes/{id}/network` in front of the fake, which has no network route: resume first, the bodies, gone and refused cases), and the reboot backstop when killing fails / the output stream does not end (the fake server's `memory: false` connect ends all processes);
   file systems and instances (files survive destroy and recreate, connect 404 → `FileSystemGoneError`, pause drops memory, cleanup by name), and the template
   auto-build (built once from the image, polled until ready, an existing alias reused, a not-ready alias rebuilt, a failed build not memoised).
 - `test/live`: real E2B, run only when `CAPYBARA_TEST_E2B_API_KEY` is set (optionally `CAPYBARA_TEST_E2B_TEMPLATE`, unset to exercise the auto-build,
   and `CAPYBARA_TEST_E2B_API_URL` / `CAPYBARA_TEST_E2B_DOMAIN`), otherwise skipped: the template, the file system created paused, the sandbox user, files, `/skills` read-only (including a write through a symlink being
-  rejected), the network allowlist and the `open-public` refusal, the metadata endpoint staying reachable under the allowlist (the
-  reason for the refusal), output truncation, kill on timeout (including nohup child processes), abort, long periods with no output, a
+  rejected), the network allowlist, `open-public` (a public host reachable, private / loopback / CGNAT / link-local destinations
+  refused, at create and by `update`), the metadata endpoint staying reachable under every policy (the documented residual), output truncation, kill on timeout (including nohup child processes), abort, long periods with no output, a
   child process that escaped the session being killed by its environment marker,
   files surviving instance destroy, whether a paused sandbox's network rules can change, `destroyFileSystem` → `FileSystemGoneError`. The file header lists the "assumptions that can only be confirmed on real E2B"; check them one by one on the first run.
 

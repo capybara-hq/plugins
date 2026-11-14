@@ -17,6 +17,9 @@ export {
 /** The socket proxy only admits network names starting with `cap`. */
 const NETWORK_NAME = /^cap[a-zA-Z0-9_.-]*$/;
 
+/** An IPv4 or IPv6 CIDR (`203.0.113.0/24`, `2001:db8::/32`); a single address is `/32` or `/128`. */
+const isCidr = (v: string) => z.cidrv4().safeParse(v).success || z.cidrv6().safeParse(v).success;
+
 /**
  * The deployment config (one per deployment). Strict: extra keys are errors, so the test-only
  * options ({@link DockerSandboxTestOptions}) can never be turned on through the plugin config.
@@ -65,9 +68,33 @@ export const DeploymentConfig = z
       label: { zh: "卷驱动", en: "Volume driver" },
     }),
     /**
+     * The deployment's own addresses (its public or corporate ranges, IPv4 / IPv6 CIDRs) the
+     * egress proxy refuses in every mode, on top of the private, loopback, link-local, CGNAT,
+     * metadata and reserved ranges it always refuses (README "Network and egress").
+     */
+    deniedCidrs: ui(
+      z
+        .array(
+          z.string().refine(isCidr, {
+            message:
+              "deniedCidrs entries must be IPv4 or IPv6 CIDRs such as 203.0.113.0/24 or 2001:db8::/32",
+          }),
+        )
+        .max(256)
+        .optional(),
+      {
+        label: { zh: "额外拒绝的地址段", en: "Extra denied address ranges" },
+        help: {
+          zh: "部署自身的公网或办公网地址段（CIDR，如 203.0.113.0/24）；出站代理在所有模式下都拒绝连接这些地址，另外始终拒绝内网、本机、链路本地、CGNAT 与云元数据地址。",
+          en: "The deployment's own public or corporate ranges (CIDRs such as 203.0.113.0/24); the egress proxy refuses them in every mode, on top of the private, loopback, link-local, CGNAT and cloud metadata addresses it always refuses.",
+        },
+      },
+    ),
+    /**
      * Refuse the open public network (default `false`): locked-down deployments refuse every
      * `create` / `update` whose effective network is `open-public`, with an error naming this
-     * setting. The org's cloud network then has to be the allowlist.
+     * setting, and an existing open-public instance answers `gone` on resume / auto-start (the
+     * kernel recreates it under the rule). The org's cloud network then has to be the allowlist.
      */
     refuseOpenNetwork: ui(z.boolean().default(false), {
       label: { zh: "拒绝开放网络", en: "Refuse open network" },

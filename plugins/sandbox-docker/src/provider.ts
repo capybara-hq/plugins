@@ -81,6 +81,11 @@ export interface DockerSandboxConfig {
    * locked-down deployments. The error names this setting so an operator can find it.
    */
   refuseOpenNetwork?: boolean | undefined;
+  /**
+   * The deployment's own ranges (IPv4 / IPv6 CIDRs) every egress proxy refuses on top of its
+   * built-in list (`DENIED_CIDRS`).
+   */
+  deniedCidrs?: string[] | undefined;
 }
 
 /**
@@ -226,15 +231,20 @@ export function sandboxEnv(name: string, mode: EgressMode): string[] {
   ];
 }
 
-/** The egress proxy container's environment (egress-proxy/proxy.mjs) for a mode and host list. */
+/**
+ * The egress proxy container's environment (egress-proxy/proxy.mjs) for a mode and host list,
+ * plus the deployment's denied ranges (both modes).
+ */
 export function egressProxyEnv(
   mode: ProxyMode,
   allowHosts: string[],
   testHosts?: Record<string, string>,
+  deniedCidrs: readonly string[] = [],
 ): string[] {
   const env = [`MODE=${mode}`, `PORT=${PROXY_PORT}`, `SOCKS_PORT=${SOCKS_PORT}`];
   // open-public has no host list: any public host
   if (mode === "allowlist") env.push(`ALLOW_HOSTS=${JSON.stringify(allowHosts)}`);
+  if (deniedCidrs.length > 0) env.push(`DENIED_CIDRS=${JSON.stringify(deniedCidrs)}`);
   if (testHosts) env.push(`CAPYBARA_EGRESS_TEST_HOSTS=${JSON.stringify(testHosts)}`);
   return env;
 }
@@ -269,10 +279,11 @@ function labelNetwork(
 
 /**
  * Whether `update` may move an instance from its container `labels` to `plan` by recreating only
- * its egress proxy (pure). The container's environment is the same in both modes, and the new
- * proxy must allow at least what the labels record (`allowlist` to `open-public`, or a host list
- * that keeps every recorded host), so a proxy rebuilt from the labels never allows more than the
- * one `update` put in place. Anything else is `"recreate"`.
+ * its egress proxy (pure). Only a host list that keeps every recorded host (or open-public to
+ * open-public) is swapped in place, so a proxy rebuilt from the labels never allows more than the
+ * one `update` put in place. A change of network kind is `"recreate"`, allowlist to open-public
+ * too: the labels then say what the instance has, and `resume` can hold an open-public instance
+ * to `refuseOpenNetwork` by its labels.
  */
 export function updateDecision(
   labels: Record<string, string>,
@@ -286,8 +297,9 @@ export function updateDecision(
   // remove an internal network in place, so `none` to `none` is a recreate too (the decision
   // `update` makes for a `none` plan).
   if (plan.mode === "none" || from.mode === "none") return "recreate";
-  if (plan.mode === "open-public") return "updated";
-  if (from.mode === "open-public") return "recreate";
+  if (plan.mode === "open-public" || from.mode === "open-public") {
+    return plan.mode === from.mode ? "updated" : "recreate";
+  }
   return from.allowHosts.every((h) => plan.allowHosts.includes(h)) ? "updated" : "recreate";
 }
 
@@ -682,7 +694,7 @@ export function createDockerSandbox(
       n.egress,
       {
         Image: cfg.egressProxyImage,
-        Env: egressProxyEnv(mode, allowHosts, test.egressTestHosts),
+        Env: egressProxyEnv(mode, allowHosts, test.egressTestHosts, cfg.deniedCidrs),
         Labels: {
           ...baseLabels(name, "egress"),
           [LABEL_MODE]: mode,
@@ -976,6 +988,10 @@ export function createDockerSandbox(
     // A container without this contract's labels resumes with no network (the kernel replaces it
     // on use, since its applied limits are unknown).
     const net = labelNetwork(labels) ?? { mode: "none", allowHosts: [] };
+    // An open-public instance made before refuseOpenNetwork was turned on is not started again:
+    // "gone" makes the kernel recreate it under the current rule (create then refuses or builds
+    // the allowlist). Auto-start goes through here too, so exec answers SandboxGoneError.
+    if (net.mode === "open-public" && cfg.refuseOpenNetwork) return "gone";
     if (net.mode !== "none") await ensureEgressRunning(h.id, net.mode, net.allowHosts, signal);
     try {
       // A `docker pause`d container still reports Running, but exec answers 409: unpause it.

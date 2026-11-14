@@ -1,6 +1,12 @@
 import { readFileSync } from "node:fs";
-import { SANDBOX_EXTENSION_POINT, type SandboxLimits } from "@capybara-hq/plugin-sdk";
-import { describe, expect, it } from "vitest";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import {
+  isSandboxGoneError,
+  SANDBOX_EXTENSION_POINT,
+  type SandboxLimits,
+} from "@capybara-hq/plugin-sdk";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import plugin, {
   createDockerSandbox,
   DeploymentConfig,
@@ -84,6 +90,25 @@ describe("sandbox-docker manifest", () => {
       providerConfig(DeploymentConfig.parse({ endpoint: "tcp://x:1", egressProxyImage: "e:1" }))
         .egressProxyImage,
     ).toBe("e:1");
+  });
+
+  it("deployment config: deniedCidrs takes IPv4 / IPv6 CIDRs and reaches the provider", () => {
+    const denied = ["203.0.113.0/24", "198.51.100.7/32", "2001:db8::/32"];
+    const c = DeploymentConfig.parse({ endpoint: "tcp://x:1", deniedCidrs: denied });
+    expect(c.deniedCidrs).toEqual(denied);
+    expect(providerConfig(c).deniedCidrs).toEqual(denied);
+    expect(DeploymentConfig.parse({ endpoint: "tcp://x:1" }).deniedCidrs).toBeUndefined();
+    for (const bad of [
+      "203.0.113.1",
+      "203.0.113.0/33",
+      "::/129",
+      "example.com/24",
+      "10.0.0.0/8 ",
+    ]) {
+      const r = DeploymentConfig.safeParse({ endpoint: "tcp://x:1", deniedCidrs: [bad] });
+      expect(r.success, bad).toBe(false);
+      expect(r.error?.issues[0]?.message).toMatch(/CIDR/);
+    }
   });
 
   it("deployment config: refuseOpenNetwork; the old egress keys are gone", () => {
@@ -179,5 +204,92 @@ describe("open-public with refuseOpenNetwork (no Docker needed)", () => {
         signal: AbortSignal.timeout(5000),
       }),
     ).rejects.toThrow(/no image/);
+  });
+});
+
+describe("refuseOpenNetwork on resume and auto-start (stub Docker API, no Docker needed)", () => {
+  const ID = "cap-device-00000000-0000-4000-8000-000000000002";
+  /** Requests the stub saw, as "METHOD /path" without the API version. */
+  const seen: string[] = [];
+  let labels: Record<string, string> = {};
+  let server: Server;
+  let endpoint = "";
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      const path = (req.url ?? "").replace(/^\/v[\d.]+/, "").split("?")[0] ?? "";
+      seen.push(`${req.method} ${path}`);
+      req.resume();
+      res.setHeader("content-type", "application/json");
+      if (req.method === "GET" && path === `/containers/${ID}/json`) {
+        res.end(JSON.stringify({ State: { Running: false }, Config: { Labels: labels } }));
+        return;
+      }
+      // a stopped container: exec answers 409 (auto-start), anything else is an error
+      if (req.method === "POST" && path === `/containers/${ID}/exec`) {
+        res.statusCode = 409;
+        res.end(JSON.stringify({ message: `container ${ID} is not running` }));
+        return;
+      }
+      res.statusCode = 500;
+      res.end(JSON.stringify({ message: "unexpected request in this test" }));
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    endpoint = `tcp://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+  afterAll(async () => {
+    await new Promise((r) => server.close(r));
+  });
+  const sbxWith = (refuseOpenNetwork: boolean) =>
+    createDockerSandbox(providerConfig(DeploymentConfig.parse({ endpoint, refuseOpenNetwork })));
+  const openLabels = {
+    "dev.capybara.sandbox.network": "open-public",
+    "dev.capybara.sandbox.allow-hosts": "[]",
+  };
+  const sig = () => AbortSignal.timeout(5000);
+
+  it("an instance labelled open-public resumes as gone, starting nothing", async () => {
+    labels = openLabels;
+    seen.length = 0;
+    expect(await sbxWith(true).resume({ id: ID }, sig())).toBe("gone");
+    expect(seen).toEqual([`GET /containers/${ID}/json`]);
+  });
+
+  it("auto-start of an instance labelled open-public answers SandboxGoneError", async () => {
+    labels = openLabels;
+    seen.length = 0;
+    const e = await sbxWith(true)
+      .exec(
+        { id: ID },
+        {
+          tag: "t",
+          actor: { accountId: "a", conversationId: "c" },
+          command: "true",
+          timeoutMs: 1000,
+          maxOutputBytes: 100,
+          signal: sig(),
+        },
+      )
+      .catch((x: unknown) => x);
+    expect(isSandboxGoneError(e)).toBe(true);
+    expect(seen.some((s) => s.endsWith("/start"))).toBe(false);
+  });
+
+  it("without refuseOpenNetwork, or with an allowlist label, resume goes on (reaches Docker)", async () => {
+    for (const [refuse, l] of [
+      [false, openLabels],
+      [
+        true,
+        {
+          "dev.capybara.sandbox.network": "allowlist",
+          "dev.capybara.sandbox.allow-hosts": '["pypi.org"]',
+        },
+      ],
+    ] as const) {
+      labels = l;
+      seen.length = 0;
+      // the stub answers 500 to the egress proxy calls that follow: not "gone"
+      await expect(sbxWith(refuse).resume({ id: ID }, sig())).rejects.toThrow();
+      expect(seen.length).toBeGreaterThan(1);
+    }
   });
 });

@@ -29,8 +29,22 @@ import {
  * sandbox@2 on E2B, against the fake E2B (startFakeE2B of @capybara-hq/testing: control plane API +
  * envd, commands run on this machine): one E2B sandbox per device, kept by pausing it without
  * memory; template auto-build; gone / plain errors; exec output / timeout / abort kills; file reads
- * and writes, /skills written as root; the network policy mapping (open-public refused).
+ * and writes, /skills written as root; the network policy mapping (open-public = internet access
+ * with the private, loopback, CGNAT and link-local ranges denied).
  */
+
+/** The `denyOut` of open-public (spec 2026-11-15 auto mode hardening PL1). */
+const OPEN_DENIED = [
+  "10.0.0.0/8",
+  "172.16.0.0/12",
+  "192.168.0.0/16",
+  "127.0.0.0/8",
+  "169.254.0.0/16",
+  "100.64.0.0/10",
+  "fc00::/7",
+  "fe80::/10",
+  "::1/128",
+];
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -692,12 +706,18 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       expect(createdBody().allow_internet_access).toBeUndefined();
     });
 
-    it("open-public is refused before any E2B call (fail closed, never silently open)", async () => {
-      const before = fake.calls.length;
-      await expect(fsWith(sbx, limits({ kind: "open-public", hosts: [] }))).rejects.toThrow(
-        /open-public.*refused.*metadata endpoint/s,
-      );
-      expect(fake.calls.length).toBe(before);
+    it("open-public is internet access with the private, loopback, CGNAT and link-local ranges denied", async () => {
+      const fs = await fsWith(sbx, limits({ kind: "open-public", hosts: ["ignored.example"] }));
+      expect(createdBody().allow_internet_access).toBe(true);
+      // no allowOut: allowed entries take precedence over denied ones on E2B
+      expect(createdBody().network).toEqual({ denyOut: OPEN_DENIED });
+      expect(fake.sandboxes.get(fs.id)?.state).toBe("paused");
+    });
+
+    it("open-public is the same in both modes", async () => {
+      await fsWith(sbx, { ...limits({ kind: "open-public", hosts: [] }), mode: "sandbox" });
+      expect(createdBody().allow_internet_access).toBe(true);
+      expect(createdBody().network).toEqual({ denyOut: OPEN_DENIED });
     });
 
     it("an older kernel's limits (tier / egress / allowHosts, no mode or network) are refused", async () => {
@@ -820,16 +840,18 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       ]);
     });
 
-    it("refuses open-public without touching the sandbox", async () => {
+    it("open-public opens the internet with the local ranges denied, and back to an allowlist", async () => {
       const h = await provision(s, limits());
-      const connects = () =>
-        fake.calls.filter((c) => c.path === `/v2/sandboxes/${h.id}/connect`).length;
-      const seen = connects();
-      await expect(
-        s.update?.(h, limits({ kind: "open-public", hosts: [] }), sig()),
-      ).rejects.toThrow(/open-public.*refused.*metadata endpoint/s);
-      expect(connects()).toBe(seen);
-      expect(updates.get(h.id)).toBeUndefined();
+      expect(await s.update?.(h, limits({ kind: "open-public", hosts: [] }), sig())).toBe(
+        "updated",
+      );
+      expect(await s.update?.(h, limits({ kind: "allowlist", hosts: ["pypi.org"] }), sig())).toBe(
+        "updated",
+      );
+      expect(updates.get(h.id)).toEqual([
+        { allow_internet_access: true, denyOut: OPEN_DENIED },
+        { allowOut: ["pypi.org"], denyOut: ["0.0.0.0/0", "fc00::/7", "fe80::/10", "::1/128"] },
+      ]);
     });
 
     it("refuses an older kernel's limits without touching the sandbox", async () => {

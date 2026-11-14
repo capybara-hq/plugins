@@ -106,7 +106,9 @@ describe("sandbox-e2b manifest", () => {
     for (const key of ["openEgress", "allowOpenEgress"]) {
       const r = DeploymentConfig.safeParse({ apiKey: "k", [key]: "proxy" });
       expect(r.success).toBe(false);
-      expect(r.error?.issues.map((i) => i.message).join("\n")).toMatch(/refuses an open network/);
+      expect(r.error?.issues.map((i) => i.message).join("\n")).toMatch(
+        /the org cloud network decides/,
+      );
     }
     // any other unknown key keeps the plain message
     const other = DeploymentConfig.safeParse({ apiKey: "k", nope: 1 });

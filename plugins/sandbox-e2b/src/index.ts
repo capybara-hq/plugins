@@ -26,8 +26,8 @@ const MAX_TIMEOUT_SECONDS = 86_400;
 /**
  * The deployment config (one per deployment). Strict: extra keys are errors, so the test-only
  * options ({@link E2BSandboxTestOptions}) can never be set from plugin config. The removed
- * `openEgress` / `allowOpenEgress` keys fail with a pointer to the network policy: E2B cannot
- * block its metadata endpoint, so the plugin refuses `open-public` outright.
+ * `openEgress` / `allowOpenEgress` keys fail with a pointer to the network policy: the org's
+ * cloud network (`limits.network`) decides, never a deployment key.
  */
 export const DeploymentConfig = z.strictObject(
   {
@@ -61,8 +61,8 @@ export const DeploymentConfig = z.strictObject(
     }),
     /**
      * Whether E2B supports a per-domain network allowlist (E2B cloud: yes). `false` (self-hosted
-     * versions without it) degrades an allowlist to no network with a warning. `open-public` is
-     * always refused: E2B cannot block the sandbox's metadata endpoint.
+     * versions without it) degrades an allowlist to no network with a warning. `open-public` does
+     * not depend on it (internet access with the local ranges denied).
      */
     domainAllowlist: ui(z.boolean().default(true), {
       label: { zh: "按域名出站白名单", en: "Domain egress allowlist" },
@@ -73,7 +73,7 @@ export const DeploymentConfig = z.strictObject(
     error: (iss) =>
       iss.code === "unrecognized_keys" &&
       (iss.keys.includes("openEgress") || iss.keys.includes("allowOpenEgress"))
-        ? "openEgress / allowOpenEgress were removed: sandbox-e2b refuses an open network (E2B cannot block the sandbox metadata endpoint). Set the org cloud network to an allowlist instead."
+        ? 'openEgress / allowOpenEgress were removed: the org cloud network decides (open-public or an allowlist, sent as limits.network); see the sandbox-e2b README "Network policy".'
         : undefined,
   },
 );

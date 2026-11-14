@@ -13,9 +13,11 @@
 //
 // Every mode: refuse malformed names (control characters, bad labels); resolve, then check EVERY
 // resolved IP: private, loopback, link-local (including the 169.254.169.254 metadata address),
-// CGNAT, ULA, unspecified, multicast, reserved and documentation addresses are refused (this blocks
-// DNS rebinding such as 10.0.0.1.nip.io); then connect to an address that was checked, never
-// resolving a second time. When the first address cannot be reached the next checked one is tried.
+// CGNAT, ULA, unspecified, multicast, reserved and documentation addresses, the Azure WireServer
+// (168.63.129.16) and the deployment's own ranges (DENIED_CIDRS, a JSON array of CIDRs from the
+// plugin's `deniedCidrs` setting) are refused (this blocks DNS rebinding such as 10.0.0.1.nip.io);
+// then connect to an address that was checked, never resolving a second time. When the first
+// address cannot be reached the next checked one is tried.
 //
 // Test only: CAPYBARA_EGRESS_TEST_HOSTS (JSON object name -> IP) pins a name to an IP and exempts
 // it from the private address check (in allowlist it must still be on the list; in open-public a
@@ -46,6 +48,7 @@ const BLOCKED_V4 = [
   ["203.0.113.0", 24],
   ["224.0.0.0", 4], // multicast
   ["240.0.0.0", 4], // reserved and broadcast
+  ["168.63.129.16", 32], // Azure WireServer / host DNS (a public address only the host answers)
 ];
 // IPv6 is default deny: only global unicast 2000::/3 is reachable, minus the special-purpose
 // blocks below (addresses that embed an IPv4 address are judged by it first, see
@@ -86,26 +89,53 @@ function v6Groups(ip) {
 const v4Of = (hi, lo) => `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
 
 /**
- * Whether connecting to a resolved IP is forbidden. IPv6 addresses that embed an IPv4 address
+ * The deployment's extra denied ranges as a BlockList: each entry is an IPv4 or IPv6 CIDR
+ * (`203.0.113.0/24`, `2001:db8::/32`; a single address is `/32` or `/128`). Throws on anything
+ * else, so a bad list stops the proxy instead of leaving the ranges open.
+ * @param {unknown} cidrs
+ */
+export function deniedList(cidrs) {
+  if (!Array.isArray(cidrs)) throw new Error("The denied CIDRs must be a JSON array of strings.");
+  const list = new BlockList();
+  for (const c of cidrs) {
+    const m = typeof c === "string" ? /^([^/]+)\/(\d{1,3})$/.exec(c) : null;
+    const family = m ? isIP(m[1]) : 0;
+    const prefix = m ? Number(m[2]) : -1;
+    if (!m || family === 0 || prefix > (family === 4 ? 32 : 128)) {
+      throw new Error(
+        `Invalid denied CIDR ${JSON.stringify(c)}: expected an IPv4 or IPv6 CIDR such as 203.0.113.0/24.`,
+      );
+    }
+    list.addSubnet(m[1], prefix, family === 4 ? "ipv4" : "ipv6");
+  }
+  return list;
+}
+
+/**
+ * Whether connecting to a resolved IP is forbidden: the built-in ranges, plus `denied` (the
+ * deployment's ranges, {@link deniedList}). IPv6 addresses that embed an IPv4 address
  * (IPv4-mapped ::ffff:0:0/96, IPv4-compatible ::/96, NAT64 64:ff9b::/96, 6to4 2002::/16) are
  * judged by the embedded IPv4; anything unrecognised is forbidden.
+ * @param {string} ip
+ * @param {BlockList} [denied]
  */
-export function isForbiddenAddress(ip) {
+export function isForbiddenAddress(ip, denied) {
   const family = isIP(ip);
-  if (family === 4) return blocked.check(ip, "ipv4");
+  if (family === 4) return blocked.check(ip, "ipv4") || (denied?.check(ip, "ipv4") ?? false);
   if (family !== 6) return true;
   const g = v6Groups(ip);
   if (g === null) return true;
   const zeros = (from, to) => g.slice(from, to).every((x) => x === 0);
-  if (zeros(0, 5) && g[5] === 0xffff) return isForbiddenAddress(v4Of(g[6], g[7]));
-  if (zeros(0, 6) && (g[6] !== 0 || g[7] > 1)) return isForbiddenAddress(v4Of(g[6], g[7]));
-  if (g[0] === 0x64 && g[1] === 0xff9b && zeros(2, 6)) return isForbiddenAddress(v4Of(g[6], g[7]));
-  if (g[0] === 0x2002) return isForbiddenAddress(v4Of(g[1], g[2]));
+  const v4 = (hi, lo) => isForbiddenAddress(v4Of(hi, lo), denied);
+  if (zeros(0, 5) && g[5] === 0xffff) return v4(g[6], g[7]);
+  if (zeros(0, 6) && (g[6] !== 0 || g[7] > 1)) return v4(g[6], g[7]);
+  if (g[0] === 0x64 && g[1] === 0xff9b && zeros(2, 6)) return v4(g[6], g[7]);
+  if (g[0] === 0x2002) return v4(g[1], g[2]);
   // Everything outside global unicast 2000::/3 (loopback, ULA, link-local, multicast, the local-use
   // NAT64 prefix 64:ff9b:1::/48, SIIT ::ffff:0:0:0/96, 5f00::/16, ...) is forbidden.
   if ((g[0] & 0xe000) !== 0x2000) return true;
   const canonical = g.map((x) => x.toString(16)).join(":");
-  return blocked.check(canonical, "ipv6");
+  return blocked.check(canonical, "ipv6") || (denied?.check(canonical, "ipv6") ?? false);
 }
 
 /** Normalise a host name: lowercase, without trailing dots and IPv6 brackets. */
@@ -158,7 +188,7 @@ class Refused extends Error {
 /**
  * Decide which IPs may be connected to: host check for the mode -> resolve -> no address may be
  * forbidden. Returns every checked address (in resolution order).
- * @param {{ mode?: "open-public" | "allowlist"; allowHosts: string[]; testHosts: Record<string, string>; lookup: (h: string) => Promise<{ address: string }[]> }} opts
+ * @param {{ mode?: "open-public" | "allowlist"; allowHosts: string[]; testHosts: Record<string, string>; lookup: (h: string) => Promise<{ address: string }[]>; denied?: BlockList }} opts
  */
 export async function resolveTarget(host, opts) {
   const mode = opts.mode ?? "open-public";
@@ -170,7 +200,7 @@ export async function resolveTarget(host, opts) {
   const h = normalizeHost(raw);
   const pinned = Object.hasOwn(opts.testHosts, h) ? opts.testHosts[h] : undefined;
   if (mode === "open-public" && isIP(h) !== 0) {
-    if (isForbiddenAddress(h)) {
+    if (isForbiddenAddress(h, opts.denied)) {
       throw new Refused(
         403,
         `Outbound access to ${h} is blocked: it is a private or reserved address.`,
@@ -197,7 +227,7 @@ export async function resolveTarget(host, opts) {
     throw new Refused(502, `Cannot resolve ${h}.`);
   }
   if (addrs.length === 0) throw new Refused(502, `Cannot resolve ${h}.`);
-  if (addrs.some((a) => isForbiddenAddress(a.address))) {
+  if (addrs.some((a) => isForbiddenAddress(a.address, opts.denied))) {
     throw new Refused(
       403,
       `Outbound access to ${h} is blocked: it resolves to a private or reserved address.`,
@@ -304,6 +334,7 @@ function proxyOptions(cfg) {
     mode,
     allowHosts: (cfg.allowHosts ?? []).map((h) => h.toLowerCase()),
     testHosts: cfg.testHosts ?? {},
+    denied: deniedList(cfg.deniedCidrs ?? []),
     lookup: cfg.lookup ?? defaultLookup,
     log: cfg.log ?? defaultLog,
   };
@@ -322,7 +353,7 @@ const MAX_CONNECTIONS = 512;
 /**
  * Create the HTTP proxy server (not listening): absolute-URL HTTP forwarding, CONNECT tunnels and
  * GET /healthz. Both modes allow any port 1-65535.
- * @param {{ mode?: "open-public" | "allowlist"; allowHosts?: string[]; testHosts?: Record<string, string>; lookup?: (h: string) => Promise<{ address: string }[]>; log?: (msg: string) => void }} cfg
+ * @param {{ mode?: "open-public" | "allowlist"; allowHosts?: string[]; deniedCidrs?: string[]; testHosts?: Record<string, string>; lookup?: (h: string) => Promise<{ address: string }[]>; log?: (msg: string) => void }} cfg
  */
 export function createEgressProxy(cfg) {
   const opts = proxyOptions(cfg);
@@ -680,7 +711,8 @@ export function createSocksProxy(cfg) {
 
 /**
  * Container entry: read the config from the environment and listen. PORT (default 3128) for the
- * HTTP proxy; SOCKS_PORT (default 1080) for the SOCKS listener.
+ * HTTP proxy; SOCKS_PORT (default 1080) for the SOCKS listener; DENIED_CIDRS (JSON array, default
+ * empty) for the deployment's extra denied ranges. An invalid list throws before listening.
  * @returns {{ http: import("node:http").Server; socks: import("node:net").Server }}
  */
 export function main(env = process.env) {
@@ -690,14 +722,21 @@ export function main(env = process.env) {
   }
   const allowHosts = mode === "open-public" ? [] : JSON.parse(env.ALLOW_HOSTS ?? "[]");
   const testHosts = JSON.parse(env.CAPYBARA_EGRESS_TEST_HOSTS ?? "{}");
+  const deniedCidrs = JSON.parse(env.DENIED_CIDRS ?? "[]");
+  if (!Array.isArray(deniedCidrs)) {
+    throw new Error("DENIED_CIDRS must be a JSON array of CIDR strings.");
+  }
+  deniedList(deniedCidrs);
   const port = Number(env.PORT ?? 3128);
   const socksPort = Number(env.SOCKS_PORT ?? 1080);
-  const http = createEgressProxy({ mode, allowHosts, testHosts });
+  const http = createEgressProxy({ mode, allowHosts, deniedCidrs, testHosts });
   const hosts = mode === "open-public" ? "any public host" : allowHosts.join(", ") || "(none)";
   http.listen(port, () => {
-    console.log(`egress proxy (${mode}) listening on ${port}; allow: ${hosts}`);
+    console.log(
+      `egress proxy (${mode}) listening on ${port}; allow: ${hosts}; extra denied: ${deniedCidrs.join(", ") || "(none)"}`,
+    );
   });
-  const socks = createSocksProxy({ mode, allowHosts, testHosts });
+  const socks = createSocksProxy({ mode, allowHosts, deniedCidrs, testHosts });
   socks.listen(socksPort, () => {
     console.log(`egress SOCKS proxy (${mode}) listening on ${socksPort}`);
   });

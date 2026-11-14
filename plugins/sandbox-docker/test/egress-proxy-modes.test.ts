@@ -6,6 +6,7 @@ import {
   connectAny,
   createEgressProxy,
   createSocksProxy,
+  deniedList,
   isForbiddenAddress,
   main,
   resolveTarget,
@@ -24,6 +25,7 @@ const lookup = async (h: string) => {
   if (h === "private192.open.org") return [{ address: "192.168.5.5" }];
   if (h === "ula.open.org") return [{ address: "fc00::1" }];
   if (h === "linklocal.open.org") return [{ address: "fe80::1" }];
+  if (h === "corp.open.org") return [{ address: "203.0.114.20" }];
   throw new Error("ENOTFOUND");
 };
 const quiet = () => {};
@@ -151,6 +153,14 @@ describe("modes", () => {
       started.socks.close();
       started.http.close();
     }
+  });
+
+  it("reads the deployment-denied CIDRs from DENIED_CIDRS and refuses an invalid list", async () => {
+    const started = main({ PORT: "0", SOCKS_PORT: "0", DENIED_CIDRS: '["203.0.114.0/24"]' });
+    started.socks.close();
+    started.http.close();
+    expect(() => main({ PORT: "0", DENIED_CIDRS: '["not-a-cidr"]' })).toThrow(/denied CIDR/);
+    expect(() => main({ PORT: "0", DENIED_CIDRS: '"203.0.114.0/24"' })).toThrow(/DENIED_CIDRS/);
   });
 
   it("refuses an unknown mode", () => {
@@ -397,6 +407,33 @@ describe("open-public mode", () => {
       expect(await tunnel(httpPort, `${h}:80`)).toMatch(/^HTTP\/1\.1 403/);
     }
   });
+
+  it("refuses the Azure WireServer address 168.63.129.16", async () => {
+    expect(await tunnel(httpPort, "168.63.129.16:80")).toMatch(/^HTTP\/1\.1 403/);
+    expect((await raw(socksPort, [greeting, ipv4Req([168, 63, 129, 16], 80)]))[3]).toBe(0x02);
+  });
+
+  it("refuses the deployment-denied CIDRs over HTTP, CONNECT and SOCKS5", async () => {
+    const cfg = {
+      mode: "open-public" as const,
+      deniedCidrs: ["203.0.114.0/24"],
+      lookup,
+      log: quiet,
+    };
+    const { server: h2, port: hp } = await listen(createEgressProxy(cfg));
+    const { server: s2, port: sp } = await listen(createSocksProxy(cfg));
+    try {
+      expect(await tunnel(hp, "corp.open.org:443")).toMatch(/^HTTP\/1\.1 403/);
+      expect(await tunnel(hp, "203.0.114.9:22")).toMatch(/^HTTP\/1\.1 403/);
+      expect(await absolute(hp, "http://corp.open.org/")).toMatch(/^HTTP\/1\.1 403/);
+      expect((await raw(sp, [greeting, domainReq("corp.open.org", 443)]))[3]).toBe(0x02);
+      expect((await raw(sp, [greeting, ipv4Req([203, 0, 114, 9], 22)]))[3]).toBe(0x02);
+    } finally {
+      h2.closeAllConnections();
+      await new Promise((r) => h2.close(r));
+      await new Promise((r) => s2.close(r));
+    }
+  });
 });
 
 describe("resolveTarget", () => {
@@ -415,6 +452,28 @@ describe("resolveTarget", () => {
       resolveTarget("public.open.org", { ...base, mode: "open-public" }),
     ).resolves.toEqual(["8.8.8.8"]);
   });
+  it("refuses the deployment-denied CIDRs by literal and by resolved address, in every mode", async () => {
+    const denied = deniedList(["203.0.114.0/24"]);
+    await expect(
+      resolveTarget("203.0.114.5", { ...base, mode: "open-public", denied }),
+    ).rejects.toThrow(/blocked/);
+    await expect(
+      resolveTarget("corp.open.org", { ...base, mode: "open-public", denied }),
+    ).rejects.toThrow(/resolves to a private or reserved address/);
+    await expect(
+      resolveTarget("corp.open.org", {
+        ...base,
+        allowHosts: ["corp.open.org"],
+        mode: "allowlist",
+        denied,
+      }),
+    ).rejects.toThrow(/resolves to a private or reserved address/);
+    // without the deployment list the address is public
+    await expect(resolveTarget("corp.open.org", { ...base, mode: "open-public" })).resolves.toEqual(
+      ["203.0.114.20"],
+    );
+  });
+
   it("refuses control characters and malformed names in every mode", async () => {
     for (const mode of ["open-public", "allowlist"] as const) {
       await expect(resolveTarget("a.example.com\n", { ...base, mode })).rejects.toThrow(

@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   connectAny,
   createEgressProxy,
+  deniedList,
   hostAllowed,
   isForbiddenAddress,
 } from "../egress-proxy/proxy.mjs";
@@ -38,6 +39,8 @@ describe("isForbiddenAddress", () => {
     "::ffff:7f00:1",
     "64:ff9b::a9fe:a9fe",
     "2002:a00:1::1",
+    "168.63.129.16",
+    "::ffff:168.63.129.16",
     "not-an-ip",
   ])("%s is forbidden", (ip) => {
     expect(isForbiddenAddress(ip)).toBe(true);
@@ -49,6 +52,33 @@ describe("isForbiddenAddress", () => {
       expect(isForbiddenAddress(ip)).toBe(false);
     },
   );
+});
+
+describe("deployment-denied CIDRs", () => {
+  const denied = deniedList(["203.0.114.0/24", "198.51.99.7/32", "2606:4700:10::/48"]);
+
+  it.each([
+    "203.0.114.1",
+    "203.0.114.255",
+    "198.51.99.7",
+    "::ffff:203.0.114.9",
+    "2002:cb00:7201::1",
+    "2606:4700:10::6814:d974",
+  ])("%s is forbidden when the deployment denies its range", (ip) => {
+    expect(isForbiddenAddress(ip, denied)).toBe(true);
+    expect(isForbiddenAddress(ip)).toBe(false);
+  });
+
+  it.each(["203.0.115.1", "198.51.99.8", "2606:4700:11::1"])("%s stays allowed", (ip) => {
+    expect(isForbiddenAddress(ip, denied)).toBe(false);
+  });
+
+  it("an empty list adds nothing; an invalid entry throws", () => {
+    expect(isForbiddenAddress("8.8.8.8", deniedList([]))).toBe(false);
+    for (const bad of ["203.0.114.0", "203.0.114.0/33", "example.com/24", "::/129", "", 5]) {
+      expect(() => deniedList([bad as string]), String(bad)).toThrow(/denied CIDR/);
+    }
+  });
 });
 
 describe("hostAllowed", () => {

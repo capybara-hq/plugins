@@ -159,6 +159,18 @@ describe("egressProxyEnv", () => {
     ]);
   });
 
+  it("the deployment's denied CIDRs go through DENIED_CIDRS in both modes, absent when empty", () => {
+    const denied = ["203.0.113.0/24", "2001:db8::/32"];
+    for (const mode of ["open-public", "allowlist"] as const) {
+      expect(egressProxyEnv(mode, L, undefined, denied)).toContain(
+        `DENIED_CIDRS=${JSON.stringify(denied)}`,
+      );
+      expect(
+        egressProxyEnv(mode, L, undefined, []).some((e) => e.startsWith("DENIED_CIDRS=")),
+      ).toBe(false);
+    }
+  });
+
   it("test hosts go through CAPYBARA_EGRESS_TEST_HOSTS", () => {
     expect(egressProxyEnv("allowlist", [], { "a.example.com": "10.0.0.1" })).toContain(
       'CAPYBARA_EGRESS_TEST_HOSTS={"a.example.com":"10.0.0.1"}',
@@ -169,8 +181,8 @@ describe("egressProxyEnv", () => {
 describe("updateDecision", () => {
   const at = (network: SandboxLimits["network"]) => planInstance(limits(network));
 
-  it("allowlist to open-public widens: updated", () => {
-    expect(updateDecision(labelsOf(at(allow())), at(OPEN))).toBe("updated");
+  it("allowlist to open-public recreates, so the labels say open-public (refuseOpenNetwork reads them)", () => {
+    expect(updateDecision(labelsOf(at(allow())), at(OPEN))).toBe("recreate");
   });
 
   it("open-public to allowlist narrows what the labels record: recreate", () => {
