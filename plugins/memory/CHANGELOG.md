@@ -1,5 +1,13 @@
 # @capybara-hq/plugin-memory
 
+## 0.1.0-rc.4
+
+### Patch Changes
+
+- a53a23f: On the memory page in fullscreen, one Escape does one thing: closing the open memory panel (from
+  the graph) or a dropdown no longer also leaves fullscreen; the next Escape, with nothing open,
+  leaves it.
+
 ## 0.1.0-rc.3
 
 ### Patch Changes
