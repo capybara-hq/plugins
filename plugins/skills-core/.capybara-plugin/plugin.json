@@ -6,7 +6,7 @@
     "zh": "核心技能",
     "en": "Core skills"
   },
-  "version": "0.1.0-rc.0",
+  "version": "0.1.0-rc.1",
   "publisher": "Capybara",
   "icon": "./icon.svg",
   "description": {

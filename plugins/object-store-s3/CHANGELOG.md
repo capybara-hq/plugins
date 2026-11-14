@@ -1,5 +1,11 @@
 # @capybara-hq/plugin-object-store-s3
 
+## 0.1.0-rc.9
+
+### Patch Changes
+
+- 39ab73d: The composed Capybara icon with the plugin's function mark.
+
 ## 0.1.0-rc.8
 
 ### Patch Changes

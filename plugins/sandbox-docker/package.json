@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-sandbox-docker",
-  "version": "0.1.0-rc.13",
+  "version": "0.1.0-rc.14",
   "description": "Conversation sandboxes (sandbox@2) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist per org",
   "license": "Apache-2.0",
   "repository": {

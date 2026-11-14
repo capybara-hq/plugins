@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-memory",
-  "version": "0.1.0-rc.1",
+  "version": "0.1.0-rc.2",
   "description": "Memory for agents: each agent remembers each member across conversations, with an index at run start, memory tools, hybrid search and a memory page",
   "license": "Apache-2.0",
   "repository": {

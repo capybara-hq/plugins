@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-skills-core",
-  "version": "0.1.0-rc.0",
+  "version": "0.1.0-rc.1",
   "description": "Core skills every agent can use: skill-guide teaches an agent to write, register, test and share its own skills",
   "license": "Apache-2.0",
   "repository": {
