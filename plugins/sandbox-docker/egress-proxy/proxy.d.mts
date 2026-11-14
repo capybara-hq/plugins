@@ -1,5 +1,5 @@
 import type { Server } from "node:http";
-import type { Server as NetServer, Socket } from "node:net";
+import type { BlockList, Server as NetServer, Socket } from "node:net";
 
 /** open-public: any public host, any port, SOCKS; allowlist: listed hosts, any port, SOCKS. */
 export type EgressProxyMode = "open-public" | "allowlist";
@@ -9,6 +9,8 @@ export interface EgressProxyConfig {
   mode?: EgressProxyMode;
   /** Allowed host names (allowlist); ignored in open-public mode. */
   allowHosts?: string[];
+  /** The deployment's extra denied ranges (IPv4 / IPv6 CIDRs), refused in every mode. */
+  deniedCidrs?: string[];
   /** Test only: host name -> pinned IP (exempt from the private address check; allowlist still needs the list). */
   testHosts?: Record<string, string>;
   lookup?: (host: string) => Promise<{ address: string }[]>;
@@ -17,7 +19,9 @@ export interface EgressProxyConfig {
 }
 
 export const MODES: readonly EgressProxyMode[];
-export function isForbiddenAddress(ip: string): boolean;
+/** The deployment's denied CIDRs as a BlockList; throws on an entry that is not a CIDR. */
+export function deniedList(cidrs: readonly string[]): BlockList;
+export function isForbiddenAddress(ip: string, denied?: BlockList): boolean;
 export function normalizeHost(host: string): string;
 export function hostAllowed(host: string, allowHosts: string[]): boolean;
 export function publicNameError(host: string): string | null;
@@ -28,6 +32,8 @@ export function resolveTarget(
     allowHosts: string[];
     testHosts: Record<string, string>;
     lookup: (host: string) => Promise<{ address: string }[]>;
+    /** The deployment's denied ranges ({@link deniedList}). */
+    denied?: BlockList;
   },
 ): Promise<string[]>;
 export function connectAny(

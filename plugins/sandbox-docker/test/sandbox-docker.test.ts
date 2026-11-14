@@ -750,9 +750,10 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       }
     });
 
-    it("update: allowlist to open-public swaps only the proxy; narrowing and a gone container recreate", async () => {
+    it("update: a wider allowlist swaps only the proxy; open-public, narrowing and a gone container recreate", async () => {
       const name = sbxName();
       const allowlisted = limits(allow(["allowed.example.com"]));
+      const wider = limits(allow(["allowed.example.com", "pypi.org"]));
       const h = await newSandbox(sbx, {
         name,
         image: images.sandboxImage,
@@ -763,11 +764,13 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
         await sbx.writeFile(h, "/workspace/keep.txt", enc.encode("kept"), sig());
         const id = (await inspect(name)).Id;
 
-        expect(await sbx.update(h, limits(OPEN), sig())).toBe("updated");
+        // allowlist to open-public recreates, so the labels stay truthful
+        expect(await sbx.update(h, limits(OPEN), sig())).toBe("recreate");
+        expect(await sbx.update(h, wider, sig())).toBe("updated");
         expect((await inspect(name)).Id).toBe(id);
         const pe = await envOf(`${name}-egress`);
-        expect(pe).toContain("MODE=open-public");
-        expect(pe.some((e) => e.startsWith("ALLOW_HOSTS="))).toBe(false);
+        expect(pe).toContain("MODE=allowlist");
+        expect(pe).toContain(`ALLOW_HOSTS=${JSON.stringify(["allowed.example.com", "pypi.org"])}`);
         expect((await inspect(`${name}-egress`)).State.Running).toBe(true);
         const r = await sbx.exec(h, {
           ...who(),
@@ -780,7 +783,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
 
         // a suspended instance keeps its new proxy stopped
         await sbx.suspend(h, sig());
-        expect(await sbx.update(h, limits(OPEN), sig())).toBe("updated");
+        expect(await sbx.update(h, wider, sig())).toBe("updated");
         expect((await inspect(`${name}-egress`)).State.Running).toBe(false);
 
         // a lost proxy is rebuilt from the labels: the create-time allowlist, never wider
@@ -1071,6 +1074,35 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       );
     } finally {
       await locked.destroy(h2, sig());
+    }
+  });
+
+  it("an open-public instance made before refuseOpenNetwork resumes as gone; deniedCidrs reach the proxy", async () => {
+    const open = createDockerSandbox(
+      { ...cfg, deniedCidrs: ["203.0.113.0/24"] },
+      { labels: { [TEST_LABEL]: RUN } },
+    );
+    const locked = createDockerSandbox(
+      { ...cfg, refuseOpenNetwork: true },
+      { labels: { [TEST_LABEL]: RUN } },
+    );
+    const name = sbxName();
+    const h = await newSandbox(open, {
+      name,
+      image: images.sandboxImage,
+      limits: limits(OPEN),
+      signal: sig(),
+    });
+    try {
+      expect((await inspect(`${name}-egress`)).Config.Env).toContain(
+        'DENIED_CIDRS=["203.0.113.0/24"]',
+      );
+      await open.suspend(h, sig());
+      expect(await locked.resume(h, sig())).toBe("gone");
+      expect((await inspect(name)).State.Running).toBe(false);
+      expect(await open.resume(h, sig())).toBe("resumed");
+    } finally {
+      await open.destroy(h, sig());
     }
   });
 
