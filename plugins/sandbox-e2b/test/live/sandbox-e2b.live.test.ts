@@ -92,10 +92,8 @@ const allowlist: SandboxLimits = {
   cpu: 1,
   memoryMb: 2048,
   diskMb: 5120,
-  egress: "allowlist",
-  allowHosts: ["pypi.org"],
-  tier: "strict",
-  devHosts: [],
+  mode: "sandbox",
+  network: { kind: "allowlist", hosts: ["pypi.org"] },
 };
 
 describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {

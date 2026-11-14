@@ -35,9 +35,9 @@
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
     "@capybara-hq/plugin-model-fake": "0.1.0-rc.19",
-    "@capybara-hq/plugin-sdk": "0.1.0-rc.19",
-    "@capybara-hq/plugin-tools": "0.1.0-rc.13",
-    "@capybara-hq/testing": "0.1.0-rc.17",
+    "@capybara-hq/plugin-sdk": "0.1.0-rc.22",
+    "@capybara-hq/plugin-tools": "0.1.0-rc.14",
+    "@capybara-hq/testing": "0.1.0-rc.18",
     "@changesets/cli": "^3.0.3",
     "@commitlint/cli": "^21.2.3",
     "@commitlint/config-conventional": "^21.2.3",

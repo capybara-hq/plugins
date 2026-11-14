@@ -1,16 +1,15 @@
 // Capybara sandbox egress proxy: one per proxied sandbox, on an internal network shared only with
 // that sandbox; its other leg joins the outbound network.
 //
-// Modes (env MODE, default "strict"):
-// - strict: hosts from ALLOW_HOSTS (JSON array of names, rules as plugin-sdk's validateAllowHost:
-//   an exact name, or `*.example.com` for any subdomain, not example.com itself). HTTP by absolute
-//   URL, CONNECT only to ALLOW_CONNECT_PORTS (comma separated, default 443,80). No SOCKS listener.
-// - dev: hosts from ALLOW_HOSTS; HTTP and CONNECT to any port 1-65535; plus a SOCKS listener on
-//   SOCKS_PORT (default 1080).
-// - open: any public host name (shape as validateAllowHost, no list), and IP literals when the
-//   address is public; any port; plus the SOCKS listener. ALLOW_HOSTS is ignored.
+// Modes (env MODE, default "open-public"):
+// - open-public: any public host name (shape as validateAllowHost, no list), and IP literals when
+//   the address is public; any port; HTTP by absolute URL, CONNECT and a SOCKS listener on
+//   SOCKS_PORT (default 1080). ALLOW_HOSTS is ignored.
+// - allowlist: hosts from ALLOW_HOSTS (JSON array of names, rules as plugin-sdk's
+//   validateAllowHost: an exact name, or `*.example.com` for any subdomain, not example.com
+//   itself); any port; HTTP, CONNECT and the SOCKS listener. IP literals are refused.
 // The SOCKS listener speaks SOCKS5 (no-auth, CONNECT only; ATYP domain / IPv4 / IPv6) and SOCKS4a
-// (CONNECT only; for `socat ... SOCKS4A:`). IP literals are only accepted in open mode.
+// (CONNECT only; for `socat ... SOCKS4A:`).
 //
 // Every mode: refuse malformed names (control characters, bad labels); resolve, then check EVERY
 // resolved IP: private, loopback, link-local (including the 169.254.169.254 metadata address),
@@ -19,9 +18,9 @@
 // resolving a second time. When the first address cannot be reached the next checked one is tried.
 //
 // Test only: CAPYBARA_EGRESS_TEST_HOSTS (JSON object name -> IP) pins a name to an IP and exempts
-// it from the private address check (in strict / dev it must still be on the allowlist; in open
-// mode a pinned name is allowed). The plugin's deployment config cannot set it; only tests that
-// call createDockerSandbox directly can.
+// it from the private address check (in allowlist it must still be on the list; in open-public a
+// pinned name is allowed). The plugin's deployment config cannot set it; only tests that call
+// createDockerSandbox directly can.
 //
 // Dependency-free, Node >= 22. Error text reaches the model (through curl / pip output): English.
 import { lookup as dnsLookup } from "node:dns/promises";
@@ -146,7 +145,7 @@ export function publicNameError(h) {
 
 /** Proxy modes. */
 // capybara:allow-module-state read-only constant list (egress proxy container, not the kernel)
-export const MODES = Object.freeze(["strict", "dev", "open"]);
+export const MODES = Object.freeze(["open-public", "allowlist"]);
 
 class Refused extends Error {
   /** @param {number} status 400 malformed, 403 not allowed, 502 cannot resolve or connect */
@@ -159,10 +158,10 @@ class Refused extends Error {
 /**
  * Decide which IPs may be connected to: host check for the mode -> resolve -> no address may be
  * forbidden. Returns every checked address (in resolution order).
- * @param {{ mode?: "strict" | "dev" | "open"; allowHosts: string[]; testHosts: Record<string, string>; lookup: (h: string) => Promise<{ address: string }[]> }} opts
+ * @param {{ mode?: "open-public" | "allowlist"; allowHosts: string[]; testHosts: Record<string, string>; lookup: (h: string) => Promise<{ address: string }[]> }} opts
  */
 export async function resolveTarget(host, opts) {
-  const mode = opts.mode ?? "strict";
+  const mode = opts.mode ?? "open-public";
   const raw = String(host);
   // Control characters, spaces and other bytes no host name or IP literal contains.
   if (!/^[\x21-\x7e]+$/.test(raw) || /[/\\@?#%]/.test(raw)) {
@@ -170,7 +169,7 @@ export async function resolveTarget(host, opts) {
   }
   const h = normalizeHost(raw);
   const pinned = Object.hasOwn(opts.testHosts, h) ? opts.testHosts[h] : undefined;
-  if (mode === "open" && isIP(h) !== 0) {
+  if (mode === "open-public" && isIP(h) !== 0) {
     if (isForbiddenAddress(h)) {
       throw new Refused(
         403,
@@ -184,7 +183,7 @@ export async function resolveTarget(host, opts) {
     const err = publicNameError(h);
     if (err !== null) throw new Refused(403, `Outbound access to ${h} is blocked: ${err}.`);
   }
-  if (mode !== "open" && !hostAllowed(h, opts.allowHosts)) {
+  if (mode === "allowlist" && !hostAllowed(h, opts.allowHosts)) {
     throw new Refused(
       403,
       `Outbound access to ${h} is blocked by the sandbox egress allowlist. Allowed hosts: ${opts.allowHosts.join(", ") || "(none)"}.`,
@@ -213,15 +212,20 @@ const CONNECT_TIMEOUT_MS = 10_000;
 /**
  * Connect to the checked addresses in turn; resolve with the first that connects, else reject with
  * the last error. Each attempt is bounded by AbortSignal.timeout (plugins use no timers).
+ * @param {string[]} ips
+ * @param {number} port
+ * @param {number} [timeoutMs]
+ * @param {typeof connect} [connectFn] the transport; tests inject a fake so the deadline does not
+ *   depend on the host routing the address
  */
-export function connectAny(ips, port, timeoutMs = CONNECT_TIMEOUT_MS) {
+export function connectAny(ips, port, timeoutMs = CONNECT_TIMEOUT_MS, connectFn = connect) {
   return new Promise((resolve, reject) => {
     const attempt = (i, lastError) => {
       if (i >= ips.length) {
         reject(lastError ?? new Error("no address"));
         return;
       }
-      const s = connect({ host: ips[i], port, allowHalfOpen: true });
+      const s = connectFn({ host: ips[i], port, allowHalfOpen: true });
       const deadline = AbortSignal.timeout(timeoutMs);
       const onTimeout = () => {
         const e = Object.assign(new Error(`connect to ${ips[i]}:${port} timed out`), {
@@ -292,13 +296,9 @@ function splice(client, up) {
 const defaultLookup = (h) => dnsLookup(h, { all: true, verbatim: true });
 const defaultLog = (msg) => console.warn(msg);
 
-/** Ports CONNECT allows in strict mode by default (ALLOW_CONNECT_PORTS changes it). */
-// capybara:allow-module-state read-only constant (egress proxy container, not the kernel)
-const DEFAULT_CONNECT_PORTS = [443, 80];
-
 /** Shared options for both listeners. */
 function proxyOptions(cfg) {
-  const mode = cfg.mode ?? "strict";
+  const mode = cfg.mode ?? "open-public";
   if (!MODES.includes(mode)) throw new Error(`Unknown egress proxy mode ${JSON.stringify(mode)}.`);
   return {
     mode,
@@ -321,13 +321,11 @@ const MAX_CONNECTIONS = 512;
 
 /**
  * Create the HTTP proxy server (not listening): absolute-URL HTTP forwarding, CONNECT tunnels and
- * GET /healthz.
- * @param {{ mode?: "strict" | "dev" | "open"; allowHosts?: string[]; testHosts?: Record<string, string>; connectPorts?: number[]; lookup?: (h: string) => Promise<{ address: string }[]>; log?: (msg: string) => void }} cfg
+ * GET /healthz. Both modes allow any port 1-65535.
+ * @param {{ mode?: "open-public" | "allowlist"; allowHosts?: string[]; testHosts?: Record<string, string>; lookup?: (h: string) => Promise<{ address: string }[]>; log?: (msg: string) => void }} cfg
  */
 export function createEgressProxy(cfg) {
   const opts = proxyOptions(cfg);
-  // strict: only the listed ports (CONNECT and HTTP); dev / open: any port 1-65535.
-  const connectPorts = opts.mode === "strict" ? (cfg.connectPorts ?? DEFAULT_CONNECT_PORTS) : null;
   const refuse = (res, e, target) => {
     const status = e instanceof Refused ? e.status : 502;
     const msg = e instanceof Refused ? e.message : "Upstream connection failed.";
@@ -362,17 +360,6 @@ export function createEgressProxy(cfg) {
       return;
     }
     const port = url.port === "" ? 80 : Number(url.port);
-    if (connectPorts !== null && !connectPorts.includes(port)) {
-      refuse(
-        res,
-        new Refused(
-          403,
-          `Port ${port} is not allowed (allowed ports: ${connectPorts.join(", ")}).`,
-        ),
-        url.host,
-      );
-      return;
-    }
     let sock;
     try {
       const ips = await resolveTarget(url.hostname, opts);
@@ -415,13 +402,6 @@ export function createEgressProxy(cfg) {
     };
     if (hp === null) {
       fail(400, "CONNECT needs host:port.");
-      return;
-    }
-    if (connectPorts !== null && !connectPorts.includes(hp[1])) {
-      fail(
-        403,
-        `CONNECT to port ${hp[1]} is not allowed (allowed ports: ${connectPorts.join(", ")}).`,
-      );
       return;
     }
     let ips;
@@ -543,8 +523,9 @@ function parseSocks(buf, stage) {
 /**
  * Create the SOCKS listener (not listening): SOCKS5 with no authentication and CONNECT only, and
  * SOCKS4a CONNECT. Same host and resolved-address checks as the HTTP proxy for the mode; any port.
- * IP literals (SOCKS5 ATYP IPv4 / IPv6, plain SOCKS4) are only allowed in open mode, when public.
- * @param {{ mode?: "strict" | "dev" | "open"; allowHosts?: string[]; testHosts?: Record<string, string>; lookup?: (h: string) => Promise<{ address: string }[]>; log?: (msg: string) => void }} cfg
+ * IP literals (SOCKS5 ATYP IPv4 / IPv6, plain SOCKS4) are only allowed in open-public mode, when
+ * public.
+ * @param {{ mode?: "open-public" | "allowlist"; allowHosts?: string[]; testHosts?: Record<string, string>; lookup?: (h: string) => Promise<{ address: string }[]>; log?: (msg: string) => void }} cfg
  */
 export function createSocksProxy(cfg) {
   const opts = proxyOptions(cfg);
@@ -602,7 +583,7 @@ export function createSocksProxy(cfg) {
         deny(SOCKS5_NOT_ALLOWED, `port ${port} is not allowed.`);
         return;
       }
-      if (isLiteral && opts.mode !== "open") {
+      if (isLiteral && opts.mode !== "open-public") {
         deny(SOCKS5_NOT_ALLOWED, "IP address destinations are not allowed; send a host name.");
         return;
       }
@@ -699,35 +680,29 @@ export function createSocksProxy(cfg) {
 
 /**
  * Container entry: read the config from the environment and listen. PORT (default 3128) for the
- * HTTP proxy; SOCKS_PORT (default 1080) for the SOCKS listener in dev / open mode.
- * @returns {{ http: import("node:http").Server; socks: import("node:net").Server | null }}
+ * HTTP proxy; SOCKS_PORT (default 1080) for the SOCKS listener.
+ * @returns {{ http: import("node:http").Server; socks: import("node:net").Server }}
  */
 export function main(env = process.env) {
-  const mode = env.MODE === undefined || env.MODE === "" ? "strict" : env.MODE;
+  const mode = env.MODE === undefined || env.MODE === "" ? "open-public" : env.MODE;
   if (!MODES.includes(mode)) {
-    throw new Error(`Unknown MODE ${JSON.stringify(mode)}; expected strict, dev or open.`);
+    throw new Error(`Unknown MODE ${JSON.stringify(mode)}; expected open-public or allowlist.`);
   }
-  const allowHosts = mode === "open" ? [] : JSON.parse(env.ALLOW_HOSTS ?? "[]");
+  const allowHosts = mode === "open-public" ? [] : JSON.parse(env.ALLOW_HOSTS ?? "[]");
   const testHosts = JSON.parse(env.CAPYBARA_EGRESS_TEST_HOSTS ?? "{}");
   const port = Number(env.PORT ?? 3128);
   const socksPort = Number(env.SOCKS_PORT ?? 1080);
-  const connectPorts = env.ALLOW_CONNECT_PORTS
-    ? env.ALLOW_CONNECT_PORTS.split(",").map((p) => Number(p.trim()))
-    : undefined;
-  const http = createEgressProxy({ mode, allowHosts, testHosts, connectPorts });
-  const hosts = mode === "open" ? "any public host" : allowHosts.join(", ") || "(none)";
+  const http = createEgressProxy({ mode, allowHosts, testHosts });
+  const hosts = mode === "open-public" ? "any public host" : allowHosts.join(", ") || "(none)";
   http.listen(port, () => {
     console.log(`egress proxy (${mode}) listening on ${port}; allow: ${hosts}`);
   });
-  let socks = null;
-  if (mode !== "strict") {
-    socks = createSocksProxy({ mode, allowHosts, testHosts });
-    socks.listen(socksPort, () => {
-      console.log(`egress SOCKS proxy (${mode}) listening on ${socksPort}`);
-    });
-  }
+  const socks = createSocksProxy({ mode, allowHosts, testHosts });
+  socks.listen(socksPort, () => {
+    console.log(`egress SOCKS proxy (${mode}) listening on ${socksPort}`);
+  });
   const stop = () => {
-    socks?.close();
+    socks.close();
     http.close(() => process.exit(0));
   };
   process.on("SIGTERM", stop);

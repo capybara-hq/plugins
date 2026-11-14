@@ -8,6 +8,6 @@
   "version": "0.1.0-rc.13",
   "publisher": "Capybara",
   "icon": "./icon.svg",
-  "description": "Conversation sandboxes (sandbox@1) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with an egress allowlist proxy",
+  "description": "Conversation sandboxes (sandbox@2) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist per org",
   "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-docker#readme"
 }

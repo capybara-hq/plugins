@@ -768,32 +768,31 @@ export function createE2BSandbox(
   const stderrOf = (r: RunResult) => r.stderr.toString("utf8").trim().slice(0, 500);
 
   /**
-   * The E2B egress of `limits`: open only when `openEgress` allows it (refused otherwise); an
-   * allowlist degrades to none without domain allowlist support, and an empty one is none.
-   * `allowHosts` is final at every tier (README "Egress").
+   * The E2B egress of `limits`: `open-public` only when `openEgress` allows it (refused
+   * otherwise); an allowlist degrades to none without domain allowlist support, and an empty one
+   * is none. The hosts are final (README "Network").
    */
   const egressOf = (
     limits: SandboxLimits,
     name: string,
   ): { kind: "none" | "open" } | { kind: "allowlist"; hosts: string[] } => {
-    if (limits.egress === "open") {
+    const network = networkOf(limits);
+    if (network.kind === "open-public") {
       if (cfg.openEgress === "off") {
         throw new Error(
-          'Sandbox egress "open" (the open sandbox tier) is refused: the sandbox-e2b plugin setting openEgress is "off". Set extensionConfig."sandbox-e2b".openEgress to "proxy" (trusted environments only), or lower the sandbox tier (sandbox.tiers.max) to "dev" or "strict".',
+          'Sandbox network "open-public" is refused: the sandbox-e2b plugin setting openEgress is "off". Set extensionConfig."sandbox-e2b".openEgress to "proxy" (trusted environments only), or have the org switch its cloud network to the allowlist.',
         );
       }
       return { kind: "open" };
     }
-    if (limits.egress === "allowlist" && !cfg.domainAllowlist) {
+    if (!cfg.domainAllowlist) {
       deps.log.warn(
-        "sandbox-e2b: domain allowlists are disabled for this deployment (domainAllowlist is false); egress allowlist degraded to none",
+        "sandbox-e2b: domain allowlists are disabled for this deployment (domainAllowlist is false); network allowlist degraded to none",
         { name },
       );
       return { kind: "none" };
     }
-    if (limits.egress === "allowlist" && limits.allowHosts.length > 0) {
-      return { kind: "allowlist", hosts: [...limits.allowHosts] };
-    }
+    if (network.hosts.length > 0) return { kind: "allowlist", hosts: [...network.hosts] };
     return { kind: "none" };
   };
 
@@ -817,8 +816,8 @@ export function createE2BSandbox(
         checkId(existing);
         return { id: existing };
       }
-      // the egress is set here; `update` changes it on the running sandbox (README "Egress").
-      // One template for every tier: the tier changes only the network.
+      // the network is set here; `update` changes it on the running sandbox (README "Network").
+      // One template for every mode and network: only the network changes here.
       const network =
         egress.kind === "allowlist"
           ? { network: { allowOut: egress.hosts, denyOut: [ALL_TRAFFIC] } }
@@ -885,7 +884,7 @@ export function createE2BSandbox(
       }
       deps.log.info("sandbox-e2b: sandbox network updated", {
         sandboxId: h.id,
-        tier: limits.tier ?? "strict",
+        mode: limits.mode ?? "sandbox",
         egress: egress.kind,
       });
       return "updated";
@@ -1150,15 +1149,26 @@ export function decodeOutput(buf: Buffer, truncated: boolean): string {
   return buf.subarray(0, end).toString("utf8");
 }
 
+/**
+ * The network of `limits`; a kernel that predates the network contract sends none: that falls to
+ * an empty allowlist (the safe direction), never to the open public network.
+ */
+function networkOf(limits: SandboxLimits): SandboxLimits["network"] {
+  const network: SandboxLimits["network"] | undefined = limits.network;
+  if (network === undefined) return { kind: "allowlist", hosts: [] };
+  if (network.kind !== "open-public" && network.kind !== "allowlist") {
+    throw new Error(`unknown sandbox network kind: ${String(network.kind)}`);
+  }
+  return network;
+}
+
 function checkLimits(l: SandboxLimits): void {
   if (!(l.cpu > 0) || !(l.memoryMb > 0) || !(l.diskMb > 0)) {
     throw new Error("sandbox limits cpu, memoryMb and diskMb must be positive");
   }
-  if (l.egress === "allowlist") {
-    for (const host of l.allowHosts) {
-      const errors = validateAllowHost(host);
-      if (errors.length > 0)
-        throw new Error(`invalid allowHosts entry ${host}: ${errors.join("; ")}`);
-    }
+  const network = networkOf(l);
+  for (const host of network.hosts) {
+    const errors = validateAllowHost(host);
+    if (errors.length > 0) throw new Error(`invalid network host ${host}: ${errors.join("; ")}`);
   }
 }

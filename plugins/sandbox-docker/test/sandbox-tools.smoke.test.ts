@@ -35,8 +35,10 @@ import {
 
 /**
  * Smoke test (M5 T9): a real kernel + model-fake + this plugin (through the socket proxy of
- * capybara-hq/core's docker/sandbox-proxy) run a few of the kernel's sandbox tool cases (default allowlist egress, so
- * the egress proxy is created too). Skipped without Docker.
+ * capybara-hq/core's docker/sandbox-proxy) run a few of the kernel's sandbox tool cases. The
+ * installed kernel sends the `limits.network` contract, and the org default is `open-public`:
+ * the sandbox reaches the network through its egress proxy, which refuses private and metadata
+ * addresses. Skipped without Docker.
  */
 
 const PLUGIN_DIR = fileURLToPath(new URL("../", import.meta.url));
@@ -132,7 +134,7 @@ describe.skipIf(!dockerAvailable)(
       orgId = await createOrg(owner);
     });
 
-    async function sandboxConversation(): Promise<string> {
+    async function sandboxConversation(): Promise<{ id: string; device: string }> {
       const res = await owner({
         method: "POST",
         url: `/api/v1/orgs/${orgId}/agents`,
@@ -149,13 +151,14 @@ describe.skipIf(!dockerAvailable)(
       expect(res.statusCode, res.body).toBe(201);
       const agentId = (res.json() as { agent: { id: string } }).agent.id;
       const conv = await createConv(owner, orgId, agentId);
-      const { device_id: env } = await db
+      const { device_id: device } = await db
         .selectFrom("conversations")
         .select("device_id")
         .where("id", "=", conv)
         .executeTakeFirstOrThrow();
-      if (env !== null) devices.add(env);
-      return conv;
+      if (device === null) throw new Error("the conversation has no device");
+      devices.add(device);
+      return { id: conv, device };
     }
 
     async function call(convId: string, key: string, input: unknown, n: number) {
@@ -170,54 +173,72 @@ describe.skipIf(!dockerAvailable)(
     }
 
     it("bash, write / read / edit / glob / grep in a real container", async () => {
-      const conv = await sandboxConversation();
+      const { id: conv, device } = await sandboxConversation();
       const r = await call(
         conv,
         "Bash",
-        { description: "Test step", command: "pwd && id -un && echo $HTTPS_PROXY" },
+        { description: "Test step", command: "pwd && id -un && echo proxy=$HTTPS_PROXY" },
         1,
       );
       expect(r.isError, why(r.content)).toBe(false);
       expect(r.content.startsWith(SANDBOX_STARTED_NOTICE)).toBe(true);
-      expect(r.content).toMatch(/\/workspace\nsandbox\nhttp:\/\/cap-device-[0-9a-f-]+-egress:3128/);
+      // the org default is open-public: the sandbox's only exit is its egress proxy
+      expect(r.content).toMatch(
+        new RegExp(`/workspace\\nsandbox\\nproxy=http://cap-device-${device}-egress:3128\\n`),
+      );
+      // the proxy refuses the metadata address by resolved IP
+      const blocked = await call(
+        conv,
+        "Bash",
+        {
+          description: "Test step",
+          command:
+            "curl -s -o /tmp/meta-response -w '%{http_code}' --max-time 15 http://169.254.169.254/latest/meta-data/",
+        },
+        2,
+      );
+      expect(blocked.isError, blocked.content).toBe(false);
+      expect(blocked.content).toMatch(/^403$/m);
 
       const w = await call(
         conv,
         "Write",
         { file_path: "/workspace/src/a.txt", content: "alpha\nbeta\ngamma\n" },
-        2,
+        3,
       );
       expect(w.isError, w.content).toBe(false);
       const e = await call(
         conv,
         "Edit",
         { file_path: "/workspace/src/a.txt", old_string: "beta", new_string: "BETA" },
-        3,
+        4,
       );
       expect(e.isError, e.content).toBe(false);
-      const rd1 = await call(conv, "Read", { file_path: "/workspace/src/a.txt" }, 4);
+      const rd1 = await call(conv, "Read", { file_path: "/workspace/src/a.txt" }, 5);
       expect(rd1.content).toContain("2\tBETA");
-      const g = await call(conv, "Glob", { pattern: "**/*.txt" }, 5);
+      const g = await call(conv, "Glob", { pattern: "**/*.txt" }, 6);
       expect(g.content).toContain("/workspace/src/a.txt");
       const gr = await call(
         conv,
         "Grep",
         { pattern: "beta", "-i": true, output_mode: "content", "-n": true },
-        6,
+        7,
       );
       expect(gr.content).toContain("/workspace/src/a.txt:2:BETA");
-      // /skills 对命令只读
+      // /skills is a read-only mount (a write would pass command review as an ask; the mount
+      // table shows the property without one)
       const ro = await call(
         conv,
         "Bash",
-        { description: "Test step", command: "touch /skills/x" },
-        7,
+        { description: "Test step", command: "grep ' /skills ' /proc/mounts" },
+        8,
       );
-      expect(ro.content).toContain("Read-only file system");
+      expect(ro.isError, ro.content).toBe(false);
+      expect(ro.content).toContain(" ro,");
     });
 
     it("a timed-out command is stopped and the sandbox stays usable", async () => {
-      const conv = await sandboxConversation();
+      const { id: conv } = await sandboxConversation();
       const t0 = Date.now();
       const r = await call(
         conv,

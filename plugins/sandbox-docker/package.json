@@ -1,7 +1,7 @@
 {
   "name": "@capybara-hq/plugin-sandbox-docker",
   "version": "0.1.0-rc.13",
-  "description": "Conversation sandboxes (sandbox@1) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with an egress allowlist proxy",
+  "description": "Conversation sandboxes (sandbox@2) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist per org",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -28,12 +28,12 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.19",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.22",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@capybara-hq/plugin-model-fake": "^0.1.0-rc.19",
-    "@capybara-hq/testing": "^0.1.0-rc.17",
+    "@capybara-hq/testing": "^0.1.0-rc.18",
     "bullmq": "^6.3.15",
     "ioredis": "^6.0.0",
     "kysely": "^0.29.8",

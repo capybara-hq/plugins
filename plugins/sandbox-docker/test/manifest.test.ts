@@ -12,16 +12,20 @@ const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url),
   version: string;
 };
 
-/** Open egress at the open tier. */
-const OPEN: SandboxLimits = {
+/** Limits carrying the network contract the kernel sends (rc.22). */
+const netLimits = (network: SandboxLimits["network"]): SandboxLimits => ({
   cpu: 1,
   memoryMb: 256,
   diskMb: 256,
-  egress: "open",
-  allowHosts: [],
-  tier: "open",
-  devHosts: [],
-};
+  mode: "auto",
+  network,
+});
+
+/** The open public network. */
+const OPEN = netLimits({ kind: "open-public", hosts: [] });
+
+/** The allowlist network (empty: no network). */
+const ALLOWLIST = netLimits({ kind: "allowlist", hosts: [] });
 
 describe("decodeOutput", () => {
   const zh = Buffer.from("a中", "utf8"); // 61 e4 b8 ad
@@ -41,8 +45,9 @@ describe("sandbox-docker manifest", () => {
     expect(SANDBOX_EXTENSION_POINT).toBe("sandbox@2");
     expect(plugin.provides).toEqual(["sandbox@2"]);
     expect(plugin.permissions).toEqual({});
-    // the kernel checks this range against the installed SDK version
-    expect(plugin.sdk).toBe("^0.1.0-rc.3");
+    // the kernel checks this range against the installed SDK version; the network contract
+    // itself needs the auto-mode SDK (the provider falls back safely with an older one)
+    expect(plugin.sdk).toBe("^0.1.0-rc.22");
   });
 
   it("deployment config: defaults, endpoint schemes", () => {
@@ -51,7 +56,7 @@ describe("sandbox-docker manifest", () => {
       endpoint: "tcp://sandbox-proxy:2375",
       runtime: "runc",
       network: "capybara-sandbox",
-      openEgress: "proxy",
+      refuseOpenNetwork: false,
     });
     expect(() => DeploymentConfig.parse({ endpoint: "tcp://x:1", network: "sandboxes" })).toThrow(
       /start with 'cap'/,
@@ -81,17 +86,17 @@ describe("sandbox-docker manifest", () => {
     ).toBe("e:1");
   });
 
-  it("deployment config: openEgress values; allowOpenEgress fails with a pointer to openEgress", () => {
-    for (const v of ["off", "proxy", "direct"] as const) {
-      expect(DeploymentConfig.parse({ endpoint: "tcp://x:1", openEgress: v }).openEgress).toBe(v);
-    }
-    expect(() => DeploymentConfig.parse({ endpoint: "tcp://x:1", openEgress: true })).toThrow();
-    for (const allowOpenEgress of [true, false]) {
-      const r = DeploymentConfig.safeParse({ endpoint: "tcp://x:1", allowOpenEgress });
+  it("deployment config: refuseOpenNetwork; the old egress keys are gone", () => {
+    expect(
+      DeploymentConfig.parse({ endpoint: "tcp://x:1", refuseOpenNetwork: true }).refuseOpenNetwork,
+    ).toBe(true);
+    expect(() => DeploymentConfig.parse({ endpoint: "tcp://x:1", refuseOpenNetwork: 1 })).toThrow();
+    // no compatibility: the tier-era settings are unknown keys
+    for (const key of ["openEgress", "allowOpenEgress"]) {
+      const r = DeploymentConfig.safeParse({ endpoint: "tcp://x:1", [key]: true });
       expect(r.success).toBe(false);
-      expect(r.error?.issues[0]?.message).toMatch(/allowOpenEgress was replaced by openEgress/);
+      expect(r.error?.issues[0]?.message).toMatch(/Unrecognized key/);
     }
-    // other unknown keys keep the plain message
     const other = DeploymentConfig.safeParse({ endpoint: "tcp://x:1", foo: 1 });
     expect(other.error?.issues[0]?.message).toMatch(/Unrecognized key/);
   });
@@ -114,10 +119,12 @@ describe("sandbox-docker manifest", () => {
   });
 });
 
-describe("egress open with openEgress off (no Docker needed)", () => {
+describe("open-public with refuseOpenNetwork (no Docker needed)", () => {
   it("create and update refuse before touching Docker, naming the plugin setting", async () => {
     const sbx = createDockerSandbox(
-      providerConfig(DeploymentConfig.parse({ endpoint: "tcp://127.0.0.1:9", openEgress: "off" })),
+      providerConfig(
+        DeploymentConfig.parse({ endpoint: "tcp://127.0.0.1:9", refuseOpenNetwork: true }),
+      ),
     );
     await expect(
       sbx.create({
@@ -127,14 +134,34 @@ describe("egress open with openEgress off (no Docker needed)", () => {
         fileSystem: { id: "cap-00000000-0000-4000-8000-000000000001" },
         signal: AbortSignal.timeout(5000),
       }),
-    ).rejects.toThrow(/extensionConfig\."sandbox-docker"\.openEgress/);
+    ).rejects.toThrow(/extensionConfig\."sandbox-docker"\.refuseOpenNetwork/);
     await expect(
       sbx.update(
         { id: "cap-00000000-0000-4000-8000-000000000001" },
         { ...OPEN },
         AbortSignal.timeout(5000),
       ),
-    ).rejects.toThrow(/openEgress is "off"/);
+    ).rejects.toThrow(/refuseOpenNetwork is true/);
+  });
+
+  it("the allowlist is still accepted when refuseOpenNetwork is on", async () => {
+    const sbx = createDockerSandbox({
+      endpoint: "tcp://127.0.0.1:9",
+      runtime: "runc",
+      network: "capybara-sandbox",
+      egressProxyImage: "e:1",
+      refuseOpenNetwork: true,
+    });
+    // it fails on Docker (nothing listens on the endpoint), not on the network refusal
+    await expect(
+      sbx.create({
+        name: "cap-device-00000000-0000-4000-8000-000000000001",
+        image: "capybara-sandbox:latest",
+        limits: { ...ALLOWLIST },
+        fileSystem: { id: "cap-device-00000000-0000-4000-8000-000000000001" },
+        signal: AbortSignal.timeout(5000),
+      }),
+    ).rejects.not.toThrow(/refuseOpenNetwork/);
   });
 
   it("create without image and without a default image refuses before touching Docker", async () => {
@@ -147,7 +174,7 @@ describe("egress open with openEgress off (no Docker needed)", () => {
     await expect(
       sbx.create({
         name: "cap-device-00000000-0000-4000-8000-000000000001",
-        limits: { ...OPEN, egress: "none", tier: "strict" },
+        limits: { ...ALLOWLIST },
         fileSystem: { id: "cap-device-00000000-0000-4000-8000-000000000001" },
         signal: AbortSignal.timeout(5000),
       }),

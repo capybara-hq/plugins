@@ -28,14 +28,13 @@ import {
 const RUN = randomUUID().slice(0, 8);
 const sig = () => AbortSignal.timeout(120_000);
 const actor: SandboxActor = { accountId: "acc-1", conversationId: "conv-1" };
-const limits = (egress: SandboxLimits["egress"], allowHosts: string[] = []): SandboxLimits => ({
+/** An empty allowlist means no network. */
+const limits = (hosts: string[] = []): SandboxLimits => ({
   cpu: 1,
   memoryMb: 512,
   diskMb: 1024,
-  egress,
-  allowHosts,
-  tier: egress === "open" ? "open" : "strict",
-  devHosts: [],
+  mode: "auto",
+  network: { kind: "allowlist", hosts },
 });
 
 describe.skipIf(!dockerAvailable)("sandbox-docker concurrent exec", { timeout: 120_000 }, () => {
@@ -68,13 +67,13 @@ describe.skipIf(!dockerAvailable)("sandbox-docker concurrent exec", { timeout: 1
     await images?.remove();
   }, 120_000);
 
-  const create = async (egress: SandboxLimits["egress"] = "none", hosts: string[] = []) => {
+  const create = async (hosts: string[] = []) => {
     const name = `cap-${randomUUID()}`;
-    const fileSystem = await sbx.createFileSystem({ name, limits: limits(egress), signal: sig() });
+    const fileSystem = await sbx.createFileSystem({ name, limits: limits(), signal: sig() });
     return sbx.create({
       name,
       image: images.sandboxImage,
-      limits: limits(egress, hosts),
+      limits: limits(hosts),
       fileSystem,
       signal: sig(),
     });
@@ -183,7 +182,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker concurrent exec", { timeout: 1
   });
 
   it("concurrent auto-start of a stopped container succeeds for both calls", async () => {
-    const h = await create("allowlist", ["example.com"]);
+    const h = await create(["example.com"]);
     try {
       await docker("stop", "-t", "1", h.id, `${h.id}-egress`);
       const [a, b, s] = await Promise.all([

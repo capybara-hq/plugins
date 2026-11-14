@@ -9,7 +9,10 @@ import {
   isForbiddenAddress,
 } from "../egress-proxy/proxy.mjs";
 
-/** 出站代理（不需要 Docker）：主机名白名单、解析后的 IP 检查（挡 DNS 重绑定）、HTTP 与 CONNECT。 */
+/**
+ * The egress proxy (no Docker): the host allowlist, the resolved-address check (DNS rebinding),
+ * HTTP and CONNECT.
+ */
 
 describe("isForbiddenAddress", () => {
   it.each([
@@ -87,11 +90,11 @@ describe("proxy server", () => {
     await new Promise<void>((r) => target.listen(0, "127.0.0.1", r));
     targetPort = (target.address() as AddressInfo).port;
     proxy = createEgressProxy({
+      // the allowlist mode: any port of a listed host
+      mode: "allowlist",
       allowHosts: ["allowed.example.com", "*.example.com"],
-      // 仅测试：allowed.example.com 固定到本机的目标服务
+      // test only: allowed.example.com is pinned to the local target service
       testHosts: { "allowed.example.com": "127.0.0.1" },
-      // 目标服务在随机端口上：测试里放行它（默认只放行 443、80）
-      connectPorts: [targetPort, 443],
       lookup,
       log: () => {},
     });
@@ -176,10 +179,11 @@ describe("proxy server", () => {
     expect(await tunnel(`127.0.0.1:${targetPort}`)).toMatch(/^HTTP\/1\.1 403/);
   });
 
-  it("refuses CONNECT to ports outside the allowed list", async () => {
-    const out = await tunnel("allowed.example.com:25");
-    expect(out).toMatch(/^HTTP\/1\.1 403/);
-    expect(out).toContain("port 25 is not allowed");
+  it("binds CONNECT to the listed host on any port", async () => {
+    // Port 25 on the listed host is attempted (and refused only because nothing listens there):
+    // the allowlist constrains hosts, never ports.
+    expect(await tunnel("allowed.example.com:25")).toMatch(/^HTTP\/1\.1 502/);
+    expect(await tunnel("denied.org:25")).toMatch(/^HTTP\/1\.1 403/);
   });
 
   it("tries the next checked address when one cannot be reached", async () => {

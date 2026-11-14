@@ -11,13 +11,19 @@ import {
   resolveTarget,
 } from "../egress-proxy/proxy.mjs";
 
-/** Egress proxy modes (no Docker): dev / open any-port CONNECT, SOCKS5 / SOCKS4a, strict without SOCKS. */
+/** Egress proxy modes (no Docker): open-public (any public host and port) and allowlist, both with HTTP, CONNECT and SOCKS5 / SOCKS4a, private addresses refused. */
 
 // Fake DNS: rebind.example.com -> 10.0.0.1 (DNS rebinding), public.example.com -> a public address.
 const lookup = async (h: string) => {
   if (h === "rebind.example.com" || h === "rebind.open.org") return [{ address: "10.0.0.1" }];
   if (h === "meta.open.org") return [{ address: "169.254.169.254" }];
   if (h === "public.example.com" || h === "public.open.org") return [{ address: "8.8.8.8" }];
+  if (h === "ten.open.org") return [{ address: "10.1.2.3" }];
+  if (h === "onetwentyseven.open.org") return [{ address: "127.0.0.1" }];
+  if (h === "private172.open.org") return [{ address: "172.20.1.1" }];
+  if (h === "private192.open.org") return [{ address: "192.168.5.5" }];
+  if (h === "ula.open.org") return [{ address: "fc00::1" }];
+  if (h === "linklocal.open.org") return [{ address: "fe80::1" }];
   throw new Error("ENOTFOUND");
 };
 const quiet = () => {};
@@ -59,6 +65,19 @@ const tunnel = (proxyPort: number, hostPort: string) =>
     s.on("end", () => resolve(buf));
     s.on("error", reject);
     s.write(`CONNECT ${hostPort} HTTP/1.1\r\nHost: ${hostPort}\r\n\r\n`);
+  });
+
+/** Send an absolute-URL request to the proxy (plain HTTP forwarding); return everything read. */
+const absolute = (proxyPort: number, url: string) =>
+  new Promise<string>((resolve, reject) => {
+    const s = connect(proxyPort, "127.0.0.1");
+    let buf = "";
+    s.on("data", (c: Buffer) => {
+      buf += c.toString();
+    });
+    s.on("end", () => resolve(buf));
+    s.on("error", reject);
+    s.write(`GET ${url} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`);
   });
 
 /** Write raw bytes to the SOCKS port and collect what comes back until the server closes. */
@@ -123,38 +142,27 @@ const socks4 = (ip: number[], port: number) => {
 const socks5Http = (port: number, req: Buffer) =>
   raw(port, [greeting, req], (got) => (got.length >= 12 && got[3] === 0 ? httpGet : null));
 
-describe("strict mode", () => {
-  it("refuses CONNECT to port 22 and opens no SOCKS listener", async () => {
-    const { server, port } = await listen(
-      createEgressProxy({
-        allowHosts: ["allowed.example.com"],
-        testHosts: { "allowed.example.com": "127.0.0.1" },
-        log: quiet,
-      }),
-    );
+describe("modes", () => {
+  it("defaults to open-public and always opens the SOCKS listener", () => {
+    const started = main({ PORT: "0", SOCKS_PORT: "0" });
     try {
-      const out = await tunnel(port, "allowed.example.com:22");
-      expect(out).toMatch(/^HTTP\/1\.1 403/);
-      expect(out).toContain("port 22 is not allowed");
+      expect(started.socks).not.toBeNull();
     } finally {
-      server.closeAllConnections();
-      await new Promise((r) => server.close(r));
-    }
-    const started = main({ MODE: "strict", PORT: "0", ALLOW_HOSTS: "[]" });
-    try {
-      expect(started.socks).toBeNull();
-    } finally {
-      await new Promise((r) => started.http.close(r));
+      started.socks.close();
+      started.http.close();
     }
   });
 
   it("refuses an unknown mode", () => {
+    expect(() => main({ MODE: "strict", PORT: "0" })).toThrow(/expected open-public or allowlist/);
     expect(() => main({ MODE: "wide", PORT: "0" })).toThrow(/Unknown MODE/);
-    expect(() => createEgressProxy({ mode: "wide" as "dev" })).toThrow(/Unknown egress proxy mode/);
+    expect(() => createEgressProxy({ mode: "wide" as "allowlist" })).toThrow(
+      /Unknown egress proxy mode/,
+    );
   });
 });
 
-describe("dev mode", () => {
+describe("allowlist mode", () => {
   let http: Server;
   let httpPort: number;
   let socks: NetServer;
@@ -163,7 +171,7 @@ describe("dev mode", () => {
 
   beforeAll(async () => {
     const cfg = {
-      mode: "dev" as const,
+      mode: "allowlist" as const,
       allowHosts: ["allowed.example.com", "*.example.com"],
       testHosts: { "allowed.example.com": "127.0.0.1" },
       lookup,
@@ -314,7 +322,7 @@ describe("dev mode", () => {
   });
 });
 
-describe("open mode", () => {
+describe("open-public mode", () => {
   let http: Server;
   let httpPort: number;
   let socks: NetServer;
@@ -322,8 +330,8 @@ describe("open mode", () => {
 
   beforeAll(async () => {
     const cfg = {
-      mode: "open" as const,
-      // ignored in open mode
+      mode: "open-public" as const,
+      // ignored in open-public mode
       allowHosts: ["only.example.com"],
       testHosts: { "anything.open.org": "127.0.0.1" },
       lookup,
@@ -339,21 +347,44 @@ describe("open mode", () => {
   });
 
   it("reaches any (pinned) public name on any port over CONNECT and SOCKS5", async () => {
+    expect(targetPort).not.toBe(443);
     const out = await tunnel(httpPort, `anything.open.org:${targetPort}`);
     expect(out).toContain("hello from target GET /t");
     const got = await socks5Http(socksPort, domainReq("anything.open.org", targetPort));
     expect(got.subarray(12).toString()).toContain("hello from target GET /s");
   });
 
-  it("refuses names resolving to private or metadata addresses", async () => {
-    expect(await tunnel(httpPort, "rebind.open.org:5432")).toMatch(/^HTTP\/1\.1 403/);
-    expect(await tunnel(httpPort, "meta.open.org:80")).toMatch(/^HTTP\/1\.1 403/);
-    expect((await raw(socksPort, [greeting, domainReq("rebind.open.org", 22)]))[3]).toBe(0x02);
+  it("forwards plain HTTP on the absolute-URL path and refuses private targets there", async () => {
+    const out = await absolute(httpPort, `http://anything.open.org:${targetPort}/`);
+    expect(out).toMatch(/^HTTP\/1\.1 200/);
+    expect(out).toContain("hello from target GET /");
+    // The same resolved-address check guards HTTP forwarding (WHATWG URL canonicalises first).
+    expect(await absolute(httpPort, `http://127.0.0.1:${targetPort}/`)).toMatch(/^HTTP\/1\.1 403/);
+    expect(await absolute(httpPort, `http://10.1.2.3:80/`)).toMatch(/^HTTP\/1\.1 403/);
   });
 
-  it("refuses private IP literals", async () => {
+  it.each([
+    ["loopback", "onetwentyseven.open.org"],
+    ["10/8", "ten.open.org"],
+    ["172.16/12", "private172.open.org"],
+    ["192.168/16", "private192.open.org"],
+    ["169.254/16 (cloud metadata)", "meta.open.org"],
+    ["ULA fc00::/7", "ula.open.org"],
+    ["link-local fe80::/10", "linklocal.open.org"],
+  ])("refuses names resolving into %s (HTTP, CONNECT and SOCKS5)", async (_range, h) => {
+    const httpOut = await tunnel(httpPort, `${h}:5432`);
+    expect(httpOut).toMatch(/^HTTP\/1\.1 403/);
+    expect(httpOut).toContain("private or reserved address");
+    expect((await raw(socksPort, [greeting, domainReq(h, 22)]))[3]).toBe(0x02);
+  });
+
+  it("refuses private IP literals, allows public ones", async () => {
     expect(await tunnel(httpPort, `127.0.0.1:${targetPort}`)).toMatch(/^HTTP\/1\.1 403/);
     expect(await tunnel(httpPort, "[::ffff:169.254.169.254]:80")).toMatch(/^HTTP\/1\.1 403/);
+    expect(await tunnel(httpPort, "10.1.2.3:80")).toMatch(/^HTTP\/1\.1 403/);
+    expect(await tunnel(httpPort, "192.168.5.5:22")).toMatch(/^HTTP\/1\.1 403/);
+    expect(await tunnel(httpPort, "[fc00::1]:80")).toMatch(/^HTTP\/1\.1 403/);
+    expect(await tunnel(httpPort, "[fe80::1]:80")).toMatch(/^HTTP\/1\.1 403/);
     expect((await raw(socksPort, [greeting, ipv4Req([127, 0, 0, 1], targetPort)]))[3]).toBe(0x02);
     expect((await raw(socksPort, [greeting, ipv4Req([10, 1, 2, 3], 22)]))[3]).toBe(0x02);
     const v6loop = ipv6Req([...Array(15).fill(0), 1], targetPort);
@@ -370,18 +401,22 @@ describe("open mode", () => {
 
 describe("resolveTarget", () => {
   const base = { allowHosts: ["a.example.com"], testHosts: {}, lookup };
-  it("accepts public IP literals only in open mode", async () => {
-    await expect(resolveTarget("8.8.8.8", { ...base, mode: "open" })).resolves.toEqual(["8.8.8.8"]);
-    await expect(resolveTarget("[2606:4700::1111]", { ...base, mode: "open" })).resolves.toEqual([
-      "2606:4700::1111",
-    ]);
-    await expect(resolveTarget("8.8.8.8", { ...base, mode: "dev" })).rejects.toThrow(/allowlist/);
-    await expect(resolveTarget("public.open.org", { ...base, mode: "open" })).resolves.toEqual([
+  it("accepts public IP literals only in open-public mode", async () => {
+    await expect(resolveTarget("8.8.8.8", { ...base, mode: "open-public" })).resolves.toEqual([
       "8.8.8.8",
     ]);
+    await expect(
+      resolveTarget("[2606:4700::1111]", { ...base, mode: "open-public" }),
+    ).resolves.toEqual(["2606:4700::1111"]);
+    await expect(resolveTarget("8.8.8.8", { ...base, mode: "allowlist" })).rejects.toThrow(
+      /allowlist/,
+    );
+    await expect(
+      resolveTarget("public.open.org", { ...base, mode: "open-public" }),
+    ).resolves.toEqual(["8.8.8.8"]);
   });
   it("refuses control characters and malformed names in every mode", async () => {
-    for (const mode of ["strict", "dev", "open"] as const) {
+    for (const mode of ["open-public", "allowlist"] as const) {
       await expect(resolveTarget("a.example.com\n", { ...base, mode })).rejects.toThrow(
         /Malformed/,
       );
@@ -393,17 +428,21 @@ describe("resolveTarget", () => {
         /Malformed/,
       );
     }
-    await expect(resolveTarget("bad_label.com", { ...base, mode: "open" })).rejects.toThrow(
+    await expect(resolveTarget("bad_label.com", { ...base, mode: "open-public" })).rejects.toThrow(
       /malformed/,
     );
-    await expect(resolveTarget("0x7f.1", { ...base, mode: "open" })).rejects.toThrow(/malformed/);
+    await expect(resolveTarget("0x7f.1", { ...base, mode: "open-public" })).rejects.toThrow(
+      /malformed/,
+    );
   });
 });
 
 describe("hardening", () => {
-  it("strict mode limits plain HTTP forwarding to the allowed ports", async () => {
+  it("allowlist mode forwards plain HTTP on any port of an allowed host", async () => {
+    expect(targetPort).not.toBe(80);
     const { server, port } = await listen(
       createEgressProxy({
+        mode: "allowlist",
         allowHosts: ["allowed.example.com"],
         testHosts: { "allowed.example.com": "127.0.0.1" },
         log: quiet,
@@ -422,8 +461,7 @@ describe("hardening", () => {
           `GET http://allowed.example.com:${targetPort}/ HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`,
         );
       });
-      expect(out).toMatch(/^HTTP\/1\.1 403/);
-      expect(out).toContain(`Port ${targetPort} is not allowed`);
+      expect(out).toContain("hello from target GET /");
     } finally {
       server.closeAllConnections();
       await new Promise((r) => server.close(r));
@@ -432,7 +470,7 @@ describe("hardening", () => {
 
   it("caps concurrent connections on both listeners", () => {
     expect(createEgressProxy({ log: quiet }).maxConnections).toBe(512);
-    expect(createSocksProxy({ mode: "dev", log: quiet }).maxConnections).toBe(512);
+    expect(createSocksProxy({ mode: "allowlist", log: quiet }).maxConnections).toBe(512);
   });
 
   describe("SOCKS deadlines", () => {
@@ -442,7 +480,7 @@ describe("hardening", () => {
     beforeAll(async () => {
       ({ server: socks, port } = await listen(
         createSocksProxy({
-          mode: "dev",
+          mode: "allowlist",
           allowHosts: ["allowed.example.com"],
           testHosts: { "allowed.example.com": "127.0.0.1" },
           handshakeMs: 300,
@@ -511,10 +549,43 @@ describe("hardening", () => {
   });
 
   it("bounds each connect attempt", async () => {
+    // A fake transport that never connects: without the per-attempt deadline the promise would
+    // never settle (the test would time out), so this is deterministic. A real TEST-NET address is
+    // not a blackhole on every host: this one intercepts outbound TCP and accepts the connection.
+    let destroyed: (Error & { code?: string }) | undefined;
+    const hanging = () => {
+      const listeners = new Map<string, (e: Error) => void>();
+      const socket = {
+        once(ev: string, fn: (e: Error) => void) {
+          listeners.set(ev, fn);
+          return socket;
+        },
+        on(ev: string, fn: (e: Error) => void) {
+          listeners.set(ev, fn);
+          return socket;
+        },
+        removeAllListeners() {
+          listeners.clear();
+          return socket;
+        },
+        destroy(e?: Error) {
+          if (e !== undefined) destroyed = e;
+          const emit = listeners.get("error");
+          listeners.clear();
+          if (emit !== undefined && e !== undefined) queueMicrotask(() => emit(e));
+          return socket;
+        },
+      };
+      return socket;
+    };
     const started = Date.now();
-    // TEST-NET-1: normally unroutable, so the attempt hangs until the deadline (or fails fast).
-    await expect(connectAny(["192.0.2.1"], 9, 200)).rejects.toThrow();
-    expect(Date.now() - started).toBeLessThan(3000);
+    await expect(
+      connectAny(["192.0.2.1"], 9, 200, hanging as unknown as Parameters<typeof connectAny>[3]),
+    ).rejects.toThrow(/timed out/);
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(150);
+    expect(elapsed).toBeLessThan(2000);
+    expect(destroyed?.code).toBe("ETIMEDOUT");
   });
 
   it.each([
@@ -542,7 +613,7 @@ describe("hardening", () => {
   it("escapes every non-ASCII character in log lines", async () => {
     const logs: string[] = [];
     const { server, port } = await listen(
-      createSocksProxy({ mode: "dev", allowHosts: [], log: (m) => logs.push(m) }),
+      createSocksProxy({ mode: "allowlist", allowHosts: [], log: (m) => logs.push(m) }),
     );
     try {
       await raw(port, [greeting, domainReq("\u00e9vil\u0085x.com", 22)]);
@@ -554,9 +625,9 @@ describe("hardening", () => {
     }
   });
 
-  it("checks the public name shape in strict and dev too", async () => {
+  it("checks the public name shape in both modes", async () => {
     const opts = { allowHosts: ["*.example.com"], testHosts: {}, lookup };
-    for (const mode of ["strict", "dev"] as const) {
+    for (const mode of ["allowlist", "open-public"] as const) {
       await expect(resolveTarget("a_b.example.com", { ...opts, mode })).rejects.toThrow(
         /malformed/,
       );

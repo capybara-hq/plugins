@@ -67,9 +67,9 @@ export const DeploymentConfig = z.strictObject(
       label: { zh: "按域名出站白名单", en: "Domain egress allowlist" },
     }),
     /**
-     * What `egress: "open"` (the `open` tier) does. E2B has no egress proxy of ours, so `"proxy"`
-     * (default) and `"direct"` both mean `allow_internet_access: true` (E2B checks no destination
-     * IP); `"off"` refuses open (README "Egress").
+     * What a `limits.network` of `open-public` does. E2B has no egress proxy of ours, so
+     * `"proxy"` (default) and `"direct"` both mean `allow_internet_access: true` (E2B checks no
+     * destination IP); `"off"` refuses it (README "Network").
      */
     openEgress: ui(z.enum(["off", "proxy", "direct"]).default("proxy"), {
       label: { zh: "开放出站", en: "Open egress" },
@@ -123,7 +123,9 @@ export function providerConfig(
 const plugin = defineExtension({
   name: "sandbox-e2b",
   version: "0.1.0-rc.13",
-  sdk: "^0.1.0-rc.3",
+  // The network contract (`limits.mode` / `limits.network`) is the SDK's from rc.22 on; a kernel
+  // that predates it gets no network (the safe direction).
+  sdk: "^0.1.0-rc.22",
   provides: [SANDBOX_EXTENSION_POINT],
   // 只用部署配置与 E2B 的 API，不用任何需要声明的平台能力
   permissions: {},
