@@ -1,5 +1,13 @@
 # @capybara-hq/plugin-memory
 
+## 0.1.0-rc.3
+
+### Patch Changes
+
+- 40cc3be: The memory page's 全屏 button fills the browser tab as an overlay of the web page instead of taking
+  the display's fullscreen: the tab and the browser stay, Escape leaves it, and the page keeps its
+  toolbar and panels.
+
 ## 0.1.0-rc.2
 
 ### Patch Changes

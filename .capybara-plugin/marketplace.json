@@ -627,7 +627,7 @@
     },
     {
       "name": "memory",
-      "version": "0.1.0-rc.2",
+      "version": "0.1.0-rc.3",
       "summary": {
         "en": "Memory for agents: each agent remembers each member across conversations, with an index at run start, memory tools, hybrid search and a memory page",
         "zh": "智能体记忆：每个智能体跨会话记住每位成员，运行开始时给出记忆索引，提供记忆工具、混合检索和记忆页面"
@@ -675,8 +675,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-memory",
-          "version": "0.1.0-rc.2",
-          "integrity": "sha512-jfzuBlMAAvgWy33cPRhVCIAlMooKQOBGa8ti5dkTXWsqQr2s7lsNP+/A7HlY8URVmrFW826gVwvXXGybO5xZ7Q=="
+          "version": "0.1.0-rc.3",
+          "integrity": "sha512-rsUbo2ginRh6JoPzwFtR4U7nh738naJ1k+focM/ZxThEnkhPbL4zPeIxmcQYgBLJy8I3Puu9YKmDkiEAYb3lTA=="
         }
       }
     }
