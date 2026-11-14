@@ -22,6 +22,8 @@ import {
   IPV6_DENIED,
   isE2BNotFound,
   isStatus,
+  type NetworkUpdate,
+  OPEN_PUBLIC_DENIED,
   type StartRequest,
   updateNetwork,
 } from "./e2b-api.js";
@@ -336,8 +338,38 @@ interface SandboxInfo {
   domain?: string | null;
 }
 
-/** What the plugin enforces for `limits.network`: an allowlist, or no network. Never open. */
-type NetworkPolicy = { kind: "none" } | { kind: "allowlist"; hosts: string[] };
+/**
+ * What the plugin enforces for `limits.network`: no network, an allowlist, or the internet with
+ * the private, loopback, CGNAT and link-local ranges denied (`open-public`).
+ */
+type NetworkPolicy =
+  | { kind: "none" }
+  | { kind: "allowlist"; hosts: string[] }
+  | { kind: "open-public" };
+
+/** The create-body fields of a network policy (`POST /v2/sandboxes`). */
+function createNetworkOf(policy: NetworkPolicy): Record<string, unknown> {
+  switch (policy.kind) {
+    case "allowlist":
+      return { network: { allowOut: policy.hosts, denyOut: [ALL_TRAFFIC, ...IPV6_DENIED] } };
+    case "open-public":
+      return { allow_internet_access: true, network: { denyOut: [...OPEN_PUBLIC_DENIED] } };
+    case "none":
+      return { allow_internet_access: false };
+  }
+}
+
+/** The body of `PUT /sandboxes/{id}/network` for a network policy (it replaces the whole config). */
+function updateNetworkOf(policy: NetworkPolicy): NetworkUpdate {
+  switch (policy.kind) {
+    case "allowlist":
+      return { allowOut: policy.hosts, denyOut: [ALL_TRAFFIC, ...IPV6_DENIED] };
+    case "open-public":
+      return { allow_internet_access: true, denyOut: [...OPEN_PUBLIC_DENIED] };
+    case "none":
+      return { allow_internet_access: false };
+  }
+}
 
 /** The `sandbox@2` provider on E2B (shared by the plugin setup and the tests). */
 export function createE2BSandbox(
@@ -765,14 +797,13 @@ export function createE2BSandbox(
 
   /**
    * The network this plugin enforces for `limits` (README "Network policy"): an allowlist of the
-   * given hosts, or no network at all. `open-public` is always refused: E2B cannot block the
-   * microVM metadata endpoint (Firecracker MMDS at 169.254.169.254), not even with `denyOut` of
-   * every private / loopback / link-local CIDR (verified live 2026-11-14), so opening the internet
-   * would expose it. The plugin never opens the network silently.
+   * given hosts, no network at all, or for `open-public` the internet with `denyOut` of the
+   * private, loopback, CGNAT and link-local ranges (`OPEN_PUBLIC_DENIED`; its `hosts` add
+   * nothing). Residual: E2B serves the microVM metadata endpoint (Firecracker MMDS at
+   * 169.254.169.254) whatever `denyOut` says, under an allowlist too (verified live 2026-11-14).
    *
    * `mode` (`auto` | `sandbox`) is validated but changes nothing here: both run in the same E2B
-   * microVM, where the container is the boundary. The kernel gives every auto-mode device the
-   * open network, so E2B cannot serve auto mode at all (README "Network policy"). A limits object
+   * microVM, where the container is the boundary. A limits object
    * without `mode` / `network` (an older kernel that sent `tier` / `egress` / `allowHosts`) is
    * refused rather than guessed.
    */
@@ -786,11 +817,7 @@ export function createE2BSandbox(
     const network = runtime.network as { kind?: unknown; hosts?: unknown } | undefined;
     const kind = network?.kind;
     const hosts = network?.hosts;
-    if (kind === "open-public") {
-      throw new Error(
-        'Sandbox network "open-public" is refused by the sandbox-e2b plugin: E2B cannot block the sandbox\'s metadata endpoint (Firecracker MMDS at 169.254.169.254) even with a denyOut of the private and link-local ranges (verified live), so internet access would expose it. Set the org cloud network to an allowlist (network kind "allowlist"), or run the device on the sandbox-docker provider. sandbox-e2b never opens the network silently.',
-      );
-    }
+    if (kind === "open-public") return { kind: "open-public" };
     if (kind !== "allowlist" || !Array.isArray(hosts) || hosts.some((h) => typeof h !== "string")) {
       throw new Error(
         'sandbox-e2b: the sandbox limits carry no valid network (expected { kind: "allowlist", hosts } or { kind: "open-public", hosts }); this plugin implements the sandbox@2 limits that a kernel sends from 0.1.0-rc.29 on (limits.mode / limits.network). An older kernel sent tier / egress / allowHosts instead; upgrade the kernel and the sandbox plugins together.',
@@ -833,10 +860,7 @@ export function createE2BSandbox(
         checkId(existing);
         return { id: existing };
       }
-      const network =
-        policy.kind === "allowlist"
-          ? { network: { allowOut: policy.hosts, denyOut: [ALL_TRAFFIC, ...IPV6_DENIED] } }
-          : { allow_internet_access: false };
+      const network = createNetworkOf(policy);
       const createFrom = (templateID: string) =>
         api.json<SandboxInfo>("POST", "/v2/sandboxes", {
           body: {
@@ -883,14 +907,7 @@ export function createE2BSandbox(
       const policy = networkOf(limits, h.id);
       await attach(h.id, signal);
       try {
-        await updateNetwork(
-          api,
-          h.id,
-          policy.kind === "allowlist"
-            ? { allowOut: policy.hosts, denyOut: [ALL_TRAFFIC, ...IPV6_DENIED] }
-            : { allow_internet_access: false },
-          signal,
-        );
+        await updateNetwork(api, h.id, updateNetworkOf(policy), signal);
       } catch (e) {
         if (isE2BNotFound(e)) {
           throw new SandboxGoneError(`E2B sandbox ${h.id} no longer exists`, { cause: e });

@@ -18,8 +18,11 @@
  *     the private / loopback / link-local CIDRs is accepted (except `0.0.0.0/8`, which the API
  *     rejects as invalid). `::1/128`, `fc00::/7` and `fe80::/10` are accepted; `::/0` is rejected
  *     as an invalid denied CIDR (`IPV6_DENIED`). The microVM metadata service at 169.254.169.254
- *     is NOT filtered by any of this, which is why the plugin refuses `open-public` instead of
- *     mapping it.
+ *     (Firecracker MMDS) is NOT filtered by any of this, under every policy including an
+ *     allowlist: a residual E2B exposure in both modes (README "Network policy"). `open-public`
+ *     is `allow_internet_access: true` plus `denyOut` of `OPEN_PUBLIC_DENIED` and no `allowOut`
+ *     (allowed entries take precedence over denied ones; checked against `e2b@2.58.0`'s
+ *     `SandboxNetworkConfig` / `SandboxNetworkUpdateConfig`, 2026-11-15).
  *   - Pause body `{memory: false}` (`Sandbox.pause(id, { mode: "filesystem" })`: processes end, files
  *     stay) and create's `autoPauseMemory: false` (`lifecycle.onTimeout: { action: "pause", mode:
  *     "filesystem" }`).
@@ -51,9 +54,7 @@ const API_TIMEOUT_MS = 60_000;
 const KEEPALIVE_SECONDS = 50;
 
 /**
- * The IPv4 CIDR of all traffic (the SDK's `ALL_TRAFFIC`): part of `denyOut` for an allowlist. The
- * provider never sends `allow_internet_access: true`: an open network is refused (README "Network
- * policy").
+ * The IPv4 CIDR of all traffic (the SDK's `ALL_TRAFFIC`): part of `denyOut` for an allowlist.
  */
 export const ALL_TRAFFIC = "0.0.0.0/0";
 
@@ -67,12 +68,30 @@ export const ALL_TRAFFIC = "0.0.0.0/0";
 export const IPV6_DENIED = ["fc00::/7", "fe80::/10", "::1/128"] as const;
 
 /**
+ * The `denyOut` of `open-public` (internet access on): the private, loopback, link-local and
+ * CGNAT IPv4 ranges plus {@link IPV6_DENIED}. `0.0.0.0/8` is left out because E2B rejects it as
+ * invalid (live 2026-11-14). MMDS (169.254.169.254) answers whatever this says (README "Network
+ * policy").
+ */
+// capybara:allow-module-state a read-only list of CIDR constants, never mutated
+export const OPEN_PUBLIC_DENIED = [
+  "10.0.0.0/8",
+  "172.16.0.0/12",
+  "192.168.0.0/16",
+  "127.0.0.0/8",
+  "169.254.0.0/16",
+  "100.64.0.0/10",
+  ...IPV6_DENIED,
+] as const;
+
+/**
  * The body of `PUT /sandboxes/{id}/network` this plugin sends (a subset of E2B's
- * `SandboxNetworkUpdateConfig`): either internet access on / off, or an allowlist with
- * everything else denied.
+ * `SandboxNetworkUpdateConfig`): no internet access, internet access with the local ranges
+ * denied (`open-public`), or an allowlist with everything else denied.
  */
 export type NetworkUpdate =
   | { allow_internet_access: false }
+  | { allow_internet_access: true; denyOut: string[] }
   | { allowOut: string[]; denyOut: string[] };
 
 /**
