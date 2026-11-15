@@ -17,6 +17,8 @@
 #   （同一个卷的可写挂载）写入技能，沙箱用户进不去；
 # - 内核的工具要用 GNU find（-print0）、GNU grep（--null、-e … --）、coreutils、sh / bash；
 #   插件中止命令要用 setsid（util-linux）与 pkill（procps）、timeout 与 base64（coreutils）；
+# - the plugins' list and scan (project root) run a python3 script inside the sandbox (python3 -I and
+#   timeout from /usr/local/bin, /usr/bin or /bin; standard library only): src/listing.ts in both plugins;
 # - one image for every sandbox mode (`auto` / `sandbox`): what a mode may do is set by policy (the
 #   sandbox tool policy and the egress network), not by missing binaries. It carries Node 22
 #   (official tarball, SHA256 pinned per architecture), pnpm (global, so

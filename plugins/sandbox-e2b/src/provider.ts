@@ -27,6 +27,16 @@ import {
   type StartRequest,
   updateNetwork,
 } from "./e2b-api.js";
+import {
+  checkListPath,
+  finishList,
+  finishScan,
+  LIST_MAX_OUTPUT_BYTES,
+  LIST_PATH,
+  LIST_SCRIPT,
+  LIST_TIMEOUT_SECONDS,
+  listLimit,
+} from "./listing.js";
 
 /** 部署配置（见 index.ts 的 DeploymentConfig）。 */
 export interface E2BSandboxConfig {
@@ -58,6 +68,11 @@ export interface E2BSandboxConfig {
 export interface E2BSandboxTestOptions {
   /** envd 地址改为这个（假 E2B 按 `E2b-Sandbox-Id` 请求头路由），不按沙箱 id 与域名拼。 */
   envdUrl?: string;
+  /**
+   * The PATH `list` / `scan` run with instead of the system directories (the fake E2B runs
+   * commands on the test machine, where python3 and timeout may live elsewhere).
+   */
+  listPath?: string;
 }
 
 /**
@@ -252,6 +267,17 @@ const USER_WRITE_SCRIPT =
 const SKILLS_WRITE_SCRIPT =
   'umask 022; s=1; mkdir -p -- "$(dirname -- "$1")" && cat -- "$2" > "$1" && chmod 0644 "$1" && s=0; ' +
   'rm -f -- "$2"; exit $s';
+
+/**
+ * Runs `LIST_SCRIPT` (`$2`, then its argv `$3`..`$5`) under the in-sandbox time limit `$1`; exit
+ * 127 when the template has no python3 or no timeout (on the PATH the command is given).
+ */
+const LIST_WRAPPER =
+  "command -v timeout >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || exit 127; " +
+  'exec timeout -s KILL "$1" python3 -I -c "$2" "$3" "$4" "$5"';
+
+const NO_PYTHON =
+  "sandbox-e2b: the sandbox template has no python3 or no timeout (looked up in /usr/local/bin, /usr/bin, /bin), which list and scan need; build the template from the published image or add them to your own";
 
 /** `ms` 毫秒后调用 `fn`（本次调用内的短暂等待；用 AbortSignal.timeout，不用进程级定时器 API）。 */
 function after(ms: number, fn: () => void): { cancel(): void } {
@@ -798,6 +824,40 @@ export function createE2BSandbox(
     return r;
   };
 
+  /**
+   * Runs `LIST_SCRIPT` in the sandbox as the sandbox user (links resolve there), under the
+   * in-sandbox time limit; an abort returns at once (the read-only script ends at its time limit at
+   * worst).
+   */
+  const listOp = async (
+    id: string,
+    op: "list" | "scan",
+    path: string,
+    limit: number,
+    signal: AbortSignal,
+  ): Promise<RunResult> => {
+    const t = await attach(id, signal);
+    return fileOp(
+      t,
+      {
+        user: SANDBOX_USER,
+        env: { PATH: test.listPath ?? LIST_PATH },
+        args: [
+          "-c",
+          LIST_WRAPPER,
+          "capybara-list",
+          String(LIST_TIMEOUT_SECONDS),
+          LIST_SCRIPT,
+          op,
+          path,
+          String(limit),
+        ],
+        maxOutputBytes: LIST_MAX_OUTPUT_BYTES,
+      },
+      signal,
+    );
+  };
+
   const stderrOf = (r: RunResult) => r.stderr.toString("utf8").trim().slice(0, 500);
 
   /**
@@ -1128,6 +1188,22 @@ export function createE2BSandbox(
       const m = r.stdout.toString("utf8").match(/^(\d+) (file|directory)\n?$/);
       if (r.exitCode !== 0 || !m) throw new Error(`cannot stat ${path}: ${stderrOf(r)}`);
       return { size: Number(m[1]), isDir: m[2] === "directory" };
+    },
+
+    // the sandbox's workspace is the whole area in either mode (core spec 2026-11-14 §4.2), so
+    // `limits.mode` changes nothing here
+    async list(h, path, opts) {
+      opts.signal.throwIfAborted();
+      const p = checkListPath(path);
+      const r = await listOp(h.id, "list", p, listLimit(opts.limit), opts.signal);
+      return finishList(p, r, NO_PYTHON);
+    },
+
+    async scan(h, base, opts) {
+      opts.signal.throwIfAborted();
+      const b = checkListPath(base);
+      const r = await listOp(h.id, "scan", b, 0, opts.signal);
+      return finishScan(b, r, NO_PYTHON);
     },
   };
 }
