@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-example-counter
 
+## 0.1.0-rc.3
+
+### Patch Changes
+
+- 8aea061: Declare route access (plugin-sdk 0.1.0-rc.23): `/inc`, `/count` and `/inc-later` are `public`, a
+  deployment-wide demo (the kernel rate-limits the public writes per client IP).
+
 ## 0.1.0-rc.2
 
 ### Patch Changes
