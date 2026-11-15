@@ -462,6 +462,28 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
     }
   });
 
+  it("file calls reach a clean absolute path outside the roots; malformed paths are refused", async () => {
+    // the roots by mode are the kernel's: auto mode's file tools reach any path (auto mode spec
+    // §4.1), sandbox mode's are checked before the call reaches the provider
+    const h = await newSandbox(sbx, {
+      name: sbxName(),
+      image: images.sandboxImage,
+      limits: limits(allow()),
+      signal: sig(),
+    });
+    try {
+      const passwd = await sbx.readFile(h, "/etc/passwd", { maxBytes: 100_000, signal: sig() });
+      expect(passwd && dec.decode(passwd.data)).toContain("root:");
+      expect((await sbx.stat(h, "/etc/passwd", sig()))?.isDir).toBe(false);
+      await expect(
+        sbx.readFile(h, "/workspace/../etc/passwd", { maxBytes: 1, signal: sig() }),
+      ).rejects.toThrow(/path/);
+      await expect(sbx.stat(h, "relative", sig())).rejects.toThrow(/path/);
+    } finally {
+      await sbx.destroy(h, sig());
+    }
+  });
+
   it("/skills is read-only inside the sandbox but writable through writeFile; no symlink bypass", async () => {
     const h = await newSandbox(sbx, {
       name: sbxName(),
