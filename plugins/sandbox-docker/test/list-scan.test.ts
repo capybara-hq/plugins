@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { connect, createServer, type Socket } from "node:net";
 import {
   DEVICE_SCAN_SKIPPED_BASE_DIRS,
   DEVICE_SCAN_SKIPPED_DIRS,
@@ -31,6 +32,15 @@ import {
  */
 
 const RUN = randomUUID().slice(0, 8);
+
+/** Polls `cond` (a wait condition, not a fixed sleep). */
+const waitFor = async (cond: () => boolean, ms = 30_000) => {
+  const end = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > end) throw new Error("condition not met in time");
+    await new Promise((r) => setTimeout(r, 25));
+  }
+};
 const sig = () => AbortSignal.timeout(120_000);
 const actor: SandboxActor = { accountId: "acc-1", conversationId: "conv-1" };
 type Mode = SandboxLimits["mode"];
@@ -112,7 +122,8 @@ describe.skipIf(!dockerAvailable)("sandbox-docker list and scan", { timeout: 120
 
   describe("list", () => {
     it("sorts entries by code unit and says which are directories, in either mode", async () => {
-      const d = await fixture("mkdir B a; : > _x; : > é");
+      // U+1F600 (surrogates D83D DE00) sorts before U+FF5E by code unit, after it by code point
+      const d = await fixture("mkdir B a; : > _x; : > é; : > ～; : > 😀");
       for (const mode of ["auto", "sandbox"] as const) {
         expect(await list(d, 10, mode)).toEqual({
           entries: [
@@ -120,6 +131,8 @@ describe.skipIf(!dockerAvailable)("sandbox-docker list and scan", { timeout: 120
             { name: "_x", isDir: false },
             { name: "a", isDir: true },
             { name: "é", isDir: false },
+            { name: "😀", isDir: false },
+            { name: "～", isDir: false },
           ],
           truncated: false,
         });
@@ -170,12 +183,53 @@ describe.skipIf(!dockerAvailable)("sandbox-docker list and scan", { timeout: 120
     it("throws for a path outside the workspace, also through a link, in either mode", async () => {
       const d = await fixture("ln -s /etc etc");
       for (const mode of ["auto", "sandbox"] as const) {
-        for (const path of ["/", "/etc", "/tmp", "/skills", "/workspacex", `${d}/etc`]) {
+        // a missing child below a link out throws too: null would tell whether /etc/nope exists
+        for (const path of [
+          "/",
+          "/etc",
+          "/tmp",
+          "/skills",
+          "/workspacex",
+          `${d}/etc`,
+          `${d}/etc/nope`,
+        ]) {
           await expect(list(path, 10, mode), `${mode} ${path}`).rejects.toThrow(/outside/);
         }
       }
-      await expect(list("/workspace/../etc")).rejects.toThrow(/path/);
+      await expect(list("/workspace/../etc")).rejects.toThrow(/outside/);
       await expect(list("relative")).rejects.toThrow(/path/);
+    });
+
+    it("normalizes the path: a trailing slash and . / .. segments answer as the plain path", async () => {
+      const d = await fixture("mkdir -p a/b");
+      const plain = await list(`${d}/a`);
+      expect(plain?.entries).toEqual([{ name: "b", isDir: true }]);
+      for (const p of [`${d}/a/`, `${d}/./a`, `${d}/a/b/..`])
+        expect(await list(p), p).toEqual(plain);
+    });
+
+    it("runs python3 and timeout from the system PATH, never the writable npm-global bin", async () => {
+      // the image's PATH starts with /workspace/.cache/npm-global/bin, which the sandbox user owns
+      // a planted python3 / timeout that answers nothing: used, the list would fail
+      const bin = "/workspace/.cache/npm-global/bin";
+      const d = await fixture(
+        `mkdir -p ${bin} a; for n in timeout python3; do printf '#!/bin/sh\\nexit 0\\n' > ${bin}/$n; chmod +x ${bin}/$n; done`,
+      );
+      try {
+        expect((await list(d))?.entries).toEqual([{ name: "a", isDir: true }]);
+      } finally {
+        // not through exec: its wrapper resolves timeout from the same PATH
+        await docker(
+          "exec",
+          "-u",
+          "1000:1000",
+          h.id,
+          "rm",
+          "-f",
+          `${bin}/timeout`,
+          `${bin}/python3`,
+        );
+      }
     });
 
     it("lists the workspace itself", async () => {
@@ -272,6 +326,17 @@ describe.skipIf(!dockerAvailable)("sandbox-docker list and scan", { timeout: 120
       }
     });
 
+    it("normalizes the base: a trailing slash and . segments give the plain base's candidates", async () => {
+      const d = await fixture("mkdir -p a/p/.git a/q/.git");
+      const plain = await scan(`${d}/a`);
+      expect(plain.map((c) => c.path)).toEqual([`${d}/a/p`, `${d}/a/q`]);
+      for (const b of [`${d}/a/`, `${d}/./a`, `${d}/a/p/..`])
+        expect(await scan(b), b).toEqual(plain);
+      const all = await scan("/workspace");
+      expect(all.length).toBeGreaterThan(0);
+      expect(await scan("/workspace/")).toEqual(all);
+    });
+
     it("scans through a base that is a link inside the workspace, reporting the path asked for", async () => {
       const d = await fixture("mkdir -p real/p/.git; ln -s $PWD/real alias");
       expect(await scan(`${d}/alias`)).toEqual([{ path: `${d}/alias/p`, suggestedName: "p" }]);
@@ -284,6 +349,61 @@ describe.skipIf(!dockerAvailable)("sandbox-docker list and scan", { timeout: 120
       ac.abort(new Error("stop"));
       await expect(list("/workspace", 10, "auto", ac.signal)).rejects.toThrow(/stop/);
       await expect(scan("/workspace", "auto", ac.signal)).rejects.toThrow(/stop/);
+    });
+
+    it("an abort while the list exec is being started rejects with its reason", async () => {
+      // a TCP relay in front of the socket proxy that holds the exec start request: the abort
+      // then lands while the provider waits for the attached exec, deterministically
+      const target = new URL(proxy.endpoint.replace(/^tcp:/, "http:"));
+      let held = false;
+      const sockets = new Set<Socket>();
+      const relay = createServer((client) => {
+        sockets.add(client);
+        const up = connect(Number(target.port), target.hostname);
+        sockets.add(up);
+        client.on("data", (chunk: Buffer) => {
+          if (/^POST \/[^ ]*exec\/[^/ ]+\/start /m.test(chunk.toString("latin1"))) {
+            held = true;
+            return;
+          }
+          up.write(chunk);
+        });
+        up.on("data", (chunk) => client.write(chunk));
+        const close = () => {
+          client.destroy();
+          up.destroy();
+        };
+        client.on("error", close).on("close", close);
+        up.on("error", close).on("close", close);
+      });
+      await new Promise<void>((r) => relay.listen(0, "127.0.0.1", r));
+      const port = (relay.address() as { port: number }).port;
+      try {
+        const slow = createDockerSandbox(
+          {
+            endpoint: `tcp://127.0.0.1:${port}`,
+            runtime: "runc",
+            network: netName,
+            egressProxyImage: images.egressImage,
+          },
+          { labels: { [TEST_LABEL]: RUN } },
+        );
+        for (const op of [
+          (s: AbortSignal) =>
+            slow.list(h, "/workspace", { limit: 10, limits: { mode: "auto" }, signal: s }),
+          (s: AbortSignal) => slow.scan(h, "/workspace", { limits: { mode: "auto" }, signal: s }),
+        ]) {
+          held = false;
+          const ac = new AbortController();
+          const p = op(ac.signal);
+          await waitFor(() => held);
+          ac.abort(new Error("lost lock"));
+          await expect(p).rejects.toThrow(/lost lock/);
+        }
+      } finally {
+        for (const s of sockets) s.destroy();
+        await new Promise<void>((r) => relay.close(() => r()));
+      }
     });
 
     it("starts a stopped container first", async () => {

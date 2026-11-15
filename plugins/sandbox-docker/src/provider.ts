@@ -25,6 +25,7 @@ import {
   finishList,
   finishScan,
   LIST_MAX_OUTPUT_BYTES,
+  LIST_PATH,
   LIST_SCRIPT,
   LIST_TIMEOUT_SECONDS,
   listLimit,
@@ -1001,6 +1002,7 @@ export function createDockerSandbox(
           String(limit),
         ],
         user: SANDBOX_USER,
+        env: [`PATH=${LIST_PATH}`],
         maxOutputBytes: LIST_MAX_OUTPUT_BYTES,
       },
       signal,
@@ -1380,22 +1382,22 @@ export function createDockerSandbox(
     // `limits.mode` changes nothing here
     async list(h, path, opts) {
       opts.signal.throwIfAborted();
-      checkListPath(path);
-      const r = await listOp(h, "list", path, listLimit(opts.limit), opts.signal);
-      return finishList(path, r, NO_PYTHON);
+      const p = checkListPath(path);
+      const r = await listOp(h, "list", p, listLimit(opts.limit), opts.signal);
+      return finishList(p, r, NO_PYTHON);
     },
 
     async scan(h, base, opts) {
       opts.signal.throwIfAborted();
-      checkListPath(base);
-      const r = await listOp(h, "scan", base, 0, opts.signal);
-      return finishScan(base, r, NO_PYTHON);
+      const b = checkListPath(base);
+      const r = await listOp(h, "scan", b, 0, opts.signal);
+      return finishScan(b, r, NO_PYTHON);
     },
   };
 }
 
 const NO_PYTHON =
-  "sandbox-docker: the sandbox image has no python3, which list and scan need; use the published image or add python3 to your own";
+  "sandbox-docker: the sandbox image has no python3 or no timeout (looked up in /usr/local/bin, /usr/bin, /bin), which list and scan need; use the published image or add them to your own";
 
 /**
  * 解码命令输出。被截断时先退回到完整的 UTF-8 字符边界（截断点落在多字节字符中间时丢掉残缺的尾巴），

@@ -127,11 +127,11 @@ or the device is recreated**; the timeout is pushed to at least "command timeout
   UTF-8 character boundary. envd sends a keepalive event every 50 seconds, so a command with no output for a long time is not disconnected by an intermediate proxy.
 - **readFile / stat**: small `head -c` / `stat` scripts run in the sandbox as the sandbox user (permissions and symlinks are resolved as the sandbox user). A missing file → null,
   and readFile on a directory also returns null.
-- **list / scan** (projects): a `python3 -I` script (`src/listing.ts`, the same as the Docker plugin's and core's local device in docker mode) runs in the sandbox as the
-  sandbox user under `timeout -s KILL 30`, the path passed as argv. The reachable area is `/workspace` in either mode (core spec 2026-11-14 project root §4.2): a path
+- **list / scan** (projects): a `python3 -I` script (`src/listing.ts`, the same file as the Docker plugin's; it follows the rules of core's local device docker mode) runs in the sandbox as the
+  sandbox user under `timeout -s KILL 30` with `PATH=/usr/local/bin:/usr/bin:/bin`, the normalized path passed as argv. The reachable area is `/workspace` in either mode (core spec 2026-11-14 project root §4.2): a path
   outside it, also through a link, is refused; a link whose target leaves it is not a directory. `scan` walks breadth-first, at most 500 directories, two levels below the
-  base, without following links. An abort returns at once; the read-only script ends at its time limit at worst. A template without python3 gets a clear error (the
-  published template has it).
+  base, without following links. An abort returns at once; the read-only script ends at its time limit at worst. A template without python3 or timeout gets a clear error (the
+  published template has both), and so does a listing that hits the 30 s limit.
 - **writeFile**: envd's upload endpoint opens the target as root and follows symlinks, so writing to the target directly could bypass permissions with something like `/workspace/l -> /etc`.
   So the plugin only transfers the bytes to a root-only staging directory `/opt/capybara/upload/<uuid>` (`/opt/capybara` owned by root, 0700), then runs as root
   `runuser -u sandbox -- sh -c 'mkdir -p …; cat > target' < staging file`: root only opens the staging file, while creating the directory and writing the target are both resolved as the

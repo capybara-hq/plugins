@@ -32,6 +32,7 @@ import {
   finishList,
   finishScan,
   LIST_MAX_OUTPUT_BYTES,
+  LIST_PATH,
   LIST_SCRIPT,
   LIST_TIMEOUT_SECONDS,
   listLimit,
@@ -67,6 +68,11 @@ export interface E2BSandboxConfig {
 export interface E2BSandboxTestOptions {
   /** envd 地址改为这个（假 E2B 按 `E2b-Sandbox-Id` 请求头路由），不按沙箱 id 与域名拼。 */
   envdUrl?: string;
+  /**
+   * The PATH `list` / `scan` run with instead of the system directories (the fake E2B runs
+   * commands on the test machine, where python3 and timeout may live elsewhere).
+   */
+  listPath?: string;
 }
 
 /**
@@ -264,13 +270,14 @@ const SKILLS_WRITE_SCRIPT =
 
 /**
  * Runs `LIST_SCRIPT` (`$2`, then its argv `$3`..`$5`) under the in-sandbox time limit `$1`; exit
- * 127 when the template has no python3.
+ * 127 when the template has no python3 or no timeout (on the PATH the command is given).
  */
 const LIST_WRAPPER =
-  'command -v python3 >/dev/null 2>&1 || exit 127; exec timeout -s KILL "$1" python3 -I -c "$2" "$3" "$4" "$5"';
+  "command -v timeout >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || exit 127; " +
+  'exec timeout -s KILL "$1" python3 -I -c "$2" "$3" "$4" "$5"';
 
 const NO_PYTHON =
-  "sandbox-e2b: the sandbox template has no python3, which list and scan need; build the template from the published image or add python3 to your own";
+  "sandbox-e2b: the sandbox template has no python3 or no timeout (looked up in /usr/local/bin, /usr/bin, /bin), which list and scan need; build the template from the published image or add them to your own";
 
 /** `ms` 毫秒后调用 `fn`（本次调用内的短暂等待；用 AbortSignal.timeout，不用进程级定时器 API）。 */
 function after(ms: number, fn: () => void): { cancel(): void } {
@@ -834,6 +841,7 @@ export function createE2BSandbox(
       t,
       {
         user: SANDBOX_USER,
+        env: { PATH: test.listPath ?? LIST_PATH },
         args: [
           "-c",
           LIST_WRAPPER,
@@ -1186,16 +1194,16 @@ export function createE2BSandbox(
     // `limits.mode` changes nothing here
     async list(h, path, opts) {
       opts.signal.throwIfAborted();
-      checkListPath(path);
-      const r = await listOp(h.id, "list", path, listLimit(opts.limit), opts.signal);
-      return finishList(path, r, NO_PYTHON);
+      const p = checkListPath(path);
+      const r = await listOp(h.id, "list", p, listLimit(opts.limit), opts.signal);
+      return finishList(p, r, NO_PYTHON);
     },
 
     async scan(h, base, opts) {
       opts.signal.throwIfAborted();
-      checkListPath(base);
-      const r = await listOp(h.id, "scan", base, 0, opts.signal);
-      return finishScan(base, r, NO_PYTHON);
+      const b = checkListPath(base);
+      const r = await listOp(h.id, "scan", b, 0, opts.signal);
+      return finishScan(b, r, NO_PYTHON);
     },
   };
 }

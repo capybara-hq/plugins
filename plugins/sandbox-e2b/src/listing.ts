@@ -1,3 +1,4 @@
+import { posix } from "node:path";
 import {
   DEVICE_SCAN_SKIPPED_BASE_DIRS,
   DEVICE_SCAN_SKIPPED_DIRS,
@@ -12,9 +13,10 @@ import {
 /*
  * `SandboxProvider.list` / `scan` read inside the instance: one python3 script run as the sandbox
  * user. KEEP IN STEP: this file is duplicated, byte for byte, in plugins/sandbox-docker/src/listing.ts
- * and plugins/sandbox-e2b/src/listing.ts (the plugins share no code package); the reference is core's
- * local device, `packages/device/src/exec/docker.ts` (`LIST_SCRIPT`) and `exec/listing.ts`, whose
- * rules this follows.
+ * and plugins/sandbox-e2b/src/listing.ts (the plugins share no code package;
+ * tools/checks/test/sandbox-listing.test.ts asserts they are identical). It follows the rules of
+ * core's local device in docker mode (`packages/device/src/exec/docker.ts`, `LIST_SCRIPT`, and
+ * `exec/listing.ts`); it is not the same script.
  */
 
 /** The whole area a cloud device offers, in either mode (core spec 2026-11-14 project root §4.2). */
@@ -24,24 +26,32 @@ export const LIST_AREA = "/workspace";
 export const LIST_TIMEOUT_SECONDS = 30;
 
 /**
+ * The PATH the list command runs with: the system directories only. The image's own PATH starts
+ * with /workspace/.cache/npm-global/bin, which the sandbox user can write, so `timeout` and
+ * `python3` are never looked up there.
+ */
+export const LIST_PATH = "/usr/local/bin:/usr/bin:/bin";
+
+/**
  * The most output a `list` / `scan` script writes: up to {@link MAX_DEVICE_LIST_ENTRIES} names as
  * ASCII-only JSON (every non-ASCII code unit escaped to six bytes) fit well within it.
  */
 export const LIST_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 /**
- * argv after the script: `<op> <path> <limit>`, the path already lexically under {@link LIST_AREA}
- * (passed as argv, never interpolated into code). The rules of core's `listDirectory` /
- * `scanDirectory` with the workspace as the area: real-path containment (a link whose target leaves
- * the workspace is not a directory, and a path that resolves outside it is refused), null / [] for
- * a missing path, the breadth-first walk and its budget. Names sort by UTF-16 code unit
+ * argv after the script: `<op> <path> <limit>`, the path already normalized and lexically under
+ * {@link LIST_AREA} (passed as argv, never interpolated into code). The rules of core's
+ * `listDirectory` / `scanDirectory` with the workspace as the area: real-path containment (a link
+ * whose target leaves the workspace is not a directory, and a path that resolves outside it is
+ * refused before anything is looked up there, so a refusal never tells whether it exists), null /
+ * [] for a missing path, the breadth-first walk and its budget. Names sort by UTF-16 code unit
  * (`utf-16-be` bytes). The workspace's own real path is resolved first, so containment holds
  * wherever it is mounted. stdout is one JSON object: `{"r": ...}` or `{"e": "policy" | "notdir" |
  * "read", "c": errno name}`; scan answers the candidates' paths relative to the base ("" for the
  * base), which the caller joins to the base it was asked for.
  */
 export const LIST_SCRIPT = `
-import errno, json, os, sys
+import errno, json, os, stat, sys
 op, p, limit = sys.argv[1], sys.argv[2], int(sys.argv[3])
 L = "${LIST_AREA}"
 W = os.path.realpath(L)
@@ -51,9 +61,6 @@ def key(s):
     return s.encode("utf-16-be", "surrogatepass")
 def under(r, a):
     return r == a or r.startswith(a + "/")
-def real(q):
-    os.stat(q)
-    return os.path.realpath(q)
 def fail(e):
     out({"e": "read", "c": errno.errorcode.get(getattr(e, "errno", None) or 0, "")})
 def plain_dir(e):
@@ -65,14 +72,18 @@ q = os.path.normpath(p)
 if not os.path.isabs(q) or not under(q, L):
     out({"e": "policy"})
 try:
-    r = real(q)
-except (FileNotFoundError, NotADirectoryError):
-    out({"r": None if op == "list" else []})
+    r = os.path.realpath(q)
 except OSError as e:
     fail(e)
 if not under(r, W):
     out({"e": "policy"})
-if not os.path.isdir(r):
+try:
+    st = os.stat(r)
+except (FileNotFoundError, NotADirectoryError):
+    out({"r": None if op == "list" else []})
+except OSError as e:
+    fail(e)
+if not stat.S_ISDIR(st.st_mode):
     out({"e": "notdir"})
 try:
     with os.scandir(r) as it:
@@ -85,7 +96,7 @@ def is_dir(d, e):
             return True
         if not e.is_symlink():
             return False
-        t = real(os.path.join(d, e.name))
+        t = os.path.realpath(os.path.join(d, e.name))
         return under(t, W) and os.path.isdir(t)
     except OSError:
         return False
@@ -124,15 +135,23 @@ out({"r": found})
 `;
 
 /**
- * Checks `path` before anything runs: the shape (absolute, no `..` or empty segments), then that it
- * lies lexically under {@link LIST_AREA}; a cloud device offers nothing else, whatever the mode.
+ * Checks `path` before anything runs and returns it normalized (`.` / `..` segments resolved, no
+ * trailing slash), which is what the script reads and what scan results are built on: the shape
+ * (absolute, no control characters), then that it lies lexically under {@link LIST_AREA}; a cloud
+ * device offers nothing else, whatever the mode.
  */
-export function checkListPath(path: string): void {
-  const errors = validateSandboxPathShape(path);
+export function checkListPath(path: string): string {
+  if (!path.startsWith("/")) {
+    throw new Error(`invalid sandbox path ${JSON.stringify(path)}: path must be absolute`);
+  }
+  let p = posix.normalize(path);
+  if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
+  const errors = validateSandboxPathShape(p);
   if (errors.length > 0) {
     throw new Error(`invalid sandbox path ${JSON.stringify(path)}: ${errors.join("; ")}`);
   }
-  if (path !== LIST_AREA && !path.startsWith(`${LIST_AREA}/`)) throw outside(path);
+  if (p !== LIST_AREA && !p.startsWith(`${LIST_AREA}/`)) throw outside(path);
+  return p;
 }
 
 /** The entries one `list` asks the script for: `limit`, at most {@link MAX_DEVICE_LIST_ENTRIES}. */
@@ -158,11 +177,16 @@ export interface ListRun {
 
 /**
  * The script's answer, or the error it reports. `noPython` is the provider's message for an image
- * without python3 (`timeout` / the shell answer 127).
+ * without python3 or timeout (`timeout` / the shell answer 127); 137 is the in-instance time limit.
  */
 function answerOf(op: "list" | "scan", path: string, run: ListRun, noPython: string): unknown {
   const text = (b: Uint8Array) => Buffer.from(b).toString("utf8").trim().slice(0, 300);
   if (run.exitCode === 127) throw new Error(noPython);
+  if (run.exitCode === 137) {
+    throw new Error(
+      `${op} ${path} took longer than ${LIST_TIMEOUT_SECONDS} s and was stopped; try a smaller directory or a base further down`,
+    );
+  }
   let res: { r?: unknown; e?: unknown; c?: unknown } | undefined;
   if (run.exitCode === 0 && !run.truncated) {
     try {

@@ -1,7 +1,7 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   DEVICE_SCAN_SKIPPED_BASE_DIRS,
   DEVICE_SCAN_SKIPPED_DIRS,
@@ -15,7 +15,8 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import { type FakeE2BServer, startFakeE2B } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createE2BSandbox, publishedImage } from "../src/index.js";
+import { createE2BSandbox, type E2BSandboxConfig, publishedImage } from "../src/index.js";
+import { finishList, finishScan, LIST_PATH } from "../src/listing.js";
 
 /**
  * `list` / `scan` (project root, core spec 2026-11-14 §4.1, §4.2) on E2B, against the fake E2B
@@ -44,10 +45,52 @@ const waitFor = async (cond: () => boolean, ms = 5000) => {
   }
 };
 
+/** A directory inside this plugin (not under /tmp, which the fake E2B rewrites in commands). */
+const scratch = () => {
+  const root = fileURLToPath(new URL("../node_modules/.cache/", import.meta.url));
+  mkdirSync(root, { recursive: true });
+  return mkdtempSync(`${root}list-bin-`);
+};
+
+describe("list / scan answers", () => {
+  const run = (exitCode: number | null, stdout = "") => ({
+    exitCode,
+    stdout: new TextEncoder().encode(stdout),
+    stderr: new Uint8Array(0),
+    truncated: false,
+  });
+
+  it("exit 137 (the in-instance time limit) says the listing took longer than 30 s", () => {
+    expect(() => finishList("/workspace/a", run(137), "np")).toThrow(
+      /list \/workspace\/a took longer than 30 s/,
+    );
+    expect(() => finishScan("/workspace", run(137), "np")).toThrow(/took longer than 30 s/);
+  });
+
+  it("exit 127 (no python3 or timeout) is the provider's message", () => {
+    expect(() => finishList("/workspace", run(127), "no python3 or timeout")).toThrow(
+      "no python3 or timeout",
+    );
+    expect(() => finishScan("/workspace", run(127), "no python3 or timeout")).toThrow(
+      "no python3 or timeout",
+    );
+  });
+
+  it("an unreadable answer or another exit code is an error naming the call", () => {
+    expect(() => finishList("/workspace", run(0, "nope"), "np")).toThrow(/unreadable answer/);
+    expect(() => finishScan("/workspace", run(3), "np")).toThrow(
+      /scan \/workspace failed.*exit code 3/,
+    );
+  });
+});
+
 describe("sandbox-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
   let fake: FakeE2BServer;
   let sbx: SandboxProvider;
   let h: SandboxHandle;
+  let cfg: E2BSandboxConfig;
+  /** python3 and timeout of this machine, the PATH list / scan get here (the sandbox has them in /usr/bin). */
+  let bin: string;
 
   const provision = async () => {
     const name = `cap-device-${randomUUID()}`;
@@ -57,18 +100,28 @@ describe("sandbox-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
 
   beforeAll(async () => {
     fake = await startFakeE2B();
+    bin = scratch();
+    const python = execFileSync("python3", ["-c", "import sys; print(sys.executable)"], {
+      encoding: "utf8",
+    }).trim();
+    const timeout = execFileSync("/bin/sh", ["-c", "command -v timeout || command -v gtimeout"], {
+      encoding: "utf8",
+    }).trim();
+    symlinkSync(python, `${bin}/python3`);
+    symlinkSync(timeout, `${bin}/timeout`);
+    cfg = {
+      apiKey: fake.apiKey,
+      apiUrl: fake.url,
+      domain: "e2b.app",
+      template: "capybara-sandbox",
+      defaultImage: publishedImage("0.0.0-test.1"),
+      timeoutSeconds: 3600,
+      domainAllowlist: true,
+    };
     sbx = createE2BSandbox(
-      {
-        apiKey: fake.apiKey,
-        apiUrl: fake.url,
-        domain: "e2b.app",
-        template: "capybara-sandbox",
-        defaultImage: publishedImage("0.0.0-test.1"),
-        timeoutSeconds: 3600,
-        domainAllowlist: true,
-      },
+      cfg,
       { log: silent },
-      { envdUrl: fake.url },
+      { envdUrl: fake.url, listPath: `${bin}:/usr/bin:/bin` },
     );
     h = await provision();
   });
@@ -85,6 +138,7 @@ describe("sandbox-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
       })
       .catch(() => undefined);
     await fake?.close();
+    if (bin) rmSync(bin, { recursive: true, force: true });
   });
 
   /** Runs `script` in a fresh directory under /workspace; returns that directory. */
@@ -113,7 +167,8 @@ describe("sandbox-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
 
   describe("list", () => {
     it("sorts entries by code unit and says which are directories, in either mode", async () => {
-      const d = await fixture("mkdir B a; : > _x; : > é");
+      // U+1F600 (surrogates D83D DE00) sorts before U+FF5E by code unit, after it by code point
+      const d = await fixture("mkdir B a; : > _x; : > é; : > ～; : > 😀");
       for (const mode of ["auto", "sandbox"] as const) {
         expect(await list(d, 10, mode)).toEqual({
           entries: [
@@ -121,6 +176,8 @@ describe("sandbox-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
             { name: "_x", isDir: false },
             { name: "a", isDir: true },
             { name: "é", isDir: false },
+            { name: "😀", isDir: false },
+            { name: "～", isDir: false },
           ],
           truncated: false,
         });
@@ -171,12 +228,42 @@ describe("sandbox-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
     it("throws for a path outside the workspace, also through a link, in either mode", async () => {
       const d = await fixture("ln -s /etc etc");
       for (const mode of ["auto", "sandbox"] as const) {
-        for (const path of ["/", "/etc", "/tmp", "/skills", "/workspacex", `${d}/etc`]) {
+        // a missing child below a link out throws too: null would tell whether /etc/nope exists
+        for (const path of [
+          "/",
+          "/etc",
+          "/tmp",
+          "/skills",
+          "/workspacex",
+          `${d}/etc`,
+          `${d}/etc/nope`,
+        ]) {
           await expect(list(path, 10, mode), `${mode} ${path}`).rejects.toThrow(/outside/);
         }
       }
-      await expect(list("/workspace/../etc")).rejects.toThrow(/path/);
+      await expect(list("/workspace/../etc")).rejects.toThrow(/outside/);
       await expect(list("relative")).rejects.toThrow(/path/);
+    });
+
+    it("normalizes the path: a trailing slash and . / .. segments answer as the plain path", async () => {
+      const d = await fixture("mkdir -p a/b");
+      const plain = await list(`${d}/a`);
+      expect(plain?.entries).toEqual([{ name: "b", isDir: true }]);
+      for (const p of [`${d}/a/`, `${d}/./a`, `${d}/a/b/..`])
+        expect(await list(p), p).toEqual(plain);
+    });
+
+    it("runs with the system PATH, never the image's (whose first entry the sandbox user can write)", async () => {
+      const plain = createE2BSandbox(cfg, { log: silent }, { envdUrl: fake.url });
+      await plain
+        .list?.(h, "/workspace", { limit: 1, limits: { mode: "auto" }, signal: sig() })
+        .catch(() => undefined); // this machine may keep python3 / timeout elsewhere
+      const start = fake.calls.filter((c) => c.path === "/process.Process/Start").at(-1);
+      const proc = (start?.body as { process?: { envs?: Record<string, string>; args?: string[] } })
+        ?.process;
+      expect(proc?.envs?.PATH).toBe(LIST_PATH);
+      expect(LIST_PATH).toBe("/usr/local/bin:/usr/bin:/bin");
+      expect(proc?.args?.[1]).toMatch(/command -v timeout .*command -v python3/);
     });
 
     it("runs as the sandbox user, the script and its arguments passed as argv", async () => {
@@ -274,6 +361,17 @@ describe("sandbox-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
       }
     });
 
+    it("normalizes the base: a trailing slash and . segments give the plain base's candidates", async () => {
+      const d = await fixture("mkdir -p a/p/.git a/q/.git");
+      const plain = await scan(`${d}/a`);
+      expect(plain.map((c) => c.path)).toEqual([`${d}/a/p`, `${d}/a/q`]);
+      for (const b of [`${d}/a/`, `${d}/./a`, `${d}/a/p/..`])
+        expect(await scan(b), b).toEqual(plain);
+      const all = await scan("/workspace");
+      expect(all.length).toBeGreaterThan(0);
+      expect(await scan("/workspace/")).toEqual(all);
+    });
+
     it("scans through a base that is a link inside the workspace, reporting the path asked for", async () => {
       const d = await fixture("mkdir -p real/p/.git; ln -s $PWD/real alias");
       expect(await scan(`${d}/alias`)).toEqual([{ path: `${d}/alias/p`, suggestedName: "p" }]);
@@ -306,19 +404,29 @@ describe("sandbox-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
       }
     });
 
-    it("a template without python3 is a clear error", async () => {
-      const empty = mkdtempSync(join(tmpdir(), "no-python-"));
-      const path = process.env.PATH;
-      // the fake runs commands with this process's PATH (after its shims): an empty directory
-      // leaves the sandbox shell without python3
-      process.env.PATH = empty;
+    it("a template without python3 or timeout is a clear error", async () => {
+      const empty = scratch();
       try {
-        await expect(list("/workspace")).rejects.toThrow(/no python3/);
-        await expect(scan("/workspace")).rejects.toThrow(/no python3/);
+        const bare = createE2BSandbox(cfg, { log: silent }, { envdUrl: fake.url, listPath: empty });
+        const o = { limits: { mode: "auto" as const }, signal: sig() };
+        await expect(bare.list?.(h, "/workspace", { ...o, limit: 1 })).rejects.toThrow(
+          /no python3 or no timeout/,
+        );
+        await expect(bare.scan?.(h, "/workspace", o)).rejects.toThrow(/no python3 or no timeout/);
       } finally {
-        process.env.PATH = path;
         rmSync(empty, { recursive: true, force: true });
       }
+    });
+
+    it("starts a paused sandbox first", async () => {
+      const g = await provision();
+      await sbx.suspend(g, sig());
+      expect(await list("/workspace", 10, "auto", sig(), g)).toEqual({
+        entries: [],
+        truncated: false,
+      });
+      await sbx.suspend(g, sig());
+      expect(await scan("/workspace", "auto", sig(), g)).toEqual([]);
     });
 
     it("a sandbox that is gone is SandboxGoneError", async () => {
