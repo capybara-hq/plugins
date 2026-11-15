@@ -1,5 +1,21 @@
 # @capybara-hq/plugin-sandbox-e2b
 
+## 0.1.0-rc.16
+
+### Minor Changes
+
+- b48e38e: Implements the optional `list` and `scan` calls of `sandbox@2` (plugin SDK 0.1.0-rc.24), so cloud
+  devices on E2B offer projects: the same `python3 -I` script as the Docker plugin runs in the
+  sandbox as the sandbox user, with `/workspace` as the whole reachable area in either mode. A
+  template without python3 gets a clear error. Requires `@capybara-hq/plugin-sdk@^0.1.0-rc.24`.
+
+### Patch Changes
+
+- a6ffe5c: File calls (`readFile`, `writeFile`, `stat`) check only the path's shape; which roots they may reach
+  is the kernel's, by mode. In auto mode the file tools reach any clean absolute path in the
+  instance (`Read /etc/passwd` failed with "invalid sandbox path" before), as the auto mode design
+  says; sandbox mode stays held to the workspace, skills and temporary roots by the kernel.
+
 ## 0.1.0-rc.15
 
 ### Patch Changes

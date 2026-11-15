@@ -130,7 +130,7 @@ export function providerConfig(
  */
 const plugin = defineExtension({
   name: "sandbox-docker",
-  version: "0.1.0-rc.15",
+  version: "0.1.0-rc.16",
   // The network contract (`limits.mode` / `limits.network`) is the SDK's from rc.22 on; a kernel
   // that predates it gets no network (the safe direction).
   sdk: "^0.1.0-rc.22",

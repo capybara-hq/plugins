@@ -1,5 +1,22 @@
 # @capybara-hq/plugin-sandbox-docker
 
+## 0.1.0-rc.16
+
+### Minor Changes
+
+- b48e38e: Implements the optional `list` and `scan` calls of `sandbox@2` (plugin SDK 0.1.0-rc.24), so cloud
+  devices on Docker offer projects: a `python3 -I` script run in the container as the sandbox user
+  lists one directory or finds project-like directories (`.git` or `AGENTS.md`), with the
+  container's `/workspace` as the whole reachable area in either mode. Requires
+  `@capybara-hq/plugin-sdk@^0.1.0-rc.24`.
+
+### Patch Changes
+
+- a6ffe5c: File calls (`readFile`, `writeFile`, `stat`) check only the path's shape; which roots they may reach
+  is the kernel's, by mode. In auto mode the file tools reach any clean absolute path in the
+  instance (`Read /etc/passwd` failed with "invalid sandbox path" before), as the auto mode design
+  says; sandbox mode stays held to the workspace, skills and temporary roots by the kernel.
+
 ## 0.1.0-rc.15
 
 ### Patch Changes
