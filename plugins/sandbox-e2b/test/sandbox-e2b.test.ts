@@ -1432,12 +1432,16 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       expect(stat?.user).toBe("sandbox");
     });
 
-    it("rejects paths outside the sandbox roots", async () => {
-      await expect(sbx.writeFile(h, "/etc/passwd", enc.encode("x"), sig())).rejects.toThrow(/path/);
+    it("rejects malformed paths; the roots by mode are the kernel's (auto mode reaches any path)", async () => {
       await expect(
         sbx.readFile(h, "/workspace/../etc/passwd", { maxBytes: 1, signal: sig() }),
       ).rejects.toThrow(/path/);
       await expect(sbx.stat(h, "relative", sig())).rejects.toThrow(/path/);
+      await expect(sbx.writeFile(h, "/workspace//x", enc.encode("x"), sig())).rejects.toThrow(
+        /path/,
+      );
+      // a clean absolute path outside the roots is passed to the instance (auto mode spec §4.1)
+      await expect(sbx.stat(h, "/opt/acceptance/missing", sig())).resolves.toBeNull();
     });
 
     it("write failures surface as errors and clean the staged upload", async () => {

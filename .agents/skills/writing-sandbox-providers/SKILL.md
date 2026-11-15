@@ -63,7 +63,7 @@ The two images are built from `plugins/sandbox-docker/image/` and published by `
 - **Output**: `maxOutputBytes` is the **combined** limit on stdout + stderr; excess is discarded and `truncated` set; truncation backs off to a full UTF-8 character boundary.
 - **`/skills` is read-only**: mounted read-only for the sandbox user (or owned by root with 0755); `writeFile("/skills/…")` is written by the provider as root and must not be redirected by a symlink the sandbox user placed. The kernel's protection checks only the path string; the real defense is the provider. Skill files have no executable bit (the model runs them through an interpreter, `sh /skills/x/run.sh`).
 - **File operations resolve as the sandbox user**: permissions and symlinks resolve as the non-root user (Docker runs small `head` / `stat` scripts in the container; E2B's upload endpoint opens the target as root, so upload to a root-only staging directory first and write the target with `runuser -u sandbox`). Never write volumes as root through the daemon.
-- Paths have passed the kernel's `validateSandboxPath` (only `/workspace`, `/skills`, `/tmp`); the working directory is `/workspace`, attachments are in `/workspace/attachments/<conversation>/`.
+- Paths have passed the kernel's checks for the mode: sandbox mode holds file calls to the roots (`/workspace`, `/skills`, `/tmp`), auto mode lets them reach any clean absolute path (core auto mode spec §4.1; the container is the boundary). A provider checks only the shape (`validateSandboxPathShape`: absolute, no `..` or empty segments), never root membership. The working directory is `/workspace`, attachments are in `/workspace/attachments/<conversation>/`.
 
 ### Limits and network (`SandboxLimits`)
 

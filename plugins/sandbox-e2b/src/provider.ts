@@ -8,7 +8,7 @@ import {
   type SandboxLimits,
   type SandboxProvider,
   validateAllowHost,
-  validateSandboxPath,
+  validateSandboxPathShape,
 } from "@capybara-hq/plugin-sdk";
 import {
   ALL_TRAFFIC,
@@ -301,8 +301,13 @@ function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
+/**
+ * The root-independent path checks (absolute, no `..` or empty segments, no control characters):
+ * which roots a file call may reach is the kernel's, by mode (auto mode reaches any path, the
+ * container is the boundary; sandbox mode is held to the roots before the call gets here).
+ */
 function checkPath(p: string): void {
-  const errors = validateSandboxPath(p);
+  const errors = validateSandboxPathShape(p);
   if (errors.length > 0)
     throw new Error(`invalid sandbox path ${JSON.stringify(p)}: ${errors.join("; ")}`);
 }
