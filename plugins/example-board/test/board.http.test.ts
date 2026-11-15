@@ -127,6 +127,55 @@ describe("example-board behind embed tokens", () => {
     ]);
   });
 
+  it("serves the page and its script to anyone: they carry no data", async () => {
+    await enable(owner, orgId, "example-board");
+    for (const path of ["/ui/board", "/ui/board-conv"]) {
+      const r = await asPlugin("GET", path);
+      expect(r.statusCode, path).toBe(200);
+      expect(r.headers["content-type"]).toMatch(/^text\/html/);
+    }
+    const js = await asPlugin("GET", "/ui/board.js");
+    expect(js.statusCode).toBe(200);
+    expect(js.headers["content-type"]).toMatch(/^text\/javascript/);
+  });
+
+  it("the kernel refuses a data request without a valid embed token before the board runs", async () => {
+    await enable(owner, orgId, "example-board");
+    for (const [method, path] of [
+      ["GET", "/ui/cards"],
+      ["POST", "/ui/cards"],
+      ["GET", "/ui/events"],
+    ] as const) {
+      for (const token of [undefined, "not.a-token"]) {
+        const r = await asPlugin(
+          method,
+          path,
+          token,
+          method === "POST" ? { title: "x" } : undefined,
+        );
+        expect(r.statusCode, `${method} ${path}`).toBe(401);
+        expect((r.json() as { error: { code: string } }).error.code).toBe("auth.required");
+      }
+    }
+    // The refused POST wrote nothing
+    const { token } = (await issue(owner, "example-board", "board")).json() as Issued;
+    const list = await asPlugin("GET", "/ui/cards", token);
+    expect((list.json() as { cards: unknown[] }).cards).toEqual([]);
+  });
+
+  it("takes the token from ?token= where a header cannot be set", async () => {
+    await enable(owner, orgId, "example-board");
+    const { token } = (await issue(owner, "example-board", "board")).json() as Issued;
+    expect((await asPlugin("POST", "/ui/cards", token, { title: "Via header" })).statusCode).toBe(
+      201,
+    );
+    const r = await asPlugin("GET", `/ui/cards?token=${encodeURIComponent(token)}`);
+    expect(r.statusCode, r.body).toBe(200);
+    expect((r.json() as { cards: { title: string }[] }).cards.map((c) => c.title)).toEqual([
+      "Via header",
+    ]);
+  });
+
   it("a page token reads and writes this org's cards; another org's token sees none of them", async () => {
     await enable(owner, orgId, "example-board");
     const { token } = (await issue(owner, "example-board", "board")).json() as Issued;
