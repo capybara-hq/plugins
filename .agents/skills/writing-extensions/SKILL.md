@@ -59,7 +59,7 @@ export default defineExtension({
   requires: [],               // extension points of other extensions depended on (optional; cannot duplicate provides)
   optional: [],               // optional dependencies: loads even when the provider is missing, list is empty on use
   permissions: {              // permission manifest: what is not declared is forbidden, see below
-    http: [{ method: "POST", path: "/inc" }],
+    http: [{ method: "POST", path: "/inc", access: "public" }],
   },
   config: {
     deployment: z.object({ step: z.number().int().positive().default(1) }), // deployment level
@@ -78,7 +78,7 @@ export default defineExtension({
 | Item | Form | Description |
 |---|---|---|
 | `secrets` | `secrets: true` | Required to use `ctx.secrets` |
-| `http` | `[{ method, path, public? }]` | Every `ctx.http.route` must be listed; `method` GET / POST / PUT / DELETE, `path` starts with `/`; `public: true` is highlighted at review. **For now `public` is only a declaration**: extension routes bypass kernel authentication either way (see "Extension routes") |
+| `http` | `[{ method, path, access }]` | Every `ctx.http.route` must be listed; `method` GET / POST / PUT / DELETE, `path` starts with `/`; `access` is required: `public` (anyone), `embed` (an embed token of this extension), `member` or `admin` (an org member / admin with a personal API token). The kernel enforces it before the handler runs (see "Extension routes"); `public` and `embed` are highlighted as sensitive at review |
 | `tools` | `["write"]` | The local name of each `ctx.tools.register` tool (without the `<extension name>__` prefix); tools see conversation content and are highlighted |
 | `network` | `["api.example.com"]` | Fixed domains accessed; display only, not enforced; omit when endpoints come from config; no wildcards |
 | `ui` | `{ views: ["tasks"], embeds: ["board"] }` | One-to-one with the manifest's top-level `ui`: views do not block loading, embeds need approval and are sensitive. See `.agents/skills/writing-extension-ui` |
@@ -103,7 +103,7 @@ const enabled = await ctx.extensionPoints.list<Directory>("directory@1", { orgId
 
 **Static check (`perm-*` of `pnpm check`)**: scans the `ctx` parameter of `setup` (including local aliases and a ctx passed by position to functions **in the same file**) and compares `ctx.secrets`, `ctx.http.route(method, path)`, `ctx.tools.register({ name })`, `ctx.extensionPoints.get|list(ref)`, `ctx.ui.view|action(id)`, `ctx.setup.check(id)`, `ctx.hooks.on(mount)`, `ctx.storage` and `ctx.models` (needs a non-empty `permissions.models`; the purposes are checked at run time) with the manifest. Route paths, tool names, refs, UI ids, setup check ids and hook mounts must be string literals (or a const in the same file); a dynamic value reports "cannot statically confirm"; for one truly known only at runtime (and reviewed), write `// capybara:allow-dynamic-permission <reason>` at the end of that line or on the line above (reason required; it only waives "cannot statically confirm"). The check cannot follow ctx into another file (the runtime `ExtensionPermissionError` is the backstop), so keep the code that uses platform APIs in the same file as `setup`.
 
-**Approval as an author sees it**: the deployment records an approved permission snapshot (the items above, provides / requires / optional, config fields, the tables created by migrations, the migration warnings digest). A new extension, or an upgrade with **any item beyond the snapshot**, does not load until an enterprise admin approves (extensions that `requires` it wait too); a shrunk or equal set loads directly. Per-entry comparison: a route turning from `public` to non-public or a config field from secret to ordinary is a new entry too. So **every extra item you add in a release makes the deployer stop and approve**; do not declare extra items casually. An unapproved extension's migrations do not run. Development and tests use the kernel config `extensionPermissions.autoApprove: true` (the dual-replica harness sets it); never in production. Extensions that provide `sandbox@1`, `object-store@1`, `channel@1`, `directory@1` or `identity-source@1` are shown as sensitive at review.
+**Approval as an author sees it**: the deployment records an approved permission snapshot (the items above, provides / requires / optional, config fields, the tables created by migrations, the migration warnings digest). A new extension, or an upgrade with **any item beyond the snapshot**, does not load until an enterprise admin approves (extensions that `requires` it wait too); a shrunk or equal set loads directly. Per-entry comparison: changing a route's `access` (the key is `permissions.http.<access>:<METHOD> <path>`) or a config field from secret to ordinary is a new entry too. So **every extra item you add in a release makes the deployer stop and approve**; do not declare extra items casually. An unapproved extension's migrations do not run. Development and tests use the kernel config `extensionPermissions.autoApprove: true` (the dual-replica harness sets it); never in production. Extensions that provide `sandbox@1`, `object-store@1`, `channel@1`, `directory@1` or `identity-source@1` are shown as sensitive at review.
 
 **`setup` must return**: setup runs serially in dependency order and is time-limited for installed extensions (`extensionHost.reloadSetupTimeoutSeconds`, default 60 s; a timeout is `setup_failed` and retried on the next reconcile); migrations are limited by `extensionHost.migrationTimeoutSeconds` (default 300 s). Extensions declared in the startup config are not time-limited, so a setup that never resolves hangs the kernel start. When you need to wait for an external dependency, set your own timeout in setup and throw, or move the wait into a queue job.
 
@@ -144,7 +144,7 @@ The `sdk` range is validated by the kernel against the SDK package version. A pl
 | `ctx.queue` | Delayed / asynchronous / periodic jobs | `define(name, handler)` in `setup`; `add(name, data, { delayMs, jobId })`; a job may run on any replica, delivery is **at-least-once** (retried, at most 3 times), so handlers are idempotent; names and jobId contain no `:` |
 | `ctx.lock` | Mutual exclusion | `acquire(key, { ttlMs })` returns a lease or `null`; long jobs `renew()`, and `release()` when done |
 | `ctx.bus` | Cross-replica broadcast | `publish` / `subscribe` (returns a cancel function); messages can be lost, so never the only end signal |
-| `ctx.http.route` | External interface | Mounted at `/plugins/<name><path>`; see "Extension routes"; bypasses kernel authentication |
+| `ctx.http.route` | External interface | Mounted at `/plugins/<name><path>` (`member` / `admin`: `/plugins/<name>/orgs/:orgId<path>`); the kernel authenticates the caller per the route's `access` before the handler; see "Extension routes" |
 | `ctx.provide` | Expose an extension point implementation | Must match `provides` |
 | `ctx.tools` | Tools for agents | `register(spec, handler)` only in `setup`; model-visible name `<extension name>__<spec.name>`; **only available in orgs that enabled this extension**. See `.agents/skills/writing-tools`, reference `plugins/todo` |
 | `ctx.ui` | Conversation-page panels / sections / inline cards, file previewers, org pages under "Extensions" | `view` / `action` (only in `setup`; honor `signal`, 5 s timeout), `invalidate` (across replicas), `verifyEmbedToken`. See `.agents/skills/writing-extension-ui` |
@@ -161,14 +161,27 @@ The `sdk` range is validated by the kernel against the SDK package version. A pl
 
 ### Extension routes (`ctx.http.route`)
 
-`ctx.http.route(method, path, (req: Request) => Promise<Response>)`; extensions do not depend on Nest.
+`ctx.http.route(method, path, (req: Request, caller: RouteCaller) => Promise<Response>)`; extensions do not depend on Nest.
 
 - **Path syntax is Fastify's** (find-my-way), relative to the extension prefix: `route("GET", "/items/:id", …)` matches `/plugins/<name>/items/42`; `*` works; matching ignores the query string. Trailing slashes matter (`/count` and `/count/` differ).
 - **The handler gets only a Web `Request`, no parsed parameters**: read `new URL(req.url).pathname` / `searchParams` yourself.
 - **The body is raw bytes** (no JSON / form parsing; webhook signatures can use them directly); GET / HEAD carry no body. **Body limit 1 MiB**: beyond it the kernel answers 413 `payload_too_large` and the handler is never reached.
 - **HEAD is treated as GET** when there is no HEAD route (`req.method` stays `"HEAD"`, no body is returned).
 - Unmatched -> 404 `not_found`; the handler throws -> 500 `internal` (logged, not echoed).
-- **Routes bypass kernel authentication**: no auth guard, no CSRF check, no caller identity. An externally exposed webhook must verify signatures itself. The kernel session cookies (`cap_at` / `cap_rt`) are stripped before forwarding.
+- **Every route declares `access` in `permissions.http`** (the route's access comes only from the manifest entry with the same method and path; a missing or unknown value is refused at import and by `capybara-plugin check`). The kernel enforces it before the body is read and before the handler runs; a refusal never reaches the handler. Core's spec: `docs/superpowers/specs/2026-11-15-extension-route-auth-design.md`.
+
+  | `access` | Who may call | Mounted at | `caller` |
+  |---|---|---|---|
+  | `public` | anyone | `/plugins/<name><path>` | `{ access: "public" }` |
+  | `embed` | a valid embed token of this extension (Bearer or `?token=`) | `/plugins/<name><path>`, path under `/ui/` | `{ access: "embed", scope: "org", orgId, accountId, role, contribution, conversationId?, exp, config }` or `{ access: "embed", scope: "platform", accountId, role: "superAdmin", contribution, exp }` |
+  | `member` | a member (role >= member) of the org in the URL, the extension enabled there | `/plugins/<name>/orgs/:orgId<path>` | `{ access: "member", orgId, accountId, role, config }` |
+  | `admin` | as `member` with role >= admin | `/plugins/<name>/orgs/:orgId<path>` | `{ access: "admin", orgId, accountId, role, config }` |
+
+- **`member` / `admin` take only `Authorization: Bearer cap_pat_...`** (a personal API token; no session cookies, service tokens 403). No or an invalid token is 401 `auth.required`; a non-member, an org where the extension is off or a deleted org 404 `org.not_found`; a lower role 403 `forbidden`; an org whose effective config is invalid 409 `extension.needs_config`.
+- **Trust only `caller`**: take the org from `caller.orgId`, never from the URL, query or body. `config` is the effective config for that org. An embed token is not bound to one route (any `embed` route accepts any valid token of the extension), so check `caller.contribution` and `caller.role` yourself for role- or contribution-specific data; a long handler (SSE) ends at `caller.exp`.
+- **Path rules**: `embed` paths start with `/ui/`; `member` / `admin` paths contain no `:orgId` parameter; no path starts with `/orgs/` (reserved for the org mount). An embed UI contribution's `path` is a `GET` with `access: "public"` (the iframe loads the page before it holds a token).
+- **Public writes are throttled**: `public` POST / PUT / DELETE get 300 requests per minute per client IP per extension (429 `rate_limited`). A `public` webhook still verifies signatures itself.
+- **The handler never sees kernel credentials**: the session cookies (`cap_at` / `cap_rt`) and an `Authorization` header carrying a kernel token (`cap_pat_` / `cap_svc_`) are stripped before forwarding; an embed token stays.
 - Response status and headers (including several `set-cookie`) pass through; the body may stream.
 - `req.signal` aborts when the client disconnects early, on revocation and **on shutdown** (all in-progress requests abort together): a long connection (SSE) unsubscribes and ends on it; put work that must finish into a queue.
 - Embed routes live under `/ui/` and are reached through the web app's `/plugin-ui/<plugin>/...` proxy; see `.agents/skills/writing-extension-ui`.

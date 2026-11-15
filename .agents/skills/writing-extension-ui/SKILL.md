@@ -78,14 +78,18 @@ defineExtension({
     { id: "board-conv", title: { zh: "看板", en: "Board" }, place: "conversation", kind: "embed", path: "/ui/board-conv" },
   ],
   permissions: {
-    http: [{ method: "GET", path: "/ui/board" }, { method: "GET", path: "/ui/board-conv" }, /* data routes are also under /ui/ */],
+    http: [
+      { method: "GET", path: "/ui/board", access: "public" },      // the page: no data, loaded before the token
+      { method: "GET", path: "/ui/board-conv", access: "public" },
+      { method: "GET", path: "/ui/cards", access: "embed" },       // data: the kernel verifies the embed token
+    ],
     ui: { embeds: ["board", "board-conv"] },
   },
 });
 ```
 
 - A contribution `id` matches `^[a-z][a-z0-9-]{0,39}$` and is unique within the extension; both the zh and en parts of `title` are non-empty and <= 100 characters.
-- `path` is allowed only on embeds: it starts with `/ui/` and is declared as `GET <path>` in `permissions.http`. All routes an embed uses (page, scripts, data, SSE) must be under `/ui/`; the web proxy forwards only there.
+- `path` is allowed only on embeds: it starts with `/ui/` and is declared as `GET <path>` with `access: "public"` in `permissions.http`. All routes an embed uses (page, scripts, data, SSE) must be under `/ui/`; the web proxy forwards only there.
 - **Two-way cross-check** (`validateUiContributions`, run by `defineExtension` and the kernel): a kind view id must be in `permissions.ui.views`, a kind embed id in `permissions.ui.embeds`, and every id in `permissions.ui` must have a contribution of that kind. An id cannot be on both sides.
 - **Approval**: the permission keys are `ui.view:<id>` and `ui.embed:<id>`.
   - `ui.view:*` is recorded and visible at review but **never blocks loading**: an upgrade that adds only views loads as usual and the kernel merges them into the snapshot. Exception: a brand-new extension needs approval even with only views.
@@ -173,7 +177,7 @@ The extension's page is placed in the web app's sandboxed iframe (`sandbox="allo
 
 - The web app obtains a token for a contribution (a conversation embed carries its `conversationId`) and loads `src` = `/plugin-ui/<plugin>/<path with the leading /ui/ removed>` (e.g. `/plugin-ui/example-board/board`). At signing the kernel has verified that the extension is enabled, the contribution is an embed, and the caller can access the conversation.
 - A token is stateless and signed with the master key; valid for 300 seconds (`EMBED_TOKEN_TTL_SECONDS`). Its claims are `EmbedClaims`: `plugin`, `orgId`, `accountId`, `role`, `conversationId?`, `contribution`, `exp` (and `fileId` for a previewer).
-- **Every data route first does `await ctx.ui.verifyEmbedToken(token)`** and returns 401 on null. It accepts only tokens signed for **this extension**, and checks every time (uncached) that the extension is still enabled in `claims.orgId`, the org exists, and the account is active and still a member: disabling, leaving or deactivation invalidates issued tokens at once. The returned `role` is the current one; an org-page token is null after the caller is demoted to guest. **Take org, account and conversation only from the returned claims**, never from request parameters. A conversation token scopes data by `conversationId`; an org token (no conversation) must not see data inside conversations (example-board's `scoped()`).
+- **Data routes declare `access: "embed"`; the kernel verifies the token before the handler runs** (Bearer, or `?token=` where a header cannot be set) and an invalid one never reaches it (401 `auth.required`). The handler gets `caller`: `{ access: "embed", scope: "org", orgId, accountId, role, contribution, conversationId?, exp, config }` (a `platform.page` token: `scope: "platform"`, no `orgId`, `conversationId` or `config`). The kernel accepts only tokens signed for **this extension**, and checks every time (uncached) that the extension is still enabled in the org, the org exists, and the account is active and still a member: disabling, leaving or deactivation invalidates issued tokens at once. `caller.role` is the current one; an org-page token is refused after the caller is demoted to guest. **Take org, account and conversation only from `caller`**, never from request parameters. A token is not bound to one route: any `embed` route of the extension accepts any valid token of the extension, so check `caller.contribution` and `caller.role` for role- or contribution-specific data. A conversation token scopes data by `conversationId`; an org token (no conversation) must not see data inside conversations (example-board's `scoped()`). `ctx.ui.verifyEmbedToken(token)` stays for tokens used elsewhere.
 - The kernel's `/api` never accepts embed tokens; the worst outcome of a leak is calling **this extension's** data routes as that user within 300 seconds.
 
 ### What the `/plugin-ui` proxy lets through
@@ -203,9 +207,9 @@ The web app's `/plugin-ui/<plugin>/<rest>` forwards to the kernel's `/plugins/<p
 
 ### Pages and data
 
-- **Static pages and scripts carry no data** and may skip token verification (an iframe loading `src` cannot send `Authorization`, and the token arrives only with `init`); data comes only through routes that verify the token. Never put the token in a URL query string (logs, history).
+- **Static pages and scripts carry no data** and are `public` GETs (an iframe loading `src` cannot send `Authorization`, and the token arrives only with `init`); data comes only through `embed` routes. Send the token as `Authorization: Bearer <token>`; the kernel also accepts `?token=`, but use it only where a header cannot be set (a URL ends up in history and proxy logs).
 - Build the DOM with `textContent`; no data through `innerHTML`. Styles use `var(--cb-*, fallback)`, written to `:root` on `init` / `theme`.
-- **Real-time refresh goes through `ctx.bus`, subscribed per request**: in an SSE route `await ctx.bus.subscribe(topic, ...)`, and unsubscribe when `req.signal` aborts or in the `ReadableStream` `cancel`; end the stream at the token's `exp` (the page reconnects with the renewed token, so permissions expire with it). Heartbeats wait with `AbortSignal.timeout` inside the request, not a timer; no module-level subscription table. The page reads the stream with `fetch` (`EventSource` cannot send `Authorization`). The writer publishes once and streams on every replica receive it.
+- **Real-time refresh goes through `ctx.bus`, subscribed per request**: in an SSE route `await ctx.bus.subscribe(topic, ...)`, and unsubscribe when `req.signal` aborts or in the `ReadableStream` `cancel`; end the stream at `caller.exp` (the page reconnects with the renewed token, so permissions expire with it). Heartbeats wait with `AbortSignal.timeout` inside the request, not a timer; no module-level subscription table. The page reads the stream with `fetch` (`EventSource` cannot send `Authorization`). The writer publishes once and streams on every replica receive it.
 - `req.signal` aborts only if the client disconnects before the response is fully written.
 
 ## Writing tests
