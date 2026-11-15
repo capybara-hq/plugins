@@ -1,9 +1,9 @@
-import { defineExtension, type EmbedClaims, type ExtensionContext } from "@capybara-hq/plugin-sdk";
+import { defineExtension, type ExtensionContext, type RouteCaller } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 import { BOARD_HTML, BOARD_JS } from "./page.js";
 
-/** The claims of an org page's embed token (the board never runs on a platform page). */
-type OrgClaims = Extract<EmbedClaims, { scope: "org" }>;
+/** The caller of a data route with an org embed token (the board never runs on a platform page). */
+type OrgCaller = Extract<RouteCaller, { access: "embed"; scope: "org" }>;
 
 type Db = ExtensionContext["db"];
 
@@ -30,7 +30,6 @@ const CreateBody = z.object({ title: z.string().trim().min(1).max(200) });
 const MoveBody = z.object({ status: z.enum(STATUSES) });
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const BEARER_RE = /^Bearer ([A-Za-z0-9._-]{1,4096})$/;
 const MAX_CARDS = 200;
 /** SSE 心跳间隔：中间层（Web 代理、负载均衡）不会把空闲连接掐断。 */
 const HEARTBEAT_MS = 15_000;
@@ -40,7 +39,11 @@ const cardsTopic = (orgId: string) => `cards.${orgId}`;
 const json = (status: number, body: unknown) => Response.json(body, { status });
 const error = (status: number, code: string, message: string) =>
   json(status, { error: { code, message } });
-const unauthorized = () => error(401, "unauthorized", "A valid embed token is required");
+const forbidden = () => error(403, "forbidden", "The board needs an org embed token");
+
+/** The kernel verified the embed token; the board only accepts an org-scope one. */
+const orgCaller = (caller: RouteCaller): OrgCaller | null =>
+  caller.access === "embed" && caller.scope === "org" ? caller : null;
 
 const toCard = (r: Record<string, unknown>): Card => ({
   id: String(r.id),
@@ -68,21 +71,22 @@ async function body<T>(req: Request, schema: z.ZodType<T>): Promise<T | undefine
 }
 
 /**
- * 令牌的可见范围：对话嵌入只看这个对话的卡片；组织页面只看不属于任何对话的卡片
- * （对话里的卡片只能经声明里有该对话的 board-conv 令牌看到，组织页面的令牌看不到也改不了）。
+ * What a token sees: a conversation embed sees only that conversation's cards; the org page sees
+ * only cards outside any conversation (a conversation's cards are reachable only with a board-conv
+ * token naming that conversation; an org page token neither sees nor changes them).
  */
 // biome-ignore lint/suspicious/noExplicitAny: 插件自带表结构，Kysely 未声明类型
-function scoped(q: any, claims: OrgClaims): any {
-  const byOrg = q.where("org_id", "=", claims.orgId);
-  return claims.conversationId === undefined
+function scoped(q: any, who: OrgCaller): any {
+  const byOrg = q.where("org_id", "=", who.orgId);
+  return who.conversationId === undefined
     ? byOrg.where("conversation_id", "is", null)
-    : byOrg.where("conversation_id", "=", claims.conversationId);
+    : byOrg.where("conversation_id", "=", who.conversationId);
 }
 
-async function listCards(db: Db, claims: OrgClaims): Promise<Card[]> {
+async function listCards(db: Db, who: OrgCaller): Promise<Card[]> {
   const rows = await scoped(
     db.selectFrom("cards").select(["id", "title", "status", "conversation_id"]),
-    claims,
+    who,
   )
     .orderBy("created_at")
     .orderBy("id")
@@ -100,11 +104,15 @@ const sleep = (ms: number, signal: AbortSignal) =>
   });
 
 /**
- * 第二档界面（嵌入应用）的参考插件：一个最小的「工作流进度看板」。
- * - 组织页面 `board`（顶栏「扩展」）与对话标签 `board-conv`，都是 iframe 里的插件页面；
- * - 每个数据路由先 `ctx.ui.verifyEmbedToken`，不通过 401；身份（组织、账号、对话）只从令牌声明里取；
- * - `/ui/events`（SSE）按请求订阅 `ctx.bus`，客户端断开或令牌过期时退订、结束（网页用续期后的令牌重连）；
- * - 不用定时器、不放模块级可变状态：跨副本的刷新全靠 bus。
+ * The reference plugin for tier-two UI (embedded apps): a minimal workflow progress board.
+ * - The org page `board` (top bar "Extensions") and the conversation panel `board-conv` are both
+ *   extension pages in an iframe;
+ * - the page and script are `public` GETs (no data); every data route is `access: "embed"`: the
+ *   kernel verifies the token (Bearer or `?token=`) before the handler, and identity (org, account,
+ *   conversation) comes only from `caller`;
+ * - `/ui/events` (SSE) subscribes to `ctx.bus` per request and unsubscribes and ends when the client
+ *   disconnects or at `caller.exp` (the page reconnects with the renewed token);
+ * - no timers and no module-level mutable state: refresh across replicas goes through the bus.
  */
 export default defineExtension({
   name: "example-board",
@@ -133,28 +141,21 @@ export default defineExtension({
   ],
   permissions: {
     http: [
-      { method: "GET", path: "/ui/board" },
-      { method: "GET", path: "/ui/board-conv" },
-      { method: "GET", path: "/ui/board.js" },
-      { method: "GET", path: "/ui/cards" },
-      { method: "POST", path: "/ui/cards" },
-      { method: "POST", path: "/ui/cards/:id" },
-      { method: "GET", path: "/ui/events" },
+      { method: "GET", path: "/ui/board", access: "public" },
+      { method: "GET", path: "/ui/board-conv", access: "public" },
+      { method: "GET", path: "/ui/board.js", access: "public" },
+      { method: "GET", path: "/ui/cards", access: "embed" },
+      { method: "POST", path: "/ui/cards", access: "embed" },
+      { method: "POST", path: "/ui/cards/:id", access: "embed" },
+      { method: "GET", path: "/ui/events", access: "embed" },
     ],
     ui: { embeds: ["board", "board-conv"] },
   },
   setup(ctx) {
-    // The board is an org page: a platform-scope token (no org) is refused like a missing one.
-    const auth = async (req: Request): Promise<OrgClaims | null> => {
-      const m = BEARER_RE.exec(req.headers.get("authorization") ?? "");
-      if (m?.[1] === undefined) return null;
-      const claims = await ctx.ui.verifyEmbedToken(m[1]);
-      return claims?.scope === "org" ? claims : null;
-    };
     const publish = (orgId: string, change: CardChange) =>
       ctx.bus.publish(cardsTopic(orgId), change);
 
-    // ---- 静态页面与脚本：不含数据，不要求令牌 ----
+    // ---- Static page and script: no data, public ----
     const html = async () =>
       new Response(BOARD_HTML, {
         headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" },
@@ -173,29 +174,29 @@ export default defineExtension({
         }),
     );
 
-    // ---- 数据 ----
-    ctx.http.route("GET", "/ui/cards", async (req) => {
-      const claims = await auth(req);
-      if (!claims) return unauthorized();
-      return json(200, { cards: await listCards(ctx.db, claims) });
+    // ---- Data: the kernel has verified the embed token; a platform-scope token (no org) is 403 ----
+    ctx.http.route("GET", "/ui/cards", async (_req, caller) => {
+      const who = orgCaller(caller);
+      if (!who) return forbidden();
+      return json(200, { cards: await listCards(ctx.db, who) });
     });
 
-    ctx.http.route("POST", "/ui/cards", async (req) => {
-      const claims = await auth(req);
-      if (!claims) return unauthorized();
+    ctx.http.route("POST", "/ui/cards", async (req, caller) => {
+      const who = orgCaller(caller);
+      if (!who) return forbidden();
       const input = await body(req, CreateBody);
       if (!input) return error(400, "validation_failed", "title must be 1-200 characters");
       const row = await ctx.db
         .insertInto("cards")
         .values({
-          org_id: claims.orgId,
-          conversation_id: claims.conversationId ?? null,
+          org_id: who.orgId,
+          conversation_id: who.conversationId ?? null,
           title: input.title,
         })
         .returning(["id", "title", "status", "conversation_id"])
         .executeTakeFirstOrThrow();
       const card = toCard(row);
-      await publish(claims.orgId, {
+      await publish(who.orgId, {
         cardId: card.id,
         status: card.status,
         conversationId: card.conversationId,
@@ -203,9 +204,9 @@ export default defineExtension({
       return json(201, { card });
     });
 
-    ctx.http.route("POST", "/ui/cards/:id", async (req) => {
-      const claims = await auth(req);
-      if (!claims) return unauthorized();
+    ctx.http.route("POST", "/ui/cards/:id", async (req, caller) => {
+      const who = orgCaller(caller);
+      if (!who) return forbidden();
       const id = decodeURIComponent(new URL(req.url).pathname.split("/").pop() ?? "");
       if (!UUID_RE.test(id)) return error(404, "not_found", "Card not found");
       const input = await body(req, MoveBody);
@@ -215,13 +216,13 @@ export default defineExtension({
           .updateTable("cards")
           .set({ status: input.status, updated_at: new Date() })
           .where("id", "=", id),
-        claims,
+        who,
       )
         .returning(["id", "title", "status", "conversation_id"])
         .executeTakeFirst();
       if (!row) return error(404, "not_found", "Card not found");
       const card = toCard(row);
-      await publish(claims.orgId, {
+      await publish(who.orgId, {
         cardId: card.id,
         status: card.status,
         conversationId: card.conversationId,
@@ -230,13 +231,14 @@ export default defineExtension({
     });
 
     // ---- 实时刷新：SSE，按请求订阅 bus ----
-    ctx.http.route("GET", "/ui/events", async (req) => {
-      const claims = await auth(req);
-      if (!claims) return unauthorized();
-      // 客户端断开或令牌过期即结束：过期后网页用续期的令牌重连，权限随令牌一起过期
+    ctx.http.route("GET", "/ui/events", async (req, caller) => {
+      const who = orgCaller(caller);
+      if (!who) return forbidden();
+      // End when the client disconnects or the token expires (caller.exp): the page reconnects with
+      // the renewed token, so access expires with the token
       const done = AbortSignal.any([
         req.signal,
-        AbortSignal.timeout(Math.max(1, claims.exp * 1000 - Date.now())),
+        AbortSignal.timeout(Math.max(1, who.exp * 1000 - Date.now())),
       ]);
       const enc = new TextEncoder();
       let closed = false;
@@ -262,11 +264,11 @@ export default defineExtension({
               // 已被取消
             }
           };
-          const u = await ctx.bus.subscribe(cardsTopic(claims.orgId), (m) => {
+          const u = await ctx.bus.subscribe(cardsTopic(who.orgId), (m) => {
             const change = parseChange(m);
             if (!change) return;
             // 与列表同一可见范围：组织页面只收不属于对话的卡片，对话标签只收本对话的
-            if (change.conversationId !== (claims.conversationId ?? null)) return;
+            if (change.conversationId !== (who.conversationId ?? null)) return;
             send(
               `event: cards\ndata: ${JSON.stringify({ cardId: change.cardId, status: change.status })}\n\n`,
             );

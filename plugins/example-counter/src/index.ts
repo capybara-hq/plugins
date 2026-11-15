@@ -63,9 +63,10 @@ export default defineExtension({
   migrations: "../migrations",
   permissions: {
     http: [
-      { method: "POST", path: "/inc" },
-      { method: "GET", path: "/count" },
-      { method: "POST", path: "/inc-later" },
+      // A deployment-wide demo: anyone may call it (public writes are rate-limited per client IP)
+      { method: "POST", path: "/inc", access: "public" },
+      { method: "GET", path: "/count", access: "public" },
+      { method: "POST", path: "/inc-later", access: "public" },
     ],
   },
   setup(ctx) {
