@@ -108,8 +108,6 @@ describe("todo in a kernel", () => {
         ],
       },
     ]);
-    // the old id `tasks` still answers, with the panel (one release)
-    expect((await view("tasks")).view).toEqual(after);
     expect((await view("tasks-section")).view.badge).toBe("1/3");
     expect((await view("tasks-card")).view.badge).toBe("1/3");
 

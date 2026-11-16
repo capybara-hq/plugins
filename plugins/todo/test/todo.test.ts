@@ -83,14 +83,24 @@ describe("todo 插件", { timeout: 60_000 }, () => {
     // titled 待办 / Todos, never "tasks" (that reads as background or scheduled tasks)
     const title = { zh: "待办", en: "Todos" };
     expect(todo.ui).toEqual([
-      { id: "tasks-panel", title, place: "panel", kind: "view", icon: "list-checks" },
-      { id: "tasks-section", title, place: "section", kind: "view", icon: "list-checks" },
-      { id: "tasks-card", title, place: "inline", kind: "view", icon: "list-checks" },
-      // the old id answers as the panel for one release (open web pages keep working)
-      { id: "tasks", title, place: "conversation", kind: "view", aliasOf: "tasks-panel" },
+      { id: "tasks-panel", title, slot: "conversation.panel", kind: "view", icon: "list-checks" },
+      {
+        id: "tasks-section",
+        title,
+        slot: "conversation.properties.section",
+        kind: "view",
+        icon: "list-checks",
+      },
+      {
+        id: "tasks-card",
+        title,
+        slot: "conversation.tool-result.card",
+        kind: "view",
+        icon: "list-checks",
+      },
     ]);
     expect(todo.permissions?.ui).toEqual({
-      views: ["tasks-panel", "tasks-section", "tasks-card", "tasks"],
+      views: ["tasks-panel", "tasks-section", "tasks-card"],
     });
     expect(validateUiContributions(todo.ui, todo.permissions)).toEqual([]);
   });
@@ -200,7 +210,7 @@ describe("todo 插件", { timeout: 60_000 }, () => {
     // a snapshot is scoped by its conversation
     expect(await readSnapshot(b, "conv-2", key1)).toBeNull();
     expect(invalidated).toEqual(
-      ["tasks-panel", "tasks-section", "tasks-card", "tasks"].map((contribution) => ({
+      ["tasks-panel", "tasks-section", "tasks-card"].map((contribution) => ({
         orgId: "org",
         conversationId: "conv-1",
         contribution,
