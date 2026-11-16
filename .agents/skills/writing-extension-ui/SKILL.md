@@ -1,6 +1,6 @@
 ---
 name: writing-extension-ui
-description: 'Use when adding UI to an extension in this repository (an inline card, a properties section or a right panel on the conversation page, a file previewer, or an org page under the "Extensions" menu): the places panel / section / inline / page / file-preview, icons, open targets and ToolResult.card; choosing between a rendered schema view and an embed iframe; the manifest ui contribution and permissions.ui.views / embeds (an embed blocks loading and is sensitive), the perm-ui check; ctx.ui.view / action / invalidate (signal, timeout, error codes); UiView blocks and UI_LIMITS; the bilingual ToolResult.display summary; embed tokens (verifyEmbedToken), what the /plugin-ui proxy allows, the message bridge rules, SSE via ctx.bus with req.signal; reference plugins/todo and plugins/example-board, and tests.'
+description: 'Use when adding UI to an extension in this repository (an inline card, a properties section or a right panel on the conversation page, a file previewer, or an org page under the "Extensions" menu): the slots conversation.panel / conversation.properties.section / conversation.tool-result.card / org.page / file.preview, icons, open targets and ToolResult.card; choosing between a rendered schema view and an embed iframe; the manifest ui contribution and permissions.ui.views / embeds (an embed blocks loading and is sensitive), the perm-ui check; ctx.ui.view / action / invalidate (signal, timeout, error codes); UiView blocks and UI_LIMITS; the bilingual ToolResult.display summary; embed tokens (verifyEmbedToken), what the /plugin-ui proxy allows, the message bridge rules, SSE via ctx.bus with req.signal; reference plugins/todo and plugins/example-board, and tests.'
 ---
 
 # Writing extension UI
@@ -9,8 +9,8 @@ This skill covers only the UI an extension contributes; for general extension au
 
 Reference implementations:
 
-- Tier 1 (rendered schema view): `plugins/todo`, views `tasks-panel` / `tasks-section` / `tasks-card` (and the alias `tasks`); `plugin__todo__write` returns `card` and calls `invalidate` after writing.
-- Tier 2 (embed): `plugins/example-board`, org page `board` and conversation panel `board-conv` (still declared with the old `place: "conversation"`), icon `layout-grid`, with live SSE refresh.
+- Tier 1 (rendered schema view): `plugins/todo`, views `tasks-panel` / `tasks-section` / `tasks-card`; `plugin__todo__write` returns `card` and calls `invalidate` after writing.
+- Tier 2 (embed): `plugins/example-board`, org page `board` and conversation panel `board-conv` (`slot: "org.page"` and `slot: "conversation.panel"`), icon `layout-grid`, with live SSE refresh.
 
 ## How to choose between the two tiers
 
@@ -26,32 +26,33 @@ Reference implementations:
 
 A contribution appears only in **orgs where this extension is enabled**; kind view also requires that the extension registered a render with `ctx.ui.view`.
 
-**Roles**: `place: "page"` contributions (view and embed) are given only to org roles **member and above**; for a guest every org page route answers 404 `ui.not_found`. Conversation places (`panel`, `section`, `inline`) follow the conversation rule (anyone who can read the conversation, guests included). The extension reads `role` (`owner` / `admin` / `member` / `guest`) in `UiRenderArgs` / `UiActionArgs` / `EmbedClaims` and may tighten further (e.g. only member and above change data); it does not need to block guests from org pages itself.
+**Roles**: `slot: "org.page"` contributions (view and embed) are given only to org roles **member and above**; for a guest every org page route answers 404 `ui.not_found`. Conversation slots (`conversation.panel`, `conversation.properties.section`, `conversation.tool-result.card`) follow the conversation rule (anyone who can read the conversation, guests included). The extension reads `role` (`owner` / `admin` / `member` / `guest`) in `UiRenderArgs` / `UiActionArgs` / `EmbedClaims` and may tighten further (e.g. only member and above change data); it does not need to block guests from org pages itself.
 
-## Places
+## Slots
 
-`UiPlace` is `"panel" | "section" | "inline" | "page" | "file-preview"`, plus the old `"conversation"`:
+A contribution names the `slot` it goes in (`"<id>"`, or `"<id>@<n>"` for a version; version 1 when omitted); `slot` is required. The old `place` key is gone from the SDK, and so is `aliasOf`.
 
-| Place | Where | Notes |
+| Slot | Where | Notes |
 |---|---|---|
-| `panel` | A right panel opened from the extension's icon in the conversation title bar | Full height, one at a time; the old `place: "conversation"` means `panel` and keeps working |
-| `section` | A section of the conversation's properties panel | Rendered `dense`; a `badge` shows as the section's value (todo's "1 / 3"); a view with nothing to show (no blocks, or only empty lists) is not drawn at all, so return `{ blocks: [] }` to hide the section (todo before the first write) |
-| `inline` | An inline card in the stream | **Hangs off a tool result**: the tool returns `card: { view: "<inline view id>", key? }` in its `ToolResult` (display only, never in the model's context). A card naming no `inline` contribution of the same extension is dropped with a warning and the result still succeeds. Extensions cannot write card events into the log themselves |
-| `page` | An org page under "Extensions", route `/p/<plugin>/<id>` | Member and above |
-| `file-preview` | An embed previewer of `file-preview@1` (below) | Embed only |
+| `conversation.panel` | A right panel opened from the extension's icon in the conversation title bar | Full height, one at a time |
+| `conversation.properties.section` | A section of the conversation's properties panel | Rendered `dense`; a `badge` shows as the section's value (todo's "1 / 3"); a view with nothing to show (no blocks, or only empty lists) is not drawn at all, so return `{ blocks: [] }` to hide the section (todo before the first write). `after` names one of the slot's anchors to sit after (default: the first) |
+| `conversation.tool-result.card` | An inline card in the stream | **Hangs off a tool result**: the tool returns `card: { view: "<card view id>", key? }` in its `ToolResult` (display only, never in the model's context). A card naming no contribution of this slot from the same extension is dropped with a warning and the result still succeeds. Extensions cannot write card events into the log themselves |
+| `org.page` | An org page under "Extensions", route `/p/<plugin>/<id>` | Member and above |
+| `file.preview` | An embed previewer of `file-preview@1` (below) | Embed only |
+
+The full catalog (`UI_SLOTS`, with each slot's accepted kinds, scope and anchors) is in the SDK; an unknown slot or version drops the contribution without failing the extension, and `capybara-plugin check` reports it as `ui-slot-unknown`.
 
 - **Icon**: `icon` from `UI_ICONS` (`list-checks`, `layout-grid`, `file`, `chart`, `calendar`, `users`, `bot`, `book`, `message-square`, `puzzle`); default `puzzle`. The title-bar button uses it, so pick one per panel.
-- **Open targets**: `UiOpen = { contribution, item? }`, where `contribution` is a `panel` of the same extension. A view may carry `open` (shown in an inline card's title row and a section header); checklist and keyValue items may carry `open` and `id`; a table block carries a parallel `open?: (UiOpen | null)[]` (never an `_open` key in a row). Clicking opens that panel scrolled to the block or item whose `id` equals `item`; `render` receives it as `UiRenderArgs.item`, and an inline card's render receives `card: { callId, key? }` (served only for a card a tool result of that conversation really recorded).
+- **Open targets**: `UiOpen = { contribution, item? }`, where `contribution` is a `conversation.panel` of the same extension. A view may carry `open` (shown in an inline card's title row and a section header); checklist and keyValue items may carry `open` and `id`; a table block carries a parallel `open?: (UiOpen | null)[]` (never an `_open` key in a row). Clicking opens that panel scrolled to the block or item whose `id` equals `item`; `render` receives it as `UiRenderArgs.item`, and an inline card's render receives `card: { callId, key? }` (served only for a card a tool result of that conversation really recorded).
 - **Failures stay local**: a failing block shows "Failed to load · Retry" in that block only (10 s timeout on the conversation page); the stream keeps going.
-- **Aliases**: `aliasOf: "<id>"` keeps a retired id answering as another contribution of the same extension and kind (not listed, no `ctx.ui.view` of its own, but still in `permissions.ui`). Invalidate it too while it lives (todo invalidates `tasks` with the rest).
 
 ### File previewers (`file-preview@1`)
 
-Previewing a file output in the right panel is the extension point `file-preview@1` (org scoped, several providers). A provider lists `previewers`, each with an `id` (`[a-z0-9-]{1,40}`), a bilingual `title`, `accepts: { mimeTypes?, extensions? }` (at least one; `image/*` allowed; extensions match case-insensitively), `maxBytes` (≤ `FILE_PREVIEW_MAX_BYTES`, 20 MB) and exactly one of `render(args) => UiView` or `embed: <id of a ui contribution { kind: "embed", place: "file-preview" }>`.
+Previewing a file output in the right panel is the extension point `file-preview@1` (org scoped, several providers). A provider lists `previewers`, each with an `id` (`[a-z0-9-]{1,40}`), a bilingual `title`, `accepts: { mimeTypes?, extensions? }` (at least one; `image/*` allowed; extensions match case-insensitively), `maxBytes` (≤ `FILE_PREVIEW_MAX_BYTES`, 20 MB) and exactly one of `render(args) => UiView` or `embed: <id of a ui contribution { kind: "embed", slot: "file.preview" }>`.
 
 - The extension never gets a storage key or a URL: `render` reads the bytes through `args.read()`, a read grant for that one file in that conversation, valid only during the call; an embed gets them through the message bridge (`type: "file"` after `init`; `createEmbedBridge({ file })`), and its token claims carry `fileId`.
 - An org admin orders and disables previewers; an accepting extension previewer wins over the built-in ones (image, text, Markdown, CSV / TSV), and the person can switch in the panel header. A slow (10 s) or failing previewer affects only the panel and falls back to the file card with Download.
-- **Validated at `ctx.provide`**: an invalid provider (`validateFilePreviewProvider`), or an `embed` naming no `{ kind: "embed", place: "file-preview" }` contribution of the same extension, fails `setup`.
+- **Validated at `ctx.provide`**: an invalid provider (`validateFilePreviewProvider`), or an `embed` naming no `{ kind: "embed", slot: "file.preview" }` contribution of the same extension, fails `setup`.
 
 ## Manifest
 
@@ -59,14 +60,13 @@ Previewing a file output in the right panel is the extension point `file-preview
 defineExtension({
   name: "todo",
   ui: [
-    { id: "tasks-panel", title, place: "panel", kind: "view", icon: "list-checks" },
-    { id: "tasks-section", title, place: "section", kind: "view", icon: "list-checks" },
-    { id: "tasks-card", title, place: "inline", kind: "view", icon: "list-checks" },
-    { id: "tasks", title, place: "conversation", kind: "view", aliasOf: "tasks-panel" },
+    { id: "tasks-panel", title, slot: "conversation.panel", kind: "view", icon: "list-checks" },
+    { id: "tasks-section", title, slot: "conversation.properties.section", kind: "view", icon: "list-checks" },
+    { id: "tasks-card", title, slot: "conversation.tool-result.card", kind: "view", icon: "list-checks" },
   ],
   permissions: {
     tools: ["write"],
-    ui: { views: ["tasks-panel", "tasks-section", "tasks-card", "tasks"] },
+    ui: { views: ["tasks-panel", "tasks-section", "tasks-card"] },
   },
   // ...
 });
@@ -74,8 +74,8 @@ defineExtension({
 defineExtension({
   name: "example-board",
   ui: [
-    { id: "board", title: { zh: "看板", en: "Board" }, place: "page", kind: "embed", path: "/ui/board" },
-    { id: "board-conv", title: { zh: "看板", en: "Board" }, place: "conversation", kind: "embed", path: "/ui/board-conv" },
+    { id: "board", title: { zh: "看板", en: "Board" }, slot: "org.page", kind: "embed", path: "/ui/board" },
+    { id: "board-conv", title: { zh: "看板", en: "Board" }, slot: "conversation.panel", kind: "embed", path: "/ui/board-conv" },
   ],
   permissions: {
     http: [
@@ -100,16 +100,16 @@ defineExtension({
 
 ```ts
 setup(ctx) {
-  ctx.ui.view("tasks", async ({ orgId, accountId, conversationId, locale, signal }) =>
+  ctx.ui.view("tasks-panel", async ({ orgId, accountId, conversationId, locale, signal }) =>
     tasksView(conversationId === undefined ? [] : await readTodos(ctx.db, conversationId)),
   );
-  ctx.ui.action("tasks", async ({ actionId, payload, answer, signal }) => {
+  ctx.ui.action("tasks-panel", async ({ actionId, payload, answer, signal }) => {
     // ...
     return { toast: { zh: "已清空", en: "Cleared" } }; // or { view: newView }, or {}
   });
 }
 // when the data changes:
-await ctx.ui.invalidate({ orgId, conversationId, contribution: "tasks" }).catch(() => {});
+await ctx.ui.invalidate({ orgId, conversationId, contribution: "tasks-panel" }).catch(() => {});
 ```
 
 - `view` / `action` can be called only in `setup`, with an id in `permissions.ui.views`, otherwise `ExtensionPermissionError`; registering the same id twice throws.

@@ -60,7 +60,7 @@ Run from the repository root; relative paths resolve against the current directo
   "license": "Apache-2.0",
   "homepage": "https://acme.example/crm",
   "dependencies": [{ "name": "crm-core", "version": "^1.0.0" }],
-  "skills": [{ "path": "./skills/crm-notes", "pinned": true }],
+  "skills": [{ "path": "./skills/crm-notes" }],
   "connectorTemplates": [{ "path": "./connectors/crm-mcp.json" }]
 }
 ```
@@ -70,7 +70,7 @@ Run from the repository root; relative paths resolve against the current directo
 - `version`: exact semver, equal to `package.json` `version` and the extension manifest's `version` (`sync-versions`).
 - `description` <= 1024 characters, `publisher` and `displayName` <= 100; `homepage` is https; `icon` is a `./…` `.svg` / `.png` (kernels check the content is really svg / png, <= 64 KB).
 - Paths start with `./`, stay inside the plugin root and do not nest (no skill directory inside another).
-- `skills` (<= 50): directories holding `SKILL.md`. Omitted = scan `skills/*/SKILL.md`. Each `SKILL.md` goes through `parseSkillMd` (YAML frontmatter, Agent Skills format); names are unique. `pinned` (suggested as pinned) is offered to the admin at import. A deployment refuses an org install when a skill name is already owned by the org or another plugin (`plugin.skill_conflict`), so pick distinctive names.
+- `skills` (<= 50): directories holding `SKILL.md`. Omitted = scan `skills/*/SKILL.md`. Each `SKILL.md` goes through `parseSkillMd` (YAML frontmatter, Agent Skills format); names are unique. Every skill is on in every agent of an org where it is on; there is no pinning (`skills[].pinned` is not part of the schema, and `skills` entries are strict objects holding only `path`). A deployment refuses an org install when a skill name is already owned by the org or another plugin (`plugin.skill_conflict`), so pick distinctive names.
   - **Invocation keys** (Claude Code's names, `SKILL_INVOCATION_LIMITS`): `disable-model-invocation: true` makes the skill **manual-only** (never in the model's catalog or the pinned skills; only a person runs it with `/name args`), `user-invocable: false` hides it from the `/` menu (both together is refused), `context: fork` runs a person's invocation as a sub-agent (`agent:` picks the type: `general-purpose`, `Explore`, `Plan` or one of the plugin's `agents/*.md` as `<plugin>:<name>`; an unknown one runs as `general-purpose` with a warning), `argument-hint` is the `/` menu placeholder (a YAML list such as `[issue-number]` reads back as text) and `arguments` names positional values. The body uses `$ARGUMENTS`, `$N`, `$ARGUMENTS[N]`, `$name`, `\$` and `${CLAUDE_SKILL_DIR}` (`/skills/<name>`); nothing is executed: `` !`cmd` `` lines stay text and the model is told to run them with `Bash` when it has it. Arguments are at most 10 000 characters and the rendered skill at most 200 000. A wrong type is refused at import.
 - `connectorTemplates` (<= 20): `./…/<id>.json` files; the template id is the file's base name (`^[a-z0-9][a-z0-9-]{0,63}$`), unique in the plugin. Omitted = scan `connectors/*.json`.
 - `dependencies` (<= 20): a plugin name and a semver range; no self-dependency, no duplicates. No integrity lock: each dependency is verified against its own source when imported. An org install installs missing dependencies first (the highest imported version satisfying the range); a dependency whose templates need a credential must be installed on its own first. Publish dependencies before the plugins that need them.

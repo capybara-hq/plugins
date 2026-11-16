@@ -124,7 +124,7 @@ export default defineExtension({
     {
       id: "board",
       title: { zh: "看板", en: "Board" },
-      place: "page",
+      slot: "org.page",
       kind: "embed",
       path: "/ui/board",
       icon: "layout-grid",
@@ -132,10 +132,10 @@ export default defineExtension({
     {
       id: "board-conv",
       title: { zh: "看板", en: "Board" },
-      place: "conversation",
+      slot: "conversation.panel",
       kind: "embed",
       path: "/ui/board-conv",
-      // the old place: still a right panel (UI refresh B), with its title-bar icon
+      // a right panel (UI refresh B), with its title-bar icon
       icon: "layout-grid",
     },
   ],

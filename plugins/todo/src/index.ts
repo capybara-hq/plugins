@@ -168,11 +168,9 @@ export const TASKS_PANEL = "tasks-panel";
 export const TASKS_SECTION = "tasks-section";
 /** The inline card under each `plugin__todo__write` call. */
 export const TASKS_CARD = "tasks-card";
-/** The old right-side tab id: an alias of {@link TASKS_PANEL} for one release (remove after). */
-export const TASKS_LEGACY = "tasks";
 /** Every contribution showing the list (refreshed after a write). */
 // capybara:allow-module-state a read-only list of contribution ids, never written
-const TASKS_ALL = [TASKS_PANEL, TASKS_SECTION, TASKS_CARD, TASKS_LEGACY] as const;
+const TASKS_ALL = [TASKS_PANEL, TASKS_SECTION, TASKS_CARD] as const;
 
 const label = (t: Todo) => (t.status === "in_progress" ? t.activeForm : t.content);
 /** done/total; no badge on an empty list (a "0/0" says nothing). */
@@ -271,9 +269,8 @@ export function writeHandler(db: Db, ui: Pick<ExtensionContext["ui"], "invalidat
  * conversation page (UI refresh B), all titled 「待办」 / "Todos" (never "tasks": that reads as
  * background or scheduled tasks): the right panel `tasks-panel`, the properties section
  * `tasks-section` (its items open the panel at that item; hidden while the list is empty) and the
- * inline card `tasks-card` under each write (the list as of that call, from a snapshot row); the old
- * id `tasks` stays as an alias of the panel for one release. Writes refresh them through
- * `ctx.ui.invalidate`. The contribution ids keep their old names (arrangements store them).
+ * inline card `tasks-card` under each write (the list as of that call, from a snapshot row). Writes
+ * refresh them through `ctx.ui.invalidate`. The contribution ids keep their old names (arrangements store them).
  */
 const title = { zh: "待办", en: "Todos" };
 
@@ -284,14 +281,25 @@ export default defineExtension({
   provides: [],
   migrations: "../migrations",
   ui: [
-    { id: "tasks-panel", title, place: "panel", kind: "view", icon: "list-checks" },
-    { id: "tasks-section", title, place: "section", kind: "view", icon: "list-checks" },
-    { id: "tasks-card", title, place: "inline", kind: "view", icon: "list-checks" },
-    { id: "tasks", title, place: "conversation", kind: "view", aliasOf: "tasks-panel" },
+    { id: "tasks-panel", title, slot: "conversation.panel", kind: "view", icon: "list-checks" },
+    {
+      id: "tasks-section",
+      title,
+      slot: "conversation.properties.section",
+      kind: "view",
+      icon: "list-checks",
+    },
+    {
+      id: "tasks-card",
+      title,
+      slot: "conversation.tool-result.card",
+      kind: "view",
+      icon: "list-checks",
+    },
   ],
   permissions: {
     tools: ["write"],
-    ui: { views: ["tasks-panel", "tasks-section", "tasks-card", "tasks"] },
+    ui: { views: ["tasks-panel", "tasks-section", "tasks-card"] },
   },
   setup(ctx) {
     ctx.tools.register(
