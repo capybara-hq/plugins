@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-todo
 
+## 0.1.0-rc.11
+
+### Patch Changes
+
+- 543fed0: Declare the panel, properties section and inline card with `slot` instead of the deprecated `place`,
+  and drop the retired `tasks` alias view (the alias field is removed from the SDK).
+
 ## 0.1.0-rc.10
 
 ### Patch Changes
