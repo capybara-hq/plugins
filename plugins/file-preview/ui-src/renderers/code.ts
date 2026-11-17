@@ -146,12 +146,10 @@ export async function mountCode(
     note.textContent = s.truncated;
     bar.append(note);
   }
-  if (skipped) {
-    const note = doc.createElement("span");
-    note.className = "cap-code-skipped";
-    note.textContent = s.skipped;
-    bar.append(note);
-  }
+  const skippedNote = doc.createElement("span");
+  skippedNote.className = "cap-code-skipped";
+  skippedNote.textContent = s.skipped;
+  if (skipped) bar.append(skippedNote);
   const body = doc.createElement("div");
   body.className = "cap-code-body";
   paint(doc, body, result.lines);
@@ -169,7 +167,10 @@ export async function mountCode(
       shown = theme;
       run(theme).then(
         (next) => {
-          if (!ctx.lifetime.aborted && currentTheme(doc) === theme) paint(doc, body, next.lines);
+          if (ctx.lifetime.aborted || currentTheme(doc) !== theme) return;
+          paint(doc, body, next.lines);
+          // the colors are real now: the "timed out" note no longer applies
+          skippedNote.remove();
         },
         () => {},
       );

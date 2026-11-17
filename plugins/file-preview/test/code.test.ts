@@ -240,6 +240,22 @@ describe("highlight timeout", () => {
     expect(ctx.root.querySelectorAll(".cap-code-row")).toHaveLength(3);
     expect(ctx.root.querySelector(".cap-code-body")?.textContent).toContain("three");
   });
+  it("a later successful theme re-highlight removes the timed-out note", async () => {
+    const ctx = makeCtx();
+    document.documentElement.setAttribute("data-theme", "light");
+    ctx.runInWorker = vi
+      .fn()
+      .mockRejectedValueOnce(new WorkerTimeoutError("code", HIGHLIGHT_BUDGET_MS))
+      .mockResolvedValueOnce({
+        lines: [[{ content: "x", color: "#fff" }]],
+        truncated: false,
+      }) as never;
+    await mountCode(ctx.root, "x", "a.ts", "", ctx);
+    expect(ctx.root.querySelector(".cap-code-skipped")).not.toBeNull();
+    document.documentElement.setAttribute("data-theme", "dark");
+    await vi.waitFor(() => expect(ctx.root.querySelector(".cap-code-skipped")).toBeNull());
+    expect(ctx.root.querySelector(".cap-code-line span")?.getAttribute("style")).toContain("color");
+  });
   it("still fails on other worker errors", async () => {
     const ctx = makeCtx();
     ctx.runInWorker = vi.fn(async () => {
