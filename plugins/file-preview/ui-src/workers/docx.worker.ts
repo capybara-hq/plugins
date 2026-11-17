@@ -11,12 +11,18 @@ import { MAX_ENTRIES, verifyArchive } from "./zip.logic.js";
 export const ENTRY_MAX = 50 * 1024 * 1024;
 export const TOTAL_MAX = 100 * 1024 * 1024;
 
+type MammothInput = Parameters<typeof mammoth.convertToHtml>[0];
+
 /**
  * mammoth's browser entry (what the worker bundle gets) reads `arrayBuffer`; its node entry, which
- * unit tests load, reads `buffer`. A real worker has no `Buffer`, so the branch is a test seam.
+ * unit tests load, reads `buffer`. A real worker has no `Buffer`, so the branch is a test seam (a
+ * typed global lookup: the workers compile without node types).
  */
-function source(data: ArrayBuffer): { arrayBuffer: ArrayBuffer } | { buffer: Buffer } {
-  return typeof Buffer === "undefined" ? { arrayBuffer: data } : { buffer: Buffer.from(data) };
+function source(data: ArrayBuffer): MammothInput {
+  const NodeBuffer = (globalThis as { Buffer?: { from(d: ArrayBuffer): Uint8Array } }).Buffer;
+  return NodeBuffer === undefined
+    ? { arrayBuffer: data }
+    : ({ buffer: NodeBuffer.from(data) } as unknown as MammothInput);
 }
 
 export async function convertDocx(input: DocxInput): Promise<DocxOutput> {
