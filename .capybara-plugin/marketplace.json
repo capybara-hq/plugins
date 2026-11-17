@@ -679,6 +679,64 @@
           "integrity": "sha512-5AJXoXOEsJjhqIr3ELwyRLHsn6zAuq72wjiZD2HeIenpZ12y4XtwoAztrAvq06dfjUvZojd7V/WtNFDUzfaT6Q=="
         }
       }
+    },
+    {
+      "name": "file-preview",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Previews code, archives, spreadsheets, documents, PDFs, SVG and HTML files in the conversation; entries inside archives are previewed regardless of per-previewer settings",
+        "zh": "在对话中预览代码、压缩包、表格、文档、PDF、SVG 和 HTML 文件；压缩包内的条目不受各预览器开关影响，一律可预览"
+      },
+      "displayName": {
+        "zh": "文件预览",
+        "en": "File preview"
+      },
+      "icon": "./plugins/file-preview/icon.svg",
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/file-preview#readme",
+      "permissions": {
+        "keys": [
+          "permissions.http.public:GET /ui/assets/:file",
+          "permissions.http.public:GET /ui/code",
+          "permissions.http.public:GET /ui/docx",
+          "permissions.http.public:GET /ui/html",
+          "permissions.http.public:GET /ui/pdf",
+          "permissions.http.public:GET /ui/sheet",
+          "permissions.http.public:GET /ui/svg",
+          "permissions.http.public:GET /ui/zip",
+          "provides:file-preview@1",
+          "ui.embed:code",
+          "ui.embed:docx",
+          "ui.embed:html",
+          "ui.embed:pdf",
+          "ui.embed:sheet",
+          "ui.embed:svg",
+          "ui.embed:zip"
+        ],
+        "sensitive": [
+          "permissions.http.public:GET /ui/assets/:file",
+          "permissions.http.public:GET /ui/code",
+          "permissions.http.public:GET /ui/docx",
+          "permissions.http.public:GET /ui/html",
+          "permissions.http.public:GET /ui/pdf",
+          "permissions.http.public:GET /ui/sheet",
+          "permissions.http.public:GET /ui/svg",
+          "permissions.http.public:GET /ui/zip",
+          "ui.embed:code",
+          "ui.embed:docx",
+          "ui.embed:html",
+          "ui.embed:pdf",
+          "ui.embed:sheet",
+          "ui.embed:svg",
+          "ui.embed:zip"
+        ]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-file-preview",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-ClsZznUmoUO+Bc3uzp//i3BBw43nWybbtJhMfL073VGCP3i3eP70uymaC+hzMSurnAFk8As2fa/3WgGL23V5Ig=="
+        }
+      }
     }
   ]
 }
