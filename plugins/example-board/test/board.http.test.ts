@@ -5,6 +5,7 @@ import {
   createDb,
   createLocalAccount,
   createOrg,
+  enableModelProviders,
   joinOrg,
   type KernelRequest,
   type KernelSchemaDb,
@@ -107,6 +108,7 @@ describe("example-board behind embed tokens", () => {
     await createLocalAccount(db, "owner");
     owner = await login(k, "owner");
     orgId = await createOrg(owner);
+    await enableModelProviders(owner, orgId, ["model-fake"]);
     other = (await joinOrg(k, owner, orgId, "other")).req;
     const agentId = await createAgent(owner, orgId);
     convId = await createConversation(owner, orgId, agentId);

@@ -6,6 +6,7 @@ import {
   createDb,
   createLocalAccount,
   createOrg,
+  enableModelProviders,
   eventsOf,
   type KernelSchemaDb,
   kernelDb,
@@ -132,6 +133,7 @@ describe.skipIf(!dockerAvailable)(
       await createLocalAccount(db, "owner", "O");
       owner = await session(k, "owner");
       orgId = await createOrg(owner);
+      await enableModelProviders(owner, orgId, ["model-fake"]);
     });
 
     async function sandboxConversation(): Promise<{ id: string; device: string }> {

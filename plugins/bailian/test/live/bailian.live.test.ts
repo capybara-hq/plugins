@@ -136,7 +136,6 @@ for (const [label, model] of [
 ] as const) {
   describe.skipIf(!provider || !model)(`live ${label}`, { timeout: 180_000 }, () => {
     describeModelProviderConformance(`bailian (live, ${model?.id})`, async () => ({
-      contract: 2,
       plugin: PLUGIN,
       provider: provider as ModelProvider,
       model: model?.id ?? "",

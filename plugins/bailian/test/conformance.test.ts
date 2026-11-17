@@ -29,7 +29,6 @@ for (const model of ["qwen3.8-flash", "qwen-flash"]) {
   describeModelProviderConformance(`bailian (fixtures, ${model})`, async () => {
     const server = await startFakeModelServer(bailianRoutes());
     return {
-      contract: 2,
       plugin: PLUGIN,
       provider: createBailianProvider({ apiKey: "sk-fixture", baseUrl: server.url }),
       model,

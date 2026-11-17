@@ -94,6 +94,9 @@ describe("Slack webhook inbound (dual replica, real plugin)", () => {
     const org = await call("POST", "/api/v1/orgs", { name: "Acme" });
     expect(org.status).toBe(201);
     const base = `/api/v1/orgs/${(org.json.org as { id: string }).id}`;
+    expect((await call("PUT", `${base}/extensions/model-fake`, { enabled: true })).status).toBe(
+      200,
+    );
     const ag = await call("POST", `${base}/agents`, {
       definition: {
         name: "Helper",

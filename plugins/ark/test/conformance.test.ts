@@ -32,7 +32,6 @@ const PLUGIN = "ark";
 describeModelProviderConformance("ark (fixtures, seed)", async () => {
   const server = await startFakeModelServer(arkRoutes());
   return {
-    contract: 2,
     plugin: PLUGIN,
     provider: createArkProvider({ apiKey: "ark-fixture", baseUrl: `${server.url}/api/v3` }),
     model: SEED,
@@ -44,7 +43,6 @@ describeModelProviderConformance("ark (fixtures, seed)", async () => {
 describeModelProviderConformance("ark (fixtures, deepseek)", async () => {
   const server = await startFakeModelServer(arkRoutes());
   return {
-    contract: 2,
     plugin: PLUGIN,
     provider: createArkProvider({ apiKey: "ark-fixture", baseUrl: `${server.url}/api/v3` }),
     model: DEEPSEEK,
@@ -565,7 +563,6 @@ if (live && (live.chat === null || live.embed === null)) {
 
 describe.skipIf(!live?.chat)("live", { timeout: 120_000 }, () => {
   describeModelProviderConformance(`ark (live, ${live?.chat?.id})`, async () => ({
-    contract: 2,
     plugin: PLUGIN,
     provider: live?.provider as ModelProvider,
     model: live?.chat?.id ?? "",

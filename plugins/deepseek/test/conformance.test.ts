@@ -21,7 +21,6 @@ const PLUGIN = "deepseek";
 describeModelProviderConformance("deepseek (fixtures)", async () => {
   const server = await startFakeModelServer(deepseekRoutes());
   return {
-    contract: 2,
     plugin: PLUGIN,
     provider: createDeepSeekProvider({ apiKey: "sk-fixture", baseUrl: server.url }),
     model: "deepseek-flash",
@@ -45,7 +44,6 @@ describe.skipIf(!LIVE_KEY)("live", { timeout: 120_000 }, () => {
     const models = await provider.listModels();
     const flash = models.find((m) => m.id === "deepseek-flash") ?? models[0];
     return {
-      contract: 2,
       plugin: PLUGIN,
       provider,
       model: flash?.id ?? "deepseek-flash",

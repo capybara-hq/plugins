@@ -250,6 +250,7 @@ describe("M4 第二段验收：Lark（双副本）", () => {
     lark.users.set("ou_alice", { openId: "ou_alice", name: "Alice" });
     const book = im.book("acme-lark-seg2");
     for (const [plugin, body] of [
+      ["model-fake", { enabled: true }],
       ["fake-im", { enabled: true, config: { url: book.url } }],
       ["lark", { enabled: true, config: { appId: lark.appId, appSecret: SECRET } }],
     ] as const) {

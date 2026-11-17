@@ -182,6 +182,7 @@ describe("Telegram plugin in the kernel (dual replica, long polling)", () => {
     // ================= setup: plugins, agent, Telegram connection =================
     const book = im.book("acme-telegram");
     for (const [plugin, body] of [
+      ["model-fake", { enabled: true }],
       ["fake-im", { enabled: true, config: { url: book.url } }],
       ["fake-ask", { enabled: true }],
       ["telegram", { enabled: true }],
