@@ -6,6 +6,7 @@ import {
   createDb,
   createLocalAccount,
   createOrg,
+  enableModelProviders,
   eventsOf,
   joinOrg,
   type KernelRequest,
@@ -131,6 +132,7 @@ describe("memory in a kernel", () => {
     await createLocalAccount(db, "owner", "Olivia");
     const owner = await login(k, "owner");
     const orgId = await createOrg(owner);
+    await enableModelProviders(owner, orgId, ["model-fake"]);
     // memory is optional: off until the org switches it on
     await enable(owner, orgId, "memory");
     await enable(owner, orgId, "request-spy");

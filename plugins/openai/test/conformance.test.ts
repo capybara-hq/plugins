@@ -29,7 +29,6 @@ const gpt = (id: string, over: Partial<ModelConfig> = {}): ModelConfig => ({
 describeModelProviderConformance("openai (fixtures)", async () => {
   const server = await startFakeModelServer(openaiRoutes());
   return {
-    contract: 2,
     plugin: "openai",
     provider: createOpenAIProvider({
       apiKey: "sk-fixture",
@@ -53,7 +52,6 @@ if (!LIVE_KEY || !LIVE_MODEL) {
 // 真实接口的思考与缓存用例常超过默认 5 秒
 describe.skipIf(!LIVE_KEY || !LIVE_MODEL)("live", { timeout: 120_000 }, () => {
   describeModelProviderConformance(`openai (live, ${LIVE_MODEL})`, async () => ({
-    contract: 2,
     plugin: "openai",
     provider: createOpenAIProvider({
       apiKey: LIVE_KEY ?? "",

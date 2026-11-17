@@ -155,6 +155,7 @@ describe("Lark 插件接内核（双副本）", () => {
     // ================= 1. 启用插件、建 agent 与 Lark 渠道连接 =================
     const book = im.book("acme-lark");
     for (const [plugin, body] of [
+      ["model-fake", { enabled: true }],
       ["fake-im", { enabled: true, config: { url: book.url } }],
       ["lark", { enabled: true }],
     ] as const) {

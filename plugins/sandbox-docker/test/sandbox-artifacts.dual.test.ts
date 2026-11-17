@@ -50,12 +50,12 @@ import {
  * checks the real container (same container after the takeover, the dead replica's command killed
  * inside it, stopped on suspend and started again on resume). The conversation works in its
  * owner's default device: the container is `cap-device-<deviceId>`, its state is the
- * device's `device_instances` row, and attachments land in
+ * device's `device_instances` row, and `FetchAttachment` copies an attachment to
  * `/workspace/attachments/<first 12 hex digits of the conversation id>/`:
  *
  * 1. 预签名直传附件（CSV）→ finalize；
- * 2. The agent processes the attachment with `Bash` (first use: the device's file system
- *    and instance are created);
+ * 2. `FetchAttachment` copies the attachment into the device (first use: the device's file
+ *    system and instance are created), then the agent processes it with `Bash`;
  * 3. `Deliver` 交付产物 → `artifact_created` → 下载路由 302 到预签名地址，内容一致；
  * 4. the replica running a `Bash` call (a command longer than the lease TTL) is killed ->
  *    the survivor takes over the run (result unknown); the next call runs at once under a shared
@@ -177,6 +177,8 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     const org = await at(1, "POST", "/api/v1/orgs", { name: "Acme" });
     expect(org.status, JSON.stringify(org.json)).toBe(201);
     base = `/api/v1/orgs/${(org.json.org as { id: string }).id}`;
+    const mf = await at(1, "PUT", `${base}/extensions/model-fake`, { enabled: true });
+    expect(mf.status, JSON.stringify(mf.json)).toBe(200);
     // a cold run builds the sandbox image (about 1.5 GB) once, shared by the files
   }, 1_200_000);
 
@@ -310,17 +312,22 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     // only the attachment is registered: no instance yet
     expect(await instanceStatus(0, convPath)).toBeNull();
 
-    // ---- 2. Bash 处理附件（首次使用：创建沙箱，附件同步到 /workspace/attachments） ----
+    // ---- 2. FetchAttachment copies the attachment (first use: creates the sandbox), Bash processes it ----
+    await send(0, convId, "FetchAttachment", { file: "fruit.csv" });
+    const r2 = await finished(convId, 2);
+    expect(r2.result.isError, r2.result.content).toBe(false);
+    expect(r2.result.content.startsWith(SANDBOX_STARTED_NOTICE)).toBe(true);
+    expect(r2.result.content).toContain(`${attachments}/fruit.csv`);
     await send(0, convId, "Bash", {
       description: "Test step",
       command:
         "mkdir -p /workspace/out && awk -F, 'NR>1{s+=$2} END{print \"total=\" s}' " +
         `${attachments}/fruit.csv | tee /workspace/out/summary.txt`,
     });
-    const r2 = await finished(convId, 2);
-    expect(r2.result.isError, r2.result.content).toBe(false);
-    expect(r2.result.content.startsWith(SANDBOX_STARTED_NOTICE)).toBe(true);
-    expect(r2.result.content).toContain(TOTAL);
+    const r2b = await finished(convId, 3);
+    expect(r2b.result.isError, r2b.result.content).toBe(false);
+    expect(r2b.result.content).not.toContain(SANDBOX_STARTED_NOTICE);
+    expect(r2b.result.content).toContain(TOTAL);
     expect(await instanceStatus(1, convPath)).toBe("running");
     const c2 = await containerOf(deviceId);
     expect(c2.State.Running).toBe(true);
@@ -337,7 +344,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
       file_path: "/workspace/out/summary.txt",
       name: "summary.txt",
     });
-    const r3 = await finished(convId, 3);
+    const r3 = await finished(convId, 4);
     expect(r3.result.isError, r3.result.content).toBe(false);
     expect(r3.result.content).toMatch(/^Delivered summary\.txt \(9 bytes, text\/plain\)/);
     const [art] = ofType(r3.evs, "artifact_created");
@@ -389,7 +396,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     await h.kill(victimIndex);
 
     // 存活副本接手：这次调用结果未知（不重复执行），模型收尾
-    const r4 = await finished(convId, 4, 60_000);
+    const r4 = await finished(convId, 5, 60_000);
     expect(r4.evs[0]?.runId).toBe(run.id);
     expect(r4.result).toMatchObject({
       toolKey: "Bash",
@@ -405,7 +412,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
       command:
         "cat /workspace/out/summary.txt && ls /workspace && echo leftover=$(pgrep -fc '^sleep 300' || true)",
     });
-    const r4b = await finished(convId, 5, 150_000);
+    const r4b = await finished(convId, 6, 150_000);
     const reuseMs = Date.now() - killedAt;
     expect(r4b.result.isError, r4b.result.content).toBe(false);
     expect(r4b.result.content).not.toContain(SANDBOX_STARTED_NOTICE);
@@ -425,7 +432,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
       description: "Test step",
       command: "echo leftover=$(pgrep -fc '^sleep 300' || true)",
     });
-    const r4c = await finished(convId, 6, 60_000);
+    const r4c = await finished(convId, 7, 60_000);
     expect(r4c.result.isError, r4c.result.content).toBe(false);
     expect(r4c.result.content).toContain("leftover=0");
     const c4 = await containerOf(deviceId);
@@ -448,7 +455,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     expect((await containerOf(deviceId)).State.Running).toBe(false);
 
     await send(survivor, convId, "Read", { file_path: "/workspace/out/summary.txt" });
-    const r5 = await finished(convId, 7);
+    const r5 = await finished(convId, 8);
     expect(r5.result.isError, r5.result.content).toBe(false);
     expect(r5.result.content).not.toContain(SANDBOX_STARTED_NOTICE);
     expect(r5.result.content).not.toContain(SANDBOX_RESTARTED_NOTICE);

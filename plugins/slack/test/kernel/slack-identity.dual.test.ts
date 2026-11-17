@@ -222,6 +222,9 @@ describe("Slack 登录与通讯录接内核（双副本）", () => {
     expect(await identitiesOf("USLACKBOT")).toEqual([]);
 
     // ================= 3. 同一个 Slack 用户私聊机器人：识别为该账号 =================
+    expect(
+      (await call(ownerJar, "PUT", `${base}/extensions/model-fake`, { enabled: true })).status,
+    ).toBe(200);
     const ag = await call(ownerJar, "POST", `${base}/agents`, {
       definition: {
         name: "Helper",

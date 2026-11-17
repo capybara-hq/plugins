@@ -6,6 +6,7 @@ import {
   createDb,
   createLocalAccount,
   createOrg,
+  enableModelProviders,
   eventsOf,
   type KernelRequest,
   kernelDb,
@@ -95,6 +96,7 @@ describe("jina in a kernel", () => {
     await createLocalAccount(db, "owner");
     const owner = await login(k, "owner");
     const orgId = await createOrg(owner);
+    await enableModelProviders(owner, orgId, ["model-fake"]);
     const enabled = await owner({
       method: "PUT",
       url: `/api/v1/orgs/${orgId}/extensions/jina`,
