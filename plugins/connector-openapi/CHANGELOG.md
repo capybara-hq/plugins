@@ -1,5 +1,16 @@
 # @capybara-hq/plugin-connector-openapi
 
+## 0.1.0-rc.12
+
+### Minor Changes
+
+- 0a75f1b: Every request to a connector endpoint (MCP requests; the OpenAPI document, its servers and the
+  `baseUrl`) goes through the kernel's guarded `ctx.net.fetch` with the org the session serves, so
+  internal endpoints are reachable only where a super admin allowed them for that org. Endpoints accept
+  http and https; `ctx.net` decides at request time. A refusal is a `ToolError` that names the host.
+  The deployment config `allowInsecureLoopback` is gone (the kernel's tests-only
+  `net.allowInsecureLoopback` replaces it). Requires `@capybara-hq/plugin-sdk@^0.1.0-rc.29`.
+
 ## 0.1.0-rc.11
 
 ### Patch Changes
