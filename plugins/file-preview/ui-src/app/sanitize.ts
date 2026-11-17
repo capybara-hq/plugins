@@ -227,18 +227,23 @@ export function srcsetUrls(srcset: string): string[] {
     if (url.endsWith(",")) {
       url = url.replace(/,+$/, "");
     } else {
-      let depth = 0;
+      // HTML spec "in parens": a boolean set by any `(` and cleared by the first `)`
+      let inParens = false;
       for (; i < srcset.length; i++) {
         const c = srcset[i];
-        if (c === "(") depth++;
-        else if (c === ")" && depth > 0) depth--;
-        else if (c === "," && depth === 0) break;
+        if (c === "(") inParens = true;
+        else if (c === ")") inParens = false;
+        else if (c === "," && !inParens) break;
       }
     }
     if (url !== "") urls.push(url);
   }
   return urls;
 }
+
+/** Whether any candidate of a srcset is not an inline `data:` URL. */
+const srcsetIsExternal = (value: string): boolean =>
+  srcsetUrls(value).some((u) => !normalizeUrl(u).startsWith("data:"));
 
 /** Keeps the purify instance's per-call state: one instance per call, so no global hooks. */
 interface Scan {
@@ -257,9 +262,7 @@ function handleUrlAttr(node: Element, name: string, value: string, scan: Scan): 
   }
   if (name === "srcset" || name === "imagesrcset") {
     // candidate lists are not worth parsing: dropped; any non-inline candidate counts as external
-    if (srcsetUrls(value).some((u) => !normalizeUrl(u).startsWith("data:"))) {
-      scan.external = true;
-    }
+    if (srcsetIsExternal(value)) scan.external = true;
     return false;
   }
   if (name === "src" || name === "href" || name === "xlink:href" || name === "poster") {
@@ -285,6 +288,12 @@ export function sanitizeHtml(html: string, doc: Document): SanitizedHtml {
     if (LOADING_ELEMENTS.has(tag)) scan.external = true;
     if (tag === "link" && (node as Element).hasAttribute?.("href")) {
       scan.external = true;
+    }
+    // a link without href never reaches the attribute hook (the element is dropped), but its
+    // imagesrcset would have preloaded images
+    if (tag === "link") {
+      const set = (node as Element).getAttribute?.("imagesrcset");
+      if (set != null && srcsetIsExternal(set)) scan.external = true;
     }
   });
 

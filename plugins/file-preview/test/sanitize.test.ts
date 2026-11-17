@@ -271,6 +271,18 @@ describe("sanitizeHtml over hostile fixtures", () => {
     expect(flag("data:image/png;base64,AAAA 1x,//evil.example/b.png 2x")).toBe(true);
     expect(flag("data:image/png;base64,AAAA 1x, data:image/png;base64,BBBB 2x")).toBe(false);
     expect(flag("data:image/png;base64,AA,AA 1x")).toBe(false);
+    // "in parens" ends at the first `)` (HTML spec), not at the matching one
+    expect(flag("data:image/png,x 1x((), https://evil/a 2x")).toBe(true);
+  });
+
+  it("weighs <link imagesrcset> that has no href", () => {
+    const flag = (attr: string) =>
+      sanitizeHtml(`<link rel="preload" as="image" ${attr}>`, document).external;
+    expect(flag('imagesrcset="https://evil.example/a.png 1x"')).toBe(true);
+    expect(flag('imagesrcset="data:image/png;base64,AAAA 1x, https://evil.example/b.png 2x"')).toBe(
+      true,
+    );
+    expect(flag('imagesrcset="data:image/png;base64,AAAA 1x"')).toBe(false);
   });
 
   it("flags removed handlers and script urls, and drops autoplay", () => {
