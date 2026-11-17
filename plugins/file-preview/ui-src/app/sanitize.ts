@@ -203,9 +203,17 @@ export function refKind(value: string): RefKind {
     : "other";
 }
 
-/** Inline media an `<img>` / `<video>` / `<audio>` / svg `<image>` may show: never a document. */
+/**
+ * Inline media an `<img>` / svg `<image>` / `poster` may show: a `data:image/` URL, never a
+ * document. The embed's CSP allows `data:` for `img-src` only.
+ */
 function isInlineMedia(value: string): boolean {
-  return /^data:(image|audio|video)\//.test(normalizeUrl(value));
+  return /^data:image\//.test(normalizeUrl(value));
+}
+
+/** `data:` audio and video: the CSP's `media-src 'self'` would block them, so they are dropped. */
+function isUnloadableMedia(value: string): boolean {
+  return /^data:(audio|video)\//.test(normalizeUrl(value));
 }
 
 /**
@@ -267,6 +275,11 @@ function handleUrlAttr(node: Element, name: string, value: string, scan: Scan): 
   }
   if (name === "src" || name === "href" || name === "xlink:href" || name === "poster") {
     if (isInlineMedia(value)) return true;
+    // dropped like any other resource the preview cannot load, and reported
+    if (isUnloadableMedia(value)) {
+      scan.external = true;
+      return false;
+    }
     // svg paint servers and gradients reference each other by fragment
     if (name !== "src" && name !== "poster" && kind === "fragment") return true;
   }

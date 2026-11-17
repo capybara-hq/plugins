@@ -101,7 +101,7 @@ function assertInert(root: ParentNode, styles: string[]) {
         expect(value).toMatch(/^(#|data:image\/)/);
       }
       if (["src", "poster", "lowsrc", "dynsrc"].includes(name)) {
-        expect(value).toMatch(/^data:(image|audio|video)\//);
+        expect(value).toMatch(/^data:image\//);
       }
       if (name === "style") assertInertCss(value);
       if (el.namespaceURI === "http://www.w3.org/2000/svg" && /url\(/i.test(value)) {
@@ -295,6 +295,19 @@ describe("sanitizeHtml over hostile fixtures", () => {
       document,
     );
     expect(fragment.querySelector("video")?.hasAttribute("autoplay")).toBe(false);
+  });
+
+  it("drops data: audio and video sources (media-src 'self' would block them) and flags them", () => {
+    for (const html of [
+      '<video src="data:video/mp4;base64,AAAA"></video>',
+      '<audio src="data:audio/mpeg;base64,AAAA"></audio>',
+      '<video><source src="data:video/webm;base64,AAAA"></video>',
+      '<audio><source src=" DATA:audio/ogg;base64,AAAA"></audio>',
+    ]) {
+      const { fragment, external } = sanitizeHtml(html, document);
+      expect(fragment.querySelector("[src]"), html).toBeNull();
+      expect(external, html).toBe(true);
+    }
   });
 
   it("reports nothing external for a plain document", () => {
