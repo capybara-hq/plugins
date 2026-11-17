@@ -5,6 +5,7 @@ import {
   type Logger,
   SANDBOX_TAG_RE,
   SandboxGoneError,
+  type SandboxHandle,
   type SandboxLimits,
   type SandboxProvider,
   validateAllowHost,
@@ -14,9 +15,12 @@ import {
   ALL_TRAFFIC,
   abortReason,
   createE2BApi,
+  E2BHttpError,
   ENVD_PORT,
   type EnvdTarget,
+  envdCloseStdin,
   envdKill,
+  envdSendInput,
   envdStart,
   envdUpload,
   IPV6_DENIED,
@@ -37,6 +41,13 @@ import {
   LIST_TIMEOUT_SECONDS,
   listLimit,
 } from "./listing.js";
+import {
+  type AgentRunOpts,
+  createOperations,
+  type OperationTransport,
+  refusedFrame,
+} from "./operations.js";
+import { OPERATION_AGENT, RUNTIME_DIR, runtimeChecksums, runtimeFiles } from "./runtime-source.js";
 
 /** 部署配置（见 index.ts 的 DeploymentConfig）。 */
 export interface E2BSandboxConfig {
@@ -73,6 +84,10 @@ export interface E2BSandboxTestOptions {
    * commands on the test machine, where python3 and timeout may live elsewhere).
    */
   listPath?: string;
+  /** Drops a background start's acknowledgement as if the transport lost it (live tests). */
+  loseBackgroundAck?: (taskId: string) => boolean;
+  /** Replaces the real `bg-start` command of a background start (live tests). */
+  backgroundStartCommand?: (taskId: string, cmd: string[]) => string[];
 }
 
 /**
@@ -225,6 +240,30 @@ const KILL_TAGGED_SCRIPT =
   `k "$q"; kill -9 "$q" 2>/dev/null; done; km E "${EXEC_MARKER}=/tmp/[.]capybara-exec-$t-$u"; ` +
   "done; exit 0";
 
+/**
+ * Kills the Full access foreground executions of one operation (`revokeOperation`): every exec
+ * wrapper (or admission agent about to exec it) whose control path ends with the operation's
+ * UUID (`$1`), then the processes that left its session, by their environment marker. Exits 1 when
+ * some survive (the caller then reboots the VM).
+ */
+const KILL_OPERATION_SCRIPT =
+  `${KILL_TREE}${KILL_MARKED}` +
+  'for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-[a-z0-9-]+-$1( |$)"); do ' +
+  `k "$q"; kill -9 "$q" 2>/dev/null; done; km E "${EXEC_MARKER}=/tmp/[.]capybara-exec-[a-z0-9-]+-$1"; exit 0`;
+
+/**
+ * Installs the staged runtime (root): `$1` the root-only upload directory holding the files and
+ * `SHA256SUMS`, `$2` the final directory. The files are checked, made root-owned 0644 in a 0755
+ * directory and moved into place with one rename; a directory another call installed first is
+ * kept. The installed directory is checked again either way.
+ */
+const STAGE_RUNTIME_SCRIPT =
+  'set -eu; umask 022; u=$1; d=$2; b=$(dirname -- "$d"); ' +
+  'mkdir -p -- "$b"; chown 0:0 "$b"; chmod 0755 "$b"; ' +
+  'cd -- "$u"; sha256sum -c --quiet SHA256SUMS; chown -R 0:0 .; chmod 0644 ./*; chmod 0755 .; cd /; ' +
+  'if [ ! -e "$d" ]; then mv -T -- "$u" "$d" 2>/dev/null || true; fi; rm -rf -- "$u"; ' +
+  'cd -- "$d"; sha256sum -c --quiet SHA256SUMS';
+
 /** The control file of one exec: carries the holder's tag when there is one. */
 export function execControlPath(tag?: string): string {
   if (tag !== undefined && !SANDBOX_TAG_RE.test(tag)) throw new Error("invalid sandbox tag");
@@ -278,6 +317,10 @@ const LIST_WRAPPER =
 
 const NO_PYTHON =
   "sandbox-e2b: the sandbox template has no python3 or no timeout (looked up in /usr/local/bin, /usr/bin, /bin), which list and scan need; build the template from the published image or add them to your own";
+
+/** envd's "no such process" (Connect `not_found`): the process has exited already. */
+const processGone = (e: unknown) =>
+  e instanceof E2BHttpError && e.status === 404 && e.code === "not_found";
 
 /** `ms` 毫秒后调用 `fn`（本次调用内的短暂等待；用 AbortSignal.timeout，不用进程级定时器 API）。 */
 function after(ms: number, fn: () => void): { cancel(): void } {
@@ -344,6 +387,8 @@ interface RunOpts {
   args: string[];
   env?: Record<string, string>;
   cwd?: string;
+  /** Written to the process's stdin once it started, then stdin is closed. */
+  stdin?: Uint8Array;
   /** stdout + stderr 合计最多收集的字节。 */
   maxOutputBytes: number;
   timeoutMs?: number;
@@ -367,6 +412,8 @@ interface SandboxInfo {
   sandboxID: string;
   envdAccessToken?: string | null;
   domain?: string | null;
+  /** `GET /sandboxes/{id}`: running | paused. */
+  state?: string;
 }
 
 /**
@@ -727,23 +774,46 @@ export function createE2BSandbox(
       ...(o.cwd !== undefined && { cwd: o.cwd }),
     };
     let streamError: unknown;
+    let feeding: Promise<void> | undefined;
+    // stdin: written once the process started, then closed. A failed write (the process may have
+    // exited already) kills the process rather than leave it waiting for its request; the agent
+    // refuses a partial request, so nothing runs on one. The stream then ends on its own.
+    const feed = (p: number | undefined) => {
+      const data = o.stdin;
+      if (data === undefined || feeding) return;
+      feeding = (async () => {
+        if (p === undefined) throw new Error("E2B started a process without a pid");
+        await envdSendInput(t, p, data, conn.signal);
+        // The agent reads exactly its length-prefixed request and usually has exited by now
+        // (not_found); closing is a courtesy, not awaited on the command's path.
+        void envdCloseStdin(t, p, AbortSignal.timeout(15_000)).catch(() => undefined);
+      })().catch(async (e: unknown) => {
+        if (p !== undefined && !conn.signal.aborted && !processGone(e)) {
+          await envdKill(t, p, AbortSignal.timeout(15_000)).catch(() => undefined);
+        }
+      });
+    };
     try {
       await envdStart(
         t,
         o.user,
         req,
         (e) => {
-          if ("start" in e) pid = e.start.pid;
-          else if ("data" in e) {
+          if ("start" in e) {
+            pid = e.start.pid;
+            feed(pid);
+          } else if ("data" in e) {
             if (e.data.stdout) collect("out", e.data.stdout);
             if (e.data.stderr) collect("err", e.data.stderr);
           } else if ("end" in e) exitCode = exitCodeOf(e.end);
         },
         conn.signal,
+        o.stdin !== undefined,
       );
     } catch (e) {
       streamError = e;
     }
+    await feeding;
     // 杀进程（必要时重启沙箱）完成后才返回：调用方接着用沙箱时它已结束
     await killing;
     grace?.cancel();
@@ -902,6 +972,199 @@ export function createE2BSandbox(
     }
     return hosts.length > 0 ? { kind: "allowlist", hosts: [...hosts] } : { kind: "none" };
   };
+
+  // ---------- operations (permission profiles) ----------
+
+  /**
+   * The envd target of a running VM, or undefined when it is paused or gone: `GET /sandboxes/{id}`
+   * answers its state and access token without connecting (connect would resume it).
+   */
+  const targetIfRunning = async (
+    id: string,
+    signal: AbortSignal,
+  ): Promise<EnvdTarget | undefined> => {
+    signal.throwIfAborted();
+    checkId(id);
+    let info: SandboxInfo | undefined;
+    try {
+      info = (await api.json<SandboxInfo>("GET", `/sandboxes/${enc(id)}`, { signal })).data;
+    } catch (e) {
+      if (isE2BNotFound(e)) return undefined;
+      throw e;
+    }
+    if (info?.state !== "running") return undefined;
+    return targetOf({ ...info, sandboxID: info.sandboxID ?? id });
+  };
+
+  /**
+   * Stages this provider's operation runtime as root (README "Permission profiles"): the files go
+   * to a fresh directory in the root-only upload area, root checks them against `SHA256SUMS` and
+   * moves them into `RUNTIME_DIR`.
+   */
+  const stageRuntime = async (t: EnvdTarget, signal: AbortSignal) => {
+    deps.log.info("sandbox-e2b: staging the operation runtime", {
+      sandboxId: t.sandboxId,
+      dir: RUNTIME_DIR,
+    });
+    const dir = `${UPLOAD_DIR}/${randomUUID()}`;
+    for (const f of runtimeFiles())
+      await envdUpload(t, `${dir}/${f.name}`, ROOT_USER, f.data, signal);
+    await envdUpload(t, `${dir}/SHA256SUMS`, ROOT_USER, Buffer.from(runtimeChecksums()), signal);
+    const r = await run(t, {
+      user: ROOT_USER,
+      cmd: "/bin/sh",
+      args: ["-c", STAGE_RUNTIME_SCRIPT, "capybara-stage", dir, RUNTIME_DIR],
+      cwd: "/",
+      maxOutputBytes: STDERR_ROOM,
+      timeoutMs: 60_000,
+      signal,
+    });
+    if (r.exitCode !== 0) {
+      throw new Error(`sandbox-e2b: cannot stage the operation runtime: ${stderrOf(r)}`);
+    }
+  };
+
+  /** Python's answer when the agent file is missing (the runtime is not staged in this VM yet). */
+  const agentMissing = (o: AgentRunOpts, r: RunResult) =>
+    o.cmd.includes(OPERATION_AGENT) &&
+    r.exitCode === 2 &&
+    r.stderr.toString("utf8").includes("can't open file") &&
+    r.stdout.byteLength === 0;
+
+  /** Runs one agent command; stages the runtime and retries once when its file is missing. */
+  const runAgent = async (t: EnvdTarget, o: AgentRunOpts): Promise<RunResult> => {
+    const once = () =>
+      run(t, {
+        user: o.user === "root" ? ROOT_USER : SANDBOX_USER,
+        cmd: o.cmd[0] as string,
+        args: o.cmd.slice(1),
+        ...(o.env && { env: o.env }),
+        ...(o.stdin && { stdin: o.stdin }),
+        cwd: "/",
+        maxOutputBytes: o.maxOutputBytes,
+        ...(o.timeoutMs !== undefined && { timeoutMs: o.timeoutMs }),
+        signal: o.signal,
+      });
+    const r = await once();
+    if (!agentMissing(o, r)) return r;
+    await stageRuntime(t, o.signal);
+    return once();
+  };
+
+  /** Envd answers 502 for a VM that was paused meanwhile: not running, never resumed here. */
+  const pausedMeanwhile = (e: unknown) => isStatus(e, 502);
+
+  /**
+   * The ordinary exec: the command runs through the wrapper (`execArgs`) under `ctl`; `prefix`
+   * (the operation agent's admission check, Full access only) execs that wrapper unchanged.
+   */
+  const execWith = async (
+    h: SandboxHandle,
+    args: Omit<Parameters<SandboxProvider["exec"]>[1], "actor">,
+    ctl: string,
+    prefix: string[] = [],
+    nonce?: string,
+  ): Promise<ExecResult> => {
+    args.signal.throwIfAborted();
+    const env: Record<string, string> = { HOME: "/workspace", LANG: "C.UTF-8" };
+    for (const [k, v] of Object.entries(args.env ?? {})) {
+      if (!ENV_KEY_RE.test(k)) throw new Error(`invalid environment variable name: ${k}`);
+      env[k] = v;
+    }
+    // The admission agent removes it before exec: the command can never echo it back.
+    if (nonce !== undefined) env.CAPYBARA_ADMISSION_NONCE = nonce;
+    // set last: a caller's variable of the same name never replaces it
+    env[EXEC_MARKER] = ctl;
+    const t = await attach(
+      h.id,
+      args.signal,
+      Math.ceil(args.timeoutMs / 1000) + TIMEOUT_MARGIN_SECONDS,
+    );
+    const wrapper = execArgs(ctl, args.command, args.timeoutMs);
+    const r = await run(t, {
+      user: SANDBOX_USER,
+      cmd: prefix.length > 0 ? (prefix[0] as string) : "setsid",
+      args: prefix.length > 0 ? [...prefix.slice(1), "setsid", ...wrapper] : wrapper,
+      env,
+      cwd: args.cwd ?? "/workspace",
+      maxOutputBytes: args.maxOutputBytes,
+      timeoutMs: args.timeoutMs,
+      signal: args.signal,
+      kill: killer(t, ctl),
+      // 重启也失败时只记日志（错误信息来自 API 正文与状态码，不含 apiKey 与访问令牌），照常返回本次结果
+      recover: () =>
+        reboot(h.id).catch((e: unknown) => {
+          deps.log.warn(
+            "sandbox-e2b: sandbox reboot failed; the stuck command may still be running",
+            {
+              sandboxId: h.id,
+              err: (e instanceof Error ? e.message : String(e)).slice(0, 500),
+            },
+          );
+        }),
+    });
+    // The admission prefix refused before the command started: its only output is the refusal
+    // frame (operations.ts maps it), with exit code 125.
+    if (prefix.length > 0 && r.exitCode === 125 && r.stdout[0] === 0x52) {
+      const refused = refusedFrame(r.stdout, nonce ?? "");
+      if (refused === "cancelled") {
+        return { exitCode: null, stdout: "", stderr: "", truncated: false, timedOut: false };
+      }
+      if (refused) throw refused;
+    }
+    return {
+      exitCode: r.exitCode,
+      stdout: decodeOutput(r.stdout, r.truncated),
+      stderr: decodeOutput(r.stderr, r.truncated),
+      truncated: r.truncated,
+      timedOut: r.timedOut,
+    };
+  };
+
+  const transport: OperationTransport = {
+    async run(h, o) {
+      const t = await attach(h.id, o.signal);
+      return runAgent(t, o);
+    },
+    async session(h, signal) {
+      const t = await attach(h.id, signal);
+      return (o) => runAgent(t, o);
+    },
+    async runIfRunning(h, o) {
+      const t = await targetIfRunning(h.id, o.signal);
+      if (t === undefined) return "not-running";
+      try {
+        return await runAgent(t, o);
+      } catch (e) {
+        if (pausedMeanwhile(e)) return "not-running";
+        throw e;
+      }
+    },
+    execFull: (h, args, ctl, prefix, nonce) => execWith(h, args, ctl, prefix, nonce),
+    async killOperation(h, uuid, signal) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid)) {
+        throw new Error("invalid operation control id");
+      }
+      // a paused VM (paused without memory) runs nothing
+      const t = await targetIfRunning(h.id, signal);
+      if (t === undefined) return;
+      const r = await run(t, {
+        user: SANDBOX_USER,
+        cmd: "/bin/sh",
+        args: ["-c", KILL_OPERATION_SCRIPT, "capybara-killop", uuid],
+        cwd: "/",
+        maxOutputBytes: STDERR_ROOM,
+        timeoutMs: 15_000,
+        signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
+      }).catch(() => null);
+      // survivors (or no answer): the last resort ends every process in the VM; the revocation
+      // then sees a new generation and reports a retry
+      if (r?.exitCode !== 0) await reboot(h.id);
+    },
+    loseBackgroundAck: test.loseBackgroundAck,
+    backgroundStartCommand: test.backgroundStartCommand,
+  };
+  const operations = createOperations({ transport, decode: decodeOutput });
 
   // ---------- 契约 ----------
 
@@ -1079,49 +1342,7 @@ export function createE2BSandbox(
     },
 
     async exec(h, args): Promise<ExecResult> {
-      args.signal.throwIfAborted();
-      const ctl = execControlPath(args.tag);
-      const env: Record<string, string> = { HOME: "/workspace", LANG: "C.UTF-8" };
-      for (const [k, v] of Object.entries(args.env ?? {})) {
-        if (!ENV_KEY_RE.test(k)) throw new Error(`invalid environment variable name: ${k}`);
-        env[k] = v;
-      }
-      // set last: a caller's variable of the same name never replaces it
-      env[EXEC_MARKER] = ctl;
-      const t = await attach(
-        h.id,
-        args.signal,
-        Math.ceil(args.timeoutMs / 1000) + TIMEOUT_MARGIN_SECONDS,
-      );
-      const r = await run(t, {
-        user: SANDBOX_USER,
-        cmd: "setsid",
-        args: execArgs(ctl, args.command, args.timeoutMs),
-        env,
-        cwd: args.cwd ?? "/workspace",
-        maxOutputBytes: args.maxOutputBytes,
-        timeoutMs: args.timeoutMs,
-        signal: args.signal,
-        kill: killer(t, ctl),
-        // 重启也失败时只记日志（错误信息来自 API 正文与状态码，不含 apiKey 与访问令牌），照常返回本次结果
-        recover: () =>
-          reboot(h.id).catch((e: unknown) => {
-            deps.log.warn(
-              "sandbox-e2b: sandbox reboot failed; the stuck command may still be running",
-              {
-                sandboxId: h.id,
-                err: (e instanceof Error ? e.message : String(e)).slice(0, 500),
-              },
-            );
-          }),
-      });
-      return {
-        exitCode: r.exitCode,
-        stdout: decodeOutput(r.stdout, r.truncated),
-        stderr: decodeOutput(r.stderr, r.truncated),
-        truncated: r.truncated,
-        timedOut: r.timedOut,
-      };
+      return execWith(h, args, execControlPath(args.tag));
     },
 
     async readFile(h, path, opts) {
@@ -1205,6 +1426,15 @@ export function createE2BSandbox(
       const r = await listOp(h.id, "scan", b, 0, opts.signal);
       return finishScan(b, r, NO_PYTHON);
     },
+
+    // The operation contract (operations.ts): fresh immutable scopes per invocation; Full access
+    // only on this provider (restricted scopes are refused, see permissionSupport).
+    permissionSupport: operations.permissionSupport,
+    operation: operations.operation,
+    prepare: operations.prepare,
+    browse: operations.browse,
+    revokeOperation: operations.revokeOperation,
+    background: operations.background,
   };
 }
 

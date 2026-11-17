@@ -232,6 +232,70 @@ configuration at once, with no restart: running commands keep running, new conne
 **Command time limit**: a single command runs at most `sandbox.limits.maxCommandSeconds`, and no more than the time left in the run it belongs to (`runtime.maxRunSeconds`,
 default 900 seconds, Ruling M20); to run long commands, raise `runtime.maxRunSeconds` to at least `maxCommandSeconds`.
 
+## Permission profiles (operation contract)
+
+The provider implements the permission operation contract of `sandbox@2` (plugin SDK
+0.1.0-rc.28): `permissionSupport`, a fresh immutable `operation` per invocation, owner `browse`,
+trusted `prepare` (skills and attachments), `revokeOperation` and exact `background` supervision
+(`start`, `status`, `tail`, `readOutput`, `stop`). It changes nothing about the device: one VM, its
+OS user, files, installed environment and network stay shared, no conversation grant updates the
+VM's network, and no other VM is ever made from copied files.
+
+**Restricted profiles are unavailable on the tested template.** The SDK's restricted launcher
+needs Landlock ABI 6 (and per-task child lists, a seccomp listener and pidfds). The tested
+template (`capybara-sandbox-0-1-0-rc-13`, E2B cloud, 2026-11-17) runs Linux `6.1.189+` x86_64
+with LSMs `capability,landlock` and **Landlock ABI 2**; child lists exist, the seccomp user
+notification action is available and unprivileged user namespaces are enabled, but this provider
+adds no namespace launcher (no new privileges, no relaxed hardening). So:
+
+- `permissionSupport` runs the SDK launcher's own probe inside the VM and reports
+  `restricted: null` with the template's facts in `unavailableReason` (for example "Landlock ABI 2
+  is below the required 6 (template kernel 6.1.189+ (x86_64))"), `fullAccess: true`,
+  `background: true`. It is template-specific: another template reports its own kernel. Even a
+  template whose kernel passes the probe stays restricted-unavailable in this version (there is no
+  validated restricted execution path on E2B yet). It answers only for a running VM and never
+  resumes one.
+- `operation`, `background.start` refuse every grant other than Full access (device files plus the
+  environment network) with `SandboxPermissionUnsupportedError` before any VM call: a scoped file
+  grant, a read-only grant, or device-wide work with a narrowed network. Nothing falls back to Full
+  access.
+- Full access runs the provider's ordinary exec wrapper (the existing OS user, environment and VM
+  network, no restricted syscall, socket or daemonization filter) behind an admission check, and
+  native file calls through the SDK native helper on `/` as the device user.
+
+**Runtime staging.** Templates built before the runtime existed have none, so the provider stages
+it in the VM itself on first use: the SDK's `native-files.py` and `linux-sandbox.py` (unchanged
+bytes) and this provider's agent `runtime/capybara-operation.py` (an adapted copy of
+sandbox-docker's agent without the restricted launch path; embedded in
+`src/operation-agent-source.ts`, regenerate with `node plugins/sandbox-e2b/scripts/gen-agent-source.mjs`)
+are uploaded as root to the root-only `/opt/capybara/upload`, checked by root against `SHA256SUMS`
+and moved with one rename into `/opt/capybara-e2b-runtime/<agent digest prefix>/` (root, 0755 /
+0644). The directory is named after the agent digest, so each provider version runs only its own
+agent; the agent re-checks the SDK files' digests and owners on every launch, and
+`permissionSupport` checks owners, modes and digests before reporting anything.
+
+**Records.** Consume records, tombstones, cancellation markers and background records live in
+`/opt/capybara-e2b-ops` (root, 0711; records 0600) on the VM's disk, so they survive a pause
+(which ends every process) and are out of the device user's reach even under Full access. Every
+method consumes its operation ID before any effect: a retry with the same method and input is an
+unknown outcome (never a repeat), a different one a validation error. `revokeOperation` writes the
+tombstone first, kills the operation's foreground wrapper and its background execution, and
+reports a retry when the VM rebooted meanwhile; a paused VM runs nothing, so a revocation whose
+admission deadline passed returns at once and one that could still be admitted stays pending.
+
+**Background executions** (Full access only) use the same design as sandbox-docker: a detached
+supervisor per operation, a root recorder that accepts the supervisor's frames only on the root
+UNIX socket connection whose `SO_PEERCRED` pid, start time, exact argv, stdin token and admitted
+request digest match, an acceptance byte before any launch, and an unacknowledged start kept for
+the same-ID retry only when `bg-start` exited 0 with exactly one result frame. Requests reach the
+agent only on its stdin (envd `SendInput` / `CloseStdin`), never argv or the environment. Status,
+tail, output reads and stop use `GET /sandboxes/{id}` (state and envd token, no connect) and never
+resume a paused VM; work of a previous boot reports `lost`.
+
+Residual trust (as on Docker, "M5"): Full access work shares the device uid, so it can signal or
+ptrace sandbox-user processes such as a background supervisor (the template has no Yama
+restriction); it cannot change root-owned records or runtime files.
+
 ## Resources (`limits.cpu` / `memoryMb` / `diskMb`)
 
 E2B's CPU and memory are fixed **when the template is built** (`cpuCount` / `memoryMB` of `Template.build`) and cannot be specified per sandbox at creation; disk size is decided by
@@ -260,6 +324,10 @@ Protocol sources (verified 2026-10-21): `dist/index.mjs` of `e2b@2.58.0`; the E2
 The third parameter of `createE2BSandbox(config, { log }, testOptions)` can be passed only by code that calls it directly; the plugin config cannot set it:
 
 - `envdUrl`: the envd address is changed to this (routed by the `E2b-Sandbox-Id` request header), instead of being assembled from the sandbox id and domain.
+- `listPath`: the PATH `list` / `scan` run with (the fake E2B runs commands on the test machine).
+- `loseBackgroundAck(taskId)`: drops a background start's acknowledgement as if the transport lost
+  it (the live lost-acknowledgement test).
+- `backgroundStartCommand(taskId, cmd)`: replaces the real `bg-start` command of a background start.
 
 ## Tests
 
@@ -270,6 +338,19 @@ The third parameter of `createE2BSandbox(config, { log }, testOptions)` can be p
   `PUT /sandboxes/{id}/network` in front of the fake, which has no network route: resume first, the bodies, gone and refused cases), and the reboot backstop when killing fails / the output stream does not end (the fake server's `memory: false` connect ends all processes);
   file systems and instances (files survive destroy and recreate, connect 404 → `FileSystemGoneError`, pause drops memory, cleanup by name), and the template
   auto-build (built once from the image, polled until ready, an existing alias reused, a not-ready alias rebuilt, a failed build not memoised).
+- `test/permission-scopes.test.ts`: the staged runtime bytes (SDK files unchanged, the embedded
+  agent equal to `runtime/capybara-operation.py` and its digest), the envd stdin calls, and every
+  path that must refuse before any VM call (restricted grants, a malformed scope, foreign
+  references, preparation roots, browsing inside the records, output bounds) or must never resume a
+  paused VM (status, tail, output, stop, support, revocation).
+- `test/live/permission-scopes.live.test.ts`: real E2B (same switches as below, plus
+  `CAPYBARA_TEST_REQUIRE_LINUX_RESTRICTED=1`, which fails unless the template reports restricted
+  support): the template probe and its kernel facts, `runSandboxPermissionConformance` (its
+  fail-closed branch) and `runSandboxNativeConformance` (through Full access) on the actual
+  provider, Full access OS rights and VM network (positive and negative) without a network update,
+  consume-once, revocation, overlap orders, background executions, records out of reach,
+  preparation, browsing, and a paused VM never resumed. One VM, deleted and asserted absent at the
+  end.
 - `test/live`: real E2B, run only when `CAPYBARA_TEST_E2B_API_KEY` is set (optionally `CAPYBARA_TEST_E2B_TEMPLATE`, unset to exercise the auto-build,
   and `CAPYBARA_TEST_E2B_API_URL` / `CAPYBARA_TEST_E2B_DOMAIN`), otherwise skipped: the template, the file system created paused, the sandbox user, files, `/skills` read-only (including a write through a symlink being
   rejected), the network allowlist, `open-public` (a public host reachable, private / loopback / CGNAT / link-local destinations
