@@ -66,19 +66,32 @@ class FakeWorker {
 
 interface RenderCall {
   page: number;
+  /** Which document session (1 = first open, 2 = the reopen after a timeout, ...). */
+  session: number;
   scale: number;
   cancel: Mock<() => void>;
   resolve: () => void;
   reject: (e: Error) => void;
 }
 
-/** A pdf.js stand-in: `pages` pages of 600 x 800 at scale 1; every render waits for the test. */
-function fakeLib(opts: { pages?: number; openError?: Error; autoResolve?: boolean } = {}) {
+/**
+ * A pdf.js stand-in: `pages` pages of 600 x 800 at scale 1. Renders resolve at once unless
+ * `autoResolve` is false or `hang(page, session)` says so; then they wait for the test.
+ */
+function fakeLib(
+  opts: {
+    pages?: number;
+    openError?: Error;
+    autoResolve?: boolean;
+    hang?: (page: number, session: number) => boolean;
+  } = {},
+) {
   const renders: RenderCall[] = [];
   const params: Array<Record<string, unknown>> = [];
   const ports: unknown[] = [];
+  const cleanups: number[] = [];
   const destroy = vi.fn(async () => {});
-  const doc: PdfDocument = {
+  const makeDoc = (session: number): PdfDocument => ({
     numPages: opts.pages ?? 3,
     async getPage(n: number): Promise<PdfPage> {
       return {
@@ -87,6 +100,7 @@ function fakeLib(opts: { pages?: number; openError?: Error; autoResolve?: boolea
           const { promise, resolve, reject } = deferred<void>();
           const call: RenderCall = {
             page: n,
+            session,
             scale: vp.width / 600,
             cancel: vi.fn<() => void>(() =>
               reject(
@@ -97,17 +111,19 @@ function fakeLib(opts: { pages?: number; openError?: Error; autoResolve?: boolea
             reject,
           };
           renders.push(call);
-          if (opts.autoResolve !== false) resolve();
+          const hangs = opts.autoResolve === false || (opts.hang?.(n, session) ?? false);
+          if (!hangs) resolve();
           return { promise, cancel: call.cancel };
         },
-        cleanup: () => true,
+        cleanup: () => cleanups.push(n),
       };
     },
     destroy,
-  };
+  });
   const lib: PdfLib = {
     getDocument(p) {
       params.push(p as Record<string, unknown>);
+      const doc = makeDoc(params.length);
       return {
         promise: opts.openError ? Promise.reject(opts.openError) : Promise.resolve(doc),
         destroy,
@@ -120,7 +136,7 @@ function fakeLib(opts: { pages?: number; openError?: Error; autoResolve?: boolea
       destroy() {}
     },
   };
-  return { lib, renders, params, ports, destroy };
+  return { lib, renders, params, ports, destroy, cleanups };
 }
 
 function deps(lib: PdfLib, extra: Partial<PdfDeps> = {}): PdfDeps {
@@ -144,16 +160,17 @@ function context(locale: "zh" | "en" = "en") {
   document.body.append(root);
   const showError = vi.fn<(reason: string) => void>();
   const controller = new AbortController();
+  const lifetime = new AbortController();
   const ctx: RenderContext = {
     root,
     locale,
     signal: controller.signal,
-    lifetime: new AbortController().signal,
+    lifetime: lifetime.signal,
     t: translator(locale),
     runInWorker: vi.fn(),
     showError,
   };
-  return { ctx, root, showError, controller };
+  return { ctx, root, showError, controller, lifetime };
 }
 
 function pdfFile(data: ArrayBuffer = new ArrayBuffer(8)): PreviewFile {
@@ -221,7 +238,7 @@ describe("pdf renderer", () => {
   });
 
   it("drops the canvases of pages far from the viewport and repaints them on return", async () => {
-    const { lib, renders } = fakeLib({ pages: 20 });
+    const { lib, renders, cleanups } = fakeLib({ pages: 20 });
     const { ctx, root } = context();
     await renderPdf(pdfFile(), ctx, deps(lib));
     await vi.waitFor(() => expect(root.querySelector('[data-page="1"] canvas')).not.toBeNull());
@@ -230,6 +247,8 @@ describe("pdf renderer", () => {
     s.dispatchEvent(new Event("scroll"));
     await vi.waitFor(() => expect(root.querySelector('[data-page="16"] canvas')).not.toBeNull());
     expect(root.querySelector('[data-page="1"] canvas')).toBeNull();
+    // the evicted pages' pdf.js resources are released too
+    expect(cleanups).toContain(1);
     const before = renders.filter((r) => r.page === 1).length;
     s.scrollTop = 0;
     s.dispatchEvent(new Event("scroll"));
@@ -274,43 +293,143 @@ describe("pdf renderer", () => {
     expect(at(mark)[0]?.scale).toBeCloseTo(1184 / 600);
   });
 
-  it("gives a page 10 s: a hung page shows an inline error and the next page still renders", async () => {
+  it("gives a page 10 s: a hung page shows an inline error, its worker is replaced", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const { lib, renders } = fakeLib({ pages: 3, autoResolve: false });
+    FakeWorker.instances = [];
+    // page 1 hangs in the first session; everything renders in the reopened one
+    const { lib, renders, params, destroy } = fakeLib({
+      pages: 3,
+      hang: (page, session) => page === 1 && session === 1,
+    });
     const { ctx, root, showError } = context();
     const done = renderPdf(pdfFile(), ctx, deps(lib));
     // flush without moving the clock (vi.waitFor would advance fake timers)
     await vi.advanceTimersByTimeAsync(0);
-    expect(renderedPages(renders)).toEqual([1, 2]);
-    // page 2 paints, page 1 hangs
-    renders.find((r) => r.page === 2)?.resolve();
+    // one page at a time: page 2 waits for page 1
+    expect(renderedPages(renders)).toEqual([1]);
     await vi.advanceTimersByTimeAsync(PAGE_BUDGET_MS - 1);
     expect(root.querySelector('[data-page="1"] .cap-pdf-page-error')).toBeNull();
+    expect(FakeWorker.instances[0]?.terminate).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     await done;
-    const err = root.querySelector('[data-page="1"] .cap-pdf-page-error');
-    expect(err?.textContent).toBe("This page took too long to render");
+    expect(root.querySelector('[data-page="1"] .cap-pdf-page-error')?.textContent).toBe(
+      "This page took too long to render",
+    );
     expect(renders.find((r) => r.page === 1)?.cancel).toHaveBeenCalled();
+    // the stuck worker is gone, the loading task destroyed
+    expect(FakeWorker.instances[0]?.terminate).toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalled();
+    // the next page reopens lazily in a fresh worker and paints, with no timeout of its own
+    await vi.advanceTimersByTimeAsync(0);
+    expect(params).toHaveLength(2);
+    expect(FakeWorker.instances).toHaveLength(2);
+    expect(renders.find((r) => r.page === 2)?.session).toBe(2);
     expect(root.querySelector('[data-page="2"] canvas')).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(PAGE_BUDGET_MS * 2);
     expect(root.querySelector('[data-page="2"] .cap-pdf-page-error')).toBeNull();
     expect(showError).not.toHaveBeenCalled();
     expect(PAGE_BUDGET_MS).toBe(10_000);
+  });
+
+  it("a queued page's budget starts when its turn comes, not when it was queued", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { lib, renders } = fakeLib({ pages: 3, autoResolve: false });
+    const { ctx, root } = context();
+    const done = renderPdf(pdfFile(), ctx, deps(lib));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(renderedPages(renders)).toEqual([1]);
+    // page 1 takes 9 s; page 2 has waited all that time
+    await vi.advanceTimersByTimeAsync(9_000);
+    renders.find((r) => r.page === 1)?.resolve();
+    await done;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(renderedPages(renders)).toEqual([1, 2]);
+    // page 2 hangs: its 10 s count from now, not from when it was queued
+    await vi.advanceTimersByTimeAsync(PAGE_BUDGET_MS - 1);
+    expect(root.querySelector('[data-page="2"] .cap-pdf-page-error')).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(root.querySelector('[data-page="2"] .cap-pdf-page-error')?.textContent).toBe(
+      "This page took too long to render",
+    );
+    expect(root.querySelector('[data-page="1"] canvas')).not.toBeNull();
   });
 
   it("a page that fails to render shows an inline error; the others still render", async () => {
     const { lib, renders } = fakeLib({ pages: 3, autoResolve: false });
     const { ctx, root } = context("zh");
     const done = renderPdf(pdfFile(), ctx, deps(lib));
-    await vi.waitFor(() => expect(renderedPages(renders)).toEqual([1, 2]));
+    await vi.waitFor(() => expect(renderedPages(renders)).toEqual([1]));
     renders.find((r) => r.page === 1)?.reject(new Error("bad operator"));
-    renders.find((r) => r.page === 2)?.resolve();
     await done;
-    await vi.waitFor(() =>
-      expect(root.querySelector('[data-page="1"] .cap-pdf-page-error')?.textContent).toBe(
-        "此页无法渲染：bad operator",
-      ),
+    // the zh UI shows only the localized line, not pdf.js's English reason
+    expect(root.querySelector('[data-page="1"] .cap-pdf-page-error')?.textContent).toBe(
+      "此页无法渲染",
     );
-    expect(root.querySelector('[data-page="2"] canvas')).not.toBeNull();
+    await vi.waitFor(() => expect(renderedPages(renders)).toEqual([1, 2]));
+    renders.find((r) => r.page === 2)?.resolve();
+    await vi.waitFor(() => expect(root.querySelector('[data-page="2"] canvas')).not.toBeNull());
+  });
+
+  it("keeps the file's bytes: pdf.js always gets a copy, also for a reopen", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const data = new Uint8Array([37, 80, 68, 70, 45, 49, 46, 52]).buffer;
+    const file = pdfFile(data);
+    const { lib, params } = fakeLib({
+      pages: 3,
+      hang: (page, session) => page === 1 && session === 1,
+    });
+    const { ctx } = context();
+    const done = renderPdf(file, ctx, deps(lib));
+    await vi.advanceTimersByTimeAsync(PAGE_BUDGET_MS);
+    await done;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(params).toHaveLength(2);
+    for (const p of params) {
+      const sent = p.data as Uint8Array;
+      expect(sent.buffer).not.toBe(data);
+      expect([...sent]).toEqual([37, 80, 68, 70, 45, 49, 46, 52]);
+    }
+    expect(file.data.byteLength).toBe(8);
+  });
+
+  it("ends with the lifetime: worker, document, listeners and root style go", async () => {
+    const observers: Array<{ disconnect: Mock<() => void> }> = [];
+    const original = window.ResizeObserver;
+    window.ResizeObserver = class {
+      disconnect = vi.fn<() => void>();
+      constructor() {
+        observers.push(this);
+      }
+      observe() {}
+      unobserve() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      FakeWorker.instances = [];
+      const { lib, renders, destroy } = fakeLib({ pages: 6 });
+      const { ctx, root, controller, lifetime } = context();
+      await renderPdf(pdfFile(), ctx, deps(lib));
+      // the shell aborts the render signal once the render settled: the preview lives on
+      controller.abort();
+      await vi.waitFor(() => expect(renderedPages(renders)).toEqual([1, 2]));
+      expect(FakeWorker.instances[0]?.terminate).not.toHaveBeenCalled();
+      expect(root.style.height).toBe("100%");
+      expect(observers).toHaveLength(1);
+
+      lifetime.abort();
+      expect(FakeWorker.instances[0]?.terminate).toHaveBeenCalled();
+      expect(destroy).toHaveBeenCalled();
+      expect(observers[0]?.disconnect).toHaveBeenCalled();
+      expect(root.style.height).toBe("");
+      const s = scroller(root);
+      const count = renders.length;
+      s.scrollTop = 16 + 3 * 816;
+      s.dispatchEvent(new Event("scroll"));
+      await Promise.resolve();
+      expect(renders.length).toBe(count);
+      expect(indicator(root)).toBe("1 / 6");
+    } finally {
+      window.ResizeObserver = original;
+    }
   });
 
   it("a password-protected PDF shows its message and asks for no password", async () => {
@@ -445,19 +564,65 @@ describe("pdf renderer with the real pdf.js (legacy build, Node fake worker)", (
     throw new Error(`unexpected import ${url}`);
   };
 
-  it("renders the 3-page fixture: 1 / 3, CJK cmap loaded through a module import", async () => {
+  /**
+   * Makes `fetch`, `XMLHttpRequest` and any touch of `WebAssembly` throw (and records them) while
+   * `run` runs. pdf.js's in-process worker is loaded first so nothing is imported under the trap.
+   */
+  async function withNetworkAndWasmTrapped(run: () => Promise<void>): Promise<string[]> {
+    // (no types ship for the worker entry: the cast keeps tsc from resolving it)
+    await import("pdfjs-dist/legacy/build/pdf.worker.mjs" as string);
+    const g = globalThis as Record<string, unknown>;
+    const saved = { fetch: g.fetch, XMLHttpRequest: g.XMLHttpRequest, WebAssembly: g.WebAssembly };
+    const hits: string[] = [];
+    g.fetch = (...args: unknown[]) => {
+      hits.push(`fetch ${String(args[0])}`);
+      throw new Error("fetch is not allowed");
+    };
+    g.XMLHttpRequest = class {
+      constructor() {
+        hits.push("XMLHttpRequest");
+        throw new Error("XMLHttpRequest is not allowed");
+      }
+    };
+    g.WebAssembly = new Proxy(
+      {},
+      {
+        get(_, key) {
+          hits.push(`WebAssembly.${String(key)}`);
+          throw new Error("WebAssembly is not allowed");
+        },
+        has(_, key) {
+          hits.push(`WebAssembly has ${String(key)}`);
+          return false;
+        },
+      },
+    );
+    try {
+      await run();
+    } finally {
+      Object.assign(g, saved);
+    }
+    return hits;
+  }
+
+  it("renders the 3-page fixture (CJK page too) with fetch, XHR and WebAssembly trapped", async () => {
     viewport = { width: 632, height: 5000 };
     imported.length = 0;
     const painted: number[] = [];
     const { ctx, root, showError } = context();
-    await renderPdf(
-      fixture("three-pages.pdf"),
-      ctx,
-      deps(await realLib((n) => painted.push(n)), { importModule }),
-    );
+    const hits = await withNetworkAndWasmTrapped(async () => {
+      await renderPdf(
+        fixture("three-pages.pdf"),
+        ctx,
+        deps(await realLib((n) => painted.push(n)), { importModule }),
+      );
+      await vi.waitFor(() => expect([...painted].sort()).toEqual([1, 2, 3]));
+    });
+    expect(hits).toEqual([]);
     expect(showError).not.toHaveBeenCalled();
     expect(indicator(root)).toBe("1 / 3");
-    await vi.waitFor(() => expect(painted.sort()).toEqual([1, 2, 3]));
+    expect(root.querySelectorAll(".cap-pdf-page-error")).toHaveLength(0);
+    // page 2's CJK text needs its cmap: it came through a module import, not a fetch
     expect(imported).toContain(`${BASE}pdfjs-cmap-UniGB-UCS2-H.bcmap.js`);
     expect(readdirSync(join(PDFJS_DIR, "cmaps"))).toContain("UniGB-UCS2-H.bcmap");
   });

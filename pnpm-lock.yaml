@@ -225,7 +225,7 @@ importers:
         specifier: ^1.13.0
         version: 1.13.0
       pdfjs-dist:
-        specifier: ^6.5.438
+        specifier: 6.5.438
         version: 6.5.438
       shiki:
         specifier: ^4.6.0

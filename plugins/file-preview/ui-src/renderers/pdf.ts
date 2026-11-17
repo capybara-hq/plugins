@@ -1,25 +1,30 @@
 /**
  * The pdf previewer: pdf.js (legacy build) renders page by page into canvases, only the pages in
- * the viewport plus one on each side, each within its own budget.
+ * the viewport plus one on each side, one page at a time, each within its own budget.
  *
  * pdf.js runs in a Web Worker started like every other worker of the embed: the build ships
  * `assets/pdfjs.worker.js`, an ES module whose default export is pdf.js's worker bundle; this file
- * `import()`s it, starts a `Worker` from a `blob:` URL of the text and hands it to pdf.js as its
- * port (`new PDFWorker({ port })`, the per-document form of `GlobalWorkerOptions.workerPort`).
- * Nothing is fetched (WebKit refuses `connect-src 'self'` in the opaque-origin embed):
+ * `import()`s it and starts it through worker-host's `startWorker` (a `blob:` URL), then hands it
+ * to pdf.js as its port (`new PDFWorker({ port })`, the per-document form of
+ * `GlobalWorkerOptions.workerPort`). Nothing is fetched (WebKit refuses `connect-src 'self'` in the
+ * opaque-origin embed):
  * - cmaps and standard fonts come through `BinaryDataFactory`, which pdf.js calls on the main
  *   thread when `useWorkerFetch` is false; it `import()`s the build's `pdfjs-cmap-<file>.js` /
  *   `pdfjs-font-<file>.js` modules, whose default export is the file's base64;
- * - `useWasm: false`: JPEG 2000 / JBIG2 images use the JS decoders bundled into the worker, colour
- *   profiles and PostScript functions their JS paths;
+ * - `useWasm: false`: JPEG 2000 and JBIG2 / CCITT fax images use the JS decoders bundled into the
+ *   worker, colour profiles and PostScript functions their JS paths;
  * - pdf.js 6 has no eval code path (the old `isEvalSupported` option is gone), XFA is off, and the
  *   offscreen renderer worker (`disableWorkerRendering`) is off since it would load its own script.
- * A password-protected PDF gets a message, never a password prompt.
+ *
+ * A page that runs out of its budget may have left pdf.js's single worker busy: the worker is
+ * terminated and the document reopened, lazily, from the retained bytes for the next page. A
+ * password-protected PDF gets a message, never a password prompt.
  */
 import { THEME } from "../app/theme.js";
 import type { PreviewFile, RenderContext, Renderer } from "../app/types.js";
+import { startWorker } from "../app/worker-host.js";
 
-/** The budget of one page (load + paint). */
+/** The budget of one page (open if needed + load + paint), from when its turn comes. */
 export const PAGE_BUDGET_MS = 10_000;
 
 const STRINGS = {
@@ -107,19 +112,20 @@ const KEEP_PAINTED = 4;
 const MAX_CANVAS_PIXELS = 16_777_216;
 
 const CSS = `
-.cap-pdf { display: flex; flex-direction: column; height: 100%; }
+.cap-pdf { display: flex; flex-direction: column; height: 100%; font-family: ${THEME.font}; }
 .cap-pdf-bar { display: flex; align-items: center; gap: 4px; padding: 4px 8px; flex: none;
-  border-bottom: 1px solid ${THEME.border};
-  background: ${THEME.background}; font-size: 12px; }
+  border-bottom: 1px solid ${THEME.border}; background: ${THEME.panel};
+  color: ${THEME.foreground}; font-size: 12px; }
 .cap-pdf-bar button { font: inherit; color: inherit; background: transparent; cursor: pointer;
   border: 1px solid ${THEME.border}; border-radius: ${THEME.radius}; padding: 2px 8px; }
 .cap-pdf-bar button:hover { background: ${THEME.hover}; }
+.cap-pdf-bar button:focus-visible { outline: 2px solid ${THEME.accent}; outline-offset: 1px; }
 .cap-pdf-indicator { margin-right: auto; font-variant-numeric: tabular-nums; }
 .cap-pdf-zoom { min-width: 3.5em; text-align: center; font-variant-numeric: tabular-nums; }
 .cap-pdf-pages { flex: 1; min-height: 0; overflow: auto; padding: ${PAD}px; box-sizing: border-box;
-  background: ${THEME.panel}; }
+  background: ${THEME.background}; }
 .cap-pdf-page { position: relative; margin: 0 auto ${PAD}px; background: #fff;
-  box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+  box-shadow: 0 0 0 1px ${THEME.border}; }
 .cap-pdf-page canvas { display: block; width: 100%; height: 100%; }
 .cap-pdf-page-error { position: absolute; inset: 0; display: flex; align-items: center;
   justify-content: center; padding: 16px; text-align: center; color: #555; font-size: 13px;
@@ -157,25 +163,15 @@ function dataFactory(importModule: PdfDeps["importModule"], assetBase: string) {
   };
 }
 
-/** Starts pdf.js's worker from a `blob:` URL of the shipped bundle (no fetch, `worker-src blob:`). */
-async function startWorker(deps: PdfDeps, started: (w: Worker) => void): Promise<Worker> {
-  const src = `${deps.assetBase}pdfjs.worker.js`;
-  const mod = await deps.importModule(src);
-  if (typeof mod.default !== "string") throw new Error(`${src} has no worker source`);
-  const url = deps.createObjectURL(new Blob([mod.default], { type: "text/javascript" }));
-  try {
-    const w = new deps.Worker(url);
-    started(w);
-    return w;
-  } finally {
-    deps.revokeObjectURL(url);
-  }
-}
-
 function isPasswordError(e: unknown): boolean {
   return (
     typeof e === "object" && e !== null && (e as { name?: unknown }).name === "PasswordException"
   );
+}
+
+/** Thrown into pending work once the preview is torn down. */
+class Disposed extends Error {
+  override name = "Disposed";
 }
 
 type Zoom = "fit" | number;
@@ -184,9 +180,16 @@ interface PageSlot {
   el: HTMLDivElement;
   /** Size at scale 1: the first page's until this page is loaded. */
   base: PdfViewport;
-  /** The zoom generation painted (or being painted) into this slot; -1 = none. */
+  /** The zoom generation painted, being painted or queued for this slot; -1 = none. */
   generation: number;
   task: PdfRenderTask | undefined;
+  /** The page proxy of the current document session, for `cleanup()` on eviction. */
+  page: PdfPage | undefined;
+}
+
+interface Session {
+  worker: Worker;
+  task: ReturnType<PdfLib["getDocument"]>;
 }
 
 /** Renders `file` with injectable pdf.js, worker and module loading. */
@@ -196,42 +199,87 @@ export async function renderPdf(
   deps: PdfDeps,
 ): Promise<void> {
   const s: Strings = STRINGS[ctx.locale];
+  const zh = ctx.locale === "zh";
+  /** pdf.js's own reasons are English: the zh UI shows only the localized line. */
+  const withReason = (text: string, e: unknown) => (zh ? text : `${text}: ${message(e)}`);
   const doc0 = ctx.root.ownerDocument;
-  let worker: Worker | undefined;
-  let loading: ReturnType<PdfLib["getDocument"]> | undefined;
-  let pdf: PdfDocument | undefined;
-  /** Until this renderer resolves, the shell's abort means "stop": afterwards the pages live on. */
-  let resolved = false;
-  const cleanup = () => {
-    void loading?.destroy().catch(() => {});
-    worker?.terminate();
-  };
-  const onAbort = () => {
-    if (!resolved) cleanup();
-  };
-  ctx.signal.addEventListener("abort", onAbort);
-  /** Rejects once the shell aborts, so no await outlives it. */
-  const aborted = new Promise<never>((_, reject) => {
-    const fire = () => reject(new Error("aborted"));
-    if (ctx.signal.aborted) fire();
-    else ctx.signal.addEventListener("abort", fire);
-  });
-  aborted.catch(() => {});
-  const live = <T>(p: Promise<T>) => Promise.race([p, aborted]);
+  // pdf.js transfers the buffer it is given to its worker: it always gets a copy, so the bytes
+  // stay valid for a reopen
+  const bytes = new Uint8Array(file.data);
 
-  try {
-    const lib = await live(deps.loadPdfjs());
-    await live(
-      startWorker(deps, (w) => {
-        worker = w;
-        // the shell gave up while the worker module was loading: it must not outlive the file
-        if (ctx.signal.aborted && !resolved) w.terminate();
-      }),
-    );
-    const port = worker as unknown as Worker;
-    loading = lib.getDocument({
-      data: new Uint8Array(file.data),
-      worker: new lib.PDFWorker({ port }),
+  // ---- lifetime: the shell's abort counts until this renderer resolves, the lifetime always
+  let resolved = false;
+  let disposed = false;
+  const teardown: Array<() => void> = [];
+  let rejectAll: ((e: Error) => void) | undefined;
+  const gone = new Promise<never>((_, reject) => {
+    rejectAll = reject;
+  });
+  gone.catch(() => {});
+  /** `p`, or a rejection once the preview is torn down, so no await outlives it. */
+  const live = <T>(p: Promise<T>) => Promise.race([p, gone]);
+
+  let session: Session | undefined;
+  const slots: PageSlot[] = [];
+  const closeSession = () => {
+    const current = session;
+    session = undefined;
+    if (!current) return;
+    for (const slot of slots) slot.page = undefined;
+    void current.task.destroy().catch(() => {});
+    current.worker.terminate();
+  };
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    for (const slot of slots) slot.task?.cancel();
+    closeSession();
+    for (const undo of teardown.splice(0)) undo();
+    ctx.root.style.height = "";
+    rejectAll?.(new Disposed());
+    ctx.signal.removeEventListener("abort", onSignal);
+    ctx.lifetime.removeEventListener("abort", dispose);
+  };
+  const onSignal = () => {
+    if (!resolved) dispose();
+  };
+  ctx.signal.addEventListener("abort", onSignal);
+  ctx.lifetime.addEventListener("abort", dispose);
+  if (ctx.signal.aborted || ctx.lifetime.aborted) dispose();
+
+  // ---- the document session: worker + loading task, (re)opened from the retained bytes
+  let lib: PdfLib | undefined;
+  /** Set once pdf.js got the bytes: later failures are the file's, earlier ones the embed's. */
+  let opened = false;
+  let workerSource: Promise<string> | undefined;
+  const loadWorkerSource = () => {
+    if (workerSource === undefined) {
+      const src = `${deps.assetBase}pdfjs.worker.js`;
+      const p = deps.importModule(src).then((mod) => {
+        if (typeof mod.default !== "string") throw new Error(`${src} has no worker source`);
+        return mod.default;
+      });
+      workerSource = p;
+      p.catch(() => {
+        if (workerSource === p) workerSource = undefined;
+      });
+    }
+    return workerSource;
+  };
+  const open = async (): Promise<PdfDocument> => {
+    if (session) return session.task.promise;
+    const pdfjs = lib ?? (await live(deps.loadPdfjs()));
+    lib = pdfjs;
+    const source = await live(loadWorkerSource());
+    if (session) return (session as Session).task.promise;
+    const worker = startWorker(source, deps);
+    if (disposed) {
+      worker.terminate();
+      throw new Disposed();
+    }
+    const task = pdfjs.getDocument({
+      data: bytes.slice(),
+      worker: new pdfjs.PDFWorker({ port: worker }),
       // pdf.js wants these set (with a trailing slash) but never fetches them: the factory maps
       // each request to its `pdfjs-<kind>-<file>.js` module
       BinaryDataFactory: dataFactory(deps.importModule, deps.assetBase),
@@ -245,38 +293,41 @@ export async function renderPdf(
       isOffscreenCanvasSupported: true,
       stopAtErrors: false,
     });
-    pdf = await live(loading.promise);
-  } catch (e) {
-    ctx.signal.removeEventListener("abort", onAbort);
-    cleanup();
-    if (ctx.signal.aborted) return;
-    if (isPasswordError(e)) ctx.showError(s.password);
-    else if (worker === undefined || loading === undefined) ctx.showError(message(e));
-    else ctx.showError(`${s.invalid}: ${message(e)}`);
-    return;
-  }
+    opened = true;
+    const current: Session = { worker, task };
+    session = current;
+    // a session that failed to open is not kept: the next page tries again
+    task.promise.catch(() => {
+      if (session === current) closeSession();
+    });
+    return task.promise;
+  };
 
-  const pdfDoc = pdf;
-  if (pdfDoc.numPages === 0) {
-    const empty = doc0.createElement("div");
-    empty.className = "cap-pdf-empty";
-    empty.textContent = s.noPages;
-    ctx.root.replaceChildren(empty);
-    resolved = true;
-    ctx.signal.removeEventListener("abort", onAbort);
-    cleanup();
-    return;
-  }
-
+  // ---- first open: errors go to the shell's inline error
+  let pdfDoc: PdfDocument;
   let first: PdfPage;
   try {
+    pdfDoc = await live(open());
+    if (pdfDoc.numPages === 0) {
+      const empty = doc0.createElement("div");
+      empty.className = "cap-pdf-empty";
+      empty.textContent = s.noPages;
+      ctx.root.replaceChildren(empty);
+      resolved = true;
+      dispose();
+      return;
+    }
     first = await live(pdfDoc.getPage(1));
   } catch (e) {
-    ctx.signal.removeEventListener("abort", onAbort);
-    cleanup();
-    if (!ctx.signal.aborted) ctx.showError(`${s.invalid}: ${message(e)}`);
+    const wasDisposed = disposed;
+    dispose();
+    if (wasDisposed || e instanceof Disposed) return;
+    if (isPasswordError(e)) ctx.showError(s.password);
+    else if (!opened) ctx.showError(message(e));
+    else ctx.showError(withReason(s.invalid, e));
     return;
   }
+  const numPages = pdfDoc.numPages;
   const firstBase = first.getViewport({ scale: 1 });
 
   // ---- the frame: toolbar + scrolling pages
@@ -313,14 +364,14 @@ export async function renderPdf(
   scroller.tabIndex = 0;
   frame.append(bar, scroller);
 
-  const slots: PageSlot[] = [];
-  for (let n = 1; n <= pdfDoc.numPages; n++) {
+  for (let n = 1; n <= numPages; n++) {
     const el = doc0.createElement("div");
     el.className = "cap-pdf-page";
     el.dataset.page = String(n);
-    slots.push({ el, base: firstBase, generation: -1, task: undefined });
+    slots.push({ el, base: firstBase, generation: -1, task: undefined, page: undefined });
     scroller.append(el);
   }
+  (slots[0] as PageSlot).page = first;
   ctx.root.style.height = "100%";
   ctx.root.replaceChildren(style, frame);
 
@@ -328,6 +379,9 @@ export async function renderPdf(
   let zoom: Zoom = "fit";
   let scale = 1;
   let generation = 0;
+  /** The pages (0-based, inclusive) the last update wants painted. */
+  let windowFrom = 0;
+  let windowTo = 0;
   const dpr = deps.devicePixelRatio ?? 1;
 
   const fitScale = () => {
@@ -359,24 +413,36 @@ export async function renderPdf(
     slot.el.replaceChildren(err);
   };
 
-  /** Paints page `n` at the current zoom; settles (painted or inline error) within the budget. */
-  const paint = async (n: number): Promise<void> => {
+  /**
+   * Paints page `n` for zoom generation `gen`. Pages run one at a time (pdf.js's worker is one
+   * thread anyway), so the budget starts when this page's turn comes, not when it was queued.
+   */
+  const runPage = async (n: number, gen: number): Promise<void> => {
     const slot = slots[n - 1] as PageSlot;
-    const gen = generation;
-    slot.generation = gen;
+    if (disposed || gen !== generation || slot.generation !== gen) return;
+    if (n - 1 < windowFrom || n - 1 > windowTo) {
+      // scrolled away while it waited: painted when it comes back
+      slot.generation = -1;
+      return;
+    }
     let timer: ReturnType<typeof setTimeout> | undefined;
     let timedOut = false;
     const budget = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
+        if (disposed) return;
         timedOut = true;
         slot.task?.cancel();
+        // the worker may still be stuck in this page: the next page gets a fresh one
+        closeSession();
         reject(new Error(s.pageTimeout));
       }, PAGE_BUDGET_MS);
     });
     budget.catch(() => {});
+    const bounded = <T>(p: Promise<T>) => live(Promise.race([p, budget]));
     try {
-      const page = n === 1 ? first : await Promise.race([pdfDoc.getPage(n), budget]);
-      if (gen !== generation) return;
+      const page = slot.page ?? (await bounded((await bounded(open())).getPage(n)));
+      if (gen !== generation || disposed) return;
+      slot.page = page;
       const base = page.getViewport({ scale: 1 });
       if (base.width !== slot.base.width || base.height !== slot.base.height) {
         slot.base = base;
@@ -396,16 +462,16 @@ export async function renderPdf(
         ...(ratio !== 1 ? { transform: [ratio, 0, 0, ratio, 0, 0] } : {}),
       });
       slot.task = task;
-      await Promise.race([task.promise, budget]);
-      if (gen !== generation) return;
+      await bounded(task.promise);
+      if (gen !== generation || disposed) return;
       slot.el.replaceChildren(canvas);
     } catch (e) {
-      if (gen !== generation) return;
+      if (disposed || gen !== generation) return;
       if (timedOut) pageError(slot, s.pageTimeout);
       else {
         const name = (e as { name?: unknown } | null)?.name;
         if (name === "RenderingCancelledException") return;
-        pageError(slot, `${s.pageError}${ctx.locale === "zh" ? "：" : ": "}${message(e)}`);
+        pageError(slot, withReason(s.pageError, e));
       }
     } finally {
       clearTimeout(timer);
@@ -413,8 +479,19 @@ export async function renderPdf(
     }
   };
 
-  /** Updates the indicator and paints the visible pages ±1 not painted at this zoom yet. */
+  let queue: Promise<void> = Promise.resolve();
+  const enqueue = (n: number): Promise<void> => {
+    const slot = slots[n - 1] as PageSlot;
+    const gen = generation;
+    slot.generation = gen;
+    const job = queue.then(() => runPage(n, gen));
+    queue = job;
+    return job;
+  };
+
+  /** Updates the indicator and queues the visible pages ±1 not painted at this zoom yet. */
   const update = (): Promise<void>[] => {
+    if (disposed) return [];
     const top = scroller.scrollTop;
     const height = Math.max(1, scroller.clientHeight);
     const bottom = top + height;
@@ -442,23 +519,30 @@ export async function renderPdf(
       current = firstVisible + 1;
     }
     indicator.textContent = `${current} / ${slots.length}`;
+    windowFrom = Math.max(0, firstVisible - 1);
+    windowTo = Math.min(slots.length - 1, lastVisible + 1);
     const work: Promise<void>[] = [];
-    const from = Math.max(0, firstVisible - 1);
-    const to = Math.min(slots.length - 1, lastVisible + 1);
-    for (let i = from; i <= to; i++) {
-      if ((slots[i] as PageSlot).generation !== generation) work.push(paint(i + 1));
+    // the page in view first, then its neighbours
+    const order = [];
+    for (let i = firstVisible; i <= lastVisible; i++) order.push(i);
+    order.push(windowFrom, windowTo);
+    for (const i of order) {
+      if ((slots[i] as PageSlot).generation !== generation) work.push(enqueue(i + 1));
     }
     // pages far from the viewport give their canvas back (a long PDF would hold one per page)
     slots.forEach((slot, i) => {
-      if (i >= from - KEEP_PAINTED && i <= to + KEEP_PAINTED) return;
+      if (i >= windowFrom - KEEP_PAINTED && i <= windowTo + KEEP_PAINTED) return;
       if (slot.task !== undefined || slot.el.firstChild === null) return;
       slot.el.replaceChildren();
+      slot.page?.cleanup();
+      slot.page = undefined;
       slot.generation = -1;
     });
     return work;
   };
 
   const setZoom = (next: Zoom) => {
+    if (disposed) return;
     // keep the page at the top of the viewport where it is
     const starts = tops();
     const anchor = Math.max(
@@ -468,7 +552,7 @@ export async function renderPdf(
     const offset = (scroller.scrollTop - (starts[anchor] ?? 0)) / scale;
     zoom = next;
     const nextScale = next === "fit" ? fitScale() : next;
-    if (nextScale === scale && slots.every((sl) => sl.generation === generation)) {
+    if (nextScale === scale) {
       layout();
       return;
     }
@@ -484,44 +568,44 @@ export async function renderPdf(
     scroller.scrollTop = (tops()[anchor] ?? 0) + offset * scale;
     void update();
   };
-  const currentScale = () => scale;
   zoomIn.addEventListener("click", () => {
-    const next = ZOOM_STEPS.find((z) => z > currentScale() + 1e-6);
+    const next = ZOOM_STEPS.find((z) => z > scale + 1e-6);
     if (next !== undefined) setZoom(next);
   });
   zoomOut.addEventListener("click", () => {
-    const next = ZOOM_STEPS.findLast((z) => z < currentScale() - 1e-6);
+    const next = ZOOM_STEPS.findLast((z) => z < scale - 1e-6);
     if (next !== undefined) setZoom(next);
   });
   fitButton.addEventListener("click", () => setZoom("fit"));
   actualButton.addEventListener("click", () => setZoom(1));
-  scroller.addEventListener("scroll", () => void update(), { passive: true });
+  const onScroll = () => void update();
+  scroller.addEventListener("scroll", onScroll, { passive: true });
+  teardown.push(() => scroller.removeEventListener("scroll", onScroll));
   const view = doc0.defaultView as (Window & typeof globalThis) | null;
   if (view && typeof view.ResizeObserver === "function") {
     let lastWidth = scroller.clientWidth;
-    new view.ResizeObserver(() => {
+    const observer = new view.ResizeObserver(() => {
       if (scroller.clientWidth === lastWidth) return;
       lastWidth = scroller.clientWidth;
       if (zoom === "fit") setZoom("fit");
       else void update();
-    }).observe(scroller);
+    });
+    observer.observe(scroller);
+    teardown.push(() => observer.disconnect());
   }
 
   scale = fitScale();
   layout();
   const initial = update();
   // the shell shows the preview once the first page settled (painted or an inline error); the rest
-  // keep painting after this resolves, and the shell's abort no longer stops them
+  // keep painting after this resolves, until the lifetime ends
   try {
     await live(initial[0] ?? Promise.resolve());
   } catch {
-    // aborted by the shell: stop everything
-    ctx.signal.removeEventListener("abort", onAbort);
-    cleanup();
+    dispose();
     return;
   }
   resolved = true;
-  ctx.signal.removeEventListener("abort", onAbort);
 }
 
 const importModule = (url: string): Promise<{ default?: unknown }> => import(url);

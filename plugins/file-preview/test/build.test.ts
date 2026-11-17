@@ -4,6 +4,8 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import vm from "node:vm";
+import { gzipSync } from "node:zlib";
 import { afterAll, describe, expect, it } from "vitest";
 import { PREVIEWERS } from "../src/previewers.js";
 import { buildUi } from "../ui-src/build.js";
@@ -19,6 +21,72 @@ async function tempDir(): Promise<string> {
 const PDFJS_DIR = dirname(
   createRequire(join(import.meta.dirname, "../package.json")).resolve("pdfjs-dist/package.json"),
 );
+
+/** One real build shared by the tests that only read it. */
+let shared: Promise<{ dir: string; manifest: Awaited<ReturnType<typeof buildUi>> }> | undefined;
+function sharedBuild() {
+  shared ??= (async () => {
+    const dir = await tempDir();
+    return { dir, manifest: await buildUi(dir) };
+  })();
+  return shared;
+}
+
+/**
+ * A call that evaluates a string as code: `Function(…)`, `new Function(…)`, `eval(…)`. Not a
+ * method (`.eval(`), not part of a longer name, and not followed by `?`: `Function(?` can only be
+ * text inside a regex source (shiki's grammars), never a call.
+ */
+const EVAL_RE = /(?<![\w$.])(?:new\s+)?(?:Function|eval)\s*\((?!\?)/g;
+/**
+ * The only eval-like calls the shipped code may contain, each unreachable in the embed (the CSP
+ * has no 'unsafe-eval', so reaching one would throw, never run code):
+ */
+const EVAL_ALLOWED: ReadonlyArray<{ file?: RegExp; re: RegExp; why: string }> = [
+  {
+    // core-js (pdf.js legacy build), lodash and regenerator-runtime (exceljs): the global object
+    re: /^Function\(["']return this["']\)\(\)/,
+    why: "last fallback after the globalThis / self / window checks, which every browser passes",
+  },
+  {
+    // regenerator-runtime (exceljs): `try { regeneratorRuntime = r } catch { globalThis ? … : this }`
+    re: /^Function\("r","regeneratorRuntime = r"\)/,
+    why: "only when globalThis is missing",
+  },
+  {
+    // the setImmediate polyfill bundled with exceljs and mammoth: `typeof f != "function"`
+    re: /^new Function\(""\+(\w+)\)/,
+    why: "only for a string callback; the bundles pass functions",
+  },
+  {
+    // underscore's _.template compiler, bundled whole into the docx worker by mammoth
+    file: /^docx\.worker\.js$/,
+    re: /^new Function\(\w+,"_",\w+\)/,
+    why: "mammoth never calls _.template (no `.template(` in mammoth/lib)",
+  },
+];
+
+/** Every script the embed runs: page modules as written, worker modules as their source text. */
+async function shippedScripts(
+  dir: string,
+  names: string[],
+): Promise<Array<[name: string, source: string]>> {
+  const out: Array<[string, string]> = [];
+  for (const name of names.filter((n) => n.endsWith(".js"))) {
+    const text = await readFile(join(dir, name), "utf8");
+    if (/^pdfjs-(cmap|font)-/.test(name)) {
+      // data, not code: a base64 string and nothing else
+      expect(text, name).toMatch(/^export default "[A-Za-z0-9+/=]*";\n$/);
+      continue;
+    }
+    if (name.endsWith(".worker.js")) {
+      // a string export and nothing else: what runs is the source text
+      expect(text, name).toMatch(/^export default "(?:[^"\\]|\\.)*";\n$/s);
+      out.push([name, (await importDefault(join(dir, name))) as string]);
+    } else out.push([name, text]);
+  }
+  return out;
+}
 
 async function importDefault(file: string): Promise<unknown> {
   return ((await import(pathToFileURL(file).href)) as { default: unknown }).default;
@@ -148,9 +216,8 @@ describe("buildUi", () => {
     await expect(buildUi(await tempDir(), { staticDir })).rejects.toThrow(/flat/);
   });
 
-  it("ships the pdf.js worker as a classic script with no eval and no runtime import", async () => {
-    const dir = await tempDir();
-    const manifest = await buildUi(dir);
+  it("ships the pdf.js worker as a classic script with no runtime import", async () => {
+    const { dir, manifest } = await sharedBuild();
     expect(manifest.files["pdfjs.worker.js"]?.contentType).toBe("text/javascript; charset=utf-8");
     const source = await importDefault(join(dir, "pdfjs.worker.js"));
     expect(typeof source).toBe("string");
@@ -158,9 +225,91 @@ describe("buildUi", () => {
     expect(text).toContain("WorkerMessageHandler");
     // the JPEG 2000 / JBIG2 JS decoders are bundled in, not imported from a URL at run time
     expect(text).not.toMatch(/\bimport\s*\(/);
-    expect(text).toContain("nowasm");
-    // no eval-like code paths in what pdf.js runs (CSP has no 'unsafe-eval')
-    expect(text).not.toMatch(/new Function\(|[^.\w]eval\(/);
+    expect(text).toContain("openjpeg_nowasm_fallback.js");
+    expect(text).toContain("jbig2_nowasm_fallback.js");
+  });
+
+  it("no shipped script evaluates strings as code, beyond the commented allowlist", async () => {
+    const { dir, manifest } = await sharedBuild();
+    const scripts = await shippedScripts(dir, Object.keys(manifest.files));
+    // the pdf renderer's chunk (pdf.js's main thread) and the worker are among them
+    expect(scripts.some(([, src]) => src.includes("PasswordException"))).toBe(true);
+    expect(scripts.map(([n]) => n)).toContain("pdfjs.worker.js");
+    const offenders: string[] = [];
+    for (const [name, src] of scripts) {
+      for (const m of src.matchAll(EVAL_RE)) {
+        const at = src.slice(m.index, m.index + 60);
+        const allowed = EVAL_ALLOWED.some((a) => (a.file?.test(name) ?? true) && a.re.test(at));
+        if (!allowed) offenders.push(`${name}: ${at}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("the built worker decodes JPEG 2000 and CCITT fax images with no WebAssembly or fetch", async () => {
+    // WebAssembly call sites stay in pdf.js's worker (behind useWasm), so this is checked at run
+    // time: the built worker runs in-process with WebAssembly and fetch trapped, and decodes a
+    // JPX image and a CCITT G4 image (the JBIG2 module's decoder) through the rewritten lookup
+    const { dir } = await sharedBuild();
+    const source = (await importDefault(join(dir, "pdfjs.worker.js"))) as string;
+    const g = globalThis as Record<string, unknown>;
+    const saved = { WebAssembly: g.WebAssembly, fetch: g.fetch };
+    const hits: string[] = [];
+    g.WebAssembly = new Proxy(
+      {},
+      {
+        get(_, key) {
+          hits.push(`WebAssembly.${String(key)}`);
+          throw new Error("WebAssembly is not allowed");
+        },
+      },
+    );
+    g.fetch = (url: unknown) => {
+      hits.push(`fetch ${String(url)}`);
+      throw new Error("fetch is not allowed");
+    };
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    let destroy: (() => Promise<void>) | undefined;
+    try {
+      // the bundle sets globalThis.pdfjsWorker; pdf.js in Node then uses it as its in-process worker
+      vm.runInThisContext(source, { filename: "pdfjs.worker.js" });
+      expect(
+        typeof (g.pdfjsWorker as { WorkerMessageHandler?: unknown })?.WorkerMessageHandler,
+      ).toBe("function");
+      const data = new Uint8Array(
+        await readFile(join(import.meta.dirname, "fixtures/pdf/images.pdf")),
+      );
+      const task = pdfjs.getDocument({ data, useWasm: false, useWorkerFetch: false, verbosity: 0 });
+      destroy = () => task.destroy();
+      const page = await (await task.promise).getPage(1);
+      const ops = await page.getOperatorList();
+      type Img = { width: number; height: number; data: Uint8ClampedArray };
+      const ids = ops.fnArray
+        .map((fn, k) =>
+          fn === pdfjs.OPS.paintImageXObject ? (ops.argsArray[k] as [string])[0] : "",
+        )
+        .filter((id) => id !== "");
+      const images = await Promise.all(
+        ids.map((id) => new Promise<Img>((resolve) => page.objs.get(id, resolve))),
+      );
+      expect(images.map((im) => [im.width, im.height])).toEqual([
+        [8, 8],
+        [16, 8],
+      ]);
+      // JPX: solid red, RGBA
+      const [jpx, fax] = images as [(typeof images)[0], (typeof images)[0]];
+      expect([...jpx.data.slice(0, 4)]).toEqual([255, 0, 0, 255]);
+      // CCITT: one bit per pixel, 2 bytes a row: one half black, the other white
+      expect(fax.data).toHaveLength(16);
+      const rows = [...fax.data];
+      expect(new Set(rows.filter((_, i) => i % 2 === 0))).toEqual(new Set([rows[0]]));
+      expect(rows[0] !== rows[1] && [rows[0], rows[1]].sort()).toEqual([0, 255]);
+    } finally {
+      await destroy?.();
+      Object.assign(g, saved);
+      delete g.pdfjsWorker;
+    }
+    expect(hits).toEqual([]);
   });
 
   it("ships every pdf.js cmap and standard font as a module whose default export is its base64", async () => {
@@ -194,12 +343,21 @@ describe("buildUi", () => {
   });
 
   it("stays far below the plugin size limits (50 MiB, 5 000 entries)", async () => {
-    const dir = await tempDir();
-    const manifest = await buildUi(dir);
-    const names = Object.keys(manifest.files);
-    expect(names.length).toBeLessThan(1000);
-    let bytes = 0;
-    for (const n of names) bytes += (await readFile(join(dir, n))).length;
-    expect(bytes).toBeLessThan(20 * 1024 * 1024);
+    // The packed tgz is ui/ (this build) plus a handful of package files (dist/index.mjs,
+    // package.json, plugin.json, icon, README, CHANGELOG); ui/ is nearly all of its bytes and
+    // entries. Packing here would need the tsc build and the toolchain, so the tgz is bounded from
+    // the build: gzip of every file's bytes, plus a 512-byte tar header per entry, plus 1 MiB and
+    // 16 entries for the package files. (Measured at Task 11: 2.88 MiB, 208 entries.)
+    const { dir, manifest } = await sharedBuild();
+    const names = [...Object.keys(manifest.files), "manifest.json"];
+    const contents = await Promise.all(names.map((n) => readFile(join(dir, n))));
+    const gz = gzipSync(Buffer.concat(contents), { level: 9 }).length;
+    const tgzBound = gz + 512 * names.length + 1024 * 1024;
+    const entries = names.length + 16;
+    expect(tgzBound).toBeLessThan(50 * 1024 * 1024);
+    expect(entries).toBeLessThan(5000);
+    // and with room to spare: a regression that ships, say, every pdfjs-dist file shows up here
+    expect(tgzBound).toBeLessThan(10 * 1024 * 1024);
+    expect(entries).toBeLessThan(500);
   });
 });
