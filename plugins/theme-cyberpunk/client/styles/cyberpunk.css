@@ -24,10 +24,11 @@
   /* ---------- Chamfered corners ---------- */
 
   /*
-   * One technique for every part: a bevelled border-radius (corner-shape, CSS Borders 4). The
+   * Where corner-shape is supported (Chromium): a bevelled border-radius (CSS Borders 4). The
    * border, the background, inset shadows and the focus outline all follow the diagonal. Cards,
    * sections, dialogs and the composer bevel the top-right and bottom-left corners; buttons and
-   * inputs the top-left and bottom-right. A browser without corner-shape keeps square corners.
+   * inputs the top-left and bottom-right. Elsewhere (Safari keeps corner-shape off through 27.x)
+   * the fallback below cuts the same corners.
    */
   @supports (corner-shape: bevel) {
     & [data-cap-part~="card"],
@@ -52,6 +53,285 @@
     & [data-cap-part~="org-avatar"] {
       border-radius: 4px 0;
       corner-shape: bevel;
+    }
+  }
+
+  /*
+   * Without corner-shape (Safari): the same corners cut by a clip-path, and their border drawn
+   * back as a diagonal. The polygon reaches far past the box (glows, shadows, overflowing children
+   * and the focus ring stay) with a triangular hole at each cut corner: the corner beyond the bevel
+   * line, out to ring-width past the box. The diagonal:
+   *  - on buttons, segmented controls, agent chips and code blocks, a ::before whose left and right
+   *    borders take the part's own border (style, colour; none when the part has none) and are
+   *    skewed onto the two cut lines, so every variant and state keeps its colour. The skewed box
+   *    runs past the part's sides, so these parts clip sideways overflow;
+   *  - on the other parts, two corner gradients in a known colour (--cx-theme-cyberpunk-bevel),
+   *    following the part's border, inset outline or focus state.
+   */
+  @supports not (corner-shape: bevel) {
+    --cx-theme-cyberpunk-ring: 4px;
+    --cx-theme-cyberpunk-far: 100vmax;
+
+    /* Top-right and bottom-left. */
+    & [data-cap-part~="card"],
+    & [data-cap-part~="stat-card"],
+    &
+      :is([data-cap-part~="right-panel"], [data-cap-part~="properties-panel"])
+      [data-cap-part~="section"],
+    & [data-cap-part~="composer"],
+    & [data-cap-part~="dialog"],
+    & [data-cap-part~="menu"],
+    & [data-cap-part~="code-block"],
+    & [data-cap-part~="message.user.bubble"],
+    & .cx-theme-cyberpunk-boot-screen {
+      --cx-theme-cyberpunk-c: var(--cx-theme-cyberpunk-cut);
+      --cx-theme-cyberpunk-notch: calc(
+        var(--cx-theme-cyberpunk-c) +
+        var(--cx-theme-cyberpunk-ring)
+      );
+      clip-path: polygon(
+        evenodd,
+        calc(-1 * var(--cx-theme-cyberpunk-far)) calc(-1 * var(--cx-theme-cyberpunk-far)),
+        calc(100% - var(--cx-theme-cyberpunk-notch)) calc(-1 * var(--cx-theme-cyberpunk-far)),
+        calc(100% - var(--cx-theme-cyberpunk-notch)) calc(-1 * var(--cx-theme-cyberpunk-ring)),
+        calc(100% + var(--cx-theme-cyberpunk-ring)) var(--cx-theme-cyberpunk-notch),
+        calc(100% + var(--cx-theme-cyberpunk-ring)) calc(-1 * var(--cx-theme-cyberpunk-ring)),
+        calc(100% - var(--cx-theme-cyberpunk-notch)) calc(-1 * var(--cx-theme-cyberpunk-ring)),
+        calc(100% - var(--cx-theme-cyberpunk-notch)) calc(-1 * var(--cx-theme-cyberpunk-far)),
+        calc(100% + var(--cx-theme-cyberpunk-far)) calc(-1 * var(--cx-theme-cyberpunk-far)),
+        calc(100% + var(--cx-theme-cyberpunk-far)) calc(100% + var(--cx-theme-cyberpunk-far)),
+        var(--cx-theme-cyberpunk-notch) calc(100% + var(--cx-theme-cyberpunk-far)),
+        var(--cx-theme-cyberpunk-notch) calc(100% + var(--cx-theme-cyberpunk-ring)),
+        calc(-1 * var(--cx-theme-cyberpunk-ring)) calc(100% - var(--cx-theme-cyberpunk-notch)),
+        calc(-1 * var(--cx-theme-cyberpunk-ring)) calc(100% + var(--cx-theme-cyberpunk-ring)),
+        var(--cx-theme-cyberpunk-notch) calc(100% + var(--cx-theme-cyberpunk-ring)),
+        var(--cx-theme-cyberpunk-notch) calc(100% + var(--cx-theme-cyberpunk-far)),
+        calc(-1 * var(--cx-theme-cyberpunk-far)) calc(100% + var(--cx-theme-cyberpunk-far))
+      );
+    }
+    & .cx-theme-cyberpunk-boot-screen {
+      --cx-theme-cyberpunk-c: 14px;
+    }
+
+    /* Top-left and bottom-right. */
+    & [data-cap-part~="button"],
+    & [data-cap-part~="input"],
+    & [data-cap-part~="segmented"],
+    & [data-cap-part~="agent-chip"],
+    & [data-cap-part~="switch"],
+    & [data-cap-part~="org-avatar"],
+    & .cx-theme-cyberpunk-boot-skip {
+      --cx-theme-cyberpunk-c: var(--cx-theme-cyberpunk-cut-sm);
+      --cx-theme-cyberpunk-notch: calc(
+        var(--cx-theme-cyberpunk-c) +
+        var(--cx-theme-cyberpunk-ring)
+      );
+      clip-path: polygon(
+        evenodd,
+        calc(-1 * var(--cx-theme-cyberpunk-far)) calc(-1 * var(--cx-theme-cyberpunk-far)),
+        var(--cx-theme-cyberpunk-notch) calc(-1 * var(--cx-theme-cyberpunk-far)),
+        var(--cx-theme-cyberpunk-notch) calc(-1 * var(--cx-theme-cyberpunk-ring)),
+        calc(-1 * var(--cx-theme-cyberpunk-ring)) var(--cx-theme-cyberpunk-notch),
+        calc(-1 * var(--cx-theme-cyberpunk-ring)) calc(-1 * var(--cx-theme-cyberpunk-ring)),
+        var(--cx-theme-cyberpunk-notch) calc(-1 * var(--cx-theme-cyberpunk-ring)),
+        var(--cx-theme-cyberpunk-notch) calc(-1 * var(--cx-theme-cyberpunk-far)),
+        calc(100% + var(--cx-theme-cyberpunk-far)) calc(-1 * var(--cx-theme-cyberpunk-far)),
+        calc(100% + var(--cx-theme-cyberpunk-far)) calc(100% - var(--cx-theme-cyberpunk-notch)),
+        calc(100% + var(--cx-theme-cyberpunk-ring)) calc(100% - var(--cx-theme-cyberpunk-notch)),
+        calc(100% - var(--cx-theme-cyberpunk-notch)) calc(100% + var(--cx-theme-cyberpunk-ring)),
+        calc(100% + var(--cx-theme-cyberpunk-ring)) calc(100% + var(--cx-theme-cyberpunk-ring)),
+        calc(100% + var(--cx-theme-cyberpunk-ring)) calc(100% - var(--cx-theme-cyberpunk-notch)),
+        calc(100% + var(--cx-theme-cyberpunk-far)) calc(100% - var(--cx-theme-cyberpunk-notch)),
+        calc(100% + var(--cx-theme-cyberpunk-far)) calc(100% + var(--cx-theme-cyberpunk-far)),
+        calc(-1 * var(--cx-theme-cyberpunk-far)) calc(100% + var(--cx-theme-cyberpunk-far))
+      );
+    }
+    & [data-cap-part~="switch"],
+    & [data-cap-part~="org-avatar"] {
+      --cx-theme-cyberpunk-c: 4px;
+    }
+
+    /* The diagonal from the part's own border (see above): skewed -45deg (top-left and
+       bottom-right) or 45deg (top-right and bottom-left), kept to the two corners by its own clip. */
+    & [data-cap-part~="button"],
+    & [data-cap-part~="segmented"],
+    & [data-cap-part~="agent-chip"],
+    & [data-cap-part~="code-block"] {
+      position: relative;
+      overflow-x: clip;
+    }
+    & [data-cap-part~="button"]::before,
+    & [data-cap-part~="segmented"]::before,
+    & [data-cap-part~="agent-chip"]::before,
+    & [data-cap-part~="code-block"]::before {
+      content: "";
+      position: absolute;
+      top: -1px;
+      box-sizing: content-box;
+      height: calc(100% + 2px);
+      aspect-ratio: 1;
+      /* content as wide as the box is high, plus this: the box spans width + height - 2 cuts,
+         so its two borders sit on the two cut lines */
+      padding: 0 0 0
+        calc(100% + 2px - 2 * var(--cx-theme-cyberpunk-c) - 2 * var(--cx-theme-cyberpunk-hair));
+      border-style: none;
+      border-width: 0 var(--cx-theme-cyberpunk-hair);
+      border-left-style: inherit;
+      border-right-style: inherit;
+      border-left-color: inherit;
+      border-right-color: inherit;
+      background: none;
+      transform-origin: 0 0;
+      pointer-events: none;
+    }
+    /* A 1px border skewed 45deg is 0.71px across: widen it so the diagonal reads like the edges. */
+    & [data-cap-part~="button"],
+    & [data-cap-part~="segmented"],
+    & [data-cap-part~="agent-chip"],
+    & [data-cap-part~="code-block"] {
+      --cx-theme-cyberpunk-hair: 1.4142px;
+    }
+    & [data-cap-part~="button"]::before,
+    & [data-cap-part~="segmented"]::before,
+    & [data-cap-part~="agent-chip"]::before {
+      left: calc(var(--cx-theme-cyberpunk-c) - 1px);
+      transform: skewX(-45deg);
+      clip-path: polygon(
+        0 0,
+        50% 0,
+        50% var(--cx-theme-cyberpunk-c),
+        0 var(--cx-theme-cyberpunk-c),
+        0 0,
+        50% calc(100% - var(--cx-theme-cyberpunk-c)),
+        100% calc(100% - var(--cx-theme-cyberpunk-c)),
+        100% 100%,
+        50% 100%,
+        50% calc(100% - var(--cx-theme-cyberpunk-c)),
+        0 0
+      );
+    }
+    & [data-cap-part~="code-block"]::before {
+      right: calc(var(--cx-theme-cyberpunk-c) - 1px);
+      transform: skewX(45deg);
+      clip-path: polygon(
+        50% 0,
+        100% 0,
+        100% var(--cx-theme-cyberpunk-c),
+        50% var(--cx-theme-cyberpunk-c),
+        50% 0,
+        0 calc(100% - var(--cx-theme-cyberpunk-c)),
+        50% calc(100% - var(--cx-theme-cyberpunk-c)),
+        50% 100%,
+        0 100%,
+        0 calc(100% - var(--cx-theme-cyberpunk-c)),
+        50% 0
+      );
+    }
+
+    /* The diagonal in a known colour: two corner gradients over the part's ground. */
+    & [data-cap-part~="card"],
+    & [data-cap-part~="stat-card"],
+    &
+      :is([data-cap-part~="right-panel"], [data-cap-part~="properties-panel"])
+      [data-cap-part~="section"],
+    & [data-cap-part~="composer"],
+    & [data-cap-part~="dialog"],
+    & [data-cap-part~="menu"],
+    & .cx-theme-cyberpunk-boot-screen {
+      background-image:
+        linear-gradient(
+          to bottom left,
+          var(--cx-theme-cyberpunk-bevel) 0 calc(50% + 1px),
+          transparent 0
+        ),
+        linear-gradient(
+          to top right,
+          var(--cx-theme-cyberpunk-bevel) 0 calc(50% + 1px),
+          transparent 0
+        );
+      background-position:
+        right top,
+        left bottom;
+    }
+    & [data-cap-part~="input"],
+    & [data-cap-part~="switch"],
+    & [data-cap-part~="org-avatar"],
+    & .cx-theme-cyberpunk-boot-skip {
+      background-image:
+        linear-gradient(
+          to bottom right,
+          var(--cx-theme-cyberpunk-bevel) 0 calc(50% + 1px),
+          transparent 0
+        ),
+        linear-gradient(
+          to top left,
+          var(--cx-theme-cyberpunk-bevel) 0 calc(50% + 1px),
+          transparent 0
+        );
+      background-position:
+        left top,
+        right bottom;
+    }
+    & [data-cap-part~="card"],
+    & [data-cap-part~="stat-card"],
+    &
+      :is([data-cap-part~="right-panel"], [data-cap-part~="properties-panel"])
+      [data-cap-part~="section"],
+    & [data-cap-part~="composer"],
+    & [data-cap-part~="dialog"],
+    & [data-cap-part~="menu"],
+    & [data-cap-part~="input"],
+    & [data-cap-part~="switch"],
+    & [data-cap-part~="org-avatar"],
+    & .cx-theme-cyberpunk-boot-screen,
+    & .cx-theme-cyberpunk-boot-skip {
+      background-size: var(--cx-theme-cyberpunk-c) var(--cx-theme-cyberpunk-c);
+      background-repeat: no-repeat;
+      background-origin: border-box;
+    }
+    /* Each part's line: its border, its inset outline, or its focus and state colours. */
+    & [data-cap-part~="card"],
+    & [data-cap-part~="stat-card"],
+    & [data-cap-part~="section"] {
+      --cx-theme-cyberpunk-bevel: var(--cb-line-card);
+    }
+    & [data-cap-part~="composer"] {
+      --cx-theme-cyberpunk-bevel: var(--cb-line);
+    }
+    & [data-cap-part~="composer"]:focus-within {
+      --cx-theme-cyberpunk-bevel: var(--cb-accent);
+    }
+    & [data-cap-part~="dialog"],
+    & [data-cap-part~="menu"],
+    & [data-cap-part~="switch"][aria-checked="false"] {
+      --cx-theme-cyberpunk-bevel: var(--cb-line-strong);
+    }
+    & [data-cap-part~="switch"] {
+      --cx-theme-cyberpunk-bevel: transparent;
+    }
+    & [data-cap-part~="org-avatar"] {
+      --cx-theme-cyberpunk-bevel: color-mix(in srgb, var(--cb-accent) 45%, transparent);
+    }
+    & .cx-theme-cyberpunk-boot-screen {
+      --cx-theme-cyberpunk-bevel: rgba(0, 229, 255, 0.35);
+    }
+    & .cx-theme-cyberpunk-boot-skip {
+      --cx-theme-cyberpunk-bevel: var(--cb-accent);
+    }
+    & [data-cap-part~="input"] {
+      --cx-theme-cyberpunk-bevel: var(--cb-line-strong);
+    }
+    & [data-cap-part~="input"]:hover {
+      --cx-theme-cyberpunk-bevel: color-mix(in srgb, var(--cb-line-strong) 70%, var(--cb-ink));
+    }
+    & [data-cap-part~="input"]:is(:focus-within, :focus-visible, [aria-expanded="true"]) {
+      --cx-theme-cyberpunk-bevel: var(--cb-accent);
+    }
+    & [data-cap-part~="input"]:is([aria-invalid="true"], :has([aria-invalid="true"])) {
+      --cx-theme-cyberpunk-bevel: var(--cb-fail);
+    }
+    & [data-cap-part~="input"]:is(:disabled, :has(:disabled)) {
+      --cx-theme-cyberpunk-bevel: var(--cb-line);
     }
   }
 
@@ -326,6 +606,14 @@
     /* room for a focus ring (2px + 2px offset) of a control flush with the reply's edge */
     overflow-clip-margin: 4px;
   }
+  /* Safari has no overflow-clip-margin: the same clip, 4px past the box, from a clip-path (the
+     reply draws no ground, border or shadow of its own for it to cut). */
+  @supports not (overflow-clip-margin: 4px) {
+    & [data-cap-part~="message.assistant"][aria-busy="true"] {
+      overflow: visible;
+      clip-path: inset(-4px);
+    }
+  }
   /* A scan beam passing over the reply. */
   & [data-cap-part~="message.assistant"][aria-busy="true"]::before {
     content: "";
@@ -570,6 +858,30 @@
     corner-shape: bevel;
     box-shadow: inset 0 0 12px rgba(0, 229, 255, 0.3);
     animation: cx-theme-cyberpunk-breathe 1.8s ease-in-out infinite;
+  }
+  /* Without corner-shape the composer's clip cuts this outline; its diagonals are drawn on the
+     composer's cut lines (this box sits 1px inside, so its cut is 2px shorter). */
+  @supports not (corner-shape: bevel) {
+    & [data-cap-part~="composer"]::after {
+      --cx-theme-cyberpunk-c: calc(var(--cx-theme-cyberpunk-cut) - 2px);
+      background-image:
+        linear-gradient(
+          to bottom left,
+          var(--cx-theme-cyberpunk-cyan) 0 calc(50% + 1px),
+          transparent 0
+        ),
+        linear-gradient(
+          to top right,
+          var(--cx-theme-cyberpunk-cyan) 0 calc(50% + 1px),
+          transparent 0
+        );
+      background-position:
+        right top,
+        left bottom;
+      background-size: var(--cx-theme-cyberpunk-c) var(--cx-theme-cyberpunk-c);
+      background-repeat: no-repeat;
+      background-origin: border-box;
+    }
   }
 }
 
