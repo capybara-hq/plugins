@@ -258,27 +258,36 @@ instance network; no capability, seccomp relaxation, privileged mode or extra co
   by root through the root-only writable mount (`/opt/capybara/skills`, `0711` directories, `0600`
   records): the sandbox user cannot create, list or change them, and they survive instance restarts.
   Admission: before any effect, a root step records `(instance generation, operation ID)` with the
-  method and input digest. A retry of a consumed foreground operation is
-  `SandboxOperationOutcomeUnknownError`, another input or generation under the same ID
-  `SandboxScopeValidationError`; a passed `admitBeforeMs` admits nothing. `revokeOperation` writes a
+  method and input digest. A retry of a consumed foreground operation with the same input is
+  `SandboxOperationOutcomeUnknownError` (also after an instance restart), another method or input
+  under the same ID `SandboxScopeValidationError`; a passed `admitBeforeMs` admits nothing. `revokeOperation` writes a
   root-owned tombstone the agent checks right before launching, ends the running foreground and
   background work, then rewrites the tombstone; if the instance restarted meanwhile (a new
   generation, for example the kill's restart fallback) it reports an error so the kernel retries.
   A cancelled restricted foreground operation gets a root-owned cancellation marker the same way.
 - **Background**: per execution a detached **root** recorder owns the record, the output spool and
-  the stop claim; the sandbox-user supervisor reaches it only through a FIFO whose random name it
-  receives on stdin. The supervisor blocks cancellation, reports its pid and start time before
-  `start` acknowledges, re-checks the tombstone after that and before launching, installs its
-  handlers, then launches (Full children additionally run under `timeout -s KILL`). It keeps the
-  starting grant, appends merged output to the spool (for `tail` and `readOutput`, at most 65,536
-  bytes per read) and to `outputPath` (opened inside the scope through the pinned roots). A retried
-  `start` returns the same reference without launching again. `status` / `tail` / `readOutput` /
-  `stop` never start a stopped instance (its work is `lost`); `stop` signals exactly the recorded
-  supervisor (pidfd and start time) and claims its outcome once (`stopped` or `already-exited`).
-  Residual trust: Full access work of any conversation shares the device uid; it cannot change the
-  root-owned records, but it can signal or inspect the sandbox user's own processes (including a
-  supervisor's open channel through `/proc`). A background result is therefore only as trustworthy
-  as Full access on that device.
+  the stop claim; the sandbox-user supervisor reaches it only through a root-owned UNIX socket whose
+  random name it receives on stdin. The recorder accepts frames only on the one connection whose
+  `SO_PEERCRED` pid is the supervisor that identified itself (pid, start time and argv checked), and
+  the supervisor is not dumpable, so other processes of the same uid can neither read its channel
+  name nor reopen its descriptors through `/proc`. The supervisor blocks cancellation, reports its
+  pid and start time before `start` acknowledges, re-checks the tombstone after that and before
+  launching, installs its handlers, then launches (Full children additionally run under
+  `timeout -s KILL`). It keeps the starting grant, appends merged output to the spool (for `tail`
+  and `readOutput`, at most 65,536 bytes per read) and to `outputPath` (opened inside the scope
+  through the pinned roots). A retried `start` returns the same reference without launching again.
+  `status` / `tail` / `readOutput` / `stop` never start a stopped instance (its work is `lost`);
+  `stop` signals exactly the recorded supervisor (pidfd and start time) and claims its outcome once
+  (`stopped` or `already-exited`). A stop that finds an execution still `starting` (no supervisor
+  reported) claims `lost` and writes a root cancellation marker, so a late supervisor never launches.
+  Residual trust: Full access work of any conversation shares the device uid, so it can still signal
+  (stop, freeze) the sandbox user's processes, including supervisors; it cannot change the records.
+- **Spool storage (operational change)**: retained background output now lives on the device's
+  persistent skills volume (not the instance's tmpfs `/tmp`) until `retainUntilMs` plus one hour.
+  Each execution's spool is capped at 64 MiB (later output still reaches `outputPath`; the record
+  notes `outputTruncated`). Expired records and spools, and records of a previous instance
+  generation past their retention, are pruned at every instance start (create, resume, restart
+  fallback) and on each operation; plan disk space for the skills volume accordingly.
 - **Preparation**: skills only under `/skills`, written by root through the writable skills mount
   on pinned descriptors (files `0644`); attachments only under `/workspace/attachments/<conversation>`,
   as the sandbox user. **Browsing**: `stat` / `list` / `scan` on pinned read roots only.

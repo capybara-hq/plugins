@@ -86,6 +86,7 @@ export interface OperationTransport {
   /** Test-only hooks (DockerSandboxTestOptions). */
   backgroundLaunchBarrier?: ((taskId: string) => string | undefined) | undefined;
   afterRevokeKill?: ((operationId: string) => Promise<void>) | undefined;
+  backgroundSpoolCapBytes?: ((taskId: string) => number | undefined) | undefined;
 }
 
 /**
@@ -739,8 +740,12 @@ export function createOperations(deps: OperationDeps) {
         {
           executionId: ref.executionId,
           secret,
+          opKey: opKey(scope.operationId),
           taskId: args.taskId,
           retainUntilMs: args.retainUntilMs,
+          ...(t.backgroundSpoolCapBytes?.(args.taskId) !== undefined && {
+            spoolCapBytes: t.backgroundSpoolCapBytes(args.taskId),
+          }),
         },
         args.signal,
         true,

@@ -142,6 +142,8 @@ export interface DockerSandboxTestOptions {
   backgroundLaunchBarrier?: (taskId: string) => string | undefined;
   /** Runs inside `revokeOperation` between the kill and the final tombstone (restart tests). */
   afterRevokeKill?: (operationId: string) => Promise<void>;
+  /** A smaller spool cap (bytes) for the background execution of `taskId`. */
+  backgroundSpoolCapBytes?: (taskId: string) => number | undefined;
 }
 
 /** The sandbox user (the image's `sandbox`): commands and file operations run as it. */
@@ -499,7 +501,15 @@ function checkPath(p: string): void {
   const errors = validateSandboxPathShape(p);
   if (errors.length > 0)
     throw new Error(`invalid sandbox path ${JSON.stringify(p)}: ${errors.join("; ")}`);
+  // The provider's own operation records (root-owned, on the skills volume) are never a file
+  // target, not even for the root-run skills write.
+  if (p === RECORDS_VIEW || p.startsWith(`${RECORDS_VIEW}/`)) {
+    throw new Error(`sandbox path ${JSON.stringify(p)} is reserved for the provider's records`);
+  }
 }
+
+/** Where the sandbox user sees the provider's operation records (capybara-operation.py). */
+const RECORDS_VIEW = "/skills/.capybara-ops";
 
 interface RunOpts {
   cmd: string[];
@@ -1013,7 +1023,24 @@ export function createDockerSandbox(
       query: { t: 0 },
       signal: within(60_000),
     });
+    await initRecords(container);
   };
+
+  /**
+   * Root step at every instance start (create, resume, restart fallback): ensures the operation
+   * record directory and prunes expired records and spools. An image without the operation
+   * runtime simply has nothing to prune.
+   */
+  async function initRecords(container: string): Promise<void> {
+    const body = Buffer.from("2\n{}");
+    await run(container, {
+      cmd: ["/usr/bin/python3", "-I", OPERATION_AGENT, "init"],
+      user: ROOT_USER,
+      stdin: body,
+      maxOutputBytes: 1 << 20,
+      signal: AbortSignal.timeout(60_000),
+    }).catch(() => undefined);
+  }
 
   /** 文件操作：以沙箱用户（写 /skills 时以 root 经可写挂载）跑一个小脚本。 */
   const fileOp = async (
@@ -1106,6 +1133,7 @@ export function createDockerSandbox(
       if (isStatus(e, 404)) return "gone";
       throw e;
     }
+    if (!c.State.Running) await initRecords(h.id);
     return "resumed";
   }
 
@@ -1191,6 +1219,7 @@ export function createDockerSandbox(
     testEndpoints: test.permissionTestEndpoints ?? {},
     backgroundLaunchBarrier: test.backgroundLaunchBarrier,
     afterRevokeKill: test.afterRevokeKill,
+    backgroundSpoolCapBytes: test.backgroundSpoolCapBytes,
   };
   const operations = createOperations({ transport, decode: decodeOutput });
 
@@ -1316,6 +1345,7 @@ export function createDockerSandbox(
           throw gone();
         }
         await start(n.container, signal);
+        await initRecords(n.container);
       } catch (e) {
         // No cleanup when aborted: a new lock holder may already use the same name; leftovers go
         // with the next create or destroyByName. The cleanup drops the instance only.

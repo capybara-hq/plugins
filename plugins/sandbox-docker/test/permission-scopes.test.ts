@@ -29,6 +29,7 @@ import {
   RUNTIME_BUNDLE_VERSION,
   runtimeChecksums,
   SDK_RUNTIME_FILES,
+  sdkRuntimeDigests,
 } from "../src/runtime-source.js";
 import {
   buildTestImages,
@@ -192,6 +193,7 @@ describe.skipIf(!dockerAvailable)(
     /** Test hooks: a file a background supervisor waits for before admission; revoke steps. */
     const barriers = new Map<string, string>();
     const afterKill = new Map<string, () => Promise<void>>();
+    const spoolCaps = new Map<string, number>();
 
     /** One device (file system plus instance) under a fresh name. */
     const newDevice = async (
@@ -327,6 +329,7 @@ describe.skipIf(!dockerAvailable)(
           },
           backgroundLaunchBarrier: (taskId) => barriers.get(taskId),
           afterRevokeKill: (operationId) => afterKill.get(operationId)?.() ?? Promise.resolve(),
+          backgroundSpoolCapBytes: (taskId) => spoolCaps.get(taskId),
         },
       );
       device = await newDevice(sbx, { kind: "allowlist", hosts: [] });
@@ -1083,7 +1086,7 @@ describe.skipIf(!dockerAvailable)(
         }
       });
 
-      it("I1: no task can forge its background record; revocation stops it", async () => {
+      it("I1: file writes (even with Full access) cannot change the root-owned records; revocation stops the task", async () => {
         const root = await newRoot(device, "forge");
         // Full access shares the device uid: the strongest in-device writer short of root.
         const scope = scopeFor(full);
@@ -1313,6 +1316,258 @@ describe.skipIf(!dockerAvailable)(
         }
         await dexec(h.id, "1000", ["touch", `${root}/release`]);
         expect((await holder).exitCode).toBe(0);
+      });
+    });
+
+    describe("review fix round 2", () => {
+      const AGENT = "/opt/capybara-runtime/capybara-operation.py";
+      const newRoot = async (h: SandboxHandle, prefix: string) => {
+        const root = `/workspace/${prefix}-${randomUUID().slice(0, 8)}`;
+        await dexec(h.id, "1000", ["mkdir", "-p", root]);
+        return root;
+      };
+      const bg = (root: string, command: string, taskId = `task-${randomUUID().slice(0, 8)}`) => ({
+        command,
+        cwd: root,
+        timeoutMs: 600_000,
+        maxOutputBytes: 1 << 20,
+        signal: sig(),
+        taskId,
+        outputPath: `${root}/out-${taskId}.log`,
+        retainUntilMs: Date.now() + 3_600_000,
+      });
+      const agentCall = (
+        h: SandboxHandle,
+        user: string,
+        args: string[],
+        body: unknown,
+        env: string[] = [],
+      ) => {
+        const json = JSON.stringify(body);
+        const r = spawnSync(
+          "docker",
+          [
+            "exec",
+            "-i",
+            "-u",
+            user,
+            ...env.flatMap((e) => ["-e", e]),
+            h.id,
+            "/usr/bin/python3",
+            "-I",
+            AGENT,
+            ...args,
+          ],
+          { input: `${Buffer.byteLength(json)}\n${json}`, maxBuffer: 1 << 24 },
+        );
+        return { status: r.status, stdout: r.stdout as Buffer };
+      };
+      const resultOf = (raw: Buffer) => {
+        let at = 0;
+        let result: Record<string, unknown> | null = null;
+        while (at + 5 <= raw.byteLength) {
+          const size = raw.readUInt32BE(at + 1);
+          if (String.fromCharCode(raw[at] as number) === "R") {
+            result = JSON.parse(raw.subarray(at + 5, at + 5 + size).toString());
+          }
+          at += 5 + size;
+        }
+        return result;
+      };
+
+      it("R1: a same-uid writer cannot inject frames into a supervisor's channel", async (context) => {
+        requireRestricted(context);
+        const root = await newRoot(device, "r1");
+        const scope = scopeFor(restricted([root]));
+        const ref = await sbx.background.start(
+          device,
+          scope,
+          bg(root, `echo $$ > ${root}/pid; exec sleep 1800`),
+        );
+        await waitFor(device, `${root}/pid`);
+        const pid = Number(text(await inspectRead(device, `${root}/pid`)));
+        // The reviewer's attack: reopen the supervisor's channel through /proc and send an exit.
+        const attack = String.raw`
+import json, os
+frame = json.dumps({"exitCode": 0, "timedOut": False, "cancelled": False}).encode()
+frame = b"X" + len(frame).to_bytes(4, "big") + frame
+wrote = 0
+for pid in os.listdir("/proc"):
+    if not pid.isdigit():
+        continue
+    try:
+        args = open("/proc/%s/cmdline" % pid, "rb").read().split(b"\0")
+        fds = os.listdir("/proc/%s/fd" % pid)
+    except OSError:
+        continue
+    if b"bg-start" not in args:
+        continue
+    for fd in fds:
+        try:
+            out = os.open("/proc/%s/fd/%s" % (pid, fd), os.O_WRONLY)
+            os.write(out, frame)
+            wrote += 1
+        except OSError:
+            pass
+print("wrote=%d" % wrote)
+`;
+        await dexec(device.id, "1000", ["python3", "-I", "-c", attack]);
+        expect(await sbx.background.status(device, ref, sig())).toEqual({ state: "running" });
+        expect(await alive(device, [pid])).toEqual([pid]);
+        expect(await sbx.background.stop(device, ref, { graceMs: 0, signal: sig() })).toEqual({
+          outcome: "stopped",
+        });
+        expect(await alive(device, [pid])).toEqual([]);
+      });
+
+      it("R2: a stop that finds the record still starting cancels the late launch", async () => {
+        const root = await newRoot(device, "r2");
+        const scope = scopeFor(full);
+        const executionId = operationUuid(scope.operationId);
+        const opKey = createHash("sha256").update(scope.operationId).digest("hex");
+        const secret = randomUUID().replaceAll("-", "");
+        const retainUntilMs = Date.now() + 3_600_000;
+        const prepared = agentCall(device, "0", ["bg-prepare"], {
+          executionId,
+          secret,
+          opKey,
+          taskId: "late",
+          retainUntilMs,
+        });
+        expect(resultOf(prepared.stdout)?.prepared).toBe(true);
+        const generation = resultOf(
+          agentCall(device, "0", ["consume"], {
+            opKey,
+            method: "backgroundStart",
+            inputHash: "x",
+            admitBeforeMs: scope.admitBeforeMs,
+            expiresAtMs: retainUntilMs,
+          }).stdout,
+        )?.generation as string;
+        const ref = {
+          executionId,
+          operationId: scope.operationId,
+          instanceId: device.id,
+          instanceGeneration: generation,
+        };
+        expect(
+          (await sbx.background.stop(device, ref, { graceMs: 0, signal: sig() })).outcome,
+        ).toBe("lost");
+        // The supervisor arrives after the stop claimed its outcome: it must not launch.
+        agentCall(device, "1000", ["bg-start"], {
+          secret,
+          opKey,
+          admitBeforeMs: scope.admitBeforeMs,
+          expect: sdkRuntimeDigests(),
+          executionId,
+          kind: "device",
+          writeRoots: [],
+          readRoots: [],
+          network: { kind: "environment" },
+          testEndpoints: {},
+          command: `printf ran > ${root}/ran`,
+          cwd: root,
+          env: {},
+          timeoutMs: 60_000,
+          maxOutputBytes: 1024,
+          taskId: "late",
+          outputPath: `${root}/late.log`,
+          retainUntilMs,
+        });
+        for (;;) {
+          const s = await sbx.background.status(device, ref, sig());
+          if (s.state !== "running") break;
+          await new Promise((r) => setImmediate(r));
+        }
+        expect(await inspectRead(device, `${root}/ran`)).toBeNull();
+      });
+
+      it("R3: the provider's own file methods refuse the record directory", async () => {
+        for (const path of ["/skills/.capybara-ops/x", "/skills/.capybara-ops"]) {
+          await expect(sbx.writeFile(device, path, enc.encode("x"), sig()), path).rejects.toThrow();
+          await expect(
+            sbx.readFile(device, path, { maxBytes: 10, signal: sig() }),
+            path,
+          ).rejects.toThrow();
+          await expect(sbx.stat(device, path, sig()), path).rejects.toThrow();
+        }
+        expect(
+          await dexec(device.id, "0", [
+            "sh",
+            "-c",
+            "test -e /opt/capybara/skills/.capybara-ops/x && echo exists || echo absent",
+          ]),
+        ).toBe("absent\n");
+      });
+
+      it("R4: caps a background spool and prunes expired records when the instance starts", async () => {
+        const h = await newDevice(sbx, { kind: "allowlist", hosts: [] });
+        const root = await newRoot(h, "r4");
+        const taskId = `task-${randomUUID().slice(0, 8)}`;
+        spoolCaps.set(taskId, 1000);
+        const ref = await sbx.background.start(
+          h,
+          scopeFor(full),
+          bg(root, "head -c 5000 /dev/zero | tr '\\0' a; echo; printf done > done", taskId),
+        );
+        for (;;) {
+          const s = await sbx.background.status(h, ref, sig());
+          if (s.state === "exited") break;
+          await new Promise((r) => setImmediate(r));
+        }
+        const out = await sbx.background.readOutput(h, ref, {
+          offset: 0,
+          maxBytes: 65_536,
+          signal: sig(),
+        });
+        expect("totalBytes" in out && out.totalBytes).toBe(1000);
+        // Expired records of any state are pruned on the next instance start.
+        const stale = randomUUID();
+        await dexec(h.id, "0", [
+          "sh",
+          "-c",
+          `d=/opt/capybara/skills/.capybara-ops/bg/${stale}; mkdir -m 711 $d && printf '%s' '{"state":"running","generation":"old","expiresAtMs":1}' > $d/record.json && head -c 100 /dev/zero > $d/output`,
+        ]);
+        await sbx.suspend(h, sig());
+        expect(await sbx.resume(h, sig())).toBe("resumed");
+        expect(
+          await dexec(h.id, "0", [
+            "sh",
+            "-c",
+            `test -e /opt/capybara/skills/.capybara-ops/bg/${stale} && echo kept || echo pruned`,
+          ]),
+        ).toBe("pruned\n");
+      });
+
+      it("R5: a same-input retry after a generation change is an unknown outcome", async () => {
+        const h = await newDevice(sbx, { kind: "allowlist", hosts: [] });
+        const scope = scopeFor(full);
+        const args = {
+          command: "echo run >> /workspace/r5",
+          timeoutMs: 30_000,
+          maxOutputBytes: 1024,
+        };
+        expect(
+          (await (await sbx.operation(h, scope, sig())).exec({ ...args, signal: sig() })).exitCode,
+        ).toBe(0);
+        await docker("restart", "-t", "0", h.id);
+        const retry = await (await sbx.operation(h, scope, sig()))
+          .exec({ ...args, signal: sig() })
+          .catch((e) => e);
+        expect(isSandboxOperationOutcomeUnknownError(retry)).toBe(true);
+        expect(text(await inspectRead(h, "/workspace/r5"))).toBe("run\n");
+      });
+
+      it("R6: an unexpected Full admission failure is never read as success", () => {
+        const r = agentCall(
+          device,
+          "1000",
+          ["full", "k", String(Date.now() + 60_000), "/tmp/.capybara-exec-x-y", "--", "not-setsid"],
+          {},
+          ["CAPYBARA_ADMISSION_NONCE=nonce-r6"],
+        );
+        expect(r.status).toBe(125);
+        expect(resultOf(r.stdout)?.nonce).toBe("nonce-r6");
       });
     });
 

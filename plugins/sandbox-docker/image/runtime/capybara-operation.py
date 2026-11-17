@@ -26,6 +26,7 @@ import shutil
 import signal
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import threading
@@ -605,8 +606,10 @@ def full(argv):
 # Every trusted background record lives in the root-owned record directory (only root, the
 # provider's own consumer steps, writes it; the sandbox user cannot even list it): the record,
 # the output spool, the stop claim and the channel. A detached root recorder per execution owns
-# them. The sandbox-user supervisor reaches it only through a FIFO whose random name the provider
-# hands to the supervisor on stdin; restricted work never inherits that descriptor.
+# them. The sandbox-user supervisor reaches it only through a root-owned UNIX socket whose random
+# name the provider hands to the supervisor on stdin; the recorder accepts frames only on the one
+# connection whose SO_PEERCRED pid is the supervisor that identified itself, and the supervisor is
+# not dumpable, so neither restricted work nor same-uid processes can reopen or reach its channel.
 
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 SECRET = re.compile(r"[0-9a-f]{32}")
@@ -653,6 +656,9 @@ def write_all(fd, data):
         view = view[os.write(fd, view):]
 
 
+SPOOL_CAP = 64 * 1024 * 1024
+
+
 def bg_prepare(request):
     """(root) Creates the execution's record, channel and recorder before anything launches."""
     records()
@@ -665,13 +671,13 @@ def bg_prepare(request):
     except FileExistsError:
         return {"prepared": False, "existing": True}
     os.chmod(directory, 0o711)
+    cap = request.get("spoolCapBytes") or SPOOL_CAP
+    if type(cap) is not int or not 0 < cap <= SPOOL_CAP:
+        raise ValueError("invalid spool cap")
     record = {"state": "starting", "generation": generation(), "taskId": request["taskId"],
-              "retainUntilMs": request["retainUntilMs"],
-              "expiresAtMs": request["retainUntilMs"] + 3600_000}
+              "opKey": request.get("opKey"), "retainUntilMs": request["retainUntilMs"],
+              "expiresAtMs": request["retainUntilMs"] + 3600_000, "spoolCapBytes": cap}
     write_json(os.path.join(directory, "record.json"), record)
-    fifo = os.path.join(directory, secret)
-    os.mkfifo(fifo, 0o600)
-    os.chmod(fifo, 0o622)  # the sandbox user may open it for writing by its exact name only
     ready_r, ready_w = os.pipe()
     pid = os.fork()
     if pid == 0:
@@ -683,7 +689,7 @@ def bg_prepare(request):
             null = os.open("/dev/null", os.O_RDWR)
             for fd in (0, 1, 2):
                 os.dup2(null, fd)
-            bg_recorder(directory, fifo, record, ready_w)
+            bg_recorder(directory, secret, record, ready_w)
         finally:
             os._exit(0)
     os.close(ready_w)
@@ -692,49 +698,135 @@ def bg_prepare(request):
     os.close(ready_r)
     if ready != b"R":
         raise Refused("INVALID_REQUEST", "The background recorder did not start")
-    return {"prepared": True}
+    return {"prepared": True, "generation": record["generation"]}
 
 
-def bg_recorder(directory, fifo, record, ready_w):
-    """(root, detached) Appends output and records the supervisor's identity and exit."""
-    channel = os.open(fifo, os.O_RDWR | os.O_NONBLOCK | os.O_CLOEXEC)
-    spool = os.open(os.path.join(directory, "output"),
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND | os.O_CLOEXEC, 0o600)
+def peer(conn):
+    """The connecting process's (pid, uid) from SO_PEERCRED, fixed by the kernel at connect."""
+    data = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+    pid, uid, _ = struct.unpack("3i", data)
+    return pid, uid
+
+
+def is_supervisor(pid):
+    """The process runs this agent's bg-start (the supervisor it forks keeps that argv)."""
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as handle:
+            args = handle.read().split(b"\0")
+    except OSError:
+        return False
+    return len(args) >= 4 and args[2] == os.fsencode(os.path.abspath(__file__)) \
+        and args[3] == b"bg-start"
+
+
+def bg_recorder(directory, secret, record, ready_w):
+    """(root, detached) Appends output and records the supervisor's identity and exit. The
+    channel is a root-owned UNIX socket: frames count only on the one connection whose
+    SO_PEERCRED pid is the supervisor that identified itself (pid, start time, argv); no other
+    peer, and no writer that reopens a descriptor, can add frames to it."""
+    import select as select_module
+    os.chdir(directory)  # bind relative: the absolute path would exceed sun_path
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(secret)
+    os.chmod(secret, 0o622)  # the sandbox user may connect by its exact name only
+    listener.listen(8)
+    spool = os.open("output", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND | os.O_CLOEXEC,
+                    0o600)
     path = os.path.join(directory, "record.json")
     os.write(ready_w, b"R")
     os.close(ready_w)
+    cap = record["spoolCapBytes"]
+    written = 0
+    bound = None
     buffer = bytearray()
+    pending = {}  # unverified connections: fd -> (socket, buffer, deadline)
     connect_by = time.monotonic() + 120
-    import select as select_module
     poller = select_module.poll()
-    poller.register(channel, select_module.POLLIN)
+    poller.register(listener.fileno(), select_module.POLLIN)
+
+    def drop(fd):
+        conn = pending.pop(fd, (None,))[0]
+        if conn is not None:
+            poller.unregister(fd)
+            conn.close()
     try:
         while True:
-            events = poller.poll(1000)
-            if events:
-                try:
-                    data = os.read(channel, CHUNK + 5)
-                except BlockingIOError:
-                    data = b""
-                buffer += data
-            while len(buffer) >= 5:
-                size = int.from_bytes(buffer[1:5], "big")
-                if size > CHUNK or buffer[0:1] not in (b"P", b"O", b"X"):
-                    record = dict(record, state="lost")
+            events = dict(poller.poll(1000))
+            if listener.fileno() in events and bound is None:
+                conn, _ = listener.accept()
+                conn.setblocking(False)
+                pending[conn.fileno()] = (conn, bytearray(), time.monotonic() + 10)
+                poller.register(conn.fileno(), select_module.POLLIN)
+            elif listener.fileno() in events:
+                listener.accept()[0].close()  # one supervisor per execution
+            for fd in list(pending):
+                conn, data, deadline = pending[fd]
+                if fd in events:
+                    try:
+                        chunk = conn.recv(4096)
+                    except BlockingIOError:
+                        chunk = None
+                    if chunk == b"":
+                        drop(fd)
+                        continue
+                    if chunk:
+                        data += chunk
+                if len(data) >= 5 and data[0:1] == b"P":
+                    size = int.from_bytes(data[1:5], "big")
+                    if size > 4096:
+                        drop(fd)
+                        continue
+                    if len(data) < 5 + size:
+                        continue
+                    try:
+                        identity = json.loads(bytes(data[5:5 + size]))
+                        claimed, start = int(identity["pid"]), int(identity["start"])
+                        pid, uid = peer(conn)
+                    except (ValueError, KeyError, OSError, struct.error):
+                        drop(fd)
+                        continue
+                    if pid != claimed or uid == 0 or proc_start(pid) != start \
+                            or not is_supervisor(pid) or record["state"] != "starting":
+                        drop(fd)
+                        continue
+                    pending.pop(fd)
+                    for other in list(pending):
+                        drop(other)
+                    bound = conn
+                    buffer = bytearray(data[5 + size:])
+                    record = dict(record, state="running", pid=pid, start=start)
                     write_json(path, record)
+                elif len(data) >= 1 and data[0:1] != b"P" or time.monotonic() > deadline:
+                    drop(fd)
+            if bound is not None and bound.fileno() in events:
+                try:
+                    chunk = bound.recv(CHUNK + 5)
+                except BlockingIOError:
+                    chunk = None
+                if chunk == b"":
+                    # The supervisor closed its channel without reporting an exit.
+                    write_json(path, dict(record, state="lost"))
+                    return
+                if chunk:
+                    buffer += chunk
+            while bound is not None and len(buffer) >= 5:
+                size = int.from_bytes(buffer[1:5], "big")
+                if size > CHUNK or buffer[0:1] not in (b"O", b"X"):
+                    write_json(path, dict(record, state="lost"))
                     return
                 if len(buffer) < 5 + size:
                     break
                 kind, body = bytes(buffer[0:1]), bytes(buffer[5:5 + size])
                 del buffer[:5 + size]
                 if kind == b"O":
-                    write_all(spool, body)
-                elif kind == b"P" and record["state"] == "starting":
-                    identity = json.loads(body)
-                    record = dict(record, state="running", pid=int(identity["pid"]),
-                                  start=int(identity["start"]))
-                    write_json(path, record)
-                elif kind == b"X" and record["state"] in ("starting", "running"):
+                    keep = body[:max(cap - written, 0)]
+                    if keep:
+                        write_all(spool, keep)
+                        written += len(keep)
+                    if len(keep) < len(body) and not record.get("outputTruncated"):
+                        record = dict(record, outputTruncated=True)
+                        write_json(path, record)
+                else:
                     result = json.loads(body)
                     record = dict(record, state="exited", exitCode=result.get("exitCode"),
                                   timedOut=bool(result.get("timedOut")),
@@ -747,12 +839,11 @@ def bg_recorder(directory, fifo, record, ready_w):
                 return
             if record["state"] == "running" and not events and \
                     proc_start(record["pid"]) != record["start"]:
-                # The supervisor is gone without reporting an exit.
                 write_json(path, dict(record, state="lost"))
                 return
     finally:
         try:
-            os.unlink(fifo)
+            os.unlink(os.path.join(directory, secret))
         except OSError:
             pass
 
@@ -792,7 +883,7 @@ def open_output(request):
 
 
 class Channel:
-    """The supervisor's side of the recorder FIFO: whole frames under one lock."""
+    """The supervisor's side of the recorder socket: whole frames under one lock."""
 
     def __init__(self, fd):
         self.fd = fd
@@ -809,15 +900,15 @@ class Channel:
 
 
 def bg_start(request):
-    """(sandbox user) Starts the detached supervisor; acknowledges once it is recorded."""
+    """(sandbox user) Starts the detached supervisor; acknowledges once it is recorded. The
+    process is not dumpable (set before the request is read), so other processes of the same
+    user cannot read its channel name or reopen its descriptors through /proc."""
     admit(request)
     verify_runtime(request["expect"])
-    fifo = os.path.join(bg_directory(request["executionId"], os.path.join(OPS_VIEW, "bg")),
-                        request["secret"])
+    address = os.path.join(bg_directory(request["executionId"], os.path.join(OPS_VIEW, "bg")),
+                           request["secret"])
     if not SECRET.fullmatch(request["secret"]):
         raise ValueError("invalid channel name")
-    channel = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
-    os.set_blocking(channel, True)
     out = open_output(request)
     ready_r, ready_w = os.pipe()
     pid = os.fork()
@@ -830,12 +921,14 @@ def bg_start(request):
             null = os.open("/dev/null", os.O_RDWR)
             for fd in (0, 1, 2):
                 os.dup2(null, fd)
-            bg_supervise(request, Channel(channel), out, ready_w)
+            # The supervisor itself connects, so the recorder's SO_PEERCRED names exactly it.
+            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connection.connect(address)
+            bg_supervise(request, Channel(connection.detach()), out, ready_w)
         finally:
             os._exit(0)
     os.close(ready_w)
     os.close(out)
-    os.close(channel)
     os.waitpid(pid, 0)
     ready = os.read(ready_r, 1)
     os.close(ready_r)
@@ -1074,6 +1167,12 @@ def bg_stop_claim(request):
             and time.monotonic() < deadline:
         time.sleep(0.02)
         record = read_json(os.path.join(directory, "record.json"))
+    if record is not None and record.get("state") == "starting" and record.get("opKey"):
+        # No supervisor reported in time: a late one must not launch after this claim.
+        marker({"opKey": record["opKey"], "expiresAtMs": record.get("expiresAtMs", 0)},
+               ".cancelled")
+        record = dict(record, state="lost")
+        write_json(os.path.join(directory, "record.json"), record)
     state = bg_state(record)
     if record is not None and record.get("state") == "exited" and not record.get("cancelled") \
             and not request.get("signalled"):
@@ -1209,8 +1308,10 @@ def consume(request):
 def lookup(path, record):
     with open(path) as handle:
         existing = json.load(handle)
-    if (existing.get("generation"), existing.get("method"), existing.get("inputHash")) != (
-            record["generation"], record["method"], record["inputHash"]):
+    # The same method and input is a duplicate in any generation (an unknown outcome, never a
+    # re-run); a different method or input under the ID is invalid.
+    if (existing.get("method"), existing.get("inputHash")) != (
+            record["method"], record["inputHash"]):
         return {"state": "mismatch"}
     return {"state": "duplicate", "record": existing}
 
@@ -1229,7 +1330,7 @@ def marker(request, suffix):
 
 # ---- entry --------------------------------------------------------------------------------
 
-ROOT_COMMANDS = {"consume", "revoke", "cancel-mark", "bg-prepare", "bg-status", "bg-tail",
+ROOT_COMMANDS = {"init", "consume", "revoke", "cancel-mark", "bg-prepare", "bg-status", "bg-tail",
                  "bg-read", "bg-stop-plan", "bg-stop-claim"}
 
 
@@ -1244,7 +1345,14 @@ def main():
                 # and the exit code is 125.
                 finish({"nonce": admission_nonce[0], "events": [
                     {"event": "refused", "code": error.code, "message": str(error)}]})
+            except Exception as error:
+                # Any other failure before exec is a refusal too, never an apparent success.
+                finish({"nonce": admission_nonce[0], "events": [
+                    {"event": "refused", "code": "INVALID_REQUEST",
+                     "message": type(error).__name__}]})
             return 125
+        if command == "bg-start":
+            libc.prctl(4, 0, 0, 0, 0)  # PR_SET_DUMPABLE 0, before the request is read
         if command == "cancel":
             if sys.argv[2] == "--uuid":
                 return cancel(uuid=sys.argv[3])
@@ -1260,6 +1368,9 @@ def main():
             restricted(command, request)
         elif command == "direct":
             direct(request)
+        elif command == "init":
+            records()  # also prunes expired records and spools when the instance starts
+            finish({"ready": True})
         elif command == "consume":
             finish(consume(request))
         elif command == "revoke":
