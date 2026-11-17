@@ -235,7 +235,6 @@ export async function renderPdf(
     for (const slot of slots) slot.task?.cancel();
     closeSession();
     for (const undo of teardown.splice(0)) undo();
-    ctx.root.style.height = "";
     rejectAll?.(new Disposed());
     ctx.signal.removeEventListener("abort", onSignal);
     ctx.lifetime.removeEventListener("abort", dispose);
@@ -372,7 +371,7 @@ export async function renderPdf(
     scroller.append(el);
   }
   (slots[0] as PageSlot).page = first;
-  ctx.root.style.height = "100%";
+  // the shell gives ctx.root a definite height: .cap-pdf-pages is the scroller
   ctx.root.replaceChildren(style, frame);
 
   // ---- layout, arithmetic (no measuring per page): page i starts at PAD + sum(h_j + PAD), j < i

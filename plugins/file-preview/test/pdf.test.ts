@@ -412,14 +412,12 @@ describe("pdf renderer", () => {
       controller.abort();
       await vi.waitFor(() => expect(renderedPages(renders)).toEqual([1, 2]));
       expect(FakeWorker.instances[0]?.terminate).not.toHaveBeenCalled();
-      expect(root.style.height).toBe("100%");
       expect(observers).toHaveLength(1);
 
       lifetime.abort();
       expect(FakeWorker.instances[0]?.terminate).toHaveBeenCalled();
       expect(destroy).toHaveBeenCalled();
       expect(observers[0]?.disconnect).toHaveBeenCalled();
-      expect(root.style.height).toBe("");
       const s = scroller(root);
       const count = renders.length;
       s.scrollTop = 16 + 3 * 816;

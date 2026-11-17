@@ -32,6 +32,7 @@ const BASE_CSS = `
 html, body { height: 100%; margin: 0; }
 body { font: 14px/1.5 ${THEME.font}; color: ${THEME.foreground}; background: ${THEME.background}; }
 #root { position: relative; height: 100%; overflow: auto; }
+.cap-content { height: 100%; }
 .cap-status { position: absolute; inset: 0; background: ${THEME.background}; }
 .cap-state { padding: 24px; text-align: center; color: ${THEME.mutedForeground}; }
 .cap-error-title { font-weight: 600; color: ${THEME.foreground}; }
@@ -69,9 +70,13 @@ export function startApp(deps: AppDeps = {}): () => void {
   // The renderer paints into `content`; loading / empty / error live in `status`, which overlays it
   // until the render succeeds. `content` is hidden with `visibility`, not `display:none`, so it is
   // laid out while the renderer runs and renderers that measure layout read real sizes.
+  // `content` fills the viewport (a definite height): a renderer's own scroller (the sheet's
+  // virtual table, the zip tree, pdf pages, docx, code) does the scrolling, not `#root`; a renderer
+  // whose content overflows without a scroller of its own still scrolls through `#root`.
   const status = doc.createElement("div");
   status.className = "cap-status";
   const content = doc.createElement("div");
+  content.className = "cap-content";
   content.style.visibility = "hidden";
   root.replaceChildren(status, content);
 

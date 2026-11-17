@@ -5,8 +5,10 @@ import { type BridgeEvent, createBridge } from "../ui-src/app/bridge.js";
 import { MESSAGES, workerReason } from "../ui-src/app/frame.js";
 import { startApp } from "../ui-src/app/main.js";
 import { applyTheme } from "../ui-src/app/theme.js";
-import type { PreviewFile, Renderer } from "../ui-src/app/types.js";
+import type { PreviewFile, Renderer, RunInWorker } from "../ui-src/app/types.js";
 import { WorkerTimeoutError } from "../ui-src/app/worker-host.js";
+import { render as renderSheet } from "../ui-src/renderers/sheet.js";
+import type { SheetOutput } from "../ui-src/shared/sheet.js";
 
 const init = { protocol: EMBED_PROTOCOL, type: "init", locale: "en", theme: "dark", tokens: {} };
 const fileMsg = (size = 3) => ({
@@ -296,6 +298,48 @@ describe("the main flow", () => {
     expect(
       getComputedStyle(document.getElementById("root")?.lastElementChild as Element).visibility,
     ).not.toBe("hidden");
+  });
+
+  it("gives the content a definite height so the sheet's own scroller scrolls, not #root", async () => {
+    // jsdom has no layout: this pins the contract the browser check found broken (F1). The content
+    // area fills #root, and the chain down to the virtual table's scroller is all definite heights
+    const rows = Array.from({ length: 5000 }, (_, r) => [`r${r + 1}`]);
+    const output: SheetOutput = {
+      sheets: [
+        {
+          name: "S",
+          hidden: false,
+          rows,
+          merges: [],
+          truncatedRows: false,
+          truncatedCols: false,
+          truncatedCells: false,
+        },
+      ],
+    };
+    stops.push(
+      startApp({
+        loadRenderer: async () => renderSheet,
+        runInWorker: (async () => output) as unknown as RunInWorker,
+      }),
+    );
+    post(init);
+    post(fileMsg());
+    await vi.waitFor(() => expect(document.querySelector(".cap-sheet-scroll")).not.toBeNull());
+    const content = document.getElementById("root")?.lastElementChild as HTMLElement;
+    expect(getComputedStyle(content).height).toBe("100%");
+    const sheet = content.querySelector(".cap-sheet") as HTMLElement;
+    expect(sheet.parentElement).toBe(content);
+    expect(getComputedStyle(sheet).height).toBe("100%");
+    const scroller = content.querySelector(".cap-sheet-scroll") as HTMLElement;
+    expect(getComputedStyle(scroller).overflow).toBe("auto");
+    for (
+      let el: HTMLElement | null = scroller;
+      el !== null && el !== sheet;
+      el = el.parentElement
+    ) {
+      expect(getComputedStyle(el).minHeight, el.className).toMatch(/^0(px)?$/);
+    }
   });
 
   it("ignores window errors and rejections once the render succeeded", async () => {
