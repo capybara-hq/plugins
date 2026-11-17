@@ -606,6 +606,14 @@
     /* room for a focus ring (2px + 2px offset) of a control flush with the reply's edge */
     overflow-clip-margin: 4px;
   }
+  /* Safari has no overflow-clip-margin: the same clip, 4px past the box, from a clip-path (the
+     reply draws no ground, border or shadow of its own for it to cut). */
+  @supports not (overflow-clip-margin: 4px) {
+    & [data-cap-part~="message.assistant"][aria-busy="true"] {
+      overflow: visible;
+      clip-path: inset(-4px);
+    }
+  }
   /* A scan beam passing over the reply. */
   & [data-cap-part~="message.assistant"][aria-busy="true"]::before {
     content: "";

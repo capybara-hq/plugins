@@ -96,10 +96,18 @@ describe("cyberpunk.css", () => {
 
   it("bevels every chamfered part with corner-shape, so outlines and focus rings stay whole", () => {
     // clip-path cuts the border and the outer focus ring at the corners: parts use it only where
-    // corner-shape is missing
+    // corner-shape (or overflow-clip-margin, for the run clip) is missing
     for (const r of with_("clip-path")) {
       if (flat(r).includes("data-cap-part")) {
-        expect(r.chain, flat(r)).toContain("@supports not (corner-shape: bevel)");
+        expect(
+          r.chain.some((p) =>
+            [
+              "@supports not (corner-shape: bevel)",
+              "@supports not (overflow-clip-margin: 4px)",
+            ].includes(p),
+          ),
+          flat(r),
+        ).toBe(true);
       }
     }
     const bevelled = with_("corner-shape: bevel")
@@ -157,6 +165,28 @@ describe("cyberpunk.css", () => {
     ].join(",");
     for (const p of parts.filter((x) => x !== "message.user.bubble")) {
       expect(drawn, p).toContain(`[data-cap-part~="${p}"]`);
+    }
+  });
+
+  it("keeps a focus ring room past a clipped run part where overflow-clip-margin is missing", () => {
+    // Safari has no overflow-clip-margin: an overflow clip there cuts the focus ring of a control
+    // flush with the edge; the fallback clips with clip-path, which can reach past the box
+    const clipped = styleRules.filter(
+      (r) =>
+        r.body.includes("overflow-clip-margin:") && !r.body.includes("overflow-clip-margin: 0"),
+    );
+    expect(clipped.length).toBeGreaterThan(0);
+    const fallback = styleRules.filter((r) =>
+      r.chain.includes("@supports not (overflow-clip-margin: 4px)"),
+    );
+    for (const r of clipped) {
+      const target = r.chain[r.chain.length - 1] ?? "";
+      // the composer's padding (space-2) already holds a control's ring inside the clip
+      if (target.includes('[data-cap-part~="composer"]')) continue;
+      const fb = fallback.find((x) => x.chain[x.chain.length - 1] === target);
+      expect(fb, target).toBeDefined();
+      expect(fb?.body).toContain("overflow: visible");
+      expect(fb?.body).toMatch(/clip-path: inset\(-4px\)/);
     }
   });
 
