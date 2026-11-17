@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { mountSanitized, sanitizeCss, sanitizeHtml } from "../ui-src/app/sanitize.js";
 
+// Deliberately hostile sanitizer input (scripts, handlers, mXSS, broken markup): biome.json
+// excludes fixtures/hostile from lint and format so the payloads stay byte for byte as written.
 const HOSTILE = join(import.meta.dirname, "fixtures", "hostile");
 const fixture = (name: string) => readFileSync(join(HOSTILE, name), "utf8");
 
