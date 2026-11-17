@@ -1,8 +1,53 @@
+/**
+ * The svg previewer: the file as `<img src="blob:…">` only. An image never runs the SVG's script
+ * and loads none of its external references; the markup never enters the DOM.
+ */
+import { showEmpty } from "../app/frame.js";
 import type { Renderer } from "../app/types.js";
 
-/** Stands in until this previewer's renderer is written. */
-const render: Renderer = async (_file, ctx) => {
-  ctx.showError("This previewer is not available yet");
+const STRINGS = {
+  zh: { invalid: "不是有效的 SVG 图像" },
+  en: { invalid: "Not a valid SVG image" },
+} as const;
+
+/** Checkerboard ground, so transparent parts read as transparent on either theme. */
+const GROUND =
+  "background-color:#fff;background-image:" +
+  "linear-gradient(45deg,#ddd 25%,transparent 25%,transparent 75%,#ddd 75%)," +
+  "linear-gradient(45deg,#ddd 25%,transparent 25%,transparent 75%,#ddd 75%);" +
+  "background-size:16px 16px;background-position:0 0,8px 8px";
+
+const render: Renderer = async (file, ctx) => {
+  if (file.data.byteLength === 0) {
+    showEmpty(ctx.root, ctx.t);
+    return;
+  }
+  const doc = ctx.root.ownerDocument;
+  const win = doc.defaultView;
+  if (!win) throw new Error("svg previewer needs a window");
+  const url = win.URL.createObjectURL(new Blob([file.data], { type: "image/svg+xml" }));
+
+  const box = doc.createElement("div");
+  box.className = "cap-svg";
+  box.style.cssText = `display:flex;align-items:center;justify-content:center;height:100%;box-sizing:border-box;padding:16px;${GROUND}`;
+  const img = doc.createElement("img");
+  img.alt = file.name;
+  // zoom to fit: never larger than the panel, aspect ratio kept
+  img.style.cssText = "max-width:100%;max-height:100%;object-fit:contain";
+
+  const loaded = new Promise<boolean>((resolve) => {
+    img.addEventListener("load", () => resolve(true), { once: true });
+    img.addEventListener("error", () => resolve(false), { once: true });
+    ctx.signal.addEventListener("abort", () => resolve(true), { once: true });
+  });
+  img.src = url;
+  box.append(img);
+  ctx.root.replaceChildren(box);
+
+  const ok = await loaded;
+  // the decoded image stays painted; the URL is not needed after load
+  win.URL.revokeObjectURL(url);
+  if (!ok && !ctx.signal.aborted) ctx.showError(STRINGS[ctx.locale].invalid);
 };
 
 export { render };

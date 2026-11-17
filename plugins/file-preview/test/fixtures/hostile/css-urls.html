@@ -1,0 +1,19 @@
+<style>
+.a { background: url(//evil.example/a.png); color: blue }
+.b { background: url(javascript:alert(1)) }
+.c { background: u\72l(https://evil.example/c.png) }
+.d { background: url( "https://evil.example/d.png" ) }
+.e { width: expression(alert(1)) }
+@font-face { font-family: f; src: url(http://evil.example/f.woff) format("woff") }
+.g { background-image: image-set("https://evil.example/g.png" 1x) }
+.h { --u: url(https://evil.example/h.png); background: var(--u) }
+.i { -moz-binding: url(https://evil.example/x.xml#b); behavior: url(x.htc) }
+.j { cursor: url(https://evil.example/c.cur), auto }
+.k { background: -webkit-image-set(url(https://evil.example/k.png) 1x) }
+.l { background-image: image-set(var(--s) 1x) }
+@media screen { .m { background: url('https://evil.example/m.png') } }
+@supports (display: grid) { .n { list-style-image: url(https://evil.example/n.png) } }
+.o { mask: url(relative.svg#m) }
+.p { color: green; background: url(data:image/png;base64,AAAA) }
+.q { clip-path: url(#clip) }
+</style><p class="p">kept</p>
