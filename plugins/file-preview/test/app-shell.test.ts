@@ -185,6 +185,38 @@ describe("the main flow", () => {
     expect(seen?.lifetime.aborted).toBe(true);
   });
 
+  it("the previous file's lifetime is aborted when a new file replaces it", async () => {
+    const lifetimes: AbortSignal[] = [];
+    const render = vi.fn<Renderer>(async (_f, ctx) => {
+      lifetimes.push(ctx.lifetime);
+      ctx.root.textContent = "painted";
+    });
+    // the page's bridge delivers one file per embed: a fake bridge drives two through the run path
+    let emit: (e: BridgeEvent) => void = () => {};
+    const fileOf = (size: number): PreviewFile => ({
+      name: "a.txt",
+      contentType: "text/plain",
+      size,
+      data: new ArrayBuffer(size),
+    });
+    stops.push(
+      startApp({
+        loadRenderer: async () => render,
+        createBridge: (_win, onEvent) => {
+          emit = onEvent;
+          return () => {};
+        },
+      }),
+    );
+    emit({ type: "file", file: fileOf(2) });
+    await vi.waitFor(() => expect(lifetimes).toHaveLength(1));
+    expect(lifetimes[0]?.aborted).toBe(false);
+    emit({ type: "file", file: fileOf(3) });
+    await vi.waitFor(() => expect(lifetimes).toHaveLength(2));
+    expect(lifetimes[0]?.aborted).toBe(true);
+    expect(lifetimes[1]?.aborted).toBe(false);
+  });
+
   it("ctx.lifetime stays live when the render fails or runs out of budget", async () => {
     vi.useFakeTimers();
     let lifetime: AbortSignal | undefined;

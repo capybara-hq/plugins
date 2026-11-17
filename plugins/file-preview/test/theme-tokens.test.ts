@@ -86,4 +86,33 @@ describe("theme variables", () => {
       expect(THEME[key]).toMatch(new RegExp(`^var\\(${THEME_VARS[key]}, .+\\)$`));
     }
   });
+
+  it("rejects hostile token values and falls back to the theme default", () => {
+    applyTheme(document, "dark", {});
+    const dflt = get(THEME_VARS.background);
+    const hostile = [
+      "url(https://evil/x)",
+      "red; background: url(x)",
+      "red } body { color: blue",
+      "{x}",
+      "@import 'x'",
+      "red\\3b x",
+      "expression(alert(1))",
+      "a".repeat(201),
+    ];
+    for (const value of hostile) {
+      applyTheme(document, "dark", { "--cb-bg": value });
+      expect(get(THEME_VARS.background), value).toBe(dflt);
+    }
+    applyTheme(document, "dark", { "--cb-bg": "a".repeat(200) });
+    expect(get(THEME_VARS.background)).toBe("a".repeat(200));
+  });
+
+  it("a token missing from a later payload falls back to the theme default", () => {
+    applyTheme(document, "dark", { "--cb-bg": "#123456", "--cb-accent": "#abcdef" });
+    expect(get(THEME_VARS.accent)).toBe("#abcdef");
+    applyTheme(document, "dark", { "--cb-bg": "#654321" });
+    expect(get(THEME_VARS.background)).toBe("#654321");
+    expect(get(THEME_VARS.accent)).toBe("#FF6A13");
+  });
 });

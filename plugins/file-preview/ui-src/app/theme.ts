@@ -75,6 +75,15 @@ export const THEME = Object.fromEntries(
   (Object.keys(THEME_VARS) as ThemeKey[]).map((k) => [k, `var(${THEME_VARS[k]}, ${TABLE[k].css})`]),
 ) as Record<ThemeKey, string>;
 
+// a token value lands in a stylesheet property: nothing that can fetch, escape or end the declaration
+const HOSTILE_VALUE = /url\(|[;{}\\]|@import|expression\(/i;
+const MAX_VALUE_LENGTH = 200;
+const usable = (v: unknown): v is string =>
+  typeof v === "string" &&
+  v.trim() !== "" &&
+  v.trim().length <= MAX_VALUE_LENGTH &&
+  !HOSTILE_VALUE.test(v);
+
 const TOKEN_RE = /^--cb-[a-z0-9-]+$/i;
 // the properties each document got last time, so a theme event replaces them instead of piling up
 const applied = new WeakMap<Document, string[]>();
@@ -95,7 +104,7 @@ export function applyTheme(
   for (const key of Object.keys(THEME_VARS) as ThemeKey[]) {
     const entry = TABLE[key];
     const sent = TOKEN_RE.test(entry.token) ? tokens[entry.token] : undefined;
-    const value = typeof sent === "string" && sent.trim() !== "" ? sent.trim() : entry[theme];
+    const value = usable(sent) ? sent.trim() : entry[theme];
     style.setProperty(THEME_VARS[key], value);
     props.push(THEME_VARS[key]);
   }

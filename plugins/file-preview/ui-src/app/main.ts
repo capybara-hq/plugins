@@ -21,6 +21,8 @@ export interface AppDeps {
   /** Loads a worker module (`assets/<id>.worker.js`); tests pass a fake. */
   importModule?: (url: string) => Promise<{ default?: unknown }>;
   budgetMs?: number;
+  /** Tests substitute the bridge to deliver more than one file; the page's bridge delivers one. */
+  createBridge?: typeof createBridge;
 }
 
 const importModule = (url: string): Promise<{ default?: unknown }> => import(url);
@@ -164,7 +166,7 @@ export function startApp(deps: AppDeps = {}): () => void {
     }
   };
 
-  const stopBridge = createBridge(win, onEvent);
+  const stopBridge = (deps.createBridge ?? createBridge)(win, onEvent);
   // once the preview is painted, a stray error must not replace it
   const onError = (e: ErrorEvent) => {
     if (!rendered) fail(e.message || message(e.error));
