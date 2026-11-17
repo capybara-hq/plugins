@@ -1,12 +1,13 @@
 import {
   EFFORT_VALUES,
   type Effort,
+  isNetDeniedError,
   type Logger,
   ModelError,
   type ModelInfo,
   type ModelParameter,
 } from "@capybara-hq/plugin-sdk";
-import { kindFromStatus, retryAfterMs } from "./errors.js";
+import { kindFromStatus, netDeniedError, retryAfterMs } from "./errors.js";
 
 /** Conservative limits for a model the response gives no limits for and the table does not know. */
 const DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -102,19 +103,24 @@ function mapModel(raw: RawModel & { id: string }): ModelInfo {
   };
 }
 
-/** `GET {baseUrl}/models`; the models the endpoint lists, as ModelInfo. */
+/**
+ * `GET {baseUrl}/models`; the models the endpoint lists, as ModelInfo. `fetchImpl` is `ctx.net`'s
+ * guarded fetch for an org's own base URL, the global `fetch` otherwise.
+ */
 export async function listDeepSeekModels(
   baseUrl: string,
   apiKey: string,
   log?: Pick<Logger, "warn">,
+  fetchImpl: (url: string, init: RequestInit) => Promise<Response> = fetch,
 ): Promise<ModelInfo[]> {
   let res: Response;
   try {
-    res = await fetch(`${baseUrl.replace(/\/+$/, "")}/models`, {
+    res = await fetchImpl(`${baseUrl.replace(/\/+$/, "")}/models`, {
       headers: { authorization: `Bearer ${apiKey}`, accept: "application/json" },
       signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
     });
   } catch (cause) {
+    if (isNetDeniedError(cause)) throw netDeniedError(cause);
     const timeout = cause instanceof Error && cause.name === "TimeoutError";
     throw new ModelError(timeout ? "timeout" : "network", "DeepSeek: cannot list models", {
       cause,

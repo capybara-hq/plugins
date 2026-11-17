@@ -4,6 +4,7 @@ import {
   type AuthInjection,
   type Connector,
   type ConnectorSession,
+  NetDeniedError,
   ToolError,
   type ToolResult,
 } from "@capybara-hq/plugin-sdk";
@@ -14,12 +15,36 @@ import {
 } from "@capybara-hq/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { createOpenApiConnector } from "../src/connector.js";
+import type { NetFetch } from "../src/http.js";
 
 /** 对着本地假 OpenAPI 服务的会话用例：取文档、调用、鉴权注入、401 重试、错误分类。 */
 
 const KEY = "fake-api-key-1234567890";
 const log = { info() {}, warn() {}, error() {} };
 const servers: FakeOpenApiServer[] = [];
+
+/** The org every test session serves. */
+const ORG = "org-1";
+
+/** Stands in for `ctx.net.fetch` (the fake servers run on loopback): plain fetch, recording orgIds. */
+function plainNet(): NetFetch & { orgIds: (string | undefined)[] } {
+  const orgIds: (string | undefined)[] = [];
+  const f = (url: string, init?: RequestInit, opts?: { orgId?: string }) => {
+    orgIds.push(opts?.orgId);
+    return fetch(url, init);
+  };
+  return Object.assign(f, { orgIds });
+}
+
+/** A `ctx.net.fetch` that refuses every host as a private address. */
+const refusingNet: NetFetch = async (url) => {
+  const host = new URL(url).hostname;
+  throw new NetDeniedError(
+    "net.private_address",
+    host,
+    `Access to ${host} is refused: it resolves to a private or reserved address.`,
+  );
+};
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((s) => s.stop()));
@@ -38,9 +63,10 @@ interface OpenOpts {
 }
 
 async function open(endpoint: Record<string, unknown>, o: OpenOpts = {}) {
-  const c = o.connector ?? createOpenApiConnector({ log, allowInsecureLoopback: true });
+  const c = o.connector ?? createOpenApiConnector({ log, fetch: plainNet() });
   return c.open({
     endpoint: c.endpointSchema.parse(endpoint),
+    orgId: ORG,
     auth: o.auth ?? (async () => ({ headers: { "X-API-Key": KEY } })),
     onUnauthorized: o.onUnauthorized ?? (async () => {}),
     signal: new AbortController().signal,
@@ -82,6 +108,55 @@ async function withSession<T>(
   }
 }
 
+describe("ctx.net", () => {
+  it("fetches the document and calls the API through ctx.net.fetch with the session's orgId", async () => {
+    const api = await server({ apiKey: KEY });
+    const net = plainNet();
+    const c = createOpenApiConnector({ log, fetch: net });
+    await withSession({ specUrl: api.specUrl }, (s) => call(s, "listPets", {}), { connector: c });
+    expect(net.orgIds.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(net.orgIds)).toEqual(new Set([ORG]));
+  });
+
+  it("a refused private document address -> ToolError naming the host, not the path or query", async () => {
+    const c = createOpenApiConnector({ log, fetch: refusingNet });
+    const e = await failure(
+      list({ specUrl: "https://10.0.0.5/openapi.json?tenant=secret-q" }, { connector: c }),
+    );
+    expect(e.kind).toBe("error");
+    expect(e.message).toContain("10.0.0.5");
+    expect(e.message).toMatch(/refused by the platform's network rules/);
+    expect(e.message).not.toMatch(/secret-q|openapi\.json/);
+  });
+
+  it("a refused private API address -> ToolError naming the host, without credentials", async () => {
+    const spec = {
+      ...defaultFakeOpenApiSpec("https://192.168.1.20/v1"),
+      servers: [{ url: "https://192.168.1.20/v1" }],
+    };
+    const ok = createOpenApiConnector({ log, fetch: plainNet() });
+    const c = createOpenApiConnector({ log, fetch: refusingNet });
+    const endpoint = { specText: JSON.stringify(spec) };
+    const def = (await withSession(endpoint, (s) => s.listTools(), { connector: ok })).find(
+      (t) => t.name === "listPets",
+    );
+    const e = await failure(
+      withSession(
+        endpoint,
+        (s) => s.callTool("listPets", {}, signal(), def ? { spec: def } : undefined),
+        {
+          connector: c,
+          auth: async () => ({ headers: { "X-API-Key": KEY }, query: { k: "q-secret" } }),
+        },
+      ),
+    );
+    expect(e.kind).toBe("error");
+    expect(e.message).toContain("192.168.1.20");
+    expect(e.message).not.toContain(KEY);
+    expect(e.message).not.toContain("q-secret");
+  });
+});
+
 describe("取文档", () => {
   it("从 specUrl 取文档（不带凭据）并列出工具", async () => {
     const api = await server({ apiKey: KEY });
@@ -113,7 +188,7 @@ describe("取文档", () => {
     });
     const small = createOpenApiConnector({
       log,
-      allowInsecureLoopback: true,
+      fetch: plainNet(),
       limits: { maxSpecBytes: 4096 },
     });
     const e = await failure(list({ specUrl: api.specUrl }, { connector: small }));
@@ -459,15 +534,15 @@ describe("调用", () => {
     expect(e.message).toContain("deletePet");
   });
 
-  it("文档里的 server 不是 https（也不是允许的本机 http）→ 拒绝调用", async () => {
+  it("a document server that is not http(s) -> the call is refused", async () => {
     const api = await server({
       spec: (base) => ({
         ...defaultFakeOpenApiSpec(base),
-        servers: [{ url: "http://api.example.com/v1" }],
+        servers: [{ url: "ftp://api.example.com/v1" }],
       }),
     });
     const e = await failure(withSession({ specUrl: api.specUrl }, (s) => call(s, "listPets", {})));
-    expect(e.message).toMatch(/https/);
+    expect(e.message).toMatch(/http or https/);
   });
 
   it("相对 server 地址按文档地址解析；specText 且无 server / baseUrl → 提示提供 baseUrl", async () => {
@@ -495,7 +570,7 @@ describe("调用", () => {
     try {
       const c = createOpenApiConnector({
         log,
-        allowInsecureLoopback: true,
+        fetch: plainNet(),
         limits: { maxResponseBytes: 1000 },
       });
       const spec = {

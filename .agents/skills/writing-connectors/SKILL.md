@@ -1,6 +1,6 @@
 ---
 name: writing-connectors
-description: 'Use when creating or changing a connector extension in this repository (provides connector@1, e.g. plugins/connector-mcp, plugins/connector-openapi): the terms connector / connector extension / connector template, no stdio MCP support, endpointSchema, the per-call open / close session lifecycle, auth() before every request and a single onUnauthorized retry, no redirect following and https only (allowInsecureLoopback), ToolError kind and the circuit breaker, connectorData and routing by the reviewed definition (ctx.spec), deterministic listTools, inspect and the install preview, onToolsChanged, onElicit and elicitation resumption, optional resources / prompts methods, what connector templates need from endpointSchema, what the kernel owns (OAuth, redaction), and tests with startFakeMcpServer / startFakeOpenApiServer / startFakeOAuthServer and live tests.'
+description: 'Use when creating or changing a connector extension in this repository (provides connector@1, e.g. plugins/connector-mcp, plugins/connector-openapi): the terms connector / connector extension / connector template, no stdio MCP support, endpointSchema, the per-call open / close session lifecycle, auth() before every request and a single onUnauthorized retry, every request through ctx.net.fetch with the org (NetDeniedError mapping), no redirect following, ToolError kind and the circuit breaker, connectorData and routing by the reviewed definition (ctx.spec), deterministic listTools, inspect and the install preview, onToolsChanged, onElicit and elicitation resumption, optional resources / prompts methods, what connector templates need from endpointSchema, what the kernel owns (OAuth, redaction), and tests with startFakeMcpServer / startFakeOpenApiServer / startFakeOAuthServer and live tests.'
 ---
 
 # Writing connectors
@@ -22,7 +22,7 @@ For general extension authoring see `.agents/skills/writing-extensions`; for gen
 
 Reference implementations: `plugins/connector-mcp` (MCP over Streamable HTTP, with elicitation, prompts, resources, list_changed) and `plugins/connector-openapi` (OpenAPI 3.0 / 3.1, one tool per operation, implements `inspect` and `connectorData` routing). The contract is the SDK's `connector.ts`.
 
-The deployment-level config of both official connectors is only `allowInsecureLoopback` (default `false`; development / testing only, allows plain http to `127.0.0.1` / `localhost` / `[::1]`), e.g. `CAPYBARA_EXTENSION_CONFIG='{"connector-mcp":{"allowInsecureLoopback":true}}'`.
+Neither official connector has deployment config. Every request to an endpoint goes through `ctx.net.fetch(url, init, { orgId })` with the org from `ConnectorOpenArgs.orgId` (or `inspect`'s `orgId`), so the kernel's network rules decide what is reachable: https to public addresses; internal endpoints and plain http only for an endpoint a super admin allowed for that org; loopback only under the kernel's tests-only `net.allowInsecureLoopback`. A connector never calls the global `fetch`. The factories take the guarded fetch as a parameter (`createMcpConnector({ log, fetch })`, `createOpenApiConnector({ log, fetch })`) so unit tests inject their own.
 
 **stdio MCP is not supported**: connectors only reach remote services (MCP over Streamable HTTP). The kernel runs as multiple replicas and does not spawn local processes for an org, so never write a connector that spawns child processes; wrap a local MCP server as an HTTP endpoint first.
 
@@ -33,13 +33,14 @@ interface Connector {
   kind: string;                 // stored with the connector, e.g. "mcp", "openapi"
   endpointSchema: ZodTypeAny;   // validates the connector endpoint (called by the kernel on install / preview)
   open(args: ConnectorOpenArgs): Promise<ConnectorSession>;
-  inspect?(args: { endpoint; signal }): Promise<{ authHints: AuthHint[]; operations?: ConnectorOperation[] }>;
+  inspect?(args: { endpoint; signal; orgId }): Promise<{ authHints: AuthHint[]; operations?: ConnectorOperation[] }>;
 }
 interface ConnectorOpenArgs {
   endpoint: unknown;                        // already validated against endpointSchema
   auth(): Promise<AuthInjection>;           // { headers, query? }
   onUnauthorized(): Promise<void>;
   signal: AbortSignal;
+  orgId: string;                            // pass to ctx.net.fetch as opts.orgId
   onToolsChanged?(): void;                  // optional
   onElicit?(req: ElicitationRequest): Promise<ElicitationResponse>;   // optional
 }
@@ -57,7 +58,7 @@ Null-check every optional callback: an older kernel does not provide them.
 ## `endpointSchema`
 
 - The kernel validates `endpoint` with it on install / preview / create (failure -> 400 `validation_failed`); `open` gets the validated value (call `schema.parse` once for the type).
-- URLs accept https only; only with `allowInsecureLoopback` are the three exact loopback http hosts allowed (`localhost.evil.com` does not count). Validation messages are English and state the rule.
+- URLs accept http and https (other schemes are refused with an English message that states the rule); whether the host is reachable is `ctx.net`'s decision at request time, not the schema's.
 - The endpoint is visible to org members and **must not contain credentials**: fixed headers exclude credential headers such as `Authorization` / `Cookie` (credentials go through the auth settings, stored encrypted). The kernel also rejects credential-like header names, query names (`key`, `token`, `access_token`, …) and URL userinfo at install, checking every top-level `url` / `*Url` string field.
 - Large fields (such as OpenAPI's `specText`, <= 2 MB): name them `text` / `*Text`; the kernel echoes only their size and hash, and raises the install and preview body limit to 6 MiB.
 - **Connector templates** reference paths in your schema (`editableEndpoint`): the kernel finds them by walking object fields, records and union / intersection branches (stripping optional / default wrappers), **never array elements**. Put fields an org may need to change on object paths and keep field names stable: renaming breaks published templates. Template format: `.agents/skills/writing-plugins`.
@@ -71,7 +72,7 @@ For every `listTools` (install, refresh, drift check), every tool call and every
 - **Call `auth()` before every request** and merge its `headers` / `query`; never fetch it once per session (credentials refresh). Credentials appear only at that moment: never store, log or echo them.
 - **On 401, call `onUnauthorized()` once and retry once with a fresh `auth()`**; still 401 -> `ToolError("Authentication failed for this app; ask the user to reconnect it.")`. No loops, and no retries of other errors inside the extension: retries and the circuit breaker are the kernel's.
 - **Never follow redirects** (`fetch(…, { redirect: "manual" })`, any 3xx is an error): following would carry the body and the injected credentials to another origin. Fetching a remote description (OpenAPI `specUrl`) carries no credentials and follows no redirects either.
-- Reject any non-https outbound address (loopback excepted), including server addresses declared in documents.
+- **Every request goes through `ctx.net.fetch` with the session's `orgId`**, including server addresses declared in documents and description fetches (OpenAPI `specUrl`). Detect a refusal with `isNetDeniedError` (by name, never `instanceof`) and turn it into `ToolError` (default kind `error`: the remote was never contacted, so it does not count toward the breaker) whose message names the host (`e.host`, plus the kernel's English reason) and never the full URL, its query or headers.
 - Remote content is untrusted. The kernel sanitizes remote `inputSchema`s before validating arguments; the connector limits response size and read time itself (openapi: document 2 MB / 30 seconds, response body 5 MB).
 
 ## `ToolError`, `kind` and the circuit breaker
@@ -123,6 +124,8 @@ All from `@capybara-hq/testing` (a devDependency):
 - `startFakeOpenApiServer({ apiKey?, apiKeyIn?, echoKey?, specRedirect?, spec? })`: `/openapi.json` serves the pet CRUD document `defaultFakeOpenApiSpec`, `/v1/*` implements it (API key check, 404 / 500 / 302, plain text and binary responses); `setSpec` simulates a document update.
 - `startFakeOAuthServer({ dcr?, metadata?, accessTokenTtl?, clients?, tokenDelayMs? })`: auto-approving authorization endpoint, PKCE, refresh rotation, client_credentials, DCR switch, `revokeAccessTokens` / `revokeRefreshTokens`; combine with `startFakeMcpServer({ verifyBearer: (t) => as.verify(t), protectedResource: { authorizationServers: [as.issuer], advertise: "header" | "well-known" } })`; the kernel then needs `tools.oauthAllowInsecureLoopback: true` and `http.publicUrl`.
 
-Test checklist (follow `plugins/connector-mcp/test/` and `plugins/connector-openapi/test/`): endpoint validation (non-https, credential headers), `auth()` before every request, 401 retried once and only once, redirects rejected, `ToolError` `kind`, no credentials in errors, no leftover connections after `close`, `signal` abort; with `connectorData`, "the call still goes by `ctx.spec` after the description changes". Through a real kernel: `plugins/connector-mcp/test/kernel/mcp-e2e.test.ts`, `plugins/connector-openapi/test/kernel/openapi-e2e.test.ts` (`startTestKernel` + model-fake); `plugins/connector-mcp/test/claude-template.test.ts` checks a translated Claude Code bearer template against the real connector.
+Kernel tests that run fake servers on loopback set the kernel config `net.allowInsecureLoopback: true` (`testKernelConfig` sets it too; the e2e tests say so explicitly).
+
+Test checklist (follow `plugins/connector-mcp/test/` and `plugins/connector-openapi/test/`): endpoint validation (schemes, credential headers), every request through the injected fetch with the session's `orgId`, a refused private address as a `ToolError` naming the host, `auth()` before every request, 401 retried once and only once, redirects rejected, `ToolError` `kind`, no credentials in errors, no leftover connections after `close`, `signal` abort; with `connectorData`, "the call still goes by `ctx.spec` after the description changes". Through a real kernel: `plugins/connector-mcp/test/kernel/mcp-e2e.test.ts`, `plugins/connector-openapi/test/kernel/openapi-e2e.test.ts` (`startTestKernel` + model-fake); `plugins/connector-mcp/test/claude-template.test.ts` checks a translated Claude Code bearer template against the real connector.
 
 Live acceptance: `plugins/connector-mcp/test/live/m3.live.test.ts` (DeepWiki MCP, GitHub MCP) and `plugins/connector-openapi/test/live/m3.live.test.ts` (Petstore OpenAPI) run only with `CAPYBARA_TEST_LIVE_TOOLS=1` (a plain test run never touches the network); GitHub also needs `CAPYBARA_TEST_GITHUB_MCP_TOKEN` and `CAPYBARA_TEST_GITHUB_REPO` (owner/name) and opens an issue it closes in `finally`. After changing outbound requests or protocol handling, run `CAPYBARA_TEST_LIVE_TOOLS=1 pnpm exec vitest run plugins/connector-mcp/test/live plugins/connector-openapi/test/live -t live` from the repository root. Keep keys in an env file outside the repository and never print them.

@@ -20,6 +20,12 @@ An organization that sets its own copy is resolved as a whole: its `apiKey` and 
 together and the platform key is never sent to an organization's `baseUrl`. An organization copy
 without a key fails with `auth`.
 
+An organization's own `baseUrl` (one that differs from the platform's) is requested through the
+kernel's guarded `ctx.net.fetch` for that organization: https to public addresses, and internal
+endpoints or plain http only where a super admin allowed them for the organization. A refused
+address fails with `invalid_request`, naming the host. The platform's own `baseUrl` is trusted as
+the super admin set it.
+
 ## Models and parameters
 
 - Models come from `GET {baseUrl}/models`; limits, image input and effort levels are read from the

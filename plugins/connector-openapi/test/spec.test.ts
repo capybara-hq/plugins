@@ -11,7 +11,12 @@ import { createOpenApiConnector } from "../src/connector.js";
 /** 不起服务、只用 specText 的用例：文档解析、dereference、工具映射与 inspect。 */
 
 const log = { info() {}, warn() {}, error() {} };
-const connector = (): Connector => createOpenApiConnector({ log, allowInsecureLoopback: true });
+/** Only specText is used here: the injected fetch is never called. */
+const connector = (): Connector =>
+  createOpenApiConnector({
+    log,
+    fetch: () => Promise.reject(new Error("no network in spec tests")),
+  });
 
 async function listTools(
   spec: unknown,
@@ -22,6 +27,7 @@ async function listTools(
   const endpoint = c.endpointSchema.parse({ specText, ...extra });
   const s = await c.open({
     endpoint,
+    orgId: "org-1",
     auth: async (): Promise<AuthInjection> => ({ headers: {} }),
     onUnauthorized: async () => {},
     signal: new AbortController().signal,
@@ -425,6 +431,7 @@ describe("inspect", () => {
     const r = await c.inspect?.({
       endpoint: c.endpointSchema.parse({ specText: JSON.stringify(spec), operations: ["getPet"] }),
       signal: new AbortController().signal,
+      orgId: "org-1",
     });
     expect(r?.authHints).toEqual([
       { scheme: "key", description: "Your key", type: "api_key", in: "header", name: "X-API-Key" },

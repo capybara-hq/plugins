@@ -5,7 +5,7 @@ import type {
   ElicitationResponse,
   Logger,
 } from "@capybara-hq/plugin-sdk";
-import { ToolError } from "@capybara-hq/plugin-sdk";
+import { NetDeniedError, ToolError } from "@capybara-hq/plugin-sdk";
 import {
   type FakeMcpHandlerContext,
   FakeMcpRpcError,
@@ -14,7 +14,25 @@ import {
   startFakeMcpServer,
 } from "@capybara-hq/testing";
 import { afterEach, describe, expect, it } from "vitest";
-import { AUTH_FAILED_TEXT, createMcpConnector, redirectText } from "../src/session.js";
+import {
+  AUTH_FAILED_TEXT,
+  createMcpConnector,
+  type NetFetch,
+  redirectText,
+} from "../src/session.js";
+
+/** The org every test session serves. */
+const ORG = "org-1";
+
+/** Stands in for `ctx.net.fetch` (the fake servers run on loopback): plain fetch, recording orgIds. */
+function plainNet(): NetFetch & { orgIds: (string | undefined)[] } {
+  const orgIds: (string | undefined)[] = [];
+  const f = (url: string, init?: RequestInit, opts?: { orgId?: string }) => {
+    orgIds.push(opts?.orgId);
+    return fetch(url, init);
+  };
+  return Object.assign(f, { orgIds });
+}
 
 /** 记录日志的 logger。 */
 function memLog(): Logger & { lines: { level: string; msg: string; fields?: unknown }[] } {
@@ -48,12 +66,14 @@ interface OpenOpts {
   log?: Logger;
   onToolsChanged?: () => void;
   onElicit?: (r: ElicitationRequest) => Promise<ElicitationResponse>;
+  net?: NetFetch;
 }
 
 async function open(server: FakeMcpServer, o: OpenOpts = {}): Promise<ConnectorSession> {
-  const c = createMcpConnector({ log: o.log ?? memLog(), allowInsecureLoopback: true });
+  const c = createMcpConnector({ log: o.log ?? memLog(), fetch: o.net ?? plainNet() });
   const s = await c.open({
     endpoint: c.endpointSchema.parse({ url: server.url, headers: o.headers ?? {} }),
+    orgId: ORG,
     auth: o.auth ?? (async () => ({ headers: {} })),
     onUnauthorized: o.onUnauthorized ?? (async () => {}),
     signal: o.signal ?? new AbortController().signal,
@@ -65,49 +85,27 @@ async function open(server: FakeMcpServer, o: OpenOpts = {}): Promise<ConnectorS
 }
 
 describe("endpointSchema", () => {
-  const strict = createMcpConnector({ log: memLog() }).endpointSchema;
-  const loose = createMcpConnector({ log: memLog(), allowInsecureLoopback: true }).endpointSchema;
+  const strict = createMcpConnector({ log: memLog(), fetch: plainNet() }).endpointSchema;
   const ok = (schema: typeof strict, url: string) => schema.safeParse({ url }).success;
 
-  it("默认只接受 https；headers 默认 {}", () => {
+  it("accepts http and https (ctx.net decides reachability); headers default to {}", () => {
     expect(strict.parse({ url: "https://mcp.example.com/mcp" })).toEqual({
       url: "https://mcp.example.com/mcp",
       headers: {},
     });
     for (const url of [
       "http://127.0.0.1:8080/mcp",
-      "http://localhost:3000/mcp",
+      "http://mcp.internal.example:3000/mcp",
       "http://[::1]/mcp",
     ]) {
+      expect(ok(strict, url), url).toBe(true);
+    }
+    for (const url of ["ftp://x.example.com", "file:///etc/passwd", "not a url"]) {
       expect(ok(strict, url), url).toBe(false);
     }
-    expect(strict.safeParse({ url: "http://127.0.0.1/mcp" }).error?.issues[0]?.message).toBe(
-      "URL must use https",
+    expect(strict.safeParse({ url: "ftp://x.example.com" }).error?.issues[0]?.message).toBe(
+      "URL must use http or https",
     );
-  });
-
-  it("allowInsecureLoopback：只放行确切的 127.0.0.1 / localhost / [::1]", () => {
-    for (const url of [
-      "http://127.0.0.1:8080/mcp",
-      "http://localhost:3000/mcp",
-      "http://[::1]:9/mcp",
-    ]) {
-      expect(ok(loose, url), url).toBe(true);
-    }
-    for (const url of [
-      "http://localhost.evil.com/mcp",
-      "http://127.0.0.1.nip.io/mcp",
-      "http://localhost./mcp",
-      "http://127.0.0.2/mcp",
-      "http://mcp.example.com/mcp",
-      "ftp://x.example.com",
-      "not a url",
-    ]) {
-      expect(ok(loose, url), url).toBe(false);
-    }
-    expect(
-      loose.safeParse({ url: "http://localhost.evil.com/mcp" }).error?.issues[0]?.message,
-    ).toBe("URL must use https (plain http is only allowed for 127.0.0.1, localhost and [::1])");
   });
 
   it("固定头里不能放凭据头", () => {
@@ -117,6 +115,49 @@ describe("endpointSchema", () => {
     });
     expect(r.success).toBe(false);
     expect(r.error?.issues[0]?.message).toMatch(/credential/i);
+  });
+});
+
+describe("ctx.net", () => {
+  it("sends every request through ctx.net.fetch with the session's orgId", async () => {
+    const server = await fake({
+      tools: [{ name: "t", description: "d", handler: () => ({ content: [] }) }],
+    });
+    const net = plainNet();
+    const s = await open(server, { net });
+    await s.listTools();
+    await s.callTool("t", {}, new AbortController().signal);
+    expect(net.orgIds.length).toBeGreaterThan(0);
+    expect(new Set(net.orgIds)).toEqual(new Set([ORG]));
+  });
+
+  it("a refused private address -> ToolError naming the host, without the URL's path or query", async () => {
+    const c = createMcpConnector({
+      log: memLog(),
+      fetch: async (url) => {
+        const host = new URL(url).hostname;
+        throw new NetDeniedError(
+          "net.private_address",
+          host,
+          `Access to ${host} is refused: it resolves to a private or reserved address.`,
+        );
+      },
+    });
+    const err = await c
+      .open({
+        endpoint: c.endpointSchema.parse({ url: "https://10.0.0.5/mcp?tenant=secret-q" }),
+        orgId: ORG,
+        auth: async () => ({ headers: { authorization: "Bearer tok-1" }, query: { k: "v-1" } }),
+        onUnauthorized: async () => {},
+        signal: new AbortController().signal,
+      })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(ToolError);
+    // remote reachable or not, this is a configuration problem: never counted by the breaker
+    expect(err.kind).toBe("error");
+    expect(err.message).toContain("10.0.0.5");
+    expect(err.message).toMatch(/refused by the platform's network rules/);
+    expect(err.message).not.toMatch(/secret-q|tok-1|v-1|\/mcp/);
   });
 });
 
@@ -349,10 +390,11 @@ describe("callTool 映射", () => {
     const url = gone.url;
     await gone.stop();
     servers.splice(servers.indexOf(gone), 1);
-    const c = createMcpConnector({ log: memLog(), allowInsecureLoopback: true });
+    const c = createMcpConnector({ log: memLog(), fetch: plainNet() });
     const refused = await c
       .open({
         endpoint: c.endpointSchema.parse({ url }),
+        orgId: ORG,
         auth: async () => ({ headers: {} }),
         onUnauthorized: async () => {},
         signal: new AbortController().signal,

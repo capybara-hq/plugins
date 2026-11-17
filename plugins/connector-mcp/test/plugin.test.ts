@@ -6,36 +6,25 @@ import {
 import { expect, it } from "vitest";
 import plugin from "../src/index.js";
 
-it("清单：connector-mcp 提供 connector@1", () => {
+it("manifest: connector-mcp provides connector@1 and has no deployment config", () => {
   expect(plugin.name).toBe("connector-mcp");
   expect(plugin.provides).toEqual([CONNECTOR_EXTENSION_POINT]);
+  expect(plugin.config?.deployment).toBeUndefined();
 });
 
-it("setup 提供 kind = mcp 的连接器", async () => {
+it("setup provides a connector of kind mcp that accepts http and https endpoints", async () => {
   const provided = new Map<string, unknown>();
   const log = { info() {}, warn() {}, error() {} };
   await plugin.setup({
     provide: (cap: string, impl: unknown) => provided.set(cap, impl),
     log,
+    net: { fetch: () => Promise.reject(new Error("unused")) },
     config: undefined,
   } as unknown as ExtensionContext);
   const c = provided.get(CONNECTOR_EXTENSION_POINT) as Connector;
   expect(c.kind).toBe("mcp");
   expect(typeof c.open).toBe("function");
   expect(c.endpointSchema.safeParse({ url: "https://x.example.com/mcp" }).success).toBe(true);
-  // 默认不允许本机 http
-  expect(c.endpointSchema.safeParse({ url: "http://127.0.0.1/mcp" }).success).toBe(false);
-});
-
-it("部署配置 allowInsecureLoopback 打开后放行本机 http", async () => {
-  const provided = new Map<string, unknown>();
-  const log = { info() {}, warn() {}, error() {} };
-  await plugin.setup({
-    provide: (cap: string, impl: unknown) => provided.set(cap, impl),
-    log,
-    config: { allowInsecureLoopback: true },
-  } as unknown as ExtensionContext);
-  const c = provided.get(CONNECTOR_EXTENSION_POINT) as Connector;
-  expect(c.endpointSchema.safeParse({ url: "http://127.0.0.1/mcp" }).success).toBe(true);
-  expect(plugin.config?.deployment?.parse({})).toEqual({ allowInsecureLoopback: false });
+  // whether an http endpoint is reachable is ctx.net's call at request time
+  expect(c.endpointSchema.safeParse({ url: "http://mcp.internal:8080/mcp" }).success).toBe(true);
 });

@@ -1,10 +1,12 @@
 import {
   type ConnectorOpenArgs,
+  type ExtensionNet,
+  isNetDeniedError,
   type Logger,
   ToolError,
   type ToolResult,
 } from "@capybara-hq/plugin-sdk";
-import { serverUrlText, urlAllowed } from "./endpoint.js";
+import { SERVER_URL_TEXT, urlAllowed } from "./endpoint.js";
 import type { Route, RouteParam } from "./route.js";
 import { CREDENTIAL_HEADER, RESERVED_HEADERS } from "./spec.js";
 
@@ -14,6 +16,16 @@ export const AUTH_FAILED_TEXT = "Authentication failed for this app; ask the use
 /** 连不上服务（模型可见，英文）。 */
 export const UNREACHABLE_TEXT =
   "Could not reach the app's server. Retry later, or ask an administrator to check the app.";
+
+/** The guarded fetch every request goes through (`ctx.net.fetch`). */
+export type NetFetch = ExtensionNet["fetch"];
+
+/**
+ * The kernel's network rules refused a request (model-visible, English): names the host, never the
+ * URL's path, query or headers.
+ */
+export const netDeniedText = (host: string, reason: string) =>
+  `The request to ${host || "the app's server"} was refused by the platform's network rules: ${reason} Ask an administrator to check the app's document URL and baseUrl.`;
 
 /** 服务以 3xx 响应（不跟随，模型可见，英文）。 */
 export const redirectText = (status: number) =>
@@ -73,6 +85,9 @@ async function readCapped(
 /** fetch 抛错：连接失败与我们自己的时限 → ToolError（unavailable）；调用方的中止原样抛出。 */
 function mapFetchError(e: unknown, outer: AbortSignal): unknown {
   if (outer.aborted) return e;
+  // ctx.net refused the target (a private address, plain http, ...): a configuration problem, kind
+  // error (the remote was never contacted, so it does not count toward the circuit breaker)
+  if (isNetDeniedError(e)) return new ToolError(netDeniedText(e.host, e.message));
   if (e instanceof TypeError && e.message === "fetch failed") {
     return new ToolError(UNREACHABLE_TEXT, { kind: "unavailable" });
   }
@@ -99,14 +114,26 @@ async function noRedirect(res: Response): Promise<void> {
 }
 
 /** 取文档（不带凭据）：不跟随重定向、限时、限大小；非 2xx → ToolError（5xx 为 unavailable）。 */
-export async function fetchSpec(url: string, signal: AbortSignal, limits: Limits): Promise<string> {
+export async function fetchSpec(
+  net: NetFetch,
+  orgId: string,
+  url: string,
+  signal: AbortSignal,
+  limits: Limits,
+): Promise<string> {
   let res: Response;
   try {
-    res = await fetch(url, {
-      headers: { accept: "application/json, application/yaml;q=0.9, text/yaml;q=0.9, */*;q=0.5" },
-      redirect: "manual",
-      signal: AbortSignal.any([signal, AbortSignal.timeout(limits.specTimeoutMs)]),
-    });
+    res = await net(
+      url,
+      {
+        headers: {
+          accept: "application/json, application/yaml;q=0.9, text/yaml;q=0.9, */*;q=0.5",
+        },
+        redirect: "manual",
+        signal: AbortSignal.any([signal, AbortSignal.timeout(limits.specTimeoutMs)]),
+      },
+      { orgId },
+    );
   } catch (e) {
     throw mapFetchError(e, signal);
   }
@@ -138,14 +165,11 @@ export async function fetchSpec(url: string, signal: AbortSignal, limits: Limits
 }
 
 /**
- * 调用的服务器地址：端点的 baseUrl 覆盖，否则用路由里（listTools 时解析好的）服务器地址；
- * 每次调用都按 https / 本机规则校验（文档里的 server 不受信任）。
+ * The server address of a call: the endpoint's baseUrl when set, else the route's server (resolved
+ * at listTools), checked on every call (the document's server is untrusted): http or https without userinfo here,
+ * the address itself by ctx.net when the request is sent.
  */
-export function resolveBaseUrl(
-  server: string | null,
-  baseUrl: string | undefined,
-  allowInsecureLoopback: boolean,
-): URL {
+export function resolveBaseUrl(server: string | null, baseUrl: string | undefined): URL {
   const raw = baseUrl ?? server;
   let u: URL | undefined;
   try {
@@ -163,8 +187,8 @@ export function resolveBaseUrl(
       "The API base URL must not contain a user name or password; ask an administrator to set the app's baseUrl without credentials.",
     );
   }
-  if (!urlAllowed(u, allowInsecureLoopback)) {
-    throw new ToolError(serverUrlText(allowInsecureLoopback));
+  if (!urlAllowed(u)) {
+    throw new ToolError(SERVER_URL_TEXT);
   }
   return u;
 }
@@ -367,6 +391,7 @@ function renderBody(
  * 其他非 2xx → `isError` 结果（状态 + 正文）。
  */
 export async function send(
+  net: NetFetch,
   req: BuiltRequest,
   method: string,
   args: ConnectorOpenArgs,
@@ -382,13 +407,17 @@ export async function send(
     const headers = new Headers(req.headers);
     for (const [k, v] of Object.entries(inj.headers)) headers.set(k, v);
     try {
-      return await fetch(url, {
-        method: method.toUpperCase(),
-        headers,
-        ...(req.body !== undefined && { body: req.body }),
-        redirect: "manual",
-        signal: combined,
-      });
+      return await net(
+        url.toString(),
+        {
+          method: method.toUpperCase(),
+          headers,
+          ...(req.body !== undefined && { body: req.body }),
+          redirect: "manual",
+          signal: combined,
+        },
+        { orgId: args.orgId },
+      );
     } catch (e) {
       throw mapFetchError(e, combined);
     }

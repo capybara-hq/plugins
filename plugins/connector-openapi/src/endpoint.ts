@@ -3,45 +3,33 @@ import { z } from "zod";
 /** 文档（specText 或从 specUrl 取到的）最大字节数。 */
 export const MAX_SPEC_BYTES = 2 * 1024 * 1024;
 
-// capybara:allow-module-state 只读常量表
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
-
-/** 本机 http 只认这三个确切的主机名（`localhost.`、`localhost.evil.com` 等一律不算）。 */
-const isLoopbackHttp = (u: URL): boolean =>
-  u.protocol === "http:" && LOOPBACK_HOSTS.has(u.hostname);
-
-/** URL 是否可用：https，或部署配置允许时的本机 http。 */
-export function urlAllowed(u: URL, allowInsecureLoopback: boolean): boolean {
-  if (u.protocol === "https:") return true;
-  return allowInsecureLoopback && isLoopbackHttp(u);
+/**
+ * Whether a URL may be configured: http or https. Whether the target is reachable is decided by the
+ * kernel's `ctx.net` at request time (https to public addresses; plain http and internal addresses
+ * only for an endpoint a super admin allowed for the org).
+ */
+export function urlAllowed(u: URL): boolean {
+  return u.protocol === "https:" || u.protocol === "http:";
 }
 
-const urlRule = (allowInsecureLoopback: boolean) =>
-  allowInsecureLoopback
-    ? "URL must use https (plain http is only allowed for 127.0.0.1, localhost and [::1])"
-    : "URL must use https";
+const URL_RULE = "URL must use http or https";
 
-const parsesAllowed = (raw: string, allowInsecureLoopback: boolean): boolean => {
+const parsesAllowed = (raw: string): boolean => {
   try {
-    return urlAllowed(new URL(raw), allowInsecureLoopback);
+    return urlAllowed(new URL(raw));
   } catch {
-    return true; // 交给 z.url() 报格式错误
+    return true; // z.url() reports the format error
   }
 };
 
 /**
- * 端点：`specUrl`（取文档，不带凭据）与 `specText`（直接给出文档，JSON 或 YAML，≤ 2 MB）二选一；
- * `baseUrl` 覆盖文档的 `servers`；`operations` 勾选的操作 id（缺省 = 全部）。URL 须为 https，
- * 部署配置 `allowInsecureLoopback` 打开时（仅供开发与测试）本机 http 例外。
+ * The endpoint: exactly one of `specUrl` (the document, fetched without credentials) and `specText`
+ * (the document itself, JSON or YAML, at most 2 MB); `baseUrl` overrides the document's `servers`;
+ * `operations` are the selected operation ids (default: all). URLs are http or https (ctx.net
+ * decides reachability at request time).
  */
-export function endpointSchema(allowInsecureLoopback: boolean) {
-  const url = () =>
-    z
-      .url()
-      .max(2000)
-      .refine((v) => parsesAllowed(v, allowInsecureLoopback), {
-        message: urlRule(allowInsecureLoopback),
-      });
+export function endpointSchema() {
+  const url = () => z.url().max(2000).refine(parsesAllowed, { message: URL_RULE });
   return z
     .object({
       specUrl: url().optional(),
@@ -69,6 +57,5 @@ export function endpointSchema(allowInsecureLoopback: boolean) {
 
 export type OpenApiEndpoint = z.infer<ReturnType<typeof endpointSchema>>;
 
-/** 文档里的 server / baseUrl 不可用时的说明（模型可见，英文）。 */
-export const serverUrlText = (allowInsecureLoopback: boolean) =>
-  `The API base URL is not allowed: ${urlRule(allowInsecureLoopback)}. Ask an administrator to set the app's baseUrl to an https URL.`;
+/** The document's server / the baseUrl is not usable (model-visible, English). */
+export const SERVER_URL_TEXT = `The API base URL is not allowed: ${URL_RULE}. Ask an administrator to set the app's baseUrl to an http or https URL.`;

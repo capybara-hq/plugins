@@ -1,4 +1,10 @@
-import { isModelError, ModelError, type ModelErrorKind } from "@capybara-hq/plugin-sdk";
+import {
+  isModelError,
+  isNetDeniedError,
+  ModelError,
+  type ModelErrorKind,
+  type NetDeniedError,
+} from "@capybara-hq/plugin-sdk";
 import OpenAI from "openai";
 
 /*
@@ -57,6 +63,25 @@ export function kindFromStatus(status: number, code?: string | null): ModelError
   return kindFromCode(code) ?? "invalid_request";
 }
 
+/** The kernel's `NetDeniedError`, thrown directly or wrapped by the SDK (`cause`); else undefined. */
+function netDenied(e: unknown): NetDeniedError | undefined {
+  if (isNetDeniedError(e)) return e;
+  const cause = typeof e === "object" && e !== null ? (e as { cause?: unknown }).cause : undefined;
+  return isNetDeniedError(cause) ? cause : undefined;
+}
+
+/**
+ * The kernel's network rules refused the org's API URL: `invalid_request` (retrying is useless),
+ * naming the host, never the URL's path, query or headers.
+ */
+export function netDeniedError(e: NetDeniedError): ModelError {
+  return new ModelError(
+    "invalid_request",
+    `DeepSeek: the request to ${e.host || "the API URL"} was refused by the platform's network rules: ${e.message} Ask an administrator to check the API URL.`,
+    { cause: e },
+  );
+}
+
 /** SDK error → ModelError. An aborted `signal` always means aborted. */
 export function toModelError(e: unknown, signal?: AbortSignal): ModelError {
   if (isModelError(e)) return e as ModelError;
@@ -67,6 +92,8 @@ export function toModelError(e: unknown, signal?: AbortSignal): ModelError {
   if (signal?.aborted || e instanceof OpenAI.APIUserAbortError) {
     return new ModelError("aborted", "Request aborted", { cause: e });
   }
+  const denied = netDenied(e);
+  if (denied) return netDeniedError(denied);
   if (e instanceof OpenAI.APIConnectionTimeoutError) return make("timeout");
   if (e instanceof OpenAI.APIConnectionError) return make("network");
   if (e instanceof OpenAI.APIError) {
