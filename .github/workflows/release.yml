@@ -86,6 +86,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm build:ui
       - name: Note when CI will not run on the Version Packages PR
         if: env.HAS_RELEASE_PR_TOKEN != 'true'
         run: >
@@ -127,6 +128,7 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
+      - run: pnpm build:ui
 
       # A manual publish must come from main (provenance records the ref); a dry run may use any ref.
       - name: Check the ref of a manual publish

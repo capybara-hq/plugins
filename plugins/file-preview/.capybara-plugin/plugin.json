@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "file-preview",
+  "displayName": {
+    "zh": "文件预览",
+    "en": "File preview"
+  },
+  "version": "0.1.0-rc.0",
+  "publisher": "Capybara",
+  "icon": "./icon.svg",
+  "description": {
+    "en": "Previews code, archives, spreadsheets, documents, PDFs, SVG and HTML files in the conversation",
+    "zh": "在对话中预览代码、压缩包、表格、文档、PDF、SVG 和 HTML 文件"
+  },
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/file-preview#readme"
+}

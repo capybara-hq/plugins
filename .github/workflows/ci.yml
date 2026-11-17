@@ -113,6 +113,8 @@ jobs:
       - run: pnpm check:plugin-icons
       - run: pnpm check:synced-skills
       - run: pnpm check:skills-frontmatter
+      - name: Build plugin UI
+        run: pnpm build:ui
       - name: Marketplace manifest
         env:
           EVENT: ${{ github.event_name }}
