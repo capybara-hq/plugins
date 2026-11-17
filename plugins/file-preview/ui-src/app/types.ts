@@ -1,4 +1,3 @@
-import type { PreviewerId } from "../../src/previewers.js";
 import type { MessageKey } from "./frame.js";
 
 /** The file the person is previewing, as the outer page sent it over the bridge. */
@@ -9,12 +8,15 @@ export interface PreviewFile {
   data: ArrayBuffer;
 }
 
+/** The workers that answer through `serve()` (pdf.js's worker is started with `startWorker`). */
+export type ServedWorkerId = "code" | "zip" | "sheet" | "docx";
+
 /**
  * Runs `input` through the worker of a previewer (a blob-URL worker, terminated on budget or
  * abort) and resolves with its output.
  */
 export type RunInWorker = <I, O>(
-  worker: PreviewerId | "pdfjs",
+  worker: ServedWorkerId,
   input: I,
   opts?: { budgetMs?: number; transfer?: Transferable[] },
 ) => Promise<O>;

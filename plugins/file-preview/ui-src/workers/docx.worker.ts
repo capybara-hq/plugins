@@ -4,8 +4,9 @@
  */
 import mammoth from "mammoth";
 import type { DocxInput, DocxOutput } from "../shared/docx.js";
+import { MAX_ENTRIES } from "../shared/zip.js";
 import { serve } from "./serve.js";
-import { MAX_ENTRIES, verifyArchive } from "./zip.logic.js";
+import { verifyArchive } from "./zip.logic.js";
 
 /** A docx is a zip: `verifyArchive` proves it within these before mammoth (JSZip) touches it. */
 export const ENTRY_MAX = 50 * 1024 * 1024;

@@ -1,4 +1,11 @@
-/** The `zip` worker's wire types (shared by the app and the worker TypeScript projects). */
+/** The `zip` worker's wire types and limits (shared by the app and the worker TypeScript projects). */
+
+/** Central directory records read; the listing stops here, whatever the end record says. */
+export const MAX_ENTRIES = 10_000;
+/** The largest entry the previewer inflates, by its declared size. */
+export const ENTRY_LIMIT = 20 * 1024 * 1024;
+/** Decompressed bytes per opened archive (the renderer keeps the running total). */
+export const ARCHIVE_LIMIT = 100 * 1024 * 1024;
 
 /** Why a worker refused: the renderer words each code (zh / en). */
 export type ZipErrorCode =

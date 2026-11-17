@@ -15,19 +15,15 @@
  * and fails when it leaves 3.10.x, so an upgrade forces a re-check of those rules.
  */
 import { Inflate } from "fflate";
-import type {
-  ZipEntry,
-  ZipErrorCode,
-  ZipExtractInput,
-  ZipListInput,
-  ZipListOutput,
+import {
+  ENTRY_LIMIT,
+  MAX_ENTRIES,
+  type ZipEntry,
+  type ZipErrorCode,
+  type ZipExtractInput,
+  type ZipListInput,
+  type ZipListOutput,
 } from "../shared/zip.js";
-
-export const MAX_ENTRIES = 10_000;
-/** The largest entry the previewer inflates, by its declared size. */
-export const ENTRY_LIMIT = 20 * 1024 * 1024;
-/** Decompressed bytes per opened archive. */
-export const ARCHIVE_LIMIT = 100 * 1024 * 1024;
 
 const EOCD_SIG = 0x06054b50;
 const CD_SIG = 0x02014b50;

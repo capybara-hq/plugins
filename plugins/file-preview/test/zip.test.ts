@@ -5,15 +5,16 @@ import { PREVIEWERS } from "../src/previewers.js";
 import { translator } from "../ui-src/app/frame.js";
 import type { PreviewFile, RenderContext } from "../ui-src/app/types.js";
 import { createRender, EXTENSIONS, render } from "../ui-src/renderers/zip.js";
-import type { ZipExtractInput, ZipInput, ZipListOutput } from "../ui-src/shared/zip.js";
-import { highlight } from "../ui-src/workers/code.logic.js";
 import {
   ARCHIVE_LIMIT,
   ENTRY_LIMIT,
-  extractEntry,
-  listEntries,
   MAX_ENTRIES,
-} from "../ui-src/workers/zip.logic.js";
+  type ZipExtractInput,
+  type ZipInput,
+  type ZipListOutput,
+} from "../ui-src/shared/zip.js";
+import { highlight } from "../ui-src/workers/code.logic.js";
+import { extractEntry, listEntries } from "../ui-src/workers/zip.logic.js";
 
 const MiB = 1024 * 1024;
 

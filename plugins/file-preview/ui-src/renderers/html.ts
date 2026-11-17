@@ -6,6 +6,7 @@ import { showEmpty, showError, workerReason } from "../app/frame.js";
 import { mountSanitized, sanitizeHtml } from "../app/sanitize.js";
 import { THEME } from "../app/theme.js";
 import type { RenderContext, Renderer } from "../app/types.js";
+import { decodeText } from "../shared/language.js";
 import { mountCode } from "./code.js";
 
 const STRINGS = {
@@ -36,7 +37,8 @@ const render: Renderer = async (file, ctx) => {
   }
   const doc = ctx.root.ownerDocument;
   const s = STRINGS[ctx.locale];
-  const text = new TextDecoder("utf-8").decode(file.data);
+  // BOM / UTF-16 / GB18030 detection, like the code previewer
+  const text = decodeText(file.data);
   const result = sanitizeHtml(text, doc);
   if (ctx.signal.aborted) return;
 

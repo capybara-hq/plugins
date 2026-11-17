@@ -11,9 +11,8 @@
  * terminated as soon as it answered, failed, ran out of budget or the host was disposed; nothing it
  * sends afterwards reaches the caller.
  */
-import type { PreviewerId } from "../../src/previewers.js";
 import type { WorkerRequest, WorkerResponse } from "../shared/protocol.js";
-import type { RunInWorker } from "./types.js";
+import type { RunInWorker, ServedWorkerId } from "./types.js";
 
 /** The budget of one run when the caller sets none. */
 export const DEFAULT_WORKER_BUDGET_MS = 20_000;
@@ -117,7 +116,7 @@ export function createWorkerHost(deps: WorkerHostDeps): WorkerHost {
   };
 
   const run = (<I, O>(
-    worker: PreviewerId | "pdfjs",
+    worker: ServedWorkerId,
     input: I,
     opts: { budgetMs?: number; transfer?: Transferable[] } = {},
   ): Promise<O> => {

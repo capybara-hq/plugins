@@ -11,20 +11,21 @@
  * A zip inside the archive opens one level deep; a zip inside that is listed but not opened.
  */
 import type { PreviewerId } from "../../src/previewers.js";
-import { showEmpty, workerReason } from "../app/frame.js";
+import { formatCount, mib, showEmpty, workerReason } from "../app/frame.js";
 import { THEME } from "../app/theme.js";
 import type { PreviewFile, RenderContext, Renderer } from "../app/types.js";
-import type {
-  ZipEntry,
-  ZipErrorCode,
-  ZipExtractInput,
-  ZipExtractOutput,
-  ZipListInput,
-  ZipListOutput,
+import {
+  ARCHIVE_LIMIT,
+  ENTRY_LIMIT,
+  MAX_ENTRIES,
+  type ZipEntry,
+  type ZipErrorCode,
+  type ZipExtractInput,
+  type ZipExtractOutput,
+  type ZipListInput,
+  type ZipListOutput,
 } from "../shared/zip.js";
 
-const ARCHIVE_LIMIT = 100 * 1024 * 1024;
-const ENTRY_LIMIT = 20 * 1024 * 1024;
 /** Above this many entries only the first level of folders starts open. */
 const OPEN_ALL_UP_TO = 500;
 const MAX_NESTING = 1;
@@ -32,11 +33,11 @@ const MAX_NESTING = 1;
 const STRINGS = {
   zh: {
     invalid: "这不是有效的压缩包（文件已损坏，或扩展名与内容不符）",
-    truncated: "压缩包内条目过多，仅列出前 10 000 项",
+    truncated: `压缩包内条目过多，仅列出前 ${formatCount(MAX_ENTRIES, "zh")} 项`,
     locked: "已加密",
     encrypted: "此条目已加密，无法预览",
-    tooLarge: "此条目超过 20 MiB，无法预览",
-    limit: "已达到此压缩包的解压上限（100 MiB）",
+    tooLarge: `此条目超过 ${mib(ENTRY_LIMIT)} MiB，无法预览`,
+    limit: `已达到此压缩包的解压上限（${mib(ARCHIVE_LIMIT)} MiB）`,
     nested: "不再展开压缩包中的压缩包",
     noPreview: "此类型的文件无法预览",
     loading: "正在读取…",
@@ -48,11 +49,11 @@ const STRINGS = {
   },
   en: {
     invalid: "This is not a valid zip archive (the file is corrupt or not what its name says)",
-    truncated: "The archive has too many entries: showing the first 10,000",
+    truncated: `The archive has too many entries: showing the first ${formatCount(MAX_ENTRIES, "en")}`,
     locked: "Encrypted",
     encrypted: "This entry is encrypted and cannot be previewed",
-    tooLarge: "This entry is larger than 20 MiB and cannot be previewed",
-    limit: "This archive reached its decompression limit (100 MiB)",
+    tooLarge: `This entry is larger than ${mib(ENTRY_LIMIT)} MiB and cannot be previewed`,
+    limit: `This archive reached its decompression limit (${mib(ARCHIVE_LIMIT)} MiB)`,
     nested: "An archive inside an archive is not opened",
     noPreview: "This file type cannot be previewed",
     loading: "Reading…",
@@ -499,7 +500,6 @@ async function renderArchive(
   };
   mount(buildTree(listing.entries), treeEl, 0);
 
-  ctx.root.dataset.state = "ready";
   ctx.root.replaceChildren(wrap);
 }
 

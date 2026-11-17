@@ -3,20 +3,20 @@
  * `MAX_ROWS` x `MAX_COLS` per sheet and `MAX_CELLS` per workbook.
  */
 import ExcelJS from "exceljs";
-import type { SheetData, SheetInput, SheetMerge, SheetOutput } from "../shared/sheet.js";
+import {
+  MAX_CELLS,
+  MAX_COLS,
+  MAX_ENTRY_BYTES,
+  MAX_ROWS,
+  MAX_TOTAL_BYTES,
+  type SheetData,
+  type SheetInput,
+  type SheetMerge,
+  type SheetOutput,
+} from "../shared/sheet.js";
+import { MAX_ENTRIES } from "../shared/zip.js";
 import { serve } from "./serve.js";
-import { MAX_ENTRIES, verifyArchive } from "./zip.logic.js";
-
-export const MAX_ROWS = 100_000;
-export const MAX_COLS = 200;
-/**
- * One entry's declared (and verified) uncompressed size, and the total, beyond which we refuse.
- * A sheet is one entry: a 20 MiB numeric workbook inflates its sheet to about 80 MiB (ruling R22).
- */
-export const MAX_ENTRY_BYTES = 120 * 1024 * 1024;
-export const MAX_TOTAL_BYTES = 150 * 1024 * 1024;
-/** Cells (values) kept across all sheets of one workbook. */
-export const MAX_CELLS = 2_000_000;
+import { verifyArchive } from "./zip.logic.js";
 
 /** Column letters ("AB") to a 0-based index. */
 function colIndex(letters: string): number {

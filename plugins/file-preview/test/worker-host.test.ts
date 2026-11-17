@@ -223,7 +223,7 @@ describe("createWorkerHost", () => {
   it("no answer within budgetMs: WorkerTimeoutError and the worker is terminated", async () => {
     vi.useFakeTimers();
     const { host } = setup(quickImport);
-    const result = host.run("pdf", 1, { budgetMs: 10_000 });
+    const result = host.run("sheet", 1, { budgetMs: 10_000 });
     const caught = result.catch((e: unknown) => e);
     const w = await startedNow();
     await vi.advanceTimersByTimeAsync(9_999);
@@ -314,12 +314,12 @@ describe("createWorkerHost", () => {
     expect(importModule).toHaveBeenCalledTimes(1);
     // one blob URL per worker, each revoked once its worker started
     expect(revokeObjectURL.mock.calls.map((c) => c[0])).toEqual([w1.url, w2.url, w3.url]);
-    const d = host.run("pdfjs", 4);
+    const d = host.run("zip", 4);
     const w4 = await started(4);
     w4.answer({ id: w4.lastId, ok: true, output: "d" });
     await d;
     expect(importModule).toHaveBeenCalledTimes(2);
-    expect(importModule).toHaveBeenLastCalledWith(`${BASE}pdfjs.worker.js`);
+    expect(importModule).toHaveBeenLastCalledWith(`${BASE}zip.worker.js`);
     host.dispose();
   });
 
@@ -330,9 +330,9 @@ describe("createWorkerHost", () => {
       if (fail) throw new TypeError(`error loading dynamically imported module: ${url}`);
       return { default: SCRIPT };
     });
-    await expect(host.run("svg", 1)).rejects.toThrow(/svg\.worker\.js/);
+    await expect(host.run("docx", 1)).rejects.toThrow(/docx\.worker\.js/);
     fail = false;
-    const result = host.run("svg", 1);
+    const result = host.run("docx", 1);
     const w = await started(1);
     w.answer({ id: w.lastId, ok: true, output: "ok" });
     await expect(result).resolves.toBe("ok");
@@ -342,7 +342,7 @@ describe("createWorkerHost", () => {
 
   it("a module without a string default export rejects the run", async () => {
     const { host } = setup(async () => ({ default: 42 }));
-    await expect(host.run("html", 1)).rejects.toThrow(/html\.worker\.js.*no worker source/);
+    await expect(host.run("zip", 1)).rejects.toThrow(/zip\.worker\.js.*no worker source/);
     expect(FakeWorker.instances).toEqual([]);
     host.dispose();
   });

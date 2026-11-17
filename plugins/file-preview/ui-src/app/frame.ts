@@ -42,6 +42,14 @@ export function workerReason(e: unknown, locale: "zh" | "en"): string {
   return detail === "" ? failed : `${failed}: ${detail}`;
 }
 
+/** `n` with thousands separators: "100 000" in zh, "100,000" in en. */
+export function formatCount(n: number, locale: "zh" | "en"): string {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, locale === "zh" ? " " : ",");
+}
+
+/** Bytes as whole MiB ("20"). */
+export const mib = (bytes: number): string => String(Math.round(bytes / (1024 * 1024)));
+
 function line(doc: Document, className: string, text: string, role?: string): HTMLElement {
   const el = doc.createElement("div");
   el.className = className;
@@ -62,12 +70,7 @@ export function showEmpty(root: HTMLElement, t: Translate): void {
 }
 
 /** The reason is agent- or file-derived text: it only ever goes in through `textContent`. */
-export function showError(
-  root: HTMLElement,
-  t: Translate,
-  reason: string,
-  onDownloadHint?: () => void,
-): void {
+export function showError(root: HTMLElement, t: Translate, reason: string): void {
   const doc = root.ownerDocument;
   root.dataset.state = "error";
   const box = doc.createElement("div");
@@ -79,5 +82,4 @@ export function showError(
     line(doc, "cap-error-hint", t("downloadHint")),
   );
   root.replaceChildren(box);
-  onDownloadHint?.();
 }

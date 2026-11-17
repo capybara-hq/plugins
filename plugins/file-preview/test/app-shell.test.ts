@@ -305,6 +305,10 @@ describe("the main flow", () => {
     post(init);
     post(fileMsg());
     await vi.waitFor(() => expect(text()).toBe("painted"));
+    // the shell marks success on its status layer, like loading / empty / error
+    expect((document.querySelector("#root > .cap-status") as HTMLElement).dataset.state).toBe(
+      "ready",
+    );
     window.dispatchEvent(new ErrorEvent("error", { message: "late" }));
     const rejection = new Event("unhandledrejection") as PromiseRejectionEvent;
     Object.defineProperty(rejection, "reason", { value: new Error("later") });

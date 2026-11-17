@@ -132,6 +132,8 @@ export function startApp(deps: AppDeps = {}): () => void {
       await Promise.race([renderer(file, ctx), timeout]);
       if (!failed) {
         rendered = true;
+        // loading / empty / error are set on the status layer by frame.ts; success too
+        status.dataset.state = "ready";
         status.replaceChildren();
         status.style.display = "none";
         content.style.visibility = "";

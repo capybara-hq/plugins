@@ -154,7 +154,6 @@ export async function mountCode(
   body.className = "cap-code-body";
   paint(doc, body, result.lines);
   wrap.append(bar, body);
-  root.dataset.state = "ready";
   root.replaceChildren(wrap);
 
   // a theme switch re-colors the tokens without a reload; a failed re-run keeps the old colors

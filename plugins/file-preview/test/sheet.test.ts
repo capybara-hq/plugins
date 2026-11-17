@@ -5,12 +5,8 @@ import { translator } from "../ui-src/app/frame.js";
 import type { PreviewFile, RenderContext } from "../ui-src/app/types.js";
 import { render } from "../ui-src/renderers/sheet.js";
 import type { SheetInput, SheetOutput } from "../ui-src/shared/sheet.js";
-import {
-  formatDate,
-  MAX_ENTRY_BYTES,
-  MAX_TOTAL_BYTES,
-  parseWorkbook,
-} from "../ui-src/workers/sheet.worker.js";
+import { MAX_ENTRY_BYTES, MAX_TOTAL_BYTES } from "../ui-src/shared/sheet.js";
+import { formatDate, parseWorkbook } from "../ui-src/workers/sheet.worker.js";
 import {
   ab,
   decoyDirectory,

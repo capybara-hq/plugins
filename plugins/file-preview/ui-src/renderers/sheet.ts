@@ -1,24 +1,31 @@
 /** Spreadsheet previewer: tabs of sheets, each a virtualized table with column letters on top. */
-import { showEmpty, workerReason } from "../app/frame.js";
+import { formatCount, showEmpty, workerReason } from "../app/frame.js";
 import { THEME } from "../app/theme.js";
 import type { RenderContext, Renderer } from "../app/types.js";
-import type { SheetData, SheetInput, SheetOutput } from "../shared/sheet.js";
+import {
+  MAX_CELLS,
+  MAX_COLS,
+  MAX_ROWS,
+  type SheetData,
+  type SheetInput,
+  type SheetOutput,
+} from "../shared/sheet.js";
 
 const STRINGS = {
   zh: {
-    truncatedRows: "仅显示每个工作表的前 100 000 行",
-    truncatedCols: "仅显示每个工作表的前 200 列",
+    truncatedRows: `仅显示每个工作表的前 ${formatCount(MAX_ROWS, "zh")} 行`,
+    truncatedCols: `仅显示每个工作表的前 ${formatCount(MAX_COLS, "zh")} 列`,
     emptySheet: "此工作表为空",
-    truncatedCells: "单元格过多，仅显示前 2 000 000 个单元格",
+    truncatedCells: `单元格过多，仅显示前 ${formatCount(MAX_CELLS, "zh")} 个单元格`,
     hidden: "隐藏的工作表",
     tooLarge: "此工作簿解压后过大，无法预览",
     invalid: "这不是有效的 .xlsx 工作簿（文件已损坏，或扩展名与内容不符）",
   },
   en: {
-    truncatedRows: "Showing only the first 100,000 rows of each sheet",
-    truncatedCols: "Showing only the first 200 columns of each sheet",
+    truncatedRows: `Showing only the first ${formatCount(MAX_ROWS, "en")} rows of each sheet`,
+    truncatedCols: `Showing only the first ${formatCount(MAX_COLS, "en")} columns of each sheet`,
     emptySheet: "This sheet is empty",
-    truncatedCells: "Too many cells: showing only the first 2,000,000",
+    truncatedCells: `Too many cells: showing only the first ${formatCount(MAX_CELLS, "en")}`,
     hidden: "Hidden sheet",
     tooLarge: "This workbook is too large once unpacked to preview",
     invalid: "This is not a valid .xlsx workbook (the file is corrupt or not what its name says)",

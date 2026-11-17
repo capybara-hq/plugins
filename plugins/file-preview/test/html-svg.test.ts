@@ -111,6 +111,24 @@ describe("html renderer", () => {
     expect(codeCtx.signal.aborted).toBe(true);
   });
 
+  it("decodes a UTF-16 page (BOM) like the code previewer", async () => {
+    const ctx = context();
+    const src = "<p>你好</p>";
+    const bytes = new Uint8Array(2 + src.length * 2);
+    bytes.set([0xff, 0xfe]);
+    for (let i = 0; i < src.length; i++) {
+      bytes[2 + i * 2] = src.charCodeAt(i) & 0xff;
+      bytes[3 + i * 2] = src.charCodeAt(i) >> 8;
+    }
+    const data = bytes.buffer as ArrayBuffer;
+    await renderHtml(
+      { name: "page.html", contentType: "text/html", size: data.byteLength, data },
+      ctx,
+    );
+    const host = ctx.root.querySelector(".cap-html-host");
+    expect(host?.shadowRoot?.querySelector("p")?.textContent).toBe("你好");
+  });
+
   it("shows a source failure inside the source pane", async () => {
     const ctx = context();
     mountCode.mockRejectedValueOnce(new Error("highlighter broke"));
