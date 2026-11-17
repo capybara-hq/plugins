@@ -132,7 +132,7 @@
     },
     {
       "name": "object-store-s3",
-      "version": "0.1.0-rc.9",
+      "version": "0.1.0-rc.10",
       "summary": {
         "en": "Object storage (object-store@1) on any S3-compatible service (AWS S3, MinIO, Ceph, OSS, TOS, ...) using the official @aws-sdk/client-s3"
       },
@@ -162,8 +162,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-object-store-s3",
-          "version": "0.1.0-rc.9",
-          "integrity": "sha512-yqW5gM5+4sdY/nJWDyu7ltDLdUm6b4q9+R/yrCLJhMRCI7HQbxeqDWky29EiDjjsJD5BaiQ6N3a5Ua75ANll7g=="
+          "version": "0.1.0-rc.10",
+          "integrity": "sha512-uzpvEixkXcngBr33iXSgsupTGG8wLkLTo9JeA134rCeknrUX1IhkfkJKw6L2mwpnefyuBwt9l/vb+eiSZrZXCw=="
         }
       }
     },
