@@ -5,7 +5,7 @@ import { translator } from "../ui-src/app/frame.js";
 import type { PreviewFile, RenderContext } from "../ui-src/app/types.js";
 import { render } from "../ui-src/renderers/sheet.js";
 import type { SheetInput, SheetOutput } from "../ui-src/shared/sheet.js";
-import { parseWorkbook } from "../ui-src/workers/sheet.worker.js";
+import { formatDate, parseWorkbook } from "../ui-src/workers/sheet.worker.js";
 
 async function toBuffer(wb: ExcelJS.Workbook): Promise<ArrayBuffer> {
   const buf = (await wb.xlsx.writeBuffer()) as ArrayBuffer;
@@ -32,17 +32,18 @@ function makeCtx(file: PreviewFile) {
   const root = document.createElement("div");
   document.body.append(root);
   const errors: string[] = [];
+  const life = new AbortController();
   const ctx: RenderContext = {
     root,
     locale: "en",
     signal: new AbortController().signal,
-    lifetime: new AbortController().signal,
+    lifetime: life.signal,
     t: translator("en"),
     runInWorker: (async <I, O>(_w: string, input: I) =>
       (await parseWorkbook(input as SheetInput)) as unknown as O) as RenderContext["runInWorker"],
     showError: (r) => errors.push(r),
   };
-  return { ctx, root, errors, file };
+  return { ctx, root, errors, file, life };
 }
 
 const fileOf = (data: ArrayBuffer): PreviewFile => ({
@@ -84,9 +85,9 @@ describe("parseWorkbook", () => {
     expect(s.truncatedRows).toBe(false);
   });
 
-  it("rejects CSV text renamed .xlsx with a reason", async () => {
+  it("flags CSV text renamed .xlsx as invalid", async () => {
     const data = new TextEncoder().encode("a,b\n1,2\n").buffer as ArrayBuffer;
-    await expect(parseWorkbook({ data })).rejects.toThrow(/not a valid \.xlsx/);
+    expect((await parseWorkbook({ data })).error).toBe("invalid");
   });
 });
 
@@ -142,7 +143,7 @@ describe("sheet renderer", () => {
     const f = fileOf(data);
     const { ctx, errors } = makeCtx(f);
     await render(f, ctx);
-    expect(errors[0]).toMatch(/not a valid \.xlsx/);
+    expect(errors[0]).toContain("not a valid .xlsx");
   });
 
   it("shows the empty state for 0 bytes", async () => {
@@ -151,5 +152,112 @@ describe("sheet renderer", () => {
     await render(f, ctx);
     expect(errors).toEqual([]);
     expect(root.querySelector(".cap-empty")?.textContent).toBe("Empty file");
+  });
+});
+
+describe("formatDate", () => {
+  const d = new Date(Date.UTC(2024, 0, 5, 14, 7, 9));
+  it("shows nothing derived from an invalid date", () => {
+    expect(formatDate(new Date(Number.NaN), "yyyy-mm-dd")).toBe("");
+  });
+  it("uses English month and weekday names", () => {
+    expect(formatDate(d, "d-mmm-yy")).toBe("5-Jan-24");
+    expect(formatDate(d, "mmmm d, yyyy")).toBe("January 5, 2024");
+    expect(formatDate(d, "dddd")).toBe("Friday");
+    expect(formatDate(d, "ddd")).toBe("Fri");
+    expect(formatDate(d, "mmm")).toBe("Jan");
+    expect(formatDate(d, "mmmmm")).toBe("J");
+  });
+  it("tells minutes from months", () => {
+    expect(formatDate(d, "hh:mm:ss")).toBe("14:07:09");
+    expect(formatDate(d, "mm/dd/yy")).toBe("01/05/24");
+    expect(formatDate(d, "h:mm AM/PM")).toBe("2:07 PM");
+  });
+});
+
+describe("parseWorkbook limits and flags", () => {
+  it("returns an error code, not a message, for a non-workbook", async () => {
+    const data = new TextEncoder().encode("a,b").buffer as ArrayBuffer;
+    expect(await parseWorkbook({ data })).toEqual({ sheets: [], error: "invalid" });
+  });
+
+  it("marks hidden sheets", async () => {
+    const wb = new ExcelJS.Workbook();
+    wb.addWorksheet("Shown").addRow([1]);
+    wb.addWorksheet("Secret", { state: "hidden" }).addRow([2]);
+    const out = await parseWorkbook({ data: await toBuffer(wb) });
+    expect(out.sheets.map((s) => s.hidden)).toEqual([false, true]);
+  });
+
+  it("does not flag truncated rows when rows past the limit hold no values", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S");
+    ws.addRow([1]);
+    ws.getRow(100_005).height = 30;
+    const s = (await parseWorkbook({ data: await toBuffer(wb) })).sheets[0];
+    expect(s?.truncatedRows).toBe(false);
+  });
+
+  it("stops at the workbook-wide cell budget and says so", async () => {
+    const wb = new ExcelJS.Workbook();
+    for (const name of ["One", "Two"]) {
+      const ws = wb.addWorksheet(name);
+      for (let i = 0; i < 10; i++) ws.addRow([i, i]);
+    }
+    const out = await parseWorkbook({ data: await toBuffer(wb) }, 25);
+    const [one, two] = out.sheets;
+    expect(one?.truncatedCells).toBe(false);
+    expect(two?.truncatedCells).toBe(true);
+    expect(two?.rows.flat().length).toBeLessThan(20);
+  });
+});
+
+describe("sheet renderer layout", () => {
+  const widths = (root: HTMLElement) =>
+    [...root.querySelectorAll<HTMLElement>("col")].map((c) => c.style.width);
+
+  it("fixes column widths up front: scrolling to a longer cell does not change them", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("W");
+    for (let i = 1; i <= 3000; i++) ws.addRow([i, i === 2500 ? "x".repeat(200) : "ab"]);
+    const f = fileOf(await toBuffer(wb));
+    const { ctx, root } = makeCtx(f);
+    await render(f, ctx);
+    const before = widths(root);
+    expect(before.length).toBe(3);
+    expect(root.querySelector<HTMLElement>("table")?.style.tableLayout).not.toBe("auto");
+    const sc = root.querySelector<HTMLElement>(".cap-sheet-scroll") as HTMLElement;
+    sc.scrollTop = 2490 * 24;
+    sc.dispatchEvent(new Event("scroll"));
+    expect(root.textContent).toContain("x".repeat(200));
+    expect(widths(root)).toEqual(before);
+  });
+
+  it("marks hidden tabs with a title", async () => {
+    const wb = new ExcelJS.Workbook();
+    wb.addWorksheet("A").addRow([1]);
+    wb.addWorksheet("B", { state: "hidden" }).addRow([1]);
+    const f = fileOf(await toBuffer(wb));
+    const { ctx, root } = makeCtx(f);
+    await render(f, ctx);
+    const tabs = root.querySelectorAll<HTMLButtonElement>(".cap-sheet-tab");
+    expect(tabs[0]?.title).toBe("");
+    expect(tabs[1]?.title).toBe("Hidden sheet");
+  });
+
+  it("stops listening when the lifetime aborts, and keeps file.data usable", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Big");
+    for (let i = 1; i <= 2000; i++) ws.addRow([`row-${i}`]);
+    const f = fileOf(await toBuffer(wb));
+    const size = f.data.byteLength;
+    const { ctx, root, life } = makeCtx(f);
+    await render(f, ctx);
+    expect(f.data.byteLength).toBe(size);
+    life.abort();
+    const sc = root.querySelector<HTMLElement>(".cap-sheet-scroll") as HTMLElement;
+    sc.scrollTop = 1500 * 24;
+    sc.dispatchEvent(new Event("scroll"));
+    expect(root.textContent).not.toContain("row-1500");
   });
 });

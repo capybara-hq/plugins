@@ -1,5 +1,5 @@
 /** Spreadsheet previewer: tabs of sheets, each a virtualized table with column letters on top. */
-import type { MessageKey } from "../app/frame.js";
+import { showEmpty } from "../app/frame.js";
 import { THEME } from "../app/theme.js";
 import type { RenderContext, Renderer } from "../app/types.js";
 import type { SheetData, SheetInput, SheetOutput } from "../shared/sheet.js";
@@ -9,11 +9,17 @@ const STRINGS = {
     truncatedRows: "仅显示每个工作表的前 100 000 行",
     truncatedCols: "仅显示每个工作表的前 200 列",
     emptySheet: "此工作表为空",
+    truncatedCells: "单元格过多，仅显示前 2 000 000 个单元格",
+    hidden: "隐藏的工作表",
+    invalid: "这不是有效的 .xlsx 工作簿（文件已损坏，或扩展名与内容不符）",
   },
   en: {
     truncatedRows: "Showing only the first 100,000 rows of each sheet",
     truncatedCols: "Showing only the first 200 columns of each sheet",
     emptySheet: "This sheet is empty",
+    truncatedCells: "Too many cells: showing only the first 2,000,000",
+    hidden: "Hidden sheet",
+    invalid: "This is not a valid .xlsx workbook (the file is corrupt or not what its name says)",
   },
 } as const;
 
@@ -25,12 +31,14 @@ const STYLE = `
 .cap-sheet-body{flex:1;min-height:0;display:flex;flex-direction:column}
 .cap-sheet-note{padding:4px 12px;font-size:12px;opacity:.7;flex:none}
 .cap-sheet-scroll{flex:1;min-height:0;overflow:auto}
-.cap-sheet-table{border-collapse:separate;border-spacing:0;font-size:13px;table-layout:auto}
-.cap-sheet-table td,.cap-sheet-table th{border-right:1px solid ${THEME.border};border-bottom:1px solid ${THEME.border};padding:0 8px;white-space:nowrap;max-width:360px;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box}
+.cap-sheet-table{border-collapse:separate;border-spacing:0;font-size:13px;table-layout:fixed}
+.cap-sheet-table td,.cap-sheet-table th{border-right:1px solid ${THEME.border};border-bottom:1px solid ${THEME.border};padding:0 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box}
 .cap-sheet-table thead th{position:sticky;top:0;z-index:2;background:${THEME.background};font-weight:500}
 .cap-sheet-table .cap-sheet-rownum,.cap-sheet-table .cap-sheet-corner{position:sticky;left:0;z-index:1;background:${THEME.background};font-weight:400;opacity:.8;text-align:right}
 .cap-sheet-table thead .cap-sheet-corner{z-index:3}
 .cap-sheet-merged{text-align:center}
+.cap-sheet-tab.cap-hidden{opacity:.55;font-style:italic}
+.cap-sheet-spacer td{padding:0;border:0}
 `;
 
 /** Row height in px; the window of rows is computed from it, not measured. */
@@ -38,6 +46,10 @@ export const ROW_HEIGHT = 24;
 const OVERSCAN = 10;
 const FALLBACK_VIEWPORT = 600;
 const MIN_COLS = 1;
+const WIDTH_SAMPLE_ROWS = 200;
+const MIN_COL_PX = 48;
+const MAX_COL_PX = 320;
+const ROWNUM_PX = 56;
 
 function letters(i: number): string {
   let s = "";
@@ -59,19 +71,39 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return e;
 }
 
+/** Pixel width of each column from the header and the first rows, fixed for the whole sheet. */
+export function columnWidths(rows: string[][], nCols: number): number[] {
+  const widths: number[] = [];
+  for (let c = 0; c < nCols; c++) {
+    let chars = letters(c).length;
+    for (let r = 0; r < Math.min(rows.length, WIDTH_SAMPLE_ROWS); r++) {
+      const text = rows[r]?.[c] ?? "";
+      let n = 0;
+      for (const ch of text) n += (ch.codePointAt(0) ?? 0) > 0x2e7f ? 2 : 1;
+      if (n > chars) chars = n;
+    }
+    widths.push(Math.min(MAX_COL_PX, Math.max(MIN_COL_PX, chars * 8 + 16)));
+  }
+  return widths;
+}
+
 function mountSheet(
   sheet: SheetData,
   host: HTMLElement,
   s: (typeof STRINGS)["en"] | (typeof STRINGS)["zh"],
+  signal: AbortSignal,
 ): void {
   const doc = host.ownerDocument;
   host.replaceChildren();
   const notes = [
     sheet.truncatedRows ? s.truncatedRows : "",
     sheet.truncatedCols ? s.truncatedCols : "",
+    sheet.truncatedCells ? s.truncatedCells : "",
   ].filter((n) => n !== "");
   for (const n of notes) host.append(el(doc, "div", "cap-sheet-note", n));
-  const nCols = Math.max(MIN_COLS, ...sheet.rows.map((r) => r.length));
+  let nCols = MIN_COLS;
+  for (const r of sheet.rows) nCols = Math.max(nCols, r.length);
+  for (const m of sheet.merges) nCols = Math.max(nCols, m.c2 + 1);
   if (sheet.rows.length === 0) {
     host.append(el(doc, "div", "cap-state cap-empty", s.emptySheet));
     return;
@@ -89,8 +121,21 @@ function mountSheet(
 
   const scroller = el(doc, "div", "cap-sheet-scroll");
   const table = el(doc, "table", "cap-sheet-table");
+  const widths = columnWidths(sheet.rows, nCols);
+  const colgroup = el(doc, "colgroup");
+  const numCol = el(doc, "col");
+  numCol.style.width = `${ROWNUM_PX}px`;
+  colgroup.append(numCol);
+  for (const w of widths) {
+    const col = el(doc, "col");
+    col.style.width = `${w}px`;
+    colgroup.append(col);
+  }
+  table.style.width = `${ROWNUM_PX + widths.reduce((a, b) => a + b, 0)}px`;
+  table.append(colgroup);
   const thead = el(doc, "thead");
   const headRow = el(doc, "tr");
+  headRow.style.height = `${ROW_HEIGHT}px`;
   headRow.append(el(doc, "th", "cap-sheet-corner"));
   for (let c = 0; c < nCols; c++) headRow.append(el(doc, "th", "cap-sheet-col", letters(c)));
   thead.append(headRow);
@@ -101,7 +146,10 @@ function mountSheet(
 
   const spacer = (h: number): HTMLTableRowElement => {
     const tr = el(doc, "tr", "cap-sheet-spacer");
-    tr.style.height = `${h}px`;
+    const td = el(doc, "td");
+    td.colSpan = nCols + 1;
+    td.style.height = `${h}px`;
+    tr.append(td);
     return tr;
   };
 
@@ -131,7 +179,12 @@ function mountSheet(
   const paint = () => {
     const viewport = scroller.clientHeight > 0 ? scroller.clientHeight : FALLBACK_VIEWPORT;
     const start = Math.max(0, Math.floor(scroller.scrollTop / ROW_HEIGHT) - OVERSCAN);
-    const end = Math.min(total, Math.ceil((scroller.scrollTop + viewport) / ROW_HEIGHT) + OVERSCAN);
+    // the sticky header covers the first ROW_HEIGHT px of the viewport and the first row starts
+    // below it, so the rows in view end at (scrollTop + viewport) / ROW_HEIGHT - 1
+    const end = Math.min(
+      total,
+      Math.ceil((scroller.scrollTop + viewport) / ROW_HEIGHT - 1) + OVERSCAN,
+    );
     if (start === first && end === last) return;
     first = start;
     last = end;
@@ -140,7 +193,9 @@ function mountSheet(
     nodes.push(spacer((total - end) * ROW_HEIGHT));
     tbody.replaceChildren(...nodes);
   };
-  scroller.addEventListener("scroll", paint);
+  // listeners go when the sheet is replaced or the preview ends
+  scroller.addEventListener("scroll", paint, { signal });
+  doc.defaultView?.addEventListener("resize", paint, { signal });
   paint();
 }
 
@@ -148,24 +203,26 @@ export const render: Renderer = async (file, ctx: RenderContext) => {
   const s = STRINGS[ctx.locale];
   const doc = ctx.root.ownerDocument;
   if (file.size === 0 || file.data.byteLength === 0) {
-    ctx.root.replaceChildren(el(doc, "div", "cap-state cap-empty", ctx.t("empty" as MessageKey)));
+    showEmpty(ctx.root, ctx.t);
     return;
   }
   let out: SheetOutput;
   try {
-    out = await ctx.runInWorker<SheetInput, SheetOutput>(
-      "sheet",
-      { data: file.data },
-      { transfer: [file.data] },
-    );
+    // a copy travels to the worker: transferring file.data would detach it for a retry
+    const data = file.data.slice(0);
+    out = await ctx.runInWorker<SheetInput, SheetOutput>("sheet", { data }, { transfer: [data] });
   } catch (e) {
     if (ctx.signal.aborted) return;
     ctx.showError(e instanceof Error ? e.message : String(e));
     return;
   }
   if (ctx.signal.aborted) return;
+  if (out.error === "invalid") {
+    ctx.showError(s.invalid);
+    return;
+  }
   if (out.sheets.length === 0) {
-    ctx.root.replaceChildren(el(doc, "div", "cap-state cap-empty", ctx.t("empty" as MessageKey)));
+    showEmpty(ctx.root, ctx.t);
     return;
   }
 
@@ -175,17 +232,26 @@ export const render: Renderer = async (file, ctx: RenderContext) => {
   tabs.setAttribute("role", "tablist");
   const body = el(doc, "div", "cap-sheet-body");
   const buttons: HTMLButtonElement[] = [];
+  let mounted: AbortController | undefined;
+  const stop = () => mounted?.abort();
+  ctx.lifetime.addEventListener("abort", stop, { once: true });
   const select = (i: number) => {
     buttons.forEach((b, j) => {
       b.setAttribute("aria-selected", String(i === j));
       b.classList.toggle("cap-active", i === j);
     });
-    mountSheet(out.sheets[i] as SheetData, body, s);
+    stop();
+    mounted = new AbortController();
+    mountSheet(out.sheets[i] as SheetData, body, s, mounted.signal);
   };
   out.sheets.forEach((sh, i) => {
     const b = el(doc, "button", "cap-sheet-tab", sh.name);
     b.type = "button";
     b.setAttribute("role", "tab");
+    if (sh.hidden) {
+      b.classList.add("cap-hidden");
+      b.title = s.hidden;
+    }
     b.addEventListener("click", () => select(i));
     buttons.push(b);
     tabs.append(b);

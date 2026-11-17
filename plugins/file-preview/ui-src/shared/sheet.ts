@@ -9,10 +9,14 @@ export interface SheetMerge {
 
 export interface SheetData {
   name: string;
+  /** A hidden (or very hidden) sheet in the workbook. */
+  hidden: boolean;
   rows: string[][];
   merges: SheetMerge[];
   truncatedRows: boolean;
   truncatedCols: boolean;
+  /** The workbook-wide cell budget ran out in or before this sheet. */
+  truncatedCells: boolean;
 }
 
 export interface SheetInput {
@@ -21,4 +25,6 @@ export interface SheetInput {
 
 export interface SheetOutput {
   sheets: SheetData[];
+  /** `invalid`: the file is not a readable .xlsx workbook (the renderer words the reason). */
+  error?: "invalid";
 }
