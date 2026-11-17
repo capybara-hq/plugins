@@ -63,8 +63,14 @@ function asError(e: unknown): Error {
 }
 
 export function createWorkerHost(deps: WorkerHostDeps): WorkerHost {
-  /** The source text of each worker id, imported once (a failed import is forgotten). */
+  /**
+   * The source text of each worker id, imported once. The host forgets a failed import, and an
+   * import still pending when a run's budget ran out, so the next run imports again (the browser
+   * may still answer from its module map, which can cache a failure).
+   */
   const scripts = new Map<string, Promise<Blob>>();
+  /** The cached imports that have settled successfully. */
+  const loaded = new WeakSet<Promise<Blob>>();
   /** Every unsettled run: dispose() rejects them all. */
   const pending = new Set<(e: Error) => void>();
   let disposed = false;
@@ -79,10 +85,14 @@ export function createWorkerHost(deps: WorkerHostDeps): WorkerHost {
         if (typeof mod.default !== "string") throw new Error(`${src} has no worker source`);
         return new Blob([mod.default], { type: "text/javascript" });
       })();
-      scripts.set(worker, blob);
-      blob.catch(() => {
-        if (scripts.get(worker) === blob) scripts.delete(worker);
-      });
+      const entry = blob;
+      scripts.set(worker, entry);
+      entry.then(
+        () => loaded.add(entry),
+        () => {
+          if (scripts.get(worker) === entry) scripts.delete(worker);
+        },
+      );
     }
     return blob;
   };
@@ -114,8 +124,12 @@ export function createWorkerHost(deps: WorkerHostDeps): WorkerHost {
       };
       const abort = (e: Error) => finish(() => reject(e));
       pending.add(abort);
-      // the budget covers the script fetch too
-      const timer = setTimeout(() => abort(new WorkerTimeoutError(worker, budgetMs)), budgetMs);
+      const entry = script(worker);
+      // the budget covers the script import too; a hung import is not kept for the next run
+      const timer = setTimeout(() => {
+        if (!loaded.has(entry) && scripts.get(worker) === entry) scripts.delete(worker);
+        abort(new WorkerTimeoutError(worker, budgetMs));
+      }, budgetMs);
 
       const start = (blob: Blob) => {
         if (settled) return;
@@ -144,9 +158,7 @@ export function createWorkerHost(deps: WorkerHostDeps): WorkerHost {
         const request: WorkerRequest<I> = { id, input };
         w.postMessage(request, opts.transfer ?? []);
       };
-      script(worker)
-        .then(start)
-        .catch((e: unknown) => abort(asError(e)));
+      entry.then(start).catch((e: unknown) => abort(asError(e)));
     });
   }) as RunInWorker;
 

@@ -82,6 +82,8 @@ export function startApp(deps: AppDeps = {}): () => void {
   let initialized = false;
 
   const fail = (reason: string) => {
+    // after teardown nothing is painted: the app is gone, its renderer's late errors with it
+    if (controller.signal.aborted) return;
     failed = true;
     // the file is given up: no worker keeps parsing it
     host.dispose();

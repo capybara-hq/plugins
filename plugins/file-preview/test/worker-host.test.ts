@@ -225,6 +225,40 @@ describe("createWorkerHost", () => {
     host.dispose();
   });
 
+  it("a run that times out while the import hangs drops the cached import", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const { host, importModule } = setup(() => {
+      calls++;
+      // the first import never settles; the next one does
+      return calls === 1 ? new Promise(() => {}) : Promise.resolve({ default: SCRIPT });
+    });
+    const caught = host.run("code", 1, { budgetMs: 100 }).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await caught).toBeInstanceOf(WorkerTimeoutError);
+    const result = host.run("code", 2);
+    const w = await startedNow();
+    expect(importModule).toHaveBeenCalledTimes(2);
+    w.answer({ id: w.lastId, ok: true, output: "ok" });
+    await expect(result).resolves.toBe("ok");
+    host.dispose();
+  });
+
+  it("a timeout after the import settled keeps the cached import", async () => {
+    vi.useFakeTimers();
+    const { host, importModule } = setup(quickImport);
+    const caught = host.run("code", 1, { budgetMs: 100 }).catch((e: unknown) => e);
+    await startedNow();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await caught).toBeInstanceOf(WorkerTimeoutError);
+    const next = host.run("code", 2).catch((e: unknown) => e);
+    await settle();
+    expect(FakeWorker.instances).toHaveLength(2);
+    expect(importModule).toHaveBeenCalledTimes(1);
+    host.dispose();
+    await next;
+  });
+
   it("imports the script once per worker id", async () => {
     const { host, importModule, revokeObjectURL } = setup();
     const a = host.run("code", 1);
@@ -250,7 +284,8 @@ describe("createWorkerHost", () => {
     host.dispose();
   });
 
-  it("a failed script import rejects the run and is retried by the next one", async () => {
+  // the host forgets a failed import; a browser may still serve the cached failure from its module map
+  it("a failed script import rejects the run and is not cached by the host", async () => {
     let fail = true;
     const { host, importModule } = setup(async (url) => {
       if (fail) throw new TypeError(`error loading dynamically imported module: ${url}`);
@@ -402,5 +437,28 @@ describe("startApp wiring", () => {
     w.answer({ id: w.lastId, ok: true, output: "late" });
     await settle();
     expect(paint).not.toHaveBeenCalled();
+  });
+
+  it("tearing the app down mid-render paints no error state", async () => {
+    let reached = false;
+    const renderer: Renderer = async (_f, ctx) => {
+      reached = true;
+      // rejects with WorkerDisposedError once the app is torn down
+      await ctx.runInWorker("code", "src");
+      ctx.showError("must not show");
+    };
+    const stop = startApp({
+      loadRenderer: async () => renderer,
+      importModule: async () => ({ default: SCRIPT }),
+    });
+    post(init);
+    post(file);
+    await started(1);
+    expect(reached).toBe(true);
+    stop();
+    await settle();
+    await settle();
+    expect(document.querySelector(".cap-error")).toBeNull();
+    expect(document.querySelector('[data-state="error"]')).toBeNull();
   });
 });

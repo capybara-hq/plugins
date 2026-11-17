@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -90,8 +90,17 @@ describe("buildUi", () => {
     expect(again).toEqual(manifest);
   });
 
-  it("ships the real worker directory without test-only workers", async () => {
+  it("ships exactly one module per ui-src/workers/*.worker.ts and no test-only worker", async () => {
+    const workersDir = join(import.meta.dirname, "../ui-src/workers");
+    const stems = (await readdir(workersDir))
+      .filter((f) => f.endsWith(".worker.ts"))
+      .map((f) => f.slice(0, -".worker.ts".length))
+      .sort();
     const manifest = await buildUi(await tempDir());
-    expect(Object.keys(manifest.files).filter((n) => n.endsWith(".worker.js"))).toEqual([]);
+    const shipped = Object.keys(manifest.files)
+      .filter((n) => n.endsWith(".worker.js"))
+      .map((n) => n.slice(0, -".worker.js".length));
+    expect(shipped).toEqual(stems);
+    for (const testOnly of ["echo", "hello"]) expect(shipped).not.toContain(testOnly);
   });
 });
