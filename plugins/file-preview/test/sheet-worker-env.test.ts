@@ -30,7 +30,7 @@ describe("sheet.worker.js in a worker-like context", () => {
     const ws = wb.addWorksheet("Tiny");
     ws.addRow(["a", 1]);
     ws.getCell("C1").value = { formula: "1+1", result: 2 };
-    const buf = (await wb.xlsx.writeBuffer()) as Uint8Array;
+    const buf = (await wb.xlsx.writeBuffer()) as unknown as Uint8Array;
     const data = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 
     const posted: Promise<unknown> = new Promise((resolve) => {
