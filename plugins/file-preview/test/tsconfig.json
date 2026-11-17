@@ -10,6 +10,7 @@
   },
   "include": [
     "*.test.ts",
+    "fixtures/**/*.ts",
     "../ui-src/app",
     "../ui-src/shared",
     "../ui-src/renderers",

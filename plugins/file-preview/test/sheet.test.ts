@@ -5,7 +5,12 @@ import { translator } from "../ui-src/app/frame.js";
 import type { PreviewFile, RenderContext } from "../ui-src/app/types.js";
 import { render } from "../ui-src/renderers/sheet.js";
 import type { SheetInput, SheetOutput } from "../ui-src/shared/sheet.js";
-import { formatDate, parseWorkbook } from "../ui-src/workers/sheet.worker.js";
+import {
+  formatDate,
+  MAX_ENTRY_BYTES,
+  MAX_TOTAL_BYTES,
+  parseWorkbook,
+} from "../ui-src/workers/sheet.worker.js";
 import {
   ab,
   decoyDirectory,
@@ -320,13 +325,26 @@ describe("oversized workbooks", () => {
     expect(out).toEqual({ sheets: [], error: "too-large" });
   });
 
-  it("refuses a single entry over 50 MiB", async () => {
-    expect((await parseWorkbook({ data: declared(51 * MiB) })).error).toBe("too-large");
+  it("has the R22 limits: 120 MiB per entry, 150 MiB in total", () => {
+    expect(MAX_ENTRY_BYTES).toBe(120 * MiB);
+    expect(MAX_TOTAL_BYTES).toBe(150 * MiB);
+  });
+
+  it("refuses a single entry over 120 MiB", async () => {
+    expect((await parseWorkbook({ data: declared(121 * MiB) })).error).toBe("too-large");
+  });
+
+  it("parses a workbook with a 79 MiB entry (a 20 MiB numeric xlsx inflates its sheet that far)", async () => {
+    // zeros keep the archive small and fast; verifyArchive inflates and counts all 79 MiB
+    const data = withEntries(u8(await basic()), { "xl/media/big.bin": new Uint8Array(79 * MiB) });
+    const out = await parseWorkbook({ data: ab(data) });
+    expect(out.error).toBeUndefined();
+    expect(out.sheets.map((s) => s.name)).toEqual(["Sales", "Notes"]);
   });
 
   it("is not 'too-large' for a normal workbook, and the renderer words it", async () => {
     expect((await parseWorkbook({ data: await basic() })).error).toBeUndefined();
-    const f = fileOf(declared(51 * MiB));
+    const f = fileOf(declared(121 * MiB));
     const { ctx, errors } = makeCtx(f);
     await render(f, ctx);
     expect(errors[0]).toContain("too large");

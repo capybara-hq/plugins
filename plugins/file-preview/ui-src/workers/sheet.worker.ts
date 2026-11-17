@@ -9,8 +9,11 @@ import { MAX_ENTRIES, verifyArchive } from "./zip.logic.js";
 
 export const MAX_ROWS = 100_000;
 export const MAX_COLS = 200;
-/** One entry's declared (and verified) uncompressed size, and the total, beyond which we refuse. */
-export const MAX_ENTRY_BYTES = 50 * 1024 * 1024;
+/**
+ * One entry's declared (and verified) uncompressed size, and the total, beyond which we refuse.
+ * A sheet is one entry: a 20 MiB numeric workbook inflates its sheet to about 80 MiB (ruling R22).
+ */
+export const MAX_ENTRY_BYTES = 120 * 1024 * 1024;
 export const MAX_TOTAL_BYTES = 150 * 1024 * 1024;
 /** Cells (values) kept across all sheets of one workbook. */
 export const MAX_CELLS = 2_000_000;
