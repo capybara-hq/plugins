@@ -8,6 +8,15 @@
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["node"]
   },
-  "include": ["app-shell.test.ts", "../ui-src/app", "../ui-src/renderers", "../src/previewers.ts"],
+  "include": [
+    "app-shell.test.ts",
+    "worker-host.test.ts",
+    "serve.test.ts",
+    "../ui-src/app",
+    "../ui-src/renderers",
+    "../ui-src/workers/protocol.ts",
+    "../ui-src/workers/serve.ts",
+    "../src/previewers.ts"
+  ],
   "exclude": ["../ui-src/app/tsconfig.json"]
 }

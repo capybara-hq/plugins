@@ -12,6 +12,8 @@
     "node_modules",
     "**/dist",
     "plugins/file-preview/test/app-shell.test.ts",
+    "plugins/file-preview/test/serve.test.ts",
+    "plugins/file-preview/test/worker-host.test.ts",
     "plugins/memory/test",
     "plugins/theme-cyberpunk/test"
   ]

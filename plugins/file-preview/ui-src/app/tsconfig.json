@@ -7,5 +7,5 @@
     "types": [],
     "emitDeclarationOnly": true
   },
-  "include": [".", "../renderers", "../../src/previewers.ts"]
+  "include": [".", "../renderers", "../workers/protocol.ts", "../../src/previewers.ts"]
 }

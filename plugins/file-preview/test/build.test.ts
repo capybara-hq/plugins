@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { PREVIEWERS } from "../src/previewers.js";
 import { buildUi } from "../ui-src/build.js";
@@ -58,5 +59,39 @@ describe("buildUi", () => {
     );
     expect(chunks.size).toBe(PREVIEWERS.length);
     for (const chunk of chunks) expect(Object.keys(manifest.files)).toContain(chunk);
+  });
+
+  it("ships each worker as an ES module whose default export is the worker's IIFE source", async () => {
+    const workers = await tempDir();
+    await writeFile(
+      join(workers, "hello.worker.ts"),
+      'const greet = (n: string): string => "hi " + n;\nself.postMessage(greet("there"));\n',
+    );
+    // not a worker entry: shared modules are bundled into the workers that import them
+    await writeFile(join(workers, "protocol.ts"), "export type X = number;\n");
+    const dir = await tempDir();
+    const manifest = await buildUi(dir, { workersDir: workers });
+    expect(manifest.files["hello.worker.js"]?.contentType).toBe("text/javascript; charset=utf-8");
+    expect(Object.keys(manifest.files).filter((n) => n.includes("worker"))).toEqual([
+      "hello.worker.js",
+    ]);
+    const mod = (await import(pathToFileURL(join(dir, "hello.worker.js")).href)) as {
+      default: unknown;
+    };
+    expect(typeof mod.default).toBe("string");
+    const source = mod.default as string;
+    // the source is a classic script (IIFE, no import/export) that runs as written
+    expect(source).not.toMatch(/\bexport\b|\bimport\b/);
+    const posted: unknown[] = [];
+    new Function("self", source)({ postMessage: (m: unknown) => posted.push(m) });
+    expect(posted).toEqual(["hi there"]);
+    // deterministic
+    const again = await buildUi(await tempDir(), { workersDir: workers });
+    expect(again).toEqual(manifest);
+  });
+
+  it("ships the real worker directory without test-only workers", async () => {
+    const manifest = await buildUi(await tempDir());
+    expect(Object.keys(manifest.files).filter((n) => n.endsWith(".worker.js"))).toEqual([]);
   });
 });

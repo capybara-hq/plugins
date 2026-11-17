@@ -3,7 +3,10 @@
  *
  * - `ui-src/app/main.ts` is the entry (`app.js`, ESM, code splitting: dynamic imports become
  *   `chunk-<hash>.js`);
- * - every `ui-src/workers/*.worker.ts` is its own IIFE bundle `<id>.worker.js`;
+ * - every `ui-src/workers/*.worker.ts` is bundled as an IIFE and shipped as `<id>.worker.js`, an ES
+ *   module whose default export is that IIFE's source text. The embed loads it with `import()`
+ *   (`script-src 'self'`) and starts the worker from a `blob:` URL of the text: in WebKit an
+ *   opaque-origin embed cannot `fetch` its own assets under `connect-src 'self'`;
  * - `ui-src/index.html` is the shell, `ui-src/static/**` is copied verbatim when present;
  * - `manifest.json` lists every other file with its content type and sha256, sorted by name.
  *
@@ -81,8 +84,7 @@ async function bundleApp(): Promise<Output[]> {
   return (result.outputFiles ?? []).map((f) => ({ name: basename(f.path), bytes: f.contents }));
 }
 
-async function bundleWorkers(): Promise<Output[]> {
-  const dir = join(SRC, "workers");
+async function bundleWorkers(dir: string): Promise<Output[]> {
   if (!existsSync(dir)) return [];
   const ids = (await readdir(dir))
     .filter((f) => f.endsWith(".worker.ts"))
@@ -98,8 +100,10 @@ async function bundleWorkers(): Promise<Output[]> {
       entryNames: "[name]",
       tsconfig: join(SRC, "tsconfig.json"),
     });
-    for (const f of result.outputFiles ?? [])
-      out.push({ name: basename(f.path), bytes: f.contents });
+    for (const f of result.outputFiles ?? []) {
+      const module = `export default ${JSON.stringify(f.text)};\n`;
+      out.push({ name: basename(f.path), bytes: new TextEncoder().encode(module) });
+    }
   }
   return out;
 }
@@ -114,12 +118,17 @@ async function staticFiles(): Promise<Output[]> {
   return out;
 }
 
+export interface BuildUiOptions {
+  /** The directory of the `*.worker.ts` entries (tests pass their own); default `ui-src/workers`. */
+  workersDir?: string;
+}
+
 /** Builds the embed app into `outDir` (replaced) and returns the manifest it wrote. */
-export async function buildUi(outDir: string): Promise<UiManifest> {
+export async function buildUi(outDir: string, opts: BuildUiOptions = {}): Promise<UiManifest> {
   const outputs: Output[] = [
     { name: "index.html", bytes: await readFile(join(SRC, "index.html")) },
     ...(await bundleApp()),
-    ...(await bundleWorkers()),
+    ...(await bundleWorkers(opts.workersDir ?? join(SRC, "workers"))),
     ...(await staticFiles()),
   ];
   outputs.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));

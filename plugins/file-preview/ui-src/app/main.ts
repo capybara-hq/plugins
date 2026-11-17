@@ -9,6 +9,7 @@ import { type BridgeEvent, createBridge } from "./bridge.js";
 import { MESSAGES, showEmpty, showError, showLoading, translator } from "./frame.js";
 import { applyTheme } from "./theme.js";
 import type { PreviewFile, RenderContext, Renderer, RunInWorker } from "./types.js";
+import { createWorkerHost } from "./worker-host.js";
 
 /** The whole-file budget (parse + paint) before the shell gives up. */
 export const RENDER_BUDGET_MS = 20_000;
@@ -17,11 +18,12 @@ export interface AppDeps {
   win?: Window;
   loadRenderer?: (id: PreviewerId) => Promise<Renderer>;
   runInWorker?: RunInWorker;
+  /** Loads a worker module (`assets/<id>.worker.js`); tests pass a fake. */
+  importModule?: (url: string) => Promise<{ default?: unknown }>;
   budgetMs?: number;
 }
 
-const workersNotAvailable: RunInWorker = () =>
-  Promise.reject(new Error("workers not available yet"));
+const importModule = (url: string): Promise<{ default?: unknown }> => import(url);
 
 const BASE_CSS = `
 :root { color-scheme: light dark; }
@@ -44,7 +46,17 @@ export function startApp(deps: AppDeps = {}): () => void {
   const win = deps.win ?? window;
   const doc = win.document;
   const loadRenderer = deps.loadRenderer ?? defaultLoadRenderer;
-  const runInWorker = deps.runInWorker ?? workersNotAvailable;
+  // The worker scripts sit beside app.js: the shell is `…/ui/<id>`, the assets `…/ui/assets/`.
+  // Creating the host touches neither `Worker` nor the modules; the first run does.
+  const g = win as Window & typeof globalThis;
+  const host = createWorkerHost({
+    importModule: deps.importModule ?? importModule,
+    Worker: g.Worker,
+    createObjectURL: (b) => g.URL.createObjectURL(b),
+    revokeObjectURL: (u) => g.URL.revokeObjectURL(u),
+    assetBase: new URL("assets/", doc.baseURI).href,
+  });
+  const runInWorker = deps.runInWorker ?? host.run;
   const budgetMs = deps.budgetMs ?? RENDER_BUDGET_MS;
 
   const root = doc.getElementById("root");
@@ -71,6 +83,8 @@ export function startApp(deps: AppDeps = {}): () => void {
 
   const fail = (reason: string) => {
     failed = true;
+    // the file is given up: no worker keeps parsing it
+    host.dispose();
     content.style.visibility = "hidden";
     status.style.display = "";
     showError(status, t, reason);
@@ -156,6 +170,8 @@ export function startApp(deps: AppDeps = {}): () => void {
     win.removeEventListener("error", onError);
     win.removeEventListener("unhandledrejection", onRejection);
     controller.abort();
+    // the running worker is terminated and its late result never reaches a renderer
+    host.dispose();
   };
 }
 
