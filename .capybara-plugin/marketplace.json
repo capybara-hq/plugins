@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "anthropic",
-      "version": "0.1.0-rc.8",
+      "version": "0.1.0-rc.9",
       "summary": {
         "en": "Anthropic model provider (model-provider@2) using the official SDK and the native Messages API"
       },
@@ -34,14 +34,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-anthropic",
-          "version": "0.1.0-rc.8",
-          "integrity": "sha512-QWUE8TboL2zV5QVLSksb38Re+3bOoWy9zJUW/CxH2WZ7VQUhvt5hc+3cO5eVNkA7zopRh3W8xxnT8dxuPQPixA=="
+          "version": "0.1.0-rc.9",
+          "integrity": "sha512-tLrZk/37U/6OX4rFWFmqsAHpizWT6Q4lqeXtx8O0t1WmfiX9UR9osfuA+atwdGNTAlyIZx8bGEALrMEZPjtyBw=="
         }
       }
     },
     {
       "name": "connector-mcp",
-      "version": "0.1.0-rc.9",
+      "version": "0.1.0-rc.10",
       "summary": {
         "en": "MCP connector (connector@1): tools and resources of remote MCP servers over Streamable HTTP"
       },
@@ -58,14 +58,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-connector-mcp",
-          "version": "0.1.0-rc.9",
-          "integrity": "sha512-UU+QL78lXkFciPMJqXWdt7DygzGC+OaYe/tvkQwLs+kJH2F786htXQBr7hbZnpGy6VfppSQWLB/w3cRHoR+RiA=="
+          "version": "0.1.0-rc.10",
+          "integrity": "sha512-uE+/XWYhHSthZTz5SckZ+Ooql0QMaG7oqdJq6qhPYjL8YLyxXjN9wW5syEgpqCWKWKfFQ4psn/v34Mks9A7h/Q=="
         }
       }
     },
     {
       "name": "connector-openapi",
-      "version": "0.1.0-rc.10",
+      "version": "0.1.0-rc.11",
       "summary": {
         "en": "OpenAPI connector (connector@1): one tool per operation of an OpenAPI 3.0 / 3.1 HTTP API"
       },
@@ -82,14 +82,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-connector-openapi",
-          "version": "0.1.0-rc.10",
-          "integrity": "sha512-SA3lpZdy+pFhtGC59cPx1IsQtadzXh6jwpxlz3dhMsmNpfXHMDxEJymyy11W1Np8vL6dD+COo9kvzrbhEKBlnw=="
+          "version": "0.1.0-rc.11",
+          "integrity": "sha512-sznNTiBwwGk7eIkJUevyooHaVy7JhwXCztRBOgYnrAPujfGw1QaxWqYGHtPb0GTXhG9vX06ZJYq+y1sssp3y/A=="
         }
       }
     },
     {
       "name": "lark",
-      "version": "0.1.0-rc.11",
+      "version": "0.1.0-rc.12",
       "summary": {
         "en": "Lark (channel@1 bot over the Lark long connection with interactive cards, identity-source@1 web login, directory@1)"
       },
@@ -125,14 +125,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-lark",
-          "version": "0.1.0-rc.11",
-          "integrity": "sha512-3k4Vsn0qbUbW2h+o5LyIBqKBbwyqba+u12J4myWN2LLGOMYgMPB8NoIp3rNwgqNXGznPEIUdX9lZKsFul/iqbg=="
+          "version": "0.1.0-rc.12",
+          "integrity": "sha512-5Eko/ye6lvPKdxgheu4wyr4Kl4y1j+tAuob9zGtevp6xcvzqQ4gBO1NZCBQa3TJN9BMkkqZTvOhW0YJDOSdYuA=="
         }
       }
     },
     {
       "name": "object-store-s3",
-      "version": "0.1.0-rc.10",
+      "version": "0.1.0-rc.11",
       "summary": {
         "en": "Object storage (object-store@1) on any S3-compatible service (AWS S3, MinIO, Ceph, OSS, TOS, ...) using the official @aws-sdk/client-s3"
       },
@@ -162,14 +162,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-object-store-s3",
-          "version": "0.1.0-rc.10",
-          "integrity": "sha512-uzpvEixkXcngBr33iXSgsupTGG8wLkLTo9JeA134rCeknrUX1IhkfkJKw6L2mwpnefyuBwt9l/vb+eiSZrZXCw=="
+          "version": "0.1.0-rc.11",
+          "integrity": "sha512-1wwQSxvlGVYc7ZxtTBNN7VPHjtoa6rvzx4x3Qir2I39ILh/D9FxhlgEoSGXZ//Gt7L7Mos/hIvs7//QGf/vZPg=="
         }
       }
     },
     {
       "name": "openai",
-      "version": "0.1.0-rc.9",
+      "version": "0.1.0-rc.10",
       "summary": {
         "en": "OpenAI model provider (model-provider@2) using the official SDK and the native Responses API"
       },
@@ -194,14 +194,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-openai",
-          "version": "0.1.0-rc.9",
-          "integrity": "sha512-P0mCs/tQBRFfb9WrVo+AaFlGgu/LLpSajYbnaz6mXZpYL6cs7H0D+eFM3ogI3PUNXQHQuJ4NRI99ylYlkRd8PQ=="
+          "version": "0.1.0-rc.10",
+          "integrity": "sha512-0dO5a/89XrYy6BMsvbew5yLL2JhBP7mcTYasJARyVbJRfyv5R2ljiVlNiM9QyEXGIrLCn1TPRgylIEIGlMGjlw=="
         }
       }
     },
     {
       "name": "openai-compatible",
-      "version": "0.1.0-rc.10",
+      "version": "0.1.0-rc.11",
       "summary": {
         "en": "Model provider (model-provider@2) for Chat Completions-compatible services (vLLM, DeepSeek, Qwen, ...) using the official openai SDK"
       },
@@ -222,14 +222,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-openai-compatible",
-          "version": "0.1.0-rc.10",
-          "integrity": "sha512-Xqvl9tDGZhuLzXEEuEAoz+pZdtRg3baoLz1fjs1DQvEropXVQeF9LwV3dkfj/XF2cpRLBTMyZdxdzqebczl67A=="
+          "version": "0.1.0-rc.11",
+          "integrity": "sha512-xhLYmzgzC6I8VAx/xzGSrW53On9hVT9aXrNJaeLYBMVr84lY765MZ6P6qt5hDhHIH13sxyfaCf+3FQ6muc4U/w=="
         }
       }
     },
     {
       "name": "sandbox-docker",
-      "version": "0.1.0-rc.16",
+      "version": "0.1.0-rc.17",
       "summary": {
         "en": "Conversation sandboxes (sandbox@2) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist per org"
       },
@@ -255,14 +255,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-sandbox-docker",
-          "version": "0.1.0-rc.16",
-          "integrity": "sha512-6LQ9TA4wRbqYJ7cfzYXrD4A+ICBvwDck9QmREal7M9kneO/Bb25hoSPsBpCxJT8/d6K+Gg7gmUd3+8rsueHeKg=="
+          "version": "0.1.0-rc.17",
+          "integrity": "sha512-YoAATRzVc00H31yDb06R1/phgqeyuSbPd4//Ri0bK8ixKJSe3XVMcP79OjUVTRpv4daDV+1TOa91ghnVYco3PA=="
         }
       }
     },
     {
       "name": "sandbox-e2b",
-      "version": "0.1.0-rc.16",
+      "version": "0.1.0-rc.17",
       "summary": {
         "en": "Devices (sandbox@2) as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, an allowlist or the open internet with local ranges denied (E2B's metadata service stays reachable)",
         "zh": "E2B 沙箱承载设备（sandbox@2，E2B 云或自托管）：暂停沙箱保留文件，从已发布镜像构建模板，网络为出站白名单或开放公网（拒绝私有、回环与链路本地地址；E2B 元数据端点仍可达，见 README）"
@@ -288,14 +288,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-sandbox-e2b",
-          "version": "0.1.0-rc.16",
-          "integrity": "sha512-nMmEO3ZtENoeFpJEv3ZJH5R5SPkETb65xUJHen22mbw5d7eNJZFAd7x/4WuZh6z1LuioCxUKAhipVZZKhILIpA=="
+          "version": "0.1.0-rc.17",
+          "integrity": "sha512-xNTXBkWbD2xV3ZWIwVDleVYaJSE+8TInkeYkPhR1KyThyTm9fhE96iPqlZQnrSe+LIxs/F5BmgOqYSq2avkZVA=="
         }
       }
     },
     {
       "name": "slack",
-      "version": "0.1.0-rc.11",
+      "version": "0.1.0-rc.12",
       "summary": {
         "en": "Slack (channel@1 bot over Socket Mode with Block Kit cards, identity-source@1 Sign in with Slack, directory@1)"
       },
@@ -333,14 +333,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-slack",
-          "version": "0.1.0-rc.11",
-          "integrity": "sha512-OMZSAsF3XwW+5t34jesxZ374J3BV6buHtfeidZraHuzy20D2pZ337QpR/Xm3MN3I9m69PJtUryWn4znqzh0khw=="
+          "version": "0.1.0-rc.12",
+          "integrity": "sha512-dRikgajS8b4reLuctFZsZYxVhd0fLWtC37qkeLZ5xrCyLZDL5I5MGE3BIzTOz8F3Uk8Oh78NkYDeNWAfwt8kUw=="
         }
       }
     },
     {
       "name": "todo",
-      "version": "0.1.0-rc.11",
+      "version": "0.1.0-rc.12",
       "summary": {
         "en": "Todo list tool for agents: plugin__todo__write keeps a per-conversation todo list in PostgreSQL"
       },
@@ -364,14 +364,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-todo",
-          "version": "0.1.0-rc.11",
-          "integrity": "sha512-9vS5wRiX4Rk255T51WWfFDNB3SjVsJx2DNikaZr3yUVnzowHRH+SQ90OHdh7GK4RuFzVZxNaafPaGMgJZ++mLw=="
+          "version": "0.1.0-rc.12",
+          "integrity": "sha512-tTQKRoBAlN3tz6eC0ZqFpfwwm0j/dte4ZJ6EOB8hSXzaQLagPIwutNsr3pTFA1xoFhFLKo13ZPdQbv8ONq06Ww=="
         }
       }
     },
     {
       "name": "jina",
-      "version": "0.1.0-rc.8",
+      "version": "0.1.0-rc.9",
       "summary": {
         "en": "Web search and page reading (web-search@1, web-fetch@1) through Jina's search and reader APIs"
       },
@@ -396,14 +396,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-jina",
-          "version": "0.1.0-rc.8",
-          "integrity": "sha512-Z6Qggs79OfE7PPvkCudLXD3RiiYFT/slLiLJeleZEpn5A56rmk35tDU2EEBVfREQrRuLqjteTG0eQRSNpH4L9Q=="
+          "version": "0.1.0-rc.9",
+          "integrity": "sha512-c0DFvKKQrO3qDkwAEBoBbFhDDfktucjWCIPyh+wRWGAbrXLwz69zX8C0f6MHI0YmlM68EW+NxVM3f1w8bDHOQg=="
         }
       }
     },
     {
       "name": "ark",
-      "version": "0.1.0-rc.8",
+      "version": "0.1.0-rc.9",
       "summary": {
         "en": "Model provider (model-provider@2) for Volcengine Ark chat and embedding models",
         "zh": "火山方舟对话与嵌入模型（model-provider@2）"
@@ -435,14 +435,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-ark",
-          "version": "0.1.0-rc.8",
-          "integrity": "sha512-pICTGWFpvX/1onDORPK3OtLGPsMCwbvbRAs3OnQzw+KBCGQC/LmNd9yWfDZ3T40IYMq+lXlLW0DUqFI5RzZ7LQ=="
+          "version": "0.1.0-rc.9",
+          "integrity": "sha512-5LtkgqeJsdU0jTKW5KmdeKoznkKu8jH86BrHJZnAqClhZxHqrErTtvOIAYsY98ia6V3C3X/si2ocMbcz0rAsDg=="
         }
       }
     },
     {
       "name": "bailian",
-      "version": "0.1.0-rc.8",
+      "version": "0.1.0-rc.9",
       "summary": {
         "en": "Model provider (model-provider@2) for Alibaba Cloud Model Studio (Bailian) chat and embedding models",
         "zh": "阿里云百炼对话与嵌入模型（model-provider@2）"
@@ -472,14 +472,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-bailian",
-          "version": "0.1.0-rc.8",
-          "integrity": "sha512-/z9Kf2UxN+8/qtfjijtXtVk0A2qbes8yaT7oyB5Mv5r4xATUACCczBa6ct2/dbY6avxNQMv8O53IZzsexSdpfg=="
+          "version": "0.1.0-rc.9",
+          "integrity": "sha512-DU9D5qiPtKLhyJDI0i3ZF6OI+QeJj9zOIFpzwuyGAay981JbJxe0YRPrIrANhDVxmGUyUmdb1NF7yHSoFgEoKA=="
         }
       }
     },
     {
       "name": "deepseek",
-      "version": "0.1.0-rc.8",
+      "version": "0.1.0-rc.9",
       "summary": {
         "en": "Model provider (model-provider@2) for DeepSeek chat models through the Chat Completions API",
         "zh": "DeepSeek 对话模型（model-provider@2），通过 Chat Completions API 调用"
@@ -502,14 +502,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-deepseek",
-          "version": "0.1.0-rc.8",
-          "integrity": "sha512-ILqGaQ9P7OvNLTohBHNK6PlWf4vakVUOmdqJKBiWTskVTFD0XqBMiBGxcCaU7Fu1WeDfwIcQZv3lN4Y69KrMHQ=="
+          "version": "0.1.0-rc.9",
+          "integrity": "sha512-SXgc/npfEStPpkJT73bBSwMNcRZQyuwaML/QY1Tzl+OJv+lw8fkUDNCNSF394wZqP7i2d+iUEtg3MBKPWrzSuQ=="
         }
       }
     },
     {
       "name": "telegram",
-      "version": "0.1.0-rc.10",
+      "version": "0.1.0-rc.11",
       "summary": {
         "en": "Telegram (channel@1 bot over the Bot API: long polling or webhook, inline keyboard cards)",
         "zh": "Telegram 机器人渠道（channel@1，Bot API：长轮询或 webhook，内联键盘卡片）"
@@ -531,8 +531,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-telegram",
-          "version": "0.1.0-rc.10",
-          "integrity": "sha512-tPUAN3q5DVuqM0p/JtlnqQD4ue/JpC6tpFIvc7UEeIwQ3iUpiQoN36iLg8BINlXW51o6zmVWQUxGDfEitF5Irw=="
+          "version": "0.1.0-rc.11",
+          "integrity": "sha512-Ygt//ETTMCi6COUudtmmBx1elGEtlTvKtV0GQrgSwdIFRwjtXXYL8Q1HnK/NOzOsYCvsOijxZZbwZg471uTmLA=="
         }
       }
     },
@@ -627,7 +627,7 @@
     },
     {
       "name": "memory",
-      "version": "0.1.0-rc.4",
+      "version": "0.1.0-rc.5",
       "summary": {
         "en": "Memory for agents: each agent remembers each member across conversations, with an index at run start, memory tools, hybrid search and a memory page",
         "zh": "智能体记忆：每个智能体跨会话记住每位成员，运行开始时给出记忆索引，提供记忆工具、混合检索和记忆页面"
@@ -675,8 +675,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-memory",
-          "version": "0.1.0-rc.4",
-          "integrity": "sha512-8c7phFlup56EaawVuP9LRZwLASfgqslKBoz1G3nuLaisrmIbYNEbdYhoxWynvuVPE7XU4VLJ3I4pV4fppwSYfA=="
+          "version": "0.1.0-rc.5",
+          "integrity": "sha512-5AJXoXOEsJjhqIr3ELwyRLHsn6zAuq72wjiZD2HeIenpZ12y4XtwoAztrAvq06dfjUvZojd7V/WtNFDUzfaT6Q=="
         }
       }
     }
