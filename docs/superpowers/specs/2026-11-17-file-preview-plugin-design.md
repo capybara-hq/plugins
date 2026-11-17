@@ -20,9 +20,11 @@ plugin on the existing extension point. The only core change is allowing Web Wor
 
 All entry points open the same `FilePanel`: the Deliver card in a reply, a file path mentioned in
 reply text, the title bar Files button (opens the newest file; the panel header switches), a
-sub-agent's deliveries listed in the parent, and the panel's fullscreen mode. Not in scope: user
-attachments (core `AttachmentPreview`), channels (Lark / Telegram users get the file itself), a
-standalone file page.
+sub-agent's deliveries listed in the parent, and the panel's fullscreen mode. Maintainer decision
+2026-11-17: user attachments join them (core change, plan Task 1A): a sent attachment is listed with
+the conversation's files (marked uploaded) and opens in the same panel, so every previewer here also
+previews attachments; images open a new full-screen zoomable viewer (plan Task 1B). Not in scope:
+channels (Lark / Telegram users get the file itself), a standalone file page.
 
 ## Goals
 
