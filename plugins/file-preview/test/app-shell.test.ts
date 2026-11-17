@@ -2,10 +2,11 @@
 import { EMBED_PROTOCOL } from "@capybara-hq/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type BridgeEvent, createBridge } from "../ui-src/app/bridge.js";
-import { MESSAGES } from "../ui-src/app/frame.js";
+import { MESSAGES, workerReason } from "../ui-src/app/frame.js";
 import { startApp } from "../ui-src/app/main.js";
 import { applyTheme } from "../ui-src/app/theme.js";
 import type { PreviewFile, Renderer } from "../ui-src/app/types.js";
+import { WorkerTimeoutError } from "../ui-src/app/worker-host.js";
 
 const init = { protocol: EMBED_PROTOCOL, type: "init", locale: "en", theme: "dark", tokens: {} };
 const fileMsg = (size = 3) => ({
@@ -242,6 +243,18 @@ describe("the main flow", () => {
     expect(text()).toContain(MESSAGES.en.errorTitle);
     expect(text()).toContain(MESSAGES.en.downloadHint);
     expect(document.querySelector("#root img")).toBeNull();
+  });
+
+  it("in zh a failed parse says the reader failed, without the English error message", async () => {
+    start(async () => {
+      throw new Error("Unexpected end of data");
+    });
+    post({ ...init, locale: "zh" });
+    post(fileMsg());
+    await vi.waitFor(() => expect(text()).toContain(MESSAGES.zh.readerFailed));
+    expect(text()).not.toContain("Unexpected end of data");
+    expect(workerReason(new WorkerTimeoutError("sheet", 1), "zh")).toBe(MESSAGES.zh.timeout);
+    expect(workerReason(new Error("boom"), "en")).toBe(`${MESSAGES.en.readerFailed}: boom`);
   });
 
   it("ctx.showError shows the inline error and keeps it after the renderer resolves", async () => {

@@ -6,10 +6,10 @@
 import type { PreviewerId } from "../../src/previewers.js";
 import { loadRenderer as defaultLoadRenderer } from "../renderers/index.js";
 import { type BridgeEvent, createBridge } from "./bridge.js";
-import { MESSAGES, showEmpty, showError, showLoading, translator } from "./frame.js";
+import { showEmpty, showError, showLoading, translator, workerReason } from "./frame.js";
 import { applyTheme, THEME } from "./theme.js";
 import type { PreviewFile, RenderContext, Renderer, RunInWorker } from "./types.js";
-import { createWorkerHost } from "./worker-host.js";
+import { createWorkerHost, WorkerTimeoutError } from "./worker-host.js";
 
 /** The whole-file budget (parse + paint) before the shell gives up. */
 export const RENDER_BUDGET_MS = 20_000;
@@ -124,7 +124,8 @@ export function startApp(deps: AppDeps = {}): () => void {
       },
     };
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(MESSAGES[locale].timeout)), budgetMs);
+      // shown as the shell's timeout message (workerReason)
+      timer = setTimeout(() => reject(new WorkerTimeoutError("preview", budgetMs)), budgetMs);
     });
     try {
       const renderer = await Promise.race([loadRenderer(previewer as PreviewerId), timeout]);
@@ -136,7 +137,7 @@ export function startApp(deps: AppDeps = {}): () => void {
         content.style.visibility = "";
       }
     } catch (e) {
-      if (!failed) fail(message(e));
+      if (!failed) fail(workerReason(e, locale));
     } finally {
       settled = true;
       clearTimeout(timer);

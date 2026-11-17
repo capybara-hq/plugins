@@ -1,5 +1,5 @@
 /** Spreadsheet previewer: tabs of sheets, each a virtualized table with column letters on top. */
-import { showEmpty } from "../app/frame.js";
+import { showEmpty, workerReason } from "../app/frame.js";
 import { THEME } from "../app/theme.js";
 import type { RenderContext, Renderer } from "../app/types.js";
 import type { SheetData, SheetInput, SheetOutput } from "../shared/sheet.js";
@@ -215,7 +215,7 @@ export const render: Renderer = async (file, ctx: RenderContext) => {
     out = await ctx.runInWorker<SheetInput, SheetOutput>("sheet", { data }, { transfer: [data] });
   } catch (e) {
     if (ctx.signal.aborted) return;
-    ctx.showError(e instanceof Error ? e.message : String(e));
+    ctx.showError(workerReason(e, ctx.locale));
     return;
   }
   if (ctx.signal.aborted) return;

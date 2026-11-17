@@ -2,7 +2,7 @@
  * The html previewer: the document sanitized into a shadow root ("rendered", the default) or its
  * source through the code renderer ("source"). Links never navigate; nothing loads or runs.
  */
-import { showEmpty, showError } from "../app/frame.js";
+import { showEmpty, showError, workerReason } from "../app/frame.js";
 import { mountSanitized, sanitizeHtml } from "../app/sanitize.js";
 import { THEME } from "../app/theme.js";
 import type { RenderContext, Renderer } from "../app/types.js";
@@ -105,7 +105,7 @@ const render: Renderer = async (file, ctx) => {
         showError: (reason) => showError(sourceView, ctx.t, reason),
       };
       mountCode(sourceView, text, file.name, file.contentType, sourceCtx).catch((e: unknown) => {
-        showError(sourceView, ctx.t, e instanceof Error ? e.message : String(e));
+        showError(sourceView, ctx.t, workerReason(e, ctx.locale));
       });
     }
   };

@@ -11,7 +11,7 @@
  * A zip inside the archive opens one level deep; a zip inside that is listed but not opened.
  */
 import type { PreviewerId } from "../../src/previewers.js";
-import { showEmpty } from "../app/frame.js";
+import { showEmpty, workerReason } from "../app/frame.js";
 import { THEME } from "../app/theme.js";
 import type { PreviewFile, RenderContext, Renderer } from "../app/types.js";
 import type {
@@ -302,7 +302,7 @@ async function renderArchive(
     listing = await send<ZipListOutput>({ op: "list" });
   } catch (e) {
     if (ctx.signal.aborted) return;
-    ctx.showError(e instanceof Error ? e.message : String(e));
+    ctx.showError(workerReason(e, ctx.locale));
     return;
   }
   if (ctx.signal.aborted) return;
@@ -349,7 +349,7 @@ async function renderArchive(
       encrypted: s.encrypted,
       "not-found": s.notFound,
     };
-    return Object.hasOwn(codes, m) ? codes[m as ZipErrorCode] : m;
+    return Object.hasOwn(codes, m) ? codes[m as ZipErrorCode] : workerReason(e, ctx.locale);
   };
 
   const select = async (entry: ZipEntry, rowEl: HTMLElement) => {

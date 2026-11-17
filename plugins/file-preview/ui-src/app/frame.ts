@@ -1,4 +1,5 @@
 /** The loading / empty / error states and the shell's strings (zh and en). */
+import { WorkerTimeoutError } from "./worker-host.js";
 
 export const MESSAGES = {
   zh: {
@@ -7,6 +8,7 @@ export const MESSAGES = {
     errorTitle: "无法预览此文件",
     downloadHint: "可以用右上角的下载查看原文件",
     timeout: "解析超时",
+    readerFailed: "读取文件失败",
   },
   en: {
     loading: "Loading…",
@@ -14,6 +16,7 @@ export const MESSAGES = {
     errorTitle: "Can't preview this file",
     downloadHint: "Use Download at the top right to open the original",
     timeout: "Took too long to read",
+    readerFailed: "The file reader failed",
   },
 } as const satisfies Record<"zh" | "en", Record<string, string>>;
 
@@ -24,6 +27,19 @@ export type Translate = (key: MessageKey) => string;
 export function translator(locale: "zh" | "en"): Translate {
   const table: Record<MessageKey, string> = MESSAGES[locale];
   return (key) => table[key];
+}
+
+/**
+ * The reason shown when a parse (a worker run, or the shell's whole-file budget) failed: a timeout
+ * is the shell's timeout message; anything else is "the reader failed", with the error's own
+ * (English) message appended only in en.
+ */
+export function workerReason(e: unknown, locale: "zh" | "en"): string {
+  if (e instanceof WorkerTimeoutError) return MESSAGES[locale].timeout;
+  const failed = MESSAGES[locale].readerFailed;
+  if (locale === "zh") return failed;
+  const detail = e instanceof Error ? e.message : String(e);
+  return detail === "" ? failed : `${failed}: ${detail}`;
 }
 
 function line(doc: Document, className: string, text: string, role?: string): HTMLElement {

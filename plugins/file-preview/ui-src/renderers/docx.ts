@@ -2,7 +2,7 @@
  * The docx previewer: mammoth (in a worker) converts the document to HTML, `sanitizeHtml` makes it
  * inert and `mountSanitized` puts it in a shadow root, as a page on a readable-width sheet.
  */
-import { showEmpty } from "../app/frame.js";
+import { showEmpty, workerReason } from "../app/frame.js";
 import { mountSanitized, sanitizeHtml } from "../app/sanitize.js";
 import { THEME } from "../app/theme.js";
 import type { Renderer } from "../app/types.js";
@@ -46,7 +46,7 @@ export const render: Renderer = async (file, ctx) => {
     out = await ctx.runInWorker<DocxInput, DocxOutput>("docx", { data }, { transfer: [data] });
   } catch (e) {
     if (ctx.signal.aborted) return;
-    ctx.showError(e instanceof Error ? e.message : String(e));
+    ctx.showError(workerReason(e, ctx.locale));
     return;
   }
   if (ctx.signal.aborted) return;
