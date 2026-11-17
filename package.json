@@ -35,7 +35,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
     "@capybara-hq/plugin-model-fake": "0.1.0-rc.19",
-    "@capybara-hq/plugin-sdk": "0.1.0-rc.24",
+    "@capybara-hq/plugin-sdk": "0.1.0-rc.26",
     "@capybara-hq/plugin-tools": "0.1.0-rc.15",
     "@capybara-hq/testing": "0.1.0-rc.19",
     "@changesets/cli": "^3.0.3",
@@ -46,5 +46,10 @@
     "typescript": "^7.0.2",
     "vitest": "^5.0.5",
     "yaml": "^2.9.1"
+  },
+  "pnpm": {
+    "overrides": {
+      "@capybara-hq/plugin-sdk": "0.1.0-rc.26"
+    }
   }
 }
