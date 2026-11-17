@@ -1,5 +1,13 @@
 # @capybara-hq/plugin-jina
 
+## 0.1.0-rc.9
+
+### Patch Changes
+
+- acf43de: Build and test against @capybara-hq/plugin-sdk 0.1.0-rc.27, @capybara-hq/testing 0.1.0-rc.21,
+  @capybara-hq/plugin-tools 0.1.0-rc.16 and @capybara-hq/plugin-model-fake 0.1.0-rc.28 (kernel
+  0.1.0-rc.37: `model-provider@2` only, model providers opt-in per org, `FetchAttachment`).
+
 ## 0.1.0-rc.8
 
 ### Patch Changes
