@@ -2,8 +2,10 @@
  * Archive previewer: the directory tree on the left and the selected entry on the right.
  *
  * The archive is read in the `zip` worker under strict limits (see `workers/zip.logic.ts`). A
- * worker lives for one request, so this side keeps the archive bytes and the running count of
- * inflated bytes (100 MiB per opened archive) and hands the remainder to each extraction.
+ * worker lives for one request, so this side keeps the archive bytes and the one running total of
+ * inflated bytes (100 MiB for an archive and everything opened from it): an extraction reserves
+ * the entry's declared size before it starts (the worker enforces actual == declared), and the
+ * reservation stays when the selection moves on; a late result is cached, not dropped.
  * An entry is previewed by the renderer its extension picks; bitmaps become `<img src="blob:…">`.
  * A zip inside the archive opens one level deep; a zip inside that is listed but not opened.
  */
@@ -13,6 +15,7 @@ import { THEME } from "../app/theme.js";
 import type { PreviewFile, RenderContext, Renderer } from "../app/types.js";
 import type {
   ZipEntry,
+  ZipErrorCode,
   ZipExtractInput,
   ZipExtractOutput,
   ZipListInput,
@@ -20,6 +23,7 @@ import type {
 } from "../shared/zip.js";
 
 const ARCHIVE_LIMIT = 100 * 1024 * 1024;
+const ENTRY_LIMIT = 20 * 1024 * 1024;
 /** Above this many entries only the first level of folders starts open. */
 const OPEN_ALL_UP_TO = 500;
 const MAX_NESTING = 1;
@@ -37,6 +41,9 @@ const STRINGS = {
     loading: "正在读取…",
     pick: "选择左侧的文件进行预览",
     folder: "文件夹",
+    corrupt: "此条目已损坏，无法读取",
+    unsupported: "不支持此条目的压缩方式",
+    notFound: "在压缩包中找不到此条目",
   },
   en: {
     invalid: "This is not a valid zip archive (the file is corrupt or not what its name says)",
@@ -50,6 +57,9 @@ const STRINGS = {
     loading: "Reading…",
     pick: "Select a file on the left to preview it",
     folder: "Folder",
+    corrupt: "This entry is corrupt and cannot be read",
+    unsupported: "This entry's compression method is not supported",
+    notFound: "This entry was not found in the archive",
   },
 } as const;
 
@@ -187,12 +197,19 @@ function buildTree(entries: ZipEntry[]): Node {
     const parts = e.path.split("/").filter((p) => p !== "");
     let at = root;
     parts.forEach((part, i) => {
-      let next = at.children.get(part);
-      if (next === undefined) {
-        next = { name: part, children: new Map() };
-        at.children.set(part, next);
+      const last = i === parts.length - 1;
+      let key = part;
+      let next = at.children.get(key);
+      // a repeated path keeps its own node: the records are distinct (extracted by index)
+      if (last && next?.entry !== undefined) {
+        for (let n = 2; at.children.has(key); n++) key = `${part} (${n})`;
+        next = undefined;
       }
-      if (i === parts.length - 1) next.entry = e;
+      if (next === undefined) {
+        next = { name: key, children: new Map() };
+        at.children.set(key, next);
+      }
+      if (last) next.entry = e;
       at = next;
     });
   }
@@ -242,7 +259,23 @@ async function entryRenderer(id: PreviewerId): Promise<Renderer> {
   }
 }
 
-async function renderArchive(file: PreviewFile, ctx: RenderContext, depth: number): Promise<void> {
+/** What one top-level archive and every archive opened from it share. */
+interface Budget {
+  limit: number;
+  /** Declared bytes of every extraction started (finished or in flight). */
+  reserved: number;
+  /** Extracted entries by `<archive path>#<index>`: a reopened archive finds them again. */
+  cache: Map<string, ArrayBuffer>;
+  pending: Map<string, Promise<ArrayBuffer>>;
+}
+
+async function renderArchive(
+  file: PreviewFile,
+  ctx: RenderContext,
+  depth: number,
+  budget: Budget,
+  prefix: string,
+): Promise<void> {
   const s = STRINGS[ctx.locale];
   const doc = ctx.root.ownerDocument;
   if (file.size === 0 || file.data.byteLength === 0) {
@@ -250,18 +283,20 @@ async function renderArchive(file: PreviewFile, ctx: RenderContext, depth: numbe
     return;
   }
   // a copy goes to each worker: transferring file.data would detach the archive for the next one
-  const send = <O>(input: ZipListInput | ZipExtractInput): Promise<O> => {
+  const send = <O>(
+    input: Omit<ZipListInput, "data"> | Omit<ZipExtractInput, "data">,
+  ): Promise<O> => {
     const data = file.data.slice(0);
     return ctx.runInWorker<ZipListInput | ZipExtractInput, O>(
       "zip",
-      { ...input, data },
+      { ...input, data } as ZipListInput | ZipExtractInput,
       { transfer: [data] },
     );
   };
 
   let listing: ZipListOutput;
   try {
-    listing = await send<ZipListOutput>({ op: "list", data: file.data });
+    listing = await send<ZipListOutput>({ op: "list" });
   } catch (e) {
     if (ctx.signal.aborted) return;
     ctx.showError(e instanceof Error ? e.message : String(e));
@@ -287,8 +322,6 @@ async function renderArchive(file: PreviewFile, ctx: RenderContext, depth: numbe
   side.append(treeEl);
   wrap.append(side, detail);
 
-  let used = 0;
-  const cache = new Map<string, ArrayBuffer>();
   let selection: AbortController | undefined;
   let imageUrl: string | undefined;
   let current: HTMLElement | undefined;
@@ -304,10 +337,16 @@ async function renderArchive(file: PreviewFile, ctx: RenderContext, depth: numbe
 
   const errorText = (e: unknown): string => {
     const m = e instanceof Error ? e.message : String(e);
-    if (m === "entry too large") return s.tooLarge;
-    if (m === "archive limit reached") return s.limit;
-    if (m === "entry is encrypted") return s.encrypted;
-    return m;
+    const codes: Record<ZipErrorCode, string> = {
+      invalid: s.invalid,
+      "entry-too-large": s.tooLarge,
+      limit: s.limit,
+      corrupt: s.corrupt,
+      "unsupported-method": s.unsupported,
+      encrypted: s.encrypted,
+      "not-found": s.notFound,
+    };
+    return Object.hasOwn(codes, m) ? codes[m as ZipErrorCode] : m;
   };
 
   const select = async (entry: ZipEntry, rowEl: HTMLElement) => {
@@ -339,24 +378,46 @@ async function renderArchive(file: PreviewFile, ctx: RenderContext, depth: numbe
       return;
     }
 
-    let bytes = cache.get(entry.path);
+    const key = `${prefix}${entry.index}`;
+    let bytes = budget.cache.get(key);
     if (bytes === undefined) {
       pane.replaceChildren(el(doc, "div", "cap-zip-note", s.loading));
-      try {
-        const out = await send<ZipExtractOutput>({
+      let job = budget.pending.get(key);
+      if (job === undefined) {
+        // reserve the declared size first: concurrent and abandoned extractions all count
+        if (entry.size <= ENTRY_LIMIT && budget.reserved + entry.size > budget.limit) {
+          fail(s.limit);
+          return;
+        }
+        const size = entry.size;
+        if (size <= ENTRY_LIMIT) budget.reserved += size;
+        const started = send<ZipExtractOutput>({
           op: "extract",
-          data: file.data,
-          path: entry.path,
-          budget: ARCHIVE_LIMIT - used,
-        });
-        bytes = out.data;
+          index: entry.index,
+          budget: size,
+        }).then(
+          (out) => {
+            budget.cache.set(key, out.data);
+            budget.pending.delete(key);
+            return out.data;
+          },
+          (e: unknown) => {
+            // nothing was kept: the reservation goes back
+            if (size <= ENTRY_LIMIT) budget.reserved -= size;
+            budget.pending.delete(key);
+            throw e;
+          },
+        );
+        budget.pending.set(key, started);
+        job = started;
+      }
+      try {
+        bytes = await job;
       } catch (e) {
         if (!sel.signal.aborted) fail(errorText(e));
         return;
       }
       if (sel.signal.aborted) return;
-      used += bytes.byteLength;
-      cache.set(entry.path, bytes);
     }
 
     const bitmap = BITMAPS[ext];
@@ -384,7 +445,7 @@ async function renderArchive(file: PreviewFile, ctx: RenderContext, depth: numbe
       },
     };
     try {
-      if (isZip) await renderArchive(inner, subCtx, depth + 1);
+      if (isZip) await renderArchive(inner, subCtx, depth + 1, budget, `${key}/`);
       else await (await entryRenderer((target as { id: PreviewerId }).id))(inner, subCtx);
     } catch (e) {
       if (!sel.signal.aborted) fail(errorText(e));
@@ -434,4 +495,10 @@ async function renderArchive(file: PreviewFile, ctx: RenderContext, depth: numbe
   ctx.root.replaceChildren(wrap);
 }
 
-export const render: Renderer = (file, ctx) => renderArchive(file, ctx, 0);
+/** A renderer with its own archive budget (the tests lower it; the shell uses `render`). */
+export function createRender(limit: number): Renderer {
+  return (file, ctx) =>
+    renderArchive(file, ctx, 0, { limit, reserved: 0, cache: new Map(), pending: new Map() }, "");
+}
+
+export const render: Renderer = createRender(ARCHIVE_LIMIT);

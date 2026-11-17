@@ -1,6 +1,18 @@
 /** The `zip` worker's wire types (shared by the app and the worker TypeScript projects). */
 
+/** Why a worker refused: the renderer words each code (zh / en). */
+export type ZipErrorCode =
+  | "invalid"
+  | "entry-too-large"
+  | "limit"
+  | "corrupt"
+  | "unsupported-method"
+  | "encrypted"
+  | "not-found";
+
 export interface ZipEntry {
+  /** The record's position in the central directory: extraction is by index, names can repeat. */
+  index: number;
   /** The path inside the archive, `/`-separated; a folder ends in `/`. */
   path: string;
   /** The uncompressed size the archive declares (never trusted when inflating). */
@@ -29,10 +41,11 @@ export interface ZipListOutput {
 export interface ZipExtractInput {
   op: "extract";
   data: ArrayBuffer;
-  path: string;
+  /** The entry's `ZipEntry.index`. */
+  index: number;
   /**
-   * What is left of the per-archive decompressed budget. A worker lives for one request, so the
-   * renderer keeps the running counter and hands the remainder in.
+   * The decompressed bytes the renderer reserved for this entry. A worker lives for one request,
+   * so the renderer keeps the archive's running total and reserves before it asks.
    */
   budget: number;
 }

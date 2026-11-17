@@ -8,7 +8,13 @@
  * at once.
  */
 import { Inflate } from "fflate";
-import type { ZipEntry, ZipExtractInput, ZipListInput, ZipListOutput } from "../shared/zip.js";
+import type {
+  ZipEntry,
+  ZipErrorCode,
+  ZipExtractInput,
+  ZipListInput,
+  ZipListOutput,
+} from "../shared/zip.js";
 
 export const MAX_ENTRIES = 10_000;
 /** The largest entry the previewer inflates, by its declared size. */
@@ -24,7 +30,8 @@ const CD_FIXED = 46;
 /** Input fed to the inflater at a time: bounds the output of one push (about 1000:1). */
 const CHUNK = 4096;
 
-interface Raw {
+export interface Raw {
+  index: number;
   path: string;
   size: number;
   compressed: number;
@@ -45,7 +52,12 @@ function dosDate(date: number, time: number): string {
   return `${1980 + (date >> 9)}-${pad(month)}-${pad(day)} ${pad((time >> 11) & 31)}:${pad((time >> 5) & 63)}`;
 }
 
-class Invalid extends Error {}
+export class Invalid extends Error {}
+
+/** An error whose message is a `ZipErrorCode`: the renderer words it in the person's language. */
+function fail(code: ZipErrorCode): Error {
+  return new Error(code);
+}
 
 function findEocd(view: DataView): number {
   const min = Math.max(0, view.byteLength - EOCD_MIN - 0xffff);
@@ -59,7 +71,7 @@ function findEocd(view: DataView): number {
  * Reads the central directory, at most `max` entries. `more` is true when the directory holds
  * another record after the cap. Throws `Invalid` for bytes that are not a zip archive.
  */
-function readDirectory(data: ArrayBuffer, max: number): { entries: Raw[]; more: boolean } {
+export function readDirectory(data: ArrayBuffer, max: number): { entries: Raw[]; more: boolean } {
   const view = new DataView(data);
   const eocd = data.byteLength >= EOCD_MIN ? findEocd(view) : -1;
   if (eocd < 0) throw new Invalid("no end of central directory");
@@ -81,6 +93,7 @@ function readDirectory(data: ArrayBuffer, max: number): { entries: Raw[]; more: 
     if (next > cdEnd) throw new Invalid("truncated central directory");
     const path = decoder.decode(new Uint8Array(data, at + CD_FIXED, nameLen));
     entries.push({
+      index: entries.length,
       path,
       size: view.getUint32(at + 24, true),
       compressed: view.getUint32(at + 20, true),
@@ -91,6 +104,11 @@ function readDirectory(data: ArrayBuffer, max: number): { entries: Raw[]; more: 
       offset: view.getUint32(at + 42, true),
     });
     at = next;
+  }
+  // an end record that counts more records than the directory yields (up to the cap) is corrupt
+  const claimed = view.getUint16(eocd + 10, true);
+  if (claimed > 0 && claimed !== 0xffff && entries.length < Math.min(claimed, max)) {
+    throw new Invalid("corrupt central directory");
   }
   return { entries, more: false };
 }
@@ -120,6 +138,7 @@ export function listEntries(input: Pick<ZipListInput, "data">): ZipListOutput {
     throw e;
   }
   const entries: ZipEntry[] = dir.entries.map((r) => ({
+    index: r.index,
     path: r.path,
     size: r.size,
     compressed: r.compressed,
@@ -153,28 +172,26 @@ function inflateCapped(src: Uint8Array, cap: number, over: () => Error): Uint8Ar
   return out;
 }
 
-export function extractEntry(input: Pick<ZipExtractInput, "data" | "path" | "budget">): {
+export function extractEntry(input: Pick<ZipExtractInput, "data" | "index" | "budget">): {
   data: ArrayBuffer;
 } {
   let dir: { entries: Raw[]; more: boolean };
   try {
     dir = readDirectory(input.data, MAX_ENTRIES);
   } catch (e) {
-    if (e instanceof Invalid) throw new Error("This is not a valid zip archive");
+    if (e instanceof Invalid) throw fail("invalid");
     throw e;
   }
-  const entry = dir.entries.find((r) => r.path === input.path && !r.dir);
-  if (entry === undefined) throw new Error("entry not found");
-  if (entry.encrypted) throw new Error("entry is encrypted");
+  const entry = dir.entries[input.index];
+  if (entry === undefined || entry.dir) throw fail("not-found");
+  if (entry.encrypted) throw fail("encrypted");
   // refuse by the declared size before anything is inflated
-  if (entry.size > ENTRY_LIMIT) throw new Error("entry too large");
-  if (entry.size > input.budget) throw new Error("archive limit reached");
-  if (entry.method !== 0 && entry.method !== 8) {
-    throw new Error(`unsupported compression method ${entry.method}`);
-  }
+  if (entry.size > ENTRY_LIMIT) throw fail("entry-too-large");
+  if (entry.size > input.budget) throw fail("limit");
+  if (entry.method !== 0 && entry.method !== 8) throw fail("unsupported-method");
   const view = new DataView(input.data);
   if (entry.offset + 30 > view.byteLength || view.getUint32(entry.offset, true) !== LOCAL_SIG) {
-    throw new Error("corrupt entry header");
+    throw fail("corrupt");
   }
   const start =
     entry.offset +
@@ -182,27 +199,22 @@ export function extractEntry(input: Pick<ZipExtractInput, "data" | "path" | "bud
     view.getUint16(entry.offset + 26, true) +
     view.getUint16(entry.offset + 28, true);
   const end = start + entry.compressed;
-  if (end > view.byteLength) throw new Error("entry data is truncated");
+  if (end > view.byteLength) throw fail("corrupt");
   const src = new Uint8Array(input.data, start, entry.compressed);
 
   let out: Uint8Array;
   if (entry.method === 0) {
-    if (entry.compressed !== entry.size) throw new Error("entry size does not match its header");
+    if (entry.compressed !== entry.size) throw fail("corrupt");
     out = src.slice();
   } else {
     // the declared size is the cap: a larger actual output aborts the inflate mid-stream
-    const cap = Math.min(entry.size, input.budget);
     try {
-      out = inflateCapped(src, cap, () =>
-        entry.size <= input.budget
-          ? new Error("entry is larger than declared")
-          : new Error("archive limit reached"),
-      );
+      out = inflateCapped(src, entry.size, () => fail("corrupt"));
     } catch (e) {
-      if (e instanceof Error && /declared|limit reached/.test(e.message)) throw e;
-      throw new Error("entry data is corrupt");
+      if (e instanceof Error && e.message === "corrupt") throw e;
+      throw fail("corrupt");
     }
-    if (out.length !== entry.size) throw new Error("entry size does not match its header");
+    if (out.length !== entry.size) throw fail("corrupt");
   }
   return { data: out.buffer as ArrayBuffer };
 }
