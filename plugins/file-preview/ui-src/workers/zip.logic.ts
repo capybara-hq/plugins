@@ -9,6 +9,10 @@
  *
  * `verifyArchive` is the stricter gate the sheet and docx workers run before exceljs / mammoth
  * (both on JSZip, which reads non-canonical archives differently and checks sizes only at the end).
+ * The sheet worker ships exceljs's bundled JSZip 3.10.1 (`dist/exceljs.min.js`) and the docx
+ * worker the `jszip/dist` 3.10.2 that mammoth depends on; the rules of `verifyArchive` were checked
+ * against the sources of both. `build.test.ts` reads the version string out of each built worker
+ * and fails when it leaves 3.10.x, so an upgrade forces a re-check of those rules.
  */
 import { Inflate } from "fflate";
 import type {
@@ -234,7 +238,6 @@ export interface ArchiveLimits {
 
 export type ArchiveVerdict = { ok: true } | { ok: false; reason: "too-large" | "invalid" };
 
-const ZIP64_LOCATOR_SIG = 0x07064b50;
 const DESCRIPTOR_SIG = 0x08074b50;
 const MAX16 = 0xffff;
 const MAX32 = 0xffffffff;
@@ -285,9 +288,8 @@ function canonicalEntries(data: Uint8Array, maxEntries: number): Checked[] {
     throw new Invalid("multi-disk or zip64 end record");
   }
   if (cdSize === MAX32 || cdOffset === MAX32) throw new Invalid("zip64 end record");
-  if (eocd >= 20 && view.getUint32(eocd - 20, true) === ZIP64_LOCATOR_SIG) {
-    throw new Invalid("zip64 locator");
-  }
+  // (a zip64 locator before the end record needs no check of its own: JSZip looks for it only
+  // when one of the fields above is maxed out, and those are refused)
   // anything else makes JSZip shift every offset ("prepended bytes") or fail
   if (cdOffset + cdSize !== eocd) throw new Invalid("directory does not end at the end record");
   if (records > maxEntries) throw new TooLarge("too many entries");

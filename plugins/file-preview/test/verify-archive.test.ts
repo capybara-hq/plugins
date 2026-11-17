@@ -138,13 +138,13 @@ describe("verifyArchive: canonical structure", () => {
     }
   });
 
-  it("refuses a zip64 locator signature right before the end record", () => {
-    // the last record's comment ends in the 20 bytes a zip64 locator would occupy
+  it("accepts a directory comment that ends in a zip64 locator signature (fields decide, not bytes)", () => {
+    // the last record's comment ends in the 20 bytes a zip64 locator would occupy; JSZip switches
+    // to zip64 only on 0xFFFF / 0xFFFFFFFF end record fields, which are refused above
     const tail = `PK\u0006\u0007${"\u0000".repeat(16)}`;
     const z = zipSync({ "a.txt": [strToU8("a"), { comment: tail }] });
     expect(dv(z).getUint32(eocdOf(z).eocd - 20, true)).toBe(0x07064b50);
-    expect(verify(z)).toEqual(invalid);
-    expect(verify(zipSync({ "a.txt": [strToU8("a"), { comment: "harmless" }] }))).toEqual(ok);
+    expect(verify(z)).toEqual(ok);
   });
 
   it("refuses a directory that does not end exactly at the end record", () => {
@@ -234,6 +234,25 @@ describe("verifyArchive: canonical structure", () => {
     expect(verify(bad)).toEqual(invalid);
   });
 
+  it("refuses a local method that differs from the directory's", () => {
+    // `small()` deflates a.txt; the local header claims "stored"
+    const z = small();
+    expect(verify(z)).toEqual(ok);
+    expect(verify(patch(z, (v, a) => v.setUint16((a.local[0] as number) + 8, 0, true)))).toEqual(
+      invalid,
+    );
+  });
+
+  it("refuses strong encryption (bit 6) and masked local headers (bit 13)", () => {
+    for (const bit of [0x0040, 0x2000]) {
+      const p = patch(small(), (v, a) => {
+        const at = (a.cd[0] as number) + 8;
+        v.setUint16(at, v.getUint16(at, true) | bit, true);
+      });
+      expect(verify(p), `flag 0x${bit.toString(16)}`).toEqual(invalid);
+    }
+  });
+
   it("refuses an unknown method and an encrypted entry", () => {
     expect(
       verify(patch(small(), (v, a) => v.setUint16((a.cd[0] as number) + 10, 12, true))),
@@ -296,7 +315,7 @@ describe("verifyArchive: sizes", () => {
       v.setUint8(data, 0xff);
       v.setUint8(data + 1, 0xff);
     });
-    expect(verify(p).ok).toBe(false);
+    expect(verify(p)).toEqual(invalid);
   });
 
   it("stops a lying-size bomb as soon as the output passes the claim", () => {
