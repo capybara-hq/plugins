@@ -52,6 +52,7 @@ Previewing a file output in the right panel is the extension point `file-preview
 
 - The extension never gets a storage key or a URL: `render` reads the bytes through `args.read()`, a read grant for that one file in that conversation, valid only during the call; an embed gets them through the message bridge (`type: "file"` after `init`; `createEmbedBridge({ file })`), and its token claims carry `fileId`.
 - An org admin orders and disables previewers; an accepting extension previewer wins over the built-in ones (image, text, Markdown, CSV / TSV), and the person can switch in the panel header. A slow (10 s) or failing previewer affects only the panel and falls back to the file card with Download.
+- **An embed previewer's runtime limits** (CSP `worker-src` is `'none'` for ordinary embeds; a file previewer is the exception): it may start workers only from `blob:` URLs (`worker-src blob:`). It cannot fetch its own assets: WebKit refuses `connect-src 'self'` in the opaque-origin sandbox, so load scripts and workers through `import()` (and create a worker from a `blob:` URL built from the loaded code), never `fetch`. The reference file previewer is `plugins/file-preview` (seven previewers, workers, sanitizer, limits).
 - **Validated at `ctx.provide`**: an invalid provider (`validateFilePreviewProvider`), or an `embed` naming no `{ kind: "embed", slot: "file.preview" }` contribution of the same extension, fails `setup`.
 
 ## Manifest
