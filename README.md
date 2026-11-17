@@ -23,6 +23,7 @@ npm; the kernel verifies each download against that integrity.
 | [`object-store-s3`](plugins/object-store-s3) | Object storage on S3-compatible services (`object-store@1`) |
 | [`todo`](plugins/todo) | A per-conversation todo list tool for agents |
 | [`memory`](plugins/memory) | Memory for agents per (agent, member): an index at run start (`context@1`), memory tools, hybrid keyword and semantic search, and a memory page with the directory neural tree (client code) |
+| [`file-preview`](plugins/file-preview) | File previewers in the conversation panel (`file-preview@1`): code, zip archives, xlsx spreadsheets, docx documents, PDF, SVG and static HTML, each in a sandboxed embed with workers |
 | [`theme-cyberpunk`](plugins/theme-cyberpunk) | The Cyberpunk theme (declarative, no extension): neon yellow on deep blue-black, techno fonts, a neon pixel capybara |
 | [`github`](plugins/github) | GitHub connector template (declarative, no extension): issues, pull requests, reviews, repositories and Actions through GitHub's remote MCP server, per person with OAuth |
 | [`skills-core`](plugins/skills-core) | Core skills (declarative, no extension): `skill-guide` teaches an agent to write, register, test and share its own skills |

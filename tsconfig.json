@@ -26,6 +26,21 @@
       "path": "plugins/example-counter"
     },
     {
+      "path": "plugins/file-preview"
+    },
+    {
+      "path": "plugins/file-preview/ui-src"
+    },
+    {
+      "path": "plugins/file-preview/ui-src/app"
+    },
+    {
+      "path": "plugins/file-preview/ui-src/workers"
+    },
+    {
+      "path": "plugins/file-preview/test"
+    },
+    {
       "path": "plugins/jina"
     },
     {

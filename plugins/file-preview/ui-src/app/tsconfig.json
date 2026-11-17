@@ -1,0 +1,11 @@
+{
+  "extends": "../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "outDir": "../../dist-ui/app",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": [],
+    "emitDeclarationOnly": true
+  },
+  "include": [".", "../renderers", "../shared", "../../src/previewers.ts"]
+}

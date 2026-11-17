@@ -104,7 +104,7 @@ describe("release.yml", () => {
       // Order matters: the packer requires plugin.json / the manifest equal to package.json, and
       // the marketplace entries carry the sha512 of those packs.
       expect(pkg.scripts["version-packages"]).toBe(
-        "changeset version && capybara-plugin sync-versions && capybara-plugin marketplace --write",
+        "pnpm build:ui && changeset version && capybara-plugin sync-versions && capybara-plugin marketplace --write",
       );
     });
   });
@@ -133,7 +133,7 @@ describe("release.yml", () => {
       expect(step?.run).toMatch(/"\$DRY_RUN" = "true"[\s\S]*--dry-run/);
       expect(step?.run).toContain(`pnpm release "$\{args[@]}"`);
       // The release checks every pack against .capybara-plugin/marketplace.json by default.
-      expect(pkg.scripts.release).toBe("capybara-plugin release");
+      expect(pkg.scripts.release).toBe("pnpm build:ui && capybara-plugin release");
     });
 
     it("refuses a real manual publish from any ref but main", () => {

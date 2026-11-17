@@ -1,0 +1,12 @@
+<style>
+.a { filter: url("\1 #x") }
+.b { filter: url(" #x") }
+.c { filter: url("\9 #x") }
+.d { clip-path: url(#ok) }
+p { color: green }
+</style>
+<div style='filter:url("\1 #x");color:green'>a</div>
+<svg><filter id="f"/><rect filter="url(\1 #f)" width="1" height="1"/>
+<rect filter='url(" #f")' width="1" height="1"/><rect filter="url(#f)" width="1" height="1"/>
+<linearGradient id="g"/><linearGradient id="g2" href="&#1;#g"/></svg>
+<img srcset="data:image/png;base64,AAAA 1x, https://evil.example/b.png 2x"><p>kept</p>

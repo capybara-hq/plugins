@@ -3,7 +3,15 @@
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!**/dist", "!**/coverage", "!.superpowers", "!pnpm-lock.yaml", "!docs"]
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/coverage",
+      "!.superpowers",
+      "!pnpm-lock.yaml",
+      "!docs",
+      "!plugins/file-preview/test/fixtures/hostile"
+    ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
   "linter": { "enabled": true, "rules": { "recommended": true } },

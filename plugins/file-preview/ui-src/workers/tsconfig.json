@@ -1,0 +1,11 @@
+{
+  "extends": "../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "outDir": "../../dist-ui/workers",
+    "lib": ["ES2022", "WebWorker"],
+    "types": [],
+    "emitDeclarationOnly": true
+  },
+  "include": [".", "../shared"]
+}
