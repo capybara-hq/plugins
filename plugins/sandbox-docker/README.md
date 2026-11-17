@@ -206,6 +206,116 @@ For orgs that handle sensitive data: in the org settings set `sandboxToolPolicy`
 org settings. An org can switch its cloud network from open to the allowlist (or cut the network with `sandboxEgress: none`, which is
 an empty allowlist); `refuseOpenNetwork` lets a deployment refuse the open network outright.
 
+## Permission profiles (operation contract)
+
+The provider implements the optional operation half of `sandbox@2` (core spec
+`2026-11-16-permission-operation-contract.md`): `permissionSupport`, `operation`, `browse`,
+`prepare`, `revokeOperation` and `background`. Every call carries an immutable scope the kernel
+resolved; the provider copies and freezes it (`parseSandboxOperationScope`) and decides nothing
+itself. Nothing about the instance changes per profile: one container, the same hardening
+(`CapDrop: ALL`, `no-new-privileges`, read-only root, uid 1000, Docker's default seccomp), the same
+instance network; no capability, seccomp relaxation, privileged mode or extra container.
+
+- **Runtime** (`image/runtime`, staged root-owned at `/opt/capybara-runtime`, `0755` / `0644`; the
+  image build runs `sha256sum -c SHA256SUMS`): the SDK's `SANDBOX_RUNTIME_SOURCE` v2 files
+  `native-files.py` and `linux-sandbox.py`, byte for byte, plus this provider's consumer
+  `capybara-operation.py`. The digests live in `src/runtime-source.ts`; `test/permission-scopes.test.ts`
+  fails when the staged bytes, the SDK bundle or `SHA256SUMS` drift. After an SDK upgrade, copy the
+  bundle files into `image/runtime`, update `OPERATION_AGENT_SHA256` and regenerate `SHA256SUMS`
+  (`runtimeChecksums()`); the agent also re-checks the SDK digests and root ownership before each
+  restricted launch.
+- **Support report**: `permissionSupport` checks the staged files (owner, mode, digest) and runs
+  the launcher's own `probe` in the running instance (it never starts or resumes one). Restricted is
+  reported only when the probe confirms all four claims: a validated architecture (`aarch64`,
+  `x86_64`), Landlock ABI 6 or newer, a working seccomp listener, descriptor hand-off and exact
+  supervision. Otherwise `restricted: null` with the probe's reason, and every restricted operation
+  is refused with `SandboxPermissionUnsupportedError` (gVisor `runsc`, older kernels, other
+  architectures). An image without the runtime, or with different bytes, reports Full unavailable
+  too (`fullAccess: false`), since admission records need the agent.
+- **Restricted** (`filesystem: scoped`): the agent pins each existing granted root once (no-follow,
+  canonical; a root swapped for a symlink refuses the operation), and the launcher installs Landlock
+  rules and the seccomp broker on those same descriptors; native file calls run the native helper
+  under the launcher on them too (scopes without a writable root use the helper on its pinned
+  descriptors alone, after the launcher's static support check). Restricted descendants cannot
+  `setsid` out of supervision; a cancel, timeout or revocation ends the whole supervised tree. Network
+  `none` refuses every TCP connect; `environment` keeps the instance's own proxy variables (the
+  instance network still applies); an `allowlist` reaches its hosts only through a **per-operation
+  forwarder** on a loopback port that only that operation's broker may connect to: `CONNECT` and
+  absolute `http://` requests to an allowlisted name become `CONNECT` tunnels through the instance's
+  egress proxy, which applies its own address rules. Only proxy-aware clients reach allowlisted
+  hosts: raw TCP clients that ignore the proxy variables (Python or Node sockets, ssh including
+  `GIT_SSH_COMMAND`, database clients) cannot, as on the instance network itself.
+- **Reserved roots**: a restricted write root that contains (or lies inside) the provider's records
+  or control files is refused with `SandboxScopeDeniedError`: `/`, `/tmp` (the Full wrapper's
+  `/tmp/.capybara-exec-*` files), `/skills`, `/opt`, `/opt/capybara` and below; read roots only
+  inside the record directory. This is defence in depth beside the root-owned records.
+- **Full access** (`filesystem: device`, `network: environment` only; anything else is refused as
+  unsupported): the ordinary exec wrapper and environment, without restricted filters, after the
+  agent's admission check; native calls use the helper on `/`. A refusal by that check is accepted
+  only with the per-call nonce the agent removes from its environment before exec, so a command
+  cannot report itself as "not executed".
+- **Records** live in `/skills/.capybara-ops` on the device's persistent skills volume, written only
+  by root through the root-only writable mount (`/opt/capybara/skills`, `0711` directories, `0600`
+  records): the sandbox user cannot create, list or change them, and they survive instance restarts.
+  Admission: before any effect, a root step records `(instance generation, operation ID)` with the
+  method and input digest. A retry of a consumed foreground operation with the same input is
+  `SandboxOperationOutcomeUnknownError` (also after an instance restart), another method or input
+  under the same ID `SandboxScopeValidationError`; a passed `admitBeforeMs` admits nothing. `revokeOperation` writes a
+  root-owned tombstone the agent checks right before launching, ends the running foreground and
+  background work, then rewrites the tombstone; if the instance restarted meanwhile (a new
+  generation, for example the kill's restart fallback) it reports an error so the kernel retries.
+  A cancelled restricted foreground operation gets a root-owned cancellation marker the same way.
+- **Background**: per execution a detached **root** recorder owns the record, the output spool and
+  the stop claim; the sandbox-user supervisor reaches it only through a root-owned UNIX socket whose
+  random name it receives on stdin. The recorder accepts frames only on the one connection whose
+  `SO_PEERCRED` pid is the supervisor that identified itself (pid, start time and argv checked) and
+  whose identity frame carries a second random token and the digest of the request it runs; root
+  recorded the digest of the canonical start request the provider admitted (command, scope, cwd,
+  env, limits, output path), and only a match binds the record. The token protects against
+  discovery of the channel through `/proc/net/unix`, which lists the socket name; it is not
+  unreadable: during `bg-start`'s interpreter start-up, before it turns undumpable, a process of
+  the same uid can read the request (token included) from its stdin through `/proc`. With it, the
+  real agent binds only a supervisor running exactly the granted request. A start the agent
+  refuses (its own supervisor was never accepted, so whatever is bound is not the provider's) is
+  aborted: the provider writes the root cancellation marker, stops whatever the record names by its
+  recorded identity and marks the reference aborted, so `status` reports it `lost` and no output is
+  served under it. The same happens when the `bg-start` exec does not exit 0 with exactly one
+  result frame (it was killed, stopped and ended on the provider's signal, failed, or its stdout
+  holds anything else): the genuine agent exits 0 only after its own supervisor was accepted. A
+  start whose exec exited 0 but whose reply was lost stays running, and the same-ID retry returns
+  its reference (one launch), unless the recorder marked it contested: a second supervisor
+  presented the token and the admitted digest after the bind, so one of them is not genuine; then
+  the start, or the retry, aborts it the same way. The supervisor blocks cancellation, reports its
+  pid and start time before `start` acknowledges, re-checks the tombstone after that and before
+  launching, installs its handlers, then launches (Full children additionally run under
+  `timeout -s KILL`). It keeps the starting grant, appends merged output to the spool (for `tail`
+  and `readOutput`, at most 65,536 bytes per read) and to `outputPath` (opened inside the scope
+  through the pinned roots). A retried `start` returns the same reference without launching again.
+  `status` / `tail` / `readOutput` / `stop` never start a stopped instance (its work is `lost`);
+  `stop` signals exactly the recorded supervisor (pidfd and start time) and claims its outcome once
+  (`stopped` or `already-exited`). A stop that finds an execution still `starting` (no supervisor
+  reported) claims `lost` and writes a root cancellation marker, so a late supervisor never launches.
+  Residual trust (M5, closed only by a separate uid or ptrace-scoped Full work, Task 14): Full access
+  work of any conversation shares the device uid, so it can signal (stop, freeze) the sandbox user's
+  processes, including supervisors, and intercept a `bg-start`'s request during its start-up. A
+  process of that uid can run its own code under the agent's exact argv (it can rewrite its own argv
+  in place, no ptrace needed) and bind the record with the stolen token and a matching digest. When
+  it kills or stops the genuine `bg-start`, or the real supervisor is refused, the start is aborted
+  and the reference reports `lost`. Two cases stay open: a worker crash after such a bind followed by
+  the kernel's same-ID retry (the provider never saw the exec end, and the retry returns the
+  reference, which then reports the forged process and its output as the task), and a forger that
+  ptraces the genuine `bg-start` during start-up (it controls the genuine process, so it can make it
+  exit 0). It cannot change the records.
+- **Spool storage (operational change)**: retained background output now lives on the device's
+  persistent skills volume (not the instance's tmpfs `/tmp`) until `retainUntilMs` plus one hour.
+  Each execution's spool is capped at 64 MiB (later output still reaches `outputPath`; the record
+  notes `outputTruncated`). Expired records and spools, and records of a previous instance
+  generation past their retention, are pruned at every instance start (create, resume, restart
+  fallback) and on each operation; plan disk space for the skills volume accordingly.
+- **Preparation**: skills only under `/skills`, written by root through the writable skills mount
+  on pinned descriptors (files `0644`); attachments only under `/workspace/attachments/<conversation>`,
+  as the sandbox user. **Browsing**: `stat` / `list` / `scan` on pinned read roots only.
+
 ## Test-only options
 
 The second parameter of `createDockerSandbox(config, testOptions)` can be passed only by code that calls it directly; the plugin config cannot set it:
@@ -213,6 +323,9 @@ The second parameter of `createDockerSandbox(config, testOptions)` can be passed
 - `labels`: adds extra labels to all resources (tests clean up by label);
 - `egressTestHosts`: the egress proxy pins these host names to the given IPs and exempts them from the private-address check (in `allowlist` mode they must also be on the list),
   so that a local HTTP service in a test can serve as an allowed target. It is passed in through the proxy container's environment variable `CAPYBARA_EGRESS_TEST_HOSTS`.
+- `backgroundLaunchBarrier` (a file a background supervisor waits for after it recorded itself and before its final admission
+  check) and `afterRevokeKill` (runs inside `revokeOperation` between the kill and the final tombstone): readiness hooks for the
+  start/revoke, start/stop and restart race tests.
 
 ## Tests
 
@@ -220,6 +333,7 @@ The second parameter of `createDockerSandbox(config, testOptions)` can be passed
 `test/manifest.test.ts` (including `refuseOpenNetwork` on resume and auto-start against a stub Docker API) and `test/network.test.ts`
 (what each network builds, and when `update` may keep the container) do not need Docker; `test/sandbox-docker.test.ts` and `test/concurrent.test.ts` need Docker (the whole group is skipped without it),
 builds the test images once (tagged by the content of their build context, shared by the test files and kept for later runs; remove old `capybara-sandbox*:test-*` tags with `docker rmi`), starts the socket proxy, and cleans up by label at the end; the runsc cases run only when the daemon has runsc registered.
+`test/permission-scopes.test.ts` runs `runSandboxPermissionConformance` (from `@capybara-hq/testing`, `access: "proxy"`: the granted endpoint is a service outside the device, reached by its allowlisted name only through the operation's forwarder and the real egress proxy) against the actual provider, image and socket proxy, plus the provider's own Full / restricted, forwarder, admission, revocation, background, preparation, browsing and fail-closed cases; it logs the kernel, Landlock ABI, Docker version and image it ran on. Set `CAPYBARA_TEST_REQUIRE_LINUX_RESTRICTED=1` for an evidence run: a missing Docker or an unsupported restricted runtime then fails instead of skipping.
 Through a real kernel: `test/sandbox-tools.smoke.test.ts` (the kernel's sandbox tools in one process) and `test/sandbox-artifacts.dual.test.ts` (the M5 segment 2 flow across two replicas: attachments, delivery, takeover after a killed replica, idle suspend and resume). The socket proxy starts from `test/sandbox-proxy/haproxy.cfg`, an exact copy of capybara-hq/core's [`docker/sandbox-proxy/haproxy.cfg`](https://github.com/capybara-hq/core/tree/main/docker/sandbox-proxy/haproxy.cfg). Nothing in this repository compares them; core's `check:bootstrap --network` (rule `bootstrap-haproxy`) will check the copy against the commit core pins.
 
 ## Icon

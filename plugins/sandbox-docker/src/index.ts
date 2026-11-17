@@ -131,9 +131,10 @@ export function providerConfig(
 const plugin = defineExtension({
   name: "sandbox-docker",
   version: "0.1.0-rc.16",
-  // The network contract (`limits.mode` / `limits.network`) is the SDK's from rc.22 on; a kernel
-  // that predates it gets no network (the safe direction).
-  sdk: "^0.1.0-rc.22",
+  // The operation contract and its staged runtime (SANDBOX_RUNTIME_SOURCE v2) are the SDK's from
+  // rc.28 on (its staged launcher bytes); the network contract (`limits.mode` /
+  // `limits.network`) from rc.22.
+  sdk: "^0.1.0-rc.28",
   provides: [SANDBOX_EXTENSION_POINT],
   // 只用部署配置与 Docker endpoint，不用任何需要声明的平台能力
   permissions: {},

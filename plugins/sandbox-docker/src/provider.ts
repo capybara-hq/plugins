@@ -30,6 +30,8 @@ import {
   LIST_TIMEOUT_SECONDS,
   listLimit,
 } from "./listing.js";
+import { createOperations, type OperationTransport, refusedFrame } from "./operations.js";
+import { OPERATION_AGENT } from "./runtime-source.js";
 
 /** The images published with a given sandbox-docker version (the plugins repo's image workflow). */
 export function publishedImages(version: string): { sandbox: string; egress: string } {
@@ -47,7 +49,20 @@ export function publishedImages(version: string): { sandbox: string; egress: str
  * created.
  */
 export type DockerSandboxProvider = SandboxProvider &
-  Required<Pick<SandboxProvider, "update" | "list" | "scan">> & {
+  Required<
+    Pick<
+      SandboxProvider,
+      | "update"
+      | "list"
+      | "scan"
+      | "permissionSupport"
+      | "operation"
+      | "prepare"
+      | "browse"
+      | "revokeOperation"
+      | "background"
+    >
+  > & {
     readonly limitsApplyAt: "instance";
   };
 
@@ -113,6 +128,35 @@ export interface DockerSandboxTestOptions {
    * test stand in for an allowed target.
    */
   egressTestHosts?: Record<string, string>;
+  /**
+   * A file the background supervisor of `taskId` waits for after it recorded itself and before its
+   * final admission check (a readiness barrier for the start/revoke and start/stop race tests).
+   */
+  backgroundLaunchBarrier?: (taskId: string) => string | undefined;
+  /** Runs inside `revokeOperation` between the kill and the final tombstone (restart tests). */
+  afterRevokeKill?: (operationId: string) => Promise<void>;
+  /** A smaller spool cap (bytes) for the background execution of `taskId`. */
+  backgroundSpoolCapBytes?: (taskId: string) => number | undefined;
+  /**
+   * Runs between a background execution's root preparation and its supervisor (race tests). It
+   * receives the exact supervisor request, channel name and token included, to simulate a leak.
+   */
+  beforeBackgroundLaunch?: (
+    taskId: string,
+    leaked: Readonly<Record<string, unknown>>,
+  ) => Promise<void>;
+  /** Drops the background start reply of `taskId` as if the transport lost it (reconcile tests). */
+  loseBackgroundAck?: (taskId: string) => boolean;
+  /**
+   * Replaces the background start's command for `taskId` (tests that kill or stop the real
+   * `bg-start` before it forks its supervisor).
+   */
+  backgroundStartCommand?: (taskId: string, cmd: string[]) => string[];
+  /**
+   * Receives the exact bytes written to the background start's stdin and returns the bytes to
+   * write instead (deterministic interception tests: steal, then write back).
+   */
+  interceptBackgroundStdin?: (taskId: string, stdin: Uint8Array) => Promise<Uint8Array>;
 }
 
 /** The sandbox user (the image's `sandbox`): commands and file operations run as it. */
@@ -372,8 +416,19 @@ const KILL_TREE =
  * 杀掉经 exec 启动、仍在运行的全部命令（接手崩溃的前任时）：按命令行找到每个包装（会话首进程），
  * 按进程组与会话 SIGKILL。模式里的 `[.]` 让它匹配不到这个脚本自己的命令行。
  */
+/**
+ * Restricted operations run under the operation agent (`capybara-operation.py exec|native
+ * capybara-exec <ctl>`): SIGTERM first lets the launcher end its whole supervised tree (a SIGKILL
+ * of the supervisor would orphan restricted descendants), then the forced pass below runs. `$1`
+ * is the control-path pattern; waits at most 10 s.
+ */
+const TERM_AGENTS =
+  'g() { a="capybara-operation[.]py (exec|native) capybara-exec $1"; ' +
+  'for q in $(pgrep -f -- "$a"); do kill -TERM "$q" 2>/dev/null; done; i=0; ' +
+  'while pgrep -f -- "$a" >/dev/null && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done; }; ';
+
 const KILL_ALL_SCRIPT =
-  `${KILL_TREE}for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-"); do ` +
+  `${KILL_TREE}${TERM_AGENTS}g "/tmp/[.]capybara-exec-"; for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-"); do ` +
   'k "$q"; kill -9 "$q" 2>/dev/null; done; exit 0';
 
 /**
@@ -385,9 +440,22 @@ const KILL_ALL_SCRIPT =
  * Other holders' commands keep running.
  */
 const KILL_TAGGED_SCRIPT =
-  `${KILL_TREE}u='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; for t in "$@"; do ` +
-  'for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-$t-$u( |$)"); do ' +
+  `${KILL_TREE}${TERM_AGENTS}u='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; ` +
+  // One graceful pass for every tag at once, so the wait stays within the kill budget.
+  'a=$(printf "%s|" "$@" | sed "s/|$//"); g "/tmp/[.]capybara-exec-($a)-$u( |$)"; for t in "$@"; do for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-$t-$u( |$)"); do ' +
   'k "$q"; kill -9 "$q" 2>/dev/null; done; done; exit 0';
+
+/**
+ * Kills every execution whose control path ends with one operation's UUID, whatever its tag
+ * (`revokeOperation`): the agent stops restricted work gracefully and the operation's background
+ * agent (`$2`), then the ordinary forced pass for Full access wrappers. Background executions
+ * are stopped by their root-owned record (operations.ts).
+ */
+const KILL_OPERATION_SCRIPT =
+  // The agent's graceful cancel takes at most 12 s, inside killOrRestart's 15 s budget.
+  `${KILL_TREE}/usr/bin/python3 -I "$2" cancel --uuid "$1" 2>/dev/null; ` +
+  'for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-[a-z0-9-]+-$1( |$)"); do ' +
+  'k "$q"; kill -9 "$q" 2>/dev/null; done; exit 0';
 
 /** The control file of one exec: carries the holder's tag when there is one. */
 export function execControlPath(tag?: string): string {
@@ -446,7 +514,15 @@ function checkPath(p: string): void {
   const errors = validateSandboxPathShape(p);
   if (errors.length > 0)
     throw new Error(`invalid sandbox path ${JSON.stringify(p)}: ${errors.join("; ")}`);
+  // The provider's own operation records (root-owned, on the skills volume) are never a file
+  // target, not even for the root-run skills write.
+  if (p === RECORDS_VIEW || p.startsWith(`${RECORDS_VIEW}/`)) {
+    throw new Error(`sandbox path ${JSON.stringify(p)} is reserved for the provider's records`);
+  }
 }
+
+/** Where the sandbox user sees the provider's operation records (capybara-operation.py). */
+const RECORDS_VIEW = "/skills/.capybara-ops";
 
 interface RunOpts {
   cmd: string[];
@@ -960,7 +1036,24 @@ export function createDockerSandbox(
       query: { t: 0 },
       signal: within(60_000),
     });
+    await initRecords(container);
   };
+
+  /**
+   * Root step at every instance start (create, resume, restart fallback): ensures the operation
+   * record directory and prunes expired records and spools. An image without the operation
+   * runtime simply has nothing to prune.
+   */
+  async function initRecords(container: string): Promise<void> {
+    const body = Buffer.from("2\n{}");
+    await run(container, {
+      cmd: ["/usr/bin/python3", "-I", OPERATION_AGENT, "init"],
+      user: ROOT_USER,
+      stdin: body,
+      maxOutputBytes: 1 << 20,
+      signal: AbortSignal.timeout(60_000),
+    }).catch(() => undefined);
+  }
 
   /** 文件操作：以沙箱用户（写 /skills 时以 root 经可写挂载）跑一个小脚本。 */
   const fileOp = async (
@@ -1053,10 +1146,98 @@ export function createDockerSandbox(
       if (isStatus(e, 404)) return "gone";
       throw e;
     }
+    if (!c.State.Running) await initRecords(h.id);
     return "resumed";
   }
 
   const stderrOf = (r: RunResult) => r.stderr.toString("utf8").trim().slice(0, 500);
+
+  /**
+   * The ordinary exec: the command runs through the wrapper (`execArgv`) under `ctl`; `prefix`
+   * (the operation agent's admission check, Full access only) execs that wrapper unchanged.
+   */
+  const execWith = async (
+    h: SandboxHandle,
+    args: Omit<Parameters<SandboxProvider["exec"]>[1], "actor">,
+    ctl: string,
+    prefix: string[] = [],
+    nonce?: string,
+  ): Promise<ExecResult> => {
+    args.signal.throwIfAborted();
+    const env: string[] = [];
+    for (const [k, v] of Object.entries(args.env ?? {})) {
+      if (!ENV_KEY_RE.test(k)) throw new Error(`invalid environment variable name: ${k}`);
+      env.push(`${k}=${v}`);
+    }
+    // The admission agent removes it before exec: the command can never echo it back.
+    if (nonce !== undefined) env.push(`CAPYBARA_ADMISSION_NONCE=${nonce}`);
+    const r = await autoStart(h, args.signal, () =>
+      run(h.id, {
+        cmd: [...prefix, ...execArgv(ctl, args.command, args.timeoutMs)],
+        user: SANDBOX_USER,
+        env,
+        cwd: args.cwd ?? "/workspace",
+        maxOutputBytes: args.maxOutputBytes,
+        timeoutMs: args.timeoutMs,
+        signal: args.signal,
+        kill: killer(h.id, ctl),
+      }),
+    );
+    // The admission prefix refused before the command started: its only output is the refusal
+    // frame (operations.ts maps it), with exit code 125.
+    if (prefix.length > 0 && r.exitCode === 125 && r.stdout[0] === 0x52) {
+      const refused = refusedFrame(r.stdout, nonce ?? "");
+      if (refused === "cancelled") {
+        return { exitCode: null, stdout: "", stderr: "", truncated: false, timedOut: false };
+      }
+      if (refused) throw refused;
+    }
+    return {
+      exitCode: r.exitCode,
+      stdout: decodeOutput(r.stdout, r.truncated),
+      stderr: decodeOutput(r.stderr, r.truncated),
+      truncated: r.truncated,
+      timedOut: r.timedOut,
+    };
+  };
+
+  const userOf = (u: "sandbox" | "root") => (u === "root" ? ROOT_USER : SANDBOX_USER);
+
+  const transport: OperationTransport = {
+    run: (h, o) =>
+      autoStart(h, o.signal, () =>
+        run(h.id, { ...o, user: userOf(o.user), cwd: "/", ...(o.kill && { kill: o.kill }) }),
+      ),
+    async runIfRunning(h, o) {
+      try {
+        return await run(h.id, { ...o, user: userOf(o.user), cwd: "/" });
+      } catch (e) {
+        if (e instanceof NotRunningError) return "not-running";
+        throw e;
+      }
+    },
+    execFull: (h, args, ctl, prefix, nonce) => execWith(h, args, ctl, prefix, nonce),
+    cancelRestricted: (h, ctl) =>
+      killOrRestart(h.id, ["/usr/bin/python3", "-I", OPERATION_AGENT, "cancel", ctl]),
+    killOperation: async (h, uuid, signal) => {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid)) {
+        throw new Error("invalid operation control id");
+      }
+      await killOrRestart(
+        h.id,
+        ["/bin/sh", "-c", KILL_OPERATION_SCRIPT, "capybara-killop", uuid, OPERATION_AGENT],
+        signal,
+      );
+    },
+    backgroundLaunchBarrier: test.backgroundLaunchBarrier,
+    afterRevokeKill: test.afterRevokeKill,
+    backgroundSpoolCapBytes: test.backgroundSpoolCapBytes,
+    beforeBackgroundLaunch: test.beforeBackgroundLaunch,
+    loseBackgroundAck: test.loseBackgroundAck,
+    backgroundStartCommand: test.backgroundStartCommand,
+    interceptBackgroundStdin: test.interceptBackgroundStdin,
+  };
+  const operations = createOperations({ transport, decode: decodeOutput });
 
   // ---------- 契约 ----------
 
@@ -1180,6 +1361,7 @@ export function createDockerSandbox(
           throw gone();
         }
         await start(n.container, signal);
+        await initRecords(n.container);
       } catch (e) {
         // No cleanup when aborted: a new lock holder may already use the same name; leftovers go
         // with the next create or destroyByName. The cleanup drops the instance only.
@@ -1289,31 +1471,7 @@ export function createDockerSandbox(
     // `args.actor` is informational in phase 1: not used for anything
     async exec(h, args): Promise<ExecResult> {
       args.signal.throwIfAborted();
-      const ctl = execControlPath(args.tag);
-      const env: string[] = [];
-      for (const [k, v] of Object.entries(args.env ?? {})) {
-        if (!ENV_KEY_RE.test(k)) throw new Error(`invalid environment variable name: ${k}`);
-        env.push(`${k}=${v}`);
-      }
-      const r = await autoStart(h, args.signal, () =>
-        run(h.id, {
-          cmd: execArgv(ctl, args.command, args.timeoutMs),
-          user: SANDBOX_USER,
-          env,
-          cwd: args.cwd ?? "/workspace",
-          maxOutputBytes: args.maxOutputBytes,
-          timeoutMs: args.timeoutMs,
-          signal: args.signal,
-          kill: killer(h.id, ctl),
-        }),
-      );
-      return {
-        exitCode: r.exitCode,
-        stdout: decodeOutput(r.stdout, r.truncated),
-        stderr: decodeOutput(r.stderr, r.truncated),
-        truncated: r.truncated,
-        timedOut: r.timedOut,
-      };
+      return execWith(h, args, execControlPath(args.tag));
     },
 
     async readFile(h, path, opts) {
@@ -1393,6 +1551,14 @@ export function createDockerSandbox(
       const r = await listOp(h, "scan", b, 0, opts.signal);
       return finishScan(b, r, NO_PYTHON);
     },
+
+    // The operation contract (operations.ts): fresh immutable scopes per invocation.
+    permissionSupport: operations.permissionSupport,
+    operation: operations.operation,
+    prepare: operations.prepare,
+    browse: operations.browse,
+    revokeOperation: operations.revokeOperation,
+    background: operations.background,
   };
 }
 
