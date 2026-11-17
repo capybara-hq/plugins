@@ -5,6 +5,8 @@
 
 const BY_EXTENSION: Readonly<Record<string, string>> = {
   ts: "typescript",
+  mts: "typescript",
+  cts: "typescript",
   tsx: "tsx",
   js: "javascript",
   mjs: "javascript",
@@ -19,35 +21,31 @@ const BY_EXTENSION: Readonly<Record<string, string>> = {
   c: "c",
   h: "c",
   cpp: "cpp",
+  cc: "cpp",
+  cxx: "cpp",
+  hh: "cpp",
   hpp: "cpp",
   cs: "csharp",
   rb: "ruby",
-  php: "php",
   sh: "shellscript",
   bash: "shellscript",
   zsh: "shellscript",
   ps1: "powershell",
   sql: "sql",
   json: "json",
+  jsonl: "json",
   jsonc: "jsonc",
   yaml: "yaml",
   yml: "yaml",
   toml: "toml",
   ini: "ini",
+  properties: "ini",
   xml: "xml",
   css: "css",
   scss: "scss",
-  vue: "vue",
-  svelte: "svelte",
   dockerfile: "dockerfile",
   makefile: "make",
-  gradle: "groovy",
   proto: "proto",
-  graphql: "graphql",
-  lua: "lua",
-  r: "r",
-  dart: "dart",
-  scala: "scala",
   html: "html",
   htm: "html",
   env: "dotenv",
@@ -100,15 +98,49 @@ export const LANGUAGES: readonly string[] = Object.freeze(
   ].sort(),
 );
 
+/** The most text the code previewer highlights; the rest of a file is not shown (a note says so). */
+export const MAX_HIGHLIGHT_CHARS = 256 * 1024;
+
+/** `text` cut to at most `max` UTF-16 units, never between the halves of a surrogate pair. */
+export function capText(
+  text: string,
+  max: number = MAX_HIGHLIGHT_CHARS,
+): { text: string; truncated: boolean } {
+  if (text.length <= max) return { text, truncated: false };
+  let end = max;
+  const last = text.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return { text: text.slice(0, end), truncated: true };
+}
+
+function replacements(s: string): number {
+  let n = 0;
+  for (const ch of s) if (ch === "\uFFFD") n++;
+  return n;
+}
+
 /**
- * Decodes file bytes as text: UTF-16 by its BOM, else UTF-8 (a UTF-8 BOM is dropped). Invalid
- * sequences become U+FFFD and NUL bytes are shown as U+FFFD too, so a binary file reads as text
- * and never throws.
+ * Decodes file bytes as text: UTF-16 by its BOM, else UTF-8 (a UTF-8 BOM is dropped). If more than
+ * 10% of a UTF-8 decode is replacement characters, GB18030 is tried and kept when it has fewer.
+ * Invalid sequences become U+FFFD and NUL bytes are shown as U+FFFD too, so a binary file reads
+ * as text and never throws.
  */
 export function decodeText(bytes: ArrayBuffer | Uint8Array): string {
   const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   let label = "utf-8";
   if (u8.length >= 2 && u8[0] === 0xff && u8[1] === 0xfe) label = "utf-16le";
   else if (u8.length >= 2 && u8[0] === 0xfe && u8[1] === 0xff) label = "utf-16be";
-  return new TextDecoder(label, { fatal: false }).decode(u8).replaceAll("\u0000", "�");
+  let text = new TextDecoder(label, { fatal: false }).decode(u8);
+  if (label === "utf-8" && text.length > 0) {
+    const bad = replacements(text);
+    if (bad / text.length > 0.1) {
+      try {
+        const gb = new TextDecoder("gb18030", { fatal: false }).decode(u8);
+        if (replacements(gb) < bad) text = gb;
+      } catch {
+        // the runtime has no GB18030 decoder: keep the UTF-8 reading
+      }
+    }
+  }
+  return text.replaceAll("\u0000", "\uFFFD");
 }

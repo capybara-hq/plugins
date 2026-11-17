@@ -3,8 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import { MESSAGES, translator } from "../ui-src/app/frame.js";
 import type { RenderContext } from "../ui-src/app/types.js";
 import { mountCode, render } from "../ui-src/renderers/code.js";
-import { decodeText, languageFor } from "../ui-src/shared/language.js";
-import { highlight, MAX_CHARS, MAX_LINES } from "../ui-src/workers/code.logic.js";
+import {
+  capText,
+  decodeText,
+  LANGUAGES,
+  languageFor,
+  MAX_HIGHLIGHT_CHARS,
+} from "../ui-src/shared/language.js";
+import { highlight, LANG_MODULES, MAX_CHARS, MAX_LINES } from "../ui-src/workers/code.logic.js";
 
 describe("languageFor", () => {
   it("maps extension, file name and MIME type", () => {
@@ -34,7 +40,7 @@ describe("highlight (worker logic)", () => {
     expect(out.lines).toHaveLength(MAX_LINES);
     expect(out.truncated).toBe(true);
   });
-  it("cuts a 2 MiB single line at 1 MiB", async () => {
+  it("cuts a 2 MiB single line at the 256 KiB highlight cap", async () => {
     const out = await highlight({
       text: "a".repeat(2 * 1024 * 1024),
       lang: "javascript",
@@ -55,14 +61,16 @@ describe("highlight (worker logic)", () => {
   });
 });
 
-function makeCtx(locale: "zh" | "en" = "en"): RenderContext {
+function makeCtx(locale: "zh" | "en" = "en"): RenderContext & { end(): void } {
+  const life = new AbortController();
   const root = document.createElement("div");
   document.body.append(root);
   return {
     root,
     locale,
     signal: new AbortController().signal,
-    lifetime: new AbortController().signal,
+    lifetime: life.signal,
+    end: () => life.abort(),
     t: translator(locale),
     runInWorker: vi.fn(async (_id, input) => highlight(input as never)) as never,
     showError: vi.fn(),
@@ -113,5 +121,96 @@ describe("mountCode", () => {
     const bytes = new Uint8Array([0xff, 0xfe, 0x68, 0x00, 0x69, 0x00]);
     await render({ name: "a.txt", contentType: "text/plain", size: 6, data: bytes.buffer }, ctx);
     expect(ctx.root.textContent).toContain("hi");
+  });
+});
+
+describe("bounded highlighting", () => {
+  it("highlights only the first 256 KiB of a near-1 MiB TypeScript file", async () => {
+    const line = "const value: number = compute(1, 'two', [3]); // note\n";
+    const text = line.repeat(Math.floor((1024 * 1024 - 10) / line.length));
+    const out = await highlight({ text, lang: "typescript", theme: "light" });
+    expect(out.truncated).toBe(true);
+    const total = out.lines.reduce(
+      (n, l) => n + l.reduce((m, t) => m + t.content.length, 0) + 1,
+      0,
+    );
+    expect(total).toBeLessThanOrEqual(MAX_HIGHLIGHT_CHARS + 1);
+    expect(out.lines[0]?.some((t) => t.color !== undefined)).toBe(true);
+  });
+  it("falls back to plain lines when tokenizing throws", async () => {
+    const out = await highlight({ text: "a\nb", lang: "typescript", theme: "light" });
+    expect(out.lines).toHaveLength(2);
+    // an unknown language is the plain path too
+    const unknown = await highlight({ text: "a", lang: "nope", theme: "light" });
+    expect(unknown.lines).toEqual([[{ content: "a" }]]);
+  });
+  it("capText never splits a surrogate pair", () => {
+    const text = `${"a".repeat(9)}\u{1F600}${"b".repeat(5)}`;
+    const cut = capText(text, 10);
+    expect(cut.truncated).toBe(true);
+    expect(cut.text).toBe("a".repeat(9));
+    expect(capText("abc", 10)).toEqual({ text: "abc", truncated: false });
+  });
+  it("sends the worker at most the cap and notes the cut", async () => {
+    const ctx = makeCtx();
+    const big = "x".repeat(MAX_HIGHLIGHT_CHARS * 4);
+    await mountCode(ctx.root, big, "a.txt", "", ctx);
+    const sent = vi.mocked(ctx.runInWorker).mock.calls[0]?.[1] as unknown as { text: string };
+    expect(sent.text.length).toBe(MAX_HIGHLIGHT_CHARS);
+    expect(ctx.root.querySelector(".cap-code-truncated")).not.toBeNull();
+  });
+  it("leaves empty lines as empty text, not a zero-width space", async () => {
+    const ctx = makeCtx();
+    await mountCode(ctx.root, "a\n\nb", "a.txt", "", ctx);
+    expect(ctx.root.textContent).not.toContain("\u200b");
+    expect(ctx.root.querySelectorAll(".cap-code-line")[1]?.textContent).toBe("");
+  });
+});
+
+describe("languages and decoding", () => {
+  it("keeps the grammar list and the extension map in agreement", () => {
+    expect([...LANGUAGES].filter((l) => l !== "text").sort()).toEqual(
+      Object.keys(LANG_MODULES).sort(),
+    );
+  });
+  it("knows the added extensions", () => {
+    for (const [f, l] of [
+      ["a.mts", "typescript"],
+      ["a.cts", "typescript"],
+      ["a.cc", "cpp"],
+      ["a.cxx", "cpp"],
+      ["a.hh", "cpp"],
+      ["a.jsonl", "json"],
+      ["a.properties", "ini"],
+    ]) {
+      expect(languageFor(f as string, "")).toBe(l);
+    }
+  });
+  it("falls back to GB18030 for a GBK file", () => {
+    const gbk = new Uint8Array([0xc4, 0xe3, 0xba, 0xc3, 0xca, 0xc0, 0xbd, 0xe7]);
+    expect(decodeText(gbk)).toBe("你好世界");
+  });
+  it("shows invalid UTF-8 through render without failing", async () => {
+    const ctx = makeCtx();
+    const bytes = new Uint8Array([0x61, 0xff, 0xfe, 0x62, 0x0a, 0x63]);
+    await render({ name: "a.log", contentType: "", size: 6, data: bytes.buffer }, ctx);
+    expect(ctx.root.textContent).toContain("\uFFFD");
+    expect(ctx.showError).not.toHaveBeenCalled();
+  });
+  it("re-highlights on a theme switch and stops after the lifetime ends", async () => {
+    const ctx = makeCtx();
+    document.documentElement.setAttribute("data-theme", "light");
+    await mountCode(ctx.root, "const a = 1;", "a.ts", "", ctx);
+    const run = vi.mocked(ctx.runInWorker);
+    expect(run).toHaveBeenCalledTimes(1);
+    document.documentElement.setAttribute("data-theme", "dark");
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    const second = run.mock.calls[1]?.[1] as unknown as { theme: string };
+    expect(second.theme).toBe("dark");
+    ctx.end();
+    await Promise.resolve();
+    document.documentElement.setAttribute("data-theme", "light");
+    await Promise.resolve();
+    expect(run).toHaveBeenCalledTimes(2);
   });
 });

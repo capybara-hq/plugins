@@ -8,13 +8,13 @@ import { showEmpty } from "../app/frame.js";
 import { THEME } from "../app/theme.js";
 import type { RenderContext, Renderer } from "../app/types.js";
 import type { HighlightInput, HighlightOutput } from "../shared/code.js";
-import { decodeText, languageFor } from "../shared/language.js";
+import { capText, decodeText, languageFor } from "../shared/language.js";
 
 const STRINGS = {
-  zh: { wrap: "自动换行", truncated: "文件过大，仅显示并高亮开头部分" },
+  zh: { wrap: "自动换行", truncated: "文件过大，仅显示开头部分" },
   en: {
     wrap: "Wrap lines",
-    truncated: "File too large: only the beginning is shown and highlighted",
+    truncated: "File too large: only the beginning is shown",
   },
 } as const;
 
@@ -85,8 +85,10 @@ export async function mountCode(
   const doc = root.ownerDocument;
   const s = STRINGS[ctx.locale];
   const lang = languageFor(name, contentType);
+  // the worker never gets (and the page never clones) more than the highlight cap
+  const capped = capText(text);
   const run = (theme: "dark" | "light") =>
-    ctx.runInWorker<HighlightInput, HighlightOutput>("code", { text, lang, theme });
+    ctx.runInWorker<HighlightInput, HighlightOutput>("code", { text: capped.text, lang, theme });
 
   const result = await run(currentTheme(doc));
   if (ctx.signal.aborted) return;
@@ -107,7 +109,7 @@ export async function mountCode(
     toggle.setAttribute("aria-pressed", String(on));
   });
   bar.append(toggle);
-  if (result.truncated) {
+  if (result.truncated || capped.truncated) {
     const note = doc.createElement("span");
     note.className = "cap-code-truncated";
     note.textContent = s.truncated;
@@ -126,17 +128,17 @@ export async function mountCode(
     let shown = currentTheme(doc);
     const observer = new view.MutationObserver(() => {
       const theme = currentTheme(doc);
-      if (!wrap.isConnected) return observer.disconnect();
       if (theme === shown) return;
       shown = theme;
       run(theme).then(
         (next) => {
-          if (wrap.isConnected && currentTheme(doc) === theme) paint(doc, body, next.lines);
+          if (!ctx.lifetime.aborted && currentTheme(doc) === theme) paint(doc, body, next.lines);
         },
         () => {},
       );
     });
     observer.observe(doc.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    ctx.lifetime.addEventListener("abort", () => observer.disconnect(), { once: true });
   }
 }
 
