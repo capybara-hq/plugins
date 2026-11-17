@@ -33,11 +33,13 @@ function sharedBuild() {
 }
 
 /**
- * A call that evaluates a string as code: `Function(…)`, `new Function(…)`, `eval(…)`. Not a
- * method (`.eval(`), not part of a longer name, and not followed by `?`: `Function(?` can only be
- * text inside a regex source (shiki's grammars), never a call.
+ * A call that evaluates a string as code: `Function(…)`, `new Function(…)`, `eval(…)`, and the
+ * indirect forms `x.eval(…)`, `x.Function(…)`, `(0,eval)(…)`, `(0, eval)(…)`. A bare name is not
+ * part of a longer one, and nothing is followed by `?`: `Function(?` can only be text inside a
+ * regex source (shiki's grammars), never a call.
  */
-const EVAL_RE = /(?<![\w$.])(?:new\s+)?(?:Function|eval)\s*\((?!\?)/g;
+const EVAL_RE =
+  /(?<![\w$.])(?:new\s+)?(?:Function|eval)\s*\((?!\?)|\.(?:eval|Function)\s*\((?!\?)|\(\s*0\s*,\s*eval\s*\)\s*\(/g;
 /**
  * The only eval-like calls the shipped code may contain, each unreachable in the embed (the CSP
  * has no 'unsafe-eval', so reaching one would throw, never run code):
@@ -55,6 +57,7 @@ const EVAL_ALLOWED: ReadonlyArray<{ file?: RegExp; re: RegExp; why: string }> = 
   },
   {
     // the setImmediate polyfill bundled with exceljs and mammoth: `typeof f != "function"`
+    file: /^(sheet|docx)\.worker\.js$/,
     re: /^new Function\(""\+(\w+)\)/,
     why: "only for a string callback; the bundles pass functions",
   },
@@ -227,6 +230,69 @@ describe("buildUi", () => {
     expect(text).not.toMatch(/\bimport\s*\(/);
     expect(text).toContain("openjpeg_nowasm_fallback.js");
     expect(text).toContain("jbig2_nowasm_fallback.js");
+  });
+
+  it("the zip readers ship JSZip 3.10.x, the versions verifyArchive's rules were checked against", async () => {
+    const { dir } = await sharedBuild();
+    const versions: Record<string, string | undefined> = {};
+    for (const worker of ["sheet", "docx"]) {
+      const source = (await importDefault(join(dir, `${worker}.worker.js`))) as string;
+      versions[worker] = /\.defaults=\w+\("\.\/defaults"\),\w+\.version="([^"]+)"/.exec(
+        source,
+      )?.[1];
+    }
+    expect(versions.sheet).toMatch(/^3\.10\.\d+$/);
+    expect(versions.docx).toMatch(/^3\.10\.\d+$/);
+  });
+
+  it("mammoth's lib never calls _.template (pairs with the docx worker's eval allowlist entry)", async () => {
+    const mammothLib = join(
+      dirname(
+        createRequire(join(import.meta.dirname, "../package.json")).resolve("mammoth/package.json"),
+      ),
+      "lib",
+    );
+    const walkJs = async (dir: string): Promise<string[]> => {
+      const out: string[] = [];
+      for (const e of await readdir(dir, { withFileTypes: true })) {
+        const full = join(dir, e.name);
+        if (e.isDirectory()) out.push(...(await walkJs(full)));
+        else if (e.name.endsWith(".js")) out.push(full);
+      }
+      return out;
+    };
+    const files = await walkJs(mammothLib);
+    expect(files.length).toBeGreaterThan(10);
+    const callers: string[] = [];
+    for (const f of files) if (/\.template\s*\(/.test(await readFile(f, "utf8"))) callers.push(f);
+    expect(callers).toEqual([]);
+  });
+
+  it("the eval scan catches the direct and the indirect forms, not regex text", () => {
+    for (const hit of [
+      'eval("1")',
+      'new Function("a","return a")',
+      'x=Function("return this")()',
+      'self.eval("1")',
+      'globalThis.Function("a")',
+      '(0,eval)("1")',
+      '(0, eval)("1")',
+      '( 0 , eval ) ("1")',
+    ]) {
+      expect([...hit.matchAll(EVAL_RE)], hit).not.toHaveLength(0);
+    }
+    for (const miss of ["/Function(?:a)/", "myeval(1)", "evaluate(1)", "x.evalue(1)"]) {
+      expect([...miss.matchAll(EVAL_RE)], miss).toHaveLength(0);
+    }
+  });
+
+  it("the setImmediate polyfill is allowed only in the workers that bundle it", () => {
+    const entry = EVAL_ALLOWED.find((a) => a.re.test('new Function(""+t)'));
+    expect(entry?.file?.test("sheet.worker.js")).toBe(true);
+    expect(entry?.file?.test("docx.worker.js")).toBe(true);
+    for (const other of ["app.js", "code.worker.js", "pdfjs.worker.js", "zip.worker.js"]) {
+      expect(entry?.file?.test(other), other).toBe(false);
+    }
   });
 
   it("no shipped script evaluates strings as code, beyond the commented allowlist", async () => {
