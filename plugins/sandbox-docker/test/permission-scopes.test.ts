@@ -1,4 +1,4 @@
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import {
   isSandboxScopeDeniedError,
   isSandboxScopeValidationError,
   SANDBOX_RUNTIME_SOURCE,
+  type SandboxExecutionRef,
   type SandboxHandle,
   type SandboxLimits,
   type SandboxOperationScope,
@@ -206,7 +207,10 @@ describe.skipIf(!dockerAvailable)(
     const barriers = new Map<string, string>();
     const afterKill = new Map<string, () => Promise<void>>();
     const spoolCaps = new Map<string, number>();
-    const beforeLaunch = new Map<string, () => Promise<void>>();
+    const beforeLaunch = new Map<
+      string,
+      (taskId: string, leaked: Readonly<Record<string, unknown>>) => Promise<void>
+    >();
 
     /** One device (file system plus instance) under a fresh name. */
     const newDevice = async (
@@ -355,7 +359,8 @@ describe.skipIf(!dockerAvailable)(
           backgroundLaunchBarrier: (taskId) => barriers.get(taskId),
           afterRevokeKill: (operationId) => afterKill.get(operationId)?.() ?? Promise.resolve(),
           backgroundSpoolCapBytes: (taskId) => spoolCaps.get(taskId),
-          beforeBackgroundLaunch: (taskId) => beforeLaunch.get(taskId)?.() ?? Promise.resolve(),
+          beforeBackgroundLaunch: (taskId, leaked) =>
+            beforeLaunch.get(taskId)?.(taskId, leaked) ?? Promise.resolve(),
         },
       );
       device = await newDevice(sbx, { kind: "allowlist", hosts: [] });
@@ -1446,10 +1451,29 @@ print("wrote=%d" % wrote)
         const secret = randomUUID().replaceAll("-", "");
         const token = randomUUID().replaceAll("-", "");
         const retainUntilMs = Date.now() + 3_600_000;
+        const launch = {
+          opKey,
+          admitBeforeMs: scope.admitBeforeMs,
+          expect: sdkRuntimeDigests(),
+          executionId,
+          kind: "device",
+          writeRoots: [],
+          readRoots: [],
+          network: { kind: "environment" },
+          command: `printf ran > ${root}/ran`,
+          cwd: root,
+          env: {},
+          timeoutMs: 60_000,
+          maxOutputBytes: 1024,
+          taskId: "late",
+          outputPath: `${root}/late.log`,
+          retainUntilMs,
+        };
         const prepared = agentCall(device, "0", ["bg-prepare"], {
           executionId,
           secret,
           token,
+          start: launch,
           opKey,
           taskId: "late",
           retainUntilMs,
@@ -1474,27 +1498,7 @@ print("wrote=%d" % wrote)
           (await sbx.background.stop(device, ref, { graceMs: 0, signal: sig() })).outcome,
         ).toBe("lost");
         // The supervisor arrives after the stop claimed its outcome: it must not launch.
-        agentCall(device, "1000", ["bg-start"], {
-          secret,
-          token,
-          opKey,
-          admitBeforeMs: scope.admitBeforeMs,
-          expect: sdkRuntimeDigests(),
-          executionId,
-          kind: "device",
-          writeRoots: [],
-          readRoots: [],
-          network: { kind: "environment" },
-          testEndpoints: {},
-          command: `printf ran > ${root}/ran`,
-          cwd: root,
-          env: {},
-          timeoutMs: 60_000,
-          maxOutputBytes: 1024,
-          taskId: "late",
-          outputPath: `${root}/late.log`,
-          retainUntilMs,
-        });
+        agentCall(device, "1000", ["bg-start"], { secret, token, ...launch });
         for (;;) {
           const s = await sbx.background.status(device, ref, sig());
           if (s.state !== "running") break;
@@ -1603,7 +1607,7 @@ for secret in names:
     tried += 1
     body = json.dumps({"secret": secret, "opKey": "attacker", "admitBeforeMs": deadline,
         "expect": expect, "executionId": execution, "kind": "device", "writeRoots": [],
-        "readRoots": [], "network": {"kind": "environment"}, "testEndpoints": {},
+        "readRoots": [], "network": {"kind": "environment"},
         "command": "echo $$ > %s/attacker; exec sleep 1801" % root, "cwd": root, "env": {},
         "timeoutMs": 600000, "maxOutputBytes": 1024, "taskId": "attacker",
         "outputPath": "%s/attacker.log" % root, "retainUntilMs": deadline}).encode()
@@ -1641,6 +1645,268 @@ print("tried=%d" % tried)
           outcome: "stopped",
         });
         expect(await alive(device, [real])).toEqual([]);
+      });
+
+      /**
+       * R8: a same-uid process that learns the channel token (from bg-start's stdin before it
+       * turns undumpable, simulated here by the test hook) runs the real agent's bg-start with a
+       * request of its own. Prints the forged start's result.
+       */
+      const FORGE_WITH = String.raw`
+import json, subprocess, sys
+body = json.loads(sys.argv[1])
+data = json.dumps(body).encode()
+done = subprocess.run(["/usr/bin/python3", "-I", "/opt/capybara-runtime/capybara-operation.py",
+    "bg-start"], input=str(len(data)).encode() + b"\n" + data, capture_output=True)
+raw, at, result = done.stdout, 0, None
+while at + 5 <= len(raw):
+    size = int.from_bytes(raw[at + 1:at + 5], "big")
+    if raw[at:at + 1] == b"R":
+        result = json.loads(raw[at + 5:at + 5 + size])
+    at += 5 + size
+print(json.dumps(result))
+`;
+      const forgeWith = async (h: SandboxHandle, body: Record<string, unknown>) =>
+        JSON.parse(
+          await dexec(h.id, "1000", ["python3", "-I", "-c", FORGE_WITH, JSON.stringify(body)]),
+        ) as Record<string, unknown> | null;
+      const attackerCommand = (root: string) => `echo $$ > ${root}/attacker; exec sleep 1801`;
+      /** Processes of the device whose command line contains `needle` (argv joined by spaces). */
+      const processes = async (h: SandboxHandle, needle: string) =>
+        Number(
+          await dexec(h.id, "0", [
+            "python3",
+            "-I",
+            "-c",
+            String.raw`
+import os, sys
+n = 0
+for pid in os.listdir("/proc"):
+    if pid.isdigit() and int(pid) != os.getpid():
+        try:
+            args = open("/proc/%s/cmdline" % pid, "rb").read().replace(b"\\0", b" ")
+            state = open("/proc/%s/stat" % pid).read().rsplit(")", 1)[1].split()[0]
+        except OSError:
+            continue
+        if sys.argv[1].encode() in args and state not in ("Z", "X"):
+            n += 1
+print(n)
+`,
+            needle,
+          ]),
+        );
+
+      it("R8: a forged identity with a wrong token is refused and the real start proceeds", async () => {
+        const root = await newRoot(device, "r8w");
+        const scope = scopeFor(full);
+        const taskId = `task-${randomUUID().slice(0, 8)}`;
+        let forged: Record<string, unknown> | null = null;
+        beforeLaunch.set(taskId, async (_task, leaked) => {
+          beforeLaunch.delete(taskId);
+          const wrong = String(leaked.token).replace(/./, (c) => (c === "0" ? "1" : "0"));
+          forged = await forgeWith(device, {
+            ...leaked,
+            token: wrong,
+            command: attackerCommand(root),
+          });
+        });
+        const ref = await sbx.background.start(
+          device,
+          scope,
+          bg(root, `echo $$ > ${root}/real; exec sleep 1802`, taskId),
+        );
+        expect(forged).not.toBeNull();
+        expect((forged as unknown as Record<string, unknown>).started).toBeUndefined();
+        await waitFor(device, `${root}/real`);
+        const real = Number(text(await inspectRead(device, `${root}/real`)));
+        expect(await sbx.background.status(device, ref, sig())).toEqual({ state: "running" });
+        expect(await sbx.background.stop(device, ref, { graceMs: 0, signal: sig() })).toEqual({
+          outcome: "stopped",
+        });
+        expect(await alive(device, [real])).toEqual([]);
+        expect(await inspectRead(device, `${root}/attacker`)).toBeNull();
+      });
+
+      it("R8: the right token with a different command binds nothing and runs nothing", async () => {
+        const root = await newRoot(device, "r8d");
+        const scope = scopeFor(full);
+        const taskId = `task-${randomUUID().slice(0, 8)}`;
+        let forged: Record<string, unknown> | null = null;
+        beforeLaunch.set(taskId, async (_task, leaked) => {
+          beforeLaunch.delete(taskId);
+          forged = await forgeWith(device, { ...leaked, command: attackerCommand(root) });
+        });
+        const started = await sbx.background
+          .start(device, scope, bg(root, `echo $$ > ${root}/real; exec sleep 1802`, taskId))
+          .catch((e: unknown) => e);
+        // The forged start was refused: its supervisor never acknowledged, never launched.
+        expect(forged).not.toBeNull();
+        expect((forged as unknown as Record<string, unknown>).started).toBeUndefined();
+        if (started instanceof Error) {
+          // Failing closed: no record is running, and nothing reports the attacker's output.
+          expect(await inspectRead(device, `${root}/real`)).toBeNull();
+        } else {
+          await waitFor(device, `${root}/real`);
+          const real = Number(text(await inspectRead(device, `${root}/real`)));
+          expect(
+            await sbx.background.status(device, started as SandboxExecutionRef, sig()),
+          ).toEqual({
+            state: "running",
+          });
+          expect(
+            await sbx.background.stop(device, started as SandboxExecutionRef, {
+              graceMs: 0,
+              signal: sig(),
+            }),
+          ).toEqual({ outcome: "stopped" });
+          expect(await alive(device, [real])).toEqual([]);
+        }
+        expect(await inspectRead(device, `${root}/attacker`)).toBeNull();
+      });
+
+      it("R8: a start that is not acknowledged is stopped by its recorded identity", async () => {
+        const root = await newRoot(device, "r8b");
+        const scope = scopeFor(full);
+        const taskId = `task-${randomUUID().slice(0, 8)}`;
+        let forged: Record<string, unknown> | null = null;
+        // The worst case of a leak: the whole request, so the forged identity matches the grant.
+        beforeLaunch.set(taskId, async (_task, leaked) => {
+          beforeLaunch.delete(taskId);
+          forged = await forgeWith(device, { ...leaked });
+        });
+        const started = await sbx.background
+          .start(device, scope, bg(root, `echo $$ > ${root}/real; exec sleep 1803`, taskId))
+          .catch((e: unknown) => e);
+        expect((forged as unknown as Record<string, unknown>)?.started).toBe(true);
+        // The real supervisor got no acceptance: the start fails, and the provider stopped what
+        // the record names (here the granted command under the other supervisor).
+        expect(started).toBeInstanceOf(Error);
+        expect(await processes(device, "sleep 1803")).toBe(0);
+        const record = JSON.parse(
+          await dexec(device.id, "0", [
+            "cat",
+            `/opt/capybara/skills/.capybara-ops/bg/${operationUuid(scope.operationId)}/record.json`,
+          ]),
+        ) as { state: string; generation: string };
+        const ref = {
+          executionId: operationUuid(scope.operationId),
+          operationId: scope.operationId,
+          instanceId: device.id,
+          instanceGeneration: record.generation,
+        };
+        expect(await sbx.background.status(device, ref, sig())).toEqual({ state: "lost" });
+        expect(await sbx.background.tail(device, ref, { maxBytes: 100, signal: sig() })).toEqual({
+          unavailable: "lost",
+        });
+      });
+
+      it("R8: stealing bg-start's stdin, forging a supervisor and writing the request back binds nothing", async () => {
+        const root = await newRoot(device, "r8s");
+        const scope = scopeFor(full);
+        const taskId = `task-${randomUUID().slice(0, 8)}`;
+        // The reviewer's watcher: catches the real bg-start during interpreter start-up (stopped
+        // on sight), reads the framed request from its stdin through /proc, runs a forged
+        // supervisor with the stolen token and its own command, then puts the bytes back.
+        const watch = String.raw`
+import json, os, select, signal, subprocess, sys, time
+agent, root = b"/opt/capybara-runtime/capybara-operation.py", sys.argv[1]
+# Processes that exist already (earlier supervisors keep the same argv) are not the target.
+seen = set(os.listdir("/proc"))
+print("watching", flush=True)
+target, deadline = None, time.monotonic() + 120
+while target is None and time.monotonic() < deadline:
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit() or pid in seen:
+            continue
+        try:
+            args = open("/proc/%s/cmdline" % pid, "rb").read().split(b"\0")
+        except OSError:
+            continue
+        if len(args) >= 4 and args[2] == agent and args[3] == b"bg-start":
+            target = int(pid)
+            break
+os.kill(target, signal.SIGSTOP)
+try:
+    r = os.open("/proc/%d/fd/0" % target, os.O_RDONLY | os.O_NONBLOCK)
+    w = os.open("/proc/%d/fd/0" % target, os.O_WRONLY | os.O_NONBLOCK)
+except OSError as error:
+    os.kill(target, signal.SIGCONT)
+    print(json.dumps({"stolen": False, "error": str(error)}))
+    sys.exit(0)
+data = b""
+while True:
+    if b"\n" in data:
+        line, rest = data.split(b"\n", 1)
+        if len(rest) >= int(line):
+            break
+    select.select([r], [], [], 10)
+    try:
+        data += os.read(r, 1 << 20)
+    except BlockingIOError:
+        pass
+line, rest = data.split(b"\n", 1)
+body = json.loads(rest[:int(line)])
+body["command"] = "echo $$ > %s/attacker; exec sleep 1801" % root
+forged = json.dumps(body).encode()
+done = subprocess.run(["/usr/bin/python3", "-I", agent.decode(), "bg-start"],
+    input=str(len(forged)).encode() + b"\n" + forged, capture_output=True)
+os.write(w, data)
+os.close(w)
+os.close(r)
+os.kill(target, signal.SIGCONT)
+out, at, result = done.stdout, 0, None
+while at + 5 <= len(out):
+    size = int.from_bytes(out[at + 1:at + 5], "big")
+    if out[at:at + 1] == b"R":
+        result = json.loads(out[at + 5:at + 5 + size])
+    at += 5 + size
+print(json.dumps({"stolen": True, "forged": result}))
+`;
+        let watcher: Promise<string> | undefined;
+        beforeLaunch.set(taskId, async () => {
+          beforeLaunch.delete(taskId);
+          const child = spawn("docker", [
+            "exec",
+            "-u",
+            "1000",
+            device.id,
+            "python3",
+            "-I",
+            "-c",
+            watch,
+            root,
+          ]);
+          let output = "";
+          watcher = new Promise<string>((resolve) => {
+            child.on("close", () => resolve(output));
+          });
+          await new Promise<void>((resolve) => {
+            child.stdout.on("data", (chunk: Buffer) => {
+              output += chunk.toString();
+              if (output.includes("watching\n")) resolve();
+            });
+          });
+        });
+        const started = await sbx.background
+          .start(device, scope, bg(root, `echo $$ > ${root}/real; exec sleep 1802`, taskId))
+          .catch((e: unknown) => e);
+        const report = JSON.parse((await watcher)?.split("watching\n")[1] ?? "null") as {
+          stolen: boolean;
+          forged?: Record<string, unknown> | null;
+        };
+        expect(report, JSON.stringify(report)).toMatchObject({ stolen: true });
+        expect(report.forged?.started).toBeUndefined();
+        expect(started).not.toBeInstanceOf(Error);
+        await waitFor(device, `${root}/real`);
+        const real = Number(text(await inspectRead(device, `${root}/real`)));
+        expect(
+          await sbx.background.stop(device, started as SandboxExecutionRef, {
+            graceMs: 0,
+            signal: sig(),
+          }),
+        ).toEqual({ outcome: "stopped" });
+        expect(await alive(device, [real])).toEqual([]);
+        expect(await inspectRead(device, `${root}/attacker`)).toBeNull();
       });
 
       it("R6: an unexpected Full admission failure is never read as success", () => {

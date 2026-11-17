@@ -85,7 +85,9 @@ export interface OperationTransport {
   backgroundLaunchBarrier?: ((taskId: string) => string | undefined) | undefined;
   afterRevokeKill?: ((operationId: string) => Promise<void>) | undefined;
   backgroundSpoolCapBytes?: ((taskId: string) => number | undefined) | undefined;
-  beforeBackgroundLaunch?: ((taskId: string) => Promise<void>) | undefined;
+  beforeBackgroundLaunch?:
+    | ((taskId: string, leaked: Readonly<Record<string, unknown>>) => Promise<void>)
+    | undefined;
 }
 
 /**
@@ -644,6 +646,7 @@ export function createOperations(deps: OperationDeps) {
     generation: string | null,
     graceMs: number,
     signal: AbortSignal,
+    aborted = false,
   ): Promise<SandboxStopResult> => {
     const key = { executionId, generation, anyGeneration: generation === null };
     const plan = await rootStep(h, "bg-stop-plan", key, signal);
@@ -662,7 +665,12 @@ export function createOperations(deps: OperationDeps) {
       if (r === "not-running") return { outcome: "lost" };
       signalled = parseFrames(r.stdout).result?.signalled === true;
     }
-    const claim = await rootStep(h, "bg-stop-claim", { ...key, signalled }, signal);
+    const claim = await rootStep(
+      h,
+      "bg-stop-claim",
+      { ...key, signalled, ...(aborted && { aborted }) },
+      signal,
+    );
     if (claim === "not-running") return { outcome: "lost" };
     return toStopResult(claim);
   };
@@ -717,10 +725,32 @@ export function createOperations(deps: OperationDeps) {
       if (scope.filesystem.kind === "scoped") {
         checkRoots(scope.filesystem.readRoots, scope.filesystem.writeRoots);
       }
-      // The root-owned record and its recorder exist before anything launches; the channel's
-      // random name reaches only the supervisor (stdin), never argv.
+      // The exact request the supervisor runs. Root records its digest before anything launches,
+      // and the recorder binds the record only to a supervisor that reports the same digest.
+      const barrier = t.backgroundLaunchBarrier?.(args.taskId);
+      const launch = {
+        ...(barrier !== undefined && { barrier }),
+        opKey: opKey(scope.operationId),
+        admitBeforeMs: scope.admitBeforeMs,
+        expect: sdkRuntimeDigests(),
+        executionId: ref.executionId,
+        kind: scope.filesystem.kind,
+        ...roots,
+        network: scope.network,
+        command: args.command,
+        cwd: args.cwd ?? defaultCwd(scope),
+        env: checkedEnv(args.env),
+        timeoutMs: args.timeoutMs,
+        maxOutputBytes: args.maxOutputBytes,
+        taskId: args.taskId,
+        outputPath: args.outputPath,
+        retainUntilMs: args.retainUntilMs,
+      };
+      // The channel's random name reaches only the supervisor (stdin), never argv; /proc/net/unix
+      // lists it, so the identity frame must also carry the token. Both travel only on stdin, which
+      // same-uid processes can read during bg-start's interpreter start-up: the digest binding and
+      // the stop below bound what they gain (the granted task under another supervisor, stopped).
       const secret = randomBytes(16).toString("hex");
-      // Never in a path, argv or env: only on the supervisor's stdin and in its identity frame.
       const token = randomBytes(16).toString("hex");
       const prepared = await rootStep(
         h,
@@ -729,6 +759,7 @@ export function createOperations(deps: OperationDeps) {
           executionId: ref.executionId,
           secret,
           token,
+          start: launch,
           opKey: opKey(scope.operationId),
           taskId: args.taskId,
           retainUntilMs: args.retainUntilMs,
@@ -744,43 +775,45 @@ export function createOperations(deps: OperationDeps) {
           "This execution was already prepared; reconcile it by its reference",
         );
       }
-      await t.beforeBackgroundLaunch?.(args.taskId);
-      const barrier = t.backgroundLaunchBarrier?.(args.taskId);
-      const r = await t.run(h, {
-        cmd: [PYTHON, "-I", OPERATION_AGENT, "bg-start"],
-        user: "sandbox",
-        stdin: request({
-          secret,
-          token,
-          ...(barrier !== undefined && { barrier }),
-          opKey: opKey(scope.operationId),
-          admitBeforeMs: scope.admitBeforeMs,
-          expect: sdkRuntimeDigests(),
-          executionId: ref.executionId,
-          kind: scope.filesystem.kind,
-          ...roots,
-          network: scope.network,
-          command: args.command,
-          cwd: args.cwd ?? defaultCwd(scope),
-          env: checkedEnv(args.env),
-          timeoutMs: args.timeoutMs,
-          maxOutputBytes: args.maxOutputBytes,
-          taskId: args.taskId,
-          outputPath: args.outputPath,
-          retainUntilMs: args.retainUntilMs,
-        }),
-        maxOutputBytes: 1 << 20,
-        signal: args.signal,
-      });
-      const result = parseFrames(r.stdout).result;
-      const error = refusalError(result);
-      if (error) throw error;
-      if (!result?.started) {
-        throw new SandboxOperationOutcomeUnknownError(
-          "The background start was not acknowledged; reconcile it by its reference",
-        );
+      let acknowledged = false;
+      try {
+        await t.beforeBackgroundLaunch?.(args.taskId, { secret, token, ...launch });
+        const r = await t.run(h, {
+          cmd: [PYTHON, "-I", OPERATION_AGENT, "bg-start"],
+          user: "sandbox",
+          stdin: request({ secret, token, ...launch }),
+          maxOutputBytes: 1 << 20,
+          signal: args.signal,
+        });
+        const result = parseFrames(r.stdout).result;
+        const error = refusalError(result);
+        if (error) throw error;
+        if (!result?.started) {
+          throw new SandboxOperationOutcomeUnknownError(
+            "The background start was not acknowledged and was stopped; reconcile it by its reference",
+          );
+        }
+        acknowledged = true;
+        return ref;
+      } finally {
+        if (!acknowledged) {
+          // Refused or not acknowledged: cancel the start and stop whatever the record names
+          // (another supervisor may have bound it), then mark the reference aborted so status
+          // reports it lost and serves none of its output.
+          const cleanup = AbortSignal.timeout(30_000);
+          await rootStep(
+            h,
+            "cancel-mark",
+            {
+              opKey: opKey(scope.operationId),
+              expiresAtMs: scope.admitBeforeMs + RECORD_RETENTION_MS,
+            },
+            cleanup,
+          )
+            .then(() => stopExecution(h, ref.executionId, ref.instanceGeneration, 0, cleanup, true))
+            .catch(() => undefined);
+        }
       }
-      return ref;
     },
 
     async status(h, input, signal) {

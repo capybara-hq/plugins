@@ -604,7 +604,15 @@ def full(argv):
 # them. The sandbox-user supervisor reaches it only through a root-owned UNIX socket whose random
 # name the provider hands to the supervisor on stdin; the recorder accepts frames only on the one
 # connection whose SO_PEERCRED pid is the supervisor that identified itself, and the supervisor is
-# not dumpable, so neither restricted work nor same-uid processes can reopen or reach its channel.
+# not dumpable, so restricted work cannot reach its channel and same-uid processes cannot reopen
+# its descriptors once it runs. The identity frame carries a second random token (so the name
+# that /proc/net/unix lists is not enough) and the digest of the request the supervisor runs; root
+# recorded the digest of the request the provider admitted, and only a match is accepted. The
+# token protects against discovery of the channel through /proc/net/unix; it is not unreadable:
+# during bg-start's interpreter start-up (until PR_SET_DUMPABLE) same-uid processes can read its
+# stdin through /proc. With it the real agent binds only a supervisor running exactly the granted
+# request; a same-uid process running its own code can lie about the digest (the M5 residual), and
+# the provider stops whatever is bound to a start it did not see acknowledged.
 
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 SECRET = re.compile(r"[0-9a-f]{32}")
@@ -652,6 +660,15 @@ def write_all(fd, data):
 
 
 SPOOL_CAP = 64 * 1024 * 1024
+PYTHON = "/usr/bin/python3"
+
+
+def start_digest(start):
+    """The digest of the canonical start request: every field the supervisor runs (command,
+    scope, cwd, env, limits, output path...), i.e. the request without its channel name and token."""
+    body = {key: value for key, value in start.items() if key not in ("secret", "token")}
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def bg_prepare(request):
@@ -666,17 +683,24 @@ def bg_prepare(request):
     except FileExistsError:
         return {"prepared": False, "existing": True}
     os.chmod(directory, 0o711)
-    # A second secret that never appears in a path (unlike the socket name, which
+    # A second random value that never appears in a path (unlike the socket name, which
     # /proc/net/unix lists): the supervisor's identity frame must carry it.
     token = request["token"]
     if not isinstance(token, str) or not SECRET.fullmatch(token):
         raise ValueError("invalid channel token")
+    # The exact request the provider admitted: only a supervisor running it may bind the record.
+    start = request["start"]
+    if not isinstance(start, dict) or "secret" in start or "token" in start \
+            or start.get("executionId") != request["executionId"] \
+            or start.get("taskId") != request["taskId"] or start.get("opKey") != request.get("opKey"):
+        raise ValueError("invalid start request")
     cap = request.get("spoolCapBytes") or SPOOL_CAP
     if type(cap) is not int or not 0 < cap <= SPOOL_CAP:
         raise ValueError("invalid spool cap")
     record = {"state": "starting", "generation": generation(), "taskId": request["taskId"],
               "opKey": request.get("opKey"), "retainUntilMs": request["retainUntilMs"],
-              "expiresAtMs": request["retainUntilMs"] + 3600_000, "spoolCapBytes": cap}
+              "expiresAtMs": request["retainUntilMs"] + 3600_000, "spoolCapBytes": cap,
+              "startDigest": start_digest(start)}
     write_json(os.path.join(directory, "record.json"), record)
     ready_r, ready_w = os.pipe()
     pid = os.fork()
@@ -709,21 +733,24 @@ def peer(conn):
 
 
 def is_supervisor(pid):
-    """The process runs this agent's bg-start (the supervisor it forks keeps that argv)."""
+    """The process runs this agent's bg-start exactly as the provider calls it (the supervisor
+    it forks keeps that argv). A same-uid process can run its own code under this argv, so this
+    is a filter; the token and the request digest bind the real agent to the admitted request."""
     try:
         with open("/proc/%d/cmdline" % pid, "rb") as handle:
             args = handle.read().split(b"\0")
     except OSError:
         return False
-    return len(args) >= 4 and args[2] == os.fsencode(os.path.abspath(__file__)) \
-        and args[3] == b"bg-start"
+    return args == [os.fsencode(PYTHON), b"-I", os.fsencode(os.path.abspath(__file__)),
+                    b"bg-start", b""]
 
 
 def bg_recorder(directory, secret, token, record, ready_w):
     """(root, detached) Appends output and records the supervisor's identity and exit. The
     channel is a root-owned UNIX socket: frames count only on the one connection whose
-    SO_PEERCRED pid is the supervisor that identified itself (pid, start time, argv); no other
-    peer, and no writer that reopens a descriptor, can add frames to it."""
+    SO_PEERCRED pid is the supervisor that identified itself (pid, start time, argv, token and
+    the digest of the request it runs, which must be the admitted one); no other peer, and no
+    writer that reopens a descriptor, can add frames to it."""
     import select as select_module
     os.chdir(directory)  # bind relative: the absolute path would exceed sun_path
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -782,13 +809,16 @@ def bg_recorder(directory, secret, token, record, ready_w):
                         identity = json.loads(bytes(data[5:5 + size]))
                         claimed, start = int(identity["pid"]), int(identity["start"])
                         offered = str(identity["token"]).encode()
+                        digest = str(identity["digest"]).encode()
                         pid, uid = peer(conn)
                     except (ValueError, KeyError, OSError, struct.error):
                         drop(fd)
                         continue
                     cancelled = record.get("opKey") and os.path.exists(
                         os.path.join(OPS_ROOT, record["opKey"] + ".cancelled"))
-                    if not hmac.compare_digest(offered, token.encode()) or pid != claimed \
+                    if not hmac.compare_digest(offered, token.encode()) \
+                            or not hmac.compare_digest(digest, record["startDigest"].encode()) \
+                            or pid != claimed \
                             or uid == 0 or proc_start(pid) != start or not is_supervisor(pid) \
                             or record["state"] != "starting" or cancelled:
                         # Refused (or a stop already cancelled this execution): close without
@@ -805,7 +835,8 @@ def bg_recorder(directory, secret, token, record, ready_w):
                         return
                     bound = conn
                     buffer = bytearray(data[5 + size:])
-                    record = dict(record, state="running", pid=pid, start=start)
+                    record = dict(record, state="running", pid=pid, start=start,
+                                  boundDigest=digest.decode())
                     write_json(path, record)
                 elif len(data) >= 1 and data[0:1] != b"P" or time.monotonic() > deadline:
                     drop(fd)
@@ -845,7 +876,10 @@ def bg_recorder(directory, secret, token, record, ready_w):
                                   refused=result.get("refused"))
                     write_json(path, record)
                     return
-            if record["state"] == "starting" and time.monotonic() > connect_by:
+            if record["state"] == "starting" and (time.monotonic() > connect_by or (
+                    record.get("opKey") and os.path.exists(
+                        os.path.join(OPS_ROOT, record["opKey"] + ".cancelled")))):
+                # No supervisor in time, or the start was cancelled: nothing may bind any more.
                 write_json(path, dict(record, state="lost"))
                 return
             if record["state"] == "running" and not events and \
@@ -912,8 +946,9 @@ class Channel:
 
 def bg_start(request):
     """(sandbox user) Starts the detached supervisor; acknowledges once it is recorded. The
-    process is not dumpable (set before the request is read), so other processes of the same
-    user cannot read its channel name or reopen its descriptors through /proc."""
+    process turns undumpable before it reads the request, so once it runs other processes of the
+    same user cannot reopen its descriptors through /proc; during interpreter start-up they can
+    (stdin included), which the request digest and the provider's stop on failure cover."""
     admit(request)
     verify_runtime(request["expect"])
     address = os.path.join(bg_directory(request["executionId"], os.path.join(OPS_VIEW, "bg")),
@@ -957,8 +992,9 @@ def bg_supervise(request, channel, out, ready_w):
     acknowledging, re-checks admission, then launches with its handlers in place."""
     signal.pthread_sigmask(signal.SIG_BLOCK, CANCEL_SIGNALS)
     me = os.getpid()
-    channel.send(b"P", json.dumps({"pid": me, "start": proc_start(me),
-                                   "token": request["token"]}).encode())
+    # The digest of the request this supervisor runs: the recorder accepts only the admitted one.
+    channel.send(b"P", json.dumps({"pid": me, "start": proc_start(me), "token": request["token"],
+                                   "digest": start_digest(request)}).encode())
     # Fail closed: without the recorder's acceptance on this very connection (another peer was
     # bound, or the execution was cancelled), never acknowledge and never launch.
     import select as select_module
@@ -1069,6 +1105,14 @@ def bg_lookup(request, any_generation=False):
         return directory, None
     if not any_generation and record.get("generation") != request.get("generation"):
         return None, None
+    stop = read_json(os.path.join(directory, "stop.json"))
+    bound = record.get("state") in ("running", "exited")
+    if (stop is not None and stop.get("aborted")) or (bound and not hmac.compare_digest(
+            str(record.get("boundDigest", "")).encode(),
+            str(record.get("startDigest", "-")).encode())):
+        # A start the provider aborted (refused or never acknowledged), or a record bound to any
+        # request but the admitted one: never reported as the task, its spool never served.
+        record = dict(record, state="lost", withheld=True)
     return directory, record
 
 
@@ -1104,6 +1148,8 @@ def bg_output(request, tail):
         raise Refused("SCOPE_DENIED", "The reference names another instance generation")
     if bg_expired(record):
         return {"unavailable": "expired"}
+    if record is None or record.get("withheld"):
+        return {"unavailable": "lost"}
     try:
         fd = os.open(os.path.join(directory, "output"), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     except OSError:
@@ -1207,6 +1253,10 @@ def bg_stop_claim(request):
                    "timedOut": state.get("timedOut", False)}
     else:
         outcome = {"outcome": "lost"}
+    if request.get("aborted"):
+        # The provider aborts a start it did not see acknowledged: from now on the reference
+        # reports the execution as lost and serves none of its output.
+        outcome = dict(outcome, aborted=True)
     try:
         write_new(stop_path, outcome, 0o600)
     except FileExistsError:

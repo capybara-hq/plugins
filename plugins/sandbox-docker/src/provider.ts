@@ -137,8 +137,14 @@ export interface DockerSandboxTestOptions {
   afterRevokeKill?: (operationId: string) => Promise<void>;
   /** A smaller spool cap (bytes) for the background execution of `taskId`. */
   backgroundSpoolCapBytes?: (taskId: string) => number | undefined;
-  /** Runs between a background execution's root preparation and its supervisor (race tests). */
-  beforeBackgroundLaunch?: (taskId: string) => Promise<void>;
+  /**
+   * Runs between a background execution's root preparation and its supervisor (race tests). It
+   * receives the exact supervisor request, channel name and token included, to simulate a leak.
+   */
+  beforeBackgroundLaunch?: (
+    taskId: string,
+    leaked: Readonly<Record<string, unknown>>,
+  ) => Promise<void>;
 }
 
 /** The sandbox user (the image's `sandbox`): commands and file operations run as it. */
