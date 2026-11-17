@@ -1,9 +1,11 @@
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import vm from "node:vm";
 import { gzipSync } from "node:zlib";
 import { afterAll, describe, expect, it } from "vitest";
@@ -99,7 +101,24 @@ afterAll(async () => {
   await Promise.all(dirs.map((d) => rm(d, { recursive: true, force: true })));
 });
 
+const PLUGIN_DIR = join(import.meta.dirname, "..");
+
 describe("buildUi", () => {
+  it("builds the same manifest from any working directory", async () => {
+    // esbuild's chunk hashes depend on the paths it sees: the build pins its working directory.
+    // Built once from a directory outside the plugin (as from the repository root) and once from
+    // the plugin directory, in child processes
+    const tsx = createRequire(join(PLUGIN_DIR, "package.json")).resolve("tsx/cli");
+    const script = join(PLUGIN_DIR, "ui-src/build.ts");
+    const manifests: string[] = [];
+    for (const cwd of [await tempDir(), PLUGIN_DIR]) {
+      const out = join(await tempDir(), "ui");
+      await promisify(execFile)(process.execPath, [tsx, script, out], { cwd });
+      manifests.push(await readFile(join(out, "manifest.json"), "utf8"));
+    }
+    expect(manifests[1]).toBe(manifests[0]);
+  });
+
   it("builds the same bytes twice", async () => {
     const a = await tempDir();
     const b = await tempDir();

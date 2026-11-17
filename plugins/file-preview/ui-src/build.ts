@@ -16,6 +16,9 @@
  *   subdirectory fails the build, since served names have no `/`);
  * - `manifest.json` lists every other file with its content type and sha256, sorted by name.
  *
+ * esbuild runs with `absWorkingDir` set to the plugin directory: chunk hashes depend on the paths
+ * esbuild sees, so building from another working directory would otherwise change the output.
+ *
  * Output names are flat (`[A-Za-z0-9][A-Za-z0-9.-]*`; esbuild's chunk hashes have capitals), the
  * server serves only manifest-listed files.
  */
@@ -23,7 +26,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { basename, dirname, extname, join } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type BuildOptions, build, type Plugin } from "esbuild";
 
@@ -32,6 +35,8 @@ export interface UiManifest {
 }
 
 const SRC = import.meta.dirname;
+/** The plugin directory: esbuild's working directory, whatever `process.cwd()` is. */
+const PLUGIN_DIR = resolve(SRC, "..");
 /** The installed pdfjs-dist package directory. */
 const PDFJS_DIR = dirname(
   createRequire(join(SRC, "../package.json")).resolve("pdfjs-dist/package.json"),
@@ -58,6 +63,7 @@ const COMMON: BuildOptions = {
   write: false,
   logLevel: "silent",
   platform: "browser",
+  absWorkingDir: PLUGIN_DIR,
 };
 
 type Output = { name: string; bytes: Uint8Array };
@@ -233,7 +239,9 @@ export async function buildUi(outDir: string, opts: BuildUiOptions = {}): Promis
   return manifest;
 }
 
+// `tsx ui-src/build.ts [outDir]`: outDir (relative to the working directory) defaults to ui/
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const manifest = await buildUi(join(SRC, "../ui"));
+  const outArg = process.argv[2];
+  const manifest = await buildUi(outArg === undefined ? join(PLUGIN_DIR, "ui") : resolve(outArg));
   console.log(`file-preview: built ${Object.keys(manifest.files).length} ui files`);
 }
