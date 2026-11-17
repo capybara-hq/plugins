@@ -275,10 +275,14 @@ instance network; no capability, seccomp relaxation, privileged mode or extra co
   discovery of the channel through `/proc/net/unix`, which lists the socket name; it is not
   unreadable: during `bg-start`'s interpreter start-up, before it turns undumpable, a process of
   the same uid can read the request (token included) from its stdin through `/proc`. With it, the
-  real agent binds only a supervisor running exactly the granted request. When a start is refused
-  or not acknowledged, the provider writes the root cancellation marker, stops whatever the record
-  names by its recorded identity and marks the reference aborted, so `status` reports it `lost` and
-  no output is served under it. The supervisor blocks cancellation, reports its
+  real agent binds only a supervisor running exactly the granted request. A start the agent
+  refuses (its own supervisor was never accepted, so whatever is bound is not the provider's) is
+  aborted: the provider writes the root cancellation marker, stops whatever the record names by its
+  recorded identity and marks the reference aborted, so `status` reports it `lost` and no output is
+  served under it. A start whose acknowledgement is lost stays running, and the same-ID retry
+  returns its reference (one launch), unless the recorder marked it contested: a second supervisor
+  presented the token and the admitted digest after the bind, so one of them is not genuine; then
+  the start, or the retry, aborts it the same way. The supervisor blocks cancellation, reports its
   pid and start time before `start` acknowledges, re-checks the tombstone after that and before
   launching, installs its handlers, then launches (Full children additionally run under
   `timeout -s KILL`). It keeps the starting grant, appends merged output to the spool (for `tail`
@@ -292,8 +296,8 @@ instance network; no capability, seccomp relaxation, privileged mode or extra co
   (stop, freeze) the sandbox user's processes, including supervisors, and intercept a `bg-start`
   during its start-up; a process of that uid that runs its own code under the agent's argv (for
   example through `LD_PRELOAD`) with an intercepted request can bind the record with a matching
-  digest. That only makes the start fail: the provider then stops the bound process and the
-  reference reports `lost`. It cannot change the records.
+  digest. That only makes the start fail: the real supervisor is refused, the provider stops the
+  bound process and the reference reports `lost`. It cannot change the records.
 - **Spool storage (operational change)**: retained background output now lives on the device's
   persistent skills volume (not the instance's tmpfs `/tmp`) until `retainUntilMs` plus one hour.
   Each execution's spool is capped at 64 MiB (later output still reaches `outputPath`; the record

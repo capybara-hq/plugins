@@ -611,8 +611,9 @@ def full(argv):
 # token protects against discovery of the channel through /proc/net/unix; it is not unreadable:
 # during bg-start's interpreter start-up (until PR_SET_DUMPABLE) same-uid processes can read its
 # stdin through /proc. With it the real agent binds only a supervisor running exactly the granted
-# request; a same-uid process running its own code can lie about the digest (the M5 residual), and
-# the provider stops whatever is bound to a start it did not see acknowledged.
+# request; a same-uid process running its own code can lie about the digest (the M5 residual). A
+# refused start, or an unacknowledged one whose record is contested (a second valid identity after
+# the bind), is aborted by the provider: whatever the record names is stopped.
 
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 SECRET = re.compile(r"[0-9a-f]{32}")
@@ -779,13 +780,16 @@ def bg_recorder(directory, secret, token, record, ready_w):
     try:
         while True:
             events = dict(poller.poll(1000))
-            if listener.fileno() in events and bound is None:
+            if listener.fileno() in events:
                 conn, _ = listener.accept()
-                conn.setblocking(False)
-                pending[conn.fileno()] = (conn, bytearray(), time.monotonic() + 10)
-                poller.register(conn.fileno(), select_module.POLLIN)
-            elif listener.fileno() in events:
-                listener.accept()[0].close()  # one supervisor per execution
+                if len(pending) >= 8:
+                    conn.close()
+                else:
+                    # Also after the bind: a later valid identity (one supervisor per execution
+                    # binds) marks the record contested, since one of the two is not genuine.
+                    conn.setblocking(False)
+                    pending[conn.fileno()] = (conn, bytearray(), time.monotonic() + 10)
+                    poller.register(conn.fileno(), select_module.POLLIN)
             for fd in list(pending):
                 conn, data, deadline = pending[fd]
                 if fd in events:
@@ -816,18 +820,23 @@ def bg_recorder(directory, secret, token, record, ready_w):
                         continue
                     cancelled = record.get("opKey") and os.path.exists(
                         os.path.join(OPS_ROOT, record["opKey"] + ".cancelled"))
-                    if not hmac.compare_digest(offered, token.encode()) \
-                            or not hmac.compare_digest(digest, record["startDigest"].encode()) \
-                            or pid != claimed \
-                            or uid == 0 or proc_start(pid) != start or not is_supervisor(pid) \
-                            or record["state"] != "starting" or cancelled:
+                    valid = hmac.compare_digest(offered, token.encode()) \
+                        and hmac.compare_digest(digest, record["startDigest"].encode()) \
+                        and pid == claimed and uid != 0 and proc_start(pid) == start \
+                        and is_supervisor(pid)
+                    if valid and bound is not None and not record.get("contested"):
+                        # Two supervisors presented the token and the admitted digest: the bound
+                        # one may be a forgery. The provider stops a contested start whose
+                        # acknowledgement it did not receive.
+                        record = dict(record, contested=True)
+                        write_json(path, record)
+                    if not valid or bound is not None or record["state"] != "starting" \
+                            or cancelled:
                         # Refused (or a stop already cancelled this execution): close without
                         # the acceptance byte, so that supervisor never acknowledges or launches.
                         drop(fd)
                         continue
                     pending.pop(fd)
-                    for other in list(pending):
-                        drop(other)
                     try:
                         conn.send(b"A")  # acceptance: only now may the supervisor proceed
                     except OSError:
@@ -1135,6 +1144,12 @@ def bg_status(request):
     return bg_state(record)
 
 
+def bg_contested(request):
+    """(root) Whether two supervisors presented this execution's token and admitted digest."""
+    _, record = bg_lookup(request)
+    return {"contested": bool(record is not None and record.get("contested"))}
+
+
 def bg_expired(record):
     return record is not None and record.get("state") == "exited" \
         and time.time() * 1000 > record.get("retainUntilMs", 0)
@@ -1403,7 +1418,7 @@ def marker(request, suffix):
 # ---- entry --------------------------------------------------------------------------------
 
 ROOT_COMMANDS = {"init", "consume", "revoke", "cancel-mark", "bg-prepare", "bg-status", "bg-tail",
-                 "bg-read", "bg-stop-plan", "bg-stop-claim"}
+                 "bg-read", "bg-stop-plan", "bg-stop-claim", "bg-contested"}
 
 
 def main():
@@ -1455,6 +1470,8 @@ def main():
             bg_start(request)
         elif command == "bg-status":
             finish(bg_status(request))
+        elif command == "bg-contested":
+            finish(bg_contested(request))
         elif command == "bg-tail":
             finish(bg_output(request, True))
         elif command == "bg-read":

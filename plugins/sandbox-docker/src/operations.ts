@@ -88,6 +88,10 @@ export interface OperationTransport {
   beforeBackgroundLaunch?:
     | ((taskId: string, leaked: Readonly<Record<string, unknown>>) => Promise<void>)
     | undefined;
+  loseBackgroundAck?: ((taskId: string) => boolean) | undefined;
+  interceptBackgroundStdin?:
+    | ((taskId: string, stdin: Uint8Array) => Promise<Uint8Array>)
+    | undefined;
 }
 
 /**
@@ -675,6 +679,46 @@ export function createOperations(deps: OperationDeps) {
     return toStopResult(claim);
   };
 
+  /**
+   * Aborts a background start: the root cancellation marker (a late supervisor never launches),
+   * then a stop by the recorded identity whose claim marks the reference aborted, so status
+   * reports it lost and serves none of its output. Best effort with its own deadline.
+   */
+  const abortStart = async (
+    h: SandboxHandle,
+    scope: SandboxOperationScope,
+    ref: SandboxExecutionRef,
+  ) => {
+    const cleanup = AbortSignal.timeout(30_000);
+    await rootStep(
+      h,
+      "cancel-mark",
+      { opKey: opKey(scope.operationId), expiresAtMs: scope.admitBeforeMs + RECORD_RETENTION_MS },
+      cleanup,
+    )
+      .then(() => stopExecution(h, ref.executionId, ref.instanceGeneration, 0, cleanup, true))
+      .catch(() => undefined);
+  };
+
+  /**
+   * A start is contested when a second supervisor presented the token and the admitted digest
+   * after one was bound: one of them is not the provider's own (the request was intercepted),
+   * and the provider cannot tell which, so an unacknowledged contested start is aborted.
+   */
+  const abortIfContested = async (
+    h: SandboxHandle,
+    scope: SandboxOperationScope,
+    ref: SandboxExecutionRef,
+  ) => {
+    const check = await rootStep(
+      h,
+      "bg-contested",
+      { executionId: ref.executionId, generation: ref.instanceGeneration },
+      AbortSignal.timeout(15_000),
+    ).catch(() => "not-running" as const);
+    if (check !== "not-running" && check.contested === true) await abortStart(h, scope, ref);
+  };
+
   const MAX_OUTPUT_READ = 65_536;
   const bytes = (result: AgentResult) =>
     new Uint8Array(Buffer.from(String(result.dataB64 ?? ""), "base64"));
@@ -713,8 +757,12 @@ export function createOperations(deps: OperationDeps) {
         instanceId: h.id,
         instanceGeneration: consumed.generation,
       });
-      // A retry after a lost acknowledgement returns the same reference and launches nothing.
-      if (consumed.state === "duplicate") return ref;
+      // A retry after a lost acknowledgement returns the same reference and launches nothing
+      // (the kernel's reconcile); a contested start is aborted first (see abortIfContested).
+      if (consumed.state === "duplicate") {
+        await abortIfContested(h, scope, ref);
+        return ref;
+      }
       const roots =
         scope.filesystem.kind === "scoped"
           ? {
@@ -775,44 +823,42 @@ export function createOperations(deps: OperationDeps) {
           "This execution was already prepared; reconcile it by its reference",
         );
       }
-      let acknowledged = false;
+      let outcome: "acknowledged" | "refused" | "unknown" = "unknown";
       try {
         await t.beforeBackgroundLaunch?.(args.taskId, { secret, token, ...launch });
+        let stdin = request({ secret, token, ...launch });
+        if (t.interceptBackgroundStdin)
+          stdin = await t.interceptBackgroundStdin(args.taskId, stdin);
         const r = await t.run(h, {
           cmd: [PYTHON, "-I", OPERATION_AGENT, "bg-start"],
           user: "sandbox",
-          stdin: request({ secret, token, ...launch }),
+          stdin,
           maxOutputBytes: 1 << 20,
           signal: args.signal,
         });
-        const result = parseFrames(r.stdout).result;
+        // Test-only: the reply is dropped as if the transport lost it.
+        const result = t.loseBackgroundAck?.(args.taskId)
+          ? null
+          : (parseFrames(r.stdout).result ?? null);
         const error = refusalError(result);
-        if (error) throw error;
+        if (error) {
+          outcome = "refused";
+          throw error;
+        }
         if (!result?.started) {
           throw new SandboxOperationOutcomeUnknownError(
-            "The background start was not acknowledged and was stopped; reconcile it by its reference",
+            "The background start was not acknowledged; reconcile it by its reference",
           );
         }
-        acknowledged = true;
+        outcome = "acknowledged";
         return ref;
       } finally {
-        if (!acknowledged) {
-          // Refused or not acknowledged: cancel the start and stop whatever the record names
-          // (another supervisor may have bound it), then mark the reference aborted so status
-          // reports it lost and serves none of its output.
-          const cleanup = AbortSignal.timeout(30_000);
-          await rootStep(
-            h,
-            "cancel-mark",
-            {
-              opKey: opKey(scope.operationId),
-              expiresAtMs: scope.admitBeforeMs + RECORD_RETENTION_MS,
-            },
-            cleanup,
-          )
-            .then(() => stopExecution(h, ref.executionId, ref.instanceGeneration, 0, cleanup, true))
-            .catch(() => undefined);
-        }
+        // Refused before launch (nothing genuine runs: the agent refuses only before its own
+        // supervisor is accepted): stop whatever the record names, which can only be a forgery.
+        if (outcome === "refused") await abortStart(h, scope, ref);
+        // Not acknowledged: the genuine admitted task may be running; it stays for the same-id
+        // retry unless the record is contested.
+        if (outcome === "unknown") await abortIfContested(h, scope, ref);
       }
     },
 

@@ -145,6 +145,13 @@ export interface DockerSandboxTestOptions {
     taskId: string,
     leaked: Readonly<Record<string, unknown>>,
   ) => Promise<void>;
+  /** Drops the background start reply of `taskId` as if the transport lost it (reconcile tests). */
+  loseBackgroundAck?: (taskId: string) => boolean;
+  /**
+   * Receives the exact bytes written to the background start's stdin and returns the bytes to
+   * write instead (deterministic interception tests: steal, then write back).
+   */
+  interceptBackgroundStdin?: (taskId: string, stdin: Uint8Array) => Promise<Uint8Array>;
 }
 
 /** The sandbox user (the image's `sandbox`): commands and file operations run as it. */
@@ -1221,6 +1228,8 @@ export function createDockerSandbox(
     afterRevokeKill: test.afterRevokeKill,
     backgroundSpoolCapBytes: test.backgroundSpoolCapBytes,
     beforeBackgroundLaunch: test.beforeBackgroundLaunch,
+    loseBackgroundAck: test.loseBackgroundAck,
+    interceptBackgroundStdin: test.interceptBackgroundStdin,
   };
   const operations = createOperations({ transport, decode: decodeOutput });
 
