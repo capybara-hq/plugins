@@ -89,6 +89,7 @@ export interface OperationTransport {
     | ((taskId: string, leaked: Readonly<Record<string, unknown>>) => Promise<void>)
     | undefined;
   loseBackgroundAck?: ((taskId: string) => boolean) | undefined;
+  backgroundStartCommand?: ((taskId: string, cmd: string[]) => string[]) | undefined;
   interceptBackgroundStdin?:
     | ((taskId: string, stdin: Uint8Array) => Promise<Uint8Array>)
     | undefined;
@@ -196,6 +197,21 @@ export function parseFrames(raw: Buffer): Frames {
     at += 5 + size;
   }
   return frames;
+}
+
+/**
+ * The one result frame a background start writes, or "malformed" when its stdout holds anything
+ * else (same-uid processes can write into the start's descriptors during its start-up).
+ */
+function soleResult(raw: Buffer): AgentResult | null | "malformed" {
+  if (raw.byteLength === 0) return null;
+  if (raw.byteLength < 5 || String.fromCharCode(raw[0] as number) !== "R") return "malformed";
+  if (5 + raw.readUInt32BE(1) !== raw.byteLength) return "malformed";
+  try {
+    return JSON.parse(raw.subarray(5).toString("utf8")) as AgentResult;
+  } catch {
+    return "malformed";
+  }
 }
 
 /** Maps the launcher's or agent's refusal to the SDK's error kinds (never SandboxGoneError). */
@@ -823,23 +839,32 @@ export function createOperations(deps: OperationDeps) {
           "This execution was already prepared; reconcile it by its reference",
         );
       }
-      let outcome: "acknowledged" | "refused" | "unknown" = "unknown";
+      // "unknown" (keep for the same-id retry) only when the exec itself exited 0: the genuine
+      // agent exits 0 only after its own supervisor was accepted, so only the reply was lost.
+      // Anything else (no exec result, killed, non-zero, ended on the provider's signal) aborts.
+      let outcome: "acknowledged" | "refused" | "unknown" | "failed" = "failed";
       try {
         await t.beforeBackgroundLaunch?.(args.taskId, { secret, token, ...launch });
         let stdin = request({ secret, token, ...launch });
         if (t.interceptBackgroundStdin)
           stdin = await t.interceptBackgroundStdin(args.taskId, stdin);
+        const cmd = [PYTHON, "-I", OPERATION_AGENT, "bg-start"];
         const r = await t.run(h, {
-          cmd: [PYTHON, "-I", OPERATION_AGENT, "bg-start"],
+          cmd: t.backgroundStartCommand?.(args.taskId, cmd) ?? cmd,
           user: "sandbox",
           stdin,
           maxOutputBytes: 1 << 20,
           signal: args.signal,
         });
+        const sole = soleResult(r.stdout);
+        if (r.exitCode !== 0 || r.aborted || r.timedOut || sole === "malformed") {
+          throw new SandboxOperationOutcomeUnknownError(
+            "The background start did not finish and was aborted; reconcile it by its reference",
+          );
+        }
+        outcome = "unknown";
         // Test-only: the reply is dropped as if the transport lost it.
-        const result = t.loseBackgroundAck?.(args.taskId)
-          ? null
-          : (parseFrames(r.stdout).result ?? null);
+        const result = t.loseBackgroundAck?.(args.taskId) ? null : sole;
         const error = refusalError(result);
         if (error) {
           outcome = "refused";
@@ -854,8 +879,10 @@ export function createOperations(deps: OperationDeps) {
         return ref;
       } finally {
         // Refused before launch (nothing genuine runs: the agent refuses only before its own
-        // supervisor is accepted): stop whatever the record names, which can only be a forgery.
-        if (outcome === "refused") await abortStart(h, scope, ref);
+        // supervisor is accepted), or the exec never exited 0 (the genuine bg-start was killed,
+        // stopped or failed before acknowledging): whatever the record names is not the
+        // provider's own supervisor, so it is stopped and the reference aborted.
+        if (outcome === "refused" || outcome === "failed") await abortStart(h, scope, ref);
         // Not acknowledged: the genuine admitted task may be running; it stays for the same-id
         // retry unless the record is contested.
         if (outcome === "unknown") await abortIfContested(h, scope, ref);

@@ -611,9 +611,11 @@ def full(argv):
 # token protects against discovery of the channel through /proc/net/unix; it is not unreadable:
 # during bg-start's interpreter start-up (until PR_SET_DUMPABLE) same-uid processes can read its
 # stdin through /proc. With it the real agent binds only a supervisor running exactly the granted
-# request; a same-uid process running its own code can lie about the digest (the M5 residual). A
-# refused start, or an unacknowledged one whose record is contested (a second valid identity after
-# the bind), is aborted by the provider: whatever the record names is stopped.
+# request; a same-uid process running its own code can lie about the digest (the M5 residual). The
+# provider aborts (stops whatever the record names) a refused start, a start whose bg-start did not
+# exit 0 with one result frame, and an unacknowledged one whose record is contested (a second
+# valid identity after the bind). A worker crash before the exec ended, followed by the same-ID
+# retry, and a forger that ptraces the genuine bg-start stay open (M5, Task 14).
 
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 SECRET = re.compile(r"[0-9a-f]{32}")

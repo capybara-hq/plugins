@@ -212,6 +212,7 @@ describe.skipIf(!dockerAvailable)(
       (taskId: string, leaked: Readonly<Record<string, unknown>>) => Promise<void>
     >();
     const loseAck = new Set<string>();
+    const startCommands = new Map<string, string[]>();
     const stdinSteal = new Map<string, (bytes: Uint8Array) => Promise<Uint8Array>>();
 
     /** One device (file system plus instance) under a fresh name. */
@@ -364,6 +365,7 @@ describe.skipIf(!dockerAvailable)(
           beforeBackgroundLaunch: (taskId, leaked) =>
             beforeLaunch.get(taskId)?.(taskId, leaked) ?? Promise.resolve(),
           loseBackgroundAck: (taskId) => loseAck.has(taskId),
+          backgroundStartCommand: (taskId, cmd) => startCommands.get(taskId) ?? cmd,
           interceptBackgroundStdin: (taskId, bytes) =>
             stdinSteal.get(taskId)?.(bytes) ?? Promise.resolve(bytes),
         },
@@ -1863,6 +1865,69 @@ print(n)
           await sbx.background.readOutput(device, ref, { offset: 0, maxBytes: 100, signal: sig() }),
         ).toEqual({ unavailable: "lost" });
       });
+
+      // R9: the genuine bg-start is killed or stopped before it forks its supervisor, while a
+      // forgery holding the intercepted request (here the real agent run with the whole leaked
+      // request, so its digest matches) is bound. The exec ends without exit 0: never kept.
+      // "acked" also writes a forged acknowledgement into the start's stdout before the kill
+      // (same-uid processes can write there during start-up): only exit 0 counts.
+      for (const variant of ["killed", "stopped", "acked"] as const) {
+        it(`R9: a forged bind whose real bg-start was ${variant} before forking is never kept`, async () => {
+          const root = await newRoot(device, `r9${variant[0]}`);
+          const scope = scopeFor(full);
+          const taskId = `task-${randomUUID().slice(0, 8)}`;
+          const marker = `capybara-r9-${randomUUID().slice(0, 8)}`;
+          let forged: Record<string, unknown> | null = null;
+          beforeLaunch.set(taskId, async (_task, leaked) => {
+            beforeLaunch.delete(taskId);
+            forged = await forgeWith(device, { ...leaked });
+          });
+          // The real bg-start: SIGKILL (exit 137) or SIGSTOP (the exec never returns; the
+          // provider ends it on its own signal), in both cases before any supervisor exists.
+          const fakeAck = `import json, os, signal, sys
+d = json.dumps({"started": True}).encode()
+sys.stdout.buffer.write(b"R" + len(d).to_bytes(4, "big") + d)
+sys.stdout.flush()
+os.kill(os.getpid(), signal.SIGKILL)  # ${marker}`;
+          startCommands.set(
+            taskId,
+            variant === "acked"
+              ? ["/usr/bin/python3", "-I", "-c", fakeAck]
+              : [
+                  "/bin/sh",
+                  "-c",
+                  variant === "killed" ? `kill -KILL $$ # ${marker}` : `kill -STOP $$ # ${marker}`,
+                ],
+          );
+          const args = {
+            ...bg(root, `echo forged-output; exec sleep 1806`, taskId),
+            ...(variant === "stopped" && { signal: AbortSignal.timeout(5_000) }),
+          };
+          const started = await sbx.background.start(device, scope, args).catch((e: unknown) => e);
+          startCommands.delete(taskId);
+          expect((forged as unknown as Record<string, unknown>)?.started).toBe(true);
+          expect(started).toBeInstanceOf(Error);
+          expect(await processes(device, "sleep 1806")).toBe(0);
+          const ref = await refOf(device, scope);
+          expect(await sbx.background.status(device, ref, sig())).toEqual({ state: "lost" });
+          expect(await sbx.background.tail(device, ref, { maxBytes: 100, signal: sig() })).toEqual({
+            unavailable: "lost",
+          });
+          // The kernel's same-id retry gets the reference, which still reports nothing forged.
+          const retried = await sbx.background.start(device, scope, { ...args, signal: sig() });
+          expect(retried.executionId).toBe(ref.executionId);
+          expect(await sbx.background.status(device, retried, sig())).toEqual({ state: "lost" });
+          expect(
+            await sbx.background.readOutput(device, retried, {
+              offset: 0,
+              maxBytes: 100,
+              signal: sig(),
+            }),
+          ).toEqual({ unavailable: "lost" });
+          // A stopped stand-in left by the transport is removed.
+          await dexec(device.id, "0", ["pkill", "-KILL", "-f", marker]).catch(() => undefined);
+        });
+      }
 
       it("R8: stealing bg-start's stdin, forging a supervisor and writing the request back binds nothing", async () => {
         const root = await newRoot(device, "r8s");

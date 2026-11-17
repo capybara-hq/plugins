@@ -148,6 +148,11 @@ export interface DockerSandboxTestOptions {
   /** Drops the background start reply of `taskId` as if the transport lost it (reconcile tests). */
   loseBackgroundAck?: (taskId: string) => boolean;
   /**
+   * Replaces the background start's command for `taskId` (tests that kill or stop the real
+   * `bg-start` before it forks its supervisor).
+   */
+  backgroundStartCommand?: (taskId: string, cmd: string[]) => string[];
+  /**
    * Receives the exact bytes written to the background start's stdin and returns the bytes to
    * write instead (deterministic interception tests: steal, then write back).
    */
@@ -1229,6 +1234,7 @@ export function createDockerSandbox(
     backgroundSpoolCapBytes: test.backgroundSpoolCapBytes,
     beforeBackgroundLaunch: test.beforeBackgroundLaunch,
     loseBackgroundAck: test.loseBackgroundAck,
+    backgroundStartCommand: test.backgroundStartCommand,
     interceptBackgroundStdin: test.interceptBackgroundStdin,
   };
   const operations = createOperations({ transport, decode: decodeOutput });

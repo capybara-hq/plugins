@@ -279,8 +279,11 @@ instance network; no capability, seccomp relaxation, privileged mode or extra co
   refuses (its own supervisor was never accepted, so whatever is bound is not the provider's) is
   aborted: the provider writes the root cancellation marker, stops whatever the record names by its
   recorded identity and marks the reference aborted, so `status` reports it `lost` and no output is
-  served under it. A start whose acknowledgement is lost stays running, and the same-ID retry
-  returns its reference (one launch), unless the recorder marked it contested: a second supervisor
+  served under it. The same happens when the `bg-start` exec does not exit 0 with exactly one
+  result frame (it was killed, stopped and ended on the provider's signal, failed, or its stdout
+  holds anything else): the genuine agent exits 0 only after its own supervisor was accepted. A
+  start whose exec exited 0 but whose reply was lost stays running, and the same-ID retry returns
+  its reference (one launch), unless the recorder marked it contested: a second supervisor
   presented the token and the admitted digest after the bind, so one of them is not genuine; then
   the start, or the retry, aborts it the same way. The supervisor blocks cancellation, reports its
   pid and start time before `start` acknowledges, re-checks the tombstone after that and before
@@ -292,12 +295,17 @@ instance network; no capability, seccomp relaxation, privileged mode or extra co
   `stop` signals exactly the recorded supervisor (pidfd and start time) and claims its outcome once
   (`stopped` or `already-exited`). A stop that finds an execution still `starting` (no supervisor
   reported) claims `lost` and writes a root cancellation marker, so a late supervisor never launches.
-  Residual trust: Full access work of any conversation shares the device uid, so it can still signal
-  (stop, freeze) the sandbox user's processes, including supervisors, and intercept a `bg-start`
-  during its start-up; a process of that uid that runs its own code under the agent's argv (for
-  example through `LD_PRELOAD`) with an intercepted request can bind the record with a matching
-  digest. That only makes the start fail: the real supervisor is refused, the provider stops the
-  bound process and the reference reports `lost`. It cannot change the records.
+  Residual trust (M5, closed only by a separate uid or ptrace-scoped Full work, Task 14): Full access
+  work of any conversation shares the device uid, so it can signal (stop, freeze) the sandbox user's
+  processes, including supervisors, and intercept a `bg-start`'s request during its start-up. A
+  process of that uid can run its own code under the agent's exact argv (it can rewrite its own argv
+  in place, no ptrace needed) and bind the record with the stolen token and a matching digest. When
+  it kills or stops the genuine `bg-start`, or the real supervisor is refused, the start is aborted
+  and the reference reports `lost`. Two cases stay open: a worker crash after such a bind followed by
+  the kernel's same-ID retry (the provider never saw the exec end, and the retry returns the
+  reference, which then reports the forged process and its output as the task), and a forger that
+  ptraces the genuine `bg-start` during start-up (it controls the genuine process, so it can make it
+  exit 0). It cannot change the records.
 - **Spool storage (operational change)**: retained background output now lives on the device's
   persistent skills volume (not the instance's tmpfs `/tmp`) until `retainUntilMs` plus one hour.
   Each execution's spool is capped at 64 MiB (later output still reaches `outputPath`; the record
