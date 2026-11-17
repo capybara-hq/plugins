@@ -21,11 +21,11 @@ interface ModelProvider {
 }
 ```
 
-- `ModelRequest`: `model`, `system` (`{ text, cache }[]`, stable content first, a cache breakpoint after blocks with `cache: true`), `messages` (user / assistant / mid-conversation `system`), `tools`, optional `toolChoice` (`"auto"` / `"none"`), `maxOutputTokens`, `params` (already processed by the kernel against the model's declarations: undeclared / invalid entries dropped, defaults filled in).
+- `ModelRequest`: `model`, `system` (`{ text, cache }[]`, stable content first, a cache breakpoint after blocks with `cache: true`), `messages` (user / assistant / mid-conversation `system`), `tools`, optional `toolChoice` (`"auto"` / `"none"`), `maxOutputTokens`, `params` (already processed by the kernel against the model's declarations: undeclared / invalid entries dropped, defaults filled in), optional `purpose` (`"compaction"` for a conversation summary call; informational: ignore it and never forward it to the vendor API, so map the request field by field instead of spreading `req` into the native body).
 - `toolChoice: "none"`: in the wrap-up call at the step limit the kernel still sends `tools` (some providers require them when the history has tool calls, and it keeps the cache prefix stable), but the model must not call tools. Map it to the native field (anthropic `tool_choice: {type: "none"}`, OpenAI Responses / Chat Completions `tool_choice: "none"`); `"auto"` / absent is not sent, nor when `tools` is empty; a provider that cannot do this must guarantee no `tool_call`. A model with `capabilities.tools` false gets neither tools nor `toolChoice`, so a model that can call tools must declare `tools: true`.
 - `ModelStreamEvent`: `text_delta`, `thinking_delta`, and finally exactly one `message_complete { content, stopReason, usage }`. The deltas concatenated equal the text in `content`. A truncated stream (no provider end event) must throw (usually `network`); it **must not** send `message_complete` with half the content.
 - `ContentBlock`: `text`, `thinking`, `tool_call`, `tool_result`, and `image` / `document` (user messages only, see "Media blocks"); `text`, `thinking` and `tool_call` may carry `opaque`.
-- `ModelInfo`: `contextWindow`, `maxOutputTokens`, `capabilities` (`tools` / `vision` / `reasoning` / `caching` / `midConversationSystem` / optional `documents`; `effort` is deprecated, `@1` only), optional `streamIdleTimeoutMs`, and required `parameters` (may be empty). The kernel caches `listModels`; on failure it skips that provider and logs.
+- `ModelInfo`: `contextWindow`, `maxOutputTokens`, `capabilities` (`tools` / `vision` / `reasoning` / `caching` / `midConversationSystem` / optional `documents`; effort is not a capability but the standard `effort` knob in `parameters`), optional `streamIdleTimeoutMs`, and required `parameters` (may be empty). The kernel caches `listModels`; on failure it skips that provider and logs.
 - Check errors with `isModelError(e)` / `isRetryableKind(kind)` (duck typing), never `instanceof ModelError`: an extension may bundle another copy of the SDK.
 
 - `ModelInfo.kind` (`ModelKind`: `chat` default, `embedding`, `rerank`, `image_generation`, ...; absent means `chat`). The chat-only fields (`contextWindow`, `maxOutputTokens`, `capabilities`, `parameters`) stay required for every kind. A model with `kind: "embedding"` sets `embedding: { dimensions: number[], defaultDimensions, maxInputTokens, maxBatch }`, and the provider then implements `embed`.
@@ -82,7 +82,7 @@ interface ModelParameter {
 - SDK pure functions: `assertValidDeclarations(plugin, decls)` (self-tests and the kernel at load), `validateParams`, `sanitizeParams`. The conformance suite has a `declares valid parameters` case.
 - Parameter decisions are logged with each model call, so requests can be reconstructed.
 
-The old contract `model-provider@1` (`capabilities.effort` + `req.effort`) still works through a kernel adapter, and `@2` wins when an extension provides both. New extensions always write `@2`.
+`model-provider@2` is the only major: `@1` (`capabilities.effort` + `req.effort`) was removed before 0.1.0, and the kernel refuses to load an extension that provides another major. Effort is the standard `effort` knob a model declares in `parameters`.
 
 ## Dialect presets (OpenAI-compatible APIs)
 
@@ -163,13 +163,13 @@ Always throw `ModelError(kind, message, { retryAfterMs?, cause })`. Decide only 
 | `context_overflow` | no | 413 / anthropic `request_too_large`; openai `context_length_exceeded` |
 | `aborted` | no | aborted by the caller |
 
-The kernel handles retryable errors (retry the primary once after `retryAfterMs`, default 1 s, skipped above 10 s, then the agent's fallback model); non-retryable errors fail the run (`model.<kind>`). Misclassifying a request problem as retryable wastes retries and switches to the fallback; a transient failure as non-retryable fails a run that could have succeeded.
+The kernel handles retryable errors (retry the primary once after `retryAfterMs`, default 1 s, honoured up to 5 minutes or the run's remaining deadline, whichever is shorter, skipping the same-model retry when the wait does not fit; then the agent's fallback model); non-retryable errors fail the run (`model.<kind>`). Misclassifying a request problem as retryable wastes retries and switches to the fallback; a transient failure as non-retryable fails a run that could have succeeded.
 
 **Malformed tool arguments -> `invalid_request`**: when the tool input JSON fails to parse or isn't an object. If the SDK's streaming helper pre-parses tool input and wraps a failure in a generic exception (anthropic's `MessageStream`), don't use it: use the raw event stream (`create({ stream: true })`), accumulate the message yourself and `JSON.parse` it (both anthropic and openai `map-stream.ts` do this).
 
 ## No retries inside the extension
 
-SDK clients always use `maxRetries: 0`. Retrying, waiting, degrading and step resets are the kernel's; retrying inside the extension stacks waits, bypasses the 10-second cap and makes the logged model calls disagree with real requests. Don't set your own request timeout to cover idle streams either; that is the kernel watchdog's job.
+SDK clients always use `maxRetries: 0`. Retrying, waiting, degrading and step resets are the kernel's; retrying inside the extension stacks waits, bypasses the kernel's wait cap (5 minutes or the run's remaining deadline) and makes the logged model calls disagree with real requests. Don't set your own request timeout to cover idle streams either; that is the kernel watchdog's job.
 
 ## `streamIdleTimeoutMs`
 
@@ -193,6 +193,7 @@ import { myRoutes } from "./fixtures.js";
 describeModelProviderConformance("my (fixtures)", async () => {
   const server = await startFakeModelServer(myRoutes());
   return {
+    plugin: "my-provider", // the extension name (checks vendor parameter key prefixes)
     provider: createMyProvider({ apiKey: "sk-fixture", baseUrl: server.url, /* … */ }),
     model: "my-model",
     expect: { thinking: true, caching: true },
@@ -204,6 +205,7 @@ describeModelProviderConformance("my (fixtures)", async () => {
 const LIVE_KEY = process.env.CAPYBARA_TEST_MY_API_KEY;
 describe.skipIf(!LIVE_KEY)("live", () => {
   describeModelProviderConformance("my (live)", async () => ({
+    plugin: "my-provider", // the extension name (checks vendor parameter key prefixes)
     provider: createMyProvider({ apiKey: LIVE_KEY ?? "" }),
     model: "my-cheap-model",
     expect: { thinking: true, caching: true },
@@ -213,13 +215,13 @@ describe.skipIf(!LIVE_KEY)("live", () => {
 });
 ```
 
-- A provider that lists an embedding model sets `expect.embedding: { model, dimensions }` in the target (`dimensions` is one the model supports); the suite then runs the embedding cases (vector count and dimension via `validateEmbedResult`, input order, `inputType`, an out-of-range `dimensions` rejected). Use `contract: 2` and `plugin: "<name>"` in the target for `@2` providers.
+- A provider that lists an embedding model sets `expect.embedding: { model, dimensions }` in the target (`dimensions` is one the model supports); the suite then runs the embedding cases (vector count and dimension via `validateEmbedResult`, input order, `inputType`, an out-of-range `dimensions` rejected).
 - `startFakeModelServer(routes)`: `routes(req)` gets `{ path, body, headers }` and returns `{ status, json, headers? }` (normal / error), `{ status: 200, sse: [{ event?, data }], delayMs? }` (SSE) or `{ stall: true }` (headers only, for abort and the watchdog). `server.requests` records every request, so assert on the native body sent. Fixtures are handwritten in the provider's native format in `test/fixtures.ts` (see `sseMessage`, `errorJson` in `plugins/anthropic/test/fixtures.ts`); never record keys from real responses.
 - The extension constructor must accept `baseUrl` so fixture mode can point at the fake server.
 - Beyond the suite, write a case per row of the error mapping table (429 with `retry-after`, 529, 5xx, 401/403, 400, 413, a mid-stream error event, stream truncation, malformed tool arguments, network failure, abort, stalled-stream abort), and prefix unit tests for the request mapping (`test/map.test.ts`).
 - Live-API mode: anthropic `CAPYBARA_TEST_ANTHROPIC_API_KEY` (runs `claude-haiku-5-5`); openai `CAPYBARA_TEST_OPENAI_API_KEY` and `CAPYBARA_TEST_OPENAI_MODEL`; openai-compatible `CAPYBARA_TEST_OAICOMPAT_BASE_URL` / `_API_KEY` / `_MODEL` / `_DIALECT` (`generic` / `deepseek` / `qwen` / `ark`; runs only when all four are set; optional `_VISION=1` / `_DOCUMENTS=1` enable the media cases). Native platform providers: deepseek `CAPYBARA_TEST_DEEPSEEK_API_KEY` (falls back to `CAPYBARA_TEST_OAICOMPAT_API_KEY`); bailian `CAPYBARA_TEST_BAILIAN_API_KEY` (optional `_REGION`, `_WORKSPACE_ID`, `_CHAT_MODEL`, `_EMBED_MODEL`); ark `CAPYBARA_TEST_ARK_API_KEY` (optional `_REGION`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_CHAT_MODEL`, `_EMBED_MODEL`). Bailian and ark choose models from the live list when the model variables are unset. Verified against real APIs so far: anthropic (`claude-haiku-5-5`), DeepSeek (`deepseek-flash`, `deepseek-v4-pro`, dialect `deepseek`), openai (`gpt-5-nano`); native deepseek (`deepseek-flash`, 2026-11-08); bailian (`qwen3.8-max`, `qwen3.7-max`, embeddings `qwen3.7-text-embedding`, cn-beijing, 2026-11-08); ark (`doubao-seed-2-1-pro-260915`, embeddings `doubao-embedding-vision-251215`, cn-beijing, 2026-11-08); media on anthropic `claude-haiku-5-5` and openai `gpt-5-nano`; the ark dialect's image mapping is **not yet verified**. When unset, the test prints one "skipped" line. Keep keys in an env file outside the repository, load it only in the test command, never print it.
 - **Run the live API before releasing**: CI has no keys, and fixtures only approximate the docs. Before every provider release, pass the conformance suite against the real API (especially thinking replay: openai reasoning items + message items with ids, anthropic signed thinking blocks, cache hits with top-level `cache_control`), and state the models in the release notes. Also after changing the request mapping or upgrading an SDK.
-- Kernel-level tests drive runs with model-fake (`@capybara-hq/plugin-model-fake`); its script syntax (`echo:`, `slow:<ms>:`, `stall`, `fail:<kind>`, `tool:<name>:<json>`, `long:<n>`, else `You said: …`) is documented in its package source (`src/script.ts`, [in core](https://github.com/capybara-hq/core/tree/main/plugins/model-fake)).
+- Kernel-level tests drive runs with model-fake (`@capybara-hq/plugin-model-fake`), switched on in each new org first (a model provider is on only in the orgs that enabled it: `enableModelProviders(req, orgId, ["model-fake"])` from `@capybara-hq/testing`); its script syntax (`echo:`, `slow:<ms>:`, `stall`, `fail:<kind>`, `tool:<name>:<json>`, `long:<n>`, else `You said: …`) is documented in its package source (`src/script.ts`, [in core](https://github.com/capybara-hq/core/tree/main/plugins/model-fake)).
 - Run from the repository root: `pnpm exec vitest run plugins/anthropic`.
 
 ## Model or gateway patches live only in the extension, with a removal condition

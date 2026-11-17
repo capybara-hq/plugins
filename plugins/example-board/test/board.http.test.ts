@@ -108,8 +108,7 @@ describe("example-board behind embed tokens", () => {
     await createLocalAccount(db, "owner");
     owner = await login(k, "owner");
     orgId = await createOrg(owner);
-    // A model provider is on only in the orgs that switched it on (kernel rc.37).
-    await enableModelProviders(owner, orgId);
+    await enableModelProviders(owner, orgId, ["model-fake"]);
     other = (await joinOrg(k, owner, orgId, "other")).req;
     const agentId = await createAgent(owner, orgId);
     convId = await createConversation(owner, orgId, agentId);

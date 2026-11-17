@@ -170,9 +170,6 @@ describe("Telegram plugin in the kernel (dual replica, long polling)", () => {
     const org = await call(ownerJar, "POST", "/api/v1/orgs", { name: "Acme" });
     const orgId = (org.json.org as { id: string }).id;
     const base = `/api/v1/orgs/${orgId}`;
-    // A model provider is on only in the orgs that switched it on (kernel rc.37).
-    const fake = await call(ownerJar, "PUT", `${base}/extensions/model-fake`, { enabled: true });
-    expect(fake.status, JSON.stringify(fake.json)).toBe(200);
     const inv = await call(ownerJar, "POST", `${base}/invitations`, { role: "member" });
     const accepted = await call(aliceJar, "POST", `/api/v1/invitations/${inv.json.token}/accept`, {
       login: "alice",
@@ -185,6 +182,7 @@ describe("Telegram plugin in the kernel (dual replica, long polling)", () => {
     // ================= setup: plugins, agent, Telegram connection =================
     const book = im.book("acme-telegram");
     for (const [plugin, body] of [
+      ["model-fake", { enabled: true }],
       ["fake-im", { enabled: true, config: { url: book.url } }],
       ["fake-ask", { enabled: true }],
       ["telegram", { enabled: true }],

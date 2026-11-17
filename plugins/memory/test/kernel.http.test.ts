@@ -132,8 +132,7 @@ describe("memory in a kernel", () => {
     await createLocalAccount(db, "owner", "Olivia");
     const owner = await login(k, "owner");
     const orgId = await createOrg(owner);
-    // A model provider is on only in the orgs that switched it on (kernel rc.37).
-    await enableModelProviders(owner, orgId);
+    await enableModelProviders(owner, orgId, ["model-fake"]);
     // memory is optional: off until the org switches it on
     await enable(owner, orgId, "memory");
     await enable(owner, orgId, "request-spy");

@@ -50,12 +50,12 @@ import {
  * checks the real container (same container after the takeover, the dead replica's command killed
  * inside it, stopped on suspend and started again on resume). The conversation works in its
  * owner's default device: the container is `cap-device-<deviceId>`, its state is the
- * device's `device_instances` row, and attachments land in
+ * device's `device_instances` row, and `FetchAttachment` copies an attachment to
  * `/workspace/attachments/<first 12 hex digits of the conversation id>/`:
  *
  * 1. 预签名直传附件（CSV）→ finalize；
- * 2. The agent processes the attachment with `Bash` (first use: the device's file system
- *    and instance are created);
+ * 2. `FetchAttachment` copies the attachment into the device (first use: the device's file
+ *    system and instance are created), then the agent processes it with `Bash`;
  * 3. `Deliver` 交付产物 → `artifact_created` → 下载路由 302 到预签名地址，内容一致；
  * 4. the replica running a `Bash` call (a command longer than the lease TTL) is killed ->
  *    the survivor takes over the run (result unknown); the next call runs at once under a shared
@@ -177,9 +177,8 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     const org = await at(1, "POST", "/api/v1/orgs", { name: "Acme" });
     expect(org.status, JSON.stringify(org.json)).toBe(201);
     base = `/api/v1/orgs/${(org.json.org as { id: string }).id}`;
-    // A model provider is on only in the orgs that switched it on (kernel rc.37).
-    const fake = await at(1, "PUT", `${base}/extensions/model-fake`, { enabled: true });
-    expect(fake.status, JSON.stringify(fake.json)).toBe(200);
+    const mf = await at(1, "PUT", `${base}/extensions/model-fake`, { enabled: true });
+    expect(mf.status, JSON.stringify(mf.json)).toBe(200);
     // a cold run builds the sandbox image (about 1.5 GB) once, shared by the files
   }, 1_200_000);
 
@@ -313,21 +312,22 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     // only the attachment is registered: no instance yet
     expect(await instanceStatus(0, convPath)).toBeNull();
 
-    // ---- 2. FetchAttachment copies the attachment in (first use creates the sandbox; kernel
-    // rc.37 no longer syncs attachments before every command), then Bash processes it ----
+    // ---- 2. FetchAttachment copies the attachment (first use: creates the sandbox), Bash processes it ----
     await send(0, convId, "FetchAttachment", { file: "fruit.csv" });
-    const fetched = await finished(convId, 2);
-    expect(fetched.result.isError, fetched.result.content).toBe(false);
-    expect(fetched.result.content.startsWith(SANDBOX_STARTED_NOTICE)).toBe(true);
+    const r2 = await finished(convId, 2);
+    expect(r2.result.isError, r2.result.content).toBe(false);
+    expect(r2.result.content.startsWith(SANDBOX_STARTED_NOTICE)).toBe(true);
+    expect(r2.result.content).toContain(`${attachments}/fruit.csv`);
     await send(0, convId, "Bash", {
       description: "Test step",
       command:
         "mkdir -p /workspace/out && awk -F, 'NR>1{s+=$2} END{print \"total=\" s}' " +
         `${attachments}/fruit.csv | tee /workspace/out/summary.txt`,
     });
-    const r2 = await finished(convId, 3);
-    expect(r2.result.isError, r2.result.content).toBe(false);
-    expect(r2.result.content).toContain(TOTAL);
+    const r2b = await finished(convId, 3);
+    expect(r2b.result.isError, r2b.result.content).toBe(false);
+    expect(r2b.result.content).not.toContain(SANDBOX_STARTED_NOTICE);
+    expect(r2b.result.content).toContain(TOTAL);
     expect(await instanceStatus(1, convPath)).toBe("running");
     const c2 = await containerOf(deviceId);
     expect(c2.State.Running).toBe(true);

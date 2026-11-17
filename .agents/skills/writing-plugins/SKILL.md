@@ -143,7 +143,7 @@ The file is strict (unlike `plugin.json`, a `$schema` key is refused); `template
 - **Content digest**: every import records a sha256 over the plugin's files. Other content at an already imported version becomes `<version>+git.<sha12>` / `+sha256.<12>` and never overwrites the imported one, so **bump the version for every content change**.
 - **Provenance**: for npm sources the registry's attestation ("built from `repository`@`commit` by `workflow`") is shown at review, display only, never a refusal. `capybara-plugin release --provenance` produces it, which needs `repository.url` and `repository.directory` to match the repository (`plugin-release-metadata`).
 - **One review**: the admin sees the extension's permissions and migration warnings, every skill with its body, every connector and agent template, and the dependencies before confirming. Changes in permissions or migration warnings in a new version need re-approval (`.agents/skills/writing-extensions`).
-- A tgz in the pre-0.1.0 format (a `capybara` section in `package.json`, no `.capybara-plugin/plugin.json`) is refused (`catalog.legacy_format`); repack it.
+- A tgz in the pre-0.1.0 format (a `capybara` section in `package.json`, no `.capybara-plugin/plugin.json`) is an ordinary invalid package (422 `catalog.invalid_manifest`, the message names the missing `.capybara-plugin/plugin.json`); repack it.
 
 ## Checklist for writing a plugin
 

@@ -44,7 +44,6 @@ for (const dialect of ["generic", "deepseek", "qwen", "ark"] as const) {
     const server = await startFakeModelServer(chatRoutes(dialect));
     const m = fixtureModels[dialect];
     return {
-      contract: 2,
       plugin: PLUGIN,
       provider: createOpenAICompatibleProvider({
         endpoints: [
@@ -86,7 +85,6 @@ describe.skipIf(!liveReady)("live", { timeout: 120_000 }, () => {
   describeModelProviderConformance(
     `openai-compatible (live, ${dialect}, ${LIVE.model})`,
     async () => ({
-      contract: 2,
       plugin: PLUGIN,
       provider: createOpenAICompatibleProvider({
         endpoints: [

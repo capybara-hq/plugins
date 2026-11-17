@@ -63,8 +63,7 @@ describe("todo in a kernel", () => {
     await createLocalAccount(db, "owner");
     const owner = await login(k, "owner");
     const orgId = await createOrg(owner);
-    // A model provider is on only in the orgs that switched it on (kernel rc.37).
-    await enableModelProviders(owner, orgId);
+    await enableModelProviders(owner, orgId, ["model-fake"]);
     const enabled = await owner({
       method: "PUT",
       url: `/api/v1/orgs/${orgId}/extensions/todo`,

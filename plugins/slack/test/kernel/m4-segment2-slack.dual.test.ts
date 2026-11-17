@@ -184,9 +184,6 @@ describe("M4 第二段验收：Slack（双副本）", () => {
     expect(org.status).toBe(201);
     const orgId = (org.json.org as { id: string }).id;
     const base = `/api/v1/orgs/${orgId}`;
-    // A model provider is on only in the orgs that switched it on (kernel rc.37).
-    const fake = await call(ownerJar, "PUT", `${base}/extensions/model-fake`, { enabled: true });
-    expect(fake.status, JSON.stringify(fake.json)).toBe(200);
     const inv = await call(ownerJar, "POST", `${base}/invitations`, { role: "member" });
     expect(inv.status).toBe(201);
     const accepted = await call(aliceJar, "POST", `/api/v1/invitations/${inv.json.token}/accept`, {
@@ -257,6 +254,7 @@ describe("M4 第二段验收：Slack（双副本）", () => {
     slack.users.set("UBOB", { id: "UBOB", teamId: "T1", name: "bob", realName: "Bob" });
     const book = im.book("acme-slack-seg2");
     for (const [plugin, body] of [
+      ["model-fake", { enabled: true }],
       ["fake-im", { enabled: true, config: { url: book.url } }],
       ["slack", { enabled: true, config: { teamId: "T1", botToken: slack.botToken } }],
     ] as const) {

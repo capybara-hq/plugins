@@ -133,7 +133,6 @@ describe.skipIf(!dockerAvailable)(
       await createLocalAccount(db, "owner", "O");
       owner = await session(k, "owner");
       orgId = await createOrg(owner);
-      // A model provider is on only in the orgs that switched it on (kernel rc.37).
       await enableModelProviders(owner, orgId, ["model-fake"]);
     });
 

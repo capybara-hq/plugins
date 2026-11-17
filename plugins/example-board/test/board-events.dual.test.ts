@@ -107,9 +107,8 @@ describe("example-board live updates (dual replica)", () => {
     const base = `/api/v1/orgs/${orgId}`;
     const en = await at(1, "PUT", `${base}/extensions/example-board`, { enabled: true });
     expect(en.status, JSON.stringify(en.json)).toBe(200);
-    // A model provider is on only in the orgs that switched it on (kernel rc.37).
-    const fake = await at(1, "PUT", `${base}/extensions/model-fake`, { enabled: true });
-    expect(fake.status, JSON.stringify(fake.json)).toBe(200);
+    const mf = await at(1, "PUT", `${base}/extensions/model-fake`, { enabled: true });
+    expect(mf.status, JSON.stringify(mf.json)).toBe(200);
 
     // Replica 0 issues
     const issued = await at(0, "POST", `${base}/ui/embeds/example-board/board/token`, {});

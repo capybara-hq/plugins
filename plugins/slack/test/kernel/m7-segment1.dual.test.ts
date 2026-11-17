@@ -139,9 +139,9 @@ describe("M7 segment 1: gateway roles, fair share, webhook mode, failover (dual 
     const org = await call("POST", "/api/v1/orgs", { name: "Acme" });
     expect(org.status).toBe(201);
     const base = `/api/v1/orgs/${(org.json.org as { id: string }).id}`;
-    // A model provider is on only in the orgs that switched it on (kernel rc.37).
-    const fake = await call("PUT", `${base}/extensions/model-fake`, { enabled: true });
-    expect(fake.status, JSON.stringify(fake.json)).toBe(200);
+    expect((await call("PUT", `${base}/extensions/model-fake`, { enabled: true })).status).toBe(
+      200,
+    );
     const ag = await call("POST", `${base}/agents`, {
       definition: {
         name: "Helper",

@@ -42,7 +42,6 @@ const memoryKv = (): Kv & { store: Map<string, string>; ttls: number[] } => {
 describeModelProviderConformance("anthropic (fixtures)", async () => {
   const server = await startFakeModelServer(anthropicRoutes());
   return {
-    contract: 2,
     plugin: "anthropic",
     provider: createAnthropicProvider({
       kv: memoryKv(),
@@ -67,7 +66,6 @@ if (!LIVE_KEY) {
 // 真实接口的思考与缓存用例常超过默认 5 秒
 describe.skipIf(!LIVE_KEY)("live", { timeout: 120_000 }, () => {
   describeModelProviderConformance("anthropic (live, claude-haiku-5-5)", async () => ({
-    contract: 2,
     plugin: "anthropic",
     provider: createAnthropicProvider({
       kv: memoryKv(),
