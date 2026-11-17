@@ -99,14 +99,17 @@ describe("ui assets", () => {
     const path = join(ui, "manifest.json");
     const original = await readFile(path, "utf8");
     const manifest = JSON.parse(original) as { files: Record<string, unknown> };
-    await writeFile(join(ui, "late.js"), "late()\n");
-    expect((await get(`${base}late.js`)).status).toBe(404);
-    manifest.files["late.js"] = { contentType: "text/javascript; charset=utf-8", sha256: "x" };
-    await writeFile(path, JSON.stringify(manifest));
-    await utimes(path, new Date(), new Date(Date.now() + 5_000));
-    expect((await get(`${base}late.js`)).status).toBe(200);
-    await writeFile(path, original);
-    await utimes(path, new Date(), new Date(Date.now() + 10_000));
+    try {
+      await writeFile(join(ui, "late.js"), "late()\n");
+      expect((await get(`${base}late.js`)).status).toBe(404);
+      manifest.files["late.js"] = { contentType: "text/javascript; charset=utf-8", sha256: "x" };
+      await writeFile(path, JSON.stringify(manifest));
+      await utimes(path, new Date(), new Date(Date.now() + 5_000));
+      expect((await get(`${base}late.js`)).status).toBe(200);
+    } finally {
+      await writeFile(path, original);
+      await utimes(path, new Date(), new Date(Date.now() + 10_000));
+    }
     expect((await get(`${base}late.js`)).status).toBe(404);
   });
 

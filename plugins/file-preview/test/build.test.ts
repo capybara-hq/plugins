@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { PREVIEWERS } from "../src/previewers.js";
 import { buildUi } from "../ui-src/build.js";
 
 const dirs: string[] = [];
@@ -46,5 +47,16 @@ describe("buildUi", () => {
     const chunk = /import\(["']\.\/(chunk-[A-Za-z0-9]+\.js)["']\)/.exec(app)?.[1];
     expect(chunk).toBeDefined();
     expect(Object.keys(manifest.files)).toContain(chunk);
+  });
+
+  it("emits one lazily loaded chunk per renderer", async () => {
+    const dir = await tempDir();
+    const manifest = await buildUi(dir);
+    const app = await readFile(join(dir, "app.js"), "utf8");
+    const chunks = new Set(
+      [...app.matchAll(/import\(["']\.\/(chunk-[A-Za-z0-9]+\.js)["']\)/g)].map((m) => m[1]),
+    );
+    expect(chunks.size).toBe(PREVIEWERS.length);
+    for (const chunk of chunks) expect(Object.keys(manifest.files)).toContain(chunk);
   });
 });

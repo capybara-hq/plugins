@@ -28,7 +28,8 @@ const BASE_CSS = `
 html, body { height: 100%; margin: 0; }
 body { font: 14px/1.5 system-ui, sans-serif; color: var(--cap-foreground, CanvasText);
   background: var(--cap-background, Canvas); }
-#root { height: 100%; overflow: auto; }
+#root { position: relative; height: 100%; overflow: auto; }
+.cap-status { position: absolute; inset: 0; background: var(--cap-background, Canvas); }
 .cap-state { padding: 24px; text-align: center; color: var(--cap-muted-foreground, GrayText); }
 .cap-error-title { font-weight: 600; color: var(--cap-foreground, CanvasText); }
 .cap-error-reason { margin: 8px 0; overflow-wrap: anywhere; }
@@ -52,20 +53,26 @@ export function startApp(deps: AppDeps = {}): () => void {
   style.textContent = BASE_CSS;
   doc.head.append(style);
 
-  // The renderer paints into `content`; loading / empty / error live in `status`.
+  // The renderer paints into `content`; loading / empty / error live in `status`, which overlays it
+  // until the render succeeds. `content` is hidden with `visibility`, not `display:none`, so it is
+  // laid out while the renderer runs and renderers that measure layout read real sizes.
   const status = doc.createElement("div");
+  status.className = "cap-status";
   const content = doc.createElement("div");
-  content.hidden = true;
+  content.style.visibility = "hidden";
   root.replaceChildren(status, content);
 
   let locale: "zh" | "en" = "en";
   let t = translator(locale);
   const controller = new AbortController();
   let failed = false;
+  let rendered = false;
+  let initialized = false;
 
   const fail = (reason: string) => {
     failed = true;
-    content.hidden = true;
+    content.style.visibility = "hidden";
+    status.style.display = "";
     showError(status, t, reason);
   };
 
@@ -98,8 +105,10 @@ export function startApp(deps: AppDeps = {}): () => void {
       const renderer = await Promise.race([loadRenderer(previewer as PreviewerId), timeout]);
       await Promise.race([renderer(file, ctx), timeout]);
       if (!failed) {
+        rendered = true;
         status.replaceChildren();
-        content.hidden = false;
+        status.style.display = "none";
+        content.style.visibility = "";
       }
     } catch (e) {
       if (!failed) fail(message(e));
@@ -118,7 +127,9 @@ export function startApp(deps: AppDeps = {}): () => void {
         t = translator(locale);
         doc.documentElement.lang = locale;
         applyTheme(doc, e.theme, e.tokens);
-        showLoading(status, t);
+        // a later init (the page re-sent it) only re-themes: never loading over a painted preview
+        if (!initialized) showLoading(status, t);
+        initialized = true;
         break;
       case "theme":
         applyTheme(doc, e.theme, e.tokens);
@@ -130,8 +141,13 @@ export function startApp(deps: AppDeps = {}): () => void {
   };
 
   const stopBridge = createBridge(win, onEvent);
-  const onError = (e: ErrorEvent) => fail(e.message || message(e.error));
-  const onRejection = (e: PromiseRejectionEvent) => fail(message(e.reason));
+  // once the preview is painted, a stray error must not replace it
+  const onError = (e: ErrorEvent) => {
+    if (!rendered) fail(e.message || message(e.error));
+  };
+  const onRejection = (e: PromiseRejectionEvent) => {
+    if (!rendered) fail(message(e.reason));
+  };
   win.addEventListener("error", onError);
   win.addEventListener("unhandledrejection", onRejection);
 

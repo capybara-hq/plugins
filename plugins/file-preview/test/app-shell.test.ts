@@ -206,6 +206,47 @@ describe("the main flow", () => {
     expect(signal?.aborted).toBe(true);
   });
 
+  it("lays the content root out (not display:none) while the renderer runs", async () => {
+    let display = "";
+    start(async (_f, ctx) => {
+      display = getComputedStyle(ctx.root).display;
+      ctx.root.textContent = "body";
+    });
+    post(init);
+    post(fileMsg());
+    await vi.waitFor(() => expect(display).not.toBe(""));
+    expect(display).not.toBe("none");
+    expect(
+      getComputedStyle(document.getElementById("root")?.lastElementChild as Element).visibility,
+    ).not.toBe("hidden");
+  });
+
+  it("ignores window errors and rejections once the render succeeded", async () => {
+    start(async (_f, ctx) => {
+      ctx.root.textContent = "painted";
+    });
+    post(init);
+    post(fileMsg());
+    await vi.waitFor(() => expect(text()).toBe("painted"));
+    window.dispatchEvent(new ErrorEvent("error", { message: "late" }));
+    const rejection = new Event("unhandledrejection") as PromiseRejectionEvent;
+    Object.defineProperty(rejection, "reason", { value: new Error("later") });
+    window.dispatchEvent(rejection);
+    expect(text()).toBe("painted");
+  });
+
+  it("a second init re-themes without showing loading over the painted preview", async () => {
+    start(async (_f, ctx) => {
+      ctx.root.textContent = "painted";
+    });
+    post(init);
+    post(fileMsg());
+    await vi.waitFor(() => expect(text()).toBe("painted"));
+    post({ ...init, theme: "light", tokens: { background: "#fff" } });
+    expect(text()).toBe("painted");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+  });
+
   it("window errors and unhandled rejections show the error state", async () => {
     start(() => new Promise<void>(() => {}));
     post(init);
