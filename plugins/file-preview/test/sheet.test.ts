@@ -23,8 +23,8 @@ import {
   zip64Switch,
 } from "./fixtures/zip/hostile.js";
 
-function must<T>(value: T | undefined): T {
-  if (value === undefined) throw new Error("expected a value");
+function must<T>(value: T | null | undefined): T {
+  if (value === undefined || value === null) throw new Error("expected a value");
   return value;
 }
 
