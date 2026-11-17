@@ -4,7 +4,7 @@
 
 **Goal:** Ship `@capybara-hq/plugin-file-preview`, seven sandboxed embed previewers (code, zip, sheet, docx, pdf, svg, html) for conversation files, after a one-line core CSP change that allows workers in embeds.
 
-**Architecture:** Part 1 is a core PR (`capybara-hq/core`): `EMBED_CSP` gets `worker-src 'self' blob:`. Part 2 is a new plugin in `capybara-hq/plugins`: a server extension that provides `file-preview@1` and serves a prebuilt single-page embed app from public `/ui/` routes; the app receives the file over the embed bridge, parses it in a blob-URL worker under a watchdog, and builds the DOM on the main thread.
+**Architecture:** Part 1 is a core PR (`capybara-hq/core`): `EMBED_CSP` gets `worker-src blob:`. Part 2 is a new plugin in `capybara-hq/plugins`: a server extension that provides `file-preview@1` and serves a prebuilt single-page embed app from public `/ui/` routes; the app receives the file over the embed bridge, parses it in a blob-URL worker under a watchdog, and builds the DOM on the main thread.
 
 **Tech Stack:** TypeScript, esbuild (embed app build), Shiki (JavaScript regex engine), fflate, exceljs, mammoth, DOMPurify, pdfjs-dist, vitest (+ jsdom), `@capybara-hq/testing`.
 
@@ -15,7 +15,7 @@
 - Plugin dir `plugins/file-preview`, npm `@capybara-hq/plugin-file-preview`, plugin and extension name `file-preview`, `repository.directory: plugins/file-preview`.
 - Depends only on `@capybara-hq/plugin-sdk` and third-party npm packages (no `@capybara-hq/kernel`); tests import only the SDK, `@capybara-hq/testing`, `@capybara-hq/plugin-model-fake` and the plugin.
 - Every previewer: `maxBytes` = `FILE_PREVIEW_MAX_BYTES` (20 MiB); contribution `{ kind: "embed", slot: "file.preview" }`; never claims `text/markdown`, `text/csv`, `text/tab-separated-values`, `md`, `markdown`, `csv`, `tsv`, or bitmap images.
-- Embed CSP after Part 1: `default-src 'self'`, inline scripts and styles allowed, `img-src 'self' data: blob:`, `font-src 'self' data:`, `connect-src 'self'`, `frame-src 'none'`, `worker-src 'self' blob:`, no `'wasm-unsafe-eval'` (no WebAssembly anywhere), sandbox `allow-scripts allow-forms` (opaque origin).
+- Embed CSP after Part 1: `default-src 'self'`, inline scripts and styles allowed, `img-src 'self' data: blob:`, `font-src 'self' data:`, `connect-src 'self'`, `frame-src 'none'`, `worker-src blob:`, no `'wasm-unsafe-eval'` (no WebAssembly anywhere), sandbox `allow-scripts allow-forms` (opaque origin).
 - The embed is a single-page app: no navigation of the iframe after first load (no `location` changes, no navigating links, no form submits).
 - No agent content becomes script or unsanitized markup: html and docx through `sanitizeHtml` into a shadow root, svg only as `<img src="blob:…">`, everything else via `textContent` or canvas. No `innerHTML` with any other string.
 - No network requests except the plugin's own `/plugin-ui/file-preview/…` assets.
@@ -46,7 +46,7 @@ Branch: `pnpm wt:new fix/embed-workers --from origin/main` in `/Users/grant/Capy
 - Create: `.changeset/<name>.md` (patch, `@capybara-hq/capybara`)
 
 **Interfaces:**
-- Produces: `EMBED_CSP` containing the directive `worker-src 'self' blob:` (the rest unchanged).
+- Produces: `EMBED_CSP` containing the directive `worker-src blob:` (the rest unchanged).
 
 - [ ] **Step 1: Write the failing test** in `apps/web/test/csp.test.ts`, a new `it("the embed CSP allows workers from the embed's own origin and blob: only")`:
 
@@ -62,9 +62,9 @@ expect(directives.sandbox).toEqual(["allow-scripts", "allow-forms"]);
 ```
 
 - [ ] **Step 2: Run it.** `pnpm exec vitest run apps/web/test/csp.test.ts` → FAIL on `worker-src`.
-- [ ] **Step 3: Change** `"worker-src 'none'"` to `"worker-src 'self' blob:"` in `EMBED_CSP`; in the doc comment replace "不允许插件页…起 worker" with an English line: workers are allowed from the embed's own routes and `blob:` URLs; a worker of a sandboxed embed inherits its opaque origin and CSP, so it reaches nothing the page cannot and only moves work off the main thread (decision 2026-11-17, plugin-file-preview spec). Note that an opaque-origin page can construct workers only from `blob:` / `data:` URLs in practice, which is why `blob:` is listed.
+- [ ] **Step 3: Change** `"worker-src 'none'"` to `"worker-src blob:"` in `EMBED_CSP`; in the doc comment replace "不允许插件页…起 worker" with an English line: workers are allowed from the embed's own routes and `blob:` URLs; a worker of a sandboxed embed inherits its opaque origin and CSP, so it reaches nothing the page cannot and only moves work off the main thread (decision 2026-11-17, plugin-file-preview spec). Note that an opaque-origin page can construct workers only from `blob:` / `data:` URLs in practice, which is why `blob:` is listed.
 - [ ] **Step 4: Run it.** Same command → PASS. Then `pnpm verify --fast`.
-- [ ] **Step 5: Skill and changeset.** In the skill, change `object-src` / `frame-src` / `worker-src 'none'` to `object-src` / `frame-src 'none'`, `worker-src 'self' blob:` (workers for off-main-thread parsing). Changeset: patch on `@capybara-hq/capybara`, "Embeds may start Web Workers (`worker-src 'self' blob:`)".
+- [ ] **Step 5: Skill and changeset.** In the skill, change `object-src` / `frame-src` / `worker-src 'none'` to `object-src` / `frame-src 'none'`, `worker-src blob:` (workers for off-main-thread parsing). Changeset: patch on `@capybara-hq/capybara`, "Embeds may start Web Workers (`worker-src blob:`)".
 - [ ] **Step 6: Commit and open the PR** (`fix(web): allow workers in embeds`), linked issue per the `contributing` skill.
 
 ### Task 1A: User attachments join the conversation's files and the right panel

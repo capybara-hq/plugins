@@ -114,7 +114,7 @@ The maintainer picked 1.
 ## Core change (first, before the plugin ships)
 
 Maintainer decision 2026-11-17: allow workers in embeds. In core, `EMBED_CSP` changes
-`worker-src 'none'` to `worker-src 'self' blob:`, with the proxy's CSP test updated (a worker from
+`worker-src 'none'` to `worker-src blob:`, with the proxy's CSP test updated (a worker from
 the plugin's own `/ui/` route and from a `blob:` URL allowed; other origins still refused) and the
 comment block explaining why: a worker started by a sandboxed embed inherits its opaque origin and
 CSP, so it reaches nothing the embed itself cannot; it only moves work off the page's main thread.
