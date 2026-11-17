@@ -8,8 +8,8 @@ import type { SheetInput, SheetOutput } from "../ui-src/shared/sheet.js";
 import { formatDate, parseWorkbook } from "../ui-src/workers/sheet.worker.js";
 
 async function toBuffer(wb: ExcelJS.Workbook): Promise<ArrayBuffer> {
-  const buf = (await wb.xlsx.writeBuffer()) as ArrayBuffer;
-  return buf.slice(0);
+  const buf = (await wb.xlsx.writeBuffer()) as unknown as Uint8Array;
+  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
 }
 
 async function basic(): Promise<ArrayBuffer> {
@@ -259,5 +259,64 @@ describe("sheet renderer layout", () => {
     sc.scrollTop = 1500 * 24;
     sc.dispatchEvent(new Event("scroll"));
     expect(root.textContent).not.toContain("row-1500");
+  });
+});
+
+describe("oversized workbooks", () => {
+  /** A zip whose central directory declares `size` bytes for one entry (the data is a stub). */
+  function declared(...sizes: number[]): ArrayBuffer {
+    const parts: Uint8Array[] = [];
+    const central: Uint8Array[] = [];
+    let offset = 0;
+    sizes.forEach((size, i) => {
+      const name = new TextEncoder().encode(`f${i}.xml`);
+      const local = new Uint8Array(30 + name.length);
+      new DataView(local.buffer).setUint32(0, 0x04034b50, true);
+      local.set(name, 30);
+      const cd = new Uint8Array(46 + name.length);
+      const v = new DataView(cd.buffer);
+      v.setUint32(0, 0x02014b50, true);
+      v.setUint32(24, size, true);
+      v.setUint16(28, name.length, true);
+      v.setUint32(42, offset, true);
+      cd.set(name, 46);
+      parts.push(local);
+      central.push(cd);
+      offset += local.length;
+    });
+    const cdSize = central.reduce((n, c) => n + c.length, 0);
+    const eocd = new Uint8Array(22);
+    const v = new DataView(eocd.buffer);
+    v.setUint32(0, 0x06054b50, true);
+    v.setUint16(8, sizes.length, true);
+    v.setUint16(10, sizes.length, true);
+    v.setUint32(12, cdSize, true);
+    v.setUint32(16, offset, true);
+    const all = [...parts, ...central, eocd];
+    const out = new Uint8Array(all.reduce((n, a) => n + a.length, 0));
+    let at = 0;
+    for (const a of all) {
+      out.set(a, at);
+      at += a.length;
+    }
+    return out.buffer as ArrayBuffer;
+  }
+  const MiB = 1024 * 1024;
+
+  it("refuses a declared total over 150 MiB", async () => {
+    const out = await parseWorkbook({ data: declared(40 * MiB, 40 * MiB, 40 * MiB, 40 * MiB) });
+    expect(out).toEqual({ sheets: [], error: "too-large" });
+  });
+
+  it("refuses a single entry over 50 MiB", async () => {
+    expect((await parseWorkbook({ data: declared(51 * MiB) })).error).toBe("too-large");
+  });
+
+  it("is not 'too-large' for a normal workbook, and the renderer words it", async () => {
+    expect((await parseWorkbook({ data: await basic() })).error).toBeUndefined();
+    const f = fileOf(declared(51 * MiB));
+    const { ctx, errors } = makeCtx(f);
+    await render(f, ctx);
+    expect(errors[0]).toContain("too large");
   });
 });

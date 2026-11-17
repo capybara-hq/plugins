@@ -25,6 +25,7 @@ export interface SheetInput {
 
 export interface SheetOutput {
   sheets: SheetData[];
-  /** `invalid`: the file is not a readable .xlsx workbook (the renderer words the reason). */
-  error?: "invalid";
+  /** `invalid`: not a readable .xlsx workbook; `too-large`: its declared uncompressed size is over the
+   * limit (refused before parsing). The renderer words the reason. */
+  error?: "invalid" | "too-large";
 }

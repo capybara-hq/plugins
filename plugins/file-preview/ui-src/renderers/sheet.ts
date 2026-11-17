@@ -11,6 +11,7 @@ const STRINGS = {
     emptySheet: "此工作表为空",
     truncatedCells: "单元格过多，仅显示前 2 000 000 个单元格",
     hidden: "隐藏的工作表",
+    tooLarge: "此工作簿解压后过大，无法预览",
     invalid: "这不是有效的 .xlsx 工作簿（文件已损坏，或扩展名与内容不符）",
   },
   en: {
@@ -19,6 +20,7 @@ const STRINGS = {
     emptySheet: "This sheet is empty",
     truncatedCells: "Too many cells: showing only the first 2,000,000",
     hidden: "Hidden sheet",
+    tooLarge: "This workbook is too large once unpacked to preview",
     invalid: "This is not a valid .xlsx workbook (the file is corrupt or not what its name says)",
   },
 } as const;
@@ -217,8 +219,8 @@ export const render: Renderer = async (file, ctx: RenderContext) => {
     return;
   }
   if (ctx.signal.aborted) return;
-  if (out.error === "invalid") {
-    ctx.showError(s.invalid);
+  if (out.error !== undefined) {
+    ctx.showError(out.error === "too-large" ? s.tooLarge : s.invalid);
     return;
   }
   if (out.sheets.length === 0) {
