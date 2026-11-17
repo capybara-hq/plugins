@@ -14,6 +14,10 @@
  *   asks for, again without `fetch`; their licenses ship beside them;
  * - `ui-src/index.html` is the shell, `ui-src/static/*` is copied verbatim when present (flat: a
  *   subdirectory fails the build, since served names have no `/`);
+ * - `THIRD-PARTY-LICENSES.txt` holds the license of every npm package bundled into the app or a
+ *   worker (found from esbuild's metafile; a package with no license file fails the build), the
+ *   direct dependencies of prebuilt `*.min.js` bundles (which embed them), and the legal comments
+ *   esbuild kept from the bundled sources; pdf.js's data licenses ship as their own files;
  * - `manifest.json` lists every other file with its content type and sha256, sorted by name.
  *
  * esbuild runs with `absWorkingDir` set to the plugin directory: chunk hashes depend on the paths
@@ -24,11 +28,11 @@
  */
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type BuildOptions, build, type Plugin } from "esbuild";
+import { type BuildOptions, type BuildResult, build, type Plugin } from "esbuild";
 
 export interface UiManifest {
   files: Record<string, { contentType: string; sha256: string }>;
@@ -57,16 +61,43 @@ const COMMON: BuildOptions = {
   bundle: true,
   minify: true,
   target: "es2022",
-  legalComments: "none",
+  // kept out of the bundles, collected into THIRD-PARTY-LICENSES.txt (`<output>.LEGAL.txt`)
+  legalComments: "external",
   charset: "utf8",
   sourcemap: false,
   write: false,
+  metafile: true,
   logLevel: "silent",
   platform: "browser",
   absWorkingDir: PLUGIN_DIR,
 };
 
 type Output = { name: string; bytes: Uint8Array };
+
+/** What the bundles were made from: metafile inputs (absolute) and the legal comments per output. */
+interface Provenance {
+  inputs: Set<string>;
+  legal: Map<string, string>;
+}
+
+const LEGAL_SUFFIX = ".LEGAL.txt";
+
+/** Records `result`'s inputs and legal comments; returns its code outputs. */
+function collect(
+  result: BuildResult,
+  prov: Provenance,
+): Array<{ name: string; text: string; bytes: Uint8Array }> {
+  for (const input of Object.keys(result.metafile?.inputs ?? {})) {
+    prov.inputs.add(resolve(PLUGIN_DIR, input));
+  }
+  const out: Array<{ name: string; text: string; bytes: Uint8Array }> = [];
+  for (const f of result.outputFiles ?? []) {
+    const name = basename(f.path);
+    if (name.endsWith(LEGAL_SUFFIX)) prov.legal.set(name.slice(0, -LEGAL_SUFFIX.length), f.text);
+    else out.push({ name, text: f.text, bytes: f.contents });
+  }
+  return out;
+}
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -86,7 +117,7 @@ async function walk(dir: string, prefix = ""): Promise<Array<[string, string]>> 
   return out;
 }
 
-async function bundleApp(): Promise<Output[]> {
+async function bundleApp(prov: Provenance): Promise<Output[]> {
   const result = await build({
     ...COMMON,
     entryPoints: { app: join(SRC, "app/main.ts") },
@@ -97,7 +128,7 @@ async function bundleApp(): Promise<Output[]> {
     chunkNames: "chunk-[hash]",
     tsconfig: join(SRC, "tsconfig.json"),
   });
-  return (result.outputFiles ?? []).map((f) => ({ name: basename(f.path), bytes: f.contents }));
+  return collect(result, prov).map(({ name, bytes }) => ({ name, bytes }));
 }
 
 /**
@@ -168,7 +199,7 @@ async function pdfjsData(): Promise<Output[]> {
   return out;
 }
 
-async function bundleWorkers(dir: string): Promise<Output[]> {
+async function bundleWorkers(dir: string, prov: Provenance): Promise<Output[]> {
   if (!existsSync(dir)) return [];
   const ids = (await readdir(dir))
     .filter((f) => f.endsWith(".worker.ts"))
@@ -185,13 +216,185 @@ async function bundleWorkers(dir: string): Promise<Output[]> {
       tsconfig: join(SRC, "tsconfig.json"),
       plugins: [inlinePdfjsNoWasm],
     });
-    for (const f of result.outputFiles ?? []) {
+    for (const f of collect(result, prov)) {
       const module = `export default ${JSON.stringify(f.text)};\n`;
-      out.push({ name: basename(f.path), bytes: new TextEncoder().encode(module) });
+      out.push({ name: f.name, bytes: new TextEncoder().encode(module) });
     }
   }
   return out;
 }
+
+/** A package's license file names, tried in this order (case-insensitive). */
+const LICENSE_FILE_RE = /^(?:LICEN[CS]E|COPYING)(?:[.-][A-Za-z0-9.-]*)?$/i;
+
+interface PackageInfo {
+  name: string;
+  version: string;
+  license: string;
+  author: string | undefined;
+  dir: string;
+}
+
+/** The package directory holding `file` (the last `node_modules/<name>` or `node_modules/@s/<name>`). */
+function packageDirOf(file: string): string | undefined {
+  const parts = file.split(sep);
+  const at = parts.lastIndexOf("node_modules");
+  if (at < 0 || at + 1 >= parts.length) return undefined;
+  const scoped = parts[at + 1]?.startsWith("@") === true;
+  return parts.slice(0, at + (scoped ? 3 : 2)).join(sep);
+}
+
+async function packageInfo(dir: string): Promise<PackageInfo> {
+  const json = JSON.parse(await readFile(join(dir, "package.json"), "utf8")) as {
+    name?: string;
+    version?: string;
+    license?: string;
+    author?: string | { name?: string };
+  };
+  if (json.name === undefined || json.version === undefined) {
+    throw new Error(`ui build: ${dir}/package.json has no name or version`);
+  }
+  const author = typeof json.author === "string" ? json.author : json.author?.name;
+  return {
+    name: json.name,
+    version: json.version,
+    license: json.license ?? "unknown",
+    author,
+    dir,
+  };
+}
+
+/** `name` as Node resolves it from `fromDir` (walking up `node_modules`), symlinks resolved. */
+async function findPackage(fromDir: string, name: string): Promise<string> {
+  for (let dir = fromDir; ; dir = dirname(dir)) {
+    const base = basename(dir) === "node_modules" ? dir : join(dir, "node_modules");
+    const candidate = join(base, name);
+    if (existsSync(join(candidate, "package.json"))) return realpath(candidate);
+    if (dirname(dir) === dir) throw new Error(`ui build: cannot find ${name} from ${fromDir}`);
+  }
+}
+
+/**
+ * Packages that ship no license file, with the license their package.json declares. Their entry
+ * is the standard text of that license with the package's author as the copyright holder. Any
+ * other package without a license file fails the build.
+ */
+const NO_LICENSE_FILE: Readonly<Record<string, "ISC">> = {
+  // embedded in exceljs's browser bundle; the package has only README, package.json and code
+  saxes: "ISC",
+};
+
+const ISC_TEXT = (holder: string) =>
+  [
+    "ISC License",
+    "",
+    `Copyright (c) ${holder}`,
+    "",
+    "Permission to use, copy, modify, and/or distribute this software for any",
+    "purpose with or without fee is hereby granted, provided that the above",
+    "copyright notice and this permission notice appear in all copies.",
+    "",
+    'THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES',
+    "WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF",
+    "MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR",
+    "ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES",
+    "WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN",
+    "ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF",
+    "OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.",
+  ].join("\n");
+
+async function licenseText(pkg: PackageInfo): Promise<{ file: string; text: string }> {
+  const files = (await readdir(pkg.dir)).filter((f) => LICENSE_FILE_RE.test(f)).sort();
+  if (files.length === 0) {
+    const declared = NO_LICENSE_FILE[pkg.name];
+    if (declared !== undefined && pkg.license === declared && pkg.author !== undefined) {
+      return {
+        file: "no license file: standard text, author from package.json",
+        text: ISC_TEXT(pkg.author),
+      };
+    }
+    throw new Error(`ui build: bundled package ${pkg.name}@${pkg.version} has no license file`);
+  }
+  const parts = await Promise.all(files.map((f) => readFile(join(pkg.dir, f), "utf8")));
+  return { file: files.join(", "), text: parts.map((t) => t.trimEnd()).join("\n\n") };
+}
+
+const byKey = (a: PackageInfo, b: PackageInfo) => {
+  const ka = `${a.name}@${a.version}`;
+  const kb = `${b.name}@${b.version}`;
+  return ka < kb ? -1 : ka > kb ? 1 : 0;
+};
+
+/**
+ * `THIRD-PARTY-LICENSES.txt`: every package an esbuild metafile lists as an input, the direct
+ * dependencies of the packages bundled from a prebuilt `*.min.js` (exceljs and JSZip ship browser
+ * bundles that embed theirs), and the legal comments esbuild kept, per output file.
+ */
+async function thirdPartyLicenses(prov: Provenance): Promise<Output> {
+  const bundled = new Map<string, PackageInfo>();
+  const prebuilt = new Set<string>();
+  for (const input of [...prov.inputs].sort()) {
+    const dir = packageDirOf(input);
+    if (dir === undefined) continue;
+    const real = await realpath(dir);
+    if (!bundled.has(real)) bundled.set(real, await packageInfo(real));
+    if (/\.min\.js$/.test(input)) prebuilt.add(real);
+  }
+  const embedded = new Map<string, { pkg: PackageInfo; in: Set<string> }>();
+  for (const real of [...prebuilt].sort()) {
+    const host = bundled.get(real) as PackageInfo;
+    const json = JSON.parse(await readFile(join(real, "package.json"), "utf8")) as {
+      dependencies?: Record<string, string>;
+    };
+    for (const dep of Object.keys(json.dependencies ?? {}).sort()) {
+      const depDir = await findPackage(real, dep);
+      if (bundled.has(depDir)) continue;
+      const entry = embedded.get(depDir) ?? { pkg: await packageInfo(depDir), in: new Set() };
+      entry.in.add(`${host.name}@${host.version}`);
+      embedded.set(depDir, entry);
+    }
+  }
+
+  const bundledList = [...bundled.values()].sort(byKey);
+  const embeddedList = [...embedded.values()].sort((a, b) => byKey(a.pkg, b.pkg));
+  const rule = "=".repeat(78);
+  const lines: string[] = [
+    "Third-party software in the file-preview embed (ui/)",
+    "",
+    "Generated by ui-src/build.ts from the installed packages; do not edit. pdf.js's cmaps and",
+    "standard fonts ship with their own licenses: pdfjs-cmaps-LICENSE.txt,",
+    "pdfjs-fonts-LICENSE-FOXIT.txt and pdfjs-fonts-LICENSE-LIBERATION.txt.",
+    "",
+    "Bundled packages:",
+    ...bundledList.map((p) => `  ${p.name}@${p.version} (${p.license})`),
+    "",
+    "Embedded in prebuilt bundles (dependencies of a bundled *.min.js):",
+    ...embeddedList.map(
+      ({ pkg, in: hosts }) =>
+        `  ${pkg.name}@${pkg.version} (${pkg.license}), in ${[...hosts].sort().join(", ")}`,
+    ),
+    "",
+  ];
+  for (const pkg of [...bundledList, ...embeddedList.map((e) => e.pkg)]) {
+    const { file, text } = await licenseText(pkg);
+    lines.push(
+      rule,
+      `${pkg.name}@${pkg.version}`,
+      `License: ${pkg.license} (${file})`,
+      rule,
+      "",
+      text,
+      "",
+    );
+  }
+  for (const output of [...prov.legal.keys()].sort()) {
+    lines.push(rule, `Legal comments kept from the sources of ${output}`, rule, "");
+    lines.push((prov.legal.get(output) as string).trimEnd(), "");
+  }
+  return { name: THIRD_PARTY_LICENSES, bytes: new TextEncoder().encode(lines.join("\n")) };
+}
+
+export const THIRD_PARTY_LICENSES = "THIRD-PARTY-LICENSES.txt";
 
 async function staticFiles(dir: string): Promise<Output[]> {
   if (!existsSync(dir)) return [];
@@ -212,13 +415,15 @@ export interface BuildUiOptions {
 
 /** Builds the embed app into `outDir` (replaced) and returns the manifest it wrote. */
 export async function buildUi(outDir: string, opts: BuildUiOptions = {}): Promise<UiManifest> {
+  const prov: Provenance = { inputs: new Set(), legal: new Map() };
   const outputs: Output[] = [
     { name: "index.html", bytes: await readFile(join(SRC, "index.html")) },
-    ...(await bundleApp()),
-    ...(await bundleWorkers(opts.workersDir ?? join(SRC, "workers"))),
+    ...(await bundleApp(prov)),
+    ...(await bundleWorkers(opts.workersDir ?? join(SRC, "workers"), prov)),
     ...(await pdfjsData()),
     ...(await staticFiles(opts.staticDir ?? join(SRC, "static"))),
   ];
+  outputs.push(await thirdPartyLicenses(prov));
   outputs.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
   const files: UiManifest["files"] = {};

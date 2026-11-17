@@ -1,16 +1,17 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import vm from "node:vm";
 import { gzipSync } from "node:zlib";
 import { afterAll, describe, expect, it } from "vitest";
 import { PREVIEWERS } from "../src/previewers.js";
-import { buildUi } from "../ui-src/build.js";
+import { buildUi, THIRD_PARTY_LICENSES } from "../ui-src/build.js";
 
 const dirs: string[] = [];
 async function tempDir(): Promise<string> {
@@ -103,6 +104,20 @@ afterAll(async () => {
 
 const PLUGIN_DIR = join(import.meta.dirname, "..");
 
+/** The directory of `name` as Node finds it from `from` (walking up `node_modules`), real path. */
+function pkgDir(name: string, from = PLUGIN_DIR): string {
+  for (let dir = from; dirname(dir) !== dir; dir = dirname(dir)) {
+    const base = basename(dir) === "node_modules" ? dir : join(dir, "node_modules");
+    if (existsSync(join(base, name, "package.json"))) return realpathSync(join(base, name));
+  }
+  throw new Error(`${name} is not installed from ${from}`);
+}
+
+async function versionOf(dir: string): Promise<string> {
+  return (JSON.parse(await readFile(join(dir, "package.json"), "utf8")) as { version: string })
+    .version;
+}
+
 describe("buildUi", () => {
   it("builds the same manifest from any working directory", async () => {
     // esbuild's chunk hashes depend on the paths it sees: the build pins its working directory.
@@ -117,6 +132,56 @@ describe("buildUi", () => {
       manifests.push(await readFile(join(out, "manifest.json"), "utf8"));
     }
     expect(manifests[1]).toBe(manifests[0]);
+  });
+
+  it("ships THIRD-PARTY-LICENSES.txt with the license of every bundled package", async () => {
+    const { dir, manifest } = await sharedBuild();
+    expect(manifest.files[THIRD_PARTY_LICENSES]?.contentType).toBe("text/plain; charset=utf-8");
+    const text = await readFile(join(dir, THIRD_PARTY_LICENSES), "utf8");
+    const listed = (heading: string) =>
+      (text.split(`${heading}\n`)[1]?.split("\n\n")[0] ?? "")
+        .split("\n")
+        .map((line) => line.trim().split(" ")[0] ?? "");
+    const bundled = listed("Bundled packages:");
+    const embedded = listed("Embedded in prebuilt bundles (dependencies of a bundled *.min.js):");
+    // what the brief names, at the versions installed for the bundles that pull them in
+    const expectIn = async (list: string[], name: string, from?: string) =>
+      expect(list, name).toContain(`${name}@${await versionOf(pkgDir(name, from))}`);
+    for (const name of ["shiki", "dompurify", "exceljs", "fflate", "mammoth", "pdfjs-dist"]) {
+      await expectIn(bundled, name);
+    }
+    for (const name of ["@shikijs/core", "@shikijs/langs", "@shikijs/themes"]) {
+      await expectIn(bundled, name, pkgDir("shiki"));
+    }
+    for (const name of ["jszip", "underscore"]) await expectIn(bundled, name, pkgDir("mammoth"));
+    // pako is inside JSZip's prebuilt browser bundle; exceljs's bundle embeds a JSZip of its own,
+    // whose notice is among the kept legal comments
+    await expectIn(embedded, "pako", pkgDir("jszip", pkgDir("mammoth")));
+    expect(text).toMatch(/^Legal comments kept from the sources of sheet\.worker\.js$/m);
+    expect(text).toContain("JSZip v3.10");
+    // every listed package has its own section with its license text
+    for (const key of [...bundled, ...embedded]) {
+      expect(text, key).toContain(`${"=".repeat(78)}\n${key}\nLicense: `);
+    }
+    const dompurify = await readFile(join(pkgDir("dompurify"), "LICENSE"), "utf8");
+    expect(text).toContain(dompurify.trimEnd());
+  });
+
+  it("fails when a bundled package has no license file", async () => {
+    const workers = await tempDir();
+    await mkdir(join(workers, "node_modules/unlicensed"), { recursive: true });
+    await writeFile(
+      join(workers, "node_modules/unlicensed/package.json"),
+      '{"name":"unlicensed","version":"1.0.0","main":"index.js"}\n',
+    );
+    await writeFile(join(workers, "node_modules/unlicensed/index.js"), "module.exports = 1;\n");
+    await writeFile(
+      join(workers, "x.worker.ts"),
+      'import n from "unlicensed";\nself.postMessage(n);\n',
+    );
+    await expect(buildUi(await tempDir(), { workersDir: workers })).rejects.toThrow(
+      /unlicensed@1\.0\.0 has no license file/,
+    );
   });
 
   it("builds the same bytes twice", async () => {
