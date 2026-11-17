@@ -114,8 +114,8 @@ The maintainer picked 1.
 ## Core change (first, before the plugin ships)
 
 Maintainer decision 2026-11-17: allow workers in embeds. In core, `EMBED_CSP` changes
-`worker-src 'none'` to `worker-src blob:`, with the proxy's CSP test updated (a worker from
-the plugin's own `/ui/` route and from a `blob:` URL allowed; other origins still refused) and the
+`worker-src 'none'` to `worker-src blob:`, with the proxy's CSP test updated (a worker from a
+`blob:` URL allowed; the plugin's own `/ui/` route and other origins refused, ruling R11) and the
 comment block explaining why: a worker started by a sandboxed embed inherits its opaque origin and
 CSP, so it reaches nothing the embed itself cannot; it only moves work off the page's main thread.
 `writing-extension-ui` (core and plugins) mention that embeds may use workers. A web changeset; no
@@ -141,7 +141,7 @@ call). Titles bilingual.
 | `zip` | 压缩包 / Archive | `application/zip`; zip, jar | fflate (unzip) |
 | `sheet` | 表格 / Spreadsheet | xlsx MIME; xlsx, xlsm | exceljs (npm SheetJS CE is stuck at 0.18.5 with known CVEs; fixed builds are off-registry) |
 | `docx` | 文档 / Document | docx MIME; docx | mammoth |
-| `pdf` | PDF | `application/pdf`; pdf | pdf.js, worker disabled |
+| `pdf` | PDF | `application/pdf`; pdf | pdf.js, with its worker (see Workers and budgets) |
 | `svg` | SVG | `image/svg+xml`; svg | none (see below) |
 | `html` | 网页 / Web page | `text/html`; html, htm | DOMPurify |
 
@@ -170,8 +170,12 @@ Markdown and CSV / TSV are not claimed: the built-ins stay first for them.
 ### Workers and budgets
 
 All parsing and decoding runs in a dedicated worker (one per opened file, terminated on file
-switch): unzip, xlsx parsing, docx conversion, syntax highlighting, and pdf.js with its worker
-(`GlobalWorkerOptions.workerSrc` pointing at the plugin's route, no `disableWorker`). The main
+switch): unzip, xlsx parsing, docx conversion, syntax highlighting, and pdf.js with its worker.
+Every worker starts from a `blob:` URL (ruling R18): the build ships each worker as an ES module
+whose default export is its source text, the embed `import()`s it (`script-src 'self'`) and starts
+`new Worker(blobUrl)`; pdf.js gets its worker as `new PDFWorker({ port })` on such a worker, never
+through `GlobalWorkerOptions.workerSrc`. The embed never `fetch`es its own assets (WebKit refuses
+`connect-src 'self'` in an opaque-origin sandbox). The main
 thread only builds the DOM from the worker's results, in slices. A watchdog terminates a worker
 that has not answered within a time budget (e.g. 20 s per file, per pdf page 10 s) and shows the
 error state with "download instead". This is what keeps the anti-goal: a hostile file can hang
@@ -180,7 +184,7 @@ a worker, never the page.
 ### Renderers
 
 - **code**: decode as UTF-8 (replacement characters allowed); language from the extension, then
-  the MIME type, then plain. Highlight at most the first 1 MiB or 20 000 lines (show the rest
+  the MIME type, then plain. Highlight at most the first 256 Ki UTF-16 units or 20 000 lines (show the rest
   plain or a "truncated" note: builder's call); line numbers, wrap toggle, monospace from the theme.
 - **zip**: read the central directory; tree with folders collapsible, sizes, modified dates;
   encrypted entries listed but not opened. Selecting an entry previews it with the matching renderer
@@ -196,8 +200,9 @@ a worker, never the page.
 - **docx**: mammoth to HTML, then DOMPurify, rendered in a styled container (no external
   resources; images as data URIs). Warnings from mammoth ignored silently.
 - **pdf**: pdf.js with its worker (see above); render pages lazily as
-  they scroll into view; zoom (fit width, 100 %, +/-); page indicator. Fonts load from data / the
-  bundled standard fonts (served under `/ui/`). Password-protected pdf: message, no prompt.
+  they scroll into view; zoom (fit width, 100 %, +/-); page indicator. pdf.js's cmaps and standard
+  fonts ship as ES modules whose default export is the file's base64; the renderer `import()`s the
+  one pdf.js asks for (ruling R18: no `cMapUrl` / `standardFontDataUrl` fetches). Password-protected pdf: message, no prompt.
 - **svg**: rendered as `<img src="blob:…">` (an `<img>` never runs SVG script and loads no external
   resources), on a checkerboard ground; zoom to fit.
 - **html**: two modes in a toggle, default "rendered": the document sanitized with DOMPurify
