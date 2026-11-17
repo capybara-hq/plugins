@@ -331,7 +331,8 @@ describe("zip renderer", () => {
     const gates: (() => void)[] = [];
     const { ctx, root } = makeCtx();
     let extracts = 0;
-    ctx.runInWorker = (async (_id: string, input: unknown) => {
+    ctx.runInWorker = (async (id: string, input: unknown) => {
+      if (id === "code") return highlight(input as never);
       const req = input as ZipInput;
       if (req.op === "list") {
         return {
@@ -483,6 +484,89 @@ describe("zip renderer", () => {
       }) satisfies ZipListOutput) as unknown as RenderContext["runInWorker"];
     await render(fileOf(normal()), ctx);
     expect(root.querySelector(".cap-zip-truncated")).not.toBeNull();
+  });
+});
+
+describe("zip renderer extraction cache", () => {
+  /** A listing of `names` (each declaring `size`) and an extract the test settles by hand. */
+  function scripted(names: string[], size: number) {
+    const jobs: { index: number; resolve: (s: string) => void; reject: (e: Error) => void }[] = [];
+    const { ctx, root } = makeCtx();
+    ctx.runInWorker = (async (id: string, input: unknown) => {
+      if (id === "code") return highlight(input as never);
+      const req = input as ZipInput;
+      if (req.op === "list") {
+        return {
+          entries: names.map((path, index) => ({
+            index,
+            path,
+            size,
+            compressed: 10,
+            modified: "",
+            encrypted: false,
+            dir: false,
+          })),
+          truncated: false,
+        } satisfies ZipListOutput;
+      }
+      const text = await new Promise<string>((resolve, reject) =>
+        jobs.push({ index: (req as ZipExtractInput).index, resolve, reject }),
+      );
+      return { data: strToU8(text).buffer };
+    }) as unknown as RenderContext["runInWorker"];
+    return { ctx, root, jobs };
+  }
+  const detailText = (root: HTMLElement) => root.querySelector(".cap-zip-detail")?.textContent;
+
+  it("releases a failed extraction's reservation", async () => {
+    const { ctx, root, jobs } = scripted(["a.txt", "b.txt"], 60);
+    await createRender(100)(fileOf(normal()), ctx);
+    row(root, "a.txt").click();
+    await vi.waitFor(() => expect(jobs).toHaveLength(1));
+    jobs[0]?.reject(new Error("corrupt"));
+    await vi.waitFor(() => expect(detailText(root)).toContain("corrupt"));
+    // 60 + 60 would pass 100 if a's reservation were kept
+    row(root, "b.txt").click();
+    await vi.waitFor(() => expect(jobs).toHaveLength(2));
+    jobs[1]?.resolve("bee");
+    await vi.waitFor(() => expect(detailText(root)).toContain("bee"));
+  });
+
+  it("shows a cached failure on retry without a new worker", async () => {
+    const { ctx, root, jobs } = scripted(["a.txt", "b.txt"], 1);
+    await render(fileOf(normal()), ctx);
+    row(root, "a.txt").click();
+    await vi.waitFor(() => expect(jobs).toHaveLength(1));
+    jobs[0]?.reject(new Error("corrupt"));
+    await vi.waitFor(() => expect(detailText(root)).toContain("corrupt"));
+    row(root, "b.txt").click();
+    await vi.waitFor(() => expect(jobs).toHaveLength(2));
+    jobs[1]?.resolve("bee");
+    await vi.waitFor(() => expect(detailText(root)).toContain("bee"));
+    row(root, "a.txt").click();
+    await vi.waitFor(() =>
+      expect(root.querySelector(".cap-zip-detail .cap-zip-error")?.textContent).toContain(
+        "corrupt",
+      ),
+    );
+    expect(jobs).toHaveLength(2);
+  });
+
+  it("caches a result that arrives after its selection moved on and reuses it", async () => {
+    const { ctx, root, jobs } = scripted(["a.txt", "b.txt"], 1);
+    await render(fileOf(normal()), ctx);
+    row(root, "a.txt").click();
+    await vi.waitFor(() => expect(jobs).toHaveLength(1));
+    row(root, "b.txt").click();
+    await vi.waitFor(() => expect(jobs).toHaveLength(2));
+    // a's selection was aborted; its result arrives late and must not paint over b
+    jobs[0]?.resolve("late-a");
+    jobs[1]?.resolve("bee");
+    await vi.waitFor(() => expect(detailText(root)).toContain("bee"));
+    expect(detailText(root)).not.toContain("late-a");
+    row(root, "a.txt").click();
+    await vi.waitFor(() => expect(detailText(root)).toContain("late-a"));
+    expect(jobs).toHaveLength(2);
   });
 });
 

@@ -5,7 +5,8 @@
  * worker lives for one request, so this side keeps the archive bytes and the one running total of
  * inflated bytes (100 MiB for an archive and everything opened from it): an extraction reserves
  * the entry's declared size before it starts (the worker enforces actual == declared), and the
- * reservation stays when the selection moves on; a late result is cached, not dropped.
+ * reservation stays when the selection moves on; a late result is cached, not dropped. A failed
+ * extraction gives its reservation back and keeps its error: a retry shows it without a worker.
  * An entry is previewed by the renderer its extension picks; bitmaps become `<img src="blob:…">`.
  * A zip inside the archive opens one level deep; a zip inside that is listed but not opened.
  */
@@ -267,6 +268,8 @@ interface Budget {
   /** Extracted entries by `<archive path>#<index>`: a reopened archive finds them again. */
   cache: Map<string, ArrayBuffer>;
   pending: Map<string, Promise<ArrayBuffer>>;
+  /** Extractions that failed, by the same key: the error, shown again on a retry. */
+  failed: Map<string, unknown>;
 }
 
 async function renderArchive(
@@ -379,6 +382,10 @@ async function renderArchive(
     }
 
     const key = `${prefix}${entry.index}`;
+    if (budget.failed.has(key)) {
+      fail(errorText(budget.failed.get(key)));
+      return;
+    }
     let bytes = budget.cache.get(key);
     if (bytes === undefined) {
       pane.replaceChildren(el(doc, "div", "cap-zip-note", s.loading));
@@ -405,6 +412,7 @@ async function renderArchive(
             // nothing was kept: the reservation goes back
             if (size <= ENTRY_LIMIT) budget.reserved -= size;
             budget.pending.delete(key);
+            budget.failed.set(key, e);
             throw e;
           },
         );
@@ -498,7 +506,13 @@ async function renderArchive(
 /** A renderer with its own archive budget (the tests lower it; the shell uses `render`). */
 export function createRender(limit: number): Renderer {
   return (file, ctx) =>
-    renderArchive(file, ctx, 0, { limit, reserved: 0, cache: new Map(), pending: new Map() }, "");
+    renderArchive(
+      file,
+      ctx,
+      0,
+      { limit, reserved: 0, cache: new Map(), pending: new Map(), failed: new Map() },
+      "",
+    );
 }
 
 export const render: Renderer = createRender(ARCHIVE_LIMIT);
