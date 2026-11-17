@@ -41,7 +41,7 @@
     },
     {
       "name": "connector-mcp",
-      "version": "0.1.0-rc.10",
+      "version": "0.1.0-rc.11",
       "summary": {
         "en": "MCP connector (connector@1): tools and resources of remote MCP servers over Streamable HTTP"
       },
@@ -52,20 +52,20 @@
       "icon": "./plugins/connector-mcp/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/connector-mcp#readme",
       "permissions": {
-        "keys": ["config.deployment:allowInsecureLoopback", "provides:connector@1"],
+        "keys": ["provides:connector@1"],
         "sensitive": []
       },
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-connector-mcp",
-          "version": "0.1.0-rc.10",
-          "integrity": "sha512-uE+/XWYhHSthZTz5SckZ+Ooql0QMaG7oqdJq6qhPYjL8YLyxXjN9wW5syEgpqCWKWKfFQ4psn/v34Mks9A7h/Q=="
+          "version": "0.1.0-rc.11",
+          "integrity": "sha512-n1V9BMlU5JVQfTUFoWsOXOi0huE8XTsbU9MULLXSESCrEc0a5RjgvhvoSuk3SXE4jxJoVV4WB6g2BVin8E/dMg=="
         }
       }
     },
     {
       "name": "connector-openapi",
-      "version": "0.1.0-rc.11",
+      "version": "0.1.0-rc.12",
       "summary": {
         "en": "OpenAPI connector (connector@1): one tool per operation of an OpenAPI 3.0 / 3.1 HTTP API"
       },
@@ -76,14 +76,14 @@
       "icon": "./plugins/connector-openapi/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/connector-openapi#readme",
       "permissions": {
-        "keys": ["config.deployment:allowInsecureLoopback", "provides:connector@1"],
+        "keys": ["provides:connector@1"],
         "sensitive": []
       },
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-connector-openapi",
-          "version": "0.1.0-rc.11",
-          "integrity": "sha512-sznNTiBwwGk7eIkJUevyooHaVy7JhwXCztRBOgYnrAPujfGw1QaxWqYGHtPb0GTXhG9vX06ZJYq+y1sssp3y/A=="
+          "version": "0.1.0-rc.12",
+          "integrity": "sha512-qIYknFj7V6xSl4lbTYpSXpu8f+FFLAwWxOhJq9HzH3RSAAq80emp4WPdXbIoJ2nzfg2mXNs0lTkgCuR38oxhQw=="
         }
       }
     },
@@ -479,7 +479,7 @@
     },
     {
       "name": "deepseek",
-      "version": "0.1.0-rc.9",
+      "version": "0.1.0-rc.10",
       "summary": {
         "en": "Model provider (model-provider@2) for DeepSeek chat models through the Chat Completions API",
         "zh": "DeepSeek 对话模型（model-provider@2），通过 Chat Completions API 调用"
@@ -502,8 +502,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-deepseek",
-          "version": "0.1.0-rc.9",
-          "integrity": "sha512-SXgc/npfEStPpkJT73bBSwMNcRZQyuwaML/QY1Tzl+OJv+lw8fkUDNCNSF394wZqP7i2d+iUEtg3MBKPWrzSuQ=="
+          "version": "0.1.0-rc.10",
+          "integrity": "sha512-sTlLjNWdGLTCFKJXYX0H9803zHq6ANU9TS/HG56McUqYxyay+/iWxbXhmP6h/8H4ditzxKLTcuerYNJLh6hxRw=="
         }
       }
     },
