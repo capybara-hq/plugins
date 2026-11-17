@@ -280,8 +280,20 @@ agent; the agent re-checks the SDK files' digests and owners on every launch, an
 method consumes its operation ID before any effect: a retry with the same method and input is an
 unknown outcome (never a repeat), a different one a validation error. `revokeOperation` writes the
 tombstone first, kills the operation's foreground wrapper and its background execution, and
-reports a retry when the VM rebooted meanwhile; a paused VM runs nothing, so a revocation whose
-admission deadline passed returns at once and one that could still be admitted stays pending.
+reports a retry when the VM rebooted meanwhile. On a paused VM it stays pending (it throws, the
+kernel retries) even past the admission deadline: the provider pauses without memory, but a paused
+VM cannot confirm that nothing of the operation survives (a control plane that restores a memory
+snapshot would bring its processes back), so success waits for a running VM.
+
+**Root runs only a verified agent.** Every root run of the agent goes through an inline
+`python3 -I -c` check: `/`, `/opt`, the runtime base and directory and the agent file must be
+root-owned, not group or world writable and of the right type, and the agent's bytes must match the
+provider's pinned digest; only then is the agent executed in the same process. A missing or
+untrusted runtime (for example a planted directory) is restaged, which replaces an untrusted
+directory, and the call is retried once. An aborted or timed-out agent command is killed in the
+VM (envd SIGKILL by pid, also when the abort came before envd reported the pid), never left
+running; an aborted background start's detached supervisor is then stopped by its recorded
+identity.
 
 **Background executions** (Full access only) use the same design as sandbox-docker: a detached
 supervisor per operation, a root recorder that accepts the supervisor's frames only on the root
@@ -294,7 +306,10 @@ resume a paused VM; work of a previous boot reports `lost`.
 
 Residual trust (as on Docker, "M5"): Full access work shares the device uid, so it can signal or
 ptrace sandbox-user processes such as a background supervisor (the template has no Yama
-restriction); it cannot change root-owned records or runtime files.
+restriction); it cannot change root-owned records or runtime files. Stop and revocation end the
+background supervisor and the process group it owns; descendants that escaped it (`setsid`, a
+daemon) survive them, as on Docker. The foreground wrapper also finds escaped processes by their
+environment marker; background work has no such marker. Only a VM pause ends them.
 
 ## Resources (`limits.cpu` / `memoryMb` / `diskMb`)
 

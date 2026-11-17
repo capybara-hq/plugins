@@ -18,9 +18,20 @@ import {
   runSandboxPermissionConformance,
 } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createE2BApi, type E2BApi, isE2BNotFound } from "../../src/e2b-api.js";
+import {
+  createE2BApi,
+  type E2BApi,
+  type EnvdTarget,
+  envdStart,
+  isE2BNotFound,
+} from "../../src/e2b-api.js";
 import { createE2BSandbox, DeploymentConfig, providerConfig } from "../../src/index.js";
-import { OPERATION_AGENT, OPS_DIR, RUNTIME_DIR } from "../../src/runtime-source.js";
+import {
+  OPERATION_AGENT,
+  OPERATION_AGENT_SHA256,
+  OPS_DIR,
+  RUNTIME_DIR,
+} from "../../src/runtime-source.js";
 
 /**
  * Permission profiles on a real E2B template: `pnpm exec vitest run
@@ -42,7 +53,8 @@ import { OPERATION_AGENT, OPS_DIR, RUNTIME_DIR } from "../../src/runtime-source.
  *   update, consume-once, revocation before launch and of exactly the running operation, both
  *   overlap orders of a refused restricted grant and a Full operation, background executions
  *   (status, tail, positional reads, idempotent start, lost acknowledgement, natural exit, stop,
- *   revocation), records out of the device user's reach, trusted preparation, owner browsing, and
+ *   revocation), records out of the device user's reach, trusted preparation, owner browsing, a
+ *   planted runtime directory root never runs, an aborted native write killed in the VM, and
  *   status / stop / revocation that never resume a paused VM.
  */
 
@@ -649,6 +661,87 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
     });
   });
 
+  /** Test-only root setup straight through envd (never the provider). */
+  const rootSh = async (command: string) => {
+    const info = (
+      await api.json<{ envdAccessToken: string; domain?: string | null }>(
+        "GET",
+        `/sandboxes/${ownedId}`,
+        { signal: sig() },
+      )
+    ).data;
+    const domain =
+      info.domain ||
+      (filled(env.CAPYBARA_TEST_E2B_DOMAIN) ? env.CAPYBARA_TEST_E2B_DOMAIN : "e2b.app");
+    const t: EnvdTarget = {
+      url: `https://49983-${ownedId}.${domain}`,
+      sandboxId: ownedId as string,
+      accessToken: info.envdAccessToken,
+    };
+    let out = "";
+    let code: number | undefined;
+    await envdStart(
+      t,
+      "root",
+      { cmd: "/bin/sh", args: ["-c", command], cwd: "/" },
+      (e) => {
+        if ("data" in e)
+          out += Buffer.from(e.data.stdout ?? e.data.stderr ?? "", "base64").toString();
+        if ("end" in e) code = e.end.exitCode ?? 0;
+      },
+      sig(),
+    );
+    return { out, code };
+  };
+
+  it("root never runs a planted runtime directory: it is replaced and verified first", async () => {
+    // plant: the runtime directory owned by the device user, world-writable, with an agent
+    // that would leave a mark if root ran it
+    const planted = await rootSh(
+      `rm -rf ${RUNTIME_DIR} /tmp/pwned-root && mkdir -p ${RUNTIME_DIR} && ` +
+        `printf '%s\\n' 'import os' 'open("/tmp/pwned-root", "w").write(str(os.getuid()))' > ${OPERATION_AGENT} && ` +
+        `chown -R 1000:1000 ${RUNTIME_DIR} && chmod 0777 ${RUNTIME_DIR} && echo planted`,
+    );
+    expect(planted.out).toContain("planted");
+    const r = await fullExec("echo verified");
+    expect(r.stdout.trim()).toBe("verified");
+    expect(await sbx.stat(h, "/tmp/pwned-root", sig())).toBeNull();
+    const after = await sh(
+      `stat -c "%u %a" ${RUNTIME_DIR} ${OPERATION_AGENT}; sha256sum ${OPERATION_AGENT}`,
+    );
+    expect(after.stdout).toMatch(/^0 755\n0 644\n/);
+    expect(after.stdout).toContain(OPERATION_AGENT_SHA256);
+  });
+
+  it("an aborted native write is killed in the VM and never lands", async () => {
+    const path = `/workspace/aborted-${randomUUID()}.bin`;
+    const ac = new AbortController();
+    const op = await full();
+    // ~40 MB travels through envd stdin for tens of seconds: abort once the agent runs
+    const write = op.writeFile(path, new Uint8Array(40 * 1024 * 1024).fill(7), ac.signal);
+    const agentPids = async () =>
+      (await sh("pgrep -f 'capybara-operation[.]py direct' || true")).stdout.trim();
+    let settled = false;
+    void write.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    while ((await agentPids()) === "") {
+      if (settled) throw new Error("the write settled before its agent was seen");
+    }
+    ac.abort();
+    await expect(write).rejects.toThrow();
+    // readiness, not a fixed wait: the killed agent disappears (bounded by the live timeout)
+    while ((await agentPids()) !== "") {
+      /* poll */
+    }
+    expect(await sbx.stat(h, path, sig())).toBeNull();
+  });
+
   it("status, output, stop and revocation never resume a paused VM", async () => {
     const s = scope();
     const { ref } = await (async () => {
@@ -675,11 +768,14 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
     expect(await sbx.background?.stop(h, ref, { graceMs: 0, signal: sig() })).toEqual({
       outcome: "lost",
     });
-    await sbx.revokeOperation?.(
-      h,
-      { operationId: s.operationId, admitBeforeMs: Date.now() - 1 },
-      sig(),
-    );
+    // pending while paused, even past its deadline (a paused VM cannot confirm the kill)
+    await expect(
+      sbx.revokeOperation?.(
+        h,
+        { operationId: s.operationId, admitBeforeMs: Date.now() - 1 },
+        sig(),
+      ),
+    ).rejects.toThrow(/not running/);
     await expect(sbx.permissionSupport?.(h, sig())).rejects.toThrow(/not running/);
     expect(await vmState()).toBe("paused");
     // resumed later (a cold boot: new generation), the old reference stays lost

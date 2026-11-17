@@ -966,7 +966,8 @@ export function createOperations(deps: OperationDeps) {
         sig.throwIfAborted();
         checkPath(String(native.path));
         const runner = await t.session(h, sig);
-        await consume(h, scope, `browse-${method}`, inputHash(method, scope, native), sig, runner);
+        const key = `browse-${method}`;
+        await consume(h, scope, key, inputHash(key, scope, native), sig, runner);
         const result = await direct(
           h,
           "sandbox",
@@ -1081,9 +1082,10 @@ export function createOperations(deps: OperationDeps) {
       //    it right before creating processes. Never resumes a paused VM.
       const first = await rootStep(h, "revoke", marker, signal);
       if (first === "not-running") {
-        // A paused VM runs nothing (paused without memory, every process ended); only a launch
-        // that could still be admitted keeps the revocation pending.
-        if (Date.now() > ref.admitBeforeMs) return;
+        // Pending even past the admission deadline: this provider pauses without memory, but a
+        // control plane that restores a memory snapshot would bring the operation's processes
+        // back, and a paused VM cannot confirm they are gone. The kernel retries; the next
+        // running VM gets the tombstone and the kill.
         throw new Error("The device instance is not running; the revocation stays pending");
       }
       // 2. Running work of this operation ends: foreground (by its wrapper) and its background

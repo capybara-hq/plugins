@@ -47,7 +47,13 @@ import {
   type OperationTransport,
   refusedFrame,
 } from "./operations.js";
-import { OPERATION_AGENT, RUNTIME_DIR, runtimeChecksums, runtimeFiles } from "./runtime-source.js";
+import {
+  OPERATION_AGENT,
+  OPERATION_AGENT_SHA256,
+  RUNTIME_DIR,
+  runtimeChecksums,
+  runtimeFiles,
+} from "./runtime-source.js";
 
 /** 部署配置（见 index.ts 的 DeploymentConfig）。 */
 export interface E2BSandboxConfig {
@@ -254,15 +260,54 @@ const KILL_OPERATION_SCRIPT =
 /**
  * Installs the staged runtime (root): `$1` the root-only upload directory holding the files and
  * `SHA256SUMS`, `$2` the final directory. The files are checked, made root-owned 0644 in a 0755
- * directory and moved into place with one rename; a directory another call installed first is
- * kept. The installed directory is checked again either way.
+ * directory and moved into place with one rename; a trusted directory another call installed
+ * first is kept, an untrusted one (planted, altered, partial) is replaced. The installed
+ * directory is checked again either way.
  */
 const STAGE_RUNTIME_SCRIPT =
-  'set -eu; umask 022; u=$1; d=$2; b=$(dirname -- "$d"); ' +
+  'set -eu; umask 022; u=$1; d=$2; b=$(dirname -- "$d"); k="$u.sums"; ' +
+  'trap \'rm -rf -- "$u" "$k"\' EXIT; cp -- "$u/SHA256SUMS" "$k"; ' +
+  // trusted: a real directory whose entries (itself included) are root-owned, not group or
+  // world writable, no symlinks, and whose files match the provider's own SHA256SUMS
+  't() { [ -d "$1" ] && [ ! -L "$1" ] && ' +
+  '[ -z "$(find "$1" -maxdepth 1 \\( ! -user 0 -o -perm /022 -o -type l \\) -print -quit)" ] && ' +
+  '(cd -- "$1" && sha256sum -c --quiet "$k") >/dev/null 2>&1; }; ' +
+  'if [ -L "$b" ] || { [ -e "$b" ] && [ ! -d "$b" ]; }; then rm -f -- "$b"; fi; ' +
   'mkdir -p -- "$b"; chown 0:0 "$b"; chmod 0755 "$b"; ' +
   'cd -- "$u"; sha256sum -c --quiet SHA256SUMS; chown -R 0:0 .; chmod 0644 ./*; chmod 0755 .; cd /; ' +
-  'if [ ! -e "$d" ]; then mv -T -- "$u" "$d" 2>/dev/null || true; fi; rm -rf -- "$u"; ' +
-  'cd -- "$d"; sha256sum -c --quiet SHA256SUMS';
+  // an existing directory that is not trusted (planted, altered, partial) is replaced
+  'if ! t "$d"; then rm -rf -- "$d"; mv -T -- "$u" "$d" 2>/dev/null || true; fi; ' +
+  't "$d"';
+
+/**
+ * The inline check every root run of the agent goes through (`python3 -I -c` with argv: agent
+ * path, expected SHA-256, then the agent's own arguments): `/`, `/opt`, the runtime base and
+ * directory and the agent file must exist (else exit 3: not staged), be root-owned, not group or
+ * world writable and of the right type, and the agent's bytes must match the provider's pinned
+ * digest (else exit 4: untrusted). Only then does it exec the agent in the same process. The
+ * whole chain being root-owned, nothing can swap it between the check and the exec.
+ * `--probe-only` checks without executing (tests).
+ */
+export const ROOT_AGENT_PRECHECK = [
+  "import hashlib, os, stat, sys",
+  "agent, digest, rest = sys.argv[1], sys.argv[2], sys.argv[3:]",
+  "rt = os.path.dirname(agent); base = os.path.dirname(rt)",
+  "chain = ['/', os.path.dirname(base), base, rt, agent]",
+  "try:",
+  "    infos = [os.lstat(p) for p in chain]",
+  "except OSError:",
+  "    sys.stderr.write('capybara-precheck: runtime missing\\n'); sys.exit(3)",
+  "for p, i in zip(chain, infos):",
+  "    kind = stat.S_ISREG(i.st_mode) if p == agent else stat.S_ISDIR(i.st_mode)",
+  "    if i.st_uid != 0 or i.st_mode & 0o022 or not kind:",
+  "        sys.stderr.write('capybara-precheck: untrusted runtime %s\\n' % p); sys.exit(4)",
+  "with open(agent, 'rb') as f:",
+  "    if hashlib.sha256(f.read()).hexdigest() != digest:",
+  "        sys.stderr.write('capybara-precheck: untrusted runtime digest\\n'); sys.exit(4)",
+  "if rest == ['--probe-only']:",
+  "    sys.exit(0)",
+  "os.execv(sys.executable, [sys.executable, '-I', agent] + rest)",
+].join("\n");
 
 /** The control file of one exec: carries the holder's tag when there is one. */
 export function execControlPath(tag?: string): string {
@@ -733,6 +778,9 @@ export function createE2BSandbox(
     let killing: Promise<void> | undefined;
     // 杀进程失败，或杀完宽限期过了流还没结束（还有进程拿着输出）：需要重启沙箱
     let wedged = false;
+    // stopped before envd reported the pid: the kill could not name the process, so the start
+    // event kills it by pid as soon as it is known
+    let killedWithoutPid = false;
     const stop = () => {
       if (stopping) return;
       stopping = true;
@@ -741,6 +789,7 @@ export function createE2BSandbox(
         conn.abort();
         return;
       }
+      killedWithoutPid = pid === undefined;
       killing = (async () => {
         const ok = await kill(pid).catch(() => false);
         if (!ok) {
@@ -801,6 +850,9 @@ export function createE2BSandbox(
         (e) => {
           if ("start" in e) {
             pid = e.start.pid;
+            if (killedWithoutPid && pid !== undefined) {
+              void envdKill(t, pid, AbortSignal.timeout(15_000)).catch(() => undefined);
+            }
             feed(pid);
           } else if ("data" in e) {
             if (e.data.stdout) collect("out", e.data.stdout);
@@ -1031,22 +1083,55 @@ export function createE2BSandbox(
     r.stderr.toString("utf8").includes("can't open file") &&
     r.stdout.byteLength === 0;
 
-  /** Runs one agent command; stages the runtime and retries once when its file is missing. */
+  /**
+   * Ends an aborted or timed-out agent command in the VM: envd SIGKILLs it by pid (the agent
+   * forks nothing on its foreground path; a background start's detached supervisor is reconciled
+   * by operations.ts). Without a pid yet, `run` kills it once the start event names it.
+   */
+  const killAgent = (t: EnvdTarget) => async (pid: number | undefined) => {
+    if (pid === undefined) return true;
+    return envdKill(t, pid, AbortSignal.timeout(15_000)).then(
+      () => true,
+      () => false,
+    );
+  };
+
+  /**
+   * Runs one agent command; stages the runtime and retries once when its file is missing or, for
+   * a root run, when the inline verification does not trust it.
+   */
   const runAgent = async (t: EnvdTarget, o: AgentRunOpts): Promise<RunResult> => {
+    // Root runs the agent only through the inline verification (ROOT_AGENT_PRECHECK).
+    const root = o.user === "root" && o.cmd[2] === OPERATION_AGENT;
+    const args = root
+      ? [
+          "-I",
+          "-c",
+          ROOT_AGENT_PRECHECK,
+          OPERATION_AGENT,
+          OPERATION_AGENT_SHA256,
+          ...o.cmd.slice(3),
+        ]
+      : o.cmd.slice(1);
     const once = () =>
       run(t, {
         user: o.user === "root" ? ROOT_USER : SANDBOX_USER,
         cmd: o.cmd[0] as string,
-        args: o.cmd.slice(1),
+        args,
         ...(o.env && { env: o.env }),
         ...(o.stdin && { stdin: o.stdin }),
         cwd: "/",
         maxOutputBytes: o.maxOutputBytes,
         ...(o.timeoutMs !== undefined && { timeoutMs: o.timeoutMs }),
         signal: o.signal,
+        kill: killAgent(t),
       });
     const r = await once();
-    if (!agentMissing(o, r)) return r;
+    const unverified =
+      root &&
+      (r.exitCode === 3 || r.exitCode === 4) &&
+      r.stderr.toString("utf8").includes("capybara-precheck:");
+    if (!agentMissing(o, r) && !unverified) return r;
     await stageRuntime(t, o.signal);
     return once();
   };

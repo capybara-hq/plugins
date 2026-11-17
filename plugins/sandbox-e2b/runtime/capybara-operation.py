@@ -722,12 +722,6 @@ def bg_supervise(request, channel, out, ready_w):
             "cancelled": bool(result.get("cancelled")),
             "refused": refused.get("code") if refused else None}).encode())
     try:
-        barrier = request.get("barrier")
-        if barrier:
-            # Test-only readiness barrier (E2BSandboxTestOptions.backgroundLaunchBarrier).
-            deadline = time.monotonic() + 120
-            while not os.path.exists(barrier) and time.monotonic() < deadline:
-                time.sleep(0.01)
         # A revocation or cancellation recorded after the start acknowledgement still wins.
         admit(request)
         if request["kind"] != "device":

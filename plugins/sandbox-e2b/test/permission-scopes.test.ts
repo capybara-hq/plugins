@@ -1,7 +1,10 @@
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   isSandboxPermissionUnsupportedError,
   isSandboxScopeDeniedError,
@@ -18,6 +21,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { envdCloseStdin, envdSendInput, envdStart } from "../src/e2b-api.js";
 import { createE2BSandbox, type E2BSandboxConfig, publishedImage } from "../src/index.js";
 import { OPERATION_AGENT_SHA256, OPERATION_AGENT_SOURCE } from "../src/operation-agent-source.js";
+import { ROOT_AGENT_PRECHECK } from "../src/provider.js";
 import {
   OPERATION_AGENT,
   OPS_DIR,
@@ -382,12 +386,13 @@ describe("operation factory fails closed (fake E2B)", { timeout: 20_000 }, () =>
       outcome: "lost",
     });
     await expect(sbx.permissionSupport?.(h, sig())).rejects.toThrow(/not running/);
-    // a revocation whose admission deadline passed has nothing left to stop
-    await sbx.revokeOperation?.(h, { operationId, admitBeforeMs: Date.now() - 1 }, sig());
-    // one that could still be admitted stays pending (the kernel retries it)
-    await expect(
-      sbx.revokeOperation?.(h, { operationId, admitBeforeMs: Date.now() + 60_000 }, sig()),
-    ).rejects.toThrow(/not running/);
+    // a paused VM cannot confirm that nothing of the operation survives (a control plane may
+    // restore a memory snapshot): the revocation stays pending, deadline passed or not
+    for (const admitBeforeMs of [Date.now() - 1, Date.now() + 60_000]) {
+      await expect(sbx.revokeOperation?.(h, { operationId, admitBeforeMs }, sig())).rejects.toThrow(
+        /not running/,
+      );
+    }
     expect(vmCalls(h.id)).toBe(before);
     expect(fake.sandboxes.get(h.id)?.state).toBe("paused");
   });
@@ -412,4 +417,206 @@ describe("operation factory fails closed (fake E2B)", { timeout: 20_000 }, () =>
       expect(isSandboxScopeDeniedError(e)).toBe(true);
     }
   });
+});
+
+describe("root runs only a verified agent", () => {
+  const run = (dir: string, digest: string) =>
+    spawnSync(
+      "python3",
+      ["-I", "-c", ROOT_AGENT_PRECHECK, `${dir}/capybara-operation.py`, digest, "--probe-only"],
+      { encoding: "utf8" },
+    );
+
+  it("refuses a runtime directory it cannot trust and reports a missing one apart", () => {
+    const base = mkdtempSync(join(tmpdir(), "e2b-precheck-"));
+    try {
+      const dir = join(base, "rt");
+      // missing: exit 3 (the provider stages); nothing is executed
+      expect(run(dir, "0".repeat(64)).status).toBe(3);
+      mkdirSync(dir);
+      const agent = join(dir, "capybara-operation.py");
+      writeFileSync(agent, "open('/dev/null')\n");
+      const digest = createHash("sha256").update(readFileSync(agent)).digest("hex");
+      // present but owned by this (non-root) user, or world-writable: exit 4 (untrusted)
+      chmodSync(dir, 0o777);
+      const planted = run(dir, digest);
+      expect(planted.status).toBe(4);
+      expect(planted.stderr).toMatch(/untrusted/);
+      chmodSync(dir, 0o755);
+      expect(run(dir, digest).status).toBe(4); // not root-owned
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
+  /** A consume step held open by the envd proxy, with the pid it reported (if any yet). */
+  interface Held {
+    pid: number;
+    started: boolean;
+    start(): void;
+    end(): void;
+  }
+  let fake: FakeE2BServer;
+  let envd: { url: string; close(): Promise<void> };
+  let sbx: SandboxProvider;
+  let h: SandboxHandle;
+  /** When set, the next root consume step is held open instead of running (see `Held`). */
+  let hold: { deferStart: boolean; seen: (held: Held) => void } | undefined;
+  const signalled: number[] = [];
+  const held = new Map<number, Held>();
+  let nextPid = 900_000;
+
+  const frame = (m: unknown, flags = 0) => {
+    const j = Buffer.from(JSON.stringify(m));
+    const head = Buffer.alloc(5);
+    head.writeUInt8(flags, 0);
+    head.writeUInt32BE(j.byteLength, 1);
+    return Buffer.concat([head, j]);
+  };
+
+  beforeAll(async () => {
+    fake = await startFakeE2B();
+    // envd in front of the fake: forwards everything, except that it can hold one root consume
+    // step open (a long-running agent command) and answers SendSignal for the held pid
+    const server = createServer((req, res) => {
+      void (async () => {
+        const parts: Buffer[] = [];
+        for await (const c of req) parts.push(c as Buffer);
+        const raw = Buffer.concat(parts);
+        const path = new URL(req.url ?? "/", "http://x").pathname;
+        if (path === "/process.Process/Start" && hold && raw.includes("consume")) {
+          const { deferStart, seen } = hold;
+          hold = undefined;
+          const pid = nextPid++;
+          res.writeHead(200, { "content-type": "application/connect+json" });
+          const entry: Held = {
+            pid,
+            started: false,
+            start: () => {
+              entry.started = true;
+              res.write(frame({ event: { start: { pid } } }));
+            },
+            end: () => {
+              res.write(frame({ event: { end: { exitCode: -1, status: "signal: killed" } } }));
+              res.end(frame({}, 2));
+            },
+          };
+          held.set(pid, entry);
+          if (!deferStart) entry.start();
+          seen(entry);
+          return;
+        }
+        if (path === "/process.Process/SendSignal") {
+          const pid = (JSON.parse(raw.toString("utf8")) as { process: { pid: number } }).process
+            .pid;
+          const entry = held.get(pid);
+          if (entry) {
+            signalled.push(pid);
+            held.delete(pid);
+            entry.end();
+            res.writeHead(200, { "content-type": "application/json" }).end("{}");
+            return;
+          }
+        }
+        const headers: Record<string, string> = {};
+        for (const [k, v] of Object.entries(req.headers)) {
+          if (typeof v === "string" && k !== "host" && k !== "content-length") headers[k] = v;
+        }
+        const r = await fetch(fake.url + (req.url ?? "/"), {
+          method: req.method ?? "GET",
+          headers,
+          ...(raw.byteLength > 0 && { body: raw }),
+        });
+        const resHeaders: Record<string, string> = {};
+        r.headers.forEach((v, k) => {
+          if (k !== "content-length" && k !== "transfer-encoding") resHeaders[k] = v;
+        });
+        res.writeHead(r.status, resHeaders);
+        if (r.body) for await (const c of r.body) res.write(c);
+        res.end();
+      })().catch(() => res.destroy());
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    envd = {
+      url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      close: () => new Promise<void>((r) => server.close(() => r())),
+    };
+    sbx = createE2BSandbox(
+      {
+        apiKey: fake.apiKey,
+        apiUrl: fake.url,
+        domain: "e2b.app",
+        template: "capybara-sandbox",
+        defaultImage: publishedImage("0.0.0-test.1"),
+        timeoutSeconds: 3600,
+        domainAllowlist: true,
+      },
+      { log: { info: () => undefined, warn: () => undefined, error: () => undefined } },
+      { envdUrl: envd.url },
+    );
+    const name = `cap-device-${randomUUID()}`;
+    const fileSystem = await sbx.createFileSystem({ name, limits, signal: sig() });
+    h = await sbx.create({ name, limits, fileSystem, signal: sig() });
+  });
+  afterAll(async () => {
+    for (const entry of held.values()) entry.end();
+    await envd?.close();
+    await fake?.close();
+  });
+
+  const fullOp = () =>
+    sbx.operation?.(
+      h,
+      {
+        operationId: `op-${randomUUID()}`,
+        admitBeforeMs: Date.now() + 60_000,
+        deviceId: "d",
+        rootConversationId: "c",
+        profileRevision: 1,
+        ceilingRevision: "c1",
+        profile: "full-access",
+        actor: { accountId: "a", conversationId: "c" },
+        tag: randomUUID(),
+        filesystem: { kind: "device" },
+        network: { kind: "environment" },
+      },
+      sig(),
+    );
+
+  it("never starts the agent as root without the inline verification", async () => {
+    const op = await fullOp();
+    // on the test machine nothing is root-owned: the consume step refuses or fails, either way
+    await op?.stat("/workspace", sig()).catch(() => undefined);
+    const rootAgent = fake.calls.filter((c) => {
+      const p = (c.body as { process?: { cmd?: string; args?: string[] } } | undefined)?.process;
+      return c.user === "root" && (p?.args ?? []).some((a) => a.includes("capybara-operation.py"));
+    });
+    expect(rootAgent.length).toBeGreaterThan(0);
+    for (const c of rootAgent) {
+      const p = (c.body as { process: { args: string[] } }).process;
+      expect(p.args.slice(0, 3)).toEqual(["-I", "-c", ROOT_AGENT_PRECHECK]);
+    }
+  });
+
+  for (const deferStart of [false, true]) {
+    it(`an aborted agent command is killed in the VM${deferStart ? " (aborted before its pid was known)" : ""}`, async () => {
+      const op = await fullOp();
+      const ac = new AbortController();
+      let seen: (held: Held) => void = () => undefined;
+      const heldStep = new Promise<Held>((resolve) => {
+        seen = resolve;
+      });
+      hold = { deferStart, seen };
+      const write = op?.writeFile("/workspace/never.txt", new Uint8Array([1]), ac.signal);
+      const entry = await heldStep;
+      ac.abort();
+      if (deferStart) entry.start();
+      await expect(write).rejects.toThrow();
+      // the held step ends only through SendSignal for its pid
+      expect(signalled).toContain(entry.pid);
+      expect(held.has(entry.pid)).toBe(false);
+    });
+  }
 });
