@@ -1,0 +1,36 @@
+import type { PreviewerId } from "../../src/previewers.js";
+import type { MessageKey } from "./frame.js";
+
+/** The file the person is previewing, as the outer page sent it over the bridge. */
+export interface PreviewFile {
+  name: string;
+  contentType: string;
+  size: number;
+  data: ArrayBuffer;
+}
+
+/**
+ * Runs `input` through the worker of a previewer (a blob-URL worker, terminated on budget or
+ * abort) and resolves with its output.
+ */
+export type RunInWorker = <I, O>(
+  worker: PreviewerId | "pdfjs",
+  input: I,
+  opts?: { budgetMs?: number; transfer?: Transferable[] },
+) => Promise<O>;
+
+/** What the shell hands a renderer. */
+export interface RenderContext {
+  /** The element the renderer owns; the shell shows it once the renderer resolves. */
+  root: HTMLElement;
+  locale: "zh" | "en";
+  /** Aborted when the budget is spent or the shell is torn down; stop painting after it. */
+  signal: AbortSignal;
+  t(key: MessageKey): string;
+  runInWorker: RunInWorker;
+  /** An inline error with the reason and the "download instead" hint. */
+  showError(reason: string): void;
+}
+
+/** One previewer's main-thread side: resolves when the file is painted into `ctx.root`. */
+export type Renderer = (file: PreviewFile, ctx: RenderContext) => Promise<void>;

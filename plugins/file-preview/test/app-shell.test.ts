@@ -1,0 +1,219 @@
+// @vitest-environment jsdom
+import { EMBED_PROTOCOL } from "@capybara-hq/plugin-sdk";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type BridgeEvent, createBridge } from "../ui-src/app/bridge.js";
+import { MESSAGES } from "../ui-src/app/frame.js";
+import { startApp } from "../ui-src/app/main.js";
+import { applyTheme } from "../ui-src/app/theme.js";
+import type { PreviewFile, Renderer } from "../ui-src/app/types.js";
+
+const init = { protocol: EMBED_PROTOCOL, type: "init", locale: "en", theme: "dark", tokens: {} };
+const fileMsg = (size = 3) => ({
+  protocol: EMBED_PROTOCOL,
+  type: "file",
+  name: "a.txt",
+  contentType: "text/plain",
+  size,
+  data: new ArrayBuffer(size),
+});
+
+/** Delivers a message as if the outer page (`window.parent`) sent it. */
+function post(data: unknown, source: MessageEventSource | null = window.parent) {
+  window.dispatchEvent(new MessageEvent("message", { data, source }));
+}
+
+let stops: Array<() => void> = [];
+beforeEach(() => {
+  document.head.innerHTML = '<meta name="previewer" content="code">';
+  document.body.innerHTML = '<div id="root"></div>';
+  document.documentElement.removeAttribute("style");
+  document.documentElement.removeAttribute("data-theme");
+});
+afterEach(() => {
+  for (const stop of stops) stop();
+  stops = [];
+  vi.useRealTimers();
+});
+
+describe("createBridge", () => {
+  const listen = () => {
+    const events: BridgeEvent[] = [];
+    stops.push(createBridge(window, (e) => events.push(e)));
+    return events;
+  };
+
+  it("ignores foreign sources, other protocols and unknown types", () => {
+    const events = listen();
+    const other = document.body.appendChild(document.createElement("iframe")).contentWindow;
+    post(init, other);
+    post(init, null);
+    post({ ...init, protocol: "other/1" });
+    post({ ...init, type: "token", token: "x" });
+    post({ ...init, type: "navigate" });
+    post("init");
+    post(null);
+    expect(events).toEqual([]);
+    post(init);
+    expect(events.map((e) => e.type)).toEqual(["init"]);
+  });
+
+  it("delivers the file only after init, and only once", () => {
+    const events = listen();
+    post(fileMsg());
+    expect(events).toEqual([]);
+    post(init);
+    post(fileMsg(2));
+    post(fileMsg(5));
+    expect(events.map((e) => e.type)).toEqual(["init", "file"]);
+    const file = events[1];
+    expect(file?.type === "file" && file.file.size).toBe(2);
+  });
+
+  it("rejects malformed messages", () => {
+    const events = listen();
+    post({ ...init, locale: "fr" });
+    post({ ...init, theme: "blue" });
+    post(init);
+    post({ ...fileMsg(), data: "abc" });
+    post({ ...fileMsg(), size: -1 });
+    expect(events.map((e) => e.type)).toEqual(["init"]);
+  });
+
+  it("stops listening when disposed", () => {
+    const events: BridgeEvent[] = [];
+    const stop = createBridge(window, (e) => events.push(e));
+    stop();
+    post(init);
+    expect(events).toEqual([]);
+  });
+});
+
+describe("applyTheme", () => {
+  it("sets --cap- properties and data-theme; a later call replaces them without touching nodes", () => {
+    const node = document.getElementById("root");
+    applyTheme(document, "dark", { background: "#000", foreground: "#fff" });
+    const style = document.documentElement.style;
+    expect(style.getPropertyValue("--cap-background")).toBe("#000");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    applyTheme(document, "light", { background: "#fff", accent: "red" });
+    expect(style.getPropertyValue("--cap-background")).toBe("#fff");
+    expect(style.getPropertyValue("--cap-foreground")).toBe("");
+    expect(style.getPropertyValue("--cap-accent")).toBe("red");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+    expect(document.getElementById("root")).toBe(node);
+  });
+
+  it("ignores token names that are not plain identifiers", () => {
+    applyTheme(document, "dark", { "a;b": "1", ok: "2" });
+    expect(document.documentElement.style.getPropertyValue("--cap-ok")).toBe("2");
+    expect(document.documentElement.style.cssText).not.toContain("a;b");
+  });
+});
+
+describe("the main flow", () => {
+  const start = (renderer: Renderer, budgetMs?: number) => {
+    const render = vi.fn(renderer);
+    stops.push(
+      startApp({
+        loadRenderer: async () => render,
+        ...(budgetMs === undefined ? {} : { budgetMs }),
+      }),
+    );
+    return render;
+  };
+  const text = () => document.getElementById("root")?.textContent ?? "";
+  const flush = () => vi.waitFor(() => expect(text()).not.toBe(MESSAGES.en.loading));
+
+  it("themes on init and re-themes on a theme event while the preview stays mounted", async () => {
+    const mounted: HTMLElement[] = [];
+    start(async (_f, ctx) => {
+      ctx.root.textContent = "body";
+      mounted.push(ctx.root);
+    });
+    post({ ...init, tokens: { background: "#000" } });
+    post(fileMsg());
+    await vi.waitFor(() => expect(text()).toBe("body"));
+    post({
+      protocol: EMBED_PROTOCOL,
+      type: "theme",
+      theme: "light",
+      tokens: { background: "#fff" },
+    });
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+    expect(document.documentElement.style.getPropertyValue("--cap-background")).toBe("#fff");
+    expect(mounted[0]?.isConnected).toBe(true);
+    expect(text()).toBe("body");
+  });
+
+  it("a 0-byte file shows the empty state and never calls the renderer", async () => {
+    const render = start(async () => {});
+    post({ ...init, locale: "zh" });
+    post(fileMsg(0));
+    await vi.waitFor(() => expect(text()).toBe(MESSAGES.zh.empty));
+    expect(render).not.toHaveBeenCalled();
+  });
+
+  it("hands the renderer the file, the locale and a live signal", async () => {
+    let seen: { file: PreviewFile; locale: string; aborted: boolean } | undefined;
+    start(async (file, ctx) => {
+      seen = { file, locale: ctx.locale, aborted: ctx.signal.aborted };
+      ctx.root.textContent = ctx.t("loading");
+    });
+    post(init);
+    post(fileMsg());
+    await vi.waitFor(() => expect(seen).toBeDefined());
+    expect(seen?.file.name).toBe("a.txt");
+    expect(seen?.locale).toBe("en");
+    expect(seen?.aborted).toBe(false);
+  });
+
+  it("a throwing renderer shows its message as text, never as markup", async () => {
+    start(async () => {
+      throw new Error("bad <img src=x onerror=alert(1)>");
+    });
+    post(init);
+    post(fileMsg());
+    await flush();
+    expect(text()).toContain("bad <img src=x onerror=alert(1)>");
+    expect(text()).toContain(MESSAGES.en.errorTitle);
+    expect(text()).toContain(MESSAGES.en.downloadHint);
+    expect(document.querySelector("#root img")).toBeNull();
+  });
+
+  it("ctx.showError shows the inline error and keeps it after the renderer resolves", async () => {
+    start(async (_f, ctx) => {
+      ctx.showError("not a zip");
+    });
+    post(init);
+    post(fileMsg());
+    await vi.waitFor(() => expect(text()).toContain("not a zip"));
+    expect(text()).toContain(MESSAGES.en.errorTitle);
+  });
+
+  it("a renderer that never resolves hits the 20 s budget", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    start((_f, ctx) => {
+      signal = ctx.signal;
+      return new Promise<void>(() => {});
+    }, undefined);
+    post({ ...init, locale: "zh" });
+    post(fileMsg());
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(text()).toBe(MESSAGES.zh.loading);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(text()).toContain(MESSAGES.zh.timeout);
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("window errors and unhandled rejections show the error state", async () => {
+    start(() => new Promise<void>(() => {}));
+    post(init);
+    window.dispatchEvent(new ErrorEvent("error", { message: "boom" }));
+    expect(text()).toContain("boom");
+    const rejection = new Event("unhandledrejection") as PromiseRejectionEvent;
+    Object.defineProperty(rejection, "reason", { value: new Error("later") });
+    window.dispatchEvent(rejection);
+    expect(text()).toContain("later");
+  });
+});
