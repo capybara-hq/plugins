@@ -14,8 +14,8 @@ const EXTERNAL: Record<string, boolean | "any"> = {
   "data-urls.html": true,
   "form.html": true,
   "frames.html": true,
-  "handlers.html": false,
-  "js-urls.html": false,
+  "handlers.html": true,
+  "js-urls.html": true,
   "link-stylesheet.html": true,
   "meta-base.html": false,
   // the payloads swallow each other; each line is checked on its own below
@@ -26,6 +26,7 @@ const EXTERNAL: Record<string, boolean | "any"> = {
   "style-import.html": true,
   "svg-refs.html": true,
   "svg-script.html": true,
+  "url-whitespace.html": true,
 };
 
 const FORBIDDEN_TAGS = [
@@ -217,6 +218,42 @@ describe("sanitizeHtml over hostile fixtures", () => {
     expect(data.querySelector('img[alt="blob"]')?.hasAttribute("src")).toBe(false);
   });
 
+  it("url-whitespace.html: inner controls and spaces never pass for data:", () => {
+    const { fragment, styles, external } = sanitizeHtml(fixture("url-whitespace.html"), document);
+    expect(external).toBe(true);
+    const css = styles.join("\n");
+    expect(css).toContain("color: green");
+    expect(css).not.toMatch(/ata:|api/);
+    const divs = Array.from(fragment.querySelectorAll("div"));
+    expect(divs[0]?.getAttribute("style")).toBe("color:green");
+    expect(divs[1]?.hasAttribute("style")).toBe(false);
+    expect(divs[2]?.hasAttribute("style")).toBe(false);
+    for (const rect of Array.from(fragment.querySelectorAll("rect"))) {
+      expect(rect.hasAttribute("fill")).toBe(false);
+    }
+    expect(fragment.querySelector("image")?.hasAttribute("href")).toBe(false);
+    expect(fragment.querySelector('img[alt="space"]')?.hasAttribute("src")).toBe(false);
+    expect(fragment.querySelector('img[alt="ctl"]')?.hasAttribute("src")).toBe(false);
+    // each place on its own sets the flag
+    for (const html of [
+      '<style>a{background:url("d\\1 ata:image/png,x")}</style>',
+      '<div style="background:url(da\\20 ta:image/png,x)">x</div>',
+      '<svg><rect fill="url(d\\1 ata:/../api#g)"/></svg>',
+    ]) {
+      expect(sanitizeHtml(html, document).external, html).toBe(true);
+    }
+  });
+
+  it("flags removed handlers and script urls, and drops autoplay", () => {
+    expect(sanitizeHtml('<div onclick="x()">a</div>', document).external).toBe(true);
+    expect(sanitizeHtml('<a href="javascript:x()">a</a>', document).external).toBe(true);
+    const { fragment } = sanitizeHtml(
+      '<video autoplay src="data:video/mp4;base64,AAAA"></video>',
+      document,
+    );
+    expect(fragment.querySelector("video")?.hasAttribute("autoplay")).toBe(false);
+  });
+
   it("reports nothing external for a plain document", () => {
     const result = sanitizeHtml("<h1>Title</h1><p style='color:red'>text</p>", document);
     expect(result.external).toBe(false);
@@ -238,10 +275,7 @@ describe("sanitizeCss", () => {
     ["a{background:url(java\\73 cript:alert(1));color:red}", "a{color:red}"],
     ["a{width:expression(alert(1));color:red}", "a{color:red}"],
     ["a{width:EXPRESSION(alert(1));color:red}", "a{color:red}"],
-    [
-      "@font-face{font-family:f;src:url(http://x/f.woff)}a{color:red}",
-      "@font-face{font-family:f;}a{color:red}",
-    ],
+    ["@font-face{font-family:f;src:url(http://x/f.woff)}a{color:red}", "a{color:red}"],
     ['a{background:image-set("https://x/a.png" 1x);color:red}', "a{color:red}"],
     ["a{background:image-set(var(--a) 1x);color:red}", "a{color:red}"],
     ['a{background:src("https://x/a.png");color:red}', "a{color:red}"],
@@ -267,6 +301,20 @@ describe("sanitizeCss", () => {
     ],
     // an escaped paren makes an ident, not a url: the browser loads nothing
     ["a{background:url\\(https://x)}", "a{background:url\\(https://x)}"],
+    // the URL parser strips C0 and space only at the ends and tab / LF / CR inside: an inner
+    // control or space makes a relative (same-origin) URL, never data:
+    ['a{background:url("d\\1 ata:image/png,x");color:red}', "a{color:red}"],
+    ["a{background:url(d\\1 ata:/../../../api/v1/me);color:red}", "a{color:red}"],
+    ["a{background:url(da\\20 ta:image/png,x);color:red}", "a{color:red}"],
+    ['a{background:url("da\\20 ta:image/png,x");color:red}', "a{color:red}"],
+    ['a{background:url("da ta:image/png,x");color:red}', "a{color:red}"],
+    ['a{background:image-set("d\\1 ata:image/png,x" 1x);color:red}', "a{color:red}"],
+    // ...while the ones a browser does strip still read as data:
+    ['a{background:url(" \\1 data:image/png,x ")}', 'a{background:url(" \\1 data:image/png,x ")}'],
+    ['a{background:url("da\\9 ta:image/png,x")}', 'a{background:url("da\\9 ta:image/png,x")}'],
+    // @font-face and @property can leak out of a shadow tree in some engines
+    ['@font-face{font-family:f;src:local("x")}a{color:red}', "a{color:red}"],
+    ["@property --x{syntax:'*';inherits:true}a{color:red}", "a{color:red}"],
     // a url inside an unterminated block or string is still caught by the final check
     ["a{background:url(https://x/a.png", "a{"],
     [
@@ -293,13 +341,19 @@ describe("sanitizeCss", () => {
     expect(sanitizeCss(css, "stylesheet")).toEqual({ text: css, external: false });
   });
 
-  it("reports remote references as external, local junk as not", () => {
+  it("reports remote references and script as external, local junk as not", () => {
     expect(sanitizeCss("a{background:url(https://x)}", "stylesheet").external).toBe(true);
     expect(sanitizeCss("a{background:url(rel.png)}", "stylesheet").external).toBe(true);
-    expect(sanitizeCss("a{background:url(javascript:alert(1))}", "stylesheet").external).toBe(
-      false,
+    // script schemes and expression() are "scripts not loaded": they show the notice too
+    expect(sanitizeCss('a{background:url("javascript:alert(1)")}', "stylesheet").external).toBe(
+      true,
     );
-    expect(sanitizeCss("a{width:expression(1)}", "stylesheet").external).toBe(false);
+    expect(sanitizeCss("a{width:expression(1)}", "stylesheet").external).toBe(true);
+    // an unquoted url with a `(` inside is a bad-url token: the browser loads nothing
+    expect(sanitizeCss("a{background:url(data:x(1))}", "stylesheet")).toEqual({
+      text: "a{}",
+      external: false,
+    });
   });
 
   it("drops declarations of a style attribute one by one", () => {

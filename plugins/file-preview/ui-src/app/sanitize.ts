@@ -24,7 +24,13 @@ export interface SanitizedHtml {
   fragment: DocumentFragment;
   /** The document's `<style>` contents, cleaned of anything that loads or runs. */
   styles: string[];
-  /** A script, a stylesheet link, a frame, or a remote `src` / `href` / `url()` was removed. */
+  /**
+   * Something that would have loaded or run was removed, so the notice "external resources and
+   * scripts are not loaded" is true: a script element, an `on*` handler, a `javascript:` /
+   * `vbscript:` URL, CSS `expression()`, a stylesheet link, a frame or plugin, or a remote or
+   * relative `src` / `href` / `url()` / `@import`. Mere pointers (`ping`, `action`, `cite`) do not
+   * count, nor do dropped `<meta>` / `<base>` / forms.
+   */
   external: boolean;
 }
 
@@ -96,6 +102,8 @@ const PURIFY_CONFIG: Config & { RETURN_DOM_FRAGMENT: true } = {
     "command",
     "commandfor",
     "interestfor",
+    // media starting on its own is the page acting without the person
+    "autoplay",
   ],
   ALLOW_UNKNOWN_PROTOCOLS: false,
   ALLOW_DATA_ATTR: true,
@@ -158,15 +166,25 @@ const POINTER_ATTRS = new Set([
 /** Elements whose `href` is a link (followed on click) rather than a resource reference. */
 const LINK_ELEMENTS = new Set(["a", "area"]);
 
-type RefKind = "empty" | "fragment" | "inline" | "remote" | "other";
+type RefKind = "empty" | "fragment" | "inline" | "remote" | "script" | "other";
 
-/** Lowercased, with the controls and spaces a browser strips before reading a scheme removed. */
-function normalizeUrl(value: string): string {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: browsers strip these from URLs
-  return value.replace(/[\u0000-\u0020\u007f]/g, "").toLowerCase();
+/**
+ * The URL as the WHATWG URL parser reads it before looking for a scheme: C0 controls and spaces
+ * trimmed from the two ends only, tab / LF / CR removed anywhere, then lowercased. Any other
+ * control or space inside (`d\1 ata:`, `da ta:`) stays, so the value is no scheme at all: a
+ * relative, same-origin URL, which is a load.
+ */
+export function normalizeUrl(value: string): string {
+  return (
+    value
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: the URL parser's own trim set
+      .replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "")
+      .replace(/[\t\n\r]/g, "")
+      .toLowerCase()
+  );
 }
 
-/** Classifies a URL the way a browser resolves it (controls and spaces stripped first). */
+/** Classifies a URL the way a browser resolves it (see `normalizeUrl`). */
 export function refKind(value: string): RefKind {
   const v = normalizeUrl(value);
   if (v === "") return "empty";
@@ -175,6 +193,7 @@ export function refKind(value: string): RefKind {
   const scheme = /^([a-z][a-z0-9+.-]*):/.exec(v);
   // relative and protocol-relative URLs resolve against the embed: a load like any other
   if (!scheme) return "remote";
+  if (scheme[1] === "javascript" || scheme[1] === "vbscript") return "script";
   return ["http", "https", "ftp", "ftps", "ws", "wss"].includes(scheme[1] ?? "")
     ? "remote"
     : "other";
@@ -196,12 +215,13 @@ function handleUrlAttr(node: Element, name: string, value: string, scan: Scan): 
   const kind = refKind(value);
   if ((name === "href" || name === "xlink:href") && LINK_ELEMENTS.has(tag)) {
     // a link keeps its text and shows where it pointed as a tooltip; it never navigates
+    if (kind === "script") scan.external = true;
     if (kind === "remote" || /^(mailto|tel):/i.test(value.trim())) scan.links.set(node, value);
     return false;
   }
   if (name === "srcset" || name === "imagesrcset") {
     // candidate lists are not worth parsing: dropped; any non-inline candidate counts as external
-    if (!/^\s*data:/i.test(value)) scan.external = true;
+    if (!normalizeUrl(value).startsWith("data:")) scan.external = true;
     return false;
   }
   if (name === "src" || name === "href" || name === "xlink:href" || name === "poster") {
@@ -209,7 +229,7 @@ function handleUrlAttr(node: Element, name: string, value: string, scan: Scan): 
     // svg paint servers and gradients reference each other by fragment
     if (name !== "src" && name !== "poster" && kind === "fragment") return true;
   }
-  if (kind === "remote" && !POINTER_ATTRS.has(name)) scan.external = true;
+  if ((kind === "remote" && !POINTER_ATTRS.has(name)) || kind === "script") scan.external = true;
   return false;
 }
 
@@ -232,6 +252,12 @@ export function sanitizeHtml(html: string, doc: Document): SanitizedHtml {
 
   purify.addHook("uponSanitizeAttribute", (node, data) => {
     const name = data.attrName;
+    // every `on*` attribute is an event handler; DOMPurify drops it, the notice must say so
+    if (name.startsWith("on")) {
+      scan.external = true;
+      data.keepAttr = false;
+      return;
+    }
     if (URL_ATTRS.has(name)) {
       data.keepAttr = handleUrlAttr(node, name, data.attrValue, scan);
       return;
@@ -650,7 +676,7 @@ function checkRef(value: string, v: Verdict): void {
   const kind = refKind(value);
   if (kind === "inline" || kind === "fragment") return;
   v.bad = true;
-  if (kind === "remote") v.external = true;
+  if (kind === "remote" || kind === "script") v.external = true;
 }
 
 /** Whether any token in `toks` could load, import or run something. */
@@ -667,6 +693,8 @@ function scanTokens(toks: Tok[]): Verdict {
           v.bad = true;
           v.external = true;
         }
+        // registered fonts and properties can leak out of a shadow tree in some engines
+        if (name === "font-face" || name === "property") v.bad = true;
         break;
       case "ident":
         if (name === "@import") {
@@ -686,7 +714,10 @@ function scanTokens(toks: Tok[]): Verdict {
         break;
       case "func":
         depth++;
-        if (name === "expression") v.bad = true;
+        if (name === "expression") {
+          v.bad = true;
+          v.external = true;
+        }
         if (urlDepth > 0 && (OPAQUE_FUNCS.has(name) || name.startsWith("--"))) v.bad = true;
         if (URL_FUNCS.has(name) && urlDepth === 0) urlDepth = depth;
         break;
