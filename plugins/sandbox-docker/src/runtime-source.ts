@@ -19,7 +19,7 @@ export const OPERATION_AGENT = `${RUNTIME_DIR}/capybara-operation.py`;
 
 /** SHA-256 of `image/runtime/capybara-operation.py` (asserted by the tests). */
 export const OPERATION_AGENT_SHA256 =
-  "19a9bcfb7366a4375f8c9d7662483046fcc829592f7e57e51624486ae9bdaec1";
+  "f2fdaa438e7b9a38a1b1c9deeab8671e8ba574483aea2ab3f4a979e23d111f5e";
 
 /** The SDK bundle version the staged files come from. */
 export const RUNTIME_BUNDLE_VERSION = 2;

@@ -129,13 +129,6 @@ export interface DockerSandboxTestOptions {
    */
   egressTestHosts?: Record<string, string>;
   /**
-   * Direct endpoints a restricted operation may connect to when its allowlist names the host
-   * (and the host is exempt from its proxy variables). Production allowlists reach hosts only
-   * through the operation's own forwarder; this lets the permission conformance suite drive the
-   * broker's endpoint checks against services inside the container.
-   */
-  permissionTestEndpoints?: Record<string, { address: string; port: number }[]>;
-  /**
    * A file the background supervisor of `taskId` waits for after it recorded itself and before its
    * final admission check (a readiness barrier for the start/revoke and start/stop race tests).
    */
@@ -144,6 +137,8 @@ export interface DockerSandboxTestOptions {
   afterRevokeKill?: (operationId: string) => Promise<void>;
   /** A smaller spool cap (bytes) for the background execution of `taskId`. */
   backgroundSpoolCapBytes?: (taskId: string) => number | undefined;
+  /** Runs between a background execution's root preparation and its supervisor (race tests). */
+  beforeBackgroundLaunch?: (taskId: string) => Promise<void>;
 }
 
 /** The sandbox user (the image's `sandbox`): commands and file operations run as it. */
@@ -1216,10 +1211,10 @@ export function createDockerSandbox(
         signal,
       );
     },
-    testEndpoints: test.permissionTestEndpoints ?? {},
     backgroundLaunchBarrier: test.backgroundLaunchBarrier,
     afterRevokeKill: test.afterRevokeKill,
     backgroundSpoolCapBytes: test.backgroundSpoolCapBytes,
+    beforeBackgroundLaunch: test.beforeBackgroundLaunch,
   };
   const operations = createOperations({ transport, decode: decodeOutput });
 

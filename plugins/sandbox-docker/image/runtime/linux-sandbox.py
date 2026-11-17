@@ -23,6 +23,15 @@ import time
 # - Metadata reads outside the roots are not mediated: stat/statx, access, readlink, getxattr,
 #   listxattr, statfs, inotify marks and other processes' /proc cmdline can reveal names, sizes,
 #   times, link targets and xattr values. File contents, writes and metadata changes are confined.
+# - Known limitation: /proc stays a read root, so a restricted command can read the world-readable
+#   entries of other processes of the same uid, including /proc/<pid>/cmdline of a concurrent Full
+#   command (secrets inlined in a command line are visible). Ptrace-guarded entries (environ, mem,
+#   maps, fd) stay closed by Landlock's ptrace scoping. Landlock cannot narrow /proc to the
+#   command's own tree: /proc/self resolves to per-process directories that exist only after the
+#   rules are set, so dropping /proc (keeping cpuinfo, meminfo, stat and the like) also denies a
+#   process its own /proc/self, which ordinary tools need (Node's process.memoryUsage(), Python's
+#   /proc/self/fd and /proc/self/maps reads). hidepid needs a mount and PID namespaces need new
+#   privileges, both outside this launcher's design. Consumers keep secrets out of command lines.
 # - Network none/allowlist: TCP sockets may bind and listen on loopback (127.0.0.1, ::1) only;
 #   connections go only to the endpoints the consumer granted. Environment lifts that filter.
 # - UNIX sockets in every network kind: stream/seqpacket only (datagram and raw are refused);

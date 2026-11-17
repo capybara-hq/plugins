@@ -52,8 +52,8 @@ describe("sandbox-docker manifest", () => {
     expect(plugin.provides).toEqual(["sandbox@2"]);
     expect(plugin.permissions).toEqual({});
     // the kernel checks this range against the installed SDK version; the operation contract
-    // and its staged runtime bytes (SANDBOX_RUNTIME_SOURCE v2) need rc.27
-    expect(plugin.sdk).toBe("^0.1.0-rc.27");
+    // and its staged runtime bytes (SANDBOX_RUNTIME_SOURCE v2) need rc.28
+    expect(plugin.sdk).toBe("^0.1.0-rc.28");
   });
 
   it("deployment config: defaults, endpoint schemes", () => {

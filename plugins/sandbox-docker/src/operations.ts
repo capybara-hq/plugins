@@ -81,12 +81,11 @@ export interface OperationTransport {
   cancelRestricted(h: SandboxHandle, ctl: string): Promise<void>;
   /** Kills every foreground execution (restricted or Full) whose control path carries `uuid`. */
   killOperation(h: SandboxHandle, uuid: string, signal: AbortSignal): Promise<void>;
-  /** Test-only direct endpoints for allowlisted hosts (DockerSandboxTestOptions). */
-  testEndpoints: Record<string, { address: string; port: number }[]>;
   /** Test-only hooks (DockerSandboxTestOptions). */
   backgroundLaunchBarrier?: ((taskId: string) => string | undefined) | undefined;
   afterRevokeKill?: ((operationId: string) => Promise<void>) | undefined;
   backgroundSpoolCapBytes?: ((taskId: string) => number | undefined) | undefined;
+  beforeBackgroundLaunch?: ((taskId: string) => Promise<void>) | undefined;
 }
 
 /**
@@ -453,17 +452,6 @@ export function createOperations(deps: OperationDeps) {
     return w.includes("/workspace") ? "/workspace" : (w[0] ?? "/");
   };
 
-  const allowlistTestEndpoints = (scope: SandboxOperationScope) => {
-    const out: Record<string, { address: string; port: number }[]> = {};
-    if (scope.network.kind === "allowlist") {
-      for (const host of scope.network.hosts) {
-        const e = t.testEndpoints[host];
-        if (e) out[host] = e;
-      }
-    }
-    return out;
-  };
-
   const execRestricted = async (
     h: SandboxHandle,
     scope: SandboxOperationScope,
@@ -472,7 +460,6 @@ export function createOperations(deps: OperationDeps) {
     const roots = restrictedFiles(scope);
     const ctl = operationControlPath(scope.tag, scope.operationId);
     const cwd = args.cwd ?? defaultCwd(scope);
-    const testEndpoints = allowlistTestEndpoints(scope);
     const r = await t.run(h, {
       cmd: [PYTHON, "-I", OPERATION_AGENT, "exec", "capybara-exec", ctl],
       user: "sandbox",
@@ -483,7 +470,6 @@ export function createOperations(deps: OperationDeps) {
         expect: sdkRuntimeDigests(),
         ...roots,
         network: scope.network,
-        testEndpoints,
         command: args.command,
         cwd,
         env: checkedEnv(args.env),
@@ -734,12 +720,15 @@ export function createOperations(deps: OperationDeps) {
       // The root-owned record and its recorder exist before anything launches; the channel's
       // random name reaches only the supervisor (stdin), never argv.
       const secret = randomBytes(16).toString("hex");
+      // Never in a path, argv or env: only on the supervisor's stdin and in its identity frame.
+      const token = randomBytes(16).toString("hex");
       const prepared = await rootStep(
         h,
         "bg-prepare",
         {
           executionId: ref.executionId,
           secret,
+          token,
           opKey: opKey(scope.operationId),
           taskId: args.taskId,
           retainUntilMs: args.retainUntilMs,
@@ -755,12 +744,14 @@ export function createOperations(deps: OperationDeps) {
           "This execution was already prepared; reconcile it by its reference",
         );
       }
+      await t.beforeBackgroundLaunch?.(args.taskId);
       const barrier = t.backgroundLaunchBarrier?.(args.taskId);
       const r = await t.run(h, {
         cmd: [PYTHON, "-I", OPERATION_AGENT, "bg-start"],
         user: "sandbox",
         stdin: request({
           secret,
+          token,
           ...(barrier !== undefined && { barrier }),
           opKey: opKey(scope.operationId),
           admitBeforeMs: scope.admitBeforeMs,
@@ -769,7 +760,6 @@ export function createOperations(deps: OperationDeps) {
           kind: scope.filesystem.kind,
           ...roots,
           network: scope.network,
-          testEndpoints: allowlistTestEndpoints(scope),
           command: args.command,
           cwd: args.cwd ?? defaultCwd(scope),
           env: checkedEnv(args.env),

@@ -100,8 +100,19 @@ const limits = (network: SandboxLimits["network"]): SandboxLimits => ({
   network,
 });
 
-const GRANTED_HOST = "granted.permission.example";
-const ENDPOINTS = { granted: ["127.0.0.1", 18080], u4: ["127.0.0.1", 18081], u6: ["::1", 18082] };
+/**
+ * The granted endpoint is a service outside the device, reached only by its allowlisted name
+ * through the operation's forwarder and the instance's real egress proxy (which pins the name to
+ * the service's address, exempt from its private-address check). The ungranted endpoints listen
+ * on the device's loopback, where Full access reaches them directly.
+ */
+const GRANTED_NAME = "granted.permission.example";
+const GRANTED_PORT = 18080;
+const ENDPOINTS = { u4: ["127.0.0.1", 18081], u6: ["::1", 18082] };
+const UNGRANTED_NAMES = {
+  u4: "ungranted4.permission.example",
+  u6: "ungranted6.permission.example",
+};
 const RECEIPTS = "/tmp/capybara-receipts";
 
 /** Controlled endpoints, run as root so the device user cannot forge their receipt counts. */
@@ -134,7 +145,7 @@ threading.Event().wait()
 `;
 const WAIT_READY = `
 import socket
-for host, port in ((${JSON.stringify(ENDPOINTS.granted[0])}, ${ENDPOINTS.granted[1]}), (${JSON.stringify(ENDPOINTS.u4[0])}, ${ENDPOINTS.u4[1]}), (${JSON.stringify(ENDPOINTS.u6[0])}, ${ENDPOINTS.u6[1]})):
+for host, port in ((${JSON.stringify(ENDPOINTS.u4[0])}, ${ENDPOINTS.u4[1]}), (${JSON.stringify(ENDPOINTS.u6[0])}, ${ENDPOINTS.u6[1]})):
     while True:
         try:
             socket.create_connection((host, port)).close()
@@ -189,11 +200,13 @@ describe.skipIf(!dockerAvailable)(
     let support: SandboxPermissionSupport;
     const netName = `capybara-sandbox-perm-${RUN}`;
     let target: StartedTestContainer;
+    let grantedService: StartedTestContainer;
     const made: string[] = [];
     /** Test hooks: a file a background supervisor waits for before admission; revoke steps. */
     const barriers = new Map<string, string>();
     const afterKill = new Map<string, () => Promise<void>>();
     const spoolCaps = new Map<string, number>();
+    const beforeLaunch = new Map<string, () => Promise<void>>();
 
     /** One device (file system plus instance) under a fresh name. */
     const newDevice = async (
@@ -313,6 +326,17 @@ describe.skipIf(!dockerAvailable)(
         .withWaitStrategy(Wait.forLogMessage("ready"))
         .start();
       const targetIp = target.getIpAddress(netName);
+      // The conformance suite's granted endpoint: counts every accepted connection itself.
+      grantedService = await new GenericContainer(images.egressImage)
+        .withNetworkMode(netName)
+        .withUser("root")
+        .withCommand([
+          "node",
+          "-e",
+          `let n = 0; const fs = require("fs"); require("net").createServer((c) => { n++; fs.writeFileSync("/tmp/count.tmp", String(n)); fs.renameSync("/tmp/count.tmp", "/tmp/count"); c.end("HTTP/1.0 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nok"); }).listen(${GRANTED_PORT}, () => console.log("ready"))`,
+        ])
+        .withWaitStrategy(Wait.forLogMessage("ready"))
+        .start();
       sbx = createDockerSandbox(
         {
           endpoint: proxy.endpoint,
@@ -323,30 +347,18 @@ describe.skipIf(!dockerAvailable)(
         },
         {
           labels: { [TEST_LABEL]: RUN },
-          egressTestHosts: { "allowed.example.com": targetIp, "denied.example.com": targetIp },
-          permissionTestEndpoints: {
-            [GRANTED_HOST]: [{ address: "127.0.0.1", port: ENDPOINTS.granted[1] as number }],
+          egressTestHosts: {
+            "allowed.example.com": targetIp,
+            "denied.example.com": targetIp,
+            [GRANTED_NAME]: grantedService.getIpAddress(netName),
           },
           backgroundLaunchBarrier: (taskId) => barriers.get(taskId),
           afterRevokeKill: (operationId) => afterKill.get(operationId)?.() ?? Promise.resolve(),
           backgroundSpoolCapBytes: (taskId) => spoolCaps.get(taskId),
+          beforeBackgroundLaunch: (taskId) => beforeLaunch.get(taskId)?.() ?? Promise.resolve(),
         },
       );
       device = await newDevice(sbx, { kind: "allowlist", hosts: [] });
-      spawnSync("docker", [
-        "exec",
-        "-d",
-        "-u",
-        "0",
-        device.id,
-        "python3",
-        "-I",
-        "-c",
-        LISTEN,
-        RECEIPTS,
-        JSON.stringify(ENDPOINTS),
-      ]);
-      await dexec(device.id, "1000", ["python3", "-I", "-c", WAIT_READY]);
       support = await sbx.permissionSupport(device, sig());
       const host = (...args: string[]) =>
         spawnSync(args[0] as string, args.slice(1), { encoding: "utf8" }).stdout?.trim() ?? "";
@@ -389,6 +401,7 @@ describe.skipIf(!dockerAvailable)(
 
     afterAll(async () => {
       await target?.stop();
+      await grantedService?.stop();
       await cleanupTestResources(RUN);
       await proxy?.stop();
     }, 300_000);
@@ -452,57 +465,62 @@ describe.skipIf(!dockerAvailable)(
     });
 
     it("passes the permission conformance on the actual provider", async () => {
+      // A device whose instance network allowlists the granted name: its allowlist operations
+      // reach it only through their own forwarder and the instance's egress proxy.
+      const net = await newDevice(sbx, { kind: "allowlist", hosts: [GRANTED_NAME] });
+      spawnSync("docker", [
+        "exec",
+        "-d",
+        "-u",
+        "0",
+        net.id,
+        "python3",
+        "-I",
+        "-c",
+        LISTEN,
+        RECEIPTS,
+        JSON.stringify(ENDPOINTS),
+      ]);
+      await dexec(net.id, "1000", ["python3", "-I", "-c", WAIT_READY]);
       const id = randomUUID().slice(0, 8);
       const root = `/workspace/project-${id}`;
       const sibling = `/workspace/sibling-${id}`;
       const protectedPath = `/workspace/.profile-${id}`;
-      await dexec(device.id, "1000", [
+      await dexec(net.id, "1000", [
         "sh",
         "-c",
         `mkdir ${root} ${sibling} && printf rc > ${protectedPath}`,
       ]);
-      const endpoint = (name: keyof typeof ENDPOINTS, host?: string) => ({
-        host: host ?? (ENDPOINTS[name][0] as string),
+      const loopback = (name: keyof typeof ENDPOINTS) => ({
+        name: UNGRANTED_NAMES[name],
+        address: ENDPOINTS[name][0] as string,
         port: ENDPOINTS[name][1] as number,
-        receipts: async () => Number(text(await inspectRead(device, `${RECEIPTS}/${name}`)) ?? 0),
+        receipts: async () => Number(text(await inspectRead(net, `${RECEIPTS}/${name}`)) ?? 0),
       });
       const fixture: SandboxPermissionFixture = {
         root,
         sibling,
         protectedPaths: [protectedPath],
         endpoints: {
-          granted: endpoint("granted"),
-          ungranted: [endpoint("u4"), endpoint("u6")],
+          granted: {
+            name: GRANTED_NAME,
+            address: grantedService.getIpAddress(netName),
+            port: GRANTED_PORT,
+            receipts: async () => {
+              const r = await grantedService.exec(["cat", "/tmp/count"]);
+              return r.exitCode === 0 ? Number(r.output.trim()) : 0;
+            },
+          },
+          ungranted: [loopback("u4"), loopback("u6")],
+          // The provider's production path: allowlisted names only through the operation's
+          // forwarder and the real egress proxy; no direct endpoint mapping exists.
+          access: "proxy",
         },
-        support: () => sbx.permissionSupport(device, sig()),
-        // TODO(core): @capybara-hq/testing 0.1.0-rc.21 needs `granted.host` to be both an allowlist
-        // name and an IPv4 literal (no valid scope is both), and its `waitFor` hangs when an
-        // operation ends before its ready file (task-12-independent-review.md, "Core testing
-        // package issues" 1 and 2). Drop this mapping once core splits name and address.
-        // The suite's granted endpoint is numeric (its race program needs an address), but scope
-        // allowlists are names (validateAllowHost refuses IP literals): the allowlist names the
-        // test host the provider maps to that endpoint (permissionTestEndpoints).
-        operation: (grant) =>
-          sbx.operation(
-            device,
-            scopeFor(
-              grant.network.kind === "allowlist"
-                ? {
-                    ...grant,
-                    network: {
-                      kind: "allowlist",
-                      hosts: grant.network.hosts.map((h) =>
-                        h === ENDPOINTS.granted[0] ? GRANTED_HOST : h,
-                      ),
-                    },
-                  }
-                : grant,
-            ),
-            sig(),
-          ),
+        support: () => sbx.permissionSupport(net, sig()),
+        operation: (grant) => sbx.operation(net, scopeFor(grant), sig()),
         async seed(entries: readonly NativeFixtureEntry[]) {
           await dexec(
-            device.id,
+            net.id,
             "1000",
             ["python3", "-I", "-c", SEED],
             JSON.stringify(
@@ -516,14 +534,14 @@ describe.skipIf(!dockerAvailable)(
         },
         inspect: {
           readFile: async (path) => {
-            const v = await inspectRead(device, path);
+            const v = await inspectRead(net, path);
             return v === null ? null : new Uint8Array(Buffer.from(v, "base64"));
           },
           mode: async (path) =>
             JSON.parse(
-              await dexec(device.id, "1000", ["python3", "-I", "-c", INSPECT, "mode", path]),
+              await dexec(net.id, "1000", ["python3", "-I", "-c", INSPECT, "mode", path]),
             ) as number | null,
-          alive: (pids) => alive(device, [...pids]),
+          alive: (pids) => alive(net, [...pids]),
         },
         dispose: async () => undefined,
       };
@@ -1426,10 +1444,12 @@ print("wrote=%d" % wrote)
         const executionId = operationUuid(scope.operationId);
         const opKey = createHash("sha256").update(scope.operationId).digest("hex");
         const secret = randomUUID().replaceAll("-", "");
+        const token = randomUUID().replaceAll("-", "");
         const retainUntilMs = Date.now() + 3_600_000;
         const prepared = agentCall(device, "0", ["bg-prepare"], {
           executionId,
           secret,
+          token,
           opKey,
           taskId: "late",
           retainUntilMs,
@@ -1456,6 +1476,7 @@ print("wrote=%d" % wrote)
         // The supervisor arrives after the stop claimed its outcome: it must not launch.
         agentCall(device, "1000", ["bg-start"], {
           secret,
+          token,
           opKey,
           admitBeforeMs: scope.admitBeforeMs,
           expect: sdkRuntimeDigests(),
@@ -1480,6 +1501,8 @@ print("wrote=%d" % wrote)
           await new Promise((r) => setImmediate(r));
         }
         expect(await inspectRead(device, `${root}/ran`)).toBeNull();
+        // The late identity never turns the cancelled record back into a running one.
+        expect(await sbx.background.status(device, ref, sig())).toEqual({ state: "lost" });
       });
 
       it("R3: the provider's own file methods refuse the record directory", async () => {
@@ -1556,6 +1579,68 @@ print("wrote=%d" % wrote)
           .catch((e) => e);
         expect(isSandboxOperationOutcomeUnknownError(retry)).toBe(true);
         expect(text(await inspectRead(h, "/workspace/r5"))).toBe("run\n");
+      });
+
+      it("R7: a same-uid process that connects first never captures the record", async () => {
+        const root = await newRoot(device, "r7");
+        const scope = scopeFor(full);
+        const executionId = operationUuid(scope.operationId);
+        const taskId = `task-${randomUUID().slice(0, 8)}`;
+        // The attacker reads every bound socket name from /proc/net/unix and runs the real agent's
+        // bg-start with a forged request for this execution before the real supervisor connects.
+        const forge = String.raw`
+import json, os, re, subprocess, sys
+execution, root, expect, deadline = sys.argv[1], sys.argv[2], json.loads(sys.argv[3]), int(sys.argv[4])
+names = set()
+for line in open("/proc/net/unix").read().splitlines()[1:]:
+    parts = line.split()
+    if len(parts) >= 8 and re.fullmatch(r"[0-9a-f]{32}", parts[-1]):
+        names.add(parts[-1])
+tried = 0
+for secret in names:
+    if not os.path.exists("/skills/.capybara-ops/bg/%s/%s" % (execution, secret)):
+        continue
+    tried += 1
+    body = json.dumps({"secret": secret, "opKey": "attacker", "admitBeforeMs": deadline,
+        "expect": expect, "executionId": execution, "kind": "device", "writeRoots": [],
+        "readRoots": [], "network": {"kind": "environment"}, "testEndpoints": {},
+        "command": "echo $$ > %s/attacker; exec sleep 1801" % root, "cwd": root, "env": {},
+        "timeoutMs": 600000, "maxOutputBytes": 1024, "taskId": "attacker",
+        "outputPath": "%s/attacker.log" % root, "retainUntilMs": deadline}).encode()
+    subprocess.run(["/usr/bin/python3", "-I", "/opt/capybara-runtime/capybara-operation.py",
+        "bg-start"], input=str(len(body)).encode() + b"\n" + body, capture_output=True)
+print("tried=%d" % tried)
+`;
+        beforeLaunch.set(taskId, async () => {
+          beforeLaunch.delete(taskId);
+          const out = await dexec(device.id, "1000", [
+            "python3",
+            "-I",
+            "-c",
+            forge,
+            executionId,
+            root,
+            JSON.stringify(sdkRuntimeDigests()),
+            String(Date.now() + 600_000),
+          ]);
+          expect(out.trim()).toBe("tried=1");
+        });
+        const started = await sbx.background
+          .start(device, scope, bg(root, `echo $$ > ${root}/real; exec sleep 1802`, taskId))
+          .catch((e) => e);
+        // The attacker's work never launches under this record.
+        expect(await inspectRead(device, `${root}/attacker`)).toBeNull();
+        if (started instanceof Error) {
+          // Failing closed is acceptable: then the real task never ran either.
+          expect(await inspectRead(device, `${root}/real`)).toBeNull();
+          return;
+        }
+        await waitFor(device, `${root}/real`);
+        const real = Number(text(await inspectRead(device, `${root}/real`)));
+        expect(await sbx.background.stop(device, started, { graceMs: 0, signal: sig() })).toEqual({
+          outcome: "stopped",
+        });
+        expect(await alive(device, [real])).toEqual([]);
       });
 
       it("R6: an unexpected Full admission failure is never read as success", () => {

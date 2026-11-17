@@ -2,7 +2,7 @@
 "@capybara-hq/plugin-sandbox-docker": minor
 ---
 
-Implements the permission operation contract of `sandbox@2` (plugin SDK 0.1.0-rc.27): runtime
+Implements the permission operation contract of `sandbox@2` (plugin SDK 0.1.0-rc.28): runtime
 capabilities (`permissionSupport`), a fresh immutable operation per invocation (`operation`), owner
 browsing, trusted skill and attachment preparation, `revokeOperation` tombstones and exact
 background supervision (`start`, `status`, `tail`, `readOutput`, `stop`). Restricted work runs
@@ -12,5 +12,5 @@ the existing container with unchanged hardening; Full access keeps the existing 
 restricted filters. A restricted allowlist reaches its hosts only through a per-operation forwarder
 in front of the instance's egress proxy. Restricted support is reported only when the launcher's
 own probe passes (validated architecture, Landlock ABI 6+, seccomp listener); otherwise restricted
-operations are refused. Requires `@capybara-hq/plugin-sdk@^0.1.0-rc.27` and the matching sandbox
+operations are refused. Requires `@capybara-hq/plugin-sdk@^0.1.0-rc.28` and the matching sandbox
 image.

@@ -18,6 +18,7 @@ import base64
 import ctypes
 import errno
 import hashlib
+import hmac
 import importlib.util
 import json
 import os
@@ -366,21 +367,15 @@ def network_for(request, forwarders):
         return {"kind": "environment"}, env
     if scope["kind"] == "none":
         return {"kind": "none"}, env
-    endpoints = []
-    direct = []
-    # Test-only direct endpoints (DockerSandboxTestOptions.permissionTestEndpoints).
-    for host in scope["hosts"]:
-        for endpoint in request.get("testEndpoints", {}).get(host, []):
-            endpoints.append({"address": endpoint["address"], "port": endpoint["port"]})
-            direct.append(host)
+    # The operation's only endpoint is its own forwarder: allowlisted names are reached through it
+    # and the instance's egress proxy, never by a direct connect.
     forwarder = Forwarder(scope["hosts"], upstream_proxy())
     forwarders.append(forwarder)
-    endpoints.append({"address": "127.0.0.1", "port": forwarder.port})
+    endpoints = [{"address": "127.0.0.1", "port": forwarder.port}]
     proxy = "http://127.0.0.1:%d" % forwarder.port
     for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
         env[key] = proxy
-    no_proxy = ",".join(["localhost", "127.0.0.1", "::1"] + direct)
-    env["NO_PROXY"] = env["no_proxy"] = no_proxy
+    env["NO_PROXY"] = env["no_proxy"] = "localhost,127.0.0.1,::1"
     return {"kind": "endpoints", "endpoints": endpoints}, env
 
 
@@ -671,6 +666,11 @@ def bg_prepare(request):
     except FileExistsError:
         return {"prepared": False, "existing": True}
     os.chmod(directory, 0o711)
+    # A second secret that never appears in a path (unlike the socket name, which
+    # /proc/net/unix lists): the supervisor's identity frame must carry it.
+    token = request["token"]
+    if not isinstance(token, str) or not SECRET.fullmatch(token):
+        raise ValueError("invalid channel token")
     cap = request.get("spoolCapBytes") or SPOOL_CAP
     if type(cap) is not int or not 0 < cap <= SPOOL_CAP:
         raise ValueError("invalid spool cap")
@@ -689,7 +689,7 @@ def bg_prepare(request):
             null = os.open("/dev/null", os.O_RDWR)
             for fd in (0, 1, 2):
                 os.dup2(null, fd)
-            bg_recorder(directory, secret, record, ready_w)
+            bg_recorder(directory, secret, token, record, ready_w)
         finally:
             os._exit(0)
     os.close(ready_w)
@@ -719,7 +719,7 @@ def is_supervisor(pid):
         and args[3] == b"bg-start"
 
 
-def bg_recorder(directory, secret, record, ready_w):
+def bg_recorder(directory, secret, token, record, ready_w):
     """(root, detached) Appends output and records the supervisor's identity and exit. The
     channel is a root-owned UNIX socket: frames count only on the one connection whose
     SO_PEERCRED pid is the supervisor that identified itself (pid, start time, argv); no other
@@ -781,17 +781,28 @@ def bg_recorder(directory, secret, record, ready_w):
                     try:
                         identity = json.loads(bytes(data[5:5 + size]))
                         claimed, start = int(identity["pid"]), int(identity["start"])
+                        offered = str(identity["token"]).encode()
                         pid, uid = peer(conn)
                     except (ValueError, KeyError, OSError, struct.error):
                         drop(fd)
                         continue
-                    if pid != claimed or uid == 0 or proc_start(pid) != start \
-                            or not is_supervisor(pid) or record["state"] != "starting":
+                    cancelled = record.get("opKey") and os.path.exists(
+                        os.path.join(OPS_ROOT, record["opKey"] + ".cancelled"))
+                    if not hmac.compare_digest(offered, token.encode()) or pid != claimed \
+                            or uid == 0 or proc_start(pid) != start or not is_supervisor(pid) \
+                            or record["state"] != "starting" or cancelled:
+                        # Refused (or a stop already cancelled this execution): close without
+                        # the acceptance byte, so that supervisor never acknowledges or launches.
                         drop(fd)
                         continue
                     pending.pop(fd)
                     for other in list(pending):
                         drop(other)
+                    try:
+                        conn.send(b"A")  # acceptance: only now may the supervisor proceed
+                    except OSError:
+                        write_json(path, dict(record, state="lost"))
+                        return
                     bound = conn
                     buffer = bytearray(data[5 + size:])
                     record = dict(record, state="running", pid=pid, start=start)
@@ -946,7 +957,18 @@ def bg_supervise(request, channel, out, ready_w):
     acknowledging, re-checks admission, then launches with its handlers in place."""
     signal.pthread_sigmask(signal.SIG_BLOCK, CANCEL_SIGNALS)
     me = os.getpid()
-    channel.send(b"P", json.dumps({"pid": me, "start": proc_start(me)}).encode())
+    channel.send(b"P", json.dumps({"pid": me, "start": proc_start(me),
+                                   "token": request["token"]}).encode())
+    # Fail closed: without the recorder's acceptance on this very connection (another peer was
+    # bound, or the execution was cancelled), never acknowledge and never launch.
+    import select as select_module
+    ready, _, _ = select_module.select([channel.fd], [], [], 30)
+    try:
+        accepted = os.read(channel.fd, 1) if ready else b""
+    except OSError:
+        accepted = b""
+    if accepted != b"A":
+        os._exit(0)
     os.write(ready_w, b"R")
     os.close(ready_w)
 
