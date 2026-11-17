@@ -229,7 +229,7 @@
     },
     {
       "name": "sandbox-docker",
-      "version": "0.1.0-rc.17",
+      "version": "0.1.0-rc.18",
       "summary": {
         "en": "Conversation sandboxes (sandbox@2) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist per org"
       },
@@ -255,14 +255,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-sandbox-docker",
-          "version": "0.1.0-rc.17",
-          "integrity": "sha512-YoAATRzVc00H31yDb06R1/phgqeyuSbPd4//Ri0bK8ixKJSe3XVMcP79OjUVTRpv4daDV+1TOa91ghnVYco3PA=="
+          "version": "0.1.0-rc.18",
+          "integrity": "sha512-H954po34kPuuG8gmORWD1C7f5wKknP6TmoeQjXvmDMpIfI5EBQlkJVbM16/74q+wk4Na31d9MKo0Z9qsT0tCjw=="
         }
       }
     },
     {
       "name": "sandbox-e2b",
-      "version": "0.1.0-rc.17",
+      "version": "0.1.0-rc.18",
       "summary": {
         "en": "Devices (sandbox@2) as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, an allowlist or the open internet with local ranges denied (E2B's metadata service stays reachable)",
         "zh": "E2B 沙箱承载设备（sandbox@2，E2B 云或自托管）：暂停沙箱保留文件，从已发布镜像构建模板，网络为出站白名单或开放公网（拒绝私有、回环与链路本地地址；E2B 元数据端点仍可达，见 README）"
@@ -288,8 +288,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-sandbox-e2b",
-          "version": "0.1.0-rc.17",
-          "integrity": "sha512-xNTXBkWbD2xV3ZWIwVDleVYaJSE+8TInkeYkPhR1KyThyTm9fhE96iPqlZQnrSe+LIxs/F5BmgOqYSq2avkZVA=="
+          "version": "0.1.0-rc.18",
+          "integrity": "sha512-EIAAvVCj0k/yaLsweCjM5ed8cHV71rjxWSODb1MDGt4nNGe/PYiK+tDOGKGPx3+vgeJPugBDzm/AocSjRemVDg=="
         }
       }
     },
@@ -538,7 +538,7 @@
     },
     {
       "name": "theme-cyberpunk",
-      "version": "0.1.0-rc.11",
+      "version": "0.1.0-rc.12",
       "summary": {
         "en": "Cyberpunk theme and UI: neon yellow on deep blue-black, a run-state HUD, scanlines, a boot screen, a glitch CYBERBARA wordmark and opt-in synthesized sound",
         "zh": "赛博朋克主题与界面：深蓝黑底上的霓虹黄，运行状态 HUD、扫描线、启动画面、故障风 CYBERBARA 字标，以及可选的合成音效"
@@ -570,8 +570,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-theme-cyberpunk",
-          "version": "0.1.0-rc.11",
-          "integrity": "sha512-PMTqBFjl96UZ5u7NR2bJllofXDDyUPsWV2L/vgvIQDZK5VYiFNDxBcznkJDMosFmc2mjh0h2xdtSmILZX1jqrg=="
+          "version": "0.1.0-rc.12",
+          "integrity": "sha512-D1yfwRgGka7eoTOpc9d6GFWAwj2WqAYTW0EXydkhH9vw/336hmZLnCFrU4HCwpQPkhQrJOv71ALiEJAG7zahuw=="
         }
       }
     },

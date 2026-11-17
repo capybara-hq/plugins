@@ -1,5 +1,15 @@
 # @capybara-hq/plugin-theme-cyberpunk
 
+## 0.1.0-rc.12
+
+### Patch Changes
+
+- 7f3922a: Cut the chamfered corners in Safari too: without `corner-shape` (off in Safari through 27.x) the
+  parts are cut with a clip-path that keeps glows and focus rings along the straight edges, and the
+  cut border is drawn back on the diagonal.
+- ef2754c: Keep the focus ring of a control flush with the edge of the reply being written whole in Safari,
+  which has no `overflow-clip-margin`: the run clip there comes from `clip-path: inset(-4px)`.
+
 ## 0.1.0-rc.11
 
 ### Patch Changes
