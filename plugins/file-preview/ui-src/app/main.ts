@@ -76,6 +76,8 @@ export function startApp(deps: AppDeps = {}): () => void {
   let locale: "zh" | "en" = "en";
   let t = translator(locale);
   const controller = new AbortController();
+  // the lifetime of the file being previewed: a new file or the teardown ends it
+  let lifetimeOf: AbortController | undefined;
   let failed = false;
   let rendered = false;
   let initialized = false;
@@ -98,6 +100,11 @@ export function startApp(deps: AppDeps = {}): () => void {
     }
     showLoading(status, t);
     const previewer = doc.querySelector('meta[name="previewer"]')?.getAttribute("content") ?? "";
+    lifetimeOf?.abort();
+    const lifetime = new AbortController();
+    lifetimeOf = lifetime;
+    const onTeardown = () => lifetime.abort();
+    controller.signal.addEventListener("abort", onTeardown);
     const fileController = new AbortController();
     const onAbort = () => fileController.abort();
     controller.signal.addEventListener("abort", onAbort);
@@ -107,6 +114,7 @@ export function startApp(deps: AppDeps = {}): () => void {
       root: content,
       locale,
       signal: fileController.signal,
+      lifetime: lifetime.signal,
       t,
       runInWorker,
       showError: (reason) => {
@@ -132,6 +140,7 @@ export function startApp(deps: AppDeps = {}): () => void {
       clearTimeout(timer);
       fileController.abort();
       controller.signal.removeEventListener("abort", onAbort);
+      // `onTeardown` stays: the lifetime ends with the embed or the next file, not with the render
     }
   };
 

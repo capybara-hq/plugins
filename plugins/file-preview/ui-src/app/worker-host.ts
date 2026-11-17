@@ -50,6 +50,25 @@ export interface WorkerHost {
   dispose(): void;
 }
 
+/**
+ * Starts a worker from its source text (or a Blob of it) through a `blob:` URL, which is revoked as
+ * soon as the worker is constructed, also when the constructor throws (a CSP refusal): the worker
+ * holds its script once constructed. The pdf renderer uses it for pdf.js's own worker.
+ */
+export function startWorker(
+  source: string | Blob,
+  deps: Pick<WorkerHostDeps, "Worker" | "createObjectURL" | "revokeObjectURL">,
+): Worker {
+  const blob =
+    typeof source === "string" ? new Blob([source], { type: "text/javascript" }) : source;
+  const url = deps.createObjectURL(blob);
+  try {
+    return new deps.Worker(url);
+  } finally {
+    deps.revokeObjectURL(url);
+  }
+}
+
 function isResponse(data: unknown): data is WorkerResponse {
   if (typeof data !== "object" || data === null) return false;
   const d = data as Record<string, unknown>;
@@ -133,15 +152,8 @@ export function createWorkerHost(deps: WorkerHostDeps): WorkerHost {
 
       const start = (blob: Blob) => {
         if (settled) return;
-        const url = deps.createObjectURL(blob);
-        let w: Worker;
-        try {
-          // `new Worker` can throw (a CSP refusal); the run then fails now, not at the budget
-          w = new deps.Worker(url);
-        } finally {
-          // the worker holds its script once constructed: the URL is not needed any more
-          deps.revokeObjectURL(url);
-        }
+        // `startWorker` can throw (a CSP refusal); the run then fails now, not at the budget
+        const w = startWorker(blob, deps);
         instance = w;
         w.onmessage = (e: MessageEvent) => {
           const data: unknown = e.data;

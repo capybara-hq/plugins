@@ -148,6 +148,7 @@ function context(locale: "zh" | "en" = "en") {
     root,
     locale,
     signal: controller.signal,
+    lifetime: new AbortController().signal,
     t: translator(locale),
     runInWorker: vi.fn(),
     showError,

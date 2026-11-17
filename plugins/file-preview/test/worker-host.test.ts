@@ -6,6 +6,7 @@ import type { Renderer } from "../ui-src/app/types.js";
 import {
   createWorkerHost,
   DEFAULT_WORKER_BUDGET_MS,
+  startWorker,
   WorkerDisposedError,
   WorkerTimeoutError,
 } from "../ui-src/app/worker-host.js";
@@ -94,6 +95,44 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("startWorker", () => {
+  const deps = () => {
+    const createObjectURL = vi.fn((_b: Blob) => "blob:null/x");
+    const revokeObjectURL = vi.fn();
+    return {
+      deps: { Worker: FakeWorker as unknown as typeof Worker, createObjectURL, revokeObjectURL },
+      createObjectURL,
+      revokeObjectURL,
+    };
+  };
+
+  it("starts a Worker from a blob URL of the source text and revokes the URL after construct", async () => {
+    const d = deps();
+    const w = startWorker("self.x = 1;", d.deps) as unknown as FakeWorker;
+    expect(w).toBeInstanceOf(FakeWorker);
+    expect(w.url).toBe("blob:null/x");
+    expect(d.revokeObjectURL).toHaveBeenCalledWith("blob:null/x");
+    const blob = d.createObjectURL.mock.calls[0]?.[0] as unknown as Blob;
+    expect(await blob.text()).toBe("self.x = 1;");
+    expect(blob.type).toBe("text/javascript");
+  });
+
+  it("accepts a Blob as is and revokes the URL even when the constructor throws", () => {
+    const d = deps();
+    const blob = new Blob(["1"], { type: "text/javascript" });
+    class Refusing {
+      constructor() {
+        throw new Error("CSP refused the worker");
+      }
+    }
+    expect(() =>
+      startWorker(blob, { ...d.deps, Worker: Refusing as unknown as typeof Worker }),
+    ).toThrow("CSP refused the worker");
+    expect(d.createObjectURL).toHaveBeenCalledWith(blob);
+    expect(d.revokeObjectURL).toHaveBeenCalledWith("blob:null/x");
+  });
 });
 
 describe("createWorkerHost", () => {

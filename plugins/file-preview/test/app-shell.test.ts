@@ -168,6 +168,37 @@ describe("the main flow", () => {
     expect(seen?.aborted).toBe(false);
   });
 
+  it("ctx.lifetime outlives the render: not aborted once it settled, aborted on teardown", async () => {
+    let seen: { signal: AbortSignal; lifetime: AbortSignal } | undefined;
+    const render = vi.fn<Renderer>(async (_f, ctx) => {
+      seen = { signal: ctx.signal, lifetime: ctx.lifetime };
+      ctx.root.textContent = "painted";
+    });
+    const stop = startApp({ loadRenderer: async () => render });
+    post(init);
+    post(fileMsg());
+    await vi.waitFor(() => expect(text()).toBe("painted"));
+    // the render attempt is over (`signal`), the painted preview is not (`lifetime`)
+    await vi.waitFor(() => expect(seen?.signal.aborted).toBe(true));
+    expect(seen?.lifetime.aborted).toBe(false);
+    stop();
+    expect(seen?.lifetime.aborted).toBe(true);
+  });
+
+  it("ctx.lifetime stays live when the render fails or runs out of budget", async () => {
+    vi.useFakeTimers();
+    let lifetime: AbortSignal | undefined;
+    start((_f, ctx) => {
+      lifetime = ctx.lifetime;
+      return new Promise<void>(() => {});
+    });
+    post(init);
+    post(fileMsg());
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(text()).toContain(MESSAGES.en.timeout);
+    expect(lifetime?.aborted).toBe(false);
+  });
+
   it("a throwing renderer shows its message as text, never as markup", async () => {
     start(async () => {
       throw new Error("bad <img src=x onerror=alert(1)>");

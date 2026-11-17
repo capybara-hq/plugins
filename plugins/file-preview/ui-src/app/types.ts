@@ -24,8 +24,14 @@ export interface RenderContext {
   /** The element the renderer owns; the shell shows it once the renderer resolves. */
   root: HTMLElement;
   locale: "zh" | "en";
-  /** Aborted when the budget is spent or the shell is torn down; stop painting after it. */
+  /** The render attempt: aborted when it settles, its budget is spent or the shell is torn down. */
   signal: AbortSignal;
+  /**
+   * The preview's lifetime: aborted only when the embed tears down or a new file replaces the
+   * current one, never when the render settles. Use it for what lives on after the render (pdf
+   * pages painted on scroll, a worker kept for the open document).
+   */
+  lifetime: AbortSignal;
   t(key: MessageKey): string;
   runInWorker: RunInWorker;
   /** An inline error with the reason and the "download instead" hint. */

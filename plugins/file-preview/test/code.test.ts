@@ -62,6 +62,7 @@ function makeCtx(locale: "zh" | "en" = "en"): RenderContext {
     root,
     locale,
     signal: new AbortController().signal,
+    lifetime: new AbortController().signal,
     t: translator(locale),
     runInWorker: vi.fn(async (_id, input) => highlight(input as never)) as never,
     showError: vi.fn(),

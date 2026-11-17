@@ -36,6 +36,7 @@ function makeCtx(file: PreviewFile) {
     root,
     locale: "en",
     signal: new AbortController().signal,
+    lifetime: new AbortController().signal,
     t: translator("en"),
     runInWorker: (async <I, O>(_w: string, input: I) =>
       (await parseWorkbook(input as SheetInput)) as unknown as O) as RenderContext["runInWorker"],
