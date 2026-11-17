@@ -23,6 +23,11 @@ import {
   zip64Switch,
 } from "./fixtures/zip/hostile.js";
 
+function must<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error("expected a value");
+  return value;
+}
+
 async function toBuffer(wb: ExcelJS.Workbook): Promise<ArrayBuffer> {
   const buf = (await wb.xlsx.writeBuffer()) as unknown as Uint8Array;
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
@@ -73,7 +78,7 @@ describe("parseWorkbook", () => {
   it("returns the tabs with their names, cached formula results, dates and merges", async () => {
     const out: SheetOutput = await parseWorkbook({ data: await basic() });
     expect(out.sheets.map((s) => s.name)).toEqual(["Sales", "Notes"]);
-    const sales = out.sheets[0]!;
+    const sales = must(out.sheets[0]);
     expect(sales.rows[0]).toEqual(["Item", "Qty", "Price"]);
     expect(sales.rows[1]?.[3]).toBe("3");
     expect(sales.rows[2]?.[0]).toBe("2024-01-15");
@@ -85,7 +90,7 @@ describe("parseWorkbook", () => {
     const ws = wb.addWorksheet("Big");
     for (let i = 1; i <= 100_001; i++) ws.addRow([i]);
     const out = await parseWorkbook({ data: await toBuffer(wb) });
-    const s = out.sheets[0]!;
+    const s = must(out.sheets[0]);
     expect(s.rows).toHaveLength(100_000);
     expect(s.truncatedRows).toBe(true);
     expect(s.truncatedCols).toBe(false);
@@ -95,7 +100,7 @@ describe("parseWorkbook", () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("Wide");
     ws.addRow(Array.from({ length: 201 }, (_, i) => i));
-    const s = (await parseWorkbook({ data: await toBuffer(wb) })).sheets[0]!;
+    const s = must((await parseWorkbook({ data: await toBuffer(wb) })).sheets[0]);
     expect(s.rows[0]).toHaveLength(200);
     expect(s.truncatedCols).toBe(true);
     expect(s.truncatedRows).toBe(false);
@@ -147,7 +152,7 @@ describe("sheet renderer", () => {
     const f = fileOf(await toBuffer(wb));
     const { ctx, root } = makeCtx(f);
     await render(f, ctx);
-    const sc = root.querySelector<HTMLElement>(".cap-sheet-scroll")!;
+    const sc = must(root.querySelector<HTMLElement>(".cap-sheet-scroll"));
     expect(root.textContent).not.toContain("row-3000");
     sc.scrollTop = 3000 * 24;
     sc.dispatchEvent(new Event("scroll"));
@@ -203,6 +208,34 @@ describe("parseWorkbook limits and flags", () => {
     wb.addWorksheet("Secret", { state: "hidden" }).addRow([2]);
     const out = await parseWorkbook({ data: await toBuffer(wb) });
     expect(out.sheets.map((s) => s.hidden)).toEqual([false, true]);
+  });
+
+  it("does not walk the rows past the row cap", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Big");
+    for (let i = 1; i <= 100_050; i++) ws.addRow([i]);
+    const data = await toBuffer(wb);
+    const proto = Object.getPrototypeOf(new ExcelJS.Workbook().addWorksheet("p").getRow(1));
+    const spy = vi.spyOn(proto, "eachCell");
+    try {
+      const out = await parseWorkbook({ data });
+      expect(must(out.sheets[0]).truncatedRows).toBe(true);
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(100_000);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("clips merges to the rows that were kept when the cell budget runs out", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S");
+    for (let i = 0; i < 10; i++) ws.addRow([i, i]);
+    ws.mergeCells("A1:A5");
+    ws.mergeCells("B7:B9");
+    const s = must((await parseWorkbook({ data: await toBuffer(wb) }, 6)).sheets[0]);
+    expect(s.truncatedCells).toBe(true);
+    expect(s.rows).toHaveLength(3);
+    expect(s.merges).toEqual([{ r1: 0, c1: 0, r2: 2, c2: 0 }]);
   });
 
   it("does not flag truncated rows when rows past the limit hold no values", async () => {

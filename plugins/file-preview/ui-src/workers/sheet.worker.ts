@@ -143,17 +143,15 @@ export async function parseWorkbook(input: SheetInput, maxCells = MAX_CELLS): Pr
     let truncatedCols = false;
     let truncatedCells = false;
     let width = 0;
-    ws.eachRow({ includeEmpty: false }, (row, r) => {
-      if (truncatedCells) return;
+    // rows past MAX_ROWS are never visited; only whether any of them holds a value is asked
+    const last = Math.min(ws.rowCount, MAX_ROWS);
+    for (let r = 1; r <= last && !truncatedCells; r++) {
+      const row = ws.findRow(r);
+      if (row === undefined) continue;
       const out: string[] = [];
-      let any = false;
       row.eachCell({ includeEmpty: false }, (cell, c) => {
         if (c > MAX_COLS) {
           truncatedCols = true;
-          return;
-        }
-        if (r > MAX_ROWS) {
-          any = true;
           return;
         }
         if (budget <= 0) {
@@ -163,24 +161,25 @@ export async function parseWorkbook(input: SheetInput, maxCells = MAX_CELLS): Pr
         budget--;
         while (out.length < c - 1) out.push("");
         out[c - 1] = cellText(cell);
-        any = true;
       });
-      if (r > MAX_ROWS) {
-        if (any) truncatedRows = true;
-        return;
-      }
-      if (truncatedCells && out.length === 0) return;
+      if (truncatedCells && out.length === 0) continue;
       while (rows.length < r - 1) rows.push([]);
       rows.push(out);
       width = Math.max(width, out.length);
-    });
-    const nRows = Math.min(rows.length, MAX_ROWS);
+    }
+    for (let r = ws.rowCount; r > MAX_ROWS && !truncatedRows; r--) {
+      if (ws.findRow(r)?.hasValues) truncatedRows = true;
+    }
+    const nRows = rows.length;
     const refs = (ws.model as { merges?: string[] }).merges ?? [];
     const merges: SheetMerge[] = [];
     for (const ref of refs) {
       const m = parseMerge(ref);
-      if (m === undefined || m.r1 >= nRows || m.c1 >= MAX_COLS) continue;
-      merges.push({ ...m, r2: Math.min(m.r2, MAX_ROWS - 1), c2: Math.min(m.c2, MAX_COLS - 1) });
+      // clipped to what was kept: the rows that made it in, and the columns up to the cap (or, when
+      // the cell budget ran out, up to the widest kept row)
+      const lastCol = truncatedCells ? width - 1 : MAX_COLS - 1;
+      if (m === undefined || m.r1 >= nRows || m.c1 > lastCol) continue;
+      merges.push({ ...m, r2: Math.min(m.r2, nRows - 1), c2: Math.min(m.c2, lastCol) });
     }
     sheets.push({
       name: ws.name,
