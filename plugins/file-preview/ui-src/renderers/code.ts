@@ -7,13 +7,31 @@
 import { showEmpty } from "../app/frame.js";
 import { THEME } from "../app/theme.js";
 import type { RenderContext, Renderer } from "../app/types.js";
+import { WorkerTimeoutError } from "../app/worker-host.js";
 import type { HighlightInput, HighlightOutput } from "../shared/code.js";
 import { capText, decodeText, languageFor } from "../shared/language.js";
 
+/** The highlighting budget: shorter than the shell's, so the plain fallback appears in time. */
+export const HIGHLIGHT_BUDGET_MS = 8_000;
+const MAX_PLAIN_LINES = 20_000;
+
+function plainLines(text: string): HighlightOutput {
+  const lines = text.split(/\r\n|\r|\n/);
+  if (lines.length > 1 && lines.at(-1) === "") lines.pop();
+  const truncated = lines.length > MAX_PLAIN_LINES;
+  if (truncated) lines.length = MAX_PLAIN_LINES;
+  return { lines: lines.map((content) => (content === "" ? [] : [{ content }])), truncated };
+}
+
 const STRINGS = {
-  zh: { wrap: "自动换行", truncated: "文件过大，仅显示开头部分" },
+  zh: {
+    wrap: "自动换行",
+    skipped: "高亮超时，已显示为纯文本",
+    truncated: "文件过大，仅显示开头部分",
+  },
   en: {
     wrap: "Wrap lines",
+    skipped: "Highlighting timed out; shown as plain text",
     truncated: "File too large: only the beginning is shown",
   },
 } as const;
@@ -29,7 +47,7 @@ const CSS = `
 .cap-code-body { padding: 8px 0; min-width: min-content; }
 .cap-code-row { display: grid; grid-template-columns: var(--cap-code-gutter, 4ch) 1fr; }
 .cap-code-num { text-align: right; padding: 0 12px 0 8px; user-select: none; opacity: 0.55; }
-.cap-code-line { margin: 0; padding-right: 12px; font: inherit; white-space: pre; tab-size: 4; }
+.cap-code-line { min-height: 1.5em; margin: 0; padding-right: 12px; font: inherit; white-space: pre; tab-size: 4; }
 .cap-code[data-wrap="on"] .cap-code-line { white-space: pre-wrap; overflow-wrap: anywhere; }
 `;
 
@@ -63,8 +81,8 @@ function paint(doc: Document, body: HTMLElement, lines: HighlightOutput["lines"]
       if (tok.color !== undefined) span.style.color = tok.color;
       line.append(span);
     }
-    // an empty line keeps its height
-    if (tokens.length === 0) line.textContent = "​";
+    // an empty line gets an empty text node; CSS keeps its height (copied text stays clean)
+    if (tokens.length === 0) line.append(doc.createTextNode(""));
     row.append(num, line);
     frag.append(row);
   });
@@ -88,9 +106,22 @@ export async function mountCode(
   // the worker never gets (and the page never clones) more than the highlight cap
   const capped = capText(text);
   const run = (theme: "dark" | "light") =>
-    ctx.runInWorker<HighlightInput, HighlightOutput>("code", { text: capped.text, lang, theme });
+    ctx.runInWorker<HighlightInput, HighlightOutput>(
+      "code",
+      { text: capped.text, lang, theme },
+      { budgetMs: HIGHLIGHT_BUDGET_MS },
+    );
 
-  const result = await run(currentTheme(doc));
+  let skipped = false;
+  let result: HighlightOutput;
+  try {
+    result = await run(currentTheme(doc));
+  } catch (e) {
+    // a slow grammar must not fail the preview: the text shows plain
+    if (!(e instanceof WorkerTimeoutError)) throw e;
+    skipped = true;
+    result = plainLines(capped.text);
+  }
   if (ctx.signal.aborted) return;
 
   ensureStyle(doc);
@@ -113,6 +144,12 @@ export async function mountCode(
     const note = doc.createElement("span");
     note.className = "cap-code-truncated";
     note.textContent = s.truncated;
+    bar.append(note);
+  }
+  if (skipped) {
+    const note = doc.createElement("span");
+    note.className = "cap-code-skipped";
+    note.textContent = s.skipped;
     bar.append(note);
   }
   const body = doc.createElement("div");

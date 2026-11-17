@@ -2,7 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { MESSAGES, translator } from "../ui-src/app/frame.js";
 import type { RenderContext } from "../ui-src/app/types.js";
-import { mountCode, render } from "../ui-src/renderers/code.js";
+import { WorkerTimeoutError } from "../ui-src/app/worker-host.js";
+import { HIGHLIGHT_BUDGET_MS, mountCode, render } from "../ui-src/renderers/code.js";
 import {
   capText,
   decodeText,
@@ -161,8 +162,13 @@ describe("bounded highlighting", () => {
   });
   it("leaves empty lines as empty text, not a zero-width space", async () => {
     const ctx = makeCtx();
+    // real Shiki returns no tokens for an empty line
+    ctx.runInWorker = vi.fn(async () => ({
+      lines: [[{ content: "a" }], [], [{ content: "b" }]],
+      truncated: false,
+    })) as never;
     await mountCode(ctx.root, "a\n\nb", "a.txt", "", ctx);
-    expect(ctx.root.textContent).not.toContain("\u200b");
+    expect(ctx.root.querySelector(".cap-code-body")?.textContent).not.toContain("\u200b");
     expect(ctx.root.querySelectorAll(".cap-code-line")[1]?.textContent).toBe("");
   });
 });
@@ -212,5 +218,33 @@ describe("languages and decoding", () => {
     document.documentElement.setAttribute("data-theme", "light");
     await Promise.resolve();
     expect(run).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("highlight timeout", () => {
+  it("asks the worker for a short budget", async () => {
+    const ctx = makeCtx();
+    await mountCode(ctx.root, "a", "a.ts", "", ctx);
+    const opts = vi.mocked(ctx.runInWorker).mock.calls[0]?.[2];
+    expect(opts?.budgetMs).toBe(HIGHLIGHT_BUDGET_MS);
+    expect(HIGHLIGHT_BUDGET_MS).toBeLessThan(20_000);
+  });
+  it("falls back to plain lines with a note when the worker times out", async () => {
+    const ctx = makeCtx();
+    ctx.runInWorker = vi.fn(async () => {
+      throw new WorkerTimeoutError("code", HIGHLIGHT_BUDGET_MS);
+    }) as never;
+    await mountCode(ctx.root, "one\n\nthree\n", "a.ts", "", ctx);
+    expect(ctx.showError).not.toHaveBeenCalled();
+    expect(ctx.root.querySelector(".cap-code-skipped")).not.toBeNull();
+    expect(ctx.root.querySelectorAll(".cap-code-row")).toHaveLength(3);
+    expect(ctx.root.querySelector(".cap-code-body")?.textContent).toContain("three");
+  });
+  it("still fails on other worker errors", async () => {
+    const ctx = makeCtx();
+    ctx.runInWorker = vi.fn(async () => {
+      throw new Error("boom");
+    }) as never;
+    await expect(mountCode(ctx.root, "a", "a.ts", "", ctx)).rejects.toThrow("boom");
   });
 });
