@@ -34,8 +34,9 @@ palette, the properties sheet below 1100 px and the sidebar drawer. The componen
 The decoration CSS bevels cards, stat cards, sections, dialogs, menus, code blocks, the user's
 message bubbles, the composer, buttons, inputs, segmented controls, agent chips, switches and the
 org initial with `corner-shape: bevel`: the border, the background and the focus ring all follow
-the diagonal, so outlines are continuous and focus rings stay whole (a browser without
-`corner-shape` keeps square corners). Input borders read at 3:1 or more on the page, panel and
+the diagonal, so outlines are continuous and focus rings stay whole. A browser without
+`corner-shape` (Safari keeps it off through 27.x) gets the same corners from a clip-path, with the
+border drawn back on the diagonal; there the focus ring follows only the straight edges. Input borders read at 3:1 or more on the page, panel and
 raised grounds; focus is one colour, the neon yellow, everywhere; selected text is neon. Switches
 get a square knob that reads when off, the org initial becomes a neon tag, and the selected agent
 chip a neon edge. Primary buttons keep their text as written.
@@ -191,7 +192,7 @@ fonts are under the SIL Open Font License 1.1, whose full text ships next to the
   批次数（还没看到时显示“—”）、音效开关）；覆盖层的扫描线与不透明的终端启动画面（每次登录一次，约两
   秒，像显像管关机一样收成一条线结束）；侧栏品牌位的故障风字标；新对话页的赛博朋克欢迎区。
 - **装饰（L3）**：卡片、统计卡片、分区、对话框、菜单、代码块、用户消息气泡、输入框、按钮、分段控件、
-  智能体标签、开关与组织首字母块切角（`corner-shape: bevel`，边框与焦点环沿斜边连续）；焦点统一为霓
+  智能体标签、开关与组织首字母块切角（`corner-shape: bevel`，边框与焦点环沿斜边连续；不支持 `corner-shape` 的浏览器（Safari 到 27.x 仍未开启）用 clip-path 切角并补画斜边边框，焦点环只沿直边显示）；焦点统一为霓
   虹黄；开关滑块改为方形且关闭时清晰可辨，组织首字母块改为霓虹标签，选中的智能体标签用霓虹描边；所有
   规则都经 `:root:has(…)` 生效，对话框、菜单、⌘K、属性抽屉与侧栏抽屉同样适用。
 - **运行动效**：运行中标题栏底边有亮光扫过，HUD 信号条像均衡器一样跳动，正在生成的回复上有扫描光束与
