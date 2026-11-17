@@ -7,6 +7,9 @@ export interface DocxInput {
 export interface DocxOutput {
   /** mammoth's HTML, images inlined as data URIs; unsanitized, the renderer sanitizes it. */
   html: string;
-  /** `invalid`: the file is not a readable .docx (the renderer words the reason). */
-  error?: "invalid";
+  /**
+   * `invalid`: not a readable .docx; `too-large`: the zip declares more than the limits allow
+   * (checked before anything is inflated). The renderer words the reason.
+   */
+  error?: "invalid" | "too-large";
 }

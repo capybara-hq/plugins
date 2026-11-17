@@ -5,6 +5,11 @@
 import mammoth from "mammoth";
 import type { DocxInput, DocxOutput } from "../shared/docx.js";
 import { serve } from "./serve.js";
+import { listEntries } from "./zip.logic.js";
+
+/** A docx is a zip: its declared sizes are checked before mammoth (JSZip) inflates anything. */
+export const ENTRY_MAX = 50 * 1024 * 1024;
+export const TOTAL_MAX = 100 * 1024 * 1024;
 
 /**
  * mammoth's browser entry (what the worker bundle gets) reads `arrayBuffer`; its node entry, which
@@ -15,6 +20,16 @@ function source(data: ArrayBuffer): { arrayBuffer: ArrayBuffer } | { buffer: Buf
 }
 
 export async function convertDocx(input: DocxInput): Promise<DocxOutput> {
+  // the directory is read with the zip previewer's capped reader (it never inflates)
+  const dir = listEntries({ data: input.data });
+  if (dir.error !== undefined) return { html: "", error: "invalid" };
+  let total = 0;
+  for (const e of dir.entries) {
+    total += e.size;
+    if (e.size > ENTRY_MAX || total > TOTAL_MAX) return { html: "", error: "too-large" };
+  }
+  // more entries than the reader lists: the declared total cannot be known
+  if (dir.truncated) return { html: "", error: "too-large" };
   try {
     const result = await mammoth.convertToHtml(source(input.data), {
       convertImage: mammoth.images.imgElement(async (image) => ({
@@ -22,8 +37,10 @@ export async function convertDocx(input: DocxInput): Promise<DocxOutput> {
       })),
     });
     return { html: result.value };
-  } catch {
-    // the renderer words the reason (zh / en) from the code
+  } catch (e) {
+    // a parse failure is "invalid"; resource and programming errors surface with their message
+    if (e instanceof RangeError || e instanceof TypeError || e instanceof ReferenceError) throw e;
+    if (!(e instanceof Error)) throw e;
     return { html: "", error: "invalid" };
   }
 }

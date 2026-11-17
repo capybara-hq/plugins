@@ -9,8 +9,14 @@ import type { Renderer } from "../app/types.js";
 import type { DocxInput, DocxOutput } from "../shared/docx.js";
 
 const STRINGS = {
-  zh: { invalid: "这不是有效的 .docx 文档（文件已损坏，或扩展名与内容不符）" },
+  zh: {
+    tooLarge: "文档过大，无法预览",
+    external: "外部资源和脚本未加载",
+    invalid: "这不是有效的 .docx 文档（文件已损坏，或扩展名与内容不符）",
+  },
   en: {
+    tooLarge: "The document is too large to preview",
+    external: "External resources and scripts are not loaded",
     invalid: "This is not a valid .docx document (the file is corrupt or not what its name says)",
   },
 } as const;
@@ -44,8 +50,9 @@ export const render: Renderer = async (file, ctx) => {
     return;
   }
   if (ctx.signal.aborted) return;
-  if (out.error === "invalid") {
-    ctx.showError(STRINGS[ctx.locale].invalid);
+  if (out.error !== undefined) {
+    const s = STRINGS[ctx.locale];
+    ctx.showError(out.error === "too-large" ? s.tooLarge : s.invalid);
     return;
   }
   const doc = ctx.root.ownerDocument;
@@ -57,7 +64,20 @@ export const render: Renderer = async (file, ctx) => {
   result.styles.unshift(DOCUMENT_CSS);
   const view = doc.createElement("div");
   view.className = "cap-docx";
-  view.style.cssText = `height:100%;overflow:auto;background:${THEME.panel}`;
+  view.style.cssText = `flex:1;min-height:0;overflow:auto;background:${THEME.panel}`;
   mountSanitized(view, result);
-  ctx.root.replaceChildren(view);
+  const shell = doc.createElement("div");
+  shell.style.cssText = "display:flex;flex-direction:column;height:100%";
+  if (result.external) {
+    const notice = doc.createElement("div");
+    notice.className = "cap-docx-notice";
+    notice.setAttribute("role", "note");
+    notice.textContent = STRINGS[ctx.locale].external;
+    notice.style.cssText =
+      `padding:6px 8px;font-size:12px;color:${THEME.mutedForeground};` +
+      `border-bottom:1px solid ${THEME.border};background:${THEME.panel}`;
+    shell.append(notice);
+  }
+  shell.append(view);
+  ctx.root.replaceChildren(shell);
 };

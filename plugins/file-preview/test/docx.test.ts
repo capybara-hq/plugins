@@ -1,11 +1,18 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import mammoth from "mammoth";
+import { describe, expect, it, vi } from "vitest";
 import { translator } from "../ui-src/app/frame.js";
 import type { PreviewFile, RenderContext } from "../ui-src/app/types.js";
 import { render } from "../ui-src/renderers/docx.js";
 import type { DocxInput, DocxOutput } from "../ui-src/shared/docx.js";
 import { convertDocx } from "../ui-src/workers/docx.worker.js";
-import { blankDocx, corruptDocx, fullDocx, hostileDocx } from "./fixtures/docx/make.js";
+import {
+  blankDocx,
+  corruptDocx,
+  declareSizes,
+  fullDocx,
+  hostileDocx,
+} from "./fixtures/docx/make.js";
 
 function setup(data: ArrayBuffer, locale: "zh" | "en" = "en") {
   const root = document.createElement("div");
@@ -45,7 +52,63 @@ describe("convertDocx", () => {
   });
 });
 
+const MIB = 1024 * 1024;
+
+describe("convertDocx limits", () => {
+  it("refuses a declared total over 100 MiB without calling mammoth", async () => {
+    const spy = vi.spyOn(mammoth, "convertToHtml");
+    const out = await convertDocx({ data: declareSizes(fullDocx(), [40 * MIB]) });
+    expect(out).toEqual({ html: "", error: "too-large" });
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("refuses one entry that declares more than 50 MiB", async () => {
+    const spy = vi.spyOn(mammoth, "convertToHtml");
+    const out = await convertDocx({ data: declareSizes(fullDocx(), [51 * MIB, 1]) });
+    expect(out.error).toBe("too-large");
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("does not turn an unexpected error into invalid", async () => {
+    const spy = vi
+      .spyOn(mammoth, "convertToHtml")
+      .mockRejectedValue(new RangeError("out of memory"));
+    await expect(convertDocx({ data: fullDocx() })).rejects.toThrow("out of memory");
+    spy.mockRestore();
+  });
+
+  it("reports a mammoth parse failure as invalid", async () => {
+    const spy = vi.spyOn(mammoth, "convertToHtml").mockRejectedValue(new Error("bad xml"));
+    expect(await convertDocx({ data: fullDocx() })).toEqual({ html: "", error: "invalid" });
+    spy.mockRestore();
+  });
+});
+
 describe("docx renderer", () => {
+  it("shows the too-large reason in the locale", async () => {
+    const big = declareSizes(fullDocx(), [40 * MIB]);
+    const en = setup(big);
+    await render(en.file, en.ctx);
+    expect(en.errors[0]).toMatch(/too large/);
+    const zh = setup(big, "zh");
+    await render(zh.file, zh.ctx);
+    expect(zh.errors[0]).toMatch(/过大/);
+  });
+
+  it("shows the external-resources notice only when the sanitizer dropped one", async () => {
+    const plain = setup(fullDocx());
+    await render(plain.file, plain.ctx);
+    expect(plain.root.querySelector(".cap-docx-notice")).toBeNull();
+    const ext = setup(fullDocx());
+    ext.ctx.runInWorker = (async () => ({
+      html: '<p>x</p><img src="https://evil.example/a.png">',
+    })) as unknown as RenderContext["runInWorker"];
+    await render(ext.file, ext.ctx);
+    expect(ext.root.querySelector(".cap-docx-notice")?.textContent).toMatch(/not loaded/);
+  });
+
   it("shows heading, list items, table cells and the embedded image in a shadow root", async () => {
     const { file, ctx, shadow, errors } = setup(fullDocx());
     await render(file, ctx);

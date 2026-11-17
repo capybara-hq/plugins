@@ -108,3 +108,24 @@ export function blankDocx(): ArrayBuffer {
 export function corruptDocx(): ArrayBuffer {
   return enc("PK\u0003\u0004 this is not really a zip archive").buffer as ArrayBuffer;
 }
+
+/**
+ * Rewrites the uncompressed size every central directory record declares, in entry order (the
+ * last size repeats): a decompression bomb needs no bytes, only a claim.
+ */
+export function declareSizes(data: ArrayBuffer, sizes: number[]): ArrayBuffer {
+  const copy = data.slice(0);
+  const view = new DataView(copy);
+  let eocd = copy.byteLength - 22;
+  while (view.getUint32(eocd, true) !== 0x06054b50) eocd--;
+  let at = view.getUint32(eocd + 16, true);
+  for (let i = 0; view.getUint32(at, true) === 0x02014b50; i++) {
+    view.setUint32(at + 24, sizes[Math.min(i, sizes.length - 1)] as number, true);
+    at +=
+      46 +
+      view.getUint16(at + 28, true) +
+      view.getUint16(at + 30, true) +
+      view.getUint16(at + 32, true);
+  }
+  return copy;
+}
