@@ -232,6 +232,9 @@ export interface StartRequest {
   cwd?: string;
 }
 
+/** The stdin chunk size of one `SendInput` call (bytes before base64). */
+const STDIN_CHUNK = 256 * 1024;
+
 const basic = (user: string) => `Basic ${Buffer.from(`${user}:`).toString("base64")}`;
 
 function envdHeaders(t: EnvdTarget, extra: Record<string, string> = {}): Record<string, string> {
@@ -318,6 +321,8 @@ export async function envdStart(
   req: StartRequest,
   onEvent: (e: ProcessEvent) => void,
   signal: AbortSignal,
+  /** Keep the process's stdin open (written with {@link envdSendInput}, ended by {@link envdCloseStdin}). */
+  stdin = false,
 ): Promise<void> {
   let res: Response;
   try {
@@ -329,7 +334,7 @@ export async function envdStart(
         Authorization: basic(user),
         "Keepalive-Ping-Interval": String(KEEPALIVE_SECONDS),
       }),
-      body: envelope({ process: req, stdin: false }),
+      body: envelope({ process: req, stdin }),
       redirect: "error",
       signal,
     });
@@ -377,4 +382,62 @@ export async function envdStart(
     signal.removeEventListener("abort", cancel);
   }
   throw new Error("E2B process stream ended without an end-of-stream message");
+}
+
+/** One unary envd process call (Connect JSON). */
+async function envdUnary(
+  t: EnvdTarget,
+  method: string,
+  body: unknown,
+  what: string,
+  signal: AbortSignal,
+): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(`${t.url}/process.Process/${method}`, {
+      method: "POST",
+      headers: envdHeaders(t, {
+        "content-type": "application/json",
+        "Connect-Protocol-Version": "1",
+      }),
+      body: JSON.stringify(body),
+      redirect: "error",
+      signal,
+    });
+  } catch (e) {
+    rethrow(e, signal);
+  }
+  if (!res.ok) throw await errorOf(res, what);
+  await res.body?.cancel().catch(() => undefined);
+}
+
+/**
+ * Writes `data` to the stdin of a process started with `stdin` (`process.Process/SendInput`, as
+ * the e2b SDK's `commands.sendStdin`), in chunks, in order.
+ */
+export async function envdSendInput(
+  t: EnvdTarget,
+  pid: number,
+  data: Uint8Array,
+  signal: AbortSignal,
+): Promise<void> {
+  for (let at = 0; at < data.byteLength; at += STDIN_CHUNK) {
+    const part = Buffer.from(data.subarray(at, at + STDIN_CHUNK)).toString("base64");
+    await envdUnary(
+      t,
+      "SendInput",
+      { process: { pid }, input: { stdin: part } },
+      "process stdin",
+      signal,
+    );
+  }
+}
+
+/** Closes the stdin of a process started with `stdin` (`process.Process/CloseStdin`). */
+export async function envdCloseStdin(
+  t: EnvdTarget,
+  pid: number,
+  signal: AbortSignal,
+): Promise<void> {
+  await envdUnary(t, "CloseStdin", { process: { pid } }, "process stdin close", signal);
 }

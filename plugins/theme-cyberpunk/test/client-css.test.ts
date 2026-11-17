@@ -95,14 +95,98 @@ describe("cyberpunk.css", () => {
   });
 
   it("bevels every chamfered part with corner-shape, so outlines and focus rings stay whole", () => {
-    // clip-path would cut the border and the outer focus ring at the corners: parts never use it
-    for (const r of with_("clip-path")) expect(flat(r)).not.toContain("data-cap-part");
+    // clip-path cuts the border and the outer focus ring at the corners: parts use it only where
+    // corner-shape (or overflow-clip-margin, for the run clip) is missing
+    for (const r of with_("clip-path")) {
+      if (flat(r).includes("data-cap-part")) {
+        expect(
+          r.chain.some((p) =>
+            [
+              "@supports not (corner-shape: bevel)",
+              "@supports not (overflow-clip-margin: 4px)",
+            ].includes(p),
+          ),
+          flat(r),
+        ).toBe(true);
+      }
+    }
     const bevelled = with_("corner-shape: bevel")
       .filter((r) => r.chain.includes("@supports (corner-shape: bevel)"))
       .map(flat)
       .join(",");
     for (const p of ["card", "section", "composer", "dialog", "button", "input"]) {
       expect(bevelled).toContain(`[data-cap-part~="${p}"]`);
+    }
+  });
+
+  it("cuts the same corners without corner-shape (Safari), the border drawn on the diagonal", () => {
+    const fallback = styleRules.filter((r) =>
+      r.chain.includes("@supports not (corner-shape: bevel)"),
+    );
+    const clipped = fallback
+      .filter((r) => r.body.includes("clip-path: polygon("))
+      .map((r) => r.chain[r.chain.length - 1] ?? "")
+      .join(",");
+    // every part corner-shape bevels, and the theme's own bevelled boxes
+    const parts = styleRules
+      .filter((r) => r.chain.includes("@supports (corner-shape: bevel)"))
+      .flatMap((r) => [
+        ...(r.chain[r.chain.length - 1] ?? "").matchAll(/data-cap-part~="([^"]+)"/g),
+      ])
+      .map((m) => m[1]);
+    expect(parts.length).toBeGreaterThan(10);
+    for (const p of parts) expect(clipped, p).toContain(`[data-cap-part~="${p}"]`);
+    for (const r of with_("corner-shape: bevel").filter(
+      (x) => !x.chain.some((p) => p.startsWith("@supports")),
+    )) {
+      const target = (r.chain[r.chain.length - 1] ?? "").replace(/^& /, "");
+      if (target.includes("::after")) continue; // the waiting outline: drawn over the composer's cut
+      expect(clipped, target).toContain(target);
+    }
+    // the cut keeps glows and the focus ring along the straight edges: holes at the corners only
+    for (const r of fallback.filter((x) => x.body.includes("clip-path: polygon("))) {
+      if (r.chain[r.chain.length - 1]?.includes("::before")) continue;
+      expect(r.body, flat(r)).toMatch(/clip-path: polygon\(\s*evenodd,/);
+      expect(r.body, flat(r)).toContain("var(--cx-theme-cyberpunk-far)");
+    }
+    // the diagonal: a skewed ::before taking the part's own border, or corner gradients
+    const own = fallback.filter((r) => r.body.includes("border-left-color: inherit"));
+    expect(own.length).toBeGreaterThan(0);
+    for (const r of own) {
+      expect(r.chain[r.chain.length - 1], flat(r)).toContain("::before");
+      expect(r.body).toContain("border-left-style: inherit");
+      expect(r.body).toContain("pointer-events: none");
+    }
+    const drawn = [
+      ...own.map((r) => r.chain[r.chain.length - 1] ?? ""),
+      ...fallback
+        .filter((r) => r.body.includes("var(--cx-theme-cyberpunk-bevel) 0 calc(50% + 1px)"))
+        .map((r) => r.chain[r.chain.length - 1] ?? ""),
+    ].join(",");
+    for (const p of parts.filter((x) => x !== "message.user.bubble")) {
+      expect(drawn, p).toContain(`[data-cap-part~="${p}"]`);
+    }
+  });
+
+  it("keeps a focus ring room past a clipped run part where overflow-clip-margin is missing", () => {
+    // Safari has no overflow-clip-margin: an overflow clip there cuts the focus ring of a control
+    // flush with the edge; the fallback clips with clip-path, which can reach past the box
+    const clipped = styleRules.filter(
+      (r) =>
+        r.body.includes("overflow-clip-margin:") && !r.body.includes("overflow-clip-margin: 0"),
+    );
+    expect(clipped.length).toBeGreaterThan(0);
+    const fallback = styleRules.filter((r) =>
+      r.chain.includes("@supports not (overflow-clip-margin: 4px)"),
+    );
+    for (const r of clipped) {
+      const target = r.chain[r.chain.length - 1] ?? "";
+      // the composer's padding (space-2) already holds a control's ring inside the clip
+      if (target.includes('[data-cap-part~="composer"]')) continue;
+      const fb = fallback.find((x) => x.chain[x.chain.length - 1] === target);
+      expect(fb, target).toBeDefined();
+      expect(fb?.body).toContain("overflow: visible");
+      expect(fb?.body).toMatch(/clip-path: inset\(-4px\)/);
     }
   });
 

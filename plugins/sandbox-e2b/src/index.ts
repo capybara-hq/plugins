@@ -96,10 +96,11 @@ export function providerConfig(
  */
 const plugin = defineExtension({
   name: "sandbox-e2b",
-  version: "0.1.0-rc.17",
-  // The network contract (`limits.mode` / `limits.network`) is the SDK's from rc.22 on; a kernel
-  // that predates it is refused by the provider rather than guessed.
-  sdk: "^0.1.0-rc.22",
+  version: "0.1.0-rc.18",
+  // The permission operation contract (`permissionSupport`, `operation`, `background`, ...) and its
+  // parsers are the SDK's from rc.28 on (the network contract `limits.mode` / `limits.network`
+  // from rc.22).
+  sdk: "^0.1.0-rc.28",
   provides: [SANDBOX_EXTENSION_POINT],
   // 只用部署配置与 E2B 的 API，不用任何需要声明的平台能力
   permissions: {},
