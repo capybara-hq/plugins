@@ -13,8 +13,9 @@ vi.mock("../ui-src/renderers/code.js", () => ({
   render: async () => {},
 }));
 
-const { render: renderHtml } = await import("../ui-src/renderers/html.js");
-const { render: renderSvg } = await import("../ui-src/renderers/svg.js");
+const { render: renderHtml, PRESSED_BG } = await import("../ui-src/renderers/html.js");
+const { render: renderSvg, GROUND } = await import("../ui-src/renderers/svg.js");
+const { THEME, THEME_VARS } = await import("../ui-src/app/theme.js");
 
 const NOTICE = {
   zh: "外部资源和脚本未加载",
@@ -244,5 +245,21 @@ describe("in the shell", () => {
       ).toBe("shell"),
     );
     stop();
+  });
+});
+
+describe("contrast in both themes", () => {
+  it("draws the svg checkerboard with the theme's line color, not the faint hover fill", () => {
+    expect(GROUND).toContain(THEME.border);
+    expect(GROUND).not.toContain(THEME.hover);
+    // the ground stays a variable-driven checker on the panel color
+    expect(GROUND).toContain(THEME.panel);
+    expect(GROUND).toContain(THEME_VARS.border);
+  });
+
+  it("marks the pressed html mode with the accent at low alpha, clearly unlike hover", () => {
+    expect(PRESSED_BG).toContain(THEME.accent);
+    expect(PRESSED_BG).toMatch(/color-mix\(in srgb, .+ \d+%, transparent\)/);
+    expect(PRESSED_BG).not.toBe(THEME.hover);
   });
 });

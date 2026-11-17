@@ -26,8 +26,8 @@ const BUTTON_STYLE =
   `font-family:${THEME.font};border-radius:${THEME.radius};` +
   `background:transparent;border:1px solid ${THEME.border}`;
 const NOTICE_STYLE = `color:${THEME.mutedForeground};font-size:12px`;
-/** The pressed mode reads as selected in the embed's theme. */
-const PRESSED_BG = THEME.hover;
+/** The pressed mode reads as selected in both themes: the accent at low alpha (hover is too faint). */
+export const PRESSED_BG = `color-mix(in srgb, ${THEME.accent} 22%, transparent)`;
 
 const render: Renderer = async (file, ctx) => {
   if (file.data.byteLength === 0) {

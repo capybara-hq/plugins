@@ -12,10 +12,10 @@ const STRINGS = {
 } as const;
 
 /** Checkerboard ground in the embed's theme, so transparent parts read as transparent. */
-const GROUND =
+export const GROUND =
   `background-color:${THEME.panel};background-image:` +
-  `linear-gradient(45deg,${THEME.hover} 25%,transparent 25%,transparent 75%,${THEME.hover} 75%),` +
-  `linear-gradient(45deg,${THEME.hover} 25%,transparent 25%,transparent 75%,${THEME.hover} 75%);` +
+  `linear-gradient(45deg,${THEME.border} 25%,transparent 25%,transparent 75%,${THEME.border} 75%),` +
+  `linear-gradient(45deg,${THEME.border} 25%,transparent 25%,transparent 75%,${THEME.border} 75%);` +
   "background-size:16px 16px;background-position:0 0,8px 8px";
 
 const render: Renderer = async (file, ctx) => {
