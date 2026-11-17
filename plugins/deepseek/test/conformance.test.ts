@@ -14,7 +14,14 @@ import {
 } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import plugin, { createDeepSeekProvider } from "../src/index.js";
-import { deepseekRoutes, errorJson, sseChat, usageFor } from "./fixtures.js";
+import {
+  deepseekRoutes,
+  errorJson,
+  recordingNet,
+  refusingNetFetch,
+  sseChat,
+  usageFor,
+} from "./fixtures.js";
 
 const PLUGIN = "deepseek";
 
@@ -22,7 +29,11 @@ describeModelProviderConformance("deepseek (fixtures)", async () => {
   const server = await startFakeModelServer(deepseekRoutes());
   return {
     plugin: PLUGIN,
-    provider: createDeepSeekProvider({ apiKey: "sk-fixture", baseUrl: server.url }),
+    provider: createDeepSeekProvider({
+      netFetch: recordingNet().netFetch,
+      apiKey: "sk-fixture",
+      baseUrl: server.url,
+    }),
     model: "deepseek-flash",
     expect: { thinking: true, caching: true },
     teardown: () => server.stop(),
@@ -39,7 +50,10 @@ if (!LIVE_KEY) {
 }
 describe.skipIf(!LIVE_KEY)("live", { timeout: 120_000 }, () => {
   describeModelProviderConformance("deepseek (live, deepseek-flash)", async () => {
-    const provider = createDeepSeekProvider({ apiKey: LIVE_KEY ?? "" });
+    const provider = createDeepSeekProvider({
+      netFetch: recordingNet().netFetch,
+      apiKey: LIVE_KEY ?? "",
+    });
     // the model comes from the live list
     const models = await provider.listModels();
     const flash = models.find((m) => m.id === "deepseek-flash") ?? models[0];
@@ -99,7 +113,12 @@ const kindOf = (e: unknown) => (isModelError(e) ? e.kind : `not a ModelError: ${
 describe("deepseek: stream edge cases and errors", () => {
   let server: FakeModelServer;
   let next: () => FakeResponse;
-  const provider = () => createDeepSeekProvider({ apiKey: "sk-fixture", baseUrl: server.url });
+  const provider = () =>
+    createDeepSeekProvider({
+      netFetch: recordingNet().netFetch,
+      apiKey: "sk-fixture",
+      baseUrl: server.url,
+    });
   const usage = usageFor({ total: 5, output: 1 });
 
   beforeAll(async () => {
@@ -225,7 +244,9 @@ describe("deepseek: stream edge cases and errors", () => {
   describe("per-call config", () => {
     it("no key in opts.config nor defaults -> auth before any request", async () => {
       const before = server.requests.length;
-      const e = await streamError(createDeepSeekProvider({ baseUrl: server.url }));
+      const e = await streamError(
+        createDeepSeekProvider({ netFetch: recordingNet().netFetch, baseUrl: server.url }),
+      );
       expect(kindOf(e)).toBe("auth");
       expect(server.requests.length).toBe(before);
     });
@@ -258,6 +279,44 @@ describe("deepseek: stream edge cases and errors", () => {
       } finally {
         await orgServer.stop();
       }
+    });
+
+    it("an org base URL goes through ctx.net with the org's id", async () => {
+      const orgServer = await startFakeModelServer(() =>
+        sseChat({ text: "ok", finish: "stop", usage }),
+      );
+      try {
+        const net = recordingNet();
+        const p = createDeepSeekProvider({
+          apiKey: "sk-fixture",
+          baseUrl: server.url,
+          netFetch: net.netFetch,
+        });
+        for await (const _ of p.stream(req(), {
+          signal: new AbortController().signal,
+          orgId: "org-1",
+          config: { apiKey: "sk-org", baseUrl: orgServer.url },
+        })) {
+          // drain
+        }
+        expect(net.calls.map((c) => c.orgId)).toEqual(["org-1"]);
+        expect(orgServer.requests).toHaveLength(1);
+      } finally {
+        await orgServer.stop();
+      }
+    });
+
+    it("an org base URL ctx.net refuses -> invalid_request naming the host", async () => {
+      const p = createDeepSeekProvider({ apiKey: "sk-fixture", netFetch: refusingNetFetch });
+      const e = await streamError(p, req(), {
+        apiKey: "sk-org",
+        baseUrl: "https://192.168.3.4/v1?tenant=secret-q",
+      });
+      expect(kindOf(e)).toBe("invalid_request");
+      const message = e instanceof Error ? e.message : "";
+      expect(message).toContain("192.168.3.4");
+      expect(message).toMatch(/refused by the platform's network rules/);
+      expect(message).not.toMatch(/secret-q|sk-org/);
     });
 
     it("usage falls back to prompt_tokens_details.cached_tokens", async () => {

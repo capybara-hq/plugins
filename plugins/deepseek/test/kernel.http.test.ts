@@ -45,7 +45,12 @@ beforeAll(async () => {
   k = await startTestKernel(
     testKernelConfig(
       { pg: pgc.url, redis: rd.url },
-      { extensions: [MODEL_FAKE, DEEPSEEK], roles: ["api", "worker"] },
+      {
+        extensions: [MODEL_FAKE, DEEPSEEK],
+        roles: ["api", "worker"],
+        // an org's own baseUrl (the fake on 127.0.0.1, plain http) goes through ctx.net
+        net: { allowInsecureLoopback: true },
+      },
     ),
     { resolveFrom: PLUGIN_DIR },
   );

@@ -6,7 +6,7 @@ import {
 } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDeepSeekProvider } from "../src/index.js";
-import { errorJson, MODELS_BODY } from "./fixtures.js";
+import { errorJson, MODELS_BODY, recordingNet, refusingNetFetch } from "./fixtures.js";
 
 describe("deepseek listModels", () => {
   let server: FakeModelServer;
@@ -17,7 +17,12 @@ describe("deepseek listModels", () => {
   afterAll(async () => {
     await server?.stop();
   });
-  const provider = () => createDeepSeekProvider({ apiKey: "sk-default", baseUrl: server.url });
+  const provider = () =>
+    createDeepSeekProvider({
+      netFetch: recordingNet().netFetch,
+      apiKey: "sk-default",
+      baseUrl: server.url,
+    });
 
   it("maps the live /models body and the minimal entry", async () => {
     next = () => ({ status: 200, json: MODELS_BODY });
@@ -76,6 +81,7 @@ describe("deepseek listModels", () => {
     });
     const warnings: string[] = [];
     const models = await createDeepSeekProvider({
+      netFetch: recordingNet().netFetch,
       apiKey: "sk-default",
       baseUrl: server.url,
       log: { warn: (msg) => warnings.push(msg) },
@@ -98,10 +104,49 @@ describe("deepseek listModels", () => {
 
   it("uses the org's key and base URL from opts.config", async () => {
     next = () => ({ status: 200, json: MODELS_BODY });
-    await createDeepSeekProvider({}).listModels({
+    await createDeepSeekProvider({ netFetch: recordingNet().netFetch }).listModels({
       config: { apiKey: "sk-org", baseUrl: server.url },
     });
     expect(server.requests.at(-1)?.headers.authorization).toBe("Bearer sk-org");
+  });
+
+  it("an org's own base URL goes through ctx.net with the org's id; the platform's keeps fetch", async () => {
+    next = () => ({ status: 200, json: MODELS_BODY });
+    const net = recordingNet();
+    const p = createDeepSeekProvider({
+      apiKey: "sk-default",
+      baseUrl: "https://api.deepseek.com",
+      netFetch: net.netFetch,
+    });
+    await p.listModels({ orgId: "org-1", config: { apiKey: "sk-org", baseUrl: server.url } });
+    expect(net.calls).toEqual([{ url: `${server.url}/models`, orgId: "org-1" }]);
+    expect(server.requests.at(-1)?.headers.authorization).toBe("Bearer sk-org");
+
+    // following the platform (its baseUrl in the per-call config): the global fetch, not ctx.net
+    const platform = recordingNet();
+    await createDeepSeekProvider({
+      apiKey: "sk-default",
+      baseUrl: server.url,
+      netFetch: platform.netFetch,
+    }).listModels({ orgId: "org-1", config: { apiKey: "sk-default", baseUrl: `${server.url}/` } });
+    expect(platform.calls).toEqual([]);
+    expect(server.requests.at(-1)?.headers.authorization).toBe("Bearer sk-default");
+  });
+
+  it("an org base URL ctx.net refuses -> invalid_request naming the host, nothing sent", async () => {
+    const before = server.requests.length;
+    const e = await createDeepSeekProvider({ netFetch: refusingNetFetch })
+      .listModels({
+        orgId: "org-1",
+        config: { apiKey: "sk-org", baseUrl: "https://10.0.0.7/v1?tenant=secret-q" },
+      })
+      .catch((x: unknown) => x);
+    expect(isModelError(e) && e.kind).toBe("invalid_request");
+    const message = e instanceof Error ? e.message : "";
+    expect(message).toContain("10.0.0.7");
+    expect(message).toMatch(/refused by the platform's network rules/);
+    expect(message).not.toMatch(/secret-q|sk-org/);
+    expect(server.requests.length).toBe(before);
   });
 
   it("an org config without a key -> auth, the default key is not used", async () => {
@@ -115,7 +160,10 @@ describe("deepseek listModels", () => {
 
   it("no key anywhere -> auth before any request", async () => {
     const before = server.requests.length;
-    const e = await createDeepSeekProvider({ baseUrl: server.url })
+    const e = await createDeepSeekProvider({
+      netFetch: recordingNet().netFetch,
+      baseUrl: server.url,
+    })
       .listModels()
       .catch((x: unknown) => x);
     expect(isModelError(e) && e.kind).toBe("auth");

@@ -153,8 +153,8 @@ beforeAll(async () => {
       {
         extensions: [MODEL_FAKE, CONNECTOR_MCP],
         extensionPermissions: { autoApprove: true },
-        // 假服务在 127.0.0.1 上跑 http：测试打开本机 http（默认关闭）
-        extensionConfig: { "connector-mcp": { allowInsecureLoopback: true } },
+        // the fake server runs plain http on 127.0.0.1: ctx.net may reach loopback (tests only)
+        net: { allowInsecureLoopback: true },
         roles: ["api", "worker"],
         tools: { timeoutMs: 2_000 },
       },
@@ -254,6 +254,27 @@ describe("connector-mcp 端到端", () => {
       key: "mcp__docs__read_resource",
       defaultPolicy: "allow",
     });
+  });
+
+  it("a private endpoint address is refused by ctx.net: 502 naming the host, nothing stored", async () => {
+    const res = await call({
+      method: "POST",
+      url: `/api/v1/orgs/${orgId}/connectors`,
+      payload: {
+        name: "Internal",
+        slug: "internal",
+        connector: "mcp",
+        endpoint: { url: "https://10.255.255.1/mcp" },
+        auth: { type: "none" },
+      },
+    });
+    expect(res.statusCode, res.body).toBe(502);
+    const err = (res.json() as { error: { code: string; message: string } }).error;
+    expect(err.code).toBe("connector.connect_failed");
+    expect(err.message).toContain("10.255.255.1");
+    expect(err.message).toMatch(/refused by the platform's network rules/);
+    const rows = await db.selectFrom("connectors").select("id").execute();
+    expect(rows).toEqual([]);
   });
 
   it("连接器自带同名工具时它优先；刷新时服务不再支持 resources → 两个工具被移除", async () => {

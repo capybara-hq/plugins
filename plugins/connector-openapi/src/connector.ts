@@ -5,7 +5,14 @@ import type {
   Logger,
 } from "@capybara-hq/plugin-sdk";
 import { endpointSchema, MAX_SPEC_BYTES, type OpenApiEndpoint } from "./endpoint.js";
-import { buildRequest, fetchSpec, type Limits, resolveBaseUrl, send } from "./http.js";
+import {
+  buildRequest,
+  fetchSpec,
+  type Limits,
+  type NetFetch,
+  resolveBaseUrl,
+  send,
+} from "./http.js";
 import { routeFromSpec, routeOf } from "./route.js";
 import {
   authHints,
@@ -23,13 +30,19 @@ const DEFAULT_LIMITS: Limits = {
   specTimeoutMs: 30_000,
 };
 
-/** 取到并整理文档（specText 直接解析；specUrl 不带凭据去取）。 */
+/**
+ * Loads the document: specText is parsed as is; specUrl is fetched without credentials through
+ * ctx.net for `orgId`.
+ */
 async function loadSpec(
   endpoint: OpenApiEndpoint,
+  orgId: string,
   signal: AbortSignal,
-  limits: Limits,
+  deps: Deps,
 ): Promise<OpenApiDocument> {
-  const text = endpoint.specText ?? (await fetchSpec(endpoint.specUrl as string, signal, limits));
+  const text =
+    endpoint.specText ??
+    (await fetchSpec(deps.fetch, orgId, endpoint.specUrl as string, signal, deps.limits));
   return loadDocument(parseSpecText(text));
 }
 
@@ -51,14 +64,14 @@ function openSession(
 ): ConnectorSession {
   return {
     async listTools() {
-      const doc = await loadSpec(endpoint, args.signal, deps.limits);
+      const doc = await loadSpec(endpoint, args.orgId, args.signal, deps);
       return selected(doc, endpoint).map((op) => toolSpecOf(op, routeOf(op, endpoint.specUrl)));
     },
     async callTool(name, input, signal, ctx) {
       const route = routeFromSpec(name, ctx?.spec);
-      const base = resolveBaseUrl(route.server, endpoint.baseUrl, deps.allowInsecureLoopback);
+      const base = resolveBaseUrl(route.server, endpoint.baseUrl);
       const req = buildRequest(route, input, base);
-      return send(req, route.method, args, signal, deps.limits, deps.log);
+      return send(deps.fetch, req, route.method, args, signal, deps.limits, deps.log);
     },
     async close() {},
   };
@@ -66,31 +79,31 @@ function openSession(
 
 interface Deps {
   log: Logger;
-  allowInsecureLoopback: boolean;
+  fetch: NetFetch;
   limits: Limits;
 }
 
 /** 创建 OpenAPI 连接器（`connector@1`，kind = `openapi`）。 */
 export function createOpenApiConnector(opts: {
   log: Logger;
-  /** 允许 http://127.0.0.1 / localhost / [::1]（部署配置，默认关闭）。 */
-  allowInsecureLoopback?: boolean;
+  /** `ctx.net.fetch` in the extension; unit tests inject their own. */
+  fetch: NetFetch;
   /** 覆盖默认上限（测试用）。 */
   limits?: Partial<Limits>;
 }): Connector {
   const deps: Deps = {
     log: opts.log,
-    allowInsecureLoopback: opts.allowInsecureLoopback === true,
+    fetch: opts.fetch,
     limits: { ...DEFAULT_LIMITS, ...opts.limits },
   };
-  const schema = endpointSchema(deps.allowInsecureLoopback);
+  const schema = endpointSchema();
   return {
     kind: "openapi",
     endpointSchema: schema,
     open: async (args) => openSession(schema.parse(args.endpoint), args, deps),
-    async inspect({ endpoint, signal }) {
+    async inspect({ endpoint, signal, orgId }) {
       const e = schema.parse(endpoint);
-      const doc = await loadSpec(e, signal, deps.limits);
+      const doc = await loadSpec(e, orgId, signal, deps);
       return {
         authHints: authHints(doc.doc),
         operations: doc.operations.map((o) => ({

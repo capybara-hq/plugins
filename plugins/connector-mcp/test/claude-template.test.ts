@@ -75,8 +75,6 @@ beforeAll(async () => {
         // imports stage their files in object storage
         extensions: [CONNECTOR_MCP, OBJECT_STORE],
         extensionConfig: {
-          // the fake servers run plain http on 127.0.0.1
-          "connector-mcp": { allowInsecureLoopback: true },
           "fake-object-store": {
             endpoint: s3.endpoint,
             region: s3.region,
@@ -86,6 +84,8 @@ beforeAll(async () => {
             forcePathStyle: true,
           },
         },
+        // the fake servers run plain http on 127.0.0.1: ctx.net may reach loopback (tests only)
+        net: { allowInsecureLoopback: true },
         marketplaces: {
           official: { enabled: false },
           allowInsecureLoopback: true,

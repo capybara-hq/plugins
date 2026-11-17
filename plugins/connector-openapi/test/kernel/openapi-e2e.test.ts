@@ -67,8 +67,8 @@ beforeAll(async () => {
       {
         extensions: [MODEL_FAKE, CONNECTOR_OPENAPI],
         extensionPermissions: { autoApprove: true },
-        // 假服务在 127.0.0.1 上跑 http：测试打开本机 http（默认关闭）
-        extensionConfig: { "connector-openapi": { allowInsecureLoopback: true } },
+        // the fake server runs plain http on 127.0.0.1: ctx.net may reach loopback (tests only)
+        net: { allowInsecureLoopback: true },
         roles: ["api", "worker"],
         tools: { timeoutMs: 5_000 },
       },
@@ -235,6 +235,17 @@ describe("连接器预览", () => {
     expect(res.statusCode).toBe(502);
     expect(errOf(res).code).toBe("connector.connect_failed");
     expect(errOf(res).message).toContain("Swagger 2.0");
+  });
+
+  it("a private document address is refused by ctx.net: 502 naming the host", async () => {
+    const res = await preview({
+      connector: "openapi",
+      endpoint: { specUrl: "https://10.255.255.1/openapi.json" },
+    });
+    expect(res.statusCode, res.body).toBe(502);
+    expect(errOf(res).code).toBe("connector.connect_failed");
+    expect(errOf(res).message).toContain("10.255.255.1");
+    expect(errOf(res).message).toMatch(/refused by the platform's network rules/);
   });
 
   it("安装时文档错误同样带说明", async () => {

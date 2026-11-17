@@ -1,31 +1,25 @@
-import { CONNECTOR_EXTENSION_POINT, defineExtension, ui } from "@capybara-hq/plugin-sdk";
-import { z } from "zod";
+import { CONNECTOR_EXTENSION_POINT, defineExtension } from "@capybara-hq/plugin-sdk";
 import { createMcpConnector } from "./session.js";
 
-/** 部署级配置。 */
-const DeploymentConfig = z.object({
-  /** 允许端点用本机 http（127.0.0.1 / localhost / [::1]），仅供开发与测试；默认关闭，生产只接受 https。 */
-  allowInsecureLoopback: ui(z.boolean().default(false), {
-    label: { zh: "允许本机 http 端点", en: "Allow loopback http endpoints" },
-  }),
-});
-
 /**
- * MCP 连接器：把远端 MCP 服务（Streamable HTTP）作为连接器接入。工具清单由内核快照进 `connector_tools`，
- * 每次调用打开一个会话、用完关闭；鉴权由内核在每个请求前注入（静态凭据 / 之后的 OAuth）。
- * 部署级配置只有 `allowInsecureLoopback`；无进程内状态。
+ * MCP connector: connects a remote MCP server (Streamable HTTP) as a connector. The kernel
+ * snapshots the tool list into `connector_tools`; every call opens a session and closes it after
+ * use; the kernel injects auth before every request (static credentials or OAuth). Every request
+ * goes through `ctx.net.fetch` with the session's org, so the kernel's network rules decide which
+ * endpoints are reachable. No deployment config, no in-process state.
  */
 export default defineExtension({
   name: "connector-mcp",
   version: "0.1.0-rc.10",
-  sdk: "^0.1.0-rc.0",
+  sdk: "^0.1.0-rc.29",
   provides: [CONNECTOR_EXTENSION_POINT],
-  config: { deployment: DeploymentConfig },
   setup(ctx) {
-    const { allowInsecureLoopback } = DeploymentConfig.parse(ctx.config ?? {});
     ctx.provide(
       CONNECTOR_EXTENSION_POINT,
-      createMcpConnector({ log: ctx.log, allowInsecureLoopback }),
+      createMcpConnector({
+        log: ctx.log,
+        fetch: (url, init, opts) => ctx.net.fetch(url, init, opts),
+      }),
     );
   },
 });

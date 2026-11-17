@@ -212,3 +212,23 @@ export function deepseekRoutes(): (req: FakeRequest) => FakeResponse {
     });
   };
 }
+
+/** Stands in for `ctx.net.fetch` (the fake servers run on loopback): plain fetch, recording calls. */
+export function recordingNet() {
+  const calls: { url: string; orgId: string | undefined }[] = [];
+  const netFetch = (url: string, init?: RequestInit, opts?: { orgId?: string }) => {
+    calls.push({ url, orgId: opts?.orgId });
+    return fetch(url, init);
+  };
+  return { netFetch, calls };
+}
+
+/** A `ctx.net.fetch` that refuses every host as a private address (a kernel `NetDeniedError`). */
+export async function refusingNetFetch(url: string): Promise<Response> {
+  const host = new URL(url).hostname;
+  const e = Object.assign(
+    new Error(`Access to ${host} is refused: it resolves to a private or reserved address.`),
+    { name: "NetDeniedError", code: "net.private_address", host },
+  );
+  throw e;
+}

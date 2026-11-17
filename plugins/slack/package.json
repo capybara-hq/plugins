@@ -36,7 +36,7 @@
   },
   "devDependencies": {
     "@capybara-hq/plugin-model-fake": "^0.1.0-rc.28",
-    "@capybara-hq/testing": "^0.1.0-rc.22",
+    "@capybara-hq/testing": "^0.1.0-rc.23",
     "ioredis": "^6.0.0",
     "kysely": "^0.29.8"
   }

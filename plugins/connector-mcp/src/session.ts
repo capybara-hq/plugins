@@ -4,6 +4,8 @@ import {
   type ConnectorSession,
   type ElicitationRequest,
   type ElicitationResponse,
+  type ExtensionNet,
+  isNetDeniedError,
   type Logger,
   type PromptInfo,
   type ToolAnnotations,
@@ -48,35 +50,25 @@ const MAX_LOGGED_BODY = 1_000;
 // capybara:allow-module-state 只读常量表
 const CREDENTIAL_HEADERS = new Set(["authorization", "proxy-authorization", "cookie"]);
 
-// capybara:allow-module-state 只读常量表
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
-
-/** 本机 http 只认这三个确切的主机名（`localhost.`、`localhost.evil.com`、`127.0.0.1.nip.io` 等一律不算）。 */
-const isLoopbackHttp = (u: URL): boolean =>
-  u.protocol === "http:" && LOOPBACK_HOSTS.has(u.hostname);
-
-const urlAllowed = (raw: string, allowInsecureLoopback: boolean): boolean => {
+/**
+ * http or https. Whether the target is reachable is decided by the kernel's `ctx.net` at request
+ * time (https to public addresses; plain http and internal addresses only for an endpoint a super
+ * admin allowed for the org).
+ */
+const urlAllowed = (raw: string): boolean => {
   let u: URL;
   try {
     u = new URL(raw);
   } catch {
-    return true; // 交给 z.url() 报格式错误
+    return true; // z.url() reports the format error
   }
-  if (u.protocol === "https:") return true;
-  return allowInsecureLoopback && isLoopbackHttp(u);
+  return u.protocol === "https:" || u.protocol === "http:";
 };
 
-/**
- * 端点：url 须为 https；部署配置 `allowInsecureLoopback` 打开时（仅供开发与测试）本机 http 例外。
- * headers 是非密钥的固定头。
- */
-export function endpointSchema(allowInsecureLoopback: boolean) {
+/** The endpoint: an http(s) URL plus non-secret fixed headers. */
+export function endpointSchema() {
   return z.object({
-    url: z.url().refine((v) => urlAllowed(v, allowInsecureLoopback), {
-      message: allowInsecureLoopback
-        ? "URL must use https (plain http is only allowed for 127.0.0.1, localhost and [::1])"
-        : "URL must use https",
-    }),
+    url: z.url().refine(urlAllowed, { message: "URL must use http or https" }),
     headers: z
       .record(z.string(), z.string())
       .default({})
@@ -96,6 +88,16 @@ export function endpointSchema(allowInsecureLoopback: boolean) {
 }
 
 export type McpEndpoint = z.infer<ReturnType<typeof endpointSchema>>;
+
+/** The guarded fetch the connector sends every request through (`ctx.net.fetch`). */
+export type NetFetch = ExtensionNet["fetch"];
+
+/**
+ * The kernel's network rules refused a request (model-visible, English): names the host, never the
+ * URL's path, query or headers.
+ */
+export const netDeniedText = (host: string, reason: string) =>
+  `The request to ${host || "the app's server"} was refused by the platform's network rules: ${reason} Ask an administrator to check the app endpoint URL.`;
 
 /** 服务以 3xx 响应（不跟随，模型可见，英文）。 */
 export const redirectText = (status: number) =>
@@ -294,7 +296,7 @@ async function guarded<T>(work: () => Promise<T>): Promise<T> {
  * 端点固定头在协议头之后补上（不覆盖）。401 → `onUnauthorized()` 后用新凭据重试一次，仍 401 抛 ToolError。
  * 其他非 2xx 的 POST 把正文（截断）记 warn 日志——内核 logger 会把已登记的凭据值打码。
  */
-function authedFetch(endpoint: McpEndpoint, args: ConnectorOpenArgs, log: Logger) {
+function authedFetch(net: NetFetch, endpoint: McpEndpoint, args: ConnectorOpenArgs, log: Logger) {
   return async (input: string | URL, init?: RequestInit): Promise<Response> => {
     const method = (init?.method ?? "GET").toUpperCase();
     const send = async (): Promise<Response> => {
@@ -305,8 +307,18 @@ function authedFetch(endpoint: McpEndpoint, args: ConnectorOpenArgs, log: Logger
       for (const [k, v] of Object.entries(endpoint.headers)) if (!headers.has(k)) headers.set(k, v);
       for (const [k, v] of Object.entries(inj.headers)) headers.set(k, v);
       const signal = init?.signal ? AbortSignal.any([init.signal, args.signal]) : args.signal;
-      // 不跟随重定向：跟随会把请求体与注入的凭据头带到别的源（跨源时自定义头不会被剥掉）
-      return fetch(url, { ...init, headers, signal, redirect: "manual" });
+      // Never follow redirects: that would carry the body and the injected credential headers to
+      // another origin. Every request goes through ctx.net with the session's org.
+      try {
+        return await net(
+          url.toString(),
+          { ...init, headers, signal, redirect: "manual" },
+          { orgId: args.orgId },
+        );
+      } catch (e) {
+        if (isNetDeniedError(e)) throw new ToolError(netDeniedText(e.host, e.message));
+        throw e;
+      }
     };
     const noRedirect = async (r: Response) => {
       if (r.status >= 300 && r.status < 400) {
@@ -343,12 +355,13 @@ function authedFetch(endpoint: McpEndpoint, args: ConnectorOpenArgs, log: Logger
  * 不在进程内缓存连接。服务声明了 resources 能力时会话才带 listResources / readResource。
  */
 async function openSession(
+  net: NetFetch,
   endpoint: McpEndpoint,
   args: ConnectorOpenArgs,
   log: Logger,
 ): Promise<ConnectorSession> {
   const transport = new StreamableHTTPClientTransport(new URL(endpoint.url), {
-    fetch: authedFetch(endpoint, args, log),
+    fetch: authedFetch(net, endpoint, args, log),
   });
   // 内核提供 onElicit 才声明 elicitation 能力（表单与 URL 两种模式）；否则服务不会发起
   const onElicit = args.onElicit;
@@ -505,16 +518,16 @@ async function openSession(
   return session;
 }
 
-/** 创建 MCP 连接器（`connector@1`，kind = `mcp`）。 */
+/** Creates the MCP connector (`connector@1`, kind = `mcp`). */
 export function createMcpConnector(deps: {
   log: Logger;
-  /** 允许 http://127.0.0.1 / localhost / [::1]（部署配置，默认关闭）。 */
-  allowInsecureLoopback?: boolean;
+  /** `ctx.net.fetch` in the extension; unit tests inject their own. */
+  fetch: NetFetch;
 }): Connector {
-  const schema = endpointSchema(deps.allowInsecureLoopback === true);
+  const schema = endpointSchema();
   return {
     kind: "mcp",
     endpointSchema: schema,
-    open: (args) => openSession(schema.parse(args.endpoint), args, deps.log),
+    open: (args) => openSession(deps.fetch, schema.parse(args.endpoint), args, deps.log),
   };
 }
