@@ -1,6 +1,8 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { PREVIEWERS } from "../src/previewers.js";
@@ -11,6 +13,15 @@ async function tempDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "file-preview-ui-"));
   dirs.push(dir);
   return dir;
+}
+
+/** The installed pdfjs-dist package directory (its cmaps and standard fonts are shipped). */
+const PDFJS_DIR = dirname(
+  createRequire(join(import.meta.dirname, "../package.json")).resolve("pdfjs-dist/package.json"),
+);
+
+async function importDefault(file: string): Promise<unknown> {
+  return ((await import(pathToFileURL(file).href)) as { default: unknown }).default;
 }
 
 afterAll(async () => {
@@ -102,5 +113,93 @@ describe("buildUi", () => {
       .map((n) => n.slice(0, -".worker.js".length));
     expect(shipped).toEqual(stems);
     for (const testOnly of ["echo", "hello"]) expect(shipped).not.toContain(testOnly);
+  });
+
+  it("writes every listed file with the manifest's sha256 and the content type of its extension", async () => {
+    const dir = await tempDir();
+    const manifest = await buildUi(dir);
+    const types: Record<string, string> = {
+      ".html": "text/html; charset=utf-8",
+      ".js": "text/javascript; charset=utf-8",
+      ".txt": "text/plain; charset=utf-8",
+    };
+    const written = (await readdir(dir)).filter((n) => n !== "manifest.json").sort();
+    expect(Object.keys(manifest.files)).toEqual(written);
+    for (const [name, { contentType, sha256 }] of Object.entries(manifest.files)) {
+      const bytes = await readFile(join(dir, name));
+      expect(createHash("sha256").update(bytes).digest("hex"), name).toBe(sha256);
+      expect(contentType, name).toBe(types[name.slice(name.lastIndexOf("."))]);
+    }
+  });
+
+  it("copies ui-src/static files verbatim and lists them; nested directories are refused", async () => {
+    const staticDir = await tempDir();
+    await writeFile(join(staticDir, "notice.txt"), "hello\n");
+    const dir = await tempDir();
+    const manifest = await buildUi(dir, { staticDir });
+    expect(await readFile(join(dir, "notice.txt"), "utf8")).toBe("hello\n");
+    expect(manifest.files["notice.txt"]).toEqual({
+      contentType: "text/plain; charset=utf-8",
+      sha256: createHash("sha256").update("hello\n").digest("hex"),
+    });
+
+    await mkdir(join(staticDir, "fonts"));
+    await writeFile(join(staticDir, "fonts", "a.txt"), "x");
+    await expect(buildUi(await tempDir(), { staticDir })).rejects.toThrow(/flat/);
+  });
+
+  it("ships the pdf.js worker as a classic script with no eval and no runtime import", async () => {
+    const dir = await tempDir();
+    const manifest = await buildUi(dir);
+    expect(manifest.files["pdfjs.worker.js"]?.contentType).toBe("text/javascript; charset=utf-8");
+    const source = await importDefault(join(dir, "pdfjs.worker.js"));
+    expect(typeof source).toBe("string");
+    const text = source as string;
+    expect(text).toContain("WorkerMessageHandler");
+    // the JPEG 2000 / JBIG2 JS decoders are bundled in, not imported from a URL at run time
+    expect(text).not.toMatch(/\bimport\s*\(/);
+    expect(text).toContain("nowasm");
+    // no eval-like code paths in what pdf.js runs (CSP has no 'unsafe-eval')
+    expect(text).not.toMatch(/new Function\(|[^.\w]eval\(/);
+  });
+
+  it("ships every pdf.js cmap and standard font as a module whose default export is its base64", async () => {
+    const dir = await tempDir();
+    const manifest = await buildUi(dir);
+    const names = Object.keys(manifest.files);
+    const cmaps = (await readdir(join(PDFJS_DIR, "cmaps"))).filter((f) => f.endsWith(".bcmap"));
+    const fonts = (await readdir(join(PDFJS_DIR, "standard_fonts"))).filter((f) =>
+      /\.(pfb|ttf)$/.test(f),
+    );
+    expect(cmaps).toContain("UniGB-UCS2-H.bcmap");
+    expect(fonts).toContain("FoxitSerif.pfb");
+    for (const f of cmaps) expect(names).toContain(`pdfjs-cmap-${f}.js`);
+    for (const f of fonts) expect(names).toContain(`pdfjs-font-${f}.js`);
+    expect(names.filter((n) => n.startsWith("pdfjs-cmap-") && n.endsWith(".js"))).toHaveLength(
+      cmaps.length,
+    );
+    for (const sample of ["cmaps/UniGB-UCS2-H.bcmap", "standard_fonts/FoxitSerif.pfb"]) {
+      const file = sample.split("/")[1] as string;
+      const kind = sample.startsWith("cmaps") ? "cmap" : "font";
+      const b64 = await importDefault(join(dir, `pdfjs-${kind}-${file}.js`));
+      expect(typeof b64).toBe("string");
+      const original = await readFile(join(PDFJS_DIR, sample));
+      expect(Buffer.from(b64 as string, "base64").equals(original)).toBe(true);
+    }
+    // the licenses travel with the data
+    for (const n of ["pdfjs-cmaps-LICENSE.txt", "pdfjs-fonts-LICENSE-FOXIT.txt"]) {
+      expect(names).toContain(n);
+    }
+    expect(names).toContain("pdfjs-fonts-LICENSE-LIBERATION.txt");
+  });
+
+  it("stays far below the plugin size limits (50 MiB, 5 000 entries)", async () => {
+    const dir = await tempDir();
+    const manifest = await buildUi(dir);
+    const names = Object.keys(manifest.files);
+    expect(names.length).toBeLessThan(1000);
+    let bytes = 0;
+    for (const n of names) bytes += (await readFile(join(dir, n))).length;
+    expect(bytes).toBeLessThan(20 * 1024 * 1024);
   });
 });
