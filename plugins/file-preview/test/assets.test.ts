@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -64,6 +64,50 @@ describe("ui assets", () => {
     const html = await res.text();
     expect(html).toContain('<meta name="previewer" content="pdf">');
     expect(html).toContain('src="assets/app.js"');
+  });
+
+  it("serves the lazily imported renderer chunk and 404s a case variant of its name", async () => {
+    const app = await (await get(`${base}app.js`)).text();
+    const chunk = /import\(["']\.\/(chunk-[A-Za-z0-9]+\.js)["']\)/.exec(app)?.[1] ?? "";
+    expect(chunk).not.toBe("");
+    const res = await get(`${base}${chunk}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
+    const swapped = [...chunk].map((c) =>
+      c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase(),
+    );
+    const variant = swapped.join("");
+    expect(variant).not.toBe(chunk);
+    expect((await get(`${base}${variant}`)).status).toBe(404);
+  });
+
+  it("every response is nosniff and sandboxed", async () => {
+    for (const res of [await get(`${base}app.js`), await assets.shell("code")]) {
+      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(res.headers.get("content-security-policy")).toBe(
+        "sandbox allow-scripts allow-forms; frame-ancestors 'self'",
+      );
+    }
+  });
+
+  it("the shell is not an asset", async () => {
+    expect((await get(`${base}index.html`)).status).toBe(404);
+  });
+
+  it("re-reads the manifest when its mtime changes", async () => {
+    const ui = join(root, "ui");
+    const path = join(ui, "manifest.json");
+    const original = await readFile(path, "utf8");
+    const manifest = JSON.parse(original) as { files: Record<string, unknown> };
+    await writeFile(join(ui, "late.js"), "late()\n");
+    expect((await get(`${base}late.js`)).status).toBe(404);
+    manifest.files["late.js"] = { contentType: "text/javascript; charset=utf-8", sha256: "x" };
+    await writeFile(path, JSON.stringify(manifest));
+    await utimes(path, new Date(), new Date(Date.now() + 5_000));
+    expect((await get(`${base}late.js`)).status).toBe(200);
+    await writeFile(path, original);
+    await utimes(path, new Date(), new Date(Date.now() + 10_000));
+    expect((await get(`${base}late.js`)).status).toBe(404);
   });
 
   it("hashed chunks are immutable", () => {

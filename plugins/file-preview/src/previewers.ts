@@ -5,6 +5,8 @@
  * Never claimed (the kernel's built-ins stay first): Markdown, CSV / TSV and bitmap images.
  */
 
+import { FILE_PREVIEW_MAX_BYTES, type FilePreviewProvider } from "@capybara-hq/plugin-sdk";
+
 export type PreviewerId = "code" | "zip" | "sheet" | "docx" | "pdf" | "svg" | "html";
 
 export interface PreviewerSpec {
@@ -114,3 +116,16 @@ export const PREVIEWERS: readonly PreviewerSpec[] = Object.freeze([
     accepts: { mimeTypes: ["text/html"], extensions: ["html", "htm"] },
   },
 ] satisfies PreviewerSpec[]);
+
+/** The `file-preview@1` provider: every previewer at the byte cap, embed id = previewer id. */
+export function toProvider(): FilePreviewProvider {
+  return {
+    previewers: PREVIEWERS.map((p) => ({
+      id: p.id,
+      title: p.title,
+      accepts: p.accepts,
+      maxBytes: FILE_PREVIEW_MAX_BYTES,
+      embed: p.id,
+    })),
+  };
+}

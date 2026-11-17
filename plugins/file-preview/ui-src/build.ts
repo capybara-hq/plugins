@@ -7,7 +7,7 @@
  * - `ui-src/index.html` is the shell, `ui-src/static/**` is copied verbatim when present;
  * - `manifest.json` lists every other file with its content type and sha256, sorted by name.
  *
- * Output names are flat (`[a-z0-9][a-z0-9.-]*`), the server serves only manifest-listed files.
+ * Output names are flat (`[A-Za-z0-9][A-Za-z0-9.-]*`, esbuild's chunk hashes have capitals), the server serves only manifest-listed files.
  */
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -21,7 +21,7 @@ export interface UiManifest {
 }
 
 const SRC = import.meta.dirname;
-const NAME_RE = /^[a-z0-9][a-z0-9.-]*$/;
+const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9.-]*$/;
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".html": "text/html; charset=utf-8",

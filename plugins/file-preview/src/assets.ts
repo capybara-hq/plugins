@@ -2,17 +2,17 @@
  * Serves the built embed app (`ui/`, written by `ui-src/build.ts`) on public routes.
  *
  * Only names listed in `ui/manifest.json` are served, and a name must be flat
- * (`[a-z0-9][a-z0-9.-]*`), so no request reaches a file outside that allowlist: no `..`, no
+ * (`[A-Za-z0-9][A-Za-z0-9.-]*`), so no request reaches a file outside that allowlist: no `..`, no
  * encoded separators, no subdirectories, not the manifest itself. The pages carry no data.
  */
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 
 /** `ui/manifest.json` as `buildUi` writes it. */
 interface UiManifest {
   files: Record<string, { contentType: string; sha256: string }>;
 }
 
-/** The serving side of the embed app; create one per `setup` (it caches the manifest). */
+/** The serving side of the embed app; create one per `setup` (it caches the manifest by mtime). */
 export interface UiAssets {
   /** The shell page for one previewer: `index.html` with `<meta name="previewer" content="<id>">`. */
   shell(previewer: string): Promise<Response>;
@@ -20,11 +20,16 @@ export interface UiAssets {
   asset(req: Request): Promise<Response>;
 }
 
-const NAME_RE = /^[a-z0-9][a-z0-9.-]*$/;
+const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9.-]*$/;
 const PREVIEWER_RE = /^[a-z0-9-]{1,40}$/;
 const ASSET_PATH_RE = /\/ui\/assets\/([^/]*)$/;
 /** esbuild's split chunks (`chunk-[hash].js`): the name changes with the content. */
 const CHUNK_RE = /^chunk-[a-z0-9]+\.js$/i;
+/** Defense in depth if the kernel's /plugins is ever exposed without the web proxy. */
+const SECURITY_HEADERS = {
+  "x-content-type-options": "nosniff",
+  "content-security-policy": "sandbox allow-scripts allow-forms; frame-ancestors 'self'",
+} as const;
 const IMMUTABLE = "private, max-age=31536000, immutable";
 
 /** The cache policy of a served file: hashed chunks forever, everything else revalidated. */
@@ -40,19 +45,15 @@ const notFound = () =>
  * `src/` (tests, source loading) and from the packed `dist/`.
  */
 export function createUiAssets(dir: URL = new URL("../ui/", import.meta.url)): UiAssets {
-  // Per extension instance, not module state: filled on first use, dropped on a failed read so a
-  // later build is picked up.
-  let manifest: Promise<UiManifest> | undefined;
-  const loadManifest = (): Promise<UiManifest> => {
-    if (manifest === undefined) {
-      const loading = readFile(new URL("manifest.json", dir), "utf8").then(
-        (text) => JSON.parse(text) as UiManifest,
-      );
-      manifest = loading;
-      loading.catch(() => {
-        if (manifest === loading) manifest = undefined;
-      });
-    }
+  // Per extension instance, not module state: re-read when the file's mtime changes (a rebuild in
+  // dev), so a long-running kernel serves the new build.
+  let cached: { mtimeMs: number; manifest: UiManifest } | undefined;
+  const loadManifest = async (): Promise<UiManifest> => {
+    const url = new URL("manifest.json", dir);
+    const { mtimeMs } = await stat(url);
+    if (cached?.mtimeMs === mtimeMs) return cached.manifest;
+    const manifest = JSON.parse(await readFile(url, "utf8")) as UiManifest;
+    cached = { mtimeMs, manifest };
     return manifest;
   };
 
@@ -85,17 +86,26 @@ export function createUiAssets(dir: URL = new URL("../ui/", import.meta.url)): U
       const meta = `<meta name="previewer" content="${previewer}">`;
       const html = new TextDecoder().decode(bytes).replace(/<head>/i, (h) => `${h}\n    ${meta}`);
       return new Response(html, {
-        headers: { "content-type": file.contentType, "cache-control": cacheControl("index.html") },
+        headers: {
+          "content-type": file.contentType,
+          "cache-control": cacheControl("index.html"),
+          ...SECURITY_HEADERS,
+        },
       });
     },
 
     async asset(req) {
       const name = ASSET_PATH_RE.exec(new URL(req.url).pathname)?.[1] ?? "";
-      const file = await entry(name);
+      // the shell is served only at /ui/<id>, never as an asset
+      const file = name === "index.html" ? undefined : await entry(name);
       const bytes = file && (await read(name));
       if (!file || !bytes) return notFound();
       return new Response(bytes, {
-        headers: { "content-type": file.contentType, "cache-control": cacheControl(name) },
+        headers: {
+          "content-type": file.contentType,
+          "cache-control": cacheControl(name),
+          ...SECURITY_HEADERS,
+        },
       });
     },
   };

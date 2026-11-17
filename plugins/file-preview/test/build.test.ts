@@ -33,9 +33,18 @@ describe("buildUi", () => {
   it("emits only flat, allowlisted names", async () => {
     const manifest = await buildUi(await tempDir());
     const names = Object.keys(manifest.files);
-    for (const name of names) expect(name).toMatch(/^[a-z0-9][a-z0-9.-]*$/);
+    for (const name of names) expect(name).toMatch(/^[A-Za-z0-9][A-Za-z0-9.-]*$/);
     expect(names).toContain("index.html");
     expect(names).toContain("app.js");
     expect(names).toEqual([...names].sort());
+  });
+
+  it("code-splits the renderers: app.js lazily imports a chunk that the manifest lists", async () => {
+    const dir = await tempDir();
+    const manifest = await buildUi(dir);
+    const app = await readFile(join(dir, "app.js"), "utf8");
+    const chunk = /import\(["']\.\/(chunk-[A-Za-z0-9]+\.js)["']\)/.exec(app)?.[1];
+    expect(chunk).toBeDefined();
+    expect(Object.keys(manifest.files)).toContain(chunk);
   });
 });

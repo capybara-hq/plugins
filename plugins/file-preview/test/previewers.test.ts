@@ -1,21 +1,10 @@
 import {
   FILE_PREVIEW_MAX_BYTES,
-  type FilePreviewProvider,
   previewerAccepts,
   validateFilePreviewProvider,
 } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
-import { PREVIEWERS, type PreviewerId } from "../src/previewers.js";
-
-const provider = (): FilePreviewProvider => ({
-  previewers: PREVIEWERS.map((p) => ({
-    id: p.id,
-    title: p.title,
-    accepts: p.accepts,
-    maxBytes: FILE_PREVIEW_MAX_BYTES,
-    embed: p.id,
-  })),
-});
+import { PREVIEWERS, type PreviewerId, toProvider } from "../src/previewers.js";
 
 /** The ids of the previewers that take this file, in table order. */
 const takers = (name: string, contentType: string): PreviewerId[] =>
@@ -28,7 +17,7 @@ const takers = (name: string, contentType: string): PreviewerId[] =>
 
 describe("PREVIEWERS", () => {
   it("is a valid file-preview@1 provider with the seven ids in order", () => {
-    expect(validateFilePreviewProvider(provider())).toEqual([]);
+    expect(validateFilePreviewProvider(toProvider())).toEqual([]);
     expect(PREVIEWERS.map((p) => p.id)).toEqual([
       "code",
       "zip",

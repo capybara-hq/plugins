@@ -1,11 +1,6 @@
-import {
-  defineExtension,
-  FILE_PREVIEW_EXTENSION_POINT,
-  FILE_PREVIEW_MAX_BYTES,
-  type FilePreviewProvider,
-} from "@capybara-hq/plugin-sdk";
+import { defineExtension, FILE_PREVIEW_EXTENSION_POINT } from "@capybara-hq/plugin-sdk";
 import { createUiAssets } from "./assets.js";
-import { PREVIEWERS } from "./previewers.js";
+import { PREVIEWERS, toProvider } from "./previewers.js";
 
 /**
  * File previewers for the conversation's right panel (`file-preview@1`): one embed per previewer,
@@ -50,15 +45,6 @@ export default defineExtension({
     ctx.http.route("GET", "/ui/html", () => assets.shell("html"));
     ctx.http.route("GET", "/ui/assets/:file", (req) => assets.asset(req));
 
-    const provider: FilePreviewProvider = {
-      previewers: PREVIEWERS.map((p) => ({
-        id: p.id,
-        title: p.title,
-        accepts: p.accepts,
-        maxBytes: FILE_PREVIEW_MAX_BYTES,
-        embed: p.id,
-      })),
-    };
-    ctx.provide(FILE_PREVIEW_EXTENSION_POINT, provider);
+    ctx.provide(FILE_PREVIEW_EXTENSION_POINT, toProvider());
   },
 });
