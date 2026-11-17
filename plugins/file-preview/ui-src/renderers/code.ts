@@ -5,13 +5,10 @@
  */
 
 import { showEmpty } from "../app/frame.js";
-import {
-  decodeText,
-  type HighlightInput,
-  type HighlightOutput,
-  languageFor,
-} from "../app/language.js";
+import { THEME } from "../app/theme.js";
 import type { RenderContext, Renderer } from "../app/types.js";
+import type { HighlightInput, HighlightOutput } from "../shared/code.js";
+import { decodeText, languageFor } from "../shared/language.js";
 
 const STRINGS = {
   zh: { wrap: "自动换行", truncated: "文件过大，仅显示并高亮开头部分" },
@@ -22,13 +19,13 @@ const STRINGS = {
 } as const;
 
 const CSS = `
-.cap-code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.cap-code { font: 13px/1.5 ${THEME.fontMono}; }
 .cap-code-bar { display: flex; gap: 12px; align-items: center; padding: 4px 12px; position: sticky; top: 0;
-  background: var(--cap-background, Canvas); border-bottom: 1px solid var(--cap-border, #8884); z-index: 1;
-  font-family: system-ui, sans-serif; font-size: 12px; color: var(--cap-muted-foreground, GrayText); }
+  background: ${THEME.background}; border-bottom: 1px solid ${THEME.border}; z-index: 1;
+  font-family: ${THEME.font}; font-size: 12px; color: ${THEME.mutedForeground}; }
 .cap-code-bar button { font: inherit; cursor: pointer; color: inherit; background: none;
-  border: 1px solid var(--cap-border, #8884); border-radius: 4px; padding: 1px 8px; }
-.cap-code-bar button[aria-pressed="true"] { color: var(--cap-foreground, CanvasText); }
+  border: 1px solid ${THEME.border}; border-radius: ${THEME.radius}; padding: 1px 8px; }
+.cap-code-bar button[aria-pressed="true"] { color: ${THEME.foreground}; }
 .cap-code-body { padding: 8px 0; min-width: min-content; }
 .cap-code-row { display: grid; grid-template-columns: var(--cap-code-gutter, 4ch) 1fr; }
 .cap-code-num { text-align: right; padding: 0 12px 0 8px; user-select: none; opacity: 0.55; }

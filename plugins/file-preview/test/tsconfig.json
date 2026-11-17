@@ -9,14 +9,12 @@
     "types": ["node"]
   },
   "include": [
-    "app-shell.test.ts",
-    "worker-host.test.ts",
-    "serve.test.ts",
+    "*.test.ts",
     "../ui-src/app",
+    "../ui-src/shared",
     "../ui-src/renderers",
-    "../ui-src/workers/protocol.ts",
-    "../ui-src/workers/serve.ts",
-    "../src/previewers.ts"
+    "../ui-src/workers"
   ],
+  "references": [{ "path": ".." }, { "path": "../ui-src" }],
   "exclude": ["../ui-src/app/tsconfig.json"]
 }

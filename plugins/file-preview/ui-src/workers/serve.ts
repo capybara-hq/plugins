@@ -2,7 +2,7 @@
  * The worker side of the protocol: `serve(handler)` answers every request with the handler's
  * output, or with its error message. A worker script is `serve(parse)` and nothing else.
  */
-import type { WorkerRequest, WorkerResponse } from "./protocol.js";
+import type { WorkerRequest, WorkerResponse } from "../shared/protocol.js";
 
 /** What a handler returns: the output, and the buffers to transfer with it. */
 export interface Served<O> {

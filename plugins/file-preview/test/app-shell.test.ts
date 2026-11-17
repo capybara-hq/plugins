@@ -89,23 +89,24 @@ describe("createBridge", () => {
 });
 
 describe("applyTheme", () => {
-  it("sets --cap- properties and data-theme; a later call replaces them without touching nodes", () => {
+  it("sets the --cap- variables and data-theme; a later call replaces them without touching nodes", () => {
     const node = document.getElementById("root");
-    applyTheme(document, "dark", { background: "#000", foreground: "#fff" });
+    applyTheme(document, "dark", { "--cb-bg": "#000", "--cb-ink": "#fff" });
     const style = document.documentElement.style;
     expect(style.getPropertyValue("--cap-background")).toBe("#000");
+    expect(style.getPropertyValue("--cap-foreground")).toBe("#fff");
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
-    applyTheme(document, "light", { background: "#fff", accent: "red" });
+    applyTheme(document, "light", { "--cb-bg": "#fff", "--cb-accent": "red" });
     expect(style.getPropertyValue("--cap-background")).toBe("#fff");
-    expect(style.getPropertyValue("--cap-foreground")).toBe("");
+    expect(style.getPropertyValue("--cap-foreground")).not.toBe("#fff");
     expect(style.getPropertyValue("--cap-accent")).toBe("red");
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
     expect(document.getElementById("root")).toBe(node);
   });
 
-  it("ignores token names that are not plain identifiers", () => {
-    applyTheme(document, "dark", { "a;b": "1", ok: "2" });
-    expect(document.documentElement.style.getPropertyValue("--cap-ok")).toBe("2");
+  it("ignores token names that are not --cb- identifiers", () => {
+    applyTheme(document, "dark", { "a;b": "1", "--cb-bg": "#123" });
+    expect(document.documentElement.style.getPropertyValue("--cap-background")).toBe("#123");
     expect(document.documentElement.style.cssText).not.toContain("a;b");
   });
 });
@@ -130,14 +131,14 @@ describe("the main flow", () => {
       ctx.root.textContent = "body";
       mounted.push(ctx.root);
     });
-    post({ ...init, tokens: { background: "#000" } });
+    post({ ...init, tokens: { "--cb-bg": "#000" } });
     post(fileMsg());
     await vi.waitFor(() => expect(text()).toBe("body"));
     post({
       protocol: EMBED_PROTOCOL,
       type: "theme",
       theme: "light",
-      tokens: { background: "#fff" },
+      tokens: { "--cb-bg": "#fff" },
     });
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
     expect(document.documentElement.style.getPropertyValue("--cap-background")).toBe("#fff");
@@ -242,7 +243,7 @@ describe("the main flow", () => {
     post(init);
     post(fileMsg());
     await vi.waitFor(() => expect(text()).toBe("painted"));
-    post({ ...init, theme: "light", tokens: { background: "#fff" } });
+    post({ ...init, theme: "light", tokens: { "--cb-bg": "#fff" } });
     expect(text()).toBe("painted");
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
   });

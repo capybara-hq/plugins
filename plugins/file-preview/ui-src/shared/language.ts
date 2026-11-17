@@ -112,15 +112,3 @@ export function decodeText(bytes: ArrayBuffer | Uint8Array): string {
   else if (u8.length >= 2 && u8[0] === 0xfe && u8[1] === 0xff) label = "utf-16be";
   return new TextDecoder(label, { fatal: false }).decode(u8).replaceAll("\u0000", "�");
 }
-
-/** The `code` worker's input and output (here so the app's and the worker's projects share them). */
-export interface HighlightInput {
-  text: string;
-  lang: string;
-  theme: "dark" | "light";
-}
-
-export interface HighlightOutput {
-  lines: { content: string; color?: string }[][];
-  truncated: boolean;
-}

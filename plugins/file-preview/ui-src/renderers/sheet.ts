@@ -1,22 +1,8 @@
 /** Spreadsheet previewer: tabs of sheets, each a virtualized table with column letters on top. */
 import type { MessageKey } from "../app/frame.js";
+import { THEME } from "../app/theme.js";
 import type { RenderContext, Renderer } from "../app/types.js";
-
-// The worker's wire types, restated here: the app and worker TypeScript projects are separate (DOM
-// vs WebWorker libs), so the renderer cannot import them from `sheet.worker.ts`.
-interface SheetData {
-  name: string;
-  rows: string[][];
-  merges: { r1: number; c1: number; r2: number; c2: number }[];
-  truncatedRows: boolean;
-  truncatedCols: boolean;
-}
-interface SheetInput {
-  data: ArrayBuffer;
-}
-interface SheetOutput {
-  sheets: SheetData[];
-}
+import type { SheetData, SheetInput, SheetOutput } from "../shared/sheet.js";
 
 const STRINGS = {
   zh: {
@@ -33,16 +19,16 @@ const STRINGS = {
 
 const STYLE = `
 .cap-sheet{display:flex;flex-direction:column;height:100%;min-height:0}
-.cap-sheet-tabs{display:flex;gap:2px;overflow-x:auto;border-bottom:1px solid #8884;flex:none}
+.cap-sheet-tabs{display:flex;gap:2px;overflow-x:auto;border-bottom:1px solid ${THEME.border};flex:none}
 .cap-sheet-tab{font:inherit;color:inherit;background:none;border:0;border-bottom:2px solid transparent;padding:6px 12px;cursor:pointer;white-space:nowrap}
-.cap-sheet-tab.cap-active{border-bottom-color:currentColor;font-weight:600}
+.cap-sheet-tab.cap-active{border-bottom-color:${THEME.accent};font-weight:600}
 .cap-sheet-body{flex:1;min-height:0;display:flex;flex-direction:column}
 .cap-sheet-note{padding:4px 12px;font-size:12px;opacity:.7;flex:none}
 .cap-sheet-scroll{flex:1;min-height:0;overflow:auto}
 .cap-sheet-table{border-collapse:separate;border-spacing:0;font-size:13px;table-layout:auto}
-.cap-sheet-table td,.cap-sheet-table th{border-right:1px solid #8883;border-bottom:1px solid #8883;padding:0 8px;white-space:nowrap;max-width:360px;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box}
-.cap-sheet-table thead th{position:sticky;top:0;z-index:2;background:var(--cap-background,Canvas);font-weight:500}
-.cap-sheet-table .cap-sheet-rownum,.cap-sheet-table .cap-sheet-corner{position:sticky;left:0;z-index:1;background:var(--cap-background,Canvas);font-weight:400;opacity:.8;text-align:right}
+.cap-sheet-table td,.cap-sheet-table th{border-right:1px solid ${THEME.border};border-bottom:1px solid ${THEME.border};padding:0 8px;white-space:nowrap;max-width:360px;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box}
+.cap-sheet-table thead th{position:sticky;top:0;z-index:2;background:${THEME.background};font-weight:500}
+.cap-sheet-table .cap-sheet-rownum,.cap-sheet-table .cap-sheet-corner{position:sticky;left:0;z-index:1;background:${THEME.background};font-weight:400;opacity:.8;text-align:right}
 .cap-sheet-table thead .cap-sheet-corner{z-index:3}
 .cap-sheet-merged{text-align:center}
 `;

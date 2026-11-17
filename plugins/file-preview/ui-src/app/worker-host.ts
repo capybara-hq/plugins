@@ -12,7 +12,7 @@
  * sends afterwards reaches the caller.
  */
 import type { PreviewerId } from "../../src/previewers.js";
-import type { WorkerRequest, WorkerResponse } from "../workers/protocol.js";
+import type { WorkerRequest, WorkerResponse } from "../shared/protocol.js";
 import type { RunInWorker } from "./types.js";
 
 /** The budget of one run when the caller sets none. */

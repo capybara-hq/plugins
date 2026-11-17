@@ -7,7 +7,7 @@ import type { PreviewerId } from "../../src/previewers.js";
 import { loadRenderer as defaultLoadRenderer } from "../renderers/index.js";
 import { type BridgeEvent, createBridge } from "./bridge.js";
 import { MESSAGES, showEmpty, showError, showLoading, translator } from "./frame.js";
-import { applyTheme } from "./theme.js";
+import { applyTheme, THEME } from "./theme.js";
 import type { PreviewFile, RenderContext, Renderer, RunInWorker } from "./types.js";
 import { createWorkerHost } from "./worker-host.js";
 
@@ -28,12 +28,11 @@ const importModule = (url: string): Promise<{ default?: unknown }> => import(url
 const BASE_CSS = `
 :root { color-scheme: light dark; }
 html, body { height: 100%; margin: 0; }
-body { font: 14px/1.5 system-ui, sans-serif; color: var(--cap-foreground, CanvasText);
-  background: var(--cap-background, Canvas); }
+body { font: 14px/1.5 ${THEME.font}; color: ${THEME.foreground}; background: ${THEME.background}; }
 #root { position: relative; height: 100%; overflow: auto; }
-.cap-status { position: absolute; inset: 0; background: var(--cap-background, Canvas); }
-.cap-state { padding: 24px; text-align: center; color: var(--cap-muted-foreground, GrayText); }
-.cap-error-title { font-weight: 600; color: var(--cap-foreground, CanvasText); }
+.cap-status { position: absolute; inset: 0; background: ${THEME.background}; }
+.cap-state { padding: 24px; text-align: center; color: ${THEME.mutedForeground}; }
+.cap-error-title { font-weight: 600; color: ${THEME.foreground}; }
 .cap-error-reason { margin: 8px 0; overflow-wrap: anywhere; }
 `;
 

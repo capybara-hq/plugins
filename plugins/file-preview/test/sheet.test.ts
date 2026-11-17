@@ -4,11 +4,8 @@ import { describe, expect, it } from "vitest";
 import { translator } from "../ui-src/app/frame.js";
 import type { PreviewFile, RenderContext } from "../ui-src/app/types.js";
 import { render } from "../ui-src/renderers/sheet.js";
-import {
-  parseWorkbook,
-  type SheetInput,
-  type SheetOutput,
-} from "../ui-src/workers/sheet.worker.js";
+import type { SheetInput, SheetOutput } from "../ui-src/shared/sheet.js";
+import { parseWorkbook } from "../ui-src/workers/sheet.worker.js";
 
 async function toBuffer(wb: ExcelJS.Workbook): Promise<ArrayBuffer> {
   const buf = (await wb.xlsx.writeBuffer()) as ArrayBuffer;

@@ -3,32 +3,11 @@
  * `MAX_ROWS` x `MAX_COLS` per sheet.
  */
 import ExcelJS from "exceljs";
+import type { SheetData, SheetInput, SheetMerge, SheetOutput } from "../shared/sheet.js";
 import { serve } from "./serve.js";
 
 export const MAX_ROWS = 100_000;
 export const MAX_COLS = 200;
-
-export interface SheetMerge {
-  r1: number;
-  c1: number;
-  r2: number;
-  c2: number;
-}
-
-export interface SheetData {
-  name: string;
-  rows: string[][];
-  merges: SheetMerge[];
-  truncatedRows: boolean;
-  truncatedCols: boolean;
-}
-
-export interface SheetInput {
-  data: ArrayBuffer;
-}
-export interface SheetOutput {
-  sheets: SheetData[];
-}
 
 /** Column letters ("AB") to a 0-based index. */
 function colIndex(letters: string): number {

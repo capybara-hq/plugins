@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import { MESSAGES, translator } from "../ui-src/app/frame.js";
-import { decodeText, languageFor } from "../ui-src/app/language.js";
 import type { RenderContext } from "../ui-src/app/types.js";
 import { mountCode, render } from "../ui-src/renderers/code.js";
+import { decodeText, languageFor } from "../ui-src/shared/language.js";
 import { highlight, MAX_CHARS, MAX_LINES } from "../ui-src/workers/code.logic.js";
 
 describe("languageFor", () => {

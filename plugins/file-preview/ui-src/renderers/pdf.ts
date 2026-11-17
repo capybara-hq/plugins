@@ -16,6 +16,7 @@
  *   offscreen renderer worker (`disableWorkerRendering`) is off since it would load its own script.
  * A password-protected PDF gets a message, never a password prompt.
  */
+import { THEME } from "../app/theme.js";
 import type { PreviewFile, RenderContext, Renderer } from "../app/types.js";
 
 /** The budget of one page (load + paint). */
@@ -108,22 +109,22 @@ const MAX_CANVAS_PIXELS = 16_777_216;
 const CSS = `
 .cap-pdf { display: flex; flex-direction: column; height: 100%; }
 .cap-pdf-bar { display: flex; align-items: center; gap: 4px; padding: 4px 8px; flex: none;
-  border-bottom: 1px solid var(--cap-border, rgba(127,127,127,.3));
-  background: var(--cap-background, Canvas); font-size: 12px; }
+  border-bottom: 1px solid ${THEME.border};
+  background: ${THEME.background}; font-size: 12px; }
 .cap-pdf-bar button { font: inherit; color: inherit; background: transparent; cursor: pointer;
-  border: 1px solid var(--cap-border, rgba(127,127,127,.3)); border-radius: 4px; padding: 2px 8px; }
-.cap-pdf-bar button:hover { background: var(--cap-muted, rgba(127,127,127,.12)); }
+  border: 1px solid ${THEME.border}; border-radius: ${THEME.radius}; padding: 2px 8px; }
+.cap-pdf-bar button:hover { background: ${THEME.hover}; }
 .cap-pdf-indicator { margin-right: auto; font-variant-numeric: tabular-nums; }
 .cap-pdf-zoom { min-width: 3.5em; text-align: center; font-variant-numeric: tabular-nums; }
 .cap-pdf-pages { flex: 1; min-height: 0; overflow: auto; padding: ${PAD}px; box-sizing: border-box;
-  background: var(--cap-muted, rgba(127,127,127,.12)); }
+  background: ${THEME.panel}; }
 .cap-pdf-page { position: relative; margin: 0 auto ${PAD}px; background: #fff;
   box-shadow: 0 1px 3px rgba(0,0,0,.25); }
 .cap-pdf-page canvas { display: block; width: 100%; height: 100%; }
 .cap-pdf-page-error { position: absolute; inset: 0; display: flex; align-items: center;
   justify-content: center; padding: 16px; text-align: center; color: #555; font-size: 13px;
   overflow-wrap: anywhere; }
-.cap-pdf-empty { padding: 24px; text-align: center; color: var(--cap-muted-foreground, GrayText); }
+.cap-pdf-empty { padding: 24px; text-align: center; color: ${THEME.mutedForeground}; }
 `;
 
 function message(e: unknown): string {

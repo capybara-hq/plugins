@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { WorkerResponse } from "../ui-src/workers/protocol.js";
+import type { WorkerResponse } from "../ui-src/shared/protocol.js";
 import { serve, type WorkerScope } from "../ui-src/workers/serve.js";
 
 function fakeScope() {

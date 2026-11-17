@@ -47,19 +47,7 @@ import xml from "shiki/langs/xml.mjs";
 import yaml from "shiki/langs/yaml.mjs";
 import githubDark from "shiki/themes/github-dark.mjs";
 import githubLight from "shiki/themes/github-light.mjs";
-
-// The same shapes as `HighlightInput` / `HighlightOutput` in `app/language.ts`: the worker and the
-// app are separate TypeScript projects that cannot import each other.
-export interface HighlightInput {
-  text: string;
-  lang: string;
-  theme: "dark" | "light";
-}
-
-export interface HighlightOutput {
-  lines: { content: string; color?: string }[][];
-  truncated: boolean;
-}
+import type { HighlightInput, HighlightOutput } from "../shared/code.js";
 
 /** Highlight at most this much text and this many lines; the rest is dropped (`truncated`). */
 export const MAX_CHARS = 1024 * 1024;

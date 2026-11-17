@@ -9,7 +9,7 @@ import {
   WorkerDisposedError,
   WorkerTimeoutError,
 } from "../ui-src/app/worker-host.js";
-import type { WorkerRequest, WorkerResponse } from "../ui-src/workers/protocol.js";
+import type { WorkerRequest, WorkerResponse } from "../ui-src/shared/protocol.js";
 
 /** A stand-in for `Worker`: records what the host posts and lets the test answer. */
 class FakeWorker {
