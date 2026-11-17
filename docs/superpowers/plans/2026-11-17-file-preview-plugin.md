@@ -35,7 +35,7 @@
 
 ## Part 1 — core (`capybara-hq/core`)
 
-Branch: `pnpm wt:new fix/embed-workers --from origin/main` in `/Users/grant/Capybara/core`. One PR; it must be released (web image rc) before Part 2's browser verification on a deployment, but Part 2 development can proceed against a local dev stack running this branch.
+Branch: `pnpm wt:new fix/embed-workers --from origin/main` in `/Users/grant/Capybara/core`. Tasks 1, 1A and 1B in one PR; it must be released (web image rc) before Part 2's browser verification on a deployment, but Part 2 development can proceed against a local dev stack running this branch.
 
 ### Task 1: Allow workers in embeds
 
@@ -66,6 +66,48 @@ expect(directives.sandbox).toEqual(["allow-scripts", "allow-forms"]);
 - [ ] **Step 4: Run it.** Same command → PASS. Then `pnpm verify --fast`.
 - [ ] **Step 5: Skill and changeset.** In the skill, change `object-src` / `frame-src` / `worker-src 'none'` to `object-src` / `frame-src 'none'`, `worker-src 'self' blob:` (workers for off-main-thread parsing). Changeset: patch on `@capybara-hq/capybara`, "Embeds may start Web Workers (`worker-src 'self' blob:`)".
 - [ ] **Step 6: Commit and open the PR** (`fix(web): allow workers in embeds`), linked issue per the `contributing` skill.
+
+### Task 1A: Download affordance on user file attachments
+
+Maintainer request 2026-11-17: a user's attachment looks like the agent's file card and shows its
+actions. Decision (assistant's call, stated to the maintainer): a non-image attachment keeps
+"click = download"; its row gains a trailing download icon button (`aria-label` 下载 / Download)
+in place of nothing. No "open in new tab" for non-image files: the kernel serves only bitmaps
+inline, so a new tab would download anyway (real opening waits for the content-origin project or
+attachments in the right panel). Read core's `writing-web-ui` skill first.
+
+**Files:**
+- Modify: `packages/design/src/conversation/bubble.tsx` (`BubbleAttachments` file rows), its CSS in the design package, `packages/design/src/i18n.ts` if a new string is needed
+- Modify: the `/dev/ui` catalog entry for bubbles (`apps/web/src/dev/catalog/components/chat.tsx`)
+- Test: the design package's bubble test (or a new `bubble-attachments.test.tsx` next to it)
+
+**Interfaces:**
+- `BubbleAttachments` gains `onDownload?(id: string): void`; when given, each file row shows the icon button, whose click calls `onDownload` and does not also fire `onOpen`. `Thread.tsx` passes `openDownload(attachmentDownloadUrl(orgId, id))`.
+
+- [ ] **Step 1: Failing test:** with `onDownload`, a file row has a button named 下载 / Download; clicking it calls `onDownload("a1")` once and `onOpen` zero times; image thumbnails get no such button; without `onDownload` no button renders. The row matches `FileCard`'s parts (type badge, middle-truncated name, size).
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement** (no box inside a box: the icon is a ghost icon button inside the row, `check:web-ui` and `findNestedBoxes` pass).
+- [ ] **Step 4: Run** the test and `pnpm check:web-ui` → PASS. **Step 5: Commit** `feat(design): download action on file attachments`.
+
+### Task 1B: `ImageViewer` lightbox replaces `ImageZoom`
+
+Maintainer request 2026-11-17: image preview is a full-screen dimmed overlay with zoom, not a
+dialog. Pre-0.1.0: `ImageZoom` is removed, not kept beside it.
+
+**Files:**
+- Create: `packages/design/src/conversation/image-viewer.tsx` (+ CSS in the design package)
+- Delete: `packages/design/src/conversation/image-zoom.tsx`; update `packages/design/src/conversation/index.ts`
+- Modify: `apps/web/src/components/conversation/Thread.tsx` (use `ImageViewer` for a message's images, all images of that message navigable), `apps/web/src/components/conversation/FilePanel.tsx` (clicking the built-in `ImagePreview` opens the viewer for that file), `packages/design/src/conversation/file-preview.tsx` (`ImagePreview` gains `onOpen?()`), `docs/design/spec.md` §5.6 (the zoom description), the `/dev/ui` catalog
+- Test: `packages/design/test/image-viewer.test.tsx` (jsdom)
+
+**Interfaces:**
+- `ImageViewer({ open, onOpenChange, images, index, onIndexChange, onDownload, onOpenInNewTab, onRetry }: { open: boolean; onOpenChange(open: boolean): void; images: { src: string; name: string; size?: string }[]; index: number; onIndexChange(i: number): void; onDownload(i: number): void; onOpenInNewTab(i: number): void; onRetry?(i: number): void }): JSX.Element`
+- Behavior: portal over the whole page on a dimmed backdrop token (new design token if none fits); image starts fit-to-viewport (never upscaled); zoom 0.1×–8× by wheel (around the pointer), pinch (two pointers), and toolbar buttons (−, +, 1:1, fit) with the percent shown; drag pans when the image exceeds the viewport; double-click toggles fit ↔ 100 %; Esc, the close button and a click on the backdrop (not on the image) close; ← / → and side buttons switch when `images.length > 1` and reset zoom; a top bar with name, size, `n / total`, open in new tab, download, close; focus trapped while open and restored to the opener; a failed image shows `LoadFailed` with Retry when `onRetry`; only `isSafeAttachmentHref` sources load. Strings zh / en in the design i18n (放大 / 缩小 / 实际大小 / 适应窗口 / 在新标签打开 / 下载 / 关闭 / 上一张 / 下一张).
+- `onOpenInNewTab` in the web: `window.open(src with ?inline=1 where the URL is an artifact download URL, "_blank", "noopener,noreferrer")` via the existing `useOpenDownload` session refresh pattern.
+
+- [ ] **Step 1: Failing tests:** opens with the image at fit scale; `+` raises the shown percent, `1:1` shows 100 %, `fit` restores; wheel up over the image zooms in; Esc calls `onOpenChange(false)`; click on backdrop closes, click on the image does not; with three images `ArrowRight` calls `onIndexChange(1)`, with one image no nav buttons render; download / new-tab buttons call their handlers with the index; an unsafe `src` renders no `img`; focus returns to the opener after close.
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement**, then wire `Thread.tsx` and `FilePanel.tsx`, remove `ImageZoom` and its references.
+- [ ] **Step 4: Run** the design tests, `pnpm check:web-ui`, `pnpm typecheck` → PASS; check `/dev/ui` by hand in light and dark. Visual baselines are re-rendered only by the `visual-update` workflow: trigger it on the PR.
+- [ ] **Step 5: Commit** `feat(design): image viewer with zoom replaces the image dialog`; changeset patch on `@capybara-hq/capybara` (shared with Task 1's PR).
 
 ---
 
