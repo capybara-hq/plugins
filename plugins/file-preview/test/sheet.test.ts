@@ -1,11 +1,22 @@
 // @vitest-environment jsdom
 import ExcelJS from "exceljs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { translator } from "../ui-src/app/frame.js";
 import type { PreviewFile, RenderContext } from "../ui-src/app/types.js";
 import { render } from "../ui-src/renderers/sheet.js";
 import type { SheetInput, SheetOutput } from "../ui-src/shared/sheet.js";
 import { formatDate, parseWorkbook } from "../ui-src/workers/sheet.worker.js";
+import {
+  ab,
+  decoyDirectory,
+  jszip,
+  lyingSize,
+  prepended,
+  streamed,
+  u8,
+  withEntries,
+  zip64Switch,
+} from "./fixtures/zip/hostile.js";
 
 async function toBuffer(wb: ExcelJS.Workbook): Promise<ArrayBuffer> {
   const buf = (await wb.xlsx.writeBuffer()) as unknown as Uint8Array;
@@ -272,6 +283,7 @@ describe("oversized workbooks", () => {
       const name = new TextEncoder().encode(`f${i}.xml`);
       const local = new Uint8Array(30 + name.length);
       new DataView(local.buffer).setUint32(0, 0x04034b50, true);
+      new DataView(local.buffer).setUint16(26, name.length, true);
       local.set(name, 30);
       const cd = new Uint8Array(46 + name.length);
       const v = new DataView(cd.buffer);
@@ -318,5 +330,57 @@ describe("oversized workbooks", () => {
     const { ctx, errors } = makeCtx(f);
     await render(f, ctx);
     expect(errors[0]).toContain("too large");
+  });
+});
+
+describe("hostile archives never reach exceljs (ruling R21)", () => {
+  const MiB = 1024 * 1024;
+  /** exceljs reads every entry, so any entry can carry the payload. */
+  const withMedia = async (bytes: number) =>
+    withEntries(u8(await basic()), { "xl/media/big.bin": new Uint8Array(bytes) });
+
+  /** Runs the real parseWorkbook path with JSZip (exceljs's unzipper) observed. */
+  async function run(data: Uint8Array) {
+    const loadAsync = vi.spyOn(jszip(), "loadAsync");
+    try {
+      const out = await parseWorkbook({ data: ab(data) });
+      return { out, jszipCalls: loadAsync.mock.calls.length };
+    } finally {
+      loadAsync.mockRestore();
+    }
+  }
+
+  it("refuses a lying-size bomb before JSZip inflates it", async () => {
+    const r = await run(lyingSize(await withMedia(8 * MiB), "xl/media/big.bin", 1024));
+    expect(r.out).toEqual({ sheets: [], error: "too-large" });
+    expect(r.jszipCalls).toBe(0);
+  });
+
+  it("refuses the decoy directory (prepended-bytes shift)", async () => {
+    const r = await run(decoyDirectory(await withMedia(1), await withMedia(60 * MiB)));
+    expect(r.out).toEqual({ sheets: [], error: "invalid" });
+    expect(r.jszipCalls).toBe(0);
+  });
+
+  it("refuses the zip64 switch (0xFFFF record count)", async () => {
+    const r = await run(zip64Switch(await withMedia(60 * MiB)));
+    expect(r.out).toEqual({ sheets: [], error: "invalid" });
+    expect(r.jszipCalls).toBe(0);
+  });
+
+  it("refuses bytes prepended to a workbook", async () => {
+    const r = await run(prepended(u8(await basic())));
+    expect(r.out).toEqual({ sheets: [], error: "invalid" });
+    expect(r.jszipCalls).toBe(0);
+  });
+
+  it("still parses workbooks from exceljs, fflate and fflate's streaming writer", async () => {
+    const fromExceljs = await run(u8(await basic()));
+    expect(fromExceljs.out.sheets.map((s) => s.name)).toEqual(["Sales", "Notes"]);
+    expect(fromExceljs.jszipCalls).toBe(1);
+    const fromFflate = await run(withEntries(u8(await basic()), {}));
+    expect(fromFflate.out.sheets[0]?.rows[1]).toEqual(["Pen", "2", "1.5", "3"]);
+    const fromStream = await run(streamed(u8(await basic())));
+    expect(fromStream.out.sheets.map((s) => s.name)).toEqual(["Sales", "Notes"]);
   });
 });

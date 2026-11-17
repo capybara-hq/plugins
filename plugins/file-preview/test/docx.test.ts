@@ -10,9 +10,21 @@ import {
   blankDocx,
   corruptDocx,
   declareSizes,
+  docx,
   fullDocx,
   hostileDocx,
 } from "./fixtures/docx/make.js";
+import {
+  ab,
+  decoyDirectory,
+  jszip,
+  lyingSize,
+  prepended,
+  streamed,
+  u8,
+  withEntries,
+  zip64Switch,
+} from "./fixtures/zip/hostile.js";
 
 function setup(data: ArrayBuffer, locale: "zh" | "en" = "en") {
   const root = document.createElement("div");
@@ -170,5 +182,79 @@ describe("docx renderer", () => {
     ac.abort();
     await render(file, { ...ctx, signal: ac.signal });
     expect(root.querySelector(".cap-html-host")).toBeNull();
+  });
+});
+
+describe("hostile archives never reach mammoth (ruling R21)", () => {
+  const body = (text: string) => `<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`;
+  /** A docx whose media holds an honest `bytes`-byte entry (zeros: 60 MiB zip to ~60 KiB). */
+  const withBig = (text: string, bytes: number) =>
+    withEntries(u8(docx(body(text), { image: false })), {
+      "word/media/big.bin": new Uint8Array(bytes),
+    });
+
+  /** Runs the real convertDocx path with JSZip (mammoth's unzipper) and mammoth observed. */
+  async function run(data: Uint8Array) {
+    const loadAsync = vi.spyOn(jszip(), "loadAsync");
+    const convert = vi.spyOn(mammoth, "convertToHtml");
+    try {
+      const out = await convertDocx({ data: ab(data) });
+      return {
+        out,
+        jszipCalls: loadAsync.mock.calls.length,
+        mammothCalls: convert.mock.calls.length,
+      };
+    } finally {
+      loadAsync.mockRestore();
+      convert.mockRestore();
+    }
+  }
+
+  it("refuses a lying-size bomb before JSZip inflates it", async () => {
+    // document.xml holds 8 MiB of text, its directory record says 1 KiB
+    const base = u8(docx(body("a".repeat(8 * MIB)), { image: false }));
+    const r = await run(lyingSize(base, "word/document.xml", 1024));
+    expect(r.out).toEqual({ html: "", error: "too-large" });
+    expect(r.mammothCalls).toBe(0);
+    expect(r.jszipCalls).toBe(0);
+  });
+
+  it("refuses the decoy directory (prepended-bytes shift)", async () => {
+    const real = withBig("FROM-B", 60 * MIB);
+    const decoy = withBig("A", 1);
+    const r = await run(decoyDirectory(decoy, real));
+    expect(r.out.error).toBe("invalid");
+    expect(r.out.html).not.toContain("FROM-B");
+    expect(r.jszipCalls).toBe(0);
+  });
+
+  it("refuses the zip64 switch (0xFFFF record count)", async () => {
+    const r = await run(zip64Switch(withBig("FROM-B", 60 * MIB)));
+    expect(r.out).toEqual({ html: "", error: "invalid" });
+    expect(r.jszipCalls).toBe(0);
+  });
+
+  it("refuses bytes prepended to a docx", async () => {
+    const r = await run(prepended(u8(fullDocx())));
+    expect(r.out).toEqual({ html: "", error: "invalid" });
+    expect(r.jszipCalls).toBe(0);
+  });
+
+  it("still converts docx files from fflate, fflate's streaming writer and JSZip", async () => {
+    const plain = await run(u8(fullDocx()));
+    expect(plain.out.html).toContain("<h1>Quarterly Report</h1>");
+    expect(plain.jszipCalls).toBe(1);
+    expect((await run(streamed(u8(fullDocx())))).out.html).toContain("Quarterly Report");
+    const JSZip = jszip();
+    const z = new JSZip();
+    for (const [name, data] of Object.entries((await import("fflate")).unzipSync(u8(fullDocx())))) {
+      z.file(name, data);
+    }
+    const viaJszip = await z.generateAsync({
+      type: "uint8array",
+      compression: "DEFLATE",
+      streamFiles: true,
+    });
+    expect((await run(viaJszip)).out.html).toContain("Quarterly Report");
   });
 });

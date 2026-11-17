@@ -5,11 +5,11 @@
 import ExcelJS from "exceljs";
 import type { SheetData, SheetInput, SheetMerge, SheetOutput } from "../shared/sheet.js";
 import { serve } from "./serve.js";
-import { listEntries } from "./zip.logic.js";
+import { MAX_ENTRIES, verifyArchive } from "./zip.logic.js";
 
 export const MAX_ROWS = 100_000;
 export const MAX_COLS = 200;
-/** One entry's declared uncompressed size, and the declared total, beyond which we refuse. */
+/** One entry's declared (and verified) uncompressed size, and the total, beyond which we refuse. */
 export const MAX_ENTRY_BYTES = 50 * 1024 * 1024;
 export const MAX_TOTAL_BYTES = 150 * 1024 * 1024;
 /** Cells (values) kept across all sheets of one workbook. */
@@ -117,17 +117,14 @@ function cellText(cell: ExcelJS.Cell): string {
 }
 
 export async function parseWorkbook(input: SheetInput, maxCells = MAX_CELLS): Promise<SheetOutput> {
-  // JSZip inflates without a cap: judge the declared sizes from the central directory first
-  const dir = listEntries({ data: input.data });
-  if (dir.error !== undefined) return { sheets: [], error: "invalid" };
-  let total = 0;
-  for (const e of dir.entries) {
-    total += e.size;
-    if (e.size > MAX_ENTRY_BYTES || total > MAX_TOTAL_BYTES) {
-      return { sheets: [], error: "too-large" };
-    }
-  }
-  if (dir.truncated) return { sheets: [], error: "too-large" };
+  // JSZip inflates a whole entry before it checks the declared size, and reads non-canonical
+  // archives differently from a plain directory reader: prove the archive first (ruling R21)
+  const verdict = verifyArchive(new Uint8Array(input.data), {
+    entryMax: MAX_ENTRY_BYTES,
+    totalMax: MAX_TOTAL_BYTES,
+    maxEntries: MAX_ENTRIES,
+  });
+  if (!verdict.ok) return { sheets: [], error: verdict.reason };
   const wb = new ExcelJS.Workbook();
   try {
     await wb.xlsx.load(input.data);

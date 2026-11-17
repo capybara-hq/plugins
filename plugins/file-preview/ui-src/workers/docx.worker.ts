@@ -5,9 +5,9 @@
 import mammoth from "mammoth";
 import type { DocxInput, DocxOutput } from "../shared/docx.js";
 import { serve } from "./serve.js";
-import { listEntries } from "./zip.logic.js";
+import { MAX_ENTRIES, verifyArchive } from "./zip.logic.js";
 
-/** A docx is a zip: its declared sizes are checked before mammoth (JSZip) inflates anything. */
+/** A docx is a zip: `verifyArchive` proves it within these before mammoth (JSZip) touches it. */
 export const ENTRY_MAX = 50 * 1024 * 1024;
 export const TOTAL_MAX = 100 * 1024 * 1024;
 
@@ -20,16 +20,14 @@ function source(data: ArrayBuffer): { arrayBuffer: ArrayBuffer } | { buffer: Buf
 }
 
 export async function convertDocx(input: DocxInput): Promise<DocxOutput> {
-  // the directory is read with the zip previewer's capped reader (it never inflates)
-  const dir = listEntries({ data: input.data });
-  if (dir.error !== undefined) return { html: "", error: "invalid" };
-  let total = 0;
-  for (const e of dir.entries) {
-    total += e.size;
-    if (e.size > ENTRY_MAX || total > TOTAL_MAX) return { html: "", error: "too-large" };
-  }
-  // more entries than the reader lists: the declared total cannot be known
-  if (dir.truncated) return { html: "", error: "too-large" };
+  // JSZip inflates a whole entry before it checks the declared size, and reads non-canonical
+  // archives differently from a plain directory reader: prove the archive first (ruling R21)
+  const verdict = verifyArchive(new Uint8Array(input.data), {
+    entryMax: ENTRY_MAX,
+    totalMax: TOTAL_MAX,
+    maxEntries: MAX_ENTRIES,
+  });
+  if (!verdict.ok) return { html: "", error: verdict.reason };
   try {
     const result = await mammoth.convertToHtml(source(input.data), {
       convertImage: mammoth.images.imgElement(async (image) => ({
