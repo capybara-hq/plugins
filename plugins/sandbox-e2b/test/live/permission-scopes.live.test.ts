@@ -54,7 +54,8 @@ import {
  *   overlap orders of a refused restricted grant and a Full operation, background executions
  *   (status, tail, positional reads, idempotent start, lost acknowledgement, natural exit, stop,
  *   revocation), records out of the device user's reach, trusted preparation, owner browsing, a
- *   planted runtime directory root never runs, an aborted native write killed in the VM, and
+ *   planted runtime directory root never runs, concurrent first-time staging, an aborted native
+ *   write killed in the VM, and
  *   status / stop / revocation that never resume a paused VM.
  */
 
@@ -706,6 +707,19 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
     const r = await fullExec("echo verified");
     expect(r.stdout.trim()).toBe("verified");
     expect(await sbx.stat(h, "/tmp/pwned-root", sig())).toBeNull();
+    const after = await sh(
+      `stat -c "%u %a" ${RUNTIME_DIR} ${OPERATION_AGENT}; sha256sum ${OPERATION_AGENT}`,
+    );
+    expect(after.stdout).toMatch(/^0 755\n0 644\n/);
+    expect(after.stdout).toContain(OPERATION_AGENT_SHA256);
+  });
+
+  it("concurrent first-time staging: both calls run, one trusted runtime remains", async () => {
+    const removed = await rootSh(`rm -rf ${RUNTIME_DIR} && echo removed`);
+    expect(removed.out).toContain("removed");
+    const [a, b] = await Promise.all([fullExec("echo first"), fullExec("echo second")]);
+    expect(a.stdout.trim()).toBe("first");
+    expect(b.stdout.trim()).toBe("second");
     const after = await sh(
       `stat -c "%u %a" ${RUNTIME_DIR} ${OPERATION_AGENT}; sha256sum ${OPERATION_AGENT}`,
     );

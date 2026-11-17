@@ -283,7 +283,10 @@ tombstone first, kills the operation's foreground wrapper and its background exe
 reports a retry when the VM rebooted meanwhile. On a paused VM it stays pending (it throws, the
 kernel retries) even past the admission deadline: the provider pauses without memory, but a paused
 VM cannot confirm that nothing of the operation survives (a control plane that restores a memory
-snapshot would bring its processes back), so success waits for a running VM.
+snapshot would bring its processes back), so success waits for a running VM. A native call
+(read, write, list) that passed its admission check before the tombstone was written runs to its
+end: revocation stops executions, not an in-flight native call, as on Docker (the kernel aborts
+the call first).
 
 **Root runs only a verified agent.** Every root run of the agent goes through an inline
 `python3 -I -c` check: `/`, `/opt`, the runtime base and directory and the agent file must be
@@ -293,7 +296,10 @@ untrusted runtime (for example a planted directory) is restaged, which replaces 
 directory, and the call is retried once. An aborted or timed-out agent command is killed in the
 VM (envd SIGKILL by pid, also when the abort came before envd reported the pid), never left
 running; an aborted background start's detached supervisor is then stopped by its recorded
-identity.
+identity. A kill that cannot be confirmed (the signal fails, or the stream stays open past the
+grace period) reboots the VM, as for exec; on the paths that never resume a paused VM (status,
+output, stop, revocation, support) a VM that is not running is left paused and the call reports
+an unknown outcome.
 
 **Background executions** (Full access only) use the same design as sandbox-docker: a detached
 supervisor per operation, a root recorder that accepts the supervisor's frames only on the root

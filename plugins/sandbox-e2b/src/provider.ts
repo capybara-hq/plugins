@@ -7,6 +7,7 @@ import {
   SandboxGoneError,
   type SandboxHandle,
   type SandboxLimits,
+  SandboxOperationOutcomeUnknownError,
   type SandboxProvider,
   validateAllowHost,
   validateSandboxPathShape,
@@ -275,8 +276,10 @@ const STAGE_RUNTIME_SCRIPT =
   'if [ -L "$b" ] || { [ -e "$b" ] && [ ! -d "$b" ]; }; then rm -f -- "$b"; fi; ' +
   'mkdir -p -- "$b"; chown 0:0 "$b"; chmod 0755 "$b"; ' +
   'cd -- "$u"; sha256sum -c --quiet SHA256SUMS; chown -R 0:0 .; chmod 0644 ./*; chmod 0755 .; cd /; ' +
-  // an existing directory that is not trusted (planted, altered, partial) is replaced
-  'if ! t "$d"; then rm -rf -- "$d"; mv -T -- "$u" "$d" 2>/dev/null || true; fi; ' +
+  // absent: one rename (a concurrent staging that won the race makes it fail harmlessly);
+  // present but untrusted (planted, altered, partial): removed, then the rename
+  'if [ ! -e "$d" ] && [ ! -L "$d" ]; then mv -T -- "$u" "$d" 2>/dev/null || true; ' +
+  'elif ! t "$d"; then rm -rf -- "$d"; mv -T -- "$u" "$d" 2>/dev/null || true; fi; ' +
   't "$d"';
 
 /**
@@ -308,6 +311,28 @@ export const ROOT_AGENT_PRECHECK = [
   "    sys.exit(0)",
   "os.execv(sys.executable, [sys.executable, '-I', agent] + rest)",
 ].join("\n");
+
+/** The only interpreter root runs the agent with. */
+const AGENT_PYTHON = "/usr/bin/python3";
+
+/**
+ * The arguments of a root agent run (`AGENT_PYTHON` plus these): the command must be exactly
+ * `[AGENT_PYTHON, "-I", OPERATION_AGENT, <command>, ...]`, and it runs through
+ * {@link ROOT_AGENT_PRECHECK}. Any other shape is refused: root never runs anything else here.
+ */
+export function rootAgentArgs(cmd: readonly string[]): string[] {
+  if (cmd[0] !== AGENT_PYTHON || cmd[1] !== "-I" || cmd[2] !== OPERATION_AGENT || !cmd[3]) {
+    throw new Error("sandbox-e2b: root runs only the operation agent, through its verification");
+  }
+  return [
+    "-I",
+    "-c",
+    ROOT_AGENT_PRECHECK,
+    OPERATION_AGENT,
+    OPERATION_AGENT_SHA256,
+    ...cmd.slice(3),
+  ];
+}
 
 /** The control file of one exec: carries the holder's tag when there is one. */
 export function execControlPath(tag?: string): string {
@@ -781,6 +806,7 @@ export function createE2BSandbox(
     // stopped before envd reported the pid: the kill could not name the process, so the start
     // event kills it by pid as soon as it is known
     let killedWithoutPid = false;
+    let lateKill: Promise<void> | undefined;
     const stop = () => {
       if (stopping) return;
       stopping = true;
@@ -851,7 +877,12 @@ export function createE2BSandbox(
           if ("start" in e) {
             pid = e.start.pid;
             if (killedWithoutPid && pid !== undefined) {
-              void envdKill(t, pid, AbortSignal.timeout(15_000)).catch(() => undefined);
+              const late = pid;
+              lateKill = envdKill(t, late, AbortSignal.timeout(15_000)).catch(() => {
+                // unconfirmed: the command may still run, so the caller's recovery decides
+                wedged = true;
+                conn.abort();
+              });
             }
             feed(pid);
           } else if ("data" in e) {
@@ -868,6 +899,7 @@ export function createE2BSandbox(
     await feeding;
     // 杀进程（必要时重启沙箱）完成后才返回：调用方接着用沙箱时它已结束
     await killing;
+    await lateKill;
     grace?.cancel();
     if (wedged && o.recover) await o.recover().catch(() => undefined);
     timer?.cancel();
@@ -1097,22 +1129,39 @@ export function createE2BSandbox(
   };
 
   /**
+   * An agent command whose kill was not confirmed (the kill failed, a late pid's kill failed, or
+   * the stream stayed open past the grace period) may still run: reboot the VM, as `execWith`
+   * does. On the never-resume path (`resume` false) only a VM confirmed running is rebooted; a
+   * paused one stays paused (a pause without memory already ended the command) and the result
+   * is false, which the caller reports as an unknown outcome. A pause racing the check and the
+   * reboot's own pause can still meet a resume: the reboot is a cold start either way.
+   */
+  const recoverAgent = async (id: string, resume: boolean): Promise<boolean> => {
+    try {
+      if (!resume) {
+        const live = await targetIfRunning(id, AbortSignal.timeout(30_000));
+        if (live === undefined) return false;
+      }
+      await reboot(id);
+      return true;
+    } catch (e) {
+      deps.log.warn("sandbox-e2b: sandbox reboot failed; an agent command may still be running", {
+        sandboxId: id,
+        err: (e instanceof Error ? e.message : String(e)).slice(0, 500),
+      });
+      return false;
+    }
+  };
+
+  /**
    * Runs one agent command; stages the runtime and retries once when its file is missing or, for
    * a root run, when the inline verification does not trust it.
    */
-  const runAgent = async (t: EnvdTarget, o: AgentRunOpts): Promise<RunResult> => {
+  const runAgent = async (t: EnvdTarget, o: AgentRunOpts, resume: boolean): Promise<RunResult> => {
     // Root runs the agent only through the inline verification (ROOT_AGENT_PRECHECK).
-    const root = o.user === "root" && o.cmd[2] === OPERATION_AGENT;
-    const args = root
-      ? [
-          "-I",
-          "-c",
-          ROOT_AGENT_PRECHECK,
-          OPERATION_AGENT,
-          OPERATION_AGENT_SHA256,
-          ...o.cmd.slice(3),
-        ]
-      : o.cmd.slice(1);
+    const root = o.user === "root";
+    const args = root ? rootAgentArgs(o.cmd) : o.cmd.slice(1);
+    let unconfirmed = false;
     const once = () =>
       run(t, {
         user: o.user === "root" ? ROOT_USER : SANDBOX_USER,
@@ -1125,15 +1174,27 @@ export function createE2BSandbox(
         ...(o.timeoutMs !== undefined && { timeoutMs: o.timeoutMs }),
         signal: o.signal,
         kill: killAgent(t),
+        recover: async () => {
+          unconfirmed = !(await recoverAgent(t.sandboxId, resume));
+        },
       });
-    const r = await once();
+    const checked = async () => {
+      const r = await once();
+      if (unconfirmed) {
+        throw new SandboxOperationOutcomeUnknownError(
+          "sandbox-e2b: an interrupted agent command could not be confirmed stopped and the VM was not rebooted (it is not running); its outcome is unknown",
+        );
+      }
+      return r;
+    };
+    const r = await checked();
     const unverified =
       root &&
       (r.exitCode === 3 || r.exitCode === 4) &&
       r.stderr.toString("utf8").includes("capybara-precheck:");
     if (!agentMissing(o, r) && !unverified) return r;
     await stageRuntime(t, o.signal);
-    return once();
+    return checked();
   };
 
   /** Envd answers 502 for a VM that was paused meanwhile: not running, never resumed here. */
@@ -1209,17 +1270,17 @@ export function createE2BSandbox(
   const transport: OperationTransport = {
     async run(h, o) {
       const t = await attach(h.id, o.signal);
-      return runAgent(t, o);
+      return runAgent(t, o, true);
     },
     async session(h, signal) {
       const t = await attach(h.id, signal);
-      return (o) => runAgent(t, o);
+      return (o) => runAgent(t, o, true);
     },
     async runIfRunning(h, o) {
       const t = await targetIfRunning(h.id, o.signal);
       if (t === undefined) return "not-running";
       try {
-        return await runAgent(t, o);
+        return await runAgent(t, o, false);
       } catch (e) {
         if (pausedMeanwhile(e)) return "not-running";
         throw e;

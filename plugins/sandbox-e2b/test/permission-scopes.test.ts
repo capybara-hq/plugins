@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  isSandboxOperationOutcomeUnknownError,
   isSandboxPermissionUnsupportedError,
   isSandboxScopeDeniedError,
   isSandboxScopeValidationError,
@@ -21,7 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { envdCloseStdin, envdSendInput, envdStart } from "../src/e2b-api.js";
 import { createE2BSandbox, type E2BSandboxConfig, publishedImage } from "../src/index.js";
 import { OPERATION_AGENT_SHA256, OPERATION_AGENT_SOURCE } from "../src/operation-agent-source.js";
-import { ROOT_AGENT_PRECHECK } from "../src/provider.js";
+import { ROOT_AGENT_PRECHECK, rootAgentArgs } from "../src/provider.js";
 import {
   OPERATION_AGENT,
   OPS_DIR,
@@ -426,6 +427,35 @@ describe("root runs only a verified agent", () => {
       ["-I", "-c", ROOT_AGENT_PRECHECK, `${dir}/capybara-operation.py`, digest, "--probe-only"],
       { encoding: "utf8" },
     );
+  /**
+   * The precheck with `os.lstat` reporting uid 0 (nothing on the test machine is root-owned), so
+   * the mode, type and digest branches are reached; modes and types stay real.
+   */
+  const asRoot = (dir: string, digest: string) =>
+    spawnSync(
+      "python3",
+      [
+        "-I",
+        "-c",
+        [
+          "import os, sys",
+          "real = os.lstat",
+          "def lstat(p):",
+          "    r = real(p)",
+          "    return os.stat_result((r.st_mode, r.st_ino, r.st_dev, r.st_nlink, 0, r.st_gid,",
+          "                           r.st_size, r.st_atime, r.st_mtime, r.st_ctime))",
+          "os.lstat = lstat",
+          "code = sys.argv[1]",
+          "sys.argv = ['-c'] + sys.argv[2:]",
+          "exec(compile(code, '<precheck>', 'exec'))",
+        ].join("\n"),
+        ROOT_AGENT_PRECHECK,
+        `${dir}/capybara-operation.py`,
+        digest,
+        "--probe-only",
+      ],
+      { encoding: "utf8" },
+    );
 
   it("refuses a runtime directory it cannot trust and reports a missing one apart", () => {
     const base = mkdtempSync(join(tmpdir(), "e2b-precheck-"));
@@ -448,24 +478,87 @@ describe("root runs only a verified agent", () => {
       rmSync(base, { recursive: true, force: true });
     }
   });
+
+  it("with root ownership stubbed: checks modes, types and the agent's digest", () => {
+    // a 0700 parent of its own, so a world-writable temp directory is not part of the chain
+    const top = mkdtempSync(join(tmpdir(), "e2b-precheck-"));
+    try {
+      chmodSync(top, 0o755);
+      const base = join(top, "base");
+      const dir = join(base, "rt");
+      mkdirSync(dir, { recursive: true });
+      chmodSync(base, 0o755);
+      chmodSync(dir, 0o755);
+      const agent = join(dir, "capybara-operation.py");
+      writeFileSync(agent, "open('/dev/null')\n");
+      chmodSync(agent, 0o644);
+      const digest = createHash("sha256").update(readFileSync(agent)).digest("hex");
+      // only "/" and the chain below the parent count; the parent itself must pass too
+      const ok = asRoot(dir, digest);
+      expect(ok.stderr).toBe("");
+      expect(ok.status).toBe(0);
+      const mismatch = asRoot(dir, "0".repeat(64));
+      expect(mismatch.status).toBe(4);
+      expect(mismatch.stderr).toMatch(/untrusted runtime digest/);
+      chmodSync(agent, 0o666);
+      expect(asRoot(dir, digest).status).toBe(4);
+      chmodSync(agent, 0o644);
+      chmodSync(dir, 0o775);
+      expect(asRoot(dir, digest).stderr).toContain(`untrusted runtime ${dir}`);
+      chmodSync(dir, 0o755);
+      rmSync(agent);
+      mkdirSync(agent); // the agent must be a regular file
+      expect(asRoot(dir, digest).status).toBe(4);
+    } finally {
+      rmSync(top, { recursive: true, force: true });
+    }
+  });
+
+  it("root runs only the exact agent command shape, through the precheck", () => {
+    expect(rootAgentArgs(["/usr/bin/python3", "-I", OPERATION_AGENT, "consume"])).toEqual([
+      "-I",
+      "-c",
+      ROOT_AGENT_PRECHECK,
+      OPERATION_AGENT,
+      OPERATION_AGENT_SHA256,
+      "consume",
+    ]);
+    for (const bad of [
+      ["/bin/sh", "-c", "id"],
+      ["/usr/bin/python3", OPERATION_AGENT, "consume"],
+      ["/usr/bin/python3", "-I", "/tmp/capybara-operation.py", "consume"],
+      ["python3", "-I", OPERATION_AGENT, "consume"],
+      ["/usr/bin/python3", "-I", OPERATION_AGENT],
+    ]) {
+      expect(() => rootAgentArgs(bad)).toThrow(/root/);
+    }
+  });
 });
 
 describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
-  /** A consume step held open by the envd proxy, with the pid it reported (if any yet). */
+  /** An agent command held open by the envd proxy, with the pid it reported (if any yet). */
   interface Held {
     pid: number;
-    started: boolean;
+    /** Resolves when the provider closed the command's stream (it disconnected). */
+    closed: Promise<void>;
     start(): void;
     end(): void;
   }
+  interface Hold {
+    /** Held when the Start body contains this text. */
+    match: string;
+    deferStart: boolean;
+    /** SendSignal for the held pid fails (envd unreachable or the kill refused). */
+    failKill: boolean;
+    seen: (held: Held) => void;
+  }
   let fake: FakeE2BServer;
-  let envd: { url: string; close(): Promise<void> };
+  let proxy: { url: string; close(): Promise<void> };
   let sbx: SandboxProvider;
   let h: SandboxHandle;
-  /** When set, the next root consume step is held open instead of running (see `Held`). */
-  let hold: { deferStart: boolean; seen: (held: Held) => void } | undefined;
+  let hold: Hold | undefined;
   const signalled: number[] = [];
-  const held = new Map<number, Held>();
+  const held = new Map<number, Held & { failKill: boolean }>();
   let nextPid = 900_000;
 
   const frame = (m: unknown, flags = 0) => {
@@ -478,27 +571,43 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
 
   beforeAll(async () => {
     fake = await startFakeE2B();
-    // envd in front of the fake: forwards everything, except that it can hold one root consume
-    // step open (a long-running agent command) and answers SendSignal for the held pid
+    // API and envd in front of the fake: forwards everything, serves `GET /sandboxes/{id}` from
+    // the fake's state (the fake has no such route), can hold one agent command open (a
+    // long-running command) and answers SendSignal for the held pid
     const server = createServer((req, res) => {
       void (async () => {
         const parts: Buffer[] = [];
         for await (const c of req) parts.push(c as Buffer);
         const raw = Buffer.concat(parts);
         const path = new URL(req.url ?? "/", "http://x").pathname;
-        if (path === "/process.Process/Start" && hold && raw.includes("consume")) {
-          const { deferStart, seen } = hold;
+        const info = /^\/sandboxes\/([^/]+)$/.exec(path);
+        if (req.method === "GET" && info) {
+          const sb = fake.sandboxes.get(info[1] as string);
+          res.writeHead(sb ? 200 : 404, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify(
+              sb
+                ? { sandboxID: sb.id, state: sb.state, envdAccessToken: sb.envdAccessToken }
+                : { code: 404, message: "not found" },
+            ),
+          );
+          return;
+        }
+        if (path === "/process.Process/Start" && hold && raw.includes(hold.match)) {
+          const { deferStart, failKill, seen } = hold;
           hold = undefined;
           const pid = nextPid++;
           res.writeHead(200, { "content-type": "application/connect+json" });
-          const entry: Held = {
+          const closed = new Promise<void>((r) => res.on("close", () => r()));
+          const entry = {
             pid,
-            started: false,
+            closed,
+            failKill,
             start: () => {
-              entry.started = true;
-              res.write(frame({ event: { start: { pid } } }));
+              if (!res.writableEnded) res.write(frame({ event: { start: { pid } } }));
             },
             end: () => {
+              if (res.writableEnded) return;
               res.write(frame({ event: { end: { exitCode: -1, status: "signal: killed" } } }));
               res.end(frame({}, 2));
             },
@@ -514,6 +623,11 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
           const entry = held.get(pid);
           if (entry) {
             signalled.push(pid);
+            if (entry.failKill) {
+              res.writeHead(503, { "content-type": "application/json" });
+              res.end(JSON.stringify({ code: "unavailable", message: "envd unavailable" }));
+              return;
+            }
             held.delete(pid);
             entry.end();
             res.writeHead(200, { "content-type": "application/json" }).end("{}");
@@ -539,14 +653,14 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
       })().catch(() => res.destroy());
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-    envd = {
+    proxy = {
       url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
       close: () => new Promise<void>((r) => server.close(() => r())),
     };
     sbx = createE2BSandbox(
       {
         apiKey: fake.apiKey,
-        apiUrl: fake.url,
+        apiUrl: proxy.url,
         domain: "e2b.app",
         template: "capybara-sandbox",
         defaultImage: publishedImage("0.0.0-test.1"),
@@ -554,7 +668,7 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
         domainAllowlist: true,
       },
       { log: { info: () => undefined, warn: () => undefined, error: () => undefined } },
-      { envdUrl: envd.url },
+      { envdUrl: proxy.url },
     );
     const name = `cap-device-${randomUUID()}`;
     const fileSystem = await sbx.createFileSystem({ name, limits, signal: sig() });
@@ -562,7 +676,7 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
   });
   afterAll(async () => {
     for (const entry of held.values()) entry.end();
-    await envd?.close();
+    await proxy?.close();
     await fake?.close();
   });
 
@@ -584,6 +698,25 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
       },
       sig(),
     );
+  /** Arms the proxy to hold the next matching agent command; resolves once it is held. */
+  const holdNext = (over: Partial<Omit<Hold, "seen">> = {}) =>
+    new Promise<Held>((resolve) => {
+      hold = { match: "consume", deferStart: false, failKill: false, ...over, seen: resolve };
+    });
+  /** Reboots of this VM: a pause without memory followed by a connect with `memory: false`. */
+  const reboots = () =>
+    fake.calls.filter(
+      (c) =>
+        c.method === "POST" &&
+        c.path === `/v2/sandboxes/${h.id}/connect` &&
+        (c.body as { memory?: boolean } | null)?.memory === false,
+    ).length;
+  const connects = () =>
+    fake.calls.filter((c) => c.method === "POST" && c.path === `/v2/sandboxes/${h.id}/connect`)
+      .length;
+  const running = async () => {
+    if (fake.sandboxes.get(h.id)?.state !== "running") await sbx.resume?.(h, sig());
+  };
 
   it("never starts the agent as root without the inline verification", async () => {
     const op = await fullOp();
@@ -602,21 +735,83 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
 
   for (const deferStart of [false, true]) {
     it(`an aborted agent command is killed in the VM${deferStart ? " (aborted before its pid was known)" : ""}`, async () => {
+      await running();
       const op = await fullOp();
       const ac = new AbortController();
-      let seen: (held: Held) => void = () => undefined;
-      const heldStep = new Promise<Held>((resolve) => {
-        seen = resolve;
-      });
-      hold = { deferStart, seen };
+      const step = holdNext({ deferStart });
       const write = op?.writeFile("/workspace/never.txt", new Uint8Array([1]), ac.signal);
-      const entry = await heldStep;
+      const entry = await step;
+      const before = reboots();
       ac.abort();
       if (deferStart) entry.start();
       await expect(write).rejects.toThrow();
-      // the held step ends only through SendSignal for its pid
+      // the held step ends only through SendSignal for its pid; a confirmed kill needs no reboot
       expect(signalled).toContain(entry.pid);
       expect(held.has(entry.pid)).toBe(false);
+      expect(reboots()).toBe(before);
     });
   }
+
+  for (const deferStart of [false, true]) {
+    it(`a kill that fails reboots the VM${deferStart ? " (pid reported after the abort)" : ""}`, async () => {
+      await running();
+      const op = await fullOp();
+      const ac = new AbortController();
+      const step = holdNext({ deferStart, failKill: true });
+      const write = op?.writeFile("/workspace/never.txt", new Uint8Array([1]), ac.signal);
+      const entry = await step;
+      const before = reboots();
+      ac.abort();
+      if (deferStart) entry.start();
+      await expect(write).rejects.toThrow();
+      expect(signalled).toContain(entry.pid);
+      expect(reboots()).toBe(before + 1);
+      held.delete(entry.pid);
+    });
+  }
+
+  it("a start event after the kill grace period reboots the VM", async () => {
+    await running();
+    const op = await fullOp();
+    const ac = new AbortController();
+    const step = holdNext({ deferStart: true });
+    const write = op?.writeFile("/workspace/never.txt", new Uint8Array([1]), ac.signal);
+    const entry = await step;
+    const before = reboots();
+    ac.abort();
+    // readiness, not a fixed wait: the provider gives up on the stream after its grace period
+    await entry.closed;
+    entry.start();
+    await expect(write).rejects.toThrow();
+    expect(reboots()).toBe(before + 1);
+    held.delete(entry.pid);
+  });
+
+  it("on the never-resume path an unconfirmed kill leaves a paused VM paused: outcome unknown", async () => {
+    await running();
+    const { operationUuid } = await import("../src/operations.js");
+    const operationId = `op-${randomUUID()}`;
+    const ref: SandboxExecutionRef = {
+      executionId: operationUuid(operationId),
+      operationId,
+      instanceId: h.id,
+      instanceGeneration: "g",
+    };
+    const ac = new AbortController();
+    const step = holdNext({ match: "bg-status", failKill: true });
+    const status = sbx.background?.status(h, ref, ac.signal);
+    const entry = await step;
+    // paused meanwhile: the kill cannot be confirmed, and resuming to reboot is not allowed here
+    await sbx.suspend(h, sig());
+    const before = connects();
+    ac.abort();
+    const e = await status?.then(
+      () => undefined,
+      (x: unknown) => x,
+    );
+    expect(isSandboxOperationOutcomeUnknownError(e)).toBe(true);
+    expect(connects()).toBe(before);
+    expect(fake.sandboxes.get(h.id)?.state).toBe("paused");
+    held.delete(entry.pid);
+  });
 });
