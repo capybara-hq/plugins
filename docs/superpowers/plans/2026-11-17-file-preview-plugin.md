@@ -67,26 +67,60 @@ expect(directives.sandbox).toEqual(["allow-scripts", "allow-forms"]);
 - [ ] **Step 5: Skill and changeset.** In the skill, change `object-src` / `frame-src` / `worker-src 'none'` to `object-src` / `frame-src 'none'`, `worker-src 'self' blob:` (workers for off-main-thread parsing). Changeset: patch on `@capybara-hq/capybara`, "Embeds may start Web Workers (`worker-src 'self' blob:`)".
 - [ ] **Step 6: Commit and open the PR** (`fix(web): allow workers in embeds`), linked issue per the `contributing` skill.
 
-### Task 1A: Download affordance on user file attachments
+### Task 1A: User attachments join the conversation's files and the right panel
 
-Maintainer request 2026-11-17: a user's attachment looks like the agent's file card and shows its
-actions. Decision (assistant's call, stated to the maintainer): a non-image attachment keeps
-"click = download"; its row gains a trailing download icon button (`aria-label` 下载 / Download)
-in place of nothing. No "open in new tab" for non-image files: the kernel serves only bitmaps
-inline, so a new tab would download anyway (real opening waits for the content-origin project or
-attachments in the right panel). Read core's `writing-web-ui` skill first.
+Maintainer decision 2026-11-17: a user's uploaded attachment previews like an agent's delivered
+file. Clicking a non-image attachment opens it in the right panel (built-in and extension
+previewers); images open the viewer of Task 1B; the panel's file switcher and the title bar Files
+list hold both kinds, uploaded ones marked 上传 / Uploaded. The attachment row keeps a download icon
+button. This task crosses an access boundary: reviewed alone on the most capable model. Read
+core's `writing-kernel-api` and `writing-web-ui` skills first.
 
 **Files:**
-- Modify: `packages/design/src/conversation/bubble.tsx` (`BubbleAttachments` file rows), its CSS in the design package, `packages/design/src/i18n.ts` if a new string is needed
-- Modify: the `/dev/ui` catalog entry for bubbles (`apps/web/src/dev/catalog/components/chat.tsx`)
-- Test: the design package's bubble test (or a new `bubble-attachments.test.tsx` next to it)
+- Modify: `packages/kernel/src/conversations/files.ts` (`list`, `file`, `content` and the
+  `FileOutput` type), `packages/kernel/src/files/previewers.ts` only if it relies on artifact-only
+  fields, the files route schemas used by the Platform tool (`packages/kernel/src/platform/route-schemas.ts`)
+- Modify: `apps/web/src/lib/files.ts` (`FileOutput`), `apps/web/src/components/conversation/FilePanel.tsx`
+  (download and inline URLs by origin), `apps/web/src/components/conversation/Thread.tsx` and
+  `RightArea.tsx` (attachment click → `openFile(id)`), `packages/design/src/conversation/bubble.tsx`
+  (`BubbleAttachments` download icon), the files list item in the design package (the 上传 marker),
+  `apps/web/messages/{zh,en}.json`, the `/dev/ui` catalog
+- Test: the kernel integration test of the conversation files routes (extend the existing one; find
+  it with `grep -rl "/files?limit" packages/kernel`), the design bubble test, the web FilePanel test
 
 **Interfaces:**
-- `BubbleAttachments` gains `onDownload?(id: string): void`; when given, each file row shows the icon button, whose click calls `onDownload` and does not also fire `onOpen`. `Thread.tsx` passes `openDownload(attachmentDownloadUrl(orgId, id))`.
+- Kernel `FileOutput` gains `origin: "delivered" | "uploaded"`. For `uploaded`: `id` = attachment id,
+  `sourcePath` = name, `version` 1, `versions` = one entry, `callId` = `""`, `createdAt` = the
+  attachment's `created_at`, `status` from the store as for artifacts, `previewable` by the same
+  rules (`isInlineArtifactType` / `isTextArtifactType`).
+- Which attachments: rows of `capybara.attachments` with `conversation_id` = this conversation,
+  `org_id` = the org, `purpose = 'chat'`, `status = 'ready'`. Access is the conversation's
+  (`ConversationAccess`, as for artifacts): whoever may read the conversation may read its
+  attachments; nothing else changes who can read an attachment.
+- `list` merges both kinds newest first by `createdAt` with a stable cursor (id tiebreak); `file`
+  and `content` resolve an id as an artifact of the conversation first, then as such an attachment,
+  else `conversation.artifact_not_found`. Previewer listing, rendering and embed-token checks go
+  through `files.file`, so extension previewers and embeds accept attachments with no further change.
+- Web: `FileOutput.origin` mirrors the kernel; FilePanel downloads an uploaded file with
+  `attachmentDownloadUrl(orgId, id)` and shows its bitmap inline through the same route (images and
+  PDF are already inline there); `BubbleAttachments` gains `onDownload?(id: string): void` (an icon
+  button per file row, `aria-label` 下载 / Download, its click does not fire `onOpen`).
 
-- [ ] **Step 1: Failing test:** with `onDownload`, a file row has a button named 下载 / Download; clicking it calls `onDownload("a1")` once and `onOpen` zero times; image thumbnails get no such button; without `onDownload` no button renders. The row matches `FileCard`'s parts (type badge, middle-truncated name, size).
-- [ ] **Step 2: Run** → FAIL. **Step 3: Implement** (no box inside a box: the icon is a ghost icon button inside the row, `check:web-ui` and `findNestedBoxes` pass).
-- [ ] **Step 4: Run** the test and `pnpm check:web-ui` → PASS. **Step 5: Commit** `feat(design): download action on file attachments`.
+- [ ] **Step 1: Failing kernel tests:** a conversation with one delivered file and one sent
+  attachment lists both, newest first, with `origin`; the text content of a text attachment is
+  returned as `text/plain`; previewers are listed for an attachment id; another org's attachment id,
+  an attachment of another conversation, an unbound (`conversation_id` null) upload and a
+  `skill-package` upload are all `conversation.artifact_not_found`; a member who cannot read the
+  conversation gets the conversation's usual refusal for an attachment id; paging with `limit=1`
+  walks both kinds without duplicates.
+- [ ] **Step 2: Run** `pnpm exec vitest run <that test file>` → FAIL. **Step 3: Implement the kernel side.**
+- [ ] **Step 4: Run** → PASS; `pnpm exec vitest run packages/kernel/src/platform` (parity).
+- [ ] **Step 5: Failing web / design tests:** the bubble file row has a 下载 button calling
+  `onDownload("a1")` and not `onOpen`; clicking the row calls `onOpen`; the panel's switcher shows
+  the 上传 marker for `origin: "uploaded"`; FilePanel's Download for an uploaded file targets the
+  attachment download URL. **Step 6: Implement** (no box inside a box), run them and
+  `pnpm check:web-ui` → PASS.
+- [ ] **Step 7: Commit** `feat: preview user attachments in the right panel`.
 
 ### Task 1B: `ImageViewer` lightbox replaces `ImageZoom`
 
