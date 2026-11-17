@@ -5,7 +5,9 @@ import {
   type Logger,
   SANDBOX_TAG_RE,
   SandboxGoneError,
+  type SandboxHandle,
   type SandboxLimits,
+  SandboxOperationOutcomeUnknownError,
   type SandboxProvider,
   validateAllowHost,
   validateSandboxPathShape,
@@ -14,9 +16,12 @@ import {
   ALL_TRAFFIC,
   abortReason,
   createE2BApi,
+  E2BHttpError,
   ENVD_PORT,
   type EnvdTarget,
+  envdCloseStdin,
   envdKill,
+  envdSendInput,
   envdStart,
   envdUpload,
   IPV6_DENIED,
@@ -37,6 +42,19 @@ import {
   LIST_TIMEOUT_SECONDS,
   listLimit,
 } from "./listing.js";
+import {
+  type AgentRunOpts,
+  createOperations,
+  type OperationTransport,
+  refusedFrame,
+} from "./operations.js";
+import {
+  OPERATION_AGENT,
+  OPERATION_AGENT_SHA256,
+  RUNTIME_DIR,
+  runtimeChecksums,
+  runtimeFiles,
+} from "./runtime-source.js";
 
 /** 部署配置（见 index.ts 的 DeploymentConfig）。 */
 export interface E2BSandboxConfig {
@@ -73,6 +91,10 @@ export interface E2BSandboxTestOptions {
    * commands on the test machine, where python3 and timeout may live elsewhere).
    */
   listPath?: string;
+  /** Drops a background start's acknowledgement as if the transport lost it (live tests). */
+  loseBackgroundAck?: (taskId: string) => boolean;
+  /** Replaces the real `bg-start` command of a background start (live tests). */
+  backgroundStartCommand?: (taskId: string, cmd: string[]) => string[];
 }
 
 /**
@@ -225,6 +247,93 @@ const KILL_TAGGED_SCRIPT =
   `k "$q"; kill -9 "$q" 2>/dev/null; done; km E "${EXEC_MARKER}=/tmp/[.]capybara-exec-$t-$u"; ` +
   "done; exit 0";
 
+/**
+ * Kills the Full access foreground executions of one operation (`revokeOperation`): every exec
+ * wrapper (or admission agent about to exec it) whose control path ends with the operation's
+ * UUID (`$1`), then the processes that left its session, by their environment marker. Exits 1 when
+ * some survive (the caller then reboots the VM).
+ */
+const KILL_OPERATION_SCRIPT =
+  `${KILL_TREE}${KILL_MARKED}` +
+  'for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-[a-z0-9-]+-$1( |$)"); do ' +
+  `k "$q"; kill -9 "$q" 2>/dev/null; done; km E "${EXEC_MARKER}=/tmp/[.]capybara-exec-[a-z0-9-]+-$1"; exit 0`;
+
+/**
+ * Installs the staged runtime (root): `$1` the root-only upload directory holding the files and
+ * `SHA256SUMS`, `$2` the final directory. The files are checked, made root-owned 0644 in a 0755
+ * directory and moved into place with one rename; a trusted directory another call installed
+ * first is kept, an untrusted one (planted, altered, partial) is replaced. The installed
+ * directory is checked again either way.
+ */
+const STAGE_RUNTIME_SCRIPT =
+  'set -eu; umask 022; u=$1; d=$2; b=$(dirname -- "$d"); k="$u.sums"; ' +
+  'trap \'rm -rf -- "$u" "$k"\' EXIT; cp -- "$u/SHA256SUMS" "$k"; ' +
+  // trusted: a real directory whose entries (itself included) are root-owned, not group or
+  // world writable, no symlinks, and whose files match the provider's own SHA256SUMS
+  't() { [ -d "$1" ] && [ ! -L "$1" ] && ' +
+  '[ -z "$(find "$1" -maxdepth 1 \\( ! -user 0 -o -perm /022 -o -type l \\) -print -quit)" ] && ' +
+  '(cd -- "$1" && sha256sum -c --quiet "$k") >/dev/null 2>&1; }; ' +
+  'if [ -L "$b" ] || { [ -e "$b" ] && [ ! -d "$b" ]; }; then rm -f -- "$b"; fi; ' +
+  'mkdir -p -- "$b"; chown 0:0 "$b"; chmod 0755 "$b"; ' +
+  'cd -- "$u"; sha256sum -c --quiet SHA256SUMS; chown -R 0:0 .; chmod 0644 ./*; chmod 0755 .; cd /; ' +
+  // absent: one rename (a concurrent staging that won the race makes it fail harmlessly);
+  // present but untrusted (planted, altered, partial): removed, then the rename
+  'if [ ! -e "$d" ] && [ ! -L "$d" ]; then mv -T -- "$u" "$d" 2>/dev/null || true; ' +
+  'elif ! t "$d"; then rm -rf -- "$d"; mv -T -- "$u" "$d" 2>/dev/null || true; fi; ' +
+  't "$d"';
+
+/**
+ * The inline check every root run of the agent goes through (`python3 -I -c` with argv: agent
+ * path, expected SHA-256, then the agent's own arguments): `/`, `/opt`, the runtime base and
+ * directory and the agent file must exist (else exit 3: not staged), be root-owned, not group or
+ * world writable and of the right type, and the agent's bytes must match the provider's pinned
+ * digest (else exit 4: untrusted). Only then does it exec the agent in the same process. The
+ * whole chain being root-owned, nothing can swap it between the check and the exec.
+ * `--probe-only` checks without executing (tests).
+ */
+export const ROOT_AGENT_PRECHECK = [
+  "import hashlib, os, stat, sys",
+  "agent, digest, rest = sys.argv[1], sys.argv[2], sys.argv[3:]",
+  "rt = os.path.dirname(agent); base = os.path.dirname(rt)",
+  "chain = ['/', os.path.dirname(base), base, rt, agent]",
+  "try:",
+  "    infos = [os.lstat(p) for p in chain]",
+  "except OSError:",
+  "    sys.stderr.write('capybara-precheck: runtime missing\\n'); sys.exit(3)",
+  "for p, i in zip(chain, infos):",
+  "    kind = stat.S_ISREG(i.st_mode) if p == agent else stat.S_ISDIR(i.st_mode)",
+  "    if i.st_uid != 0 or i.st_mode & 0o022 or not kind:",
+  "        sys.stderr.write('capybara-precheck: untrusted runtime %s\\n' % p); sys.exit(4)",
+  "with open(agent, 'rb') as f:",
+  "    if hashlib.sha256(f.read()).hexdigest() != digest:",
+  "        sys.stderr.write('capybara-precheck: untrusted runtime digest\\n'); sys.exit(4)",
+  "if rest == ['--probe-only']:",
+  "    sys.exit(0)",
+  "os.execv(sys.executable, [sys.executable, '-I', agent] + rest)",
+].join("\n");
+
+/** The only interpreter root runs the agent with. */
+const AGENT_PYTHON = "/usr/bin/python3";
+
+/**
+ * The arguments of a root agent run (`AGENT_PYTHON` plus these): the command must be exactly
+ * `[AGENT_PYTHON, "-I", OPERATION_AGENT, <command>, ...]`, and it runs through
+ * {@link ROOT_AGENT_PRECHECK}. Any other shape is refused: root never runs anything else here.
+ */
+export function rootAgentArgs(cmd: readonly string[]): string[] {
+  if (cmd[0] !== AGENT_PYTHON || cmd[1] !== "-I" || cmd[2] !== OPERATION_AGENT || !cmd[3]) {
+    throw new Error("sandbox-e2b: root runs only the operation agent, through its verification");
+  }
+  return [
+    "-I",
+    "-c",
+    ROOT_AGENT_PRECHECK,
+    OPERATION_AGENT,
+    OPERATION_AGENT_SHA256,
+    ...cmd.slice(3),
+  ];
+}
+
 /** The control file of one exec: carries the holder's tag when there is one. */
 export function execControlPath(tag?: string): string {
   if (tag !== undefined && !SANDBOX_TAG_RE.test(tag)) throw new Error("invalid sandbox tag");
@@ -278,6 +387,10 @@ const LIST_WRAPPER =
 
 const NO_PYTHON =
   "sandbox-e2b: the sandbox template has no python3 or no timeout (looked up in /usr/local/bin, /usr/bin, /bin), which list and scan need; build the template from the published image or add them to your own";
+
+/** envd's "no such process" (Connect `not_found`): the process has exited already. */
+const processGone = (e: unknown) =>
+  e instanceof E2BHttpError && e.status === 404 && e.code === "not_found";
 
 /** `ms` 毫秒后调用 `fn`（本次调用内的短暂等待；用 AbortSignal.timeout，不用进程级定时器 API）。 */
 function after(ms: number, fn: () => void): { cancel(): void } {
@@ -344,6 +457,8 @@ interface RunOpts {
   args: string[];
   env?: Record<string, string>;
   cwd?: string;
+  /** Written to the process's stdin once it started, then stdin is closed. */
+  stdin?: Uint8Array;
   /** stdout + stderr 合计最多收集的字节。 */
   maxOutputBytes: number;
   timeoutMs?: number;
@@ -367,6 +482,8 @@ interface SandboxInfo {
   sandboxID: string;
   envdAccessToken?: string | null;
   domain?: string | null;
+  /** `GET /sandboxes/{id}`: running | paused. */
+  state?: string;
 }
 
 /**
@@ -686,6 +803,10 @@ export function createE2BSandbox(
     let killing: Promise<void> | undefined;
     // 杀进程失败，或杀完宽限期过了流还没结束（还有进程拿着输出）：需要重启沙箱
     let wedged = false;
+    // stopped before envd reported the pid: the kill could not name the process, so the start
+    // event kills it by pid as soon as it is known
+    let killedWithoutPid = false;
+    let lateKill: Promise<void> | undefined;
     const stop = () => {
       if (stopping) return;
       stopping = true;
@@ -694,6 +815,7 @@ export function createE2BSandbox(
         conn.abort();
         return;
       }
+      killedWithoutPid = pid === undefined;
       killing = (async () => {
         const ok = await kill(pid).catch(() => false);
         if (!ok) {
@@ -727,25 +849,57 @@ export function createE2BSandbox(
       ...(o.cwd !== undefined && { cwd: o.cwd }),
     };
     let streamError: unknown;
+    let feeding: Promise<void> | undefined;
+    // stdin: written once the process started, then closed. A failed write (the process may have
+    // exited already) kills the process rather than leave it waiting for its request; the agent
+    // refuses a partial request, so nothing runs on one. The stream then ends on its own.
+    const feed = (p: number | undefined) => {
+      const data = o.stdin;
+      if (data === undefined || feeding) return;
+      feeding = (async () => {
+        if (p === undefined) throw new Error("E2B started a process without a pid");
+        await envdSendInput(t, p, data, conn.signal);
+        // The agent reads exactly its length-prefixed request and usually has exited by now
+        // (not_found); closing is a courtesy, not awaited on the command's path.
+        void envdCloseStdin(t, p, AbortSignal.timeout(15_000)).catch(() => undefined);
+      })().catch(async (e: unknown) => {
+        if (p !== undefined && !conn.signal.aborted && !processGone(e)) {
+          await envdKill(t, p, AbortSignal.timeout(15_000)).catch(() => undefined);
+        }
+      });
+    };
     try {
       await envdStart(
         t,
         o.user,
         req,
         (e) => {
-          if ("start" in e) pid = e.start.pid;
-          else if ("data" in e) {
+          if ("start" in e) {
+            pid = e.start.pid;
+            if (killedWithoutPid && pid !== undefined) {
+              const late = pid;
+              lateKill = envdKill(t, late, AbortSignal.timeout(15_000)).catch(() => {
+                // unconfirmed: the command may still run, so the caller's recovery decides
+                wedged = true;
+                conn.abort();
+              });
+            }
+            feed(pid);
+          } else if ("data" in e) {
             if (e.data.stdout) collect("out", e.data.stdout);
             if (e.data.stderr) collect("err", e.data.stderr);
           } else if ("end" in e) exitCode = exitCodeOf(e.end);
         },
         conn.signal,
+        o.stdin !== undefined,
       );
     } catch (e) {
       streamError = e;
     }
+    await feeding;
     // 杀进程（必要时重启沙箱）完成后才返回：调用方接着用沙箱时它已结束
     await killing;
+    await lateKill;
     grace?.cancel();
     if (wedged && o.recover) await o.recover().catch(() => undefined);
     timer?.cancel();
@@ -902,6 +1056,261 @@ export function createE2BSandbox(
     }
     return hosts.length > 0 ? { kind: "allowlist", hosts: [...hosts] } : { kind: "none" };
   };
+
+  // ---------- operations (permission profiles) ----------
+
+  /**
+   * The envd target of a running VM, or undefined when it is paused or gone: `GET /sandboxes/{id}`
+   * answers its state and access token without connecting (connect would resume it).
+   */
+  const targetIfRunning = async (
+    id: string,
+    signal: AbortSignal,
+  ): Promise<EnvdTarget | undefined> => {
+    signal.throwIfAborted();
+    checkId(id);
+    let info: SandboxInfo | undefined;
+    try {
+      info = (await api.json<SandboxInfo>("GET", `/sandboxes/${enc(id)}`, { signal })).data;
+    } catch (e) {
+      if (isE2BNotFound(e)) return undefined;
+      throw e;
+    }
+    if (info?.state !== "running") return undefined;
+    return targetOf({ ...info, sandboxID: info.sandboxID ?? id });
+  };
+
+  /**
+   * Stages this provider's operation runtime as root (README "Permission profiles"): the files go
+   * to a fresh directory in the root-only upload area, root checks them against `SHA256SUMS` and
+   * moves them into `RUNTIME_DIR`.
+   */
+  const stageRuntime = async (t: EnvdTarget, signal: AbortSignal) => {
+    deps.log.info("sandbox-e2b: staging the operation runtime", {
+      sandboxId: t.sandboxId,
+      dir: RUNTIME_DIR,
+    });
+    const dir = `${UPLOAD_DIR}/${randomUUID()}`;
+    for (const f of runtimeFiles())
+      await envdUpload(t, `${dir}/${f.name}`, ROOT_USER, f.data, signal);
+    await envdUpload(t, `${dir}/SHA256SUMS`, ROOT_USER, Buffer.from(runtimeChecksums()), signal);
+    const r = await run(t, {
+      user: ROOT_USER,
+      cmd: "/bin/sh",
+      args: ["-c", STAGE_RUNTIME_SCRIPT, "capybara-stage", dir, RUNTIME_DIR],
+      cwd: "/",
+      maxOutputBytes: STDERR_ROOM,
+      timeoutMs: 60_000,
+      signal,
+    });
+    if (r.exitCode !== 0) {
+      throw new Error(`sandbox-e2b: cannot stage the operation runtime: ${stderrOf(r)}`);
+    }
+  };
+
+  /** Python's answer when the agent file is missing (the runtime is not staged in this VM yet). */
+  const agentMissing = (o: AgentRunOpts, r: RunResult) =>
+    o.cmd.includes(OPERATION_AGENT) &&
+    r.exitCode === 2 &&
+    r.stderr.toString("utf8").includes("can't open file") &&
+    r.stdout.byteLength === 0;
+
+  /**
+   * Ends an aborted or timed-out agent command in the VM: envd SIGKILLs it by pid (the agent
+   * forks nothing on its foreground path; a background start's detached supervisor is reconciled
+   * by operations.ts). Without a pid yet, `run` kills it once the start event names it.
+   */
+  const killAgent = (t: EnvdTarget) => async (pid: number | undefined) => {
+    if (pid === undefined) return true;
+    return envdKill(t, pid, AbortSignal.timeout(15_000)).then(
+      () => true,
+      () => false,
+    );
+  };
+
+  /**
+   * An agent command whose kill was not confirmed (the kill failed, a late pid's kill failed, or
+   * the stream stayed open past the grace period) may still run: reboot the VM, as `execWith`
+   * does. On the never-resume path (`resume` false) only a VM confirmed running is rebooted; a
+   * paused one stays paused (a pause without memory already ended the command) and the result
+   * is false, which the caller reports as an unknown outcome. A pause racing the check and the
+   * reboot's own pause can still meet a resume: the reboot is a cold start either way.
+   */
+  const recoverAgent = async (id: string, resume: boolean): Promise<boolean> => {
+    try {
+      if (!resume) {
+        const live = await targetIfRunning(id, AbortSignal.timeout(30_000));
+        if (live === undefined) return false;
+      }
+      await reboot(id);
+      return true;
+    } catch (e) {
+      deps.log.warn("sandbox-e2b: sandbox reboot failed; an agent command may still be running", {
+        sandboxId: id,
+        err: (e instanceof Error ? e.message : String(e)).slice(0, 500),
+      });
+      return false;
+    }
+  };
+
+  /**
+   * Runs one agent command; stages the runtime and retries once when its file is missing or, for
+   * a root run, when the inline verification does not trust it.
+   */
+  const runAgent = async (t: EnvdTarget, o: AgentRunOpts, resume: boolean): Promise<RunResult> => {
+    // Root runs the agent only through the inline verification (ROOT_AGENT_PRECHECK).
+    const root = o.user === "root";
+    const args = root ? rootAgentArgs(o.cmd) : o.cmd.slice(1);
+    let unconfirmed = false;
+    const once = () =>
+      run(t, {
+        user: o.user === "root" ? ROOT_USER : SANDBOX_USER,
+        cmd: o.cmd[0] as string,
+        args,
+        ...(o.env && { env: o.env }),
+        ...(o.stdin && { stdin: o.stdin }),
+        cwd: "/",
+        maxOutputBytes: o.maxOutputBytes,
+        ...(o.timeoutMs !== undefined && { timeoutMs: o.timeoutMs }),
+        signal: o.signal,
+        kill: killAgent(t),
+        recover: async () => {
+          unconfirmed = !(await recoverAgent(t.sandboxId, resume));
+        },
+      });
+    const checked = async () => {
+      const r = await once();
+      if (unconfirmed) {
+        throw new SandboxOperationOutcomeUnknownError(
+          "sandbox-e2b: an interrupted agent command could not be confirmed stopped and the VM was not rebooted (it is not running); its outcome is unknown",
+        );
+      }
+      return r;
+    };
+    const r = await checked();
+    const unverified =
+      root &&
+      (r.exitCode === 3 || r.exitCode === 4) &&
+      r.stderr.toString("utf8").includes("capybara-precheck:");
+    if (!agentMissing(o, r) && !unverified) return r;
+    await stageRuntime(t, o.signal);
+    return checked();
+  };
+
+  /** Envd answers 502 for a VM that was paused meanwhile: not running, never resumed here. */
+  const pausedMeanwhile = (e: unknown) => isStatus(e, 502);
+
+  /**
+   * The ordinary exec: the command runs through the wrapper (`execArgs`) under `ctl`; `prefix`
+   * (the operation agent's admission check, Full access only) execs that wrapper unchanged.
+   */
+  const execWith = async (
+    h: SandboxHandle,
+    args: Omit<Parameters<SandboxProvider["exec"]>[1], "actor">,
+    ctl: string,
+    prefix: string[] = [],
+    nonce?: string,
+  ): Promise<ExecResult> => {
+    args.signal.throwIfAborted();
+    const env: Record<string, string> = { HOME: "/workspace", LANG: "C.UTF-8" };
+    for (const [k, v] of Object.entries(args.env ?? {})) {
+      if (!ENV_KEY_RE.test(k)) throw new Error(`invalid environment variable name: ${k}`);
+      env[k] = v;
+    }
+    // The admission agent removes it before exec: the command can never echo it back.
+    if (nonce !== undefined) env.CAPYBARA_ADMISSION_NONCE = nonce;
+    // set last: a caller's variable of the same name never replaces it
+    env[EXEC_MARKER] = ctl;
+    const t = await attach(
+      h.id,
+      args.signal,
+      Math.ceil(args.timeoutMs / 1000) + TIMEOUT_MARGIN_SECONDS,
+    );
+    const wrapper = execArgs(ctl, args.command, args.timeoutMs);
+    const r = await run(t, {
+      user: SANDBOX_USER,
+      cmd: prefix.length > 0 ? (prefix[0] as string) : "setsid",
+      args: prefix.length > 0 ? [...prefix.slice(1), "setsid", ...wrapper] : wrapper,
+      env,
+      cwd: args.cwd ?? "/workspace",
+      maxOutputBytes: args.maxOutputBytes,
+      timeoutMs: args.timeoutMs,
+      signal: args.signal,
+      kill: killer(t, ctl),
+      // 重启也失败时只记日志（错误信息来自 API 正文与状态码，不含 apiKey 与访问令牌），照常返回本次结果
+      recover: () =>
+        reboot(h.id).catch((e: unknown) => {
+          deps.log.warn(
+            "sandbox-e2b: sandbox reboot failed; the stuck command may still be running",
+            {
+              sandboxId: h.id,
+              err: (e instanceof Error ? e.message : String(e)).slice(0, 500),
+            },
+          );
+        }),
+    });
+    // The admission prefix refused before the command started: its only output is the refusal
+    // frame (operations.ts maps it), with exit code 125.
+    if (prefix.length > 0 && r.exitCode === 125 && r.stdout[0] === 0x52) {
+      const refused = refusedFrame(r.stdout, nonce ?? "");
+      if (refused === "cancelled") {
+        return { exitCode: null, stdout: "", stderr: "", truncated: false, timedOut: false };
+      }
+      if (refused) throw refused;
+    }
+    return {
+      exitCode: r.exitCode,
+      stdout: decodeOutput(r.stdout, r.truncated),
+      stderr: decodeOutput(r.stderr, r.truncated),
+      truncated: r.truncated,
+      timedOut: r.timedOut,
+    };
+  };
+
+  const transport: OperationTransport = {
+    async run(h, o) {
+      const t = await attach(h.id, o.signal);
+      return runAgent(t, o, true);
+    },
+    async session(h, signal) {
+      const t = await attach(h.id, signal);
+      return (o) => runAgent(t, o, true);
+    },
+    async runIfRunning(h, o) {
+      const t = await targetIfRunning(h.id, o.signal);
+      if (t === undefined) return "not-running";
+      try {
+        return await runAgent(t, o, false);
+      } catch (e) {
+        if (pausedMeanwhile(e)) return "not-running";
+        throw e;
+      }
+    },
+    execFull: (h, args, ctl, prefix, nonce) => execWith(h, args, ctl, prefix, nonce),
+    async killOperation(h, uuid, signal) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid)) {
+        throw new Error("invalid operation control id");
+      }
+      // a paused VM (paused without memory) runs nothing
+      const t = await targetIfRunning(h.id, signal);
+      if (t === undefined) return;
+      const r = await run(t, {
+        user: SANDBOX_USER,
+        cmd: "/bin/sh",
+        args: ["-c", KILL_OPERATION_SCRIPT, "capybara-killop", uuid],
+        cwd: "/",
+        maxOutputBytes: STDERR_ROOM,
+        timeoutMs: 15_000,
+        signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
+      }).catch(() => null);
+      // survivors (or no answer): the last resort ends every process in the VM; the revocation
+      // then sees a new generation and reports a retry
+      if (r?.exitCode !== 0) await reboot(h.id);
+    },
+    loseBackgroundAck: test.loseBackgroundAck,
+    backgroundStartCommand: test.backgroundStartCommand,
+  };
+  const operations = createOperations({ transport, decode: decodeOutput });
 
   // ---------- 契约 ----------
 
@@ -1079,49 +1488,7 @@ export function createE2BSandbox(
     },
 
     async exec(h, args): Promise<ExecResult> {
-      args.signal.throwIfAborted();
-      const ctl = execControlPath(args.tag);
-      const env: Record<string, string> = { HOME: "/workspace", LANG: "C.UTF-8" };
-      for (const [k, v] of Object.entries(args.env ?? {})) {
-        if (!ENV_KEY_RE.test(k)) throw new Error(`invalid environment variable name: ${k}`);
-        env[k] = v;
-      }
-      // set last: a caller's variable of the same name never replaces it
-      env[EXEC_MARKER] = ctl;
-      const t = await attach(
-        h.id,
-        args.signal,
-        Math.ceil(args.timeoutMs / 1000) + TIMEOUT_MARGIN_SECONDS,
-      );
-      const r = await run(t, {
-        user: SANDBOX_USER,
-        cmd: "setsid",
-        args: execArgs(ctl, args.command, args.timeoutMs),
-        env,
-        cwd: args.cwd ?? "/workspace",
-        maxOutputBytes: args.maxOutputBytes,
-        timeoutMs: args.timeoutMs,
-        signal: args.signal,
-        kill: killer(t, ctl),
-        // 重启也失败时只记日志（错误信息来自 API 正文与状态码，不含 apiKey 与访问令牌），照常返回本次结果
-        recover: () =>
-          reboot(h.id).catch((e: unknown) => {
-            deps.log.warn(
-              "sandbox-e2b: sandbox reboot failed; the stuck command may still be running",
-              {
-                sandboxId: h.id,
-                err: (e instanceof Error ? e.message : String(e)).slice(0, 500),
-              },
-            );
-          }),
-      });
-      return {
-        exitCode: r.exitCode,
-        stdout: decodeOutput(r.stdout, r.truncated),
-        stderr: decodeOutput(r.stderr, r.truncated),
-        truncated: r.truncated,
-        timedOut: r.timedOut,
-      };
+      return execWith(h, args, execControlPath(args.tag));
     },
 
     async readFile(h, path, opts) {
@@ -1205,6 +1572,15 @@ export function createE2BSandbox(
       const r = await listOp(h.id, "scan", b, 0, opts.signal);
       return finishScan(b, r, NO_PYTHON);
     },
+
+    // The operation contract (operations.ts): fresh immutable scopes per invocation; Full access
+    // only on this provider (restricted scopes are refused, see permissionSupport).
+    permissionSupport: operations.permissionSupport,
+    operation: operations.operation,
+    prepare: operations.prepare,
+    browse: operations.browse,
+    revokeOperation: operations.revokeOperation,
+    background: operations.background,
   };
 }
 
