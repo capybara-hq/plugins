@@ -6,6 +6,7 @@ import {
   createLocalAccount,
   createOrg,
   defaultFakeOpenApiSpec,
+  enableModelProviders,
   eventsOf,
   type FakeOpenApiServer,
   joinOrg,
@@ -90,6 +91,8 @@ beforeEach(async () => {
   await createLocalAccount(db, "owner", "O");
   req = await session(k, "owner");
   orgId = await createOrg(req);
+  // A model provider is on only in the orgs that switched it on (kernel rc.37).
+  await enableModelProviders(req, orgId);
   // Connectors can be created only of kinds whose extension the org has switched on
   await db
     .insertInto("extension_org_configs")

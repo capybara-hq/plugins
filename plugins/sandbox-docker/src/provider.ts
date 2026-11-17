@@ -30,6 +30,8 @@ import {
   LIST_TIMEOUT_SECONDS,
   listLimit,
 } from "./listing.js";
+import { createOperations, type OperationTransport, refusedFrame } from "./operations.js";
+import { OPERATION_AGENT } from "./runtime-source.js";
 
 /** The images published with a given sandbox-docker version (the plugins repo's image workflow). */
 export function publishedImages(version: string): { sandbox: string; egress: string } {
@@ -47,7 +49,20 @@ export function publishedImages(version: string): { sandbox: string; egress: str
  * created.
  */
 export type DockerSandboxProvider = SandboxProvider &
-  Required<Pick<SandboxProvider, "update" | "list" | "scan">> & {
+  Required<
+    Pick<
+      SandboxProvider,
+      | "update"
+      | "list"
+      | "scan"
+      | "permissionSupport"
+      | "operation"
+      | "prepare"
+      | "browse"
+      | "revokeOperation"
+      | "background"
+    >
+  > & {
     readonly limitsApplyAt: "instance";
   };
 
@@ -113,6 +128,13 @@ export interface DockerSandboxTestOptions {
    * test stand in for an allowed target.
    */
   egressTestHosts?: Record<string, string>;
+  /**
+   * Direct endpoints a restricted operation may connect to when its allowlist names the host
+   * (and the host is exempt from its proxy variables). Production allowlists reach hosts only
+   * through the operation's own forwarder; this lets the permission conformance suite drive the
+   * broker's endpoint checks against services inside the container.
+   */
+  permissionTestEndpoints?: Record<string, { address: string; port: number }[]>;
 }
 
 /** The sandbox user (the image's `sandbox`): commands and file operations run as it. */
@@ -372,8 +394,19 @@ const KILL_TREE =
  * 杀掉经 exec 启动、仍在运行的全部命令（接手崩溃的前任时）：按命令行找到每个包装（会话首进程），
  * 按进程组与会话 SIGKILL。模式里的 `[.]` 让它匹配不到这个脚本自己的命令行。
  */
+/**
+ * Restricted operations run under the operation agent (`capybara-operation.py exec|native
+ * capybara-exec <ctl>`): SIGTERM first lets the launcher end its whole supervised tree (a SIGKILL
+ * of the supervisor would orphan restricted descendants), then the forced pass below runs. `$1`
+ * is the control-path pattern; waits at most 10 s.
+ */
+const TERM_AGENTS =
+  'g() { a="capybara-operation[.]py (exec|native) capybara-exec $1"; ' +
+  'for q in $(pgrep -f -- "$a"); do kill -TERM "$q" 2>/dev/null; done; i=0; ' +
+  'while pgrep -f -- "$a" >/dev/null && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done; }; ';
+
 const KILL_ALL_SCRIPT =
-  `${KILL_TREE}for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-"); do ` +
+  `${KILL_TREE}${TERM_AGENTS}g "/tmp/[.]capybara-exec-"; for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-"); do ` +
   'k "$q"; kill -9 "$q" 2>/dev/null; done; exit 0';
 
 /**
@@ -385,9 +418,20 @@ const KILL_ALL_SCRIPT =
  * Other holders' commands keep running.
  */
 const KILL_TAGGED_SCRIPT =
-  `${KILL_TREE}u='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; for t in "$@"; do ` +
-  'for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-$t-$u( |$)"); do ' +
+  `${KILL_TREE}${TERM_AGENTS}u='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; for t in "$@"; do ` +
+  'g "/tmp/[.]capybara-exec-$t-$u( |$)"; for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-$t-$u( |$)"); do ' +
   'k "$q"; kill -9 "$q" 2>/dev/null; done; done; exit 0';
+
+/**
+ * Kills every execution whose control path ends with one operation's UUID, whatever its tag
+ * (`revokeOperation`): the agent stops restricted work gracefully and the operation's background
+ * execution by its record (`$2` is the agent), then the ordinary forced pass.
+ */
+const KILL_OPERATION_SCRIPT =
+  `${KILL_TREE}${TERM_AGENTS}/usr/bin/python3 -I "$2" cancel --uuid "$1" 2>/dev/null; ` +
+  'g "/tmp/[.]capybara-exec-[a-z0-9-]+-$1( |$)"; ' +
+  'for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-[a-z0-9-]+-$1( |$)"); do ' +
+  'k "$q"; kill -9 "$q" 2>/dev/null; done; exit 0';
 
 /** The control file of one exec: carries the holder's tag when there is one. */
 export function execControlPath(tag?: string): string {
@@ -1058,6 +1102,84 @@ export function createDockerSandbox(
 
   const stderrOf = (r: RunResult) => r.stderr.toString("utf8").trim().slice(0, 500);
 
+  /**
+   * The ordinary exec: the command runs through the wrapper (`execArgv`) under `ctl`; `prefix`
+   * (the operation agent's admission check, Full access only) execs that wrapper unchanged.
+   */
+  const execWith = async (
+    h: SandboxHandle,
+    args: Omit<Parameters<SandboxProvider["exec"]>[1], "actor">,
+    ctl: string,
+    prefix: string[] = [],
+  ): Promise<ExecResult> => {
+    args.signal.throwIfAborted();
+    const env: string[] = [];
+    for (const [k, v] of Object.entries(args.env ?? {})) {
+      if (!ENV_KEY_RE.test(k)) throw new Error(`invalid environment variable name: ${k}`);
+      env.push(`${k}=${v}`);
+    }
+    const r = await autoStart(h, args.signal, () =>
+      run(h.id, {
+        cmd: [...prefix, ...execArgv(ctl, args.command, args.timeoutMs)],
+        user: SANDBOX_USER,
+        env,
+        cwd: args.cwd ?? "/workspace",
+        maxOutputBytes: args.maxOutputBytes,
+        timeoutMs: args.timeoutMs,
+        signal: args.signal,
+        kill: killer(h.id, ctl),
+      }),
+    );
+    // The admission prefix refused before the command started: its only output is the refusal
+    // frame (operations.ts maps it), with exit code 125.
+    if (prefix.length > 0 && r.exitCode === 125 && r.stdout[0] === 0x52) {
+      const refused = refusedFrame(r.stdout);
+      if (refused === "cancelled") {
+        return { exitCode: null, stdout: "", stderr: "", truncated: false, timedOut: false };
+      }
+      if (refused) throw refused;
+    }
+    return {
+      exitCode: r.exitCode,
+      stdout: decodeOutput(r.stdout, r.truncated),
+      stderr: decodeOutput(r.stderr, r.truncated),
+      truncated: r.truncated,
+      timedOut: r.timedOut,
+    };
+  };
+
+  const userOf = (u: "sandbox" | "root") => (u === "root" ? ROOT_USER : SANDBOX_USER);
+
+  const transport: OperationTransport = {
+    run: (h, o) =>
+      autoStart(h, o.signal, () =>
+        run(h.id, { ...o, user: userOf(o.user), cwd: "/", ...(o.kill && { kill: o.kill }) }),
+      ),
+    async runIfRunning(h, o) {
+      try {
+        return await run(h.id, { ...o, user: userOf(o.user), cwd: "/" });
+      } catch (e) {
+        if (e instanceof NotRunningError) return "not-running";
+        throw e;
+      }
+    },
+    execFull: (h, args, ctl, prefix) => execWith(h, args, ctl, prefix),
+    cancelRestricted: (h, ctl) =>
+      killOrRestart(h.id, ["/usr/bin/python3", "-I", OPERATION_AGENT, "cancel", ctl]),
+    killOperation: async (h, uuid, signal) => {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid)) {
+        throw new Error("invalid operation control id");
+      }
+      await killOrRestart(
+        h.id,
+        ["/bin/sh", "-c", KILL_OPERATION_SCRIPT, "capybara-killop", uuid, OPERATION_AGENT],
+        signal,
+      );
+    },
+    testEndpoints: test.permissionTestEndpoints ?? {},
+  };
+  const operations = createOperations({ transport, decode: decodeOutput });
+
   // ---------- 契约 ----------
 
   return {
@@ -1289,31 +1411,7 @@ export function createDockerSandbox(
     // `args.actor` is informational in phase 1: not used for anything
     async exec(h, args): Promise<ExecResult> {
       args.signal.throwIfAborted();
-      const ctl = execControlPath(args.tag);
-      const env: string[] = [];
-      for (const [k, v] of Object.entries(args.env ?? {})) {
-        if (!ENV_KEY_RE.test(k)) throw new Error(`invalid environment variable name: ${k}`);
-        env.push(`${k}=${v}`);
-      }
-      const r = await autoStart(h, args.signal, () =>
-        run(h.id, {
-          cmd: execArgv(ctl, args.command, args.timeoutMs),
-          user: SANDBOX_USER,
-          env,
-          cwd: args.cwd ?? "/workspace",
-          maxOutputBytes: args.maxOutputBytes,
-          timeoutMs: args.timeoutMs,
-          signal: args.signal,
-          kill: killer(h.id, ctl),
-        }),
-      );
-      return {
-        exitCode: r.exitCode,
-        stdout: decodeOutput(r.stdout, r.truncated),
-        stderr: decodeOutput(r.stderr, r.truncated),
-        truncated: r.truncated,
-        timedOut: r.timedOut,
-      };
+      return execWith(h, args, execControlPath(args.tag));
     },
 
     async readFile(h, path, opts) {
@@ -1393,6 +1491,14 @@ export function createDockerSandbox(
       const r = await listOp(h, "scan", b, 0, opts.signal);
       return finishScan(b, r, NO_PYTHON);
     },
+
+    // The operation contract (operations.ts): fresh immutable scopes per invocation.
+    permissionSupport: operations.permissionSupport,
+    operation: operations.operation,
+    prepare: operations.prepare,
+    browse: operations.browse,
+    revokeOperation: operations.revokeOperation,
+    background: operations.background,
   };
 }
 

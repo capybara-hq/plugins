@@ -1,0 +1,1068 @@
+import { execFile, spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import {
+  isSandboxOperationOutcomeUnknownError,
+  isSandboxPermissionUnsupportedError,
+  isSandboxScopeDeniedError,
+  isSandboxScopeValidationError,
+  SANDBOX_RUNTIME_SOURCE,
+  type SandboxHandle,
+  type SandboxLimits,
+  type SandboxOperationScope,
+  type SandboxPermissionSupport,
+} from "@capybara-hq/plugin-sdk";
+import {
+  type NativeFixtureEntry,
+  runSandboxPermissionConformance,
+  type SandboxPermissionFixture,
+  type SandboxPermissionGrant,
+} from "@capybara-hq/testing";
+import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createDockerSandbox, type DockerSandboxProvider } from "../src/index.js";
+import {
+  OPERATION_AGENT_SHA256,
+  RUNTIME_BUNDLE_VERSION,
+  runtimeChecksums,
+  SDK_RUNTIME_FILES,
+} from "../src/runtime-source.js";
+import {
+  buildTestImages,
+  cleanupTestResources,
+  docker,
+  dockerAvailable,
+  type SocketProxy,
+  startSocketProxy,
+  TEST_LABEL,
+  type TestImages,
+} from "./docker-env.js";
+
+/**
+ * The operation contract on the actual provider: the published SDK runtime staged in the real
+ * sandbox image, driven through the socket proxy into a container with the provider's unchanged
+ * hardening. The permission conformance suite of @capybara-hq/testing runs against it (positive
+ * shell / Python / Node / curl controls, sibling, symlink and protected-path denials, both overlap
+ * orders, component and root swaps, mutable syscall pointers, exact cancellation and narrowing),
+ * plus the provider's own cases: Full against restricted, the per-operation allowlist forwarder
+ * through the real egress proxy, durable consumption and revocation, preparation, browsing and
+ * fail-closed images. Skipped without Docker; CAPYBARA_TEST_REQUIRE_LINUX_RESTRICTED=1 (evidence
+ * mode) fails instead of skipping, and fails when the runtime reports restricted unavailable.
+ */
+
+const exec = promisify(execFile);
+const required = process.env.CAPYBARA_TEST_REQUIRE_LINUX_RESTRICTED === "1";
+const imageDir = fileURLToPath(new URL("../image/", import.meta.url));
+const RUN = randomUUID().slice(0, 8);
+const sig = () => AbortSignal.timeout(300_000);
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+describe("staged runtime", () => {
+  it("stages the SDK runtime bytes unchanged", async () => {
+    expect(SANDBOX_RUNTIME_SOURCE.version).toBe(RUNTIME_BUNDLE_VERSION);
+    for (const name of SDK_RUNTIME_FILES) {
+      const file = SANDBOX_RUNTIME_SOURCE.files.find((f) => f.name === name);
+      const staged = await readFile(`${imageDir}runtime/${name}`, "utf8");
+      expect(staged === file?.source, `${name} differs from the SDK bundle`).toBe(true);
+      expect(createHash("sha256").update(staged).digest("hex")).toBe(file?.sha256);
+    }
+  });
+
+  it("pins the agent digest and the image checksums", async () => {
+    const agent = await readFile(`${imageDir}runtime/capybara-operation.py`);
+    expect(createHash("sha256").update(agent).digest("hex")).toBe(OPERATION_AGENT_SHA256);
+    expect(await readFile(`${imageDir}runtime/SHA256SUMS`, "utf8")).toBe(runtimeChecksums());
+  });
+
+  it("copies the runtime root-owned and checks it while building the image", async () => {
+    const dockerfile = await readFile(`${imageDir}Dockerfile`, "utf8");
+    expect(dockerfile).toMatch(/COPY --chown=0:0 runtime\/ \/opt\/capybara-runtime\//);
+    expect(dockerfile).toMatch(/sha256sum -c SHA256SUMS/);
+  });
+});
+
+describe.runIf(required && !dockerAvailable)("Linux restricted runtime is required", () => {
+  it("has Docker", () => {
+    throw new Error("CAPYBARA_TEST_REQUIRE_LINUX_RESTRICTED=1 but Docker is not available");
+  });
+});
+
+const limits = (network: SandboxLimits["network"]): SandboxLimits => ({
+  cpu: 1,
+  memoryMb: 1024,
+  diskMb: 2048,
+  mode: "auto",
+  network,
+});
+
+const GRANTED_HOST = "granted.permission.example";
+const ENDPOINTS = { granted: ["127.0.0.1", 18080], u4: ["127.0.0.1", 18081], u6: ["::1", 18082] };
+const RECEIPTS = "/tmp/capybara-receipts";
+
+/** Controlled endpoints, run as root so the device user cannot forge their receipt counts. */
+const LISTEN = `
+import json, os, socket, sys, threading
+directory, endpoints = sys.argv[1], json.loads(sys.argv[2])
+os.makedirs(directory, mode=0o755, exist_ok=True)
+def serve(name, host, port):
+    server = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind((host, port))
+    server.listen(128)
+    count = 0
+    while True:
+        conn, _ = server.accept()
+        count += 1
+        path = os.path.join(directory, name)
+        with open(path + ".tmp", "w") as handle:
+            handle.write(str(count))
+        os.chmod(path + ".tmp", 0o644)
+        os.rename(path + ".tmp", path)
+        try:
+            conn.sendall(b"HTTP/1.0 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nok")
+        except OSError:
+            pass
+        conn.close()
+for name, (host, port) in endpoints.items():
+    threading.Thread(target=serve, args=(name, host, port), daemon=True).start()
+threading.Event().wait()
+`;
+const WAIT_READY = `
+import socket
+for host, port in ((${JSON.stringify(ENDPOINTS.granted[0])}, ${ENDPOINTS.granted[1]}), (${JSON.stringify(ENDPOINTS.u4[0])}, ${ENDPOINTS.u4[1]}), (${JSON.stringify(ENDPOINTS.u6[0])}, ${ENDPOINTS.u6[1]})):
+    while True:
+        try:
+            socket.create_connection((host, port)).close()
+            break
+        except OSError:
+            pass
+`;
+const SEED = `
+import base64, json, os, sys
+for e in json.load(sys.stdin):
+    os.makedirs(os.path.dirname(e["path"]), exist_ok=True)
+    if e["kind"] == "directory":
+        os.makedirs(e["path"], exist_ok=True)
+    elif e["kind"] == "file":
+        open(e["path"], "wb").write(base64.b64decode(e["dataB64"]))
+    else:
+        os.symlink(e["target"], e["path"])
+`;
+const INSPECT = `
+import base64, json, os, sys
+kind, arg = sys.argv[1], sys.argv[2]
+if kind == "read":
+    try:
+        print(json.dumps(base64.b64encode(open(arg, "rb").read()).decode()))
+    except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
+        print("null")
+elif kind == "mode":
+    try:
+        print(os.stat(arg).st_mode & 0o7777)
+    except FileNotFoundError:
+        print("null")
+else:
+    alive = []
+    for pid in json.loads(arg):
+        try:
+            state = open("/proc/%d/stat" % pid).read().rsplit(")", 1)[1].split()[0]
+            if state not in ("Z", "X"):
+                alive.append(pid)
+        except OSError:
+            pass
+    print(json.dumps(alive))
+`;
+
+describe.skipIf(!dockerAvailable)(
+  "operation permission scopes on the actual provider",
+  { timeout: 1_800_000 },
+  () => {
+    let images: TestImages;
+    let proxy: SocketProxy;
+    let sbx: DockerSandboxProvider;
+    let device: SandboxHandle;
+    let support: SandboxPermissionSupport;
+    const netName = `capybara-sandbox-perm-${RUN}`;
+    let target: StartedTestContainer;
+    const made: string[] = [];
+
+    /** One device (file system plus instance) under a fresh name. */
+    const newDevice = async (
+      provider: DockerSandboxProvider,
+      network: SandboxLimits["network"],
+      image?: string,
+    ): Promise<SandboxHandle> => {
+      const name = `cap-device-perm-${randomUUID().slice(0, 8)}`;
+      made.push(name);
+      const fileSystem = await provider.createFileSystem({
+        name,
+        limits: limits(network),
+        signal: sig(),
+      });
+      return provider.create({
+        name,
+        limits: limits(network),
+        fileSystem,
+        signal: sig(),
+        ...(image !== undefined && { image }),
+      });
+    };
+
+    const dexec = (container: string, user: string, args: string[], input?: string) =>
+      new Promise<string>((resolve, reject) => {
+        const r = spawnSync("docker", ["exec", "-i", "-u", user, container, ...args], {
+          input,
+          encoding: "utf8",
+        });
+        if (r.status !== 0) reject(new Error(`docker exec failed: ${r.stderr}`));
+        else resolve(r.stdout);
+      });
+
+    const scopeFor = (
+      grant: SandboxPermissionGrant,
+      overrides: Partial<SandboxOperationScope> = {},
+    ): SandboxOperationScope => ({
+      operationId: randomUUID(),
+      admitBeforeMs: Date.now() + 600_000,
+      deviceId: "device-perm",
+      rootConversationId: "conv-perm",
+      profileRevision: 1,
+      ceilingRevision: "ceiling-1",
+      profile: grant.profile,
+      actor: { accountId: "acc-perm", conversationId: "conv-perm" },
+      tag: "perm-test",
+      filesystem: grant.filesystem,
+      network: grant.network,
+      ...overrides,
+    });
+
+    const restricted = (
+      writeRoots: string[],
+      network: SandboxPermissionGrant["network"] = { kind: "none" },
+      readRoots: string[] = [],
+    ): SandboxPermissionGrant => ({
+      profile: "approve-for-me",
+      filesystem: { kind: "scoped", readRoots, writeRoots },
+      network,
+    });
+    const full: SandboxPermissionGrant = {
+      profile: "full-access",
+      filesystem: { kind: "device" },
+      network: { kind: "environment" },
+    };
+
+    const run = async (
+      h: SandboxHandle,
+      grant: SandboxPermissionGrant,
+      command: string,
+      o: {
+        cwd?: string;
+        signal?: AbortSignal;
+        timeoutMs?: number;
+        scope?: Partial<SandboxOperationScope>;
+      } = {},
+    ) =>
+      (await sbx.operation(h, scopeFor(grant, o.scope), sig())).exec({
+        command,
+        ...(o.cwd !== undefined && { cwd: o.cwd }),
+        timeoutMs: o.timeoutMs ?? 120_000,
+        maxOutputBytes: 1 << 20,
+        signal: o.signal ?? sig(),
+      });
+
+    const inspectRead = async (h: SandboxHandle, path: string) =>
+      JSON.parse(await dexec(h.id, "1000", ["python3", "-I", "-c", INSPECT, "read", path])) as
+        | string
+        | null;
+    const alive = async (h: SandboxHandle, pids: number[]) =>
+      JSON.parse(
+        await dexec(h.id, "1000", ["python3", "-I", "-c", INSPECT, "alive", JSON.stringify(pids)]),
+      ) as number[];
+    const waitFor = async (h: SandboxHandle, path: string) => {
+      while ((await inspectRead(h, path)) === null) {
+        await new Promise((r) => setImmediate(r));
+      }
+    };
+    const text = (b64: string | null) =>
+      b64 === null ? null : Buffer.from(b64, "base64").toString();
+
+    beforeAll(async () => {
+      [images, proxy] = await Promise.all([
+        buildTestImages(),
+        startSocketProxy(),
+        docker("network", "create", "--label", `${TEST_LABEL}=${RUN}`, netName),
+      ]);
+      // An HTTP service the egress proxy reaches (pinned by egressTestHosts) for the forwarder.
+      target = await new GenericContainer(images.egressImage)
+        .withNetworkMode(netName)
+        .withUser("root")
+        .withCommand([
+          "node",
+          "-e",
+          "require('http').createServer((q,s)=>s.end('hello-'+q.headers.host)).listen(80,()=>console.log('ready'))",
+        ])
+        .withWaitStrategy(Wait.forLogMessage("ready"))
+        .start();
+      const targetIp = target.getIpAddress(netName);
+      sbx = createDockerSandbox(
+        {
+          endpoint: proxy.endpoint,
+          runtime: "runc",
+          network: netName,
+          egressProxyImage: images.egressImage,
+          defaultImage: images.sandboxImage,
+        },
+        {
+          labels: { [TEST_LABEL]: RUN },
+          egressTestHosts: { "allowed.example.com": targetIp, "denied.example.com": targetIp },
+          permissionTestEndpoints: {
+            [GRANTED_HOST]: [{ address: "127.0.0.1", port: ENDPOINTS.granted[1] as number }],
+          },
+        },
+      );
+      device = await newDevice(sbx, { kind: "allowlist", hosts: [] });
+      spawnSync("docker", [
+        "exec",
+        "-d",
+        "-u",
+        "0",
+        device.id,
+        "python3",
+        "-I",
+        "-c",
+        LISTEN,
+        RECEIPTS,
+        JSON.stringify(ENDPOINTS),
+      ]);
+      await dexec(device.id, "1000", ["python3", "-I", "-c", WAIT_READY]);
+      support = await sbx.permissionSupport(device, sig());
+      const host = (...args: string[]) =>
+        spawnSync(args[0] as string, args.slice(1), { encoding: "utf8" }).stdout?.trim() ?? "";
+      // The real runtime this evidence ran on.
+      console.info(
+        `[sandbox-docker permission] ${JSON.stringify({
+          support,
+          kernel: (await dexec(device.id, "1000", ["uname", "-srm"])).trim(),
+          landlockAbi: (
+            await dexec(device.id, "1000", [
+              "python3",
+              "-I",
+              "-c",
+              "import ctypes; print(ctypes.CDLL(None).syscall(444, None, 0, 1))",
+            ])
+          ).trim(),
+          docker: host(
+            "docker",
+            "version",
+            "--format",
+            "{{.Server.Version}} {{.Server.Os}}/{{.Server.Arch}}",
+          ),
+          dockerSecurity: host("docker", "info", "--format", "{{json .SecurityOptions}}"),
+          image: host(
+            "docker",
+            "image",
+            "inspect",
+            images.sandboxImage,
+            "--format",
+            "{{.Id}} {{.Architecture}}",
+          ),
+        })}`,
+      );
+      if (required && support.restricted === null) {
+        throw new Error(
+          `CAPYBARA_TEST_REQUIRE_LINUX_RESTRICTED=1 but: ${support.unavailableReason ?? "unsupported"}`,
+        );
+      }
+    }, 1_800_000);
+
+    afterAll(async () => {
+      await target?.stop();
+      await cleanupTestResources(RUN);
+      await proxy?.stop();
+    }, 300_000);
+
+    /** Skips a mechanism case where restricted mode is unavailable, or fails in evidence mode. */
+    const requireRestricted = (context: { skip: (note?: string) => void }) => {
+      if (support.restricted !== null) return;
+      if (required) throw new Error(`restricted unavailable: ${support.unavailableReason}`);
+      context.skip(`restricted unavailable: ${support.unavailableReason}`);
+    };
+
+    it("keeps the container hardening unchanged", async () => {
+      const inspect = JSON.parse(await docker("inspect", device.id))[0].HostConfig;
+      expect(inspect.CapDrop).toEqual(["ALL"]);
+      expect(inspect.CapAdd ?? []).toEqual([]);
+      expect(inspect.SecurityOpt).toEqual(["no-new-privileges:true"]);
+      expect(inspect.ReadonlyRootfs).toBe(true);
+      expect(inspect.Privileged).toBe(false);
+      expect(inspect.NetworkMode).toBe("none");
+      expect(inspect.PidsLimit).toBe(1024);
+      // Docker's default seccomp profile is active (mode 2) for the device user.
+      expect(
+        await dexec(device.id, "1000", ["sh", "-c", "id -u; grep '^Seccomp:' /proc/self/status"]),
+      ).toMatch(/^1000\nSeccomp:\s+2/);
+      // The staged runtime is root-owned and the device user cannot change it.
+      expect(
+        await dexec(device.id, "1000", [
+          "sh",
+          "-c",
+          "stat -c '%u %a' /opt/capybara-runtime /opt/capybara-runtime/*; touch /opt/capybara-runtime/x 2>/dev/null || echo refused",
+        ]),
+      ).toMatch(/^0 755\n(0 644\n){4}refused\n$/);
+    });
+
+    it("reports support from the launcher's own probe, never from a fixture", async () => {
+      const arch = (await dexec(device.id, "1000", ["uname", "-m"])).trim();
+      const probe = JSON.parse(
+        await dexec(device.id, "1000", [
+          "python3",
+          "-I",
+          "/opt/capybara-runtime/linux-sandbox.py",
+          "probe",
+        ]),
+      ) as { restricted: object | null; landlockAbi?: number };
+      expect(support.version).toBe(1);
+      expect(support.fullAccess).toBe(true);
+      expect(support.background).toBe(true);
+      if (probe.restricted === null) {
+        expect(support.restricted).toBeNull();
+        expect(support.unavailableReason).toBeTruthy();
+      } else {
+        expect(["aarch64", "x86_64"]).toContain(arch);
+        expect(probe.landlockAbi).toBeGreaterThanOrEqual(6);
+        expect(support.restricted).toEqual({
+          filesystem: true,
+          network: true,
+          native: true,
+          concurrentScopes: true,
+        });
+      }
+    });
+
+    it("passes the permission conformance on the actual provider", async () => {
+      const id = randomUUID().slice(0, 8);
+      const root = `/workspace/project-${id}`;
+      const sibling = `/workspace/sibling-${id}`;
+      const protectedPath = `/workspace/.profile-${id}`;
+      await dexec(device.id, "1000", [
+        "sh",
+        "-c",
+        `mkdir ${root} ${sibling} && printf rc > ${protectedPath}`,
+      ]);
+      const endpoint = (name: keyof typeof ENDPOINTS, host?: string) => ({
+        host: host ?? (ENDPOINTS[name][0] as string),
+        port: ENDPOINTS[name][1] as number,
+        receipts: async () => Number(text(await inspectRead(device, `${RECEIPTS}/${name}`)) ?? 0),
+      });
+      const fixture: SandboxPermissionFixture = {
+        root,
+        sibling,
+        protectedPaths: [protectedPath],
+        endpoints: {
+          granted: endpoint("granted"),
+          ungranted: [endpoint("u4"), endpoint("u6")],
+        },
+        support: () => sbx.permissionSupport(device, sig()),
+        // The suite's granted endpoint is numeric (its race program needs an address), but scope
+        // allowlists are names (validateAllowHost refuses IP literals): the allowlist names the
+        // test host the provider maps to that endpoint (permissionTestEndpoints).
+        operation: (grant) =>
+          sbx.operation(
+            device,
+            scopeFor(
+              grant.network.kind === "allowlist"
+                ? {
+                    ...grant,
+                    network: {
+                      kind: "allowlist",
+                      hosts: grant.network.hosts.map((h) =>
+                        h === ENDPOINTS.granted[0] ? GRANTED_HOST : h,
+                      ),
+                    },
+                  }
+                : grant,
+            ),
+            sig(),
+          ),
+        async seed(entries: readonly NativeFixtureEntry[]) {
+          await dexec(
+            device.id,
+            "1000",
+            ["python3", "-I", "-c", SEED],
+            JSON.stringify(
+              entries.map((e) =>
+                e.kind === "file"
+                  ? { ...e, data: undefined, dataB64: Buffer.from(e.data).toString("base64") }
+                  : e,
+              ),
+            ),
+          );
+        },
+        inspect: {
+          readFile: async (path) => {
+            const v = await inspectRead(device, path);
+            return v === null ? null : new Uint8Array(Buffer.from(v, "base64"));
+          },
+          mode: async (path) =>
+            JSON.parse(
+              await dexec(device.id, "1000", ["python3", "-I", "-c", INSPECT, "mode", path]),
+            ) as number | null,
+          alive: (pids) => alive(device, [...pids]),
+        },
+        dispose: async () => undefined,
+      };
+      await runSandboxPermissionConformance(fixture);
+    });
+
+    it("runs Full access without the restricted filters that restricted work gets", async (context) => {
+      requireRestricted(context);
+      const root = `/workspace/compare-${randomUUID().slice(0, 8)}`;
+      await dexec(device.id, "1000", ["mkdir", root]);
+      const probe =
+        "grep -E '^(Seccomp_filters|NoNewPrivs):' /proc/self/status | tr '\\n' ' '; " +
+        "python3 -c 'import os; os.setsid(); print(\"setsid-ok\")' 2>/dev/null || echo setsid-denied; " +
+        "cat /etc/hostname > /dev/null && echo etc-read; " +
+        "printf x > /workspace/outside-compare 2>/dev/null && echo outside-write || echo outside-denied";
+      const f = await run(device, full, probe, { cwd: root });
+      const r = await run(device, restricted([root]), probe, { cwd: root });
+      expect(f.exitCode).toBe(0);
+      expect(r.exitCode).toBe(0);
+      const filters = (out: string) => Number(out.match(/Seccomp_filters:\s+(\d+)/)?.[1]);
+      console.info(
+        `[sandbox-docker permission] full: ${f.stdout.trim()} | restricted: ${r.stdout.trim()}`,
+      );
+      // Full keeps only the container's own filter; restricted adds the launcher's.
+      expect(filters(r.stdout)).toBeGreaterThan(filters(f.stdout));
+      expect(f.stdout).toMatch(/setsid-ok/);
+      expect(f.stdout).toMatch(/outside-write/);
+      expect(r.stdout).toMatch(/setsid-denied/);
+      expect(r.stdout).toMatch(/etc-read/);
+      expect(r.stdout).toMatch(/outside-denied/);
+    });
+
+    it("reaches allowlisted hosts only through the operation's forwarder and the real egress proxy", async (context) => {
+      requireRestricted(context);
+      const h = await newDevice(sbx, {
+        kind: "allowlist",
+        hosts: ["allowed.example.com", "denied.example.com"],
+      });
+      const root = "/workspace/net";
+      await dexec(h.id, "1000", ["mkdir", root]);
+      const curl = (host: string) => `curl -fsS -m 20 http://${host}/; true`;
+      const exec = async (grant: SandboxPermissionGrant, command: string) =>
+        (await sbx.operation(h, scopeFor(grant), sig())).exec({
+          command,
+          cwd: root,
+          timeoutMs: 120_000,
+          maxOutputBytes: 1 << 20,
+          signal: sig(),
+        });
+      const allowed = await exec(
+        restricted([root], { kind: "allowlist", hosts: ["allowed.example.com"] }),
+        `curl -fsS -m 20 http://allowed.example.com/; echo; curl -sS -m 20 http://denied.example.com/ -o /dev/null -w 'denied=%{http_code}\\n'; ` +
+          `python3 -c 'import os,socket; h=os.environ["HTTP_PROXY"]; print("proxy", h.startswith("http://127.0.0.1:"))'; ` +
+          // The instance's egress proxy itself is not an endpoint of this operation.
+          `python3 -c 'import socket, sys; socket.create_connection((sys.argv[1], 3128), 5)' ${h.id}-egress 2>/dev/null && echo egress-direct || echo egress-refused`,
+      );
+      expect(allowed.stdout).toContain("hello-allowed.example.com");
+      expect(allowed.stdout).toContain("denied=403");
+      expect(allowed.stdout).toContain("proxy True");
+      expect(allowed.stdout).toContain("egress-refused");
+      const none = await exec(restricted([root]), curl("allowed.example.com"));
+      expect(none.stdout).not.toContain("hello-");
+      // Environment lifts only the operation filter: the instance network still applies.
+      const environment = await exec(
+        restricted([root], { kind: "environment" }),
+        "curl -fsS -m 20 http://denied.example.com/; echo; curl -sS -m 10 http://other.example.org/ -o /dev/null -w 'other=%{http_code}\\n'",
+      );
+      expect(environment.stdout).toContain("hello-denied.example.com");
+      expect(environment.stdout).not.toContain("other=200");
+    });
+
+    it("consumes an operation ID once and never repeats its effect", async (context) => {
+      requireRestricted(context);
+      const root = `/workspace/once-${randomUUID().slice(0, 8)}`;
+      await dexec(device.id, "1000", ["mkdir", root]);
+      const scope = scopeFor(restricted([root]));
+      const first = await sbx.operation(device, scope, sig());
+      await first.writeFile(`${root}/a`, enc.encode("first"), sig());
+      // A retry with the same input is an unknown outcome; other input under the ID is invalid.
+      const again = await sbx.operation(device, scope, sig());
+      const error = await again.writeFile(`${root}/a`, enc.encode("first"), sig()).catch((e) => e);
+      expect(isSandboxOperationOutcomeUnknownError(error)).toBe(true);
+      const other = await (await sbx.operation(device, scope, sig()))
+        .writeFile(`${root}/a`, enc.encode("second"), sig())
+        .catch((e) => e);
+      expect(isSandboxScopeValidationError(other)).toBe(true);
+      expect(text(await inspectRead(device, `${root}/a`))).toBe("first");
+      // An exec retried with its ID never runs twice.
+      const execScope = scopeFor(restricted([root]));
+      const args = {
+        command: "echo run >> runs",
+        cwd: root,
+        timeoutMs: 30_000,
+        maxOutputBytes: 1024,
+      };
+      expect(
+        (await (await sbx.operation(device, execScope, sig())).exec({ ...args, signal: sig() }))
+          .exitCode,
+      ).toBe(0);
+      const repeated = await (await sbx.operation(device, execScope, sig()))
+        .exec({ ...args, signal: sig() })
+        .catch((e) => e);
+      expect(isSandboxOperationOutcomeUnknownError(repeated)).toBe(true);
+      expect(text(await inspectRead(device, `${root}/runs`))).toBe("run\n");
+      // A passed admission deadline admits nothing.
+      const late = await run(device, restricted([root]), "echo late > late", {
+        cwd: root,
+        scope: { admitBeforeMs: Date.now() - 1 },
+      }).catch((e) => e);
+      expect(isSandboxScopeDeniedError(late)).toBe(true);
+      expect(await inspectRead(device, `${root}/late`)).toBeNull();
+    });
+
+    it("revokes before launch and cancels exactly the revoked running work", async (context) => {
+      requireRestricted(context);
+      const root = `/workspace/revoke-${randomUUID().slice(0, 8)}`;
+      await dexec(device.id, "1000", ["mkdir", root]);
+      // Revoked before it starts: refused, nothing runs.
+      const early = scopeFor(restricted([root]));
+      await sbx.revokeOperation(
+        device,
+        { operationId: early.operationId, admitBeforeMs: early.admitBeforeMs },
+        sig(),
+      );
+      const refused = await (await sbx.operation(device, early, sig()))
+        .exec({
+          command: "echo ran > early",
+          cwd: root,
+          timeoutMs: 30_000,
+          maxOutputBytes: 1024,
+          signal: sig(),
+        })
+        .catch((e) => e);
+      expect(isSandboxScopeDeniedError(refused)).toBe(true);
+      expect(await inspectRead(device, `${root}/early`)).toBeNull();
+      // Running restricted and Full work with a sibling each: only the revoked ones end.
+      for (const grant of [restricted([root]), full]) {
+        const tag = grant === full ? "full" : "restricted";
+        const victim = scopeFor(grant);
+        const sibling = run(
+          device,
+          grant,
+          `printf r > ${root}/${tag}-sib-ready; until [ -e ${root}/${tag}-release ]; do sleep 0.01; done; printf done > ${root}/${tag}-kept`,
+          { cwd: root },
+        );
+        const running = (await sbx.operation(device, victim, sig())).exec({
+          command: `(sleep 1200 & echo $! > ${root}/${tag}-child); printf r > ${root}/${tag}-ready; sleep 1201`,
+          cwd: root,
+          timeoutMs: 120_000,
+          maxOutputBytes: 1024,
+          signal: sig(),
+        });
+        await waitFor(device, `${root}/${tag}-ready`);
+        await waitFor(device, `${root}/${tag}-sib-ready`);
+        const child = Number(text(await inspectRead(device, `${root}/${tag}-child`)));
+        expect(await alive(device, [child])).toEqual([child]);
+        await sbx.revokeOperation(
+          device,
+          { operationId: victim.operationId, admitBeforeMs: victim.admitBeforeMs },
+          sig(),
+        );
+        const ended = await running;
+        expect(ended.exitCode === null || ended.exitCode >= 128, tag).toBe(true);
+        expect(await alive(device, [child]), tag).toEqual([]);
+        await dexec(device.id, "1000", ["touch", `${root}/${tag}-release`]);
+        expect((await sibling).exitCode, tag).toBe(0);
+        expect(text(await inspectRead(device, `${root}/${tag}-kept`)), tag).toBe("done");
+      }
+    });
+
+    it("killTagged ends a restricted operation's whole tree and nothing else", async (context) => {
+      requireRestricted(context);
+      const root = `/workspace/tagged-${randomUUID().slice(0, 8)}`;
+      await dexec(device.id, "1000", ["mkdir", root]);
+      const other = run(
+        device,
+        restricted([root]),
+        `printf r > other-ready; until [ -e release ]; do sleep 0.01; done; printf kept > kept`,
+        { cwd: root, scope: { tag: "keep-me" } },
+      );
+      const victim = run(
+        device,
+        restricted([root]),
+        `(sleep 1300 & echo $! > child); nohup sleep 1301 > /dev/null 2>&1 & echo $! > nohup; printf r > ready; sleep 1302`,
+        { cwd: root, scope: { tag: "kill-me" } },
+      );
+      await waitFor(device, `${root}/ready`);
+      await waitFor(device, `${root}/other-ready`);
+      const pids = await Promise.all(
+        ["child", "nohup"].map(async (n) =>
+          Number(text(await inspectRead(device, `${root}/${n}`))),
+        ),
+      );
+      expect(await alive(device, pids)).toEqual(pids);
+      await sbx.killTagged(device, ["kill-me"], sig());
+      expect((await victim).exitCode).not.toBe(0);
+      expect(await alive(device, pids)).toEqual([]);
+      await dexec(device.id, "1000", ["touch", `${root}/release`]);
+      expect((await other).exitCode).toBe(0);
+      expect(text(await inspectRead(device, `${root}/kept`))).toBe("kept");
+    });
+
+    it("prepares skills as root through pinned roots and attachments as the device user", async () => {
+      const name = `skill-${randomUUID().slice(0, 8)}`;
+      const skills = await sbx.prepare(
+        device,
+        {
+          operationId: randomUUID(),
+          deviceId: "device-perm",
+          purpose: "skills",
+          writeRoots: [`/skills/${name}`],
+          tag: "prep",
+        },
+        sig(),
+      );
+      await skills.writeFile(`/skills/${name}/SKILL.md`, enc.encode("# skill"), sig());
+      expect(await skills.stat(`/skills/${name}/SKILL.md`, sig())).toEqual({
+        size: 7,
+        isDir: false,
+      });
+      expect(
+        dec.decode(
+          (await skills.readFile(`/skills/${name}/SKILL.md`, { maxBytes: 100, signal: sig() }))
+            ?.data,
+        ),
+      ).toBe("# skill");
+      expect(
+        await dexec(device.id, "1000", [
+          "sh",
+          "-c",
+          `cat /skills/${name}/SKILL.md; touch /skills/${name}/x 2>/dev/null || echo ro`,
+        ]),
+      ).toBe("# skillro\n");
+      const outside = await skills
+        .writeFile(`/skills/other/x`, enc.encode("x"), sig())
+        .catch((e) => e);
+      expect(isSandboxScopeDeniedError(outside)).toBe(true);
+      await expect(
+        sbx.prepare(
+          device,
+          {
+            operationId: randomUUID(),
+            deviceId: "device-perm",
+            purpose: "skills",
+            writeRoots: ["/workspace"],
+            tag: "prep",
+          },
+          sig(),
+        ),
+      ).rejects.toSatisfy(isSandboxScopeDeniedError);
+      // Attachments: a symlink planted inside the conversation subtree never redirects a write.
+      const conv = `/workspace/attachments/conv-${randomUUID().slice(0, 8)}`;
+      await dexec(device.id, "1000", [
+        "sh",
+        "-c",
+        `mkdir -p ${conv} && ln -s /workspace ${conv}/escape`,
+      ]);
+      const attachments = await sbx.prepare(
+        device,
+        {
+          operationId: randomUUID(),
+          deviceId: "device-perm",
+          purpose: "attachments",
+          writeRoots: [conv],
+          tag: "prep",
+        },
+        sig(),
+      );
+      await attachments.writeFile(`${conv}/a/b.txt`, enc.encode("att"), sig());
+      expect(text(await inspectRead(device, `${conv}/a/b.txt`))).toBe("att");
+      const escaped = await attachments
+        .writeFile(`${conv}/escape/pwn`, enc.encode("x"), sig())
+        .catch((e) => e);
+      expect(escaped).toBeInstanceOf(Error);
+      expect(await inspectRead(device, "/workspace/pwn")).toBeNull();
+    });
+
+    it("browses metadata inside the owner's roots only", async () => {
+      const base = `/workspace/browse-${randomUUID().slice(0, 8)}`;
+      await dexec(device.id, "1000", [
+        "sh",
+        "-c",
+        `mkdir -p ${base}/proj/.git ${base}/other && printf s > ${base}/secret && ln -s /workspace ${base}/out`,
+      ]);
+      const browse = await sbx.browse(
+        device,
+        {
+          operationId: randomUUID(),
+          admitBeforeMs: Date.now() + 60_000,
+          deviceId: "device-perm",
+          accountId: "acc-perm",
+          ceilingRevision: "ceiling-1",
+          readRoots: [base],
+          tag: "browse",
+        },
+        sig(),
+      );
+      expect(await browse.list(base, { limit: 10, signal: sig() })).toEqual({
+        entries: [
+          { name: "other", isDir: true },
+          { name: "out", isDir: false },
+          { name: "proj", isDir: true },
+          { name: "secret", isDir: false },
+        ],
+        truncated: false,
+      });
+      const fresh = () =>
+        sbx.browse(
+          device,
+          {
+            operationId: randomUUID(),
+            admitBeforeMs: Date.now() + 60_000,
+            deviceId: "device-perm",
+            accountId: "acc-perm",
+            ceilingRevision: "ceiling-1",
+            readRoots: [base],
+            tag: "browse",
+          },
+          sig(),
+        );
+      expect(await (await fresh()).scan(base, { signal: sig() })).toEqual([
+        { path: `${base}/proj`, suggestedName: "proj" },
+      ]);
+      await expect(
+        (await fresh()).list("/workspace", { limit: 10, signal: sig() }),
+      ).rejects.toSatisfy(isSandboxScopeDeniedError);
+      await expect((await fresh()).stat(`${base}/out/x`, sig())).rejects.toSatisfy(
+        isSandboxScopeDeniedError,
+      );
+      expect("readFile" in (await fresh())).toBe(false);
+    });
+
+    describe("background executions", () => {
+      const bgArgs = (
+        root: string,
+        command: string,
+        extra: Partial<{ outputPath: string; timeoutMs: number }> = {},
+      ) => ({
+        command,
+        cwd: root,
+        timeoutMs: extra.timeoutMs ?? 600_000,
+        maxOutputBytes: 1 << 20,
+        signal: sig(),
+        taskId: `task-${randomUUID().slice(0, 8)}`,
+        outputPath: extra.outputPath ?? `${root}/out.log`,
+        retainUntilMs: Date.now() + 3_600_000,
+      });
+      const newRoot = async (prefix: string) => {
+        const root = `/workspace/${prefix}-${randomUUID().slice(0, 8)}`;
+        await dexec(device.id, "1000", ["mkdir", root]);
+        return root;
+      };
+
+      it("supervises restricted work exactly: status, tail, positional reads, idempotent start and stop", async (context) => {
+        requireRestricted(context);
+        const root = await newRoot("bg");
+        const scope = scopeFor(restricted([root]));
+        const args = bgArgs(
+          root,
+          `echo started >> starts; printf 'line-1\\n'; printf 'line-2\\n' >&2; (sleep 1400 & echo $! > child); ` +
+            `printf r > ready; until [ -e release ]; do sleep 0.01; done; { printf pwn > ${root}-outside; } 2>/dev/null; echo done; sleep 1401`,
+        );
+        const ref = await sbx.background.start(device, scope, args);
+        await waitFor(device, `${root}/ready`);
+        // A retry after a lost acknowledgement returns the same reference and launches nothing.
+        expect(await sbx.background.start(device, scope, { ...args, signal: sig() })).toEqual(ref);
+        expect(text(await inspectRead(device, `${root}/starts`))).toBe("started\n");
+        expect(await sbx.background.status(device, ref, sig())).toEqual({ state: "running" });
+        await dexec(device.id, "1000", ["touch", `${root}/release`]);
+        const until = async (want: string) => {
+          for (;;) {
+            const r = await sbx.background.readOutput(device, ref, {
+              offset: 0,
+              maxBytes: 65_536,
+              signal: sig(),
+            });
+            if ("data" in r && dec.decode(r.data).includes(want)) return r;
+            await new Promise((resolve) => setImmediate(resolve));
+          }
+        };
+        const all = await until("done");
+        // stdout and stderr are both retained; their relative order in the merged spool is not fixed
+        const merged = "data" in all ? dec.decode(all.data) : "";
+        expect(merged).toContain("line-1\n");
+        expect(merged).toContain("line-2\n");
+        expect(merged).toMatch(/done\n$/);
+        if (!("data" in all)) throw new Error("output unavailable");
+        expect(all.nextOffset).toBe(all.data.byteLength);
+        const part = await sbx.background.readOutput(device, ref, {
+          offset: 2,
+          maxBytes: 3,
+          signal: sig(),
+        });
+        expect("data" in part && { text: dec.decode(part.data), next: part.nextOffset }).toEqual({
+          text: "ne-",
+          next: 5,
+        });
+        const past = await sbx.background.readOutput(device, ref, {
+          offset: 1_000_000,
+          maxBytes: 10,
+          signal: sig(),
+        });
+        expect("data" in past && past.data.byteLength).toBe(0);
+        const tail = await sbx.background.tail(device, ref, { maxBytes: 5, signal: sig() });
+        expect(
+          "data" in tail && { text: dec.decode(tail.data), truncated: tail.truncated },
+        ).toEqual({
+          text: "done\n",
+          truncated: true,
+        });
+        // The starting grant stays restricted for the whole lifetime.
+        expect(await inspectRead(device, `${root}-outside`)).toBeNull();
+        expect(text(await inspectRead(device, `${root}/out.log`))).toContain("done");
+        await expect(
+          sbx.background.readOutput(device, ref, { offset: 0, maxBytes: 65_537, signal: sig() }),
+        ).rejects.toSatisfy(isSandboxScopeDeniedError);
+        await expect(
+          sbx.background.status(device, { ...ref, instanceId: "cap-other" }, sig()),
+        ).rejects.toSatisfy(isSandboxScopeDeniedError);
+        const child = Number(text(await inspectRead(device, `${root}/child`)));
+        expect(await alive(device, [child])).toEqual([child]);
+        const stopped = await sbx.background.stop(device, ref, { graceMs: 0, signal: sig() });
+        expect(stopped).toEqual({ outcome: "stopped" });
+        expect(await alive(device, [child])).toEqual([]);
+        expect(await sbx.background.stop(device, ref, { graceMs: 0, signal: sig() })).toEqual(
+          stopped,
+        );
+        expect(await sbx.background.status(device, ref, sig())).toEqual({
+          state: "exited",
+          exitCode: null,
+          timedOut: false,
+        });
+      });
+
+      it("reports a natural exit, keeps siblings alive and refuses an output path outside the scope", async (context) => {
+        requireRestricted(context);
+        const root = await newRoot("bg-exit");
+        const keep = await sbx.background.start(
+          device,
+          scopeFor(restricted([root])),
+          bgArgs(root, "printf r > keep-ready; sleep 1500", { outputPath: `${root}/keep.log` }),
+        );
+        const ref = await sbx.background.start(
+          device,
+          scopeFor(restricted([root])),
+          bgArgs(root, "echo bye; exit 3", { outputPath: `${root}/exit.log` }),
+        );
+        await waitFor(device, `${root}/keep-ready`);
+        for (;;) {
+          const s = await sbx.background.status(device, ref, sig());
+          if (s.state === "exited") {
+            expect(s).toEqual({ state: "exited", exitCode: 3, timedOut: false });
+            break;
+          }
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        expect(await sbx.background.stop(device, ref, { graceMs: 0, signal: sig() })).toEqual({
+          outcome: "already-exited",
+          exitCode: 3,
+          timedOut: false,
+        });
+        expect(await sbx.background.status(device, keep, sig())).toEqual({ state: "running" });
+        expect(await sbx.background.stop(device, keep, { graceMs: 0, signal: sig() })).toEqual({
+          outcome: "stopped",
+        });
+        const outside = await sbx.background
+          .start(
+            device,
+            scopeFor(restricted([root])),
+            bgArgs(root, "echo ran > ran", { outputPath: "/workspace/escape.log" }),
+          )
+          .catch((e) => e);
+        expect(isSandboxScopeDeniedError(outside)).toBe(true);
+        expect(await inspectRead(device, `${root}/ran`)).toBeNull();
+        expect(await inspectRead(device, "/workspace/escape.log")).toBeNull();
+      });
+
+      it("runs Full access in the background and revocation stops exactly that execution", async () => {
+        const root = await newRoot("bg-full");
+        const scope = scopeFor(full);
+        const ref = await sbx.background.start(
+          device,
+          scope,
+          bgArgs(
+            root,
+            `printf full > /workspace/bg-full-${scope.operationId}; (sleep 1600 & echo $! > child); printf r > ready; sleep 1601`,
+          ),
+        );
+        await waitFor(device, `${root}/ready`);
+        expect(text(await inspectRead(device, `/workspace/bg-full-${scope.operationId}`))).toBe(
+          "full",
+        );
+        const child = Number(text(await inspectRead(device, `${root}/child`)));
+        expect(await alive(device, [child])).toEqual([child]);
+        await sbx.revokeOperation(
+          device,
+          { operationId: scope.operationId, admitBeforeMs: scope.admitBeforeMs },
+          sig(),
+        );
+        expect(await alive(device, [child])).toEqual([]);
+        expect(await sbx.background.stop(device, ref, { graceMs: 0, signal: sig() })).toEqual({
+          outcome: "stopped",
+        });
+      });
+
+      it("never starts a stopped instance to answer status, output or stop", async () => {
+        const h = await newDevice(sbx, { kind: "allowlist", hosts: [] });
+        await dexec(h.id, "1000", ["mkdir", "/workspace/p"]);
+        const ref = await sbx.background.start(
+          h,
+          scopeFor(full),
+          bgArgs("/workspace/p", "sleep 1700"),
+        );
+        await sbx.suspend(h, sig());
+        expect(await sbx.background.status(h, ref, sig())).toEqual({ state: "lost" });
+        expect(await sbx.background.tail(h, ref, { maxBytes: 10, signal: sig() })).toEqual({
+          unavailable: "lost",
+        });
+        expect(await sbx.background.stop(h, ref, { graceMs: 0, signal: sig() })).toEqual({
+          outcome: "lost",
+        });
+        expect((await docker("inspect", "--format", "{{.State.Running}}", h.id)).trim()).toBe(
+          "false",
+        );
+      });
+    });
+
+    it("fails closed on an image whose staged runtime does not match the SDK digests", async () => {
+      const tag = `capybara-sandbox:perm-mutant-${RUN}`;
+      const context = images.sandboxImage;
+      const build = spawnSync("docker", ["build", "-q", "-t", tag, "-"], {
+        input:
+          `FROM ${context}\nUSER 0:0\n` +
+          "RUN sed -i 's/^LANDLOCK_ABI_REQUIRED = 6/LANDLOCK_ABI_REQUIRED = 5/' /opt/capybara-runtime/linux-sandbox.py\nUSER 1000:1000\n",
+        encoding: "utf8",
+      });
+      expect(build.status, build.stderr).toBe(0);
+      try {
+        const h = await newDevice(sbx, { kind: "allowlist", hosts: [] }, tag);
+        const report = await sbx.permissionSupport(h, sig());
+        expect(report.restricted).toBeNull();
+        expect(report.fullAccess).toBe(false);
+        expect(report.unavailableReason).toMatch(/digest/);
+        await dexec(h.id, "1000", ["mkdir", "/workspace/p"]);
+        const error = await run(h, restricted(["/workspace/p"]), "echo ran > ran", {
+          cwd: "/workspace/p",
+        }).catch((e) => e);
+        expect(isSandboxPermissionUnsupportedError(error)).toBe(true);
+        expect(await inspectRead(h, "/workspace/p/ran")).toBeNull();
+      } finally {
+        await exec("docker", ["rmi", "-f", tag]).catch(() => undefined);
+      }
+    });
+  },
+);

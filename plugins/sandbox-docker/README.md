@@ -206,6 +206,66 @@ For orgs that handle sensitive data: in the org settings set `sandboxToolPolicy`
 org settings. An org can switch its cloud network from open to the allowlist (or cut the network with `sandboxEgress: none`, which is
 an empty allowlist); `refuseOpenNetwork` lets a deployment refuse the open network outright.
 
+## Permission profiles (operation contract)
+
+The provider implements the optional operation half of `sandbox@2` (core spec
+`2026-11-16-permission-operation-contract.md`): `permissionSupport`, `operation`, `browse`,
+`prepare`, `revokeOperation` and `background`. Every call carries an immutable scope the kernel
+resolved; the provider copies and freezes it (`parseSandboxOperationScope`) and decides nothing
+itself. Nothing about the instance changes per profile: one container, the same hardening
+(`CapDrop: ALL`, `no-new-privileges`, read-only root, uid 1000, Docker's default seccomp), the same
+instance network; no capability, seccomp relaxation, privileged mode or extra container.
+
+- **Runtime** (`image/runtime`, staged root-owned at `/opt/capybara-runtime`, `0755` / `0644`; the
+  image build runs `sha256sum -c SHA256SUMS`): the SDK's `SANDBOX_RUNTIME_SOURCE` v2 files
+  `native-files.py` and `linux-sandbox.py`, byte for byte, plus this provider's consumer
+  `capybara-operation.py`. The digests live in `src/runtime-source.ts`; `test/permission-scopes.test.ts`
+  fails when the staged bytes, the SDK bundle or `SHA256SUMS` drift. After an SDK upgrade, copy the
+  bundle files into `image/runtime`, update `OPERATION_AGENT_SHA256` and regenerate `SHA256SUMS`
+  (`runtimeChecksums()`); the agent also re-checks the SDK digests and root ownership before each
+  restricted launch.
+- **Support report**: `permissionSupport` checks the staged files (owner, mode, digest) and runs
+  the launcher's own `probe` in the running instance (it never starts or resumes one). Restricted is
+  reported only when the probe confirms all four claims: a validated architecture (`aarch64`,
+  `x86_64`), Landlock ABI 6 or newer, a working seccomp listener, descriptor hand-off and exact
+  supervision. Otherwise `restricted: null` with the probe's reason, and every restricted operation
+  is refused with `SandboxPermissionUnsupportedError` (gVisor `runsc`, older kernels, other
+  architectures). An image without the runtime, or with different bytes, reports Full unavailable
+  too (`fullAccess: false`), since admission records need the agent.
+- **Restricted** (`filesystem: scoped`): the agent pins each existing granted root once (no-follow,
+  canonical; a root swapped for a symlink refuses the operation), and the launcher installs Landlock
+  rules and the seccomp broker on those same descriptors; native file calls run the native helper
+  under the launcher on them too (scopes without a writable root use the helper on its pinned
+  descriptors alone, after the launcher's static support check). Restricted descendants cannot
+  `setsid` out of supervision; a cancel, timeout or revocation ends the whole supervised tree. Network
+  `none` refuses every TCP connect; `environment` keeps the instance's own proxy variables (the
+  instance network still applies); an `allowlist` reaches its hosts only through a **per-operation
+  forwarder** on a loopback port that only that operation's broker may connect to: `CONNECT` and
+  absolute `http://` requests to an allowlisted name become `CONNECT` tunnels through the instance's
+  egress proxy, which applies its own address rules. ssh over SOCKS (`GIT_SSH_COMMAND`) is not
+  forwarded under a restricted allowlist.
+- **Full access** (`filesystem: device`, `network: environment` only; anything else is refused as
+  unsupported): the ordinary exec wrapper and environment, without restricted filters, after the
+  agent's admission check; native calls use the helper on `/`.
+- **Admission and idempotency**: before any effect, a root-run step records `(instance generation,
+  operation ID)` with the method and input digest in `/tmp/.capybara-ops` (root, `0711`; records
+  `0600`). A retry of a consumed foreground operation is `SandboxOperationOutcomeUnknownError`,
+  another input under the same ID `SandboxScopeValidationError`; a passed `admitBeforeMs` admits
+  nothing. `revokeOperation` writes a tombstone the agent checks right before launching, then ends
+  the operation's running work (foreground or background) by its control path. The records live on
+  the instance's `/tmp` and end with the instance (a new instance is a new generation).
+- **Background**: a detached supervisor per operation records its pid and start time before `start`
+  acknowledges, keeps the starting grant, appends merged output to its own spool (for `tail` and
+  `readOutput`, at most 65,536 bytes per read) and to `outputPath` (opened inside the scope through
+  the pinned roots), and records the exit. A retried `start` returns the same reference without
+  launching again. `status` / `tail` / `readOutput` / `stop` never start a stopped instance (a stopped
+  instance's work is `lost`); `stop` claims its outcome once (`stopped` or `already-exited`). These
+  records are owned by the sandbox user under `/tmp/.capybara-bg`: Full access work (same user) could
+  rewrite them; restricted work cannot unless a scope grants `/tmp`.
+- **Preparation**: skills only under `/skills`, written by root through the writable skills mount
+  on pinned descriptors (files `0644`); attachments only under `/workspace/attachments/<conversation>`,
+  as the sandbox user. **Browsing**: `stat` / `list` / `scan` on pinned read roots only.
+
 ## Test-only options
 
 The second parameter of `createDockerSandbox(config, testOptions)` can be passed only by code that calls it directly; the plugin config cannot set it:
@@ -213,6 +273,9 @@ The second parameter of `createDockerSandbox(config, testOptions)` can be passed
 - `labels`: adds extra labels to all resources (tests clean up by label);
 - `egressTestHosts`: the egress proxy pins these host names to the given IPs and exempts them from the private-address check (in `allowlist` mode they must also be on the list),
   so that a local HTTP service in a test can serve as an allowed target. It is passed in through the proxy container's environment variable `CAPYBARA_EGRESS_TEST_HOSTS`.
+- `permissionTestEndpoints`: direct endpoints (`{ address, port }`) a restricted operation whose allowlist names the host may
+  connect to, exempt from its proxy variables. Production allowlists reach hosts only through the per-operation forwarder; this
+  lets `test/permission-scopes.test.ts` drive the broker's endpoint checks against services inside the container.
 
 ## Tests
 
@@ -220,6 +283,7 @@ The second parameter of `createDockerSandbox(config, testOptions)` can be passed
 `test/manifest.test.ts` (including `refuseOpenNetwork` on resume and auto-start against a stub Docker API) and `test/network.test.ts`
 (what each network builds, and when `update` may keep the container) do not need Docker; `test/sandbox-docker.test.ts` and `test/concurrent.test.ts` need Docker (the whole group is skipped without it),
 builds the test images once (tagged by the content of their build context, shared by the test files and kept for later runs; remove old `capybara-sandbox*:test-*` tags with `docker rmi`), starts the socket proxy, and cleans up by label at the end; the runsc cases run only when the daemon has runsc registered.
+`test/permission-scopes.test.ts` runs `runSandboxPermissionConformance` (from `@capybara-hq/testing`) against the actual provider, image and socket proxy, plus the provider's own Full / restricted, forwarder, admission, revocation, background, preparation, browsing and fail-closed cases; it logs the kernel, Landlock ABI, Docker version and image it ran on. Set `CAPYBARA_TEST_REQUIRE_LINUX_RESTRICTED=1` for an evidence run: a missing Docker or an unsupported restricted runtime then fails instead of skipping.
 Through a real kernel: `test/sandbox-tools.smoke.test.ts` (the kernel's sandbox tools in one process) and `test/sandbox-artifacts.dual.test.ts` (the M5 segment 2 flow across two replicas: attachments, delivery, takeover after a killed replica, idle suspend and resume). The socket proxy starts from `test/sandbox-proxy/haproxy.cfg`, an exact copy of capybara-hq/core's [`docker/sandbox-proxy/haproxy.cfg`](https://github.com/capybara-hq/core/tree/main/docker/sandbox-proxy/haproxy.cfg). Nothing in this repository compares them; core's `check:bootstrap --network` (rule `bootstrap-haproxy`) will check the copy against the commit core pins.
 
 ## Icon

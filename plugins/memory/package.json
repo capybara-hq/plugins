@@ -34,7 +34,7 @@
   "devDependencies": {
     "@capybara-hq/plugin-client": "^0.1.0-rc.5",
     "@capybara-hq/plugin-model-fake": "^0.1.0-rc.19",
-    "@capybara-hq/testing": "^0.1.0-rc.19",
+    "@capybara-hq/testing": "^0.1.0-rc.21",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "jsdom": "^30.1.3",

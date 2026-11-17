@@ -17,6 +17,7 @@
 #   （同一个卷的可写挂载）写入技能，沙箱用户进不去；
 # - 内核的工具要用 GNU find（-print0）、GNU grep（--null、-e … --）、coreutils、sh / bash；
 #   插件中止命令要用 setsid（util-linux）与 pkill（procps）、timeout 与 base64（coreutils）；
+# - /opt/capybara-runtime holds the restricted operation runtime, root-owned 0755 / 0644 (below);
 # - the plugins' list and scan (project root) run a python3 script inside the sandbox (python3 -I and
 #   timeout from /usr/local/bin, /usr/bin or /bin; standard library only): src/listing.ts in both plugins;
 # - one image for every sandbox mode (`auto` / `sandbox`): what a mode may do is set by policy (the
@@ -94,6 +95,16 @@ RUN printf '%s\n' \
   'bitbucket.org ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDQeJzhupRu0u0cdegZIa8e86EG2qOCsIsD1Xw0xSeiPDlCr7kq97NLmMbpKTX6Esc30NuoqEEHCuc7yWtwp8dI76EEEB1VqY9QJq6vk+aySyboD5QF61I/1WeTwu+deCbgKMGbUijeXhtfbxSxm6JwGrXrhBdofTsbKRUsrN1WoNgUa8uqN1Vx6WAJw1JHPhglEGGHea6QICwJOAr/6mrui/oB7pkaWKHj3z7d1IC4KWLtY47elvjbaTlkN04Kc/5LFEirorGYVbt15kAUlqGM65pk6ZBxtaO3+30LVlORZkxOh+LKL/BvbZ/iRNhItLqNyieoQj/uh/7Iv4uyH/cV/0b4WDSd3DptigWq84lJubb9t/DnZlrJazxyDCulTmKdOR7vs9gMTo+uoIrPSb8ScTtvw65+odKAlBj59dhnVp9zd7QUojOpXlL62Aw56U4oO+FALuevvMjiWeavKhJqlR7i5n9srYcrNV7ttmDw7kf/97P5zauIhxcjX+xHv4M=' \
   > /etc/ssh/ssh_known_hosts \
   && chmod 0644 /etc/ssh/ssh_known_hosts
+
+# The restricted operation runtime (permission profiles): the SDK's SANDBOX_RUNTIME_SOURCE files
+# (native-files.py, linux-sandbox.py) byte for byte plus the provider's consumer
+# (capybara-operation.py), staged root-owned and read-only; the build fails unless every file
+# matches SHA256SUMS (src/runtime-source.ts; test/permission-scopes.test.ts keeps them in step).
+# Nothing here adds a capability or changes the container profile: the launcher uses Landlock
+# and a seccomp user-notification broker as the unprivileged sandbox user.
+COPY --chown=0:0 runtime/ /opt/capybara-runtime/
+RUN set -eu; cd /opt/capybara-runtime; sha256sum -c SHA256SUMS; \
+  chmod 0755 /opt/capybara-runtime; chmod 0644 /opt/capybara-runtime/*
 
 ENV HOME=/workspace \
   LANG=C.UTF-8 \

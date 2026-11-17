@@ -110,6 +110,9 @@ export function createDockerClient(endpoint: string): DockerClient {
           ...target,
           method,
           path: pathOf(path, opts.query),
+          // A fresh connection per request: the socket proxy closes idle keep-alive connections
+          // (HAProxy's 30 s keep-alive timeout), and reusing one fails with "socket hang up".
+          agent: false,
           headers: {
             ...(payload && {
               "content-type": "application/json",

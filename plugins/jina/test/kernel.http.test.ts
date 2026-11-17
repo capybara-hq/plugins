@@ -6,6 +6,7 @@ import {
   createDb,
   createLocalAccount,
   createOrg,
+  enableModelProviders,
   eventsOf,
   type KernelRequest,
   kernelDb,
@@ -95,6 +96,8 @@ describe("jina in a kernel", () => {
     await createLocalAccount(db, "owner");
     const owner = await login(k, "owner");
     const orgId = await createOrg(owner);
+    // A model provider is on only in the orgs that switched it on (kernel rc.37).
+    await enableModelProviders(owner, orgId);
     const enabled = await owner({
       method: "PUT",
       url: `/api/v1/orgs/${orgId}/extensions/jina`,
@@ -150,6 +153,8 @@ describe("jina in a kernel", () => {
     // a second org cannot enable jina without a key (the kernel validates the org config), so
     // neither point is available to it
     const org2 = await createOrg(owner, "second");
+    // A model provider is on only in the orgs that switched it on (kernel rc.37).
+    await enableModelProviders(owner, org2);
     const enabled2 = await owner({
       method: "PUT",
       url: `/api/v1/orgs/${org2}/extensions/jina`,

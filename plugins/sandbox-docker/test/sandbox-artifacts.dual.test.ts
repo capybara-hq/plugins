@@ -177,6 +177,9 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     const org = await at(1, "POST", "/api/v1/orgs", { name: "Acme" });
     expect(org.status, JSON.stringify(org.json)).toBe(201);
     base = `/api/v1/orgs/${(org.json.org as { id: string }).id}`;
+    // A model provider is on only in the orgs that switched it on (kernel rc.37).
+    const fake = await at(1, "PUT", `${base}/extensions/model-fake`, { enabled: true });
+    expect(fake.status, JSON.stringify(fake.json)).toBe(200);
     // a cold run builds the sandbox image (about 1.5 GB) once, shared by the files
   }, 1_200_000);
 
@@ -310,16 +313,20 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     // only the attachment is registered: no instance yet
     expect(await instanceStatus(0, convPath)).toBeNull();
 
-    // ---- 2. Bash 处理附件（首次使用：创建沙箱，附件同步到 /workspace/attachments） ----
+    // ---- 2. FetchAttachment copies the attachment in (first use creates the sandbox; kernel
+    // rc.37 no longer syncs attachments before every command), then Bash processes it ----
+    await send(0, convId, "FetchAttachment", { file: "fruit.csv" });
+    const fetched = await finished(convId, 2);
+    expect(fetched.result.isError, fetched.result.content).toBe(false);
+    expect(fetched.result.content.startsWith(SANDBOX_STARTED_NOTICE)).toBe(true);
     await send(0, convId, "Bash", {
       description: "Test step",
       command:
         "mkdir -p /workspace/out && awk -F, 'NR>1{s+=$2} END{print \"total=\" s}' " +
         `${attachments}/fruit.csv | tee /workspace/out/summary.txt`,
     });
-    const r2 = await finished(convId, 2);
+    const r2 = await finished(convId, 3);
     expect(r2.result.isError, r2.result.content).toBe(false);
-    expect(r2.result.content.startsWith(SANDBOX_STARTED_NOTICE)).toBe(true);
     expect(r2.result.content).toContain(TOTAL);
     expect(await instanceStatus(1, convPath)).toBe("running");
     const c2 = await containerOf(deviceId);
@@ -337,7 +344,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
       file_path: "/workspace/out/summary.txt",
       name: "summary.txt",
     });
-    const r3 = await finished(convId, 3);
+    const r3 = await finished(convId, 4);
     expect(r3.result.isError, r3.result.content).toBe(false);
     expect(r3.result.content).toMatch(/^Delivered summary\.txt \(9 bytes, text\/plain\)/);
     const [art] = ofType(r3.evs, "artifact_created");
@@ -389,7 +396,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     await h.kill(victimIndex);
 
     // 存活副本接手：这次调用结果未知（不重复执行），模型收尾
-    const r4 = await finished(convId, 4, 60_000);
+    const r4 = await finished(convId, 5, 60_000);
     expect(r4.evs[0]?.runId).toBe(run.id);
     expect(r4.result).toMatchObject({
       toolKey: "Bash",
@@ -405,7 +412,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
       command:
         "cat /workspace/out/summary.txt && ls /workspace && echo leftover=$(pgrep -fc '^sleep 300' || true)",
     });
-    const r4b = await finished(convId, 5, 150_000);
+    const r4b = await finished(convId, 6, 150_000);
     const reuseMs = Date.now() - killedAt;
     expect(r4b.result.isError, r4b.result.content).toBe(false);
     expect(r4b.result.content).not.toContain(SANDBOX_STARTED_NOTICE);
@@ -425,7 +432,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
       description: "Test step",
       command: "echo leftover=$(pgrep -fc '^sleep 300' || true)",
     });
-    const r4c = await finished(convId, 6, 60_000);
+    const r4c = await finished(convId, 7, 60_000);
     expect(r4c.result.isError, r4c.result.content).toBe(false);
     expect(r4c.result.content).toContain("leftover=0");
     const c4 = await containerOf(deviceId);
@@ -448,7 +455,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     expect((await containerOf(deviceId)).State.Running).toBe(false);
 
     await send(survivor, convId, "Read", { file_path: "/workspace/out/summary.txt" });
-    const r5 = await finished(convId, 7);
+    const r5 = await finished(convId, 8);
     expect(r5.result.isError, r5.result.content).toBe(false);
     expect(r5.result.content).not.toContain(SANDBOX_STARTED_NOTICE);
     expect(r5.result.content).not.toContain(SANDBOX_RESTARTED_NOTICE);

@@ -143,6 +143,9 @@ describe("Lark 插件接内核（双副本）", () => {
     const org = await call(ownerJar, "POST", "/api/v1/orgs", { name: "Acme" });
     const orgId = (org.json.org as { id: string }).id;
     const base = `/api/v1/orgs/${orgId}`;
+    // A model provider is on only in the orgs that switched it on (kernel rc.37).
+    const fake = await call(ownerJar, "PUT", `${base}/extensions/model-fake`, { enabled: true });
+    expect(fake.status, JSON.stringify(fake.json)).toBe(200);
     const inv = await call(ownerJar, "POST", `${base}/invitations`, { role: "member" });
     const accepted = await call(aliceJar, "POST", `/api/v1/invitations/${inv.json.token}/accept`, {
       login: "alice",
