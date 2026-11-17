@@ -96,7 +96,7 @@ export function providerConfig(
  */
 const plugin = defineExtension({
   name: "sandbox-e2b",
-  version: "0.1.0-rc.17",
+  version: "0.1.0-rc.18",
   // The permission operation contract (`permissionSupport`, `operation`, `background`, ...) and its
   // parsers are the SDK's from rc.28 on (the network contract `limits.mode` / `limits.network`
   // from rc.22).
