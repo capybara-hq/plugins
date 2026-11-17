@@ -12,7 +12,8 @@
 #   bg-*            background executions: a detached trusted supervisor per operation, with an
 #                   append-only output spool and a status record (start/status/tail/read/stop).
 #   probe           the launcher's own probe.
-#   consume/revoke  (root) the durable operation records and tombstones in /tmp/.capybara-ops.
+#   consume/revoke  (root) the durable operation records, tombstones and cancellation markers in
+#   cancel-mark     the root-owned record directory on the skills volume.
 import base64
 import ctypes
 import errno
@@ -33,7 +34,12 @@ import time
 RUNTIME = os.path.dirname(os.path.abspath(__file__))
 LAUNCHER = os.path.join(RUNTIME, "linux-sandbox.py")
 NATIVE = os.path.join(RUNTIME, "native-files.py")
-OPS = "/tmp/.capybara-ops"
+# The record directory: written by root through the skills volume's root-only writable mount
+# (persistent across instance restarts), checked by the sandbox user through the read-only /skills.
+OPS_ROOT = "/opt/capybara/skills/.capybara-ops"
+OPS_VIEW = "/skills/.capybara-ops"
+# Write roots that contain these would reach the provider's records or control files.
+PROTECTED = ("/tmp/.capybara-exec-", "/skills/.capybara-ops", "/opt/capybara")
 MARKER = "capybara-exec"
 CHUNK = 65536
 PROXY_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy",
@@ -89,17 +95,34 @@ def op_key(operation_id):
     return hashlib.sha256(operation_id.encode()).hexdigest()
 
 
+def ops_dir():
+    return OPS_ROOT if os.getuid() == 0 else OPS_VIEW
+
+
 def admit(request):
-    """Refuses a revoked operation, a passed admission deadline or a requested cancellation."""
+    """Refuses a revoked operation, a passed admission deadline or a requested cancellation.
+    Tombstones and cancellation markers are root-written; the sandbox user cannot forge them."""
     key = request.get("opKey")
-    if key and os.path.exists(os.path.join(OPS, key + ".revoked")):
+    if key and os.path.exists(os.path.join(ops_dir(), key + ".revoked")):
         raise Refused("REVOKED", "The operation was revoked")
     deadline = request.get("admitBeforeMs")
     if deadline is not None and time.time() * 1000 > deadline:
         raise Refused("EXPIRED", "The operation's admission deadline passed")
-    ctl = request.get("ctl")
-    if ctl and os.path.exists(ctl + ".kill"):
+    if key and os.path.exists(os.path.join(ops_dir(), key + ".cancelled")):
         raise Refused("CANCELLED", "The operation was cancelled before it started")
+
+
+def protected(path, write):
+    """A write root containing (or inside) the provider's records or control files, or a read
+    root inside the records, is refused (defence in depth beside the root-owned records)."""
+    path = os.path.normpath(path)
+    for entry in PROTECTED:
+        inside = path == entry.rstrip("-") or path.startswith(entry.rstrip("/") + "/")
+        if write and (inside or entry.startswith(path.rstrip("/") + "/")):
+            return True
+        if not write and inside and entry != "/tmp/.capybara-exec-":
+            return True
+    return False
 
 
 def verify_runtime(expected):
@@ -127,7 +150,7 @@ def close_pinned(pinned):
             pass
 
 
-def pin(paths):
+def pin(paths, write=False):
     """Opens each existing granted root once (no-follow, canonical) and records its identity.
 
     A root that does not exist grants nothing and is left out; a root that is not a real
@@ -135,6 +158,8 @@ def pin(paths):
     pinned = []
     try:
         for path in paths:
+            if protected(path, write):
+                raise Refused("SCOPE_DENIED", "A granted root contains the provider's records")
             try:
                 fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
             except FileNotFoundError:
@@ -361,15 +386,17 @@ def network_for(request, forwarders):
 # ---- restricted launch --------------------------------------------------------------------
 
 def pdeathsig():
-    # The launcher cancels (and ends its whole tree) if this agent is lost.
+    # The launcher cancels (and ends its whole tree) if this agent is lost; a background
+    # supervisor launches with cancellation blocked, which the launcher must not inherit.
     libc.prctl(1, signal.SIGTERM, 0, 0, 0)
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
 
 
 def restricted(mode, request, sink=None, done=None):
     admit(request)
     verify_runtime(request["expect"])
     write_paths = request["writeRoots"]
-    write = pin(write_paths)
+    write = pin(write_paths, True)
     read = []
     forwarders = []
     try:
@@ -415,6 +442,8 @@ def supervise(launcher, report_r, body, request, mode, sink=None, done=None):
     signal.signal(signal.SIGTERM, cancel)
     signal.signal(signal.SIGINT, cancel)
     signal.signal(signal.SIGHUP, cancel)
+    # A background stop that arrived while blocked is delivered now, with the launcher known.
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
     try:
         launcher.stdin.write(json.dumps(body).encode())
         launcher.stdin.close()
@@ -517,13 +546,15 @@ def direct(request):
                 reason = launcher.probe_static(launcher.arch()[1])
                 if reason:
                     raise Refused("UNAVAILABLE", reason)
-            write = pin(request["writeRoots"])
+            write = pin(request["writeRoots"], True)
             pinned += write
             read = pin([p for p in request["readRoots"] if p not in request["writeRoots"]])
             pinned += read
             roots = {"read": [{"path": e["path"], "fd": e["fd"]} for e in read],
                      "write": [{"path": e["path"], "fd": e["fd"]} for e in write]}
         elif kind == "prepare":
+            if protected(request["native"]["path"], False):
+                raise Refused("SCOPE_DENIED", "The path is reserved for the provider")
             # Trusted staging: roots are mapped below a protected base, created when missing.
             for entry in request["prepareRoots"]:
                 fd = pin_under(entry["base"], entry["relative"], True)
@@ -555,8 +586,14 @@ def direct(request):
 
 # ---- Full access: the provider's ordinary wrapper -----------------------------------------
 
+NONCE_ENV = "CAPYBARA_ADMISSION_NONCE"
+admission_nonce = [None]
+
+
 def full(argv):
-    request = {"opKey": argv[0], "admitBeforeMs": int(argv[1]), "ctl": argv[2]}
+    # The nonce authenticates a refusal frame; it is removed before the command can see it.
+    admission_nonce[0] = os.environ.pop(NONCE_ENV, None)
+    request = {"opKey": argv[0], "admitBeforeMs": int(argv[1])}
     admit(request)
     if argv[3] != "--" or argv[4] != "setsid":
         raise ValueError("unexpected Full access command")
@@ -564,32 +601,29 @@ def full(argv):
 
 
 # ---- background executions ----------------------------------------------------------------
+#
+# Every trusted background record lives in the root-owned record directory (only root, the
+# provider's own consumer steps, writes it; the sandbox user cannot even list it): the record,
+# the output spool, the stop claim and the channel. A detached root recorder per execution owns
+# them. The sandbox-user supervisor reaches it only through a FIFO whose random name the provider
+# hands to the supervisor on stdin; restricted work never inherits that descriptor.
 
-BG = "/tmp/.capybara-bg"
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+SECRET = re.compile(r"[0-9a-f]{32}")
 READ_MAX = 65536
+CANCEL_SIGNALS = {signal.SIGTERM, signal.SIGINT, signal.SIGHUP}
 
 
-def bg_base():
-    try:
-        os.mkdir(BG, 0o700)
-    except FileExistsError:
-        pass
-    info = os.lstat(BG)
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise Refused("UNAVAILABLE", "The background record directory is not trusted")
-    return BG
-
-
-def bg_directory(execution):
+def bg_directory(execution, base=None):
     if not isinstance(execution, str) or not UUID.fullmatch(execution):
         raise ValueError("invalid execution id")
-    return os.path.join(bg_base(), execution)
+    return os.path.join(base or os.path.join(ops_dir(), "bg"), execution)
 
 
-def write_json(path, value):
+def write_json(path, value, mode=0o600):
     temporary = path + ".tmp"
-    with open(temporary, "w") as handle:
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+    with os.fdopen(fd, "w") as handle:
         json.dump(value, handle)
     os.replace(temporary, path)
 
@@ -609,7 +643,7 @@ def proc_start(pid):
             data = handle.read()
         fields = data[data.rindex(")") + 2:].split()
         return None if fields[0] in ("Z", "X") else int(fields[19])
-    except (OSError, ValueError, IndexError):
+    except (OSError, ValueError, IndexError, TypeError):
         return None
 
 
@@ -619,12 +653,108 @@ def write_all(fd, data):
         view = view[os.write(fd, view):]
 
 
-def bg_prune(base):
-    now = time.time() * 1000
-    for name in os.listdir(base):
-        status = read_json(os.path.join(base, name, "status.json"))
-        if status and status.get("state") == "exited" and now > status.get("retainUntilMs", 0):
-            shutil.rmtree(os.path.join(base, name), ignore_errors=True)
+def bg_prepare(request):
+    """(root) Creates the execution's record, channel and recorder before anything launches."""
+    records()
+    directory = bg_directory(request["executionId"])
+    secret = request["secret"]
+    if not SECRET.fullmatch(secret):
+        raise ValueError("invalid channel name")
+    try:
+        os.mkdir(directory, 0o711)
+    except FileExistsError:
+        return {"prepared": False, "existing": True}
+    os.chmod(directory, 0o711)
+    record = {"state": "starting", "generation": generation(), "taskId": request["taskId"],
+              "retainUntilMs": request["retainUntilMs"],
+              "expiresAtMs": request["retainUntilMs"] + 3600_000}
+    write_json(os.path.join(directory, "record.json"), record)
+    fifo = os.path.join(directory, secret)
+    os.mkfifo(fifo, 0o600)
+    os.chmod(fifo, 0o622)  # the sandbox user may open it for writing by its exact name only
+    ready_r, ready_w = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        try:
+            os.close(ready_r)
+            os.setsid()
+            if os.fork() != 0:
+                os._exit(0)
+            null = os.open("/dev/null", os.O_RDWR)
+            for fd in (0, 1, 2):
+                os.dup2(null, fd)
+            bg_recorder(directory, fifo, record, ready_w)
+        finally:
+            os._exit(0)
+    os.close(ready_w)
+    os.waitpid(pid, 0)
+    ready = os.read(ready_r, 1)
+    os.close(ready_r)
+    if ready != b"R":
+        raise Refused("INVALID_REQUEST", "The background recorder did not start")
+    return {"prepared": True}
+
+
+def bg_recorder(directory, fifo, record, ready_w):
+    """(root, detached) Appends output and records the supervisor's identity and exit."""
+    channel = os.open(fifo, os.O_RDWR | os.O_NONBLOCK | os.O_CLOEXEC)
+    spool = os.open(os.path.join(directory, "output"),
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND | os.O_CLOEXEC, 0o600)
+    path = os.path.join(directory, "record.json")
+    os.write(ready_w, b"R")
+    os.close(ready_w)
+    buffer = bytearray()
+    connect_by = time.monotonic() + 120
+    import select as select_module
+    poller = select_module.poll()
+    poller.register(channel, select_module.POLLIN)
+    try:
+        while True:
+            events = poller.poll(1000)
+            if events:
+                try:
+                    data = os.read(channel, CHUNK + 5)
+                except BlockingIOError:
+                    data = b""
+                buffer += data
+            while len(buffer) >= 5:
+                size = int.from_bytes(buffer[1:5], "big")
+                if size > CHUNK or buffer[0:1] not in (b"P", b"O", b"X"):
+                    record = dict(record, state="lost")
+                    write_json(path, record)
+                    return
+                if len(buffer) < 5 + size:
+                    break
+                kind, body = bytes(buffer[0:1]), bytes(buffer[5:5 + size])
+                del buffer[:5 + size]
+                if kind == b"O":
+                    write_all(spool, body)
+                elif kind == b"P" and record["state"] == "starting":
+                    identity = json.loads(body)
+                    record = dict(record, state="running", pid=int(identity["pid"]),
+                                  start=int(identity["start"]))
+                    write_json(path, record)
+                elif kind == b"X" and record["state"] in ("starting", "running"):
+                    result = json.loads(body)
+                    record = dict(record, state="exited", exitCode=result.get("exitCode"),
+                                  timedOut=bool(result.get("timedOut")),
+                                  cancelled=bool(result.get("cancelled")),
+                                  refused=result.get("refused"))
+                    write_json(path, record)
+                    return
+            if record["state"] == "starting" and time.monotonic() > connect_by:
+                write_json(path, dict(record, state="lost"))
+                return
+            if record["state"] == "running" and not events and \
+                    proc_start(record["pid"]) != record["start"]:
+                # The supervisor is gone without reporting an exit.
+                write_json(path, dict(record, state="lost"))
+                return
+    finally:
+        try:
+            os.unlink(fifo)
+        except OSError:
+            pass
 
 
 def open_output(request):
@@ -637,11 +767,13 @@ def open_output(request):
             pinned.append({"fd": fd})
             roots = {"read": [], "write": [{"path": "/", "fd": fd}]}
         else:
-            write = pin(request["writeRoots"])
+            write = pin(request["writeRoots"], True)
             pinned += write
             if not write:
                 raise Refused("SCOPE_DENIED", "Restricted execution needs an existing writable root")
             roots = {"read": [], "write": [{"path": e["path"], "fd": e["fd"]} for e in write]}
+        if protected(request["outputPath"], True):
+            raise Refused("SCOPE_DENIED", "The output path is reserved for the provider")
         try:
             out = native.NativeFiles(roots).open(request["outputPath"], write=True)
         except (native.ScopeDenied, OSError, ValueError):
@@ -659,23 +791,34 @@ def open_output(request):
         close_pinned(pinned)
 
 
+class Channel:
+    """The supervisor's side of the recorder FIFO: whole frames under one lock."""
+
+    def __init__(self, fd):
+        self.fd = fd
+        self.lock = threading.Lock()
+
+    def send(self, kind, data):
+        with self.lock:
+            try:
+                for at in range(0, max(len(data), 1), CHUNK):
+                    part = data[at:at + CHUNK]
+                    write_all(self.fd, kind + len(part).to_bytes(4, "big") + part)
+            except OSError:
+                pass  # A lost recorder records the execution as lost; the work continues.
+
+
 def bg_start(request):
+    """(sandbox user) Starts the detached supervisor; acknowledges once it is recorded."""
     admit(request)
     verify_runtime(request["expect"])
-    base = bg_base()
-    bg_prune(base)
-    directory = bg_directory(request["executionId"])
-    try:
-        os.mkdir(directory, 0o700)
-    except FileExistsError:
-        # Started before (a lost acknowledgement): never launch twice.
-        finish({"started": True, "existing": True})
-        return
-    try:
-        out = open_output(request)
-    except BaseException:
-        write_json(os.path.join(directory, "status.json"), {"state": "lost", "retainUntilMs": 0})
-        raise
+    fifo = os.path.join(bg_directory(request["executionId"], os.path.join(OPS_VIEW, "bg")),
+                        request["secret"])
+    if not SECRET.fullmatch(request["secret"]):
+        raise ValueError("invalid channel name")
+    channel = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    os.set_blocking(channel, True)
+    out = open_output(request)
     ready_r, ready_w = os.pipe()
     pid = os.fork()
     if pid == 0:
@@ -687,11 +830,12 @@ def bg_start(request):
             null = os.open("/dev/null", os.O_RDWR)
             for fd in (0, 1, 2):
                 os.dup2(null, fd)
-            bg_supervise(request, directory, out, ready_w)
+            bg_supervise(request, Channel(channel), out, ready_w)
         finally:
             os._exit(0)
     os.close(ready_w)
     os.close(out)
+    os.close(channel)
     os.waitpid(pid, 0)
     ready = os.read(ready_r, 1)
     os.close(ready_r)
@@ -700,26 +844,25 @@ def bg_start(request):
     finish({"started": True})
 
 
-def bg_supervise(request, directory, out, ready_w):
-    """The detached trusted supervisor: records itself before acknowledging, then runs the work."""
-    spool = os.open(os.path.join(directory, "output"),
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND | os.O_CLOEXEC, 0o600)
-    status_path = os.path.join(directory, "status.json")
+def unblock():
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, CANCEL_SIGNALS)
+
+
+def bg_supervise(request, channel, out, ready_w):
+    """The detached supervisor: blocks cancellation, reports its identity to the recorder before
+    acknowledging, re-checks admission, then launches with its handlers in place."""
+    signal.pthread_sigmask(signal.SIG_BLOCK, CANCEL_SIGNALS)
     me = os.getpid()
-    record = {"pid": me, "start": proc_start(me), "generation": generation(),
-              "retainUntilMs": request["retainUntilMs"], "taskId": request["taskId"]}
-    write_json(status_path, dict(record, state="running"))
+    channel.send(b"P", json.dumps({"pid": me, "start": proc_start(me)}).encode())
     os.write(ready_w, b"R")
     os.close(ready_w)
-    lock = threading.Lock()
 
     def sink(data):
-        with lock:
-            write_all(spool, data)
-            try:
-                write_all(out, data)
-            except OSError:
-                pass
+        channel.send(b"O", data)
+        try:
+            write_all(out, data)
+        except OSError:
+            pass
 
     def done(result):
         events = result.get("events", [])
@@ -729,11 +872,19 @@ def bg_supervise(request, directory, out, ready_w):
         if isinstance(code, int) and code < 0:
             code = 128 - code
         timed_out = bool(exit_event.get("timedOut"))
-        write_json(status_path, dict(record, state="exited",
-                                     exitCode=None if timed_out or refused else code,
-                                     timedOut=timed_out, cancelled=bool(result.get("cancelled")),
-                                     refused=refused.get("code") if refused else None))
+        channel.send(b"X", json.dumps({
+            "exitCode": None if timed_out or refused else code, "timedOut": timed_out,
+            "cancelled": bool(result.get("cancelled")),
+            "refused": refused.get("code") if refused else None}).encode())
     try:
+        barrier = request.get("barrier")
+        if barrier:
+            # Test-only readiness barrier (DockerSandboxTestOptions.backgroundLaunchBarrier).
+            deadline = time.monotonic() + 120
+            while not os.path.exists(barrier) and time.monotonic() < deadline:
+                time.sleep(0.01)
+        # A revocation or cancellation recorded after the start acknowledgement still wins.
+        admit(request)
         if request["kind"] == "device":
             full_supervise(request, sink, done)
         else:
@@ -746,13 +897,16 @@ def bg_supervise(request, directory, out, ready_w):
 
 def full_supervise(request, sink, done):
     """Full access in the background: the existing OS user and environment, no restricted filter;
-    the owned process group is ended on stop, timeout and exit."""
+    the owned process group ends on stop, timeout and exit, and an in-sandbox time limit bounds
+    it even if this supervisor is lost."""
     env = dict(os.environ)
     env.update(request.get("env") or {})
     cancelled = []
-    child = subprocess.Popen(["/bin/bash", "-c", request["command"]], cwd=request.get("cwd") or None,
-                             env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT, start_new_session=True)
+    seconds = str(int(request["timeoutMs"] / 1000) + 6)
+    child = subprocess.Popen(["/usr/bin/timeout", "-s", "KILL", seconds, "/bin/bash", "-c",
+                              request["command"]], cwd=request.get("cwd") or None, env=env,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, start_new_session=True, preexec_fn=unblock)
 
     def cancel(signum, _frame):
         cancelled.append(signum)
@@ -760,8 +914,10 @@ def full_supervise(request, sink, done):
             os.killpg(child.pid, signal.SIGKILL)
         except OSError:
             pass
-    signal.signal(signal.SIGTERM, cancel)
-    signal.signal(signal.SIGINT, cancel)
+    for number in CANCEL_SIGNALS:
+        signal.signal(number, cancel)
+    # A stop that arrived while blocked is delivered now, with the child known.
+    unblock()
 
     def copy():
         while True:
@@ -791,47 +947,47 @@ def full_supervise(request, sink, done):
                       "timedOut": timed_out}], "cancelled": bool(cancelled)})
 
 
-def bg_lookup(request):
-    """The record of an exact reference, or None (another generation, or nothing recorded)."""
-    if request.get("generation") != generation():
-        return None, None
+def bg_lookup(request, any_generation=False):
     directory = bg_directory(request["executionId"])
-    return directory, read_json(os.path.join(directory, "status.json"))
+    record = read_json(os.path.join(directory, "record.json"))
+    if record is None:
+        return directory, None
+    if not any_generation and record.get("generation") != request.get("generation"):
+        return None, None
+    return directory, record
 
 
-def bg_state(directory, status):
-    if status is None:
+def bg_state(record):
+    if record is None:
         return {"state": "lost"}
-    if status.get("state") == "running":
-        if proc_start(status["pid"]) != status.get("start"):
-            status = read_json(os.path.join(directory, "status.json")) or {}
-            if status.get("state") != "exited":
-                return {"state": "lost"}
-        else:
-            return {"state": "running"}
-    if status.get("state") == "exited":
-        return {"state": "exited", "exitCode": status.get("exitCode"),
-                "timedOut": bool(status.get("timedOut"))}
+    state = record.get("state")
+    if state in ("starting", "running"):
+        if state == "running" and proc_start(record["pid"]) != record["start"]:
+            return {"state": "lost"}
+        return {"state": "running"}
+    if state == "exited":
+        return {"state": "exited", "exitCode": record.get("exitCode"),
+                "timedOut": bool(record.get("timedOut"))}
     return {"state": "lost"}
 
 
 def bg_status(request):
-    directory, status = bg_lookup(request)
-    return bg_state(directory, status)
+    _, record = bg_lookup(request)
+    return bg_state(record)
 
 
-def bg_expired(status):
-    return status is not None and time.time() * 1000 > status.get("retainUntilMs", 0) \
-        and status.get("state") == "exited"
+def bg_expired(record):
+    return record is not None and record.get("state") == "exited" \
+        and time.time() * 1000 > record.get("retainUntilMs", 0)
 
 
 def bg_output(request, tail):
-    directory, status = bg_lookup(request)
+    directory, record = bg_lookup(request)
     if directory is None:
         if tail:
             return {"unavailable": "lost"}
         raise Refused("SCOPE_DENIED", "The reference names another instance generation")
-    if bg_expired(status):
+    if bg_expired(record):
         return {"unavailable": "expired"}
     try:
         fd = os.open(os.path.join(directory, "output"), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -843,7 +999,6 @@ def bg_output(request, tail):
             want = min(request["maxBytes"], total)
             data = os.pread(fd, want, total - want)
             truncated = total > want
-            # Start on a whole UTF-8 character.
             cut = 0
             while cut < len(data) and cut < 4 and data[cut] & 0xC0 == 0x80:
                 cut += 1
@@ -862,44 +1017,73 @@ def bg_output(request, tail):
         os.close(fd)
 
 
-def bg_stop(request):
-    directory, status = bg_lookup(request)
-    if directory is None:
+def bg_stop_plan(request):
+    """(root) The claimed outcome, or the recorded identity the stop must signal."""
+    directory, record = bg_lookup(request, request.get("anyGeneration", False))
+    if directory is None or record is None:
+        return {"outcome": {"outcome": "lost"}}
+    prior = read_json(os.path.join(directory, "stop.json"))
+    if prior is not None:
+        return {"outcome": prior}
+    deadline = time.monotonic() + 5
+    while record is not None and record.get("state") == "starting" and time.monotonic() < deadline:
+        time.sleep(0.02)
+        record = read_json(os.path.join(directory, "record.json"))
+    state = bg_state(record)
+    if state["state"] == "running" and record.get("state") == "running":
+        return {"signal": {"pid": record["pid"], "start": record["start"]}}
+    return {"state": state}
+
+
+def bg_signal(request):
+    """(sandbox user) Ends one recorded supervisor: SIGTERM, then SIGKILL; never a reused pid."""
+    pid, start = int(request["pid"]), int(request["start"])
+    if proc_start(pid) != start:
+        return {"signalled": False}
+    try:
+        handle = os.pidfd_open(pid)
+    except OSError:
+        return {"signalled": False}
+    try:
+        if proc_start(pid) != start:
+            return {"signalled": False}
+        signal.pidfd_send_signal(handle, signal.SIGTERM)
+        deadline = time.monotonic() + min(request.get("graceMs", 0) / 1000, 5) + 6
+        while proc_start(pid) == start and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if proc_start(pid) == start:
+            signal.pidfd_send_signal(handle, signal.SIGKILL)
+        return {"signalled": True}
+    except OSError:
+        return {"signalled": False}
+    finally:
+        os.close(handle)
+
+
+def bg_stop_claim(request):
+    """(root) Atomically claims the terminal outcome; a retry returns the same outcome."""
+    directory, record = bg_lookup(request, request.get("anyGeneration", False))
+    if directory is None or record is None:
         return {"outcome": "lost"}
-    return stop_execution(directory, status, request.get("graceMs", 0))
-
-
-def stop_execution(directory, status, grace_ms):
-    """Atomically claims the terminal outcome (stop.json); a retry returns the same outcome."""
     stop_path = os.path.join(directory, "stop.json")
     prior = read_json(stop_path)
     if prior is not None:
         return prior
-    state = bg_state(directory, status)
-    if state["state"] == "running":
-        pid = status["pid"]
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            pass
-        deadline = time.monotonic() + grace_ms / 1000 + 15
-        while time.monotonic() < deadline and proc_start(pid) == status.get("start"):
-            time.sleep(0.02)
-        if proc_start(pid) == status.get("start"):
-            # The supervisor did not finish: SIGKILL; its launcher's death signal ends the tree.
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
-        final = read_json(os.path.join(directory, "status.json")) or {}
-        if final.get("state") == "exited" and not final.get("cancelled"):
-            outcome = {"outcome": "already-exited", "exitCode": final.get("exitCode"),
-                       "timedOut": bool(final.get("timedOut"))}
-        else:
-            outcome = {"outcome": "stopped"}
+    deadline = time.monotonic() + 5
+    while record is not None and record.get("state") in ("starting", "running") \
+            and time.monotonic() < deadline:
+        time.sleep(0.02)
+        record = read_json(os.path.join(directory, "record.json"))
+    state = bg_state(record)
+    if record is not None and record.get("state") == "exited" and not record.get("cancelled") \
+            and not request.get("signalled"):
+        outcome = {"outcome": "already-exited", "exitCode": state.get("exitCode"),
+                   "timedOut": state.get("timedOut", False)}
+    elif request.get("signalled") or (record is not None and record.get("cancelled")):
+        outcome = {"outcome": "stopped"}
     elif state["state"] == "exited":
-        outcome = {"outcome": "already-exited", "exitCode": state["exitCode"],
-                   "timedOut": state["timedOut"]}
+        outcome = {"outcome": "already-exited", "exitCode": state.get("exitCode"),
+                   "timedOut": state.get("timedOut", False)}
     else:
         outcome = {"outcome": "lost"}
     try:
@@ -934,18 +1118,14 @@ def agents(ctl=None, uuid=None):
 
 
 def cancel(ctl=None, uuid=None):
-    """SIGTERM lets the launcher end its whole tree; SIGKILL only if that does not happen."""
-    if ctl is not None:
-        try:
-            open(ctl + ".kill", "a").close()
-        except OSError:
-            pass
+    """SIGTERM lets the launcher end its whole tree; SIGKILL only if that does not happen.
+    At most 12 s, inside the provider's 15 s kill budget."""
     for pid in agents(ctl, uuid):
         try:
             os.kill(pid, signal.SIGTERM)
         except OSError:
             pass
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + 8
     while agents(ctl, uuid) and time.monotonic() < deadline:
         time.sleep(0.02)
     for pid in agents(ctl, uuid):
@@ -953,11 +1133,8 @@ def cancel(ctl=None, uuid=None):
             os.kill(pid, signal.SIGKILL)
         except OSError:
             pass
-    while agents(ctl, uuid) and time.monotonic() < deadline + 5:
+    while agents(ctl, uuid) and time.monotonic() < deadline + 4:
         time.sleep(0.02)
-    if uuid is not None and UUID.fullmatch(uuid) and os.path.isdir(os.path.join(BG, uuid)):
-        directory = os.path.join(BG, uuid)
-        stop_execution(directory, read_json(os.path.join(directory, "status.json")), 0)
     return 0
 
 
@@ -973,16 +1150,21 @@ def generation():
 
 
 def records():
-    try:
-        os.mkdir(OPS, 0o711)
-    except FileExistsError:
-        pass
-    info = os.lstat(OPS)
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o7777 != 0o711:
-        raise Refused("UNAVAILABLE", "The operation record directory is not trusted")
+    """(root) The record directory on the instance's persistent skills volume, reached through its
+    root-only writable mount: the sandbox user can neither create, list nor change it."""
+    for path in (OPS_ROOT, os.path.join(OPS_ROOT, "bg")):
+        try:
+            os.mkdir(path, 0o711)
+        except FileExistsError:
+            pass
+        info = os.lstat(path)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o7777 != 0o711:
+            raise Refused("UNAVAILABLE", "The operation record directory is not trusted")
     now = time.time() * 1000
-    for name in os.listdir(OPS):
-        path = os.path.join(OPS, name)
+    for name in os.listdir(OPS_ROOT):
+        path = os.path.join(OPS_ROOT, name)
+        if name == "bg":
+            continue
         try:
             with open(path) as handle:
                 expires = json.load(handle).get("expiresAtMs", 0)
@@ -990,6 +1172,13 @@ def records():
                 os.unlink(path)
         except (OSError, ValueError):
             pass
+    base = os.path.join(OPS_ROOT, "bg")
+    for name in os.listdir(base):
+        record = read_json(os.path.join(base, name, "record.json"))
+        stale = record is not None and (record.get("state") in ("exited", "lost")
+                                        or record.get("generation") != generation())
+        if stale and now > record.get("expiresAtMs", 0):
+            shutil.rmtree(os.path.join(base, name), ignore_errors=True)
 
 
 def write_new(path, record, mode):
@@ -1001,9 +1190,9 @@ def write_new(path, record, mode):
 def consume(request):
     records()
     key = request["opKey"]
-    if os.path.exists(os.path.join(OPS, key + ".revoked")):
+    if os.path.exists(os.path.join(OPS_ROOT, key + ".revoked")):
         return {"state": "revoked"}
-    path = os.path.join(OPS, key + ".json")
+    path = os.path.join(OPS_ROOT, key + ".json")
     record = {"generation": generation(), "method": request["method"],
               "inputHash": request["inputHash"], "expiresAtMs": request["expiresAtMs"]}
     if time.time() * 1000 > request["admitBeforeMs"]:
@@ -1026,17 +1215,23 @@ def lookup(path, record):
     return {"state": "duplicate", "record": existing}
 
 
-def revoke(request):
+def marker(request, suffix):
+    """(root) A tombstone or cancellation marker the sandbox-user agent checks before launching."""
     records()
     try:
-        write_new(os.path.join(OPS, request["opKey"] + ".revoked"),
+        write_new(os.path.join(OPS_ROOT, request["opKey"] + suffix),
                   {"expiresAtMs": request["expiresAtMs"]}, 0o644)
     except FileExistsError:
         pass
-    return {"state": "revoked"}
+    return {"state": "revoked" if suffix == ".revoked" else "cancelled",
+            "generation": generation()}
 
 
 # ---- entry --------------------------------------------------------------------------------
+
+ROOT_COMMANDS = {"consume", "revoke", "cancel-mark", "bg-prepare", "bg-status", "bg-tail",
+                 "bg-read", "bg-stop-plan", "bg-stop-claim"}
+
 
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else ""
@@ -1045,9 +1240,10 @@ def main():
             try:
                 full(sys.argv[2:])
             except Refused as error:
-                # Nothing ran: the only output is this refusal frame, and the exit code is 125.
-                finish({"events": [{"event": "refused", "code": error.code,
-                                    "message": str(error)}]})
+                # Nothing ran: the only output is this refusal frame (with the provider's nonce),
+                # and the exit code is 125.
+                finish({"nonce": admission_nonce[0], "events": [
+                    {"event": "refused", "code": error.code, "message": str(error)}]})
             return 125
         if command == "cancel":
             if sys.argv[2] == "--uuid":
@@ -1058,6 +1254,8 @@ def main():
             finish({"probe": json.loads(done.stdout)})
             return 0
         request = read_request()
+        if command in ROOT_COMMANDS and os.getuid() != 0:
+            raise ValueError("root-only command")
         if command in ("exec", "native"):
             restricted(command, request)
         elif command == "direct":
@@ -1065,7 +1263,11 @@ def main():
         elif command == "consume":
             finish(consume(request))
         elif command == "revoke":
-            finish(revoke(request))
+            finish(marker(request, ".revoked"))
+        elif command == "cancel-mark":
+            finish(marker(request, ".cancelled"))
+        elif command == "bg-prepare":
+            finish(bg_prepare(request))
         elif command == "bg-start":
             bg_start(request)
         elif command == "bg-status":
@@ -1074,8 +1276,12 @@ def main():
             finish(bg_output(request, True))
         elif command == "bg-read":
             finish(bg_output(request, False))
-        elif command == "bg-stop":
-            finish(bg_stop(request))
+        elif command == "bg-stop-plan":
+            finish(bg_stop_plan(request))
+        elif command == "bg-signal":
+            finish(bg_signal(request))
+        elif command == "bg-stop-claim":
+            finish(bg_stop_claim(request))
         else:
             raise ValueError("unknown command")
         return 0

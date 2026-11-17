@@ -23,6 +23,7 @@ import {
 import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDockerSandbox, type DockerSandboxProvider } from "../src/index.js";
+import { operationUuid } from "../src/operations.js";
 import {
   OPERATION_AGENT_SHA256,
   RUNTIME_BUNDLE_VERSION,
@@ -188,6 +189,9 @@ describe.skipIf(!dockerAvailable)(
     const netName = `capybara-sandbox-perm-${RUN}`;
     let target: StartedTestContainer;
     const made: string[] = [];
+    /** Test hooks: a file a background supervisor waits for before admission; revoke steps. */
+    const barriers = new Map<string, string>();
+    const afterKill = new Map<string, () => Promise<void>>();
 
     /** One device (file system plus instance) under a fresh name. */
     const newDevice = async (
@@ -321,6 +325,8 @@ describe.skipIf(!dockerAvailable)(
           permissionTestEndpoints: {
             [GRANTED_HOST]: [{ address: "127.0.0.1", port: ENDPOINTS.granted[1] as number }],
           },
+          backgroundLaunchBarrier: (taskId) => barriers.get(taskId),
+          afterRevokeKill: (operationId) => afterKill.get(operationId)?.() ?? Promise.resolve(),
         },
       );
       device = await newDevice(sbx, { kind: "allowlist", hosts: [] });
@@ -466,6 +472,10 @@ describe.skipIf(!dockerAvailable)(
           ungranted: [endpoint("u4"), endpoint("u6")],
         },
         support: () => sbx.permissionSupport(device, sig()),
+        // TODO(core): @capybara-hq/testing 0.1.0-rc.21 needs `granted.host` to be both an allowlist
+        // name and an IPv4 literal (no valid scope is both), and its `waitFor` hangs when an
+        // operation ends before its ready file (task-12-independent-review.md, "Core testing
+        // package issues" 1 and 2). Drop this mapping once core splits name and address.
         // The suite's granted endpoint is numeric (its race program needs an address), but scope
         // allowlists are names (validateAllowHost refuses IP literals): the allowlist names the
         // test host the provider maps to that endpoint (permissionTestEndpoints).
@@ -1035,6 +1045,274 @@ describe.skipIf(!dockerAvailable)(
         expect((await docker("inspect", "--format", "{{.State.Running}}", h.id)).trim()).toBe(
           "false",
         );
+      });
+    });
+
+    describe("review fix round 1", () => {
+      const newRoot = async (h: SandboxHandle, prefix: string) => {
+        const root = `/workspace/${prefix}-${randomUUID().slice(0, 8)}`;
+        await dexec(h.id, "1000", ["mkdir", "-p", root]);
+        return root;
+      };
+      const bg = (root: string, command: string, taskId = `task-${randomUUID().slice(0, 8)}`) => ({
+        command,
+        cwd: root,
+        timeoutMs: 600_000,
+        maxOutputBytes: 1 << 20,
+        signal: sig(),
+        taskId,
+        outputPath: `${root}/out-${taskId}.log`,
+        retainUntilMs: Date.now() + 3_600_000,
+      });
+      const pidOf = async (h: SandboxHandle, path: string) => {
+        await waitFor(h, path);
+        return Number(text(await inspectRead(h, path)));
+      };
+
+      it("I1: refuses restricted roots that contain the provider's records or control files", async (context) => {
+        requireRestricted(context);
+        for (const writeRoots of [["/tmp"], ["/"], ["/opt"], ["/skills"]]) {
+          const fg = await run(device, restricted(writeRoots), "true", {
+            cwd: writeRoots[0] as string,
+          }).catch((e) => e);
+          expect(isSandboxScopeDeniedError(fg), `exec ${writeRoots}`).toBe(true);
+          const started = await sbx.background
+            .start(device, scopeFor(restricted(writeRoots)), bg(writeRoots[0] as string, "true"))
+            .catch((e) => e);
+          expect(isSandboxScopeDeniedError(started), `background ${writeRoots}`).toBe(true);
+        }
+      });
+
+      it("I1: no task can forge its background record; revocation stops it", async () => {
+        const root = await newRoot(device, "forge");
+        // Full access shares the device uid: the strongest in-device writer short of root.
+        const scope = scopeFor(full);
+        const id = operationUuid(scope.operationId);
+        const forged = JSON.stringify({
+          state: "exited",
+          exitCode: 0,
+          pid: 1,
+          start: 1,
+          retainUntilMs: 0,
+        });
+        await sbx.background.start(
+          device,
+          scope,
+          bg(
+            root,
+            `echo $$ > ${root}/pid; for d in /tmp/.capybara-bg/${id} /skills/.capybara-ops/bg/${id} /opt/capybara/skills/.capybara-ops/bg/${id}; do ` +
+              `printf '%s' '${forged}' > $d/status.json 2>/dev/null; printf '%s' '${forged}' > $d/record.json 2>/dev/null; done; ` +
+              `printf done > ${root}/forged; exec sleep 1800`,
+          ),
+        );
+        await waitFor(device, `${root}/forged`);
+        const pid = await pidOf(device, `${root}/pid`);
+        expect(await alive(device, [pid])).toEqual([pid]);
+        await sbx.revokeOperation(
+          device,
+          { operationId: scope.operationId, admitBeforeMs: scope.admitBeforeMs },
+          sig(),
+        );
+        expect(await alive(device, [pid])).toEqual([]);
+      });
+
+      it("I2: a Full background start revoked before its launch never runs", async () => {
+        const root = await newRoot(device, "i2a");
+        const taskId = `task-${randomUUID().slice(0, 8)}`;
+        barriers.set(taskId, `${root}/barrier`);
+        const scope = scopeFor(full);
+        const ref = await sbx.background.start(
+          device,
+          scope,
+          bg(root, `printf ran > ${root}/ran; sleep 1800`, taskId),
+        );
+        await sbx.revokeOperation(
+          device,
+          { operationId: scope.operationId, admitBeforeMs: scope.admitBeforeMs },
+          sig(),
+        );
+        await dexec(device.id, "1000", ["touch", `${root}/barrier`]);
+        for (;;) {
+          const s = await sbx.background.status(device, ref, sig());
+          if (s.state !== "running") break;
+          await new Promise((r) => setImmediate(r));
+        }
+        expect(await inspectRead(device, `${root}/ran`)).toBeNull();
+      });
+
+      it("I2: a stop that arrives before the supervisor's handler still ends the Full child", async () => {
+        const root = await newRoot(device, "i2b");
+        const taskId = `task-${randomUUID().slice(0, 8)}`;
+        barriers.set(taskId, `${root}/barrier`);
+        const ref = await sbx.background.start(
+          device,
+          scopeFor(full),
+          bg(root, `echo $$ > ${root}/child; exec sleep 1800`, taskId),
+        );
+        let settled = false;
+        const stopping = sbx.background
+          .stop(device, ref, { graceMs: 0, signal: sig() })
+          .finally(() => {
+            settled = true;
+          });
+        // Readiness: the supervisor holds a pending SIGTERM while it waits at the barrier.
+        for (;;) {
+          const pending = await dexec(device.id, "1000", [
+            "sh",
+            "-c",
+            `for p in $(pgrep -f 'capybara-operation[.]py bg-start'); do grep -E '^(SigPnd|ShdPnd):' /proc/$p/status; done`,
+          ]).catch(() => "");
+          const sigterm = [...pending.matchAll(/Pnd:\s+([0-9a-f]+)/g)].some(
+            (m) => (BigInt(`0x${m[1]}`) & 0x4000n) !== 0n,
+          );
+          if (sigterm || settled) break;
+          await new Promise((r) => setImmediate(r));
+        }
+        await dexec(device.id, "1000", ["touch", `${root}/barrier`]);
+        expect(await stopping).toEqual({ outcome: "stopped" });
+        const child = await inspectRead(device, `${root}/child`);
+        if (child !== null) expect(await alive(device, [Number(text(child))])).toEqual([]);
+      });
+
+      it("I3: a revocation survives an instance restart, and a restart during revocation is not reported as success", async (context) => {
+        requireRestricted(context);
+        const h = await newDevice(sbx, { kind: "allowlist", hosts: [] });
+        const root = await newRoot(h, "i3");
+        const early = scopeFor(restricted([root]));
+        await sbx.revokeOperation(
+          h,
+          { operationId: early.operationId, admitBeforeMs: early.admitBeforeMs },
+          sig(),
+        );
+        await docker("restart", "-t", "0", h.id);
+        const late = await (await sbx.operation(h, early, sig()))
+          .exec({
+            command: `printf ran > ${root}/late`,
+            cwd: root,
+            timeoutMs: 30_000,
+            maxOutputBytes: 1024,
+            signal: sig(),
+          })
+          .catch((e) => e);
+        expect(isSandboxScopeDeniedError(late)).toBe(true);
+        expect(await inspectRead(h, `${root}/late`)).toBeNull();
+        // The provider's own restart fallback between the kill and the final tombstone.
+        const mid = scopeFor(restricted([root]));
+        afterKill.set(mid.operationId, async () => {
+          afterKill.delete(mid.operationId);
+          await docker("restart", "-t", "0", h.id);
+        });
+        const revoked = await sbx
+          .revokeOperation(
+            h,
+            { operationId: mid.operationId, admitBeforeMs: mid.admitBeforeMs },
+            sig(),
+          )
+          .catch((e) => e);
+        expect(revoked).toBeInstanceOf(Error);
+        await sbx.revokeOperation(
+          h,
+          { operationId: mid.operationId, admitBeforeMs: mid.admitBeforeMs },
+          sig(),
+        );
+        const after = await (await sbx.operation(h, mid, sig()))
+          .exec({
+            command: `printf ran > ${root}/mid`,
+            cwd: root,
+            timeoutMs: 30_000,
+            maxOutputBytes: 1024,
+            signal: sig(),
+          })
+          .catch((e) => e);
+        expect(isSandboxScopeDeniedError(after)).toBe(true);
+      });
+
+      it("M1: a Full command cannot fake the admission refusal", async () => {
+        const json = Buffer.from(
+          JSON.stringify({ events: [{ event: "refused", code: "REVOKED" }] }),
+        );
+        const frame = Buffer.concat([Buffer.from("R"), Buffer.alloc(4), json]);
+        frame.writeUInt32BE(json.byteLength, 1);
+        const r = await run(device, full, `echo ${frame.toString("base64")} | base64 -d; exit 125`);
+        expect(r.exitCode).toBe(125);
+      });
+
+      it("M3: a record directory planted by the device user does not disable operations", async (context) => {
+        requireRestricted(context);
+        const h = await newDevice(sbx, { kind: "allowlist", hosts: [] });
+        await dexec(h.id, "1000", [
+          "sh",
+          "-c",
+          "mkdir -p /tmp/.capybara-ops /tmp/.capybara-bg && chmod 777 /tmp/.capybara-ops",
+        ]);
+        const root = await newRoot(h, "m3");
+        const r = await (await sbx.operation(h, scopeFor(restricted([root])), sig())).exec({
+          command: "echo ok",
+          cwd: root,
+          timeoutMs: 30_000,
+          maxOutputBytes: 1024,
+          signal: sig(),
+        });
+        expect(r.stdout.trim()).toBe("ok");
+      });
+
+      it("M2: the forwarder tunnels CONNECT and wildcards, the instance network still applies, and no other operation reaches it", async (context) => {
+        requireRestricted(context);
+        const h = await newDevice(sbx, {
+          kind: "allowlist",
+          hosts: ["allowed.example.com", "denied.example.com"],
+        });
+        const root = await newRoot(h, "m2");
+        const exec = async (grant: SandboxPermissionGrant, command: string) =>
+          (await sbx.operation(h, scopeFor(grant), sig())).exec({
+            command,
+            cwd: root,
+            timeoutMs: 120_000,
+            maxOutputBytes: 1 << 20,
+            signal: sig(),
+          });
+        const connect = await exec(
+          restricted([root], { kind: "allowlist", hosts: ["*.example.com"] }),
+          "curl -fsS -m 20 --proxytunnel http://allowed.example.com/; echo",
+        );
+        expect(connect.stdout).toContain("hello-allowed.example.com");
+        const blocked = await exec(
+          restricted([root], { kind: "allowlist", hosts: ["other.example.org"] }),
+          "curl -sS -m 20 -o /dev/null -w 'code=%{http_code}\\n' http://other.example.org/; true",
+        );
+        expect(blocked.stdout).not.toContain("code=200");
+        // A long-running operation publishes its forwarder port; another one cannot use it.
+        const holder = (
+          await sbx.operation(
+            h,
+            scopeFor(restricted([root], { kind: "allowlist", hosts: ["allowed.example.com"] })),
+            sig(),
+          )
+        ).exec({
+          command: `printf '%s' "\${HTTP_PROXY##*:}" > ${root}/port; until [ -e ${root}/release ]; do sleep 0.01; done`,
+          cwd: root,
+          timeoutMs: 120_000,
+          maxOutputBytes: 1024,
+          signal: sig(),
+        });
+        const port = Number(
+          await (async () => {
+            await waitFor(h, `${root}/port`);
+            return text(await inspectRead(h, `${root}/port`));
+          })(),
+        );
+        for (const network of [
+          { kind: "none" } as const,
+          { kind: "allowlist", hosts: ["allowed.example.com"] } as const,
+        ]) {
+          const r = await exec(
+            restricted([root], network),
+            `python3 -c 'import socket; socket.create_connection(("127.0.0.1", ${port}), 5)' 2>/dev/null && echo borrowed || echo refused`,
+          );
+          expect(r.stdout.trim(), network.kind).toBe("refused");
+        }
+        await dexec(h.id, "1000", ["touch", `${root}/release`]);
+        expect((await holder).exitCode).toBe(0);
       });
     });
 

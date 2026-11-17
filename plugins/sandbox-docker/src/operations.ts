@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { posix } from "node:path";
 import {
   type ExecResult,
@@ -23,6 +23,7 @@ import {
   type SandboxPreparationScope,
   SandboxScopeDeniedError,
   SandboxScopeValidationError,
+  type SandboxStopResult,
   validateSandboxPathShape,
 } from "@capybara-hq/plugin-sdk";
 import {
@@ -74,13 +75,37 @@ export interface OperationTransport {
     args: SandboxExecOptions & { tag: string },
     ctl: string,
     prefix: string[],
+    nonce: string,
   ): Promise<ExecResult>;
-  /** Kills one restricted operation by its control path (graceful, then forced). */
+  /** Kills one restricted operation by its control path (graceful, then forced), as the sandbox user. */
   cancelRestricted(h: SandboxHandle, ctl: string): Promise<void>;
-  /** Kills every execution (restricted or Full) whose control path carries `uuid`. */
+  /** Kills every foreground execution (restricted or Full) whose control path carries `uuid`. */
   killOperation(h: SandboxHandle, uuid: string, signal: AbortSignal): Promise<void>;
   /** Test-only direct endpoints for allowlisted hosts (DockerSandboxTestOptions). */
   testEndpoints: Record<string, { address: string; port: number }[]>;
+  /** Test-only hooks (DockerSandboxTestOptions). */
+  backgroundLaunchBarrier?: ((taskId: string) => string | undefined) | undefined;
+  afterRevokeKill?: ((operationId: string) => Promise<void>) | undefined;
+}
+
+/**
+ * Write roots that contain (or lie inside) the provider's records or control files, and read
+ * roots inside the records, are refused: defence in depth beside the root-owned record directory
+ * (`/skills/.capybara-ops` on the skills volume) and the Full wrapper's `/tmp/.capybara-exec-*`
+ * control files. The agent applies the same rule when it pins roots.
+ */
+// capybara:allow-module-state read-only list of reserved paths, never mutated
+const PROTECTED = Object.freeze(["/tmp/.capybara-exec-", "/skills/.capybara-ops", "/opt/capybara"]);
+
+export function protectedRoot(path: string, write: boolean): boolean {
+  const p = posix.normalize(path);
+  for (const entry of PROTECTED) {
+    const bare = entry.replace(/-$/, "");
+    const inside = p === bare || p.startsWith(`${entry.replace(/\/$/, "")}/`);
+    if (write && (inside || entry.startsWith(`${p.replace(/\/$/, "")}/`))) return true;
+    if (!write && inside && entry !== "/tmp/.capybara-exec-") return true;
+  }
+  return false;
 }
 
 const PYTHON = "/usr/bin/python3";
@@ -192,10 +217,14 @@ function refusalError(result: AgentResult | null): Error | null {
   }
 }
 
-/** The refusal in a Full access admission frame: an error, `"cancelled"`, or null when none. */
-export function refusedFrame(raw: Buffer): Error | "cancelled" | null {
+/**
+ * The refusal in a Full access admission frame: an error, `"cancelled"`, or null when none. Only a
+ * frame carrying this invocation's nonce counts: the command never sees the nonce (the agent
+ * removes it from its environment before exec), so a command cannot fake "not executed".
+ */
+export function refusedFrame(raw: Buffer, nonce: string): Error | "cancelled" | null {
   const result = parseFrames(raw).result;
-  if (!result) return null;
+  if (!result || result.nonce !== nonce) return null;
   if (result.events?.some((e) => e.event === "refused" && e.code === "CANCELLED")) {
     return "cancelled";
   }
@@ -411,7 +440,7 @@ export function createOperations(deps: OperationDeps) {
       stdin: request({ ...base, ...roots, ctl, network: { kind: "none" } }),
       maxOutputBytes: NATIVE_MAX_OUTPUT,
       signal,
-      kill: () => t.cancelRestricted(h, ctl),
+      kill: () => cancelOperation(h, scope, ctl),
     });
     if (run.aborted) signal.throwIfAborted();
     return nativeResult(method, nativeReply(frames.result, true));
@@ -464,7 +493,7 @@ export function createOperations(deps: OperationDeps) {
       maxOutputBytes: 6 * (args.maxOutputBytes + 1) + (1 << 20),
       timeoutMs: args.timeoutMs,
       signal: args.signal,
-      kill: () => t.cancelRestricted(h, ctl),
+      kill: () => cancelOperation(h, scope, ctl),
     });
     const frames = parseFrames(r.stdout);
     const output = collect(frames, args.maxOutputBytes, deps.decode);
@@ -502,16 +531,22 @@ export function createOperations(deps: OperationDeps) {
     await consume(h, scope, "exec", inputHash("exec", scope, input), args.signal);
     if (scope.filesystem.kind === "device") {
       const ctl = operationControlPath(scope.tag, scope.operationId);
-      return t.execFull(h, { ...args, tag: scope.tag }, ctl, [
-        PYTHON,
-        "-I",
-        OPERATION_AGENT,
-        "full",
-        opKey(scope.operationId),
-        String(scope.admitBeforeMs),
+      return t.execFull(
+        h,
+        { ...args, tag: scope.tag },
         ctl,
-        "--",
-      ]);
+        [
+          PYTHON,
+          "-I",
+          OPERATION_AGENT,
+          "full",
+          opKey(scope.operationId),
+          String(scope.admitBeforeMs),
+          ctl,
+          "--",
+        ],
+        randomBytes(16).toString("hex"),
+      );
     }
     return execRestricted(h, scope, args);
   };
@@ -523,13 +558,69 @@ export function createOperations(deps: OperationDeps) {
         "sandbox-docker cannot narrow the network of device-wide work without restricted filters",
       );
     }
-    for (const root of scope.filesystem.kind === "scoped"
-      ? [...scope.filesystem.readRoots, ...scope.filesystem.writeRoots]
-      : []) {
+    if (scope.filesystem.kind !== "scoped") return;
+    for (const root of [...scope.filesystem.readRoots, ...scope.filesystem.writeRoots]) {
       if (posix.normalize(root) !== root) {
         throw new SandboxScopeDeniedError("Granted roots must be canonical absolute paths");
       }
     }
+    checkRoots(scope.filesystem.readRoots, scope.filesystem.writeRoots);
+  };
+
+  const checkRoots = (readRoots: readonly string[], writeRoots: readonly string[]) => {
+    for (const root of writeRoots) {
+      if (protectedRoot(root, true)) {
+        throw new SandboxScopeDeniedError(
+          "A writable root may not contain the provider's records or control files",
+        );
+      }
+    }
+    for (const root of readRoots) {
+      if (protectedRoot(root, false)) {
+        throw new SandboxScopeDeniedError(
+          "A readable root may not be inside the provider's records",
+        );
+      }
+    }
+  };
+
+  /**
+   * Cancels one restricted foreground operation: a root-owned cancellation marker (checked by the
+   * agent right before launching), then the exact agent by its control path.
+   */
+  const cancelOperation = async (h: SandboxHandle, scope: SandboxOperationScope, ctl: string) => {
+    await rootStep(
+      h,
+      "cancel-mark",
+      { opKey: opKey(scope.operationId), expiresAtMs: scope.admitBeforeMs + RECORD_RETENTION_MS },
+      AbortSignal.timeout(15_000),
+    ).catch(() => undefined);
+    await t.cancelRestricted(h, ctl);
+  };
+
+  /** Root-run record steps (consume, markers, background records): never start the instance. */
+  const rootStep = async (
+    h: SandboxHandle,
+    command: string,
+    body: Record<string, unknown>,
+    signal: AbortSignal,
+    started = false,
+  ): Promise<AgentResult | "not-running"> => {
+    const o: AgentRunOpts = {
+      cmd: [PYTHON, "-I", OPERATION_AGENT, command],
+      user: "root",
+      stdin: request(body),
+      maxOutputBytes: 1 << 20,
+      signal,
+    };
+    const r = started ? await t.run(h, o) : await t.runIfRunning(h, o);
+    if (r === "not-running") return r;
+    if (r.aborted) signal.throwIfAborted();
+    const result = parseFrames(r.stdout).result;
+    if (!result) throw new Error(`The operation record step ${command} gave no result`);
+    const error = refusalError(result);
+    if (error) throw error;
+    return result;
   };
 
   /** The exact execution a reference names on this handle; other instances are scope-denied. */
@@ -541,32 +632,52 @@ export function createOperations(deps: OperationDeps) {
     return ref;
   };
 
-  /** One background agent command against an already running instance (never starts it). */
-  const bgCall = async (
+  /** One root-run read of a background record against a running instance (never starts it). */
+  const bgCall = (
     h: SandboxHandle,
-    command: "bg-status" | "bg-tail" | "bg-read" | "bg-stop",
+    command: "bg-status" | "bg-tail" | "bg-read",
     ref: SandboxExecutionRef,
     extra: Record<string, unknown>,
     signal: AbortSignal,
-  ): Promise<AgentResult | "not-running"> => {
-    const r = await t.runIfRunning(h, {
-      cmd: [PYTHON, "-I", OPERATION_AGENT, command],
-      user: "sandbox",
-      stdin: request({
-        executionId: ref.executionId,
-        generation: ref.instanceGeneration,
-        ...extra,
-      }),
-      maxOutputBytes: 1 << 20,
+  ) =>
+    rootStep(
+      h,
+      command,
+      { executionId: ref.executionId, generation: ref.instanceGeneration, ...extra },
       signal,
-    });
-    if (r === "not-running") return r;
-    if (r.aborted) signal.throwIfAborted();
-    const result = parseFrames(r.stdout).result;
-    if (!result) throw new Error("The background record could not be read");
-    const error = refusalError(result);
-    if (error) throw error;
-    return result;
+    );
+
+  /**
+   * Stops one recorded execution: root reads the recorded identity, the sandbox user signals
+   * exactly that supervisor (pidfd, start time), root claims the outcome once.
+   */
+  const stopExecution = async (
+    h: SandboxHandle,
+    executionId: string,
+    generation: string | null,
+    graceMs: number,
+    signal: AbortSignal,
+  ): Promise<SandboxStopResult> => {
+    const key = { executionId, generation, anyGeneration: generation === null };
+    const plan = await rootStep(h, "bg-stop-plan", key, signal);
+    if (plan === "not-running") return { outcome: "lost" };
+    if (plan.outcome) return toStopResult(plan.outcome as AgentResult);
+    let signalled = false;
+    const target = plan.signal as { pid: number; start: number } | undefined;
+    if (target) {
+      const r = await t.runIfRunning(h, {
+        cmd: [PYTHON, "-I", OPERATION_AGENT, "bg-signal"],
+        user: "sandbox",
+        stdin: request({ ...target, graceMs }),
+        maxOutputBytes: 1 << 20,
+        signal,
+      });
+      if (r === "not-running") return { outcome: "lost" };
+      signalled = parseFrames(r.stdout).result?.signalled === true;
+    }
+    const claim = await rootStep(h, "bg-stop-claim", { ...key, signalled }, signal);
+    if (claim === "not-running") return { outcome: "lost" };
+    return toStopResult(claim);
   };
 
   const MAX_OUTPUT_READ = 65_536;
@@ -616,10 +727,36 @@ export function createOperations(deps: OperationDeps) {
               readRoots: [...scope.filesystem.readRoots],
             }
           : { writeRoots: [], readRoots: [] };
+      if (scope.filesystem.kind === "scoped") {
+        checkRoots(scope.filesystem.readRoots, scope.filesystem.writeRoots);
+      }
+      // The root-owned record and its recorder exist before anything launches; the channel's
+      // random name reaches only the supervisor (stdin), never argv.
+      const secret = randomBytes(16).toString("hex");
+      const prepared = await rootStep(
+        h,
+        "bg-prepare",
+        {
+          executionId: ref.executionId,
+          secret,
+          taskId: args.taskId,
+          retainUntilMs: args.retainUntilMs,
+        },
+        args.signal,
+        true,
+      );
+      if (prepared === "not-running" || prepared.existing) {
+        throw new SandboxOperationOutcomeUnknownError(
+          "This execution was already prepared; reconcile it by its reference",
+        );
+      }
+      const barrier = t.backgroundLaunchBarrier?.(args.taskId);
       const r = await t.run(h, {
         cmd: [PYTHON, "-I", OPERATION_AGENT, "bg-start"],
         user: "sandbox",
         stdin: request({
+          secret,
+          ...(barrier !== undefined && { barrier }),
           opKey: opKey(scope.operationId),
           admitBeforeMs: scope.admitBeforeMs,
           expect: sdkRuntimeDigests(),
@@ -718,20 +855,7 @@ export function createOperations(deps: OperationDeps) {
     async stop(h, input, opts) {
       opts.signal.throwIfAborted();
       const ref = exactRef(h, input);
-      const result = await bgCall(h, "bg-stop", ref, { graceMs: opts.graceMs }, opts.signal);
-      if (result === "not-running") return { outcome: "lost" };
-      switch (result.outcome) {
-        case "already-exited":
-          return {
-            outcome: "already-exited",
-            exitCode: typeof result.exitCode === "number" ? result.exitCode : null,
-            timedOut: result.timedOut === true,
-          };
-        case "stopped":
-          return { outcome: "stopped" };
-        default:
-          return { outcome: "lost" };
-      }
+      return stopExecution(h, ref.executionId, ref.instanceGeneration, opts.graceMs, opts.signal);
     },
   };
 
@@ -868,6 +992,7 @@ export function createOperations(deps: OperationDeps) {
     ): Promise<SandboxBrowse> {
       signal.throwIfAborted();
       const scope = parseSandboxBrowseScope(input);
+      checkRoots(scope.readRoots, []);
       const run = async (
         method: "stat" | "list" | "scan",
         native: Record<string, unknown>,
@@ -985,29 +1110,48 @@ export function createOperations(deps: OperationDeps) {
     async revokeOperation(h: SandboxHandle, input: SandboxOperationRef, signal: AbortSignal) {
       signal.throwIfAborted();
       const ref = parseSandboxOperationRef(input);
-      const tombstone = await t.runIfRunning(h, {
-        cmd: [PYTHON, "-I", OPERATION_AGENT, "revoke"],
-        user: "root",
-        stdin: request({
-          opKey: opKey(ref.operationId),
-          expiresAtMs: ref.admitBeforeMs + RECORD_RETENTION_MS,
-        }),
-        maxOutputBytes: 1 << 20,
-        signal,
-      });
-      if (tombstone === "not-running") {
-        // A stopped instance runs nothing and loses /tmp on start; only a launch that could still
-        // be admitted keeps the revocation pending (an ordinary error, so the kernel retries).
+      const marker = {
+        opKey: opKey(ref.operationId),
+        expiresAtMs: ref.admitBeforeMs + RECORD_RETENTION_MS,
+      };
+      // 1. The tombstone first (root-owned, on the persistent skills volume): a delayed launch
+      //    checks it right before creating processes.
+      const first = await rootStep(h, "revoke", marker, signal);
+      if (first === "not-running") {
+        // A stopped instance runs nothing, and the tombstone persists once it can be written;
+        // only a launch that could still be admitted keeps the revocation pending.
         if (Date.now() > ref.admitBeforeMs) return;
         throw new Error("The device instance is not running; the revocation stays pending");
       }
-      const result = parseFrames(tombstone.stdout).result;
-      if (tombstone.exitCode !== 0 || result?.state !== "revoked") {
-        throw new Error("The revocation tombstone could not be recorded");
+      // 2. Running work of this operation ends: foreground (restricted gracefully, Full by its
+      //    wrapper) and its background execution by the recorded identity.
+      const uuid = operationUuid(ref.operationId);
+      await t.killOperation(h, uuid, signal);
+      await stopExecution(h, uuid, null, 0, signal);
+      await t.afterRevokeKill?.(ref.operationId);
+      // 3. Rewrite the tombstone; a generation change means the instance restarted meanwhile
+      //    (for example the kill's restart fallback), so success is not reported: the kernel retries.
+      const second = await rootStep(h, "revoke", marker, signal);
+      if (second === "not-running" || second.generation !== first.generation) {
+        throw new Error("The device instance restarted during the revocation; retry it");
       }
-      await t.killOperation(h, operationUuid(ref.operationId), signal);
     },
   };
+}
+
+function toStopResult(result: AgentResult): SandboxStopResult {
+  switch (result.outcome) {
+    case "already-exited":
+      return {
+        outcome: "already-exited",
+        exitCode: typeof result.exitCode === "number" ? result.exitCode : null,
+        timedOut: result.timedOut === true,
+      };
+    case "stopped":
+      return { outcome: "stopped" };
+    default:
+      return { outcome: "lost" };
+  }
 }
 
 function digestOf(data: unknown): string | undefined {

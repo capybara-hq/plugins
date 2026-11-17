@@ -242,26 +242,43 @@ instance network; no capability, seccomp relaxation, privileged mode or extra co
   instance network still applies); an `allowlist` reaches its hosts only through a **per-operation
   forwarder** on a loopback port that only that operation's broker may connect to: `CONNECT` and
   absolute `http://` requests to an allowlisted name become `CONNECT` tunnels through the instance's
-  egress proxy, which applies its own address rules. ssh over SOCKS (`GIT_SSH_COMMAND`) is not
-  forwarded under a restricted allowlist.
+  egress proxy, which applies its own address rules. Only proxy-aware clients reach allowlisted
+  hosts: raw TCP clients that ignore the proxy variables (Python or Node sockets, ssh including
+  `GIT_SSH_COMMAND`, database clients) cannot, as on the instance network itself.
+- **Reserved roots**: a restricted write root that contains (or lies inside) the provider's records
+  or control files is refused with `SandboxScopeDeniedError`: `/`, `/tmp` (the Full wrapper's
+  `/tmp/.capybara-exec-*` files), `/skills`, `/opt`, `/opt/capybara` and below; read roots only
+  inside the record directory. This is defence in depth beside the root-owned records.
 - **Full access** (`filesystem: device`, `network: environment` only; anything else is refused as
   unsupported): the ordinary exec wrapper and environment, without restricted filters, after the
-  agent's admission check; native calls use the helper on `/`.
-- **Admission and idempotency**: before any effect, a root-run step records `(instance generation,
-  operation ID)` with the method and input digest in `/tmp/.capybara-ops` (root, `0711`; records
-  `0600`). A retry of a consumed foreground operation is `SandboxOperationOutcomeUnknownError`,
-  another input under the same ID `SandboxScopeValidationError`; a passed `admitBeforeMs` admits
-  nothing. `revokeOperation` writes a tombstone the agent checks right before launching, then ends
-  the operation's running work (foreground or background) by its control path. The records live on
-  the instance's `/tmp` and end with the instance (a new instance is a new generation).
-- **Background**: a detached supervisor per operation records its pid and start time before `start`
-  acknowledges, keeps the starting grant, appends merged output to its own spool (for `tail` and
-  `readOutput`, at most 65,536 bytes per read) and to `outputPath` (opened inside the scope through
-  the pinned roots), and records the exit. A retried `start` returns the same reference without
-  launching again. `status` / `tail` / `readOutput` / `stop` never start a stopped instance (a stopped
-  instance's work is `lost`); `stop` claims its outcome once (`stopped` or `already-exited`). These
-  records are owned by the sandbox user under `/tmp/.capybara-bg`: Full access work (same user) could
-  rewrite them; restricted work cannot unless a scope grants `/tmp`.
+  agent's admission check; native calls use the helper on `/`. A refusal by that check is accepted
+  only with the per-call nonce the agent removes from its environment before exec, so a command
+  cannot report itself as "not executed".
+- **Records** live in `/skills/.capybara-ops` on the device's persistent skills volume, written only
+  by root through the root-only writable mount (`/opt/capybara/skills`, `0711` directories, `0600`
+  records): the sandbox user cannot create, list or change them, and they survive instance restarts.
+  Admission: before any effect, a root step records `(instance generation, operation ID)` with the
+  method and input digest. A retry of a consumed foreground operation is
+  `SandboxOperationOutcomeUnknownError`, another input or generation under the same ID
+  `SandboxScopeValidationError`; a passed `admitBeforeMs` admits nothing. `revokeOperation` writes a
+  root-owned tombstone the agent checks right before launching, ends the running foreground and
+  background work, then rewrites the tombstone; if the instance restarted meanwhile (a new
+  generation, for example the kill's restart fallback) it reports an error so the kernel retries.
+  A cancelled restricted foreground operation gets a root-owned cancellation marker the same way.
+- **Background**: per execution a detached **root** recorder owns the record, the output spool and
+  the stop claim; the sandbox-user supervisor reaches it only through a FIFO whose random name it
+  receives on stdin. The supervisor blocks cancellation, reports its pid and start time before
+  `start` acknowledges, re-checks the tombstone after that and before launching, installs its
+  handlers, then launches (Full children additionally run under `timeout -s KILL`). It keeps the
+  starting grant, appends merged output to the spool (for `tail` and `readOutput`, at most 65,536
+  bytes per read) and to `outputPath` (opened inside the scope through the pinned roots). A retried
+  `start` returns the same reference without launching again. `status` / `tail` / `readOutput` /
+  `stop` never start a stopped instance (its work is `lost`); `stop` signals exactly the recorded
+  supervisor (pidfd and start time) and claims its outcome once (`stopped` or `already-exited`).
+  Residual trust: Full access work of any conversation shares the device uid; it cannot change the
+  root-owned records, but it can signal or inspect the sandbox user's own processes (including a
+  supervisor's open channel through `/proc`). A background result is therefore only as trustworthy
+  as Full access on that device.
 - **Preparation**: skills only under `/skills`, written by root through the writable skills mount
   on pinned descriptors (files `0644`); attachments only under `/workspace/attachments/<conversation>`,
   as the sandbox user. **Browsing**: `stat` / `list` / `scan` on pinned read roots only.
@@ -276,6 +293,9 @@ The second parameter of `createDockerSandbox(config, testOptions)` can be passed
 - `permissionTestEndpoints`: direct endpoints (`{ address, port }`) a restricted operation whose allowlist names the host may
   connect to, exempt from its proxy variables. Production allowlists reach hosts only through the per-operation forwarder; this
   lets `test/permission-scopes.test.ts` drive the broker's endpoint checks against services inside the container.
+- `backgroundLaunchBarrier` (a file a background supervisor waits for after it recorded itself and before its final admission
+  check) and `afterRevokeKill` (runs inside `revokeOperation` between the kill and the final tombstone): readiness hooks for the
+  start/revoke, start/stop and restart race tests.
 
 ## Tests
 

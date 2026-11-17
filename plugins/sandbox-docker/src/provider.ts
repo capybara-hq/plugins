@@ -135,6 +135,13 @@ export interface DockerSandboxTestOptions {
    * broker's endpoint checks against services inside the container.
    */
   permissionTestEndpoints?: Record<string, { address: string; port: number }[]>;
+  /**
+   * A file the background supervisor of `taskId` waits for after it recorded itself and before its
+   * final admission check (a readiness barrier for the start/revoke and start/stop race tests).
+   */
+  backgroundLaunchBarrier?: (taskId: string) => string | undefined;
+  /** Runs inside `revokeOperation` between the kill and the final tombstone (restart tests). */
+  afterRevokeKill?: (operationId: string) => Promise<void>;
 }
 
 /** The sandbox user (the image's `sandbox`): commands and file operations run as it. */
@@ -418,18 +425,20 @@ const KILL_ALL_SCRIPT =
  * Other holders' commands keep running.
  */
 const KILL_TAGGED_SCRIPT =
-  `${KILL_TREE}${TERM_AGENTS}u='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; for t in "$@"; do ` +
-  'g "/tmp/[.]capybara-exec-$t-$u( |$)"; for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-$t-$u( |$)"); do ' +
+  `${KILL_TREE}${TERM_AGENTS}u='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; ` +
+  // One graceful pass for every tag at once, so the wait stays within the kill budget.
+  'a=$(printf "%s|" "$@" | sed "s/|$//"); g "/tmp/[.]capybara-exec-($a)-$u( |$)"; for t in "$@"; do for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-$t-$u( |$)"); do ' +
   'k "$q"; kill -9 "$q" 2>/dev/null; done; done; exit 0';
 
 /**
  * Kills every execution whose control path ends with one operation's UUID, whatever its tag
  * (`revokeOperation`): the agent stops restricted work gracefully and the operation's background
- * execution by its record (`$2` is the agent), then the ordinary forced pass.
+ * agent (`$2`), then the ordinary forced pass for Full access wrappers. Background executions
+ * are stopped by their root-owned record (operations.ts).
  */
 const KILL_OPERATION_SCRIPT =
-  `${KILL_TREE}${TERM_AGENTS}/usr/bin/python3 -I "$2" cancel --uuid "$1" 2>/dev/null; ` +
-  'g "/tmp/[.]capybara-exec-[a-z0-9-]+-$1( |$)"; ' +
+  // The agent's graceful cancel takes at most 12 s, inside killOrRestart's 15 s budget.
+  `${KILL_TREE}/usr/bin/python3 -I "$2" cancel --uuid "$1" 2>/dev/null; ` +
   'for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-[a-z0-9-]+-$1( |$)"); do ' +
   'k "$q"; kill -9 "$q" 2>/dev/null; done; exit 0';
 
@@ -1111,6 +1120,7 @@ export function createDockerSandbox(
     args: Omit<Parameters<SandboxProvider["exec"]>[1], "actor">,
     ctl: string,
     prefix: string[] = [],
+    nonce?: string,
   ): Promise<ExecResult> => {
     args.signal.throwIfAborted();
     const env: string[] = [];
@@ -1118,6 +1128,8 @@ export function createDockerSandbox(
       if (!ENV_KEY_RE.test(k)) throw new Error(`invalid environment variable name: ${k}`);
       env.push(`${k}=${v}`);
     }
+    // The admission agent removes it before exec: the command can never echo it back.
+    if (nonce !== undefined) env.push(`CAPYBARA_ADMISSION_NONCE=${nonce}`);
     const r = await autoStart(h, args.signal, () =>
       run(h.id, {
         cmd: [...prefix, ...execArgv(ctl, args.command, args.timeoutMs)],
@@ -1133,7 +1145,7 @@ export function createDockerSandbox(
     // The admission prefix refused before the command started: its only output is the refusal
     // frame (operations.ts maps it), with exit code 125.
     if (prefix.length > 0 && r.exitCode === 125 && r.stdout[0] === 0x52) {
-      const refused = refusedFrame(r.stdout);
+      const refused = refusedFrame(r.stdout, nonce ?? "");
       if (refused === "cancelled") {
         return { exitCode: null, stdout: "", stderr: "", truncated: false, timedOut: false };
       }
@@ -1163,7 +1175,7 @@ export function createDockerSandbox(
         throw e;
       }
     },
-    execFull: (h, args, ctl, prefix) => execWith(h, args, ctl, prefix),
+    execFull: (h, args, ctl, prefix, nonce) => execWith(h, args, ctl, prefix, nonce),
     cancelRestricted: (h, ctl) =>
       killOrRestart(h.id, ["/usr/bin/python3", "-I", OPERATION_AGENT, "cancel", ctl]),
     killOperation: async (h, uuid, signal) => {
@@ -1177,6 +1189,8 @@ export function createDockerSandbox(
       );
     },
     testEndpoints: test.permissionTestEndpoints ?? {},
+    backgroundLaunchBarrier: test.backgroundLaunchBarrier,
+    afterRevokeKill: test.afterRevokeKill,
   };
   const operations = createOperations({ transport, decode: decodeOutput });
 
