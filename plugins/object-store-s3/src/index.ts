@@ -265,6 +265,14 @@ export function createS3ObjectStore(input: S3StoreConfig): ObjectStore {
         : { items };
     },
 
+    /**
+     * The object's canonical URI (`s3://<bucket>/<key>`): unsigned and stable, no credentials — the
+     * kernel puts it in model-visible text where a kernel-known file must be identified.
+     */
+    uri(key) {
+      return `s3://${Bucket}/${key}`;
+    },
+
     async presignGet(key, opts) {
       return getSignedUrl(
         signer,
