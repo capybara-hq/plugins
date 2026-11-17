@@ -28,6 +28,7 @@ function file(text: string, name = "page.html", contentType = "text/html"): Prev
 
 function context(
   locale: "zh" | "en" = "en",
+  lifetime: AbortSignal = new AbortController().signal,
 ): RenderContext & { showError: Mock<(reason: string) => void> } {
   const root = document.createElement("div");
   document.body.append(root);
@@ -35,6 +36,7 @@ function context(
     root,
     locale,
     signal: new AbortController().signal,
+    lifetime,
     t: translator(locale),
     runInWorker: vi.fn(),
     showError: vi.fn<(reason: string) => void>(),
@@ -91,6 +93,21 @@ describe("html renderer", () => {
     (ctx.root.querySelector('button[data-mode="rendered"]') as HTMLButtonElement).click();
     source.click();
     expect(mountCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("ties the source pane's work to the preview's lifetime", async () => {
+    const life = new AbortController();
+    const ctx = context("en", life.signal);
+    const render = new AbortController();
+    await renderHtml(file("<p>x</p>"), { ...ctx, signal: render.signal });
+    // the shell aborts the render signal once the render settles; the toggle comes later
+    render.abort();
+    (ctx.root.querySelector('button[data-mode="source"]') as HTMLButtonElement).click();
+    const codeCtx = (mountCode.mock.calls[0] as unknown as unknown[])[4] as RenderContext;
+    expect(codeCtx.signal.aborted).toBe(false);
+    expect(codeCtx.lifetime).toBe(life.signal);
+    life.abort();
+    expect(codeCtx.signal.aborted).toBe(true);
   });
 
   it("shows a source failure inside the source pane", async () => {

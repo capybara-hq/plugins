@@ -3,6 +3,7 @@
  * and loads none of its external references; the markup never enters the DOM.
  */
 import { showEmpty } from "../app/frame.js";
+import { THEME } from "../app/theme.js";
 import type { Renderer } from "../app/types.js";
 
 const STRINGS = {
@@ -10,11 +11,11 @@ const STRINGS = {
   en: { invalid: "Not a valid SVG image" },
 } as const;
 
-/** Checkerboard ground, so transparent parts read as transparent on either theme. */
+/** Checkerboard ground in the embed's theme, so transparent parts read as transparent. */
 const GROUND =
-  "background-color:#fff;background-image:" +
-  "linear-gradient(45deg,#ddd 25%,transparent 25%,transparent 75%,#ddd 75%)," +
-  "linear-gradient(45deg,#ddd 25%,transparent 25%,transparent 75%,#ddd 75%);" +
+  `background-color:${THEME.panel};background-image:` +
+  `linear-gradient(45deg,${THEME.hover} 25%,transparent 25%,transparent 75%,${THEME.hover} 75%),` +
+  `linear-gradient(45deg,${THEME.hover} 25%,transparent 25%,transparent 75%,${THEME.hover} 75%);` +
   "background-size:16px 16px;background-position:0 0,8px 8px";
 
 const render: Renderer = async (file, ctx) => {

@@ -4,6 +4,7 @@
  */
 import { showEmpty, showError } from "../app/frame.js";
 import { mountSanitized, sanitizeHtml } from "../app/sanitize.js";
+import { THEME } from "../app/theme.js";
 import type { RenderContext, Renderer } from "../app/types.js";
 import { mountCode } from "./code.js";
 
@@ -19,11 +20,14 @@ const STRINGS = {
 
 const BAR_STYLE =
   "display:flex;align-items:center;gap:8px;padding:6px 8px;" +
-  "border-bottom:1px solid var(--cap-border, rgba(128,128,128,.3))";
+  `border-bottom:1px solid ${THEME.border};background:${THEME.panel};color:${THEME.foreground}`;
 const BUTTON_STYLE =
-  "font:inherit;padding:2px 10px;border-radius:4px;cursor:pointer;color:inherit;" +
-  "background:transparent;border:1px solid var(--cap-border, rgba(128,128,128,.4))";
-const NOTICE_STYLE = "color:var(--cap-muted-foreground, GrayText);font-size:12px";
+  "font:inherit;padding:2px 10px;cursor:pointer;color:inherit;" +
+  `font-family:${THEME.font};border-radius:${THEME.radius};` +
+  `background:transparent;border:1px solid ${THEME.border}`;
+const NOTICE_STYLE = `color:${THEME.mutedForeground};font-size:12px`;
+/** The pressed mode reads as selected in the embed's theme. */
+const PRESSED_BG = THEME.hover;
 
 const render: Renderer = async (file, ctx) => {
   if (file.data.byteLength === 0) {
@@ -85,6 +89,8 @@ const render: Renderer = async (file, ctx) => {
   const select = (mode: "rendered" | "source") => {
     renderedBtn.setAttribute("aria-pressed", String(mode === "rendered"));
     sourceBtn.setAttribute("aria-pressed", String(mode === "source"));
+    renderedBtn.style.background = mode === "rendered" ? PRESSED_BG : "transparent";
+    sourceBtn.style.background = mode === "source" ? PRESSED_BG : "transparent";
     renderedView.hidden = mode !== "rendered";
     sourceView.hidden = mode !== "source";
     if (mode === "source" && !sourceMounted) {
@@ -94,7 +100,8 @@ const render: Renderer = async (file, ctx) => {
       const sourceCtx: RenderContext = {
         ...ctx,
         root: sourceView,
-        signal: new AbortController().signal,
+        // the source pane lives on after the render settles: it ends with the preview
+        signal: ctx.lifetime,
         showError: (reason) => showError(sourceView, ctx.t, reason),
       };
       mountCode(sourceView, text, file.name, file.contentType, sourceCtx).catch((e: unknown) => {

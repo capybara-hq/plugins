@@ -13,6 +13,7 @@ const EXTERNAL: Record<string, boolean | "any"> = {
   "css-urls.html": true,
   "data-urls.html": true,
   "form.html": true,
+  "fragment-refs.html": true,
   "frames.html": true,
   "handlers.html": true,
   "js-urls.html": true,
@@ -244,6 +245,34 @@ describe("sanitizeHtml over hostile fixtures", () => {
     }
   });
 
+  it("fragment-refs.html: only a raw leading # is a local reference", () => {
+    const { fragment, styles, external } = sanitizeHtml(fixture("fragment-refs.html"), document);
+    expect(external).toBe(true);
+    const css = styles.join("\n");
+    expect(css).toContain("url(#ok)");
+    expect(css).toContain("color: green");
+    expect(css.match(/url\(/g)).toHaveLength(1);
+    expect(fragment.querySelector("div")?.getAttribute("style")).toBe("color:green");
+    const rects = Array.from(fragment.querySelectorAll("rect"));
+    expect(rects.map((r) => r.getAttribute("filter"))).toEqual([null, null, "url(#f)"]);
+    expect(fragment.querySelector("#g2")?.hasAttribute("href")).toBe(false);
+    for (const html of [
+      '<style>a{filter:url("\\1 #x")}</style>',
+      "<div style='filter:url(\" #x\")'>x</div>",
+      '<svg><rect filter="url(\\1 #f)"/></svg>',
+    ]) {
+      expect(sanitizeHtml(html, document).external, html).toBe(true);
+    }
+  });
+
+  it("weighs every srcset candidate for the notice", () => {
+    const flag = (srcset: string) => sanitizeHtml(`<img srcset="${srcset}">`, document).external;
+    expect(flag("data:image/png;base64,AAAA 1x, https://evil.example/b.png 2x")).toBe(true);
+    expect(flag("data:image/png;base64,AAAA 1x,//evil.example/b.png 2x")).toBe(true);
+    expect(flag("data:image/png;base64,AAAA 1x, data:image/png;base64,BBBB 2x")).toBe(false);
+    expect(flag("data:image/png;base64,AA,AA 1x")).toBe(false);
+  });
+
   it("flags removed handlers and script urls, and drops autoplay", () => {
     expect(sanitizeHtml('<div onclick="x()">a</div>', document).external).toBe(true);
     expect(sanitizeHtml('<a href="javascript:x()">a</a>', document).external).toBe(true);
@@ -315,6 +344,12 @@ describe("sanitizeCss", () => {
     // @font-face and @property can leak out of a shadow tree in some engines
     ['@font-face{font-family:f;src:local("x")}a{color:red}', "a{color:red}"],
     ["@property --x{syntax:'*';inherits:true}a{color:red}", "a{color:red}"],
+    // a reference is local only when its raw value starts with `#`; anything before the `#`
+    // makes a relative URL to the embed page itself
+    ['a{filter:url("\\1 #x");color:red}', "a{color:red}"],
+    ['a{filter:url(" #x");color:red}', "a{color:red}"],
+    ['a{filter:url("\\9 #x");color:red}', "a{color:red}"],
+    ["a{filter:url(\\1 #x);color:red}", "a{color:red}"],
     // a url inside an unterminated block or string is still caught by the final check
     ["a{background:url(https://x/a.png", "a{"],
     [

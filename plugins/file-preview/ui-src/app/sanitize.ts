@@ -184,11 +184,15 @@ export function normalizeUrl(value: string): string {
   );
 }
 
-/** Classifies a URL the way a browser resolves it (see `normalizeUrl`). */
+/**
+ * Classifies a URL the way a browser resolves it (see `normalizeUrl`). A local reference is only
+ * a value whose raw first character is `#` (CSS and svg treat exactly that as same-document);
+ * `\1 #x` or ` #x` parse as relative URLs to the embed page, a load.
+ */
 export function refKind(value: string): RefKind {
+  if (value.startsWith("#")) return "fragment";
   const v = normalizeUrl(value);
   if (v === "") return "empty";
-  if (v.startsWith("#")) return "fragment";
   if (v.startsWith("data:")) return "inline";
   const scheme = /^([a-z][a-z0-9+.-]*):/.exec(v);
   // relative and protocol-relative URLs resolve against the embed: a load like any other
@@ -202,6 +206,38 @@ export function refKind(value: string): RefKind {
 /** Inline media an `<img>` / `<video>` / `<audio>` / svg `<image>` may show: never a document. */
 function isInlineMedia(value: string): boolean {
   return /^data:(image|audio|video)\//.test(normalizeUrl(value));
+}
+
+/**
+ * The candidate URLs of a `srcset`, split the way the HTML srcset parser does: a URL runs to the
+ * next whitespace (trailing commas end the candidate), its descriptors to the next comma outside
+ * parentheses. So commas inside a `data:` URL stay in the URL.
+ */
+export function srcsetUrls(srcset: string): string[] {
+  const urls: string[] = [];
+  const ws = /[\t\n\f\r ]/;
+  let i = 0;
+  while (i < srcset.length) {
+    while (i < srcset.length && (ws.test(srcset[i] ?? "") || srcset[i] === ",")) i++;
+    if (i >= srcset.length) break;
+    let end = i;
+    while (end < srcset.length && !ws.test(srcset[end] ?? "")) end++;
+    let url = srcset.slice(i, end);
+    i = end;
+    if (url.endsWith(",")) {
+      url = url.replace(/,+$/, "");
+    } else {
+      let depth = 0;
+      for (; i < srcset.length; i++) {
+        const c = srcset[i];
+        if (c === "(") depth++;
+        else if (c === ")" && depth > 0) depth--;
+        else if (c === "," && depth === 0) break;
+      }
+    }
+    if (url !== "") urls.push(url);
+  }
+  return urls;
 }
 
 /** Keeps the purify instance's per-call state: one instance per call, so no global hooks. */
@@ -221,7 +257,9 @@ function handleUrlAttr(node: Element, name: string, value: string, scan: Scan): 
   }
   if (name === "srcset" || name === "imagesrcset") {
     // candidate lists are not worth parsing: dropped; any non-inline candidate counts as external
-    if (!normalizeUrl(value).startsWith("data:")) scan.external = true;
+    if (srcsetUrls(value).some((u) => !normalizeUrl(u).startsWith("data:"))) {
+      scan.external = true;
+    }
     return false;
   }
   if (name === "src" || name === "href" || name === "xlink:href" || name === "poster") {
