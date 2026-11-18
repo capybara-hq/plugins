@@ -21,6 +21,7 @@ const DARK = {
   "--cb-muted": "#8E8E89",
   "--cb-accent": "#FF6A13",
   "--cb-fail": "#FF5C52",
+  "--cb-scroll-thumb": "rgba(255,255,255,0.15)",
 };
 const LIGHT = {
   ...COMMON,
@@ -32,6 +33,7 @@ const LIGHT = {
   "--cb-muted": "#5E5E5A",
   "--cb-accent": "#CC4609",
   "--cb-fail": "#C8302A",
+  "--cb-scroll-thumb": "rgba(26,26,24,0.20)",
 };
 
 const get = (name: string) => document.documentElement.style.getPropertyValue(name);
@@ -58,6 +60,18 @@ describe("theme variables", () => {
     expect(get(THEME_VARS.foreground)).toBe("#1A1A18");
     expect(get(THEME_VARS.accent)).toBe("#CC4609");
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+  });
+
+  it("color-scheme and the scrollbar thumb follow the host theme, so no light track on dark", () => {
+    applyTheme(document, "dark", DARK);
+    expect(document.documentElement.style.colorScheme).toBe("dark");
+    expect(get(THEME_VARS.scrollThumb)).toBe("rgba(255,255,255,0.15)");
+    applyTheme(document, "light", LIGHT);
+    expect(document.documentElement.style.colorScheme).toBe("light");
+    expect(get(THEME_VARS.scrollThumb)).toBe("rgba(26,26,24,0.20)");
+    // an older host without the token: the theme's own thumb
+    applyTheme(document, "dark", {});
+    expect(get(THEME_VARS.scrollThumb)).toBe("rgba(255,255,255,0.15)");
   });
 
   it("falls back to the theme's defaults for tokens the host did not send", () => {

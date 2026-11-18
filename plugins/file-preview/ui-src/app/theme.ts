@@ -19,6 +19,11 @@
  * | `--cap-font`              | `--cb-font-prose`| UI text                          |
  * | `--cap-font-mono`         | `--cb-font`      | code, tabular numbers            |
  * | `--cap-radius`            | `--cb-radius-sm` | buttons, small boxes             |
+ * | `--cap-scroll-thumb`      | `--cb-scroll-thumb` | scrollbar thumb (track clear) |
+ *
+ * `applyTheme` also sets `color-scheme` from the host theme, so native controls and scrollbars
+ * follow it; the shell's `scrollbar-color` (thumb on a transparent track, as the host draws its
+ * own) keeps a light track off a dark panel where the browser's scheme alone does not.
  */
 
 /** The variables renderers may use, by role. */
@@ -34,6 +39,7 @@ export const THEME_VARS = {
   font: "--cap-font",
   fontMono: "--cap-font-mono",
   radius: "--cap-radius",
+  scrollThumb: "--cap-scroll-thumb",
 } as const;
 
 export type ThemeKey = keyof typeof THEME_VARS;
@@ -68,6 +74,12 @@ const TABLE: Record<ThemeKey, Entry> = {
   font: { token: "--cb-font-prose", dark: PROSE, light: PROSE, css: "system-ui, sans-serif" },
   fontMono: { token: "--cb-font", dark: MONO, light: MONO, css: "ui-monospace, monospace" },
   radius: { token: "--cb-radius-sm", dark: "4px", light: "4px", css: "4px" },
+  scrollThumb: {
+    token: "--cb-scroll-thumb",
+    dark: "rgba(255,255,255,0.15)",
+    light: "rgba(26,26,24,0.20)",
+    css: "rgba(127,127,127,.35)",
+  },
 };
 
 /** `var(--cap-…, fallback)` per role, for template-string CSS in the renderers. */
