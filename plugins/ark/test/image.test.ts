@@ -15,7 +15,7 @@ import {
   type FakeResponse,
   startFakeModelServer,
 } from "@capybara-hq/testing";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createArkProvider } from "../src/index.js";
 import {
   arkRoutes,
@@ -26,6 +26,13 @@ import {
   SEEDREAM,
   SEEDREAM_4,
 } from "./fixtures.js";
+
+// The rc.25 suite asks for two images even when the model declares maxImages 1; Ark refuses that.
+// Skipped until the testing release with core#367 (the suite then skips it itself); remove this
+// hook when bumping @capybara-hq/testing.
+beforeEach((ctx) => {
+  if (ctx.task.name === "generates two images") ctx.skip();
+});
 
 describeModelProviderConformance("ark (fixtures, image generation)", async () => {
   const server = await startFakeModelServer(arkRoutes());
@@ -167,18 +174,13 @@ describe("ark: image generation", () => {
     ]);
   });
 
-  it("n > 1 makes one single-image request per image and sums the usage", async () => {
+  it("n > maxImages (1) is invalid_request naming maxImages, with no request", async () => {
     route = fixtures;
     const before = imageRequests().length;
-    const res = await provider().generateImage?.(
-      req({ n: 3, size: { width: 1024, height: 1024 } }),
-      {
-        signal: signal(),
-      },
-    );
-    expect(imageRequests().length - before).toBe(3);
-    expect(res?.images).toHaveLength(3);
-    expect(res?.usage).toMatchObject({ outputTokens: 3 * 4096, outputImages: 3 });
+    const e = await failure(req({ n: 2 }));
+    expect(kindOf(e)).toBe("invalid_request");
+    expect((e as Error).message).toContain("at most 1 image(s) per call (maxImages)");
+    expect(imageRequests().length).toBe(before);
   });
 
   it("sniffs the media type from the bytes (a PNG comes back as image/png)", async () => {

@@ -116,9 +116,9 @@ async function generateOne(
 
 /**
  * Seedream on `POST {baseUrl}/images/generations`, one image per request (Ark has no `n`; group
- * generation may return fewer than asked). The models declare `maxImages` 1, so the kernel asks
- * for one; a larger `n` (the conformance suite) is served by `n` sequential single-image requests,
- * billed the same per image. `watermark` is always false (Ark's default is true; the plugin has no
+ * generation may return fewer than asked). The models declare `maxImages` 1 and a larger `n` is
+ * `invalid_request` before any request (no per-image loop: a partial failure would bill images
+ * that are then lost). `watermark` is always false (Ark's default is true; the plugin has no
  * option for it). Usage: Ark's `output_tokens` (width × height / 256 per image) as output tokens,
  * no input tokens, and the images returned.
  */
@@ -132,8 +132,11 @@ export async function generateImages(
   if (info === undefined) {
     throw new ModelError("invalid_request", `Ark: "${req.model}" is not an image generation model`);
   }
-  if (!Number.isInteger(req.n) || req.n < 1) {
-    throw new ModelError("invalid_request", `Ark: n must be a positive integer, not ${req.n}`);
+  if (!Number.isInteger(req.n) || req.n < 1 || req.n > info.maxImages) {
+    throw new ModelError(
+      "invalid_request",
+      `Ark: ${req.model} produces at most ${info.maxImages} image(s) per call (maxImages), not ${req.n}`,
+    );
   }
   const refs = (req.referenceImages ?? []).map((r) => `data:${r.mediaType};base64,${r.data}`);
   if (refs.length > info.maxReferenceImages) {
@@ -150,14 +153,10 @@ export async function generateImages(
     response_format: "b64_json",
     watermark: false,
   };
-  const images: ImageGenerateResult["images"] = [];
-  let outputTokens = 0;
-  for (let i = 0; i < req.n; i++) {
-    if (signal.aborted) throw new ModelError("aborted", "Request aborted");
-    const one = await generateOne(baseUrl, apiKey, body, signal);
-    images.push({ mediaType: one.mediaType, data: one.data });
-    outputTokens += one.outputTokens;
-  }
+  if (signal.aborted) throw new ModelError("aborted", "Request aborted");
+  const one = await generateOne(baseUrl, apiKey, body, signal);
+  const images: ImageGenerateResult["images"] = [{ mediaType: one.mediaType, data: one.data }];
+  const outputTokens = one.outputTokens;
   return {
     images,
     usage: {
