@@ -1,7 +1,7 @@
 {
   "name": "@capybara-hq/plugin-ark",
   "version": "0.1.0-rc.9",
-  "description": "Model provider (model-provider@2) for Volcengine Ark chat and embedding models",
+  "description": "Model provider (model-provider@2) for Volcengine Ark chat, embedding and image generation models",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -27,11 +27,11 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.27",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.32",
     "openai": "^7.36.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@capybara-hq/testing": "^0.1.0-rc.23"
+    "@capybara-hq/testing": "^0.1.0-rc.26"
   }
 }

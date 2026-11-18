@@ -55,6 +55,11 @@ export interface BailianDefaults {
    * org can set it; it replaces the origin derived from region and workspace.
    */
   baseUrl?: string | undefined;
+  /**
+   * Extra origins result images may be downloaded from, for tests (a fake image server). Not a
+   * config field; without it only https hosts under `aliyuncs.com` are downloaded from.
+   */
+  downloadOrigins?: string[] | undefined;
 }
 
 /** Where and with which key one call goes. */

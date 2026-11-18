@@ -17,6 +17,8 @@ import {
   errorJson,
   MODELS_BODY,
   SEED,
+  SEEDREAM,
+  SEEDREAM_4,
 } from "./fixtures.js";
 
 describe("ark listModels", () => {
@@ -48,7 +50,9 @@ describe("ark listModels", () => {
       ["mystery-chat-260101", "chat"],
       [EMBED, "embedding"],
       ["doubao-embedding-vision-250615", "embedding"],
-      ["doubao-seedream-5-0-flash-260915", "image_generation"],
+      [SEEDREAM, "image_generation"],
+      [SEEDREAM_4, "image_generation"],
+      ["doubao-seededit-3-0-i2i-250628", "image_generation"],
       ["doubao-seedance-2-5-260628", "video_generation"],
     ]);
     for (const m of models)

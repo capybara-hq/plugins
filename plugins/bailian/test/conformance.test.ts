@@ -19,6 +19,7 @@ import {
   fixtureModels,
   listResponse,
   sseGeneration,
+  startImageServer,
 } from "./fixtures.js";
 
 const PLUGIN = "bailian";
@@ -38,6 +39,28 @@ for (const model of ["qwen3.8-flash", "qwen-flash"]) {
         embedding: { model: "text-embedding-v4", dimensions: 512 },
       },
       teardown: () => server.stop(),
+    };
+  });
+}
+
+// Fixture conformance with image generation: the sync shape (qwen-image-2.0) and the async task
+// (wanx2.0-t2i-turbo), each downloading its images from a fake image server.
+for (const imageModel of ["qwen-image-2.0", "wanx2.0-t2i-turbo"]) {
+  describeModelProviderConformance(`bailian (fixtures, ${imageModel})`, async () => {
+    const images = await startImageServer();
+    const server = await startFakeModelServer(bailianRoutes(fixtureModels(), images.url));
+    return {
+      plugin: PLUGIN,
+      provider: createBailianProvider(
+        { apiKey: "sk-fixture", baseUrl: server.url, downloadOrigins: [images.url] },
+        { imagePoll: { initialMs: 1, maxMs: 4 } },
+      ),
+      model: "qwen-flash",
+      expect: { thinking: true, caching: true, imageGeneration: { model: imageModel } },
+      teardown: async () => {
+        await server.stop();
+        await images.stop();
+      },
     };
   });
 }

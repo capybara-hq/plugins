@@ -42,6 +42,9 @@ export function fakeModels(
           }
         : null;
     },
+    async generateImage() {
+      throw new Error("the memory plugin never generates images");
+    },
     async embed(req) {
       if (!mapped) {
         throw Object.assign(new Error("No embedding model is mapped"), {

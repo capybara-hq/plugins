@@ -23,8 +23,8 @@ into it.
 ## Models
 
 - Listing: the platform list `GET /api/v1/models` with page size 200 (the maximum), all pages, grouped
-  by kind: chat, embedding, rerank, image / video generation, speech to text, text to speech. Only
-  chat and embedding are callable.
+  by kind: chat, embedding, rerank, image / video generation, speech to text, text to speech. Chat,
+  embedding and the bundled image generation models are callable.
 - Only models served by the `aliyun-bailian` inference provider are listed. Third-party providers
   (MiniMax, Zhipu, Moonshot and others) were not activated on the test account, so they could not be
   verified and are left out.
@@ -37,6 +37,22 @@ into it.
   the endpoint is looked up per model and cached in `ctx.kv` for 24 hours. Parameters: `thinking`,
   `temperature`, `maxOutputTokens`. Explicit prompt caching marks the system prompt; usage
   `input_tokens` includes cached and cache-written tokens.
+
+- Image generation models come from a bundled table (the list tags them `IG` but carries no sizes
+  or limits); an `IG` model missing from it stays list-only. Sync multimodal-generation:
+  `qwen-image-2.0` / `-pro` and their dated snapshots (n 1-6, up to 3 reference images, PNG) and
+  `wan2.6-t2i` (n 1-4). Async text2image task, polled inside the call (1 s doubling to 5 s):
+  `wan2.5-t2i-preview`, `wan2.2-t2i-plus` / `-flash`, `wanx2.1-t2i-plus` / `-turbo`,
+  `wanx2.0-t2i-turbo` (n 1-4; the rewritten prompt comes back as `revisedPrompt`). `n` and
+  `watermark: false` are always sent. Result URLs (signed OSS links, https `*.aliyuncs.com` only)
+  are downloaded inside the call and returned as bytes; usage is per image (tokens 0). Content
+  moderation (`DataInspectionFailed`, `IPInfringementSuspect`) is `refusal`; a task that returns
+  fewer than `n` images fails (no top-up).
+
+## Verified live (2026-11-18, cn-beijing): image generation
+
+`wanx2.0-t2i-turbo` (async task, polling, download, actual prompt) through `generateImage`;
+`qwen-image-2.0` with one reference image through the raw API (same shapes the fixtures use).
 
 ## Verified live (2026-11-08, cn-beijing)
 

@@ -13,6 +13,7 @@ import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_OUTPUT,
   embeddingInfo,
+  imageGenerationInfo,
   publisherOf,
 } from "./tables.js";
 
@@ -152,9 +153,12 @@ function mapModel(raw: RawModel, id: string, kind: ModelKind): ModelInfo {
     };
   }
   if (kind !== "chat") {
-    // List-only kinds: the kernel ignores the chat fields
+    // The kernel ignores the chat fields. An image model the family table knows is callable
+    // (`generateImage`); any other non-chat entry is list-only.
+    const imageGeneration = kind === "image_generation" ? imageGenerationInfo(id) : undefined;
     return {
       ...common,
+      ...(imageGeneration !== undefined ? { imageGeneration } : {}),
       contextWindow: 0,
       maxOutputTokens: 0,
       capabilities: NO_CAPABILITIES,

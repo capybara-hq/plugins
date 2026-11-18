@@ -13,6 +13,7 @@ import { z } from "zod";
 import { embedTexts } from "./embed.js";
 import { listEndpoints, type Management } from "./endpoints.js";
 import { toModelError } from "./errors.js";
+import { generateImages } from "./image.js";
 import { listArkModels, withEndpoints } from "./list.js";
 import { streamChat } from "./map-stream.js";
 
@@ -133,7 +134,8 @@ function resolve(defaults: ArkDefaults, config: unknown): Resolved {
 
 /**
  * model-provider@2 for Volcengine Ark: the list from the data plane's `/models`, chat on its Chat
- * Completions API (the official `openai` SDK), text embeddings on `/embeddings/multimodal`. No
+ * Completions API (the official `openai` SDK), text embeddings on `/embeddings/multimodal`, Seedream
+ * images on `/images/generations`. No
  * process state: everything is built per call because the key and region can differ per org.
  */
 export function createArkProvider(defaults: ArkDefaults): ModelProvider {
@@ -183,10 +185,14 @@ export function createArkProvider(defaults: ArkDefaults): ModelProvider {
       const { apiKey, baseUrl } = resolve(defaults, opts.config);
       return embedTexts(baseUrl, apiKey, req, opts.signal);
     },
+    async generateImage(req, opts) {
+      const { apiKey, baseUrl } = resolve(defaults, opts.config);
+      return generateImages(baseUrl, apiKey, req, opts.signal);
+    },
   };
 }
 
-/** Volcengine Ark model provider plugin: chat (thinking, encrypted replay) and embeddings. */
+/** Volcengine Ark model provider plugin: chat (thinking, encrypted replay), embeddings, images. */
 export default defineExtension({
   name: "ark",
   version: "0.1.0-rc.9",

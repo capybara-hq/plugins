@@ -1,6 +1,11 @@
-import { isModelError, type ModelInfo, type ModelProvider } from "@capybara-hq/plugin-sdk";
+import {
+  isModelError,
+  type ModelInfo,
+  type ModelProvider,
+  validateImageGenerateResult,
+} from "@capybara-hq/plugin-sdk";
 import { describeModelProviderConformance } from "@capybara-hq/testing";
-import { describe } from "vitest";
+import { describe, expect, it } from "vitest";
 import { type BailianDefaults, createBailianProvider } from "../../src/index.js";
 
 /**
@@ -9,7 +14,8 @@ import { type BailianDefaults, createBailianProvider } from "../../src/index.js"
  * the live list: the first chat model of each endpoint (vision → multimodal-generation, text-only
  * → text-generation) and the first embedding model; a candidate failing with an access /
  * not-activated error (`auth` / `invalid_request`) moves to the next, at most 5, then the case is
- * skipped with one printed reason.
+ * skipped with one printed reason. Image generation makes ONE image with `_IMAGE_MODEL` (default
+ * `wanx2.0-t2i-turbo`, the cheapest bundled model; its async task covers polling and the download).
  */
 const KEY = process.env.CAPYBARA_TEST_BAILIAN_API_KEY;
 const PLUGIN = "bailian";
@@ -28,6 +34,8 @@ function memoizedList(p: ModelProvider): ModelProvider {
     },
     stream: (req, opts) => p.stream(req, opts),
     embed: (req, opts) => (p.embed as NonNullable<ModelProvider["embed"]>)(req, opts),
+    generateImage: (req, opts) =>
+      (p.generateImage as NonNullable<ModelProvider["generateImage"]>)(req, opts),
   };
 }
 
@@ -153,3 +161,29 @@ for (const [label, model] of [
     }));
   });
 }
+
+const IMAGE_MODEL = process.env.CAPYBARA_TEST_BAILIAN_IMAGE_MODEL ?? "wanx2.0-t2i-turbo";
+const imageModel = models.find((m) => m.id === IMAGE_MODEL && m.imageGeneration !== undefined);
+if (provider && !imageModel) {
+  skipped("image generation", `${IMAGE_MODEL} is not listed with imageGeneration for this key`);
+}
+
+describe.skipIf(!provider || !imageModel)("live image generation", { timeout: 180_000 }, () => {
+  it(`generates one image with ${IMAGE_MODEL} as bytes`, async () => {
+    const info = imageModel?.imageGeneration;
+    if (!provider?.generateImage || !info) throw new Error("unreachable");
+    const req = {
+      model: IMAGE_MODEL,
+      prompt: "a small red square on a white background",
+      size: info.defaultSize,
+      n: 1,
+      params: {},
+    };
+    const res = await provider.generateImage(req, { signal: AbortSignal.timeout(170_000) });
+    expect(validateImageGenerateResult(req, info, res)).toBeNull();
+    expect(res.usage.outputImages).toBe(1);
+    console.info(
+      `[plugin-bailian] live image: ${res.images[0]?.mediaType}, ${res.images[0]?.data.length} base64 chars, revised prompt ${res.revisedPrompt ? "yes" : "no"}`,
+    );
+  });
+});

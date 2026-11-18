@@ -13,6 +13,7 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import OpenAI from "openai";
 import { z } from "zod";
+import { generateOpenAIImage, imageModelInfo, KNOWN_IMAGE_MODEL_IDS } from "./image.js";
 import { streamResponses } from "./map-stream.js";
 
 const EffortLevel = z.enum(EFFORT_VALUES as [Effort, ...Effort[]], {
@@ -56,6 +57,13 @@ export interface OpenAIProviderOptions {
   models: ModelConfig[];
   /** 部署级默认值："off" 时不请求推理摘要；默认 "auto"。agent 的 thinking 参数可覆盖。 */
   reasoningSummary?: "auto" | "off" | undefined;
+  /**
+   * Image generation model ids; ids without facts in the plugin's table are ignored with one
+   * warning. None by default.
+   */
+  imageModels?: string[] | undefined;
+  /** Receives the warning about ignored image model ids. */
+  log?: { warn(message: string): void } | undefined;
 }
 
 /**
@@ -126,9 +134,27 @@ export function createOpenAIProvider(opts: OpenAIProviderOptions): ModelProvider
   });
   const models = opts.models;
   const reasoningSummary = opts.reasoningSummary ?? "auto";
+  const configuredImageModels = opts.imageModels ?? [];
+  // An id without facts (a retired or misspelled model) is skipped, never a broken provider
+  const unknown = configuredImageModels.filter((id) => !KNOWN_IMAGE_MODEL_IDS.includes(id));
+  if (unknown.length > 0) {
+    opts.log?.warn(
+      `openai: ignoring unknown image model(s) ${unknown.join(", ")}; known: ${KNOWN_IMAGE_MODEL_IDS.join(", ")}`,
+    );
+  }
+  const imageModels = configuredImageModels.filter((id) => KNOWN_IMAGE_MODEL_IDS.includes(id));
 
   return {
-    listModels: async () => models.map((m) => modelInfo(m, reasoningSummary)),
+    listModels: async () => [
+      ...models.map((m) => modelInfo(m, reasoningSummary)),
+      ...imageModels.map((id) => imageModelInfo(id)),
+    ],
+    async generateImage(req, { signal }) {
+      if (!imageModels.includes(req.model)) {
+        throw new ModelError("invalid_request", `Image model "${req.model}" is not configured`);
+      }
+      return generateOpenAIImage(client, req, signal);
+    },
     async *stream(req, { signal }): AsyncGenerator<ModelStreamEvent> {
       const m = models.find((x) => x.id === req.model);
       if (m === undefined) {
@@ -155,6 +181,13 @@ const DeploymentConfig = z.object({
   reasoningSummary: ui(z.enum(["auto", "off"]).default("auto"), {
     label: { zh: "推理摘要", en: "Reasoning summary" },
   }),
+  /**
+   * Image generation model ids to offer. Any string is accepted (a retired id never breaks the
+   * config); ids without facts in the plugin's table are ignored with a warning.
+   */
+  imageModels: ui(z.array(z.string().min(1)).optional(), {
+    label: { zh: "图像生成模型", en: "Image generation models" },
+  }),
 });
 
 /** OpenAI 供应商插件：官方 SDK + 原生 Responses API。 */
@@ -176,6 +209,8 @@ export default defineExtension({
         organization: cfg.organization,
         models: cfg.models,
         reasoningSummary: cfg.reasoningSummary,
+        imageModels: cfg.imageModels,
+        log: ctx.log,
       }),
     );
   },

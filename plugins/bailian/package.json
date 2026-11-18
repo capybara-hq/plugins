@@ -1,7 +1,7 @@
 {
   "name": "@capybara-hq/plugin-bailian",
   "version": "0.1.0-rc.9",
-  "description": "Model provider (model-provider@2) for Alibaba Cloud Model Studio (Bailian) chat and embedding models",
+  "description": "Model provider (model-provider@2) for Alibaba Cloud Model Studio (Bailian) chat, embedding and image generation models",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -27,10 +27,10 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.27",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.32",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@capybara-hq/testing": "^0.1.0-rc.23"
+    "@capybara-hq/testing": "^0.1.0-rc.26"
   }
 }
