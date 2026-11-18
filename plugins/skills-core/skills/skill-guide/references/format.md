@@ -32,8 +32,6 @@ variable and never hard-code the path. Nothing in a skill is executed when it lo
 
 ## Limits
 
-- `name` 1-64 characters (lowercase letters, digits, single hyphens), equal to the folder name.
-- `description` 1-1024 characters, no XML tags (registration refuses it).
 - `SKILL.md` under 500 lines; references one level deep.
 - The package: 10 MB per file, 50 MB in total, 1000 files.
 - A package is a zip with `SKILL.md` at its root or inside exactly one top-level folder.

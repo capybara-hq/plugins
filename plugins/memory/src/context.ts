@@ -22,7 +22,7 @@ export const GUIDANCE = `# Memory
 You have a persistent memory of this member, kept across your conversations with them. Use it to remember who they are, how they want work done, and the context of their work, so you do not have to ask again. Each agent keeps separate memories for each member; these are yours with this member.
 
 ## Types
-Each memory is one file at "<type>/<name>.md" (deeper directories are fine, e.g. "project/github/probe.md"):
+Each memory is one file at "<type>/<name>.md" (deeper directories are fine, e.g. "project/billing/q3-migration.md"):
 - user/: who the member is: role, expertise, responsibilities, preferences about themselves.
 - feedback/: how they want you to work: corrections and confirmed preferences. Lead with the rule, then a "Why:" line and a "How to apply:" line.
 - project/: ongoing work, goals, decisions, constraints and deadlines that are not written down elsewhere. Lead with the fact, then "Why:" and "How to apply:" lines. Write absolute dates (2026-03-05), never relative ones.

@@ -104,7 +104,7 @@ function checkDescription(description: string): string {
   }
   if (d.length > MAX_DESCRIPTION_LENGTH) {
     throw new MemoryLimitError(
-      `The description is ${d.length} characters; keep it under ${MAX_DESCRIPTION_LENGTH} and move details into the body.`,
+      `The description is ${d.length} characters; keep it at most ${MAX_DESCRIPTION_LENGTH} and move details into the body.`,
     );
   }
   return d;
