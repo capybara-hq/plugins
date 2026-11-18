@@ -16,7 +16,7 @@
  *   subdirectory fails the build, since served names have no `/`);
  * - `THIRD-PARTY-LICENSES.txt` holds the license of every npm package bundled into the app or a
  *   worker (found from esbuild's metafile; a package with no license file fails the build), the
- *   direct dependencies of prebuilt `*.min.js` bundles (which embed them), and the legal comments
+ *   production dependency closure of prebuilt `*.min.js` bundles (which embed it), and the legal comments
  *   esbuild kept from the bundled sources; pdf.js's data licenses ship as their own files;
  * - `manifest.json` lists every other file with its content type and sha256, sorted by name.
  *
@@ -254,7 +254,10 @@ async function packageInfo(dir: string): Promise<PackageInfo> {
   if (json.name === undefined || json.version === undefined) {
     throw new Error(`ui build: ${dir}/package.json has no name or version`);
   }
-  const author = typeof json.author === "string" ? json.author : json.author?.name;
+  // "Name <mail> (url)" -> "Name"
+  const author = (typeof json.author === "string" ? json.author : json.author?.name)
+    ?.replace(/\s*[<(].*$/, "")
+    .trim();
   return {
     name: json.name,
     version: json.version,
@@ -275,13 +278,22 @@ async function findPackage(fromDir: string, name: string): Promise<string> {
 }
 
 /**
- * Packages that ship no license file, with the license their package.json declares. Their entry
- * is the standard text of that license with the package's author as the copyright holder. Any
- * other package without a license file fails the build.
+ * Packages that ship no license file. Their entry is the standard text of the license they
+ * declare (`declared` is what their package.json says, compared exactly, so a changed declaration
+ * fails the build) with the package's author as the copyright holder. Any other package without a
+ * license file fails the build.
  */
-const NO_LICENSE_FILE: Readonly<Record<string, "ISC">> = {
-  // embedded in exceljs's browser bundle; the package has only README, package.json and code
-  saxes: "ISC",
+const NO_LICENSE_FILE: Readonly<
+  Record<string, { license: "ISC" | "MIT"; declared: string | undefined }>
+> = {
+  // inlined in exceljs's browser bundle; only README, package.json and code
+  saxes: { license: "ISC", declared: "ISC" },
+  // in exceljs's closure (unzipper); the README of isarray carries the MIT text, binary's says MIT
+  binary: { license: "MIT", declared: "MIT" },
+  isarray: { license: "MIT", declared: "MIT" },
+  chainsaw: { license: "MIT", declared: "MIT/X11" },
+  // declares no license at all; its npm registry page and repository say MIT
+  buffers: { license: "MIT", declared: undefined },
 };
 
 const ISC_TEXT = (holder: string) =>
@@ -303,14 +315,43 @@ const ISC_TEXT = (holder: string) =>
     "OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.",
   ].join("\n");
 
+const MIT_TEXT = (holder: string) =>
+  [
+    "MIT License",
+    "",
+    `Copyright (c) ${holder}`,
+    "",
+    "Permission is hereby granted, free of charge, to any person obtaining a copy",
+    'of this software and associated documentation files (the "Software"), to deal',
+    "in the Software without restriction, including without limitation the rights",
+    "to use, copy, modify, merge, publish, distribute, sublicense, and/or sell",
+    "copies of the Software, and to permit persons to whom the Software is",
+    "furnished to do so, subject to the following conditions:",
+    "",
+    "The above copyright notice and this permission notice shall be included in all",
+    "copies or substantial portions of the Software.",
+    "",
+    'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR',
+    "IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,",
+    "FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE",
+    "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER",
+    "LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,",
+    "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE",
+    "SOFTWARE.",
+  ].join("\n");
+
 async function licenseText(pkg: PackageInfo): Promise<{ file: string; text: string }> {
   const files = (await readdir(pkg.dir)).filter((f) => LICENSE_FILE_RE.test(f)).sort();
   if (files.length === 0) {
     const declared = NO_LICENSE_FILE[pkg.name];
-    if (declared !== undefined && pkg.license === declared && pkg.author !== undefined) {
+    if (
+      declared !== undefined &&
+      (pkg.license === "unknown" ? undefined : pkg.license) === declared.declared &&
+      pkg.author !== undefined
+    ) {
       return {
         file: "no license file: standard text, author from package.json",
-        text: ISC_TEXT(pkg.author),
+        text: (declared.license === "ISC" ? ISC_TEXT : MIT_TEXT)(pkg.author),
       };
     }
     throw new Error(`ui build: bundled package ${pkg.name}@${pkg.version} has no license file`);
@@ -326,9 +367,10 @@ const byKey = (a: PackageInfo, b: PackageInfo) => {
 };
 
 /**
- * `THIRD-PARTY-LICENSES.txt`: every package an esbuild metafile lists as an input, the direct
- * dependencies of the packages bundled from a prebuilt `*.min.js` (exceljs and JSZip ship browser
- * bundles that embed theirs), and the legal comments esbuild kept, per output file.
+ * `THIRD-PARTY-LICENSES.txt`: every package an esbuild metafile lists as an input, the production
+ * dependency closure of the packages bundled from a prebuilt `*.min.js` (exceljs and JSZip ship
+ * browser bundles that embed theirs, and theirs in turn), and the legal comments esbuild kept,
+ * per output file.
  */
 async function thirdPartyLicenses(prov: Provenance): Promise<Output> {
   const bundled = new Map<string, PackageInfo>();
@@ -340,18 +382,34 @@ async function thirdPartyLicenses(prov: Provenance): Promise<Output> {
     if (!bundled.has(real)) bundled.set(real, await packageInfo(real));
     if (/\.min\.js$/.test(input)) prebuilt.add(real);
   }
+  // The prebuilt bundle inlines its dependencies and theirs in turn, and the bundle does not say
+  // which: take the whole production closure (`dependencies`, node resolution from each package;
+  // one that is not installed is skipped, as npm does for optional ones). Over-listing a package
+  // that is not inlined costs nothing; leaving one out would drop a notice that must ship.
   const embedded = new Map<string, { pkg: PackageInfo; in: Set<string> }>();
   for (const real of [...prebuilt].sort()) {
     const host = bundled.get(real) as PackageInfo;
-    const json = JSON.parse(await readFile(join(real, "package.json"), "utf8")) as {
-      dependencies?: Record<string, string>;
-    };
-    for (const dep of Object.keys(json.dependencies ?? {}).sort()) {
-      const depDir = await findPackage(real, dep);
-      if (bundled.has(depDir)) continue;
-      const entry = embedded.get(depDir) ?? { pkg: await packageInfo(depDir), in: new Set() };
-      entry.in.add(`${host.name}@${host.version}`);
-      embedded.set(depDir, entry);
+    const visited = new Set<string>([real]);
+    const queue = [real];
+    for (let dir = queue.shift(); dir !== undefined; dir = queue.shift()) {
+      const json = JSON.parse(await readFile(join(dir, "package.json"), "utf8")) as {
+        dependencies?: Record<string, string>;
+      };
+      for (const dep of Object.keys(json.dependencies ?? {}).sort()) {
+        let depDir: string;
+        try {
+          depDir = await findPackage(dir, dep);
+        } catch {
+          continue;
+        }
+        if (visited.has(depDir)) continue;
+        visited.add(depDir);
+        queue.push(depDir);
+        if (bundled.has(depDir)) continue;
+        const entry = embedded.get(depDir) ?? { pkg: await packageInfo(depDir), in: new Set() };
+        entry.in.add(`${host.name}@${host.version}`);
+        embedded.set(depDir, entry);
+      }
     }
   }
 
@@ -368,7 +426,7 @@ async function thirdPartyLicenses(prov: Provenance): Promise<Output> {
     "Bundled packages:",
     ...bundledList.map((p) => `  ${p.name}@${p.version} (${p.license})`),
     "",
-    "Embedded in prebuilt bundles (dependencies of a bundled *.min.js):",
+    "Embedded in prebuilt bundles (dependency closure of a bundled *.min.js):",
     ...embeddedList.map(
       ({ pkg, in: hosts }) =>
         `  ${pkg.name}@${pkg.version} (${pkg.license}), in ${[...hosts].sort().join(", ")}`,
