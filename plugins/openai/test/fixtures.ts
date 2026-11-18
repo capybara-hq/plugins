@@ -281,9 +281,37 @@ function mediaAnswer(input: InputItem[]): string | null {
   return null;
 }
 
+/** A valid 1x1 PNG, base64 (the installed @capybara-hq/testing rc.23 does not export one). */
+export const PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+
+/** OpenAI image response: `n` PNGs, usage for the whole request (tokens only). */
+export function imageResponse(n: number): FakeResponse {
+  return {
+    status: 200,
+    json: {
+      created: 1_760_000_000,
+      output_format: "png",
+      data: Array.from({ length: n }, () => ({ b64_json: PNG_BASE64 })),
+      usage: {
+        input_tokens: 20,
+        output_tokens: 1056 * n,
+        total_tokens: 20 + 1056 * n,
+        input_tokens_details: { text_tokens: 20, image_tokens: 0 },
+      },
+    },
+  };
+}
+
 export function openaiRoutes(): (req: FakeRequest) => FakeResponse {
   const cachedPrefixes = new Set<string>();
   return (req) => {
+    if (req.path === "/v1/images/generations" || req.path === "/v1/images/edits") {
+      const n = req.path.endsWith("generations")
+        ? ((req.body as { n?: number }).n ?? 1)
+        : Number(/name="n"\r\n\r\n(\d+)/.exec(String(req.body))?.[1] ?? 1);
+      return imageResponse(n);
+    }
     if (req.path !== "/v1/responses") {
       return errorJson(404, { message: "not found", type: "invalid_request_error" });
     }
