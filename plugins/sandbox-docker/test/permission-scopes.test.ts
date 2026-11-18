@@ -554,6 +554,9 @@ describe.skipIf(!dockerAvailable)(
               await dexec(net.id, "1000", ["python3", "-I", "-c", INSPECT, "mode", path]),
             ) as number | null,
           alive: (pids) => alive(net, [...pids]),
+          // Another session's Full access work: a fresh `docker exec` as the device user, outside
+          // every operation and restricted domain.
+          outside: (program, args) => dexec(net.id, "1000", ["python3", "-", ...args], program),
         },
         dispose: async () => undefined,
       };

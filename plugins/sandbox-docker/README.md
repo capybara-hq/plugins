@@ -236,7 +236,14 @@ instance network; no capability, seccomp relaxation, privileged mode or extra co
   canonical; a root swapped for a symlink refuses the operation), and the launcher installs Landlock
   rules and the seccomp broker on those same descriptors; native file calls run the native helper
   under the launcher on them too (scopes without a writable root use the helper on its pinned
-  descriptors alone, after the launcher's static support check). Restricted descendants cannot
+  descriptors alone, after the launcher's static support check). Every restricted write follows
+  the SDK's mandatory write denies (`sandbox-write-denies.ts`: shell startup files, git-global,
+  `.envrc`, `.npmrc`, editor and agent files, hook managers, and inside `.git` only git's ordinary
+  internals): the launcher's broker mediates every write-capable syscall against them, and the
+  agent marks its direct native roots and a restricted background output file `denyWrites: true`
+  so the native helper refuses the same set; ordinary git (add, commit, checkout, stash,
+  pack-refs, gc) keeps working. The launcher is non-dumpable, so same-uid processes outside the
+  operation cannot ptrace it or read its memory. Restricted descendants cannot
   `setsid` out of supervision; a cancel, timeout or revocation ends the whole supervised tree. Network
   `none` refuses every TCP connect; `environment` keeps the instance's own proxy variables (the
   instance network still applies); an `allowlist` reaches its hosts only through a **per-operation

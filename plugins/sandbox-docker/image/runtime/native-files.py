@@ -16,6 +16,88 @@ SKIP_BASE = ["Library"]
 # ECMAScript whitespace (Python's str.strip also removes several extra control characters).
 SPACE = "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
 
+# Restricted roots ({"denyWrites": true}) follow the shared write policy (sandbox-write-denies.ts).
+
+import unicodedata as _unicodedata
+WRITE_DENIES = [[_unicodedata.normalize("NFKC", n).casefold() for n in e] for e in [[".gitconfig"],[".gitmodules"],[".bashrc"],[".bash_profile"],[".zshrc"],[".zprofile"],[".profile"],[".ripgreprc"],[".mcp.json"],[".envrc"],[".npmrc"],[".vscode"],[".idea"],[".claude","commands"],[".claude","agents"],[".husky"],[".huskyrc"],[".huskyrc.json"],[".huskyrc.js"],["husky.config.js"],[".pre-commit-config.yaml"],[".pre-commit-config.yml"],["lefthook.yml"],["lefthook.yaml"],["lefthook.json"],["lefthook.toml"],[".lefthook.yml"],[".lefthook.yaml"],[".lefthook.json"],[".lefthook.toml"],["lefthook-local.yml"],["lefthook-local.yaml"],["lefthook-local.json"],["lefthook-local.toml"],[".lefthook-local.yml"],[".lefthook-local.yaml"],[".lefthook-local.json"],[".lefthook-local.toml"],[".lefthook"],[".lefthook-local"],[".config","lefthook.yml"],[".config","lefthook.yaml"],[".config","lefthook.json"],[".config","lefthook.toml"],[".overcommit.yml"],[".simple-git-hooks.json"],[".simple-git-hooks.js"],[".simple-git-hooks.cjs"],["simple-git-hooks.json"],["simple-git-hooks.js"],["simple-git-hooks.cjs"],[".githooks"]]]
+GIT_ALLOWED_DIRECTORIES = set(["objects","refs","logs","rebase-merge","rebase-apply","sequencer"])
+GIT_ALLOWED_FILES = set(["index","head","orig_head","fetch_head","merge_head","merge_msg","merge_mode","merge_rr","auto_merge","cherry_pick_head","revert_head","rebase_head","bisect_log","bisect_start","bisect_expected_rev","bisect_ancestors_ok","bisect_names","bisect_terms","packed-refs","packed-refs.new","merge_autostash","commit_editmsg","tag_editmsg","squash_msg","shallow","description","gc.pid","gc.log","info","modules","worktrees"])
+GIT_DANGER = set(["config","config.worktree","commondir","gitdir","hooks","info"])
+PROTECTED_PATH_NAMES = set([".git",".gitconfig",".gitmodules",".bashrc",".bash_profile",".zshrc",".zprofile",".profile",".ripgreprc",".mcp.json",".envrc",".npmrc",".vscode",".idea",".claude",".husky",".huskyrc",".huskyrc.json",".huskyrc.js","husky.config.js",".pre-commit-config.yaml",".pre-commit-config.yml","lefthook.yml","lefthook.yaml","lefthook.json","lefthook.toml",".lefthook.yml",".lefthook.yaml",".lefthook.json",".lefthook.toml","lefthook-local.yml","lefthook-local.yaml","lefthook-local.json","lefthook-local.toml",".lefthook-local.yml",".lefthook-local.yaml",".lefthook-local.json",".lefthook-local.toml",".lefthook",".lefthook-local",".config",".overcommit.yml",".simple-git-hooks.json",".simple-git-hooks.js",".simple-git-hooks.cjs","simple-git-hooks.json","simple-git-hooks.js","simple-git-hooks.cjs",".githooks"])
+
+
+def _fold_parts(path):
+    return [_unicodedata.normalize("NFKC", p).casefold() for p in path.split("/") if p]
+
+
+def _holds_head(head, prefix):
+    if head == "logs":
+        return not prefix or (len(prefix) == 3 and prefix[0] == "refs" and prefix[1] == "remotes")
+    if head == "refs":
+        return len(prefix) == 2 and prefix[0] == "remotes"
+    return head == "sequencer" and not prefix
+
+
+def _subtree_allowed(head, rest):
+    for k, name in enumerate(rest):
+        if name == ".git":
+            return False
+        if name == "head" and not (k == len(rest) - 1 and _holds_head(head, rest[:k])):
+            return False
+        if name in ("objects", "commondir", "gitdir") and _holds_head(head, rest[:k]):
+            return False
+    return True
+
+
+def _git_internal_allowed(rel):
+    if not rel:
+        return True
+    head = rel[0]
+    if head in GIT_ALLOWED_DIRECTORIES:
+        return _subtree_allowed(head, rel[1:])
+    if head in ("modules", "worktrees") and len(rel) > 1:
+        rest = rel[1:]
+        if head == "worktrees":
+            return _git_internal_allowed(rest[1:])
+        readings = [rest[k + 1:] for k in range(len(rest))]
+        if any(r and r[0] in GIT_DANGER and not _git_internal_allowed(r) for r in readings):
+            return False
+        return any(r and _git_internal_allowed(r) for r in readings)
+    if len(rel) == 1:
+        base = head[:-5] if head.endswith(".lock") else head
+        stash = base.startswith("index.stash.") and base[12:].isascii() and base[12:].isdigit()
+        return base in GIT_ALLOWED_FILES or stash
+    return head == "info" and len(rel) == 2 and rel[1] in ("exclude", "exclude.lock")
+
+
+def write_denied(path):
+    names = _fold_parts(path)
+    for entry in WRITE_DENIES:
+        for i in range(len(names) - len(entry) + 1):
+            if names[i:i + len(entry)] == entry:
+                return True
+    if ".git" in names:
+        return not _git_internal_allowed(names[names.index(".git") + 1:])
+    return bool(names) and names[-1] == "head"
+
+
+def move_denied(source, destination, is_dir):
+    src, dst = _fold_parts(source), _fold_parts(destination)
+
+    def protected_at(names):
+        return next((k for k, n in enumerate(names) if n in PROTECTED_PATH_NAMES), -1)
+
+    def same_prefix(n):
+        return n >= 0 and len(dst) > n + 1 and dst[:n + 1] == src[:n + 1]
+    i = protected_at(src)
+    if i >= 0 and not same_prefix(i):
+        return True
+    j = protected_at(dst)
+    if is_dir and j >= 0 and not (i == j and same_prefix(j)):
+        return True
+    return (not is_dir) and bool(dst) and dst[-1] == ".git"
+
+
 class ScopeDenied(Exception):
     pass
 
@@ -50,6 +132,7 @@ def valid_name(name):
 class NativeFiles:
     def __init__(self, roots):
         self.roots = roots
+        self.deny_writes = roots.get("denyWrites") is True
         # Descriptors are supplied by the trusted consumer, never reopened by root pathname.
         for root in roots["read"] + roots["write"]:
             if not valid_path(root["path"]) or os.path.normpath(root["path"]) != root["path"]:
@@ -65,6 +148,8 @@ class NativeFiles:
         if not valid_path(path):
             raise ValueError("Supply a valid absolute native path")
         path = os.path.normpath(path)
+        if write and self.deny_writes and write_denied(path):
+            raise ScopeDenied("Native path is a protected write target")
         roots = self.roots["write"] if write else self.roots["read"] + self.roots["write"]
         matches = [root for root in roots if within(root["path"], path)]
         if not matches:
@@ -73,7 +158,11 @@ class NativeFiles:
         fd = os.dup(root["fd"])
         current = root["path"]
         parts = os.path.relpath(path, current).split("/")
-        return self.walk(fd, current, parts, write, create, links, must_exist)
+        result = self.walk(fd, current, parts, write, create, links, must_exist)
+        if write and self.deny_writes and write_denied(result[2]):
+            os.close(result[0])
+            raise ScopeDenied("Native path is a protected write target")
+        return result
 
     def walk(self, fd, current, parts, write, create, links, must_exist):
         try:
@@ -83,6 +172,8 @@ class NativeFiles:
                     info = os.stat(name, dir_fd=fd, follow_symlinks=False)
                 except FileNotFoundError:
                     if not final and create:
+                        if self.deny_writes and write_denied(os.path.join(current, name)):
+                            raise ScopeDenied("Native path is a protected write target")
                         try:
                             os.mkdir(name, 0o755, dir_fd=fd)
                         except FileExistsError:
@@ -136,13 +227,18 @@ class NativeFiles:
     def open(self, path, write=False, directory=False):
         parent, name = self.parent(path, write, write)
         try:
+            if write and self.deny_writes and _fold_parts(name) == [".git"]:
+                os.close(parent)
+                parent = None
+                raise ScopeDenied("A file named .git would point git elsewhere")
             flags = os.O_NOFOLLOW | os.O_NONBLOCK
             flags |= os.O_WRONLY | os.O_CREAT if write else os.O_RDONLY
             if directory:
                 flags |= os.O_DIRECTORY
             return os.open(name, flags, 0o600, dir_fd=parent)
         finally:
-            os.close(parent)
+            if parent is not None:
+                os.close(parent)
 
     def metadata(self, path):
         parent, name = self.parent(path)
