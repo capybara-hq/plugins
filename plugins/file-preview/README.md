@@ -4,9 +4,9 @@ Previews files from a conversation in the right panel. The plugin provides `file
 six previewers; each is a sandboxed embed. Markdown, CSV / TSV, bitmap images and HTML stay with
 the kernel's built-in previewers and are never claimed here.
 
-HTML is rendered by the kernel's built-in previewer (full rendering, CDN allowlist) since a kernel
-release after 0.1.0-rc.50. This plugin no longer has an `html` previewer; on an older kernel an HTML
-file has no previewer from this plugin.
+HTML is rendered by the kernel's built-in previewer (full rendering, CDN allowlist) since capybara
+0.1.0-rc.52 (kernel 0.1.0-rc.46). This plugin no longer has an `html` previewer; on an older kernel
+an HTML file has no previewer from this plugin.
 
 ## Previewers
 
