@@ -128,6 +128,14 @@ describe("the main flow", () => {
   const text = () => document.getElementById("root")?.textContent ?? "";
   const flush = () => vi.waitFor(() => expect(text()).not.toBe(MESSAGES.en.loading));
 
+  it("draws scrollbars as the theme's thumb on a transparent track, inherited from :root", () => {
+    start(async () => {});
+    const css = [...document.head.querySelectorAll("style")].map((s) => s.textContent).join("\n");
+    expect(css).toMatch(
+      /:root \{[^}]*scrollbar-color: var\(--cap-scroll-thumb, [^)]+\)\) transparent;/,
+    );
+  });
+
   it("themes on init and re-themes on a theme event while the preview stays mounted", async () => {
     const mounted: HTMLElement[] = [];
     start(async (_f, ctx) => {

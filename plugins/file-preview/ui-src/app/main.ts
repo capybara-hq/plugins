@@ -28,7 +28,8 @@ export interface AppDeps {
 const importModule = (url: string): Promise<{ default?: unknown }> => import(url);
 
 const BASE_CSS = `
-:root { color-scheme: light dark; }
+/* color-scheme follows the host theme (applyTheme); scrollbars are a thumb on a clear track, inherited */
+:root { color-scheme: light dark; scrollbar-color: ${THEME.scrollThumb} transparent; }
 html, body { height: 100%; margin: 0; }
 body { font: 14px/1.5 ${THEME.font}; color: ${THEME.foreground}; background: ${THEME.background}; }
 #root { position: relative; height: 100%; overflow: auto; }
