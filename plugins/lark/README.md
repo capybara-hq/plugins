@@ -34,7 +34,7 @@ The long connection **supports only enterprise self-built apps** (not store apps
    | `im:message.p2p_msg:readonly` (读取用户发给机器人的单聊消息; read DMs sent to the bot) | Receive DM messages |
    | `im:message.group_at_msg:readonly` (接收群聊中@机器人消息事件; receive events for messages that @-mention the bot in group chats) | Receive messages that @-mention the bot in groups |
    | `im:message:send_as_bot` (以应用的身份发消息; send messages as the app) | Send and reply to messages, update cards |
-| `im:resource` (获取与上传图片或文件资源; read and upload images or files; `im:resource:upload`, 上传文件V2, also works) | Send files and images the agent produced as native attachments; without it those files are sent as links |
+   | `im:resource` (获取与上传图片或文件资源; read and upload images or files; `im:resource:upload`, 上传文件V2, also works) | Send files and images the agent produced as native attachments; without it those files are sent as links |
    | `tenant:tenant:readonly` (获取企业信息; get enterprise info) | Read `tenant_key` (the tenant) when validating the connection |
    | `contact:user.base:readonly` (获取用户基本信息; get basic user info) | The speaker's display name and avatar; people-change events |
 
