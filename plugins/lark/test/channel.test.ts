@@ -111,6 +111,7 @@ describe("plugin manifest", () => {
       edit: true,
       threads: true,
       minEditIntervalMs: MIN_EDIT_INTERVAL_MS,
+      files: { maxBytes: 31_457_280, imageMaxBytes: 10_485_760 },
     });
     expect(MIN_EDIT_INTERVAL_MS).toBe(1500);
     expect(ch.connectionSchema.safeParse(config()).success).toBe(true);
@@ -378,6 +379,108 @@ describe("send / update", () => {
       .catch((e: unknown) => e);
     expect(err).toMatchObject({ retryable: false, reason: "rejected" });
     expect(lark.messages.length).toBe(before);
+  });
+});
+
+describe("sendFile", () => {
+  const bytes = (n: string) => new TextEncoder().encode(n);
+  const send = async (
+    file: { name: string; kind: "image" | "file"; contentType?: string },
+    target: { chatId: string; chatType: "dm" | "group"; threadId?: string } = dm,
+    idempotencyKey?: string,
+  ) => {
+    const sendFile = channel().sendFile;
+    if (sendFile === undefined) throw new Error("sendFile is not implemented");
+    return sendFile({
+      config: config(),
+      target,
+      file: { contentType: "application/octet-stream", data: bytes("payload"), ...file },
+      signal: signal(),
+      locale: "en",
+      ...(idempotencyKey !== undefined && { idempotencyKey }),
+    });
+  };
+
+  it("declares the bot's real limits", () => {
+    expect(channel().features.files).toEqual({ maxBytes: 31_457_280, imageMaxBytes: 10_485_760 });
+  });
+
+  it("image into a thread: uploads, then replies in the thread with the key as uuid", async () => {
+    const root = await channel().send({
+      config: config(),
+      target: { chatId: "oc_g", chatType: "group" },
+      message: { text: "root" },
+      signal: signal(),
+      locale: "en",
+    });
+    const r = await send(
+      { name: "chart.png", kind: "image" },
+      { chatId: "oc_g", chatType: "group", threadId: root.messageId },
+      "file-key-1",
+    );
+    const up = lark.uploads.at(-1);
+    expect(up).toMatchObject({ kind: "image" });
+    const m = lark.messages.find((x) => x.messageId === r.messageId);
+    expect(m).toMatchObject({
+      msgType: "image",
+      replyInThread: true,
+      rootId: root.messageId,
+      uuid: "file-key-1",
+    });
+    expect(m?.card).toEqual({ image_key: up?.key });
+  });
+
+  it("maps extensions to file_type; unknown is stream", async () => {
+    const cases: [string, string][] = [
+      ["report.DOCX", "doc"],
+      ["a.pdf", "pdf"],
+      ["b.xlsx", "xls"],
+      ["c.pptx", "ppt"],
+      ["d.mp4", "mp4"],
+      ["e.opus", "opus"],
+      ["f.zip", "stream"],
+      ["noext", "stream"],
+    ];
+    for (const [name, type] of cases) {
+      const r = await send({ name, kind: "file" });
+      const up = lark.uploads.at(-1);
+      expect(up).toMatchObject({ kind: "file", fileType: type, fileName: name });
+      const m = lark.messages.find((x) => x.messageId === r.messageId);
+      expect(m).toMatchObject({ msgType: "file", chatId: "oc_dm" });
+      expect(m?.card).toEqual({ file_key: up?.key });
+    }
+  });
+
+  it("strips path parts from the file name", async () => {
+    await send({ name: "dir/sub\\pass\u0000wd.pdf", kind: "file" });
+    expect(lark.uploads.at(-1)?.fileName).toBe("passwd.pdf");
+  });
+
+  it("same idempotency key yields the same message", async () => {
+    const a = await send({ name: "x.pdf", kind: "file" }, dm, "dup-file");
+    const before = lark.messages.length;
+    const b = await send({ name: "x.pdf", kind: "file" }, dm, "dup-file");
+    expect(b).toEqual(a);
+    expect(lark.messages.length).toBe(before);
+  });
+
+  it("missing upload permission (99991672) is a non-retryable rejected, not auth", async () => {
+    lark.failNext("image_upload", { code: 99991672 });
+    const e = await send({ name: "p.png", kind: "image" }).catch((x: unknown) => x);
+    expect(e).toMatchObject({ retryable: false, reason: "rejected" });
+    expect(String((e as Error).message)).not.toMatch(/token|Bearer/i);
+  });
+
+  it("the size error is too_large; a 5xx upload is retryable", async () => {
+    lark.failNext("file_upload", { status: 400, code: 234006 });
+    expect(await send({ name: "a.pdf", kind: "file" }).catch((x: unknown) => x)).toMatchObject({
+      retryable: false,
+      reason: "too_large",
+    });
+    lark.failNext("file_upload", { status: 503 });
+    expect(await send({ name: "a.pdf", kind: "file" }).catch((x: unknown) => x)).toMatchObject({
+      retryable: true,
+    });
   });
 });
 

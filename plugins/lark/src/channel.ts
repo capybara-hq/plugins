@@ -167,6 +167,42 @@ function wsHttp(signal: AbortSignal): HttpInstance {
  * - 群聊话题：带 `threadId`（根消息 id）时用「回复消息」并 `reply_in_thread: true`，回复进以该消息为根的话题；
  *   私聊与没有话题的群聊直接发到会话。
  */
+/** Lark `file_type` from the (lower-cased) extension; anything else is `stream`. */
+function larkFileType(name: string): string {
+  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
+  switch (ext) {
+    case "pdf":
+    case "mp4":
+    case "opus":
+      return ext;
+    case "doc":
+    case "docx":
+      return "doc";
+    case "xls":
+    case "xlsx":
+      return "xls";
+    case "ppt":
+    case "pptx":
+      return "ppt";
+    default:
+      return "stream";
+  }
+}
+
+/** The model controls the name: drop path parts and control characters, cap the length. */
+function safeFileName(name: string): string {
+  const base = name.split(/[\\/]/).pop() ?? "";
+  const clean = [...base]
+    .filter((ch) => {
+      const c = ch.charCodeAt(0);
+      return c > 0x1f && c !== 0x7f;
+    })
+    .join("")
+    .trim()
+    .slice(0, 200);
+  return clean === "" || clean === "." || clean === ".." ? "file" : clean;
+}
+
 export function createLarkChannel(opts: LarkChannelOptions): Channel {
   const { log } = opts;
   const api = createLarkApi({ baseUrl: opts.apiUrl, timeoutMs: opts.requestTimeoutMs ?? 15_000 });
@@ -321,7 +357,13 @@ export function createLarkChannel(opts: LarkChannelOptions): Channel {
 
   return {
     connectionSchema: LarkConnection,
-    features: { cards: true, edit: true, threads: true, minEditIntervalMs: MIN_EDIT_INTERVAL_MS },
+    features: {
+      cards: true,
+      edit: true,
+      threads: true,
+      minEditIntervalMs: MIN_EDIT_INTERVAL_MS,
+      files: { maxBytes: 31_457_280, imageMaxBytes: 10_485_760 },
+    },
 
     async verify({ config, signal }) {
       const c = creds(parse(config));
@@ -545,6 +587,86 @@ export function createLarkChannel(opts: LarkChannelOptions): Channel {
       }
       if (last === undefined) throw new ChannelSendError("nothing to send", { retryable: false });
       return { messageId: last };
+    },
+
+    async sendFile({ config, target, file, signal, idempotencyKey }) {
+      const c = creds(parse(config));
+      if (
+        target.chatType === "group" &&
+        target.threadId !== undefined &&
+        !MESSAGE_ID.test(target.threadId)
+      ) {
+        throw new ChannelSendError("malformed Lark thread id (expected the root message_id om_…)", {
+          retryable: false,
+          reason: "rejected",
+        });
+      }
+      const root = target.chatType === "group" ? target.threadId : undefined;
+      const blob = new Blob([file.data as Uint8Array<ArrayBuffer>]);
+      const form = new FormData();
+      let path: string;
+      let msgType: "image" | "file";
+      let keyField: "image_key" | "file_key";
+      if (file.kind === "image") {
+        path = "/open-apis/im/v1/images";
+        msgType = "image";
+        keyField = "image_key";
+        form.set("image_type", "message");
+        form.set("image", blob, "image");
+      } else {
+        path = "/open-apis/im/v1/files";
+        msgType = "file";
+        keyField = "file_key";
+        const name = safeFileName(file.name);
+        form.set("file_type", larkFileType(name));
+        form.set("file_name", name);
+        form.set("file", blob, name);
+      }
+      let key: unknown;
+      try {
+        const up = await api.upload<{ data?: Record<string, unknown> }>(c, path, form, { signal });
+        key = up.data?.[keyField];
+      } catch (e) {
+        throw toChannelSendError(e, "upload");
+      }
+      if (typeof key !== "string" || key === "") {
+        throw new ChannelSendError(`Lark upload returned no ${keyField}`, {
+          retryable: false,
+          reason: "rejected",
+        });
+      }
+      const uuid = uuidFor(idempotencyKey, 0);
+      const body = {
+        msg_type: msgType,
+        content: JSON.stringify({ [keyField]: key }),
+        ...(uuid !== undefined && { uuid }),
+      };
+      let r: { data?: { message_id?: unknown } };
+      try {
+        r =
+          root !== undefined
+            ? await api.call(c, `/open-apis/im/v1/messages/${encodeURIComponent(root)}/reply`, {
+                method: "POST",
+                body: { ...body, reply_in_thread: true },
+                signal,
+              })
+            : await api.call(c, "/open-apis/im/v1/messages", {
+                method: "POST",
+                query: { receive_id_type: "chat_id" },
+                body: { receive_id: target.chatId, ...body },
+                signal,
+              });
+      } catch (e) {
+        throw toChannelSendError(e);
+      }
+      const id = r.data?.message_id;
+      if (typeof id !== "string" || id === "") {
+        throw new ChannelSendError("Lark returned no message_id", {
+          retryable: false,
+          reason: "rejected",
+        });
+      }
+      return { messageId: id };
     },
 
     async update({ config, target, messageId, message, signal, locale }) {

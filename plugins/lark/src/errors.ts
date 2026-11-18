@@ -52,7 +52,20 @@ const REASONS: Record<number, ChannelSendFailure> = {
   230025: "too_large", // 消息体长度超出限制（卡片 / 富文本 30 KB）
 };
 
-export function toChannelSendError(e: unknown): ChannelSendError {
+/**
+ * Upload steps (`im/v1/images`, `im/v1/files`). A missing upload permission is `rejected`, never `auth`:
+ * `auth` would stop the whole delivery of the conversation, text included.
+ * https://open.larksuite.com/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/file/create (2026-11-19)
+ */
+const UPLOAD_REASONS: Record<number, ChannelSendFailure> = {
+  99991672: "rejected", // scope not granted (im:resource / im:resource:upload)
+  99991676: "rejected",
+  230027: "rejected",
+  234007: "rejected", // bot capability not enabled
+  234006: "too_large", // over the size limit (30 MB file, 10 MB image)
+};
+
+export function toChannelSendError(e: unknown, step?: "upload"): ChannelSendError {
   if (e instanceof LarkNetworkError) {
     return new ChannelSendError(e.message, { retryable: true, cause: e });
   }
@@ -66,6 +79,7 @@ export function toChannelSendError(e: unknown): ChannelSendError {
       });
     }
     const reason =
+      (step === "upload" && e.code !== undefined ? UPLOAD_REASONS[e.code] : undefined) ??
       (e.code !== undefined ? REASONS[e.code] : undefined) ??
       (e.status === 401 || e.status === 403 ? "auth" : "rejected");
     return new ChannelSendError(e.message, { retryable: false, reason, ...opts });

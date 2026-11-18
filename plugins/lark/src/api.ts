@@ -49,12 +49,16 @@ export class LarkNetworkError extends Error {
 }
 
 const TOKEN_INVALID: Record<number, true> = { 99991663: true, 99991665: true, 99991677: true };
+/** Whole-call limit of an upload (token fetch included). */
+const UPLOAD_TIMEOUT_MS = 115_000;
 const TOKEN_EARLY_MS = 3 * 60_000;
 
 export interface LarkCallOptions {
   method?: "GET" | "POST" | "PATCH" | "PUT";
   query?: Record<string, string>;
   body?: unknown;
+  /** Multipart body (uploads); mutually exclusive with `body`. */
+  form?: FormData;
   signal: AbortSignal;
   /** 整次调用的时限（含取 token 与 token 失效后的重试；默认按单次请求取客户端的 timeoutMs）。 */
   timeoutMs?: number;
@@ -78,6 +82,13 @@ export interface LarkApi {
     creds: LarkCredentials,
     path: string,
     opts: LarkCallOptions,
+  ): Promise<T>;
+  /** Like {@link call} for a multipart POST (image / file upload); own time limit of 115 s. */
+  upload<T = Record<string, unknown>>(
+    creds: LarkCredentials,
+    path: string,
+    form: FormData,
+    o: { signal: AbortSignal; timeoutMs?: number },
   ): Promise<T>;
   /** 取（缓存的）tenant token；凭据错误时抛 {@link LarkApiError}（如 10014 app id 不存在、10015 secret 错误）。 */
   token(creds: LarkCredentials, signal: AbortSignal): Promise<string>;
@@ -110,10 +121,13 @@ export function createLarkApi(opts: { baseUrl: string; timeoutMs?: number }): La
       res = await fetch(url, {
         method: o.method ?? "GET",
         headers: {
-          ...(o.body !== undefined && { "content-type": "application/json; charset=utf-8" }),
+          ...(o.body !== undefined &&
+            o.form === undefined && { "content-type": "application/json; charset=utf-8" }),
           ...(token !== undefined && { authorization: `Bearer ${token}` }),
         },
-        ...(o.body !== undefined && { body: JSON.stringify(o.body) }),
+        ...(o.form !== undefined
+          ? { body: o.form }
+          : o.body !== undefined && { body: JSON.stringify(o.body) }),
         signal,
         redirect: "error",
       });
@@ -229,6 +243,19 @@ export function createLarkApi(opts: { baseUrl: string; timeoutMs?: number }): La
       return request<T>(path, o, o.bearer, budget);
     },
     token: (creds, signal) => token(creds, signal),
+    upload<T>(
+      creds: LarkCredentials,
+      path: string,
+      form: FormData,
+      o: { signal: AbortSignal; timeoutMs?: number },
+    ): Promise<T> {
+      return this.call<T>(creds, path, {
+        method: "POST",
+        form,
+        signal: o.signal,
+        timeoutMs: o.timeoutMs ?? UPLOAD_TIMEOUT_MS,
+      });
+    },
     async call<T>(creds: LarkCredentials, path: string, o: LarkCallOptions): Promise<T> {
       const budget = o.timeoutMs !== undefined ? AbortSignal.timeout(o.timeoutMs) : undefined;
       const t = await token(creds, o.signal, budget);
