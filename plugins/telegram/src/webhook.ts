@@ -79,7 +79,7 @@ export async function handleTelegramWebhook(a: {
  * failure throws, so the kernel answers non-2xx and Telegram redelivers the update.
  */
 export async function webhookBotIdentity(
-  api: TelegramApi,
+  api: Pick<TelegramApi, "call">,
   kv: Kv | undefined,
   botId: string,
   signal: AbortSignal,
@@ -119,7 +119,7 @@ export async function webhookBotIdentity(
  * already stopped; the redelivery is deduped). Errors are logged without the token.
  */
 export async function answerWebhookCallback(
-  api: TelegramApi,
+  api: Pick<TelegramApi, "call">,
   update: unknown,
   log: Logger,
   connectionId: string,

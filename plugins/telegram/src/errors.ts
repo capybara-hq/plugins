@@ -8,7 +8,8 @@ import { TelegramApiError } from "./api.js";
  * 403 (blocked, kicked, can't initiate conversation, deactivated user: the bot can no longer reach
  * the chat) → `target_gone`; 400 chat not found or a migrated group → `target_gone`;
  * 400 "too long" (`message is too long`, `MESSAGE_TOO_LONG` on edits, `message caption is too long`)
- * → `too_large`; anything else → `rejected`.
+ * → `too_large`; 413 (an upload over Telegram's or a proxy's size limit) → `too_large`;
+ * anything else → `rejected`.
  * The message is the client error's (method, `error_code`, description), never the URL.
  */
 export function toChannelSendError(e: unknown): ChannelSendError {
@@ -32,6 +33,7 @@ export function toChannelSendError(e: unknown): ChannelSendError {
     new ChannelSendError(e.message, { retryable: false, reason, ...opts });
   if (code === 401) return reject("auth");
   if (code === 403) return reject("target_gone");
+  if (code === 413) return reject("too_large");
   const text = (e.description ?? "").toLowerCase();
   if (e.migrateToChatId !== undefined) return reject("target_gone");
   if (code === 400 && text.includes("chat not found")) return reject("target_gone");

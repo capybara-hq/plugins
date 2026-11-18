@@ -213,7 +213,7 @@ describe("long polling", () => {
       [{ update_id: 100, ...telegramPrivateMessage(user, "before", { messageId: 1 }) }],
       [{ update_id: 5, ...telegramPrivateMessage(user, "after reset", { messageId: 2 }) }],
     ];
-    const api: TelegramApi = {
+    const api: Pick<TelegramApi, "call"> = {
       async call<T>(method: string, params?: Record<string, unknown>, signal?: AbortSignal) {
         if (method === "getMe") return { id: BOT_ID, username: "poll_bot" } as T;
         if (method === "getWebhookInfo") return { url: "" } as T;
@@ -248,7 +248,7 @@ describe("long polling", () => {
   it("pauses instead of spinning on a batch with nothing to confirm by", async () => {
     const ac = new AbortController();
     let polls = 0;
-    const api: TelegramApi = {
+    const api: Pick<TelegramApi, "call"> = {
       async call<T>(method: string) {
         if (method === "getMe") return { id: BOT_ID, username: "poll_bot" } as T;
         if (method === "getWebhookInfo") return { url: "" } as T;

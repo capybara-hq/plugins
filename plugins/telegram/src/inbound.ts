@@ -20,7 +20,7 @@ const str = (v: unknown) => (typeof v === "string" ? v : undefined);
  * a usable bot user (`TelegramApiError` from the call itself propagates).
  */
 export async function fetchBotIdentity(
-  api: TelegramApi,
+  api: Pick<TelegramApi, "call">,
   signal?: AbortSignal,
 ): Promise<BotIdentity> {
   const me = await api.call<{ id?: unknown; username?: unknown } | undefined>(
