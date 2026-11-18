@@ -295,7 +295,7 @@ app** to the workspace (Slack asks for it because the scopes changed). The bot t
   (shared by every replica; nothing in process memory; an unknown user is cached as empty). The lookup has a
   1.5 second timeout so the 3 second ack deadline holds; on any failure the fields are left out and nothing
   is cached.
-- **Permission manifest**: `network: ["slack.com", "wss-primary.slack.com"]`, shown only and not enforced; login (OIDC) and the directory also use
+- **Permission manifest**: `network: ["slack.com", "wss-primary.slack.com", "files.slack.com"]`, shown only and not enforced; file uploads go to the signed URL on `files.slack.com`; login (OIDC) and the directory also use
   `slack.com`. The WSS host for Socket Mode is
   assigned by Slack and is not fixed (for example `wss-primary.slack.com`, `wss-backup.slack.com`, `wss-111.slack.com`); the manifest's domain
   validation does not support wildcards, so only the main one is listed.

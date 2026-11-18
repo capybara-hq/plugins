@@ -787,7 +787,7 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
         );
       }
       await res.body?.cancel().catch(() => undefined);
-      if (!res.ok) throw uploadStatusError(res.status);
+      if (!res.ok) throw uploadStatusError(res.status, res.headers.get("retry-after"));
       const threadTs = threadTsOf(target);
       let done: unknown;
       try {

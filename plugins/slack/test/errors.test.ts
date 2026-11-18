@@ -105,6 +105,8 @@ describe("uploadStatusError", () => {
   it("5xx / 429 retryable, 413 too_large, other statuses rejected; the message names only the status", () => {
     expect(uploadStatusError(502)).toMatchObject({ retryable: true });
     expect(uploadStatusError(429)).toMatchObject({ retryable: true });
+    expect(uploadStatusError(429, "4")).toMatchObject({ retryable: true, retryAfterMs: 4000 });
+    expect(uploadStatusError(429, "soon").retryAfterMs).toBeUndefined();
     expect(uploadStatusError(413)).toMatchObject({ retryable: false, reason: "too_large" });
     expect(uploadStatusError(403)).toMatchObject({ retryable: false, reason: "rejected" });
     expect(uploadStatusError(403).message).toBe("files upload failed with status 403");

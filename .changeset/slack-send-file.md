@@ -9,3 +9,5 @@ The app needs the new bot scope `files:write`: admins re-paste the manifest from
 add the scope under OAuth & Permissions) and reinstall the app to the workspace; the `bot-scopes`
 check names it until then. Without it the replies still arrive and files are delivered as links
 (a missing scope on an upload is `rejected`, not `auth`).
+The permission manifest gains the network host `files.slack.com` (where uploads go), so the upgrade
+asks the super admin to re-approve the plugin's permissions.

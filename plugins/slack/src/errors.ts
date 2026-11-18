@@ -112,11 +112,18 @@ export function toUploadSendError(e: unknown): ChannelSendError {
 
 /**
  * A failed POST to the signed upload URL. The URL is a credential: neither the message nor a
- * `cause` carries it (or the response body), only the HTTP status.
+ * `cause` carries it (or the response body), only the HTTP status; a 429 or 5xx carries
+ * `Retry-After` (seconds) as `retryAfterMs`, like the Web API's rate limits.
  */
-export function uploadStatusError(status: number): ChannelSendError {
+export function uploadStatusError(status: number, retryAfter?: string | null): ChannelSendError {
   const message = `files upload failed with status ${status}`;
-  if (status === 429 || status >= 500) return new ChannelSendError(message, { retryable: true });
+  if (status === 429 || status >= 500) {
+    const sec = retryAfter ? Number(retryAfter) : Number.NaN;
+    return new ChannelSendError(message, {
+      retryable: true,
+      ...(Number.isFinite(sec) && sec >= 0 && { retryAfterMs: sec * 1000 }),
+    });
+  }
   return new ChannelSendError(message, {
     retryable: false,
     reason: status === 413 ? "too_large" : "rejected",

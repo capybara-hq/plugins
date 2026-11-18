@@ -7,7 +7,7 @@ import {
   slackMentionEvent,
   startFakeSlack,
 } from "@capybara-hq/testing";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { decodeActionValue } from "../src/actions.js";
 import { createSlackChannel } from "../src/channel.js";
 import plugin from "../src/index.js";
@@ -81,7 +81,7 @@ describe("plugin manifest", () => {
     expect(plugin.name).toBe("slack");
     expect(plugin.provides).toEqual(["channel@1", "identity-source@1", "directory@1"]);
     expect(plugin.permissions).toEqual({
-      network: ["slack.com", "wss-primary.slack.com"],
+      network: ["slack.com", "wss-primary.slack.com", "files.slack.com"],
       setupChecks: ["bot-token", "bot-scopes", "app-token"],
     });
     // 部署级：登录的 client id / secret 可选（只用机器人时不填）；组织级：通讯录的 teamId / botToken 可选
@@ -442,6 +442,11 @@ describe("sendFile", () => {
       }
       expect(slack.files.length).toBe(before);
     }
+    slack.failNext("upload", { status: 429, retryAfter: 3 });
+    expect(await failure(sendFile({ log: capture }))).toMatchObject({
+      retryable: true,
+      retryAfterMs: 3000,
+    });
     for (const l of lines) {
       expect(l).not.toContain(slack.url);
       expect(l).not.toContain("/upload/");
@@ -449,14 +454,26 @@ describe("sendFile", () => {
   });
 
   it("does not retry: one upload POST per call", async () => {
-    const gets = () => slack.calls.filter((c) => c.method === "files.getUploadURLExternal").length;
-    const before = gets();
-    slack.failNext("upload", { status: 500 }, 2);
-    await failure(sendFile());
-    expect(gets()).toBe(before + 1);
-    // The second queued failure is still there: the plugin made no second upload
-    await failure(sendFile());
-    expect(await sendFile()).toEqual({});
+    // The fake records Web API calls only, so the upload POSTs are counted at fetch
+    const posts: string[] = [];
+    const real = globalThis.fetch;
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes("/upload/")) posts.push(url);
+      return real(input, init);
+    });
+    try {
+      slack.failNext("upload", { status: 500 }, 2);
+      await failure(sendFile());
+      expect(posts.length).toBe(1);
+      // The second queued failure is still there: the plugin made no second upload
+      await failure(sendFile());
+      expect(posts.length).toBe(2);
+      expect(await sendFile()).toEqual({});
+      expect(posts.length).toBe(3);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("an abort during the upload rejects without completing the upload", async () => {
@@ -467,7 +484,7 @@ describe("sendFile", () => {
       const p = failure(sendFile({ signal: ac.signal }));
       setTimeout(() => ac.abort(), 50);
       const e = await p;
-      expect(e.message).not.toContain("/upload/");
+      expect(e).toMatchObject({ retryable: true, message: "files upload aborted" });
       expect(slack.files.length).toBe(before);
     } finally {
       slack.delay("upload", 0);
