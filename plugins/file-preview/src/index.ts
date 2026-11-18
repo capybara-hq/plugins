@@ -10,7 +10,7 @@ import { PREVIEWERS, toProvider } from "./previewers.js";
  */
 export default defineExtension({
   name: "file-preview",
-  version: "0.1.0-rc.0",
+  version: "0.1.0-rc.1",
   sdk: "^0.1.0-rc.27",
   provides: [FILE_PREVIEW_EXTENSION_POINT],
   ui: PREVIEWERS.map((p) => ({
