@@ -145,7 +145,6 @@ export const EXTENSIONS: Record<PreviewerId, readonly string[]> = {
   docx: ["docx"],
   pdf: ["pdf"],
   svg: ["svg"],
-  html: ["html", "htm"],
 };
 const MIME: Record<PreviewerId, string> = {
   code: "text/plain",
@@ -154,7 +153,6 @@ const MIME: Record<PreviewerId, string> = {
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   pdf: "application/pdf",
   svg: "image/svg+xml",
-  html: "text/html",
 };
 
 const BITMAPS: Record<string, string> = {
@@ -164,8 +162,11 @@ const BITMAPS: Record<string, string> = {
   gif: "image/gif",
   webp: "image/webp",
 };
-/** Text the code previewer shows for entries no other previewer claims. */
-const AS_CODE = new Set(["md", "markdown", "csv", "tsv"]);
+/**
+ * Text the code previewer shows for entries no other previewer claims (HTML is shown as source:
+ * only the kernel renders it).
+ */
+const AS_CODE = new Set(["md", "markdown", "csv", "tsv", "html", "htm"]);
 
 function extOf(name: string): string {
   const base = (name.split("/").pop() ?? name).toLowerCase();
@@ -254,8 +255,6 @@ async function entryRenderer(id: PreviewerId): Promise<Renderer> {
       return (await import("./pdf.js")).render;
     case "svg":
       return (await import("./svg.js")).render;
-    case "html":
-      return (await import("./html.js")).render;
     case "zip":
       return render;
   }

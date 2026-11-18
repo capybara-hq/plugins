@@ -17,7 +17,7 @@ import { buildUi } from "../ui-src/build.js";
 
 /**
  * file-preview through a real kernel: the provider passes the kernel's `file-preview@1` checks at
- * setup, the org lists the seven previewers in table order, and the shell and the built app are
+ * setup, the org lists the six previewers in table order, and the shell and the built app are
  * served on the public `/ui/` routes (an encoded `..` is 404). The embed itself is tested in jsdom.
  */
 
@@ -49,7 +49,7 @@ afterAll(async () => {
 });
 
 describe("file-preview in a kernel", () => {
-  it("lists the seven previewers and serves the shell and the app", async () => {
+  it("lists the six previewers and serves the shell and the app", async () => {
     await createLocalAccount(kernelDb(raw), "owner");
     const owner = await login(k, "owner");
     const orgId = await createOrg(owner);
@@ -65,7 +65,7 @@ describe("file-preview in a kernel", () => {
     const items = (list.json() as { items: { plugin: string; id: string }[] }).items.filter(
       (i) => i.plugin === "file-preview",
     );
-    expect(items.map((i) => i.id)).toEqual(["code", "zip", "sheet", "docx", "pdf", "svg", "html"]);
+    expect(items.map((i) => i.id)).toEqual(["code", "zip", "sheet", "docx", "pdf", "svg"]);
 
     const shell = await k.http.inject({ method: "GET", url: "/plugins/file-preview/ui/code" });
     expect(shell.statusCode, shell.body).toBe(200);

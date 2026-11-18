@@ -2,12 +2,13 @@
  * The previewers of this plugin: the single source for the `file-preview@1` provider, the `ui`
  * contributions (one embed per previewer, same id) and the shell routes `/ui/<id>`.
  *
- * Never claimed (the kernel's built-ins stay first): Markdown, CSV / TSV and bitmap images.
+ * Never claimed (the kernel's built-ins stay first): Markdown, CSV / TSV, bitmap images and HTML
+ * (the kernel renders HTML itself).
  */
 
 import { FILE_PREVIEW_MAX_BYTES, type FilePreviewProvider } from "@capybara-hq/plugin-sdk";
 
-export type PreviewerId = "code" | "zip" | "sheet" | "docx" | "pdf" | "svg" | "html";
+export type PreviewerId = "code" | "zip" | "sheet" | "docx" | "pdf" | "svg";
 
 export interface PreviewerSpec {
   id: PreviewerId;
@@ -109,11 +110,6 @@ export const PREVIEWERS: readonly PreviewerSpec[] = Object.freeze([
     id: "svg",
     title: { zh: "SVG", en: "SVG" },
     accepts: { mimeTypes: ["image/svg+xml"], extensions: ["svg"] },
-  },
-  {
-    id: "html",
-    title: { zh: "网页", en: "Web page" },
-    accepts: { mimeTypes: ["text/html"], extensions: ["html", "htm"] },
   },
 ] satisfies PreviewerSpec[]);
 

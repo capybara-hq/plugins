@@ -272,6 +272,22 @@ describe("zip renderer", () => {
     expect(window.location.href).toBe(before);
   });
 
+  it("shows html and htm entries as source, never rendered", async () => {
+    const z = zipSync({ "a.html": strToU8("<p>hi</p>"), "b.htm": strToU8("<b>yo</b>") });
+    const { ctx, root } = makeCtx();
+    await render(fileOf(z), ctx);
+    for (const [name, text] of [
+      ["a.html", "<p>hi</p>"],
+      ["b.htm", "<b>yo</b>"],
+    ] as const) {
+      row(root, name).click();
+      await vi.waitFor(() =>
+        expect(root.querySelector(".cap-zip-detail .cap-code")?.textContent).toContain(text),
+      );
+    }
+    expect(root.querySelector(".cap-zip-detail iframe, .cap-html-host")).toBeNull();
+  });
+
   it("shows bitmap entries as a blob image and revokes it on change", async () => {
     const urls: string[] = [];
     const revoked: string[] = [];

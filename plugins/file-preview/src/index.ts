@@ -29,7 +29,6 @@ export default defineExtension({
       { method: "GET", path: "/ui/docx", access: "public" },
       { method: "GET", path: "/ui/pdf", access: "public" },
       { method: "GET", path: "/ui/svg", access: "public" },
-      { method: "GET", path: "/ui/html", access: "public" },
       { method: "GET", path: "/ui/assets/:file", access: "public" },
     ],
     ui: { embeds: PREVIEWERS.map((p) => p.id) },
@@ -42,7 +41,6 @@ export default defineExtension({
     ctx.http.route("GET", "/ui/docx", () => assets.shell("docx"));
     ctx.http.route("GET", "/ui/pdf", () => assets.shell("pdf"));
     ctx.http.route("GET", "/ui/svg", () => assets.shell("svg"));
-    ctx.http.route("GET", "/ui/html", () => assets.shell("html"));
     ctx.http.route("GET", "/ui/assets/:file", (req) => assets.asset(req));
 
     ctx.provide(FILE_PREVIEW_EXTENSION_POINT, toProvider());

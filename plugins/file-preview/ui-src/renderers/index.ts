@@ -19,7 +19,5 @@ export async function loadRenderer(id: PreviewerId): Promise<Renderer> {
       return (await import("./pdf.js")).render;
     case "svg":
       return (await import("./svg.js")).render;
-    case "html":
-      return (await import("./html.js")).render;
   }
 }
