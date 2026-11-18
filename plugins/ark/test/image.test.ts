@@ -15,7 +15,7 @@ import {
   type FakeResponse,
   startFakeModelServer,
 } from "@capybara-hq/testing";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createArkProvider } from "../src/index.js";
 import {
   arkRoutes,
@@ -26,13 +26,6 @@ import {
   SEEDREAM,
   SEEDREAM_4,
 } from "./fixtures.js";
-
-// The rc.25 suite asks for two images even when the model declares maxImages 1; Ark refuses that.
-// Skipped until the testing release with core#367 (the suite then skips it itself); remove this
-// hook when bumping @capybara-hq/testing.
-beforeEach((ctx) => {
-  if (ctx.task.name === "generates two images") ctx.skip();
-});
 
 describeModelProviderConformance("ark (fixtures, image generation)", async () => {
   const server = await startFakeModelServer(arkRoutes());

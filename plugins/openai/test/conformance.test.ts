@@ -34,9 +34,10 @@ describeModelProviderConformance("openai (fixtures)", async () => {
       apiKey: "sk-fixture",
       baseUrl: `${server.url}/v1`,
       models: [gpt("gpt-5.5", { documents: true })],
+      imageModels: ["gpt-image-1-mini"],
     }),
     model: "gpt-5.5",
-    expect: { thinking: true, caching: true },
+    expect: { thinking: true, caching: true, imageGeneration: { model: "gpt-image-1-mini" } },
     teardown: () => server.stop(),
   };
 });
