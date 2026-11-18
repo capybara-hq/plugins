@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-file-preview
 
+## 0.1.0-rc.3
+
+### Patch Changes
+
+- 5aa3c09: Drop the `html` previewer: the kernel's built-in previewer renders HTML (full rendering, CDN
+  allowlist) since capybara 0.1.0-rc.52 (kernel 0.1.0-rc.46).
+
 ## 0.1.0-rc.2
 
 ### Patch Changes
