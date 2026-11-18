@@ -17,7 +17,8 @@ import { appTokenCheck, botScopesCheck, botTokenCheck } from "../../src/setup-ch
  * - Setup checks: `bot-token`, `bot-scopes` (the app installed from the guide's manifest) and
  *   `app-token` answer ok, with no token in any text.
  * - 另填 `CAPYBARA_TEST_SLACK_CHANNEL`（测试频道或私聊的 id，机器人须已在其中）时：发一条消息、编辑它、
- *   发一张审批卡片并把它改成「已批准」（不留下可点的按钮）。
+ *   发一张审批卡片并把它改成「已批准」（不留下可点的按钮）；and send a small PNG (`image`) and a text
+ *   file (`file`) through `sendFile` (the app needs `files:write`).
  * - 另填 `CAPYBARA_TEST_SLACK_CLIENT_ID` / `_CLIENT_SECRET` 时：Sign in with Slack 的授权地址，以及用一个无效的
  *   授权码换 token——Slack 回 `invalid_code`（而不是 `invalid_client_id` / `bad_client_secret`）即说明客户端凭据正确。
  *
@@ -204,6 +205,40 @@ describe.skipIf(!READY)("Slack live", () => {
         signal: timeout(20_000),
         locale: "en",
       });
+    },
+    90_000,
+  );
+
+  it.skipIf(!filled(CHANNEL))(
+    "live: sends a small PNG as an image and a text file as a file (needs files:write)",
+    async () => {
+      const chatId = CHANNEL as string;
+      const target = { chatId, chatType: chatId.startsWith("D") ? "dm" : "group" } as const;
+      // A 1×1 transparent PNG
+      const png = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+        "base64",
+      );
+      for (const file of [
+        { name: "capybara-live.png", contentType: "image/png", kind: "image" as const, data: png },
+        {
+          name: "capybara-live.txt",
+          contentType: "text/plain",
+          kind: "file" as const,
+          data: new TextEncoder().encode(`Capybara live test ${stamp}: file delivery\n`),
+        },
+      ]) {
+        const r = await channel.sendFile?.({
+          config: config(),
+          target,
+          file: { ...file, data: new Uint8Array(file.data) },
+          signal: timeout(30_000),
+          locale: "en",
+        });
+        expect(r).toBeDefined();
+        if (r?.messageId !== undefined) expect(r.messageId.startsWith(`${chatId}:`)).toBe(true);
+      }
+      for (const l of logs) expect(l.msg).not.toMatch(/files\.slack\.com\/upload/);
     },
     90_000,
   );

@@ -85,6 +85,51 @@ export function toChannelSendError(e: unknown): ChannelSendError {
   }
 }
 
+/** Scope and token-type errors that only mean "this app may not upload files". */
+const UPLOAD_PERMISSION: Record<string, true> = {
+  missing_scope: true,
+  not_allowed_token_type: true,
+};
+
+/**
+ * The mapping for the Web API calls of a file upload (`files.getUploadURLExternal`,
+ * `files.completeUploadExternal`; the upload POST itself: {@link uploadStatusError}): the general
+ * table, except that a missing `files:write` (or a token type that may not upload) is `rejected`,
+ * never `auth`. `auth` would stop the
+ * conversation's whole delivery, text included; `rejected` only turns this file into a link.
+ */
+export function toUploadSendError(e: unknown): ChannelSendError {
+  const code = platformErrorCode(e);
+  if (code !== undefined && UPLOAD_PERMISSION[code]) {
+    return new ChannelSendError(`Slack API error: ${code}`, {
+      retryable: false,
+      reason: "rejected",
+      cause: e,
+    });
+  }
+  return toChannelSendError(e);
+}
+
+/**
+ * A failed POST to the signed upload URL. The URL is a credential: neither the message nor a
+ * `cause` carries it (or the response body), only the HTTP status; a 429 or 5xx carries
+ * `Retry-After` (seconds) as `retryAfterMs`, like the Web API's rate limits.
+ */
+export function uploadStatusError(status: number, retryAfter?: string | null): ChannelSendError {
+  const message = `files upload failed with status ${status}`;
+  if (status === 429 || status >= 500) {
+    const sec = retryAfter ? Number(retryAfter) : Number.NaN;
+    return new ChannelSendError(message, {
+      retryable: true,
+      ...(Number.isFinite(sec) && sec >= 0 && { retryAfterMs: sec * 1000 }),
+    });
+  }
+  return new ChannelSendError(message, {
+    retryable: false,
+    reason: status === 413 ? "too_large" : "rejected",
+  });
+}
+
 /**
  * True when a send failed because Slack refused the message's blocks or attachments
  * (`invalid_blocks`, `invalid_blocks_format`, `invalid_attachments`, e.g. a table block it does not

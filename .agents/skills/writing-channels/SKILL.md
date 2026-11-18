@@ -35,11 +35,13 @@ The plugins' READMEs (`plugins/slack/README.md`, `plugins/lark/README.md`, `plug
 ```ts
 interface Channel {
   connectionSchema: ZodTypeAny;            // use secret() for secret fields
-  features: { cards: boolean; edit: boolean; threads: boolean; minEditIntervalMs?: number };
+  features: { cards: boolean; edit: boolean; threads: boolean; minEditIntervalMs?: number;
+              files?: { maxBytes: number; imageMaxBytes?: number } };
   verify(args): Promise<{ botUserId; botName; tenantId }>;
   connect(args: ChannelConnectArgs): Promise<void>;   // long connection loop
   send(args: ChannelSendArgs): Promise<{ messageId: string }>;
   update(args: ChannelSendArgs & { messageId: string }): Promise<void>;
+  sendFile?(args: ChannelSendFileArgs): Promise<{ messageId?: string }>;   // optional file delivery
   webhook?: { handle(args): Promise<ChannelWebhookResult> };   // optional webhook inbound
 }
 ```
@@ -93,6 +95,19 @@ Inbound is a **long connection by default**. When the extension implements `Chan
 - With `features.cards` false, the kernel has already turned each card into Markdown via `renderCardAsText(card, locale)` and appended it to the text; the message has no `cards`. Model-controllable fields are in inline code / fenced code, so the converter must show code content as is. With `cards: true` you get `message.cards` and render native cards; a card you cannot render (e.g. a callback value over the limit) falls back to a link or text.
 - With `features.threads` false, targets carry no `threadId` and replies go straight into the chat; each mention in a group then opens its own conversation.
 - With `features.edit` false, no streaming draft is sent, only one message at the end.
+
+### `sendFile` (optional file delivery)
+
+Implement `sendFile` to let the bot deliver conversation artifacts (files the agent produced) as native attachments. Contract: `ChannelFile` / `ChannelSendFileArgs` in the SDK's `channel.ts`; design: core spec `2026-11-18-channel-file-delivery-design.md` (§4, §6).
+
+- **Declare `features.files` iff `sendFile` is implemented**, with the platform's real bot limits: `maxBytes` for any file, and `imageMaxBytes` when images have a smaller cap (Lark images 10 MB, files 30 MB; Telegram photos 10 MB, documents 50 MB; Slack 1 GB). The kernel never hands over more than `maxBytes`, and sends `kind: "image"` only within `imageMaxBytes ?? maxBytes`; larger artifacts become a link in the text.
+- **The kernel picks `kind`; do not re-derive it from the content type.** An `image` may fall back to a plain file when the platform refuses it as an image (unsupported format, dimensions); a `file` is never turned into an image.
+- **One message per call**, one file per message. `data` is the whole file in memory. Return the platform's `messageId` if there is one (the kernel does not edit it).
+- `idempotencyKey` has the same semantics as for `send`: pass it through where the platform supports it (Lark `uuid`), ignore it otherwise. `locale` picks your own fixed wording (a caption, if any).
+- `file.name` is model-controlled: never interpret it as markup, a path or a mention; escape it like any model text and sanitise it for the platform's file-name rules before uploading.
+- **Failure mapping** (`ChannelSendError`, same table as below): rate limit, 5xx, network -> `retryable`. A missing-permission error for uploads (Slack `missing_scope` on `files:write`, Lark scope errors on `im/v1/files`) is `reason: "rejected"`, **never `auth`**: `auth` stops the whole delivery of the conversation, text included, while `rejected` only turns this file into a link. Bad credentials in general are still `auth`; a gone target is `target_gone`; over the limit is `too_large`.
+- **Never put an upload URL, token or response body in an error message or log**: multi-step uploads (Slack's `files.getUploadURLExternal` then a POST to the returned URL, then `files.completeUploadExternal`) return pre-signed URLs that are credentials. The error names the step and the platform error code only.
+- Fakes: `startFakeChannelServer` has `POST /send-file` (recorded in its sent files, with `sha256`, `kind`, deduped by `idempotencyKey`); `startFakeLark` has `im/v1/images` and `im/v1/files` (`uploads`); `startFakeSlack` records `files`; `startFakeTelegram` accepts the multipart `sendPhoto` / `sendDocument` (recorded in `messages` with `file`). Cover in `plugins/<name>/test`: the kind mapping and image fallback, the size limits declared, the missing-permission case (`rejected`), and that no error text contains the upload URL or token.
 
 ### Failure classification (`ChannelSendError`)
 

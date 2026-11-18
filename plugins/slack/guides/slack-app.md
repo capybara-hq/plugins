@@ -49,6 +49,7 @@ oauth_config:
   scopes:
     bot:
       - chat:write # post and update replies and cards
+      - files:write # upload conversation files
       - commands # slash commands /new, /env, /capybara
       - im:write # conversations.open: tell the bot's own DM from other DMs
       - im:history # message.im: direct messages to the bot
@@ -103,6 +104,7 @@ oauth_config:
   scopes:
     bot:
       - chat:write # post and update replies and cards
+      - files:write # upload conversation files
       - commands # slash commands /new, /env, /capybara
       - im:write # conversations.open: tell the bot's own DM from other DMs
       - im:history # message.im: direct messages to the bot
@@ -193,6 +195,7 @@ oauth_config:
   scopes:
     bot:
       - chat:write # post and update replies and cards
+      - files:write # upload conversation files
       - commands # slash commands /new, /env, /capybara
       - im:write # conversations.open: tell the bot's own DM from other DMs
       - im:history # message.im: direct messages to the bot

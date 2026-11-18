@@ -20,6 +20,7 @@ import { workspaceTokenProblem } from "./config.js";
 // capybara:allow-module-state read-only list of scope names, never mutated
 export const REQUIRED_BOT_SCOPES = [
   "chat:write",
+  "files:write",
   "commands",
   "im:write",
   "im:history",

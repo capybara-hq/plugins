@@ -1,3 +1,4 @@
+import { deflateSync } from "node:zlib";
 import type { ChannelCard, ChannelTarget } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { createTelegramChannel } from "../../src/channel.js";
@@ -16,7 +17,8 @@ import { createTelegramChannel } from "../../src/channel.js";
  * - Checks: `verify`; send, then edit; a 5000-character send that splits; a card with buttons
  *   (nobody clicks it; it is edited to its decided state so no live button stays); a reply with a
  *   table streamed like the kernel does (plain draft, then edits into a rich message with a native
- *   table) and a table sent directly as a rich message, with no fallback to the plain list.
+ *   table) and a table sent directly as a rich message, with no fallback to the plain list; a file
+ *   sent as a photo and one as a document (`sendFile`) into the private chat.
  *
  * The test messages and cards stay in the chat (there is no cleanup); use a throwaway chat or group.
  *
@@ -150,6 +152,35 @@ describe.skipIf(!READY)("Telegram live", () => {
     );
   }
 
+  it("live: sendFile sends an image as a photo and a file as a document", async () => {
+    const send = channel.sendFile;
+    if (!send) throw new Error("sendFile missing");
+    const target = { chatId: CHAT_ID as string, chatType: "dm" as const };
+    const base = { config: config(), target, locale: "en" as const };
+    // A 64x64 solid PNG: Telegram accepts it as a photo (no fallback warning).
+    const png = solidPng(64, 64, deflateSync);
+    warnings.length = 0;
+    const photo = await send.call(channel, {
+      ...base,
+      file: { name: "capybara-live.png", contentType: "image/png", kind: "image", data: png },
+      signal: timeout(60_000),
+    });
+    expect(photo.messageId).toMatch(new RegExp(`^${CHAT_ID}:\\d+$`));
+    expect(warnings.filter((w) => w.includes("photo"))).toEqual([]);
+    const doc = await send.call(channel, {
+      ...base,
+      file: {
+        name: `capybara live ${stamp}.txt`,
+        contentType: "text/plain",
+        kind: "file",
+        data: new TextEncoder().encode(`[capybara test] sendFile document ${stamp}\n`),
+      },
+      signal: timeout(60_000),
+    });
+    expect(doc.messageId).toMatch(new RegExp(`^${CHAT_ID}:\\d+$`));
+    expect(doc.messageId).not.toBe(photo.messageId);
+  }, 150_000);
+
   it("live: a reply with a table streams into a rich message and sends as one", async () => {
     const base = {
       config: config(),
@@ -191,3 +222,48 @@ describe.skipIf(!READY)("Telegram live", () => {
     expect(warnings.filter((w) => w.includes("rich message"))).toEqual([]);
   }, 120_000);
 });
+
+/** A minimal RGB PNG of one colour (signature, IHDR, IDAT, IEND). */
+function solidPng(w: number, h: number, deflate: (b: Uint8Array) => Uint8Array): Uint8Array {
+  const crcTable = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (b: Uint8Array) => {
+    let c = 0xffffffff;
+    for (const x of b) c = (crcTable[(c ^ x) & 0xff] as number) ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type: string, data: Uint8Array) => {
+    const out = new Uint8Array(12 + data.length);
+    const view = new DataView(out.buffer);
+    view.setUint32(0, data.length);
+    out.set(new TextEncoder().encode(type), 4);
+    out.set(data, 8);
+    view.setUint32(8 + data.length, crc(out.subarray(4, 8 + data.length)));
+    return out;
+  };
+  const ihdr = new Uint8Array(13);
+  const iv = new DataView(ihdr.buffer);
+  iv.setUint32(0, w);
+  iv.setUint32(4, h);
+  ihdr.set([8, 2, 0, 0, 0], 8); // 8-bit RGB
+  const raw = new Uint8Array(h * (1 + w * 3));
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) raw.set([0x8b, 0x5a, 0x2b], y * (1 + w * 3) + 1 + x * 3);
+  }
+  const parts = [
+    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", deflate(raw)),
+    chunk("IEND", new Uint8Array()),
+  ];
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
+}

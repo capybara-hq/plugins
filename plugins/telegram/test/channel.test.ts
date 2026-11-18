@@ -386,6 +386,136 @@ describe("send", () => {
   });
 });
 
+/** The channel's `sendFile` (optional in the contract; this channel has it). */
+const fileSender = (c: ReturnType<typeof createTelegramChannel>) => {
+  const f = c.sendFile;
+  if (!f) throw new Error("sendFile missing");
+  return f.bind(c);
+};
+
+describe("sendFile", () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+  const image = { name: "chart.png", contentType: "image/png", kind: "image" as const, data: png };
+  const pdf = {
+    name: "report.pdf",
+    contentType: "application/pdf",
+    kind: "file" as const,
+    data: new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+  };
+
+  it("declares files: 50 MB documents, 10 MB photos", () => {
+    expect(make().features.files).toEqual({ maxBytes: 50_000_000, imageMaxBytes: 10_000_000 });
+  });
+
+  it("sends an image as a photo into the recorded topic, replying to the root, and records it", async () => {
+    const { kv, data } = memoryKv();
+    await kv.set("topic/111/-100:5", "77", { ttlSeconds: 1 });
+    const target = { chatId: "-100", chatType: "group" as const, threadId: "-100:5" };
+    const r = await fileSender(make(kv))({ ...base, target, file: image });
+    expect(tg.messages).toHaveLength(1);
+    const m = tg.messages[0];
+    expect(m).toMatchObject({
+      chatId: -100,
+      messageThreadId: 77,
+      replyToMessageId: 5,
+      file: { kind: "photo", name: "chart.png", contentType: "image/png" },
+    });
+    expect(new Uint8Array(m?.file?.data ?? [])).toEqual(png);
+    expect(tg.calls.find((c) => c.method === "sendPhoto")?.params.reply_parameters).toEqual({
+      message_id: 5,
+      allow_sending_without_reply: true,
+    });
+    expect(r.messageId).toBe(`-100:${m?.messageId}`);
+    expect(data.get(`thread/111/-100:${m?.messageId}`)).toBe("-100:5");
+  });
+
+  it("sends an image Telegram refuses as a photo once more as one document", async () => {
+    tg.failNext("sendPhoto", {
+      status: 400,
+      description: "Bad Request: PHOTO_INVALID_DIMENSIONS",
+    });
+    warnings.length = 0;
+    const r = await fileSender(make())({ ...base, target: dm, file: image });
+    expect(tg.messages).toHaveLength(1);
+    expect(tg.messages[0]?.file).toMatchObject({ kind: "document", name: "chart.png" });
+    expect(r.messageId).toBe(`42:${tg.messages[0]?.messageId}`);
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("also falls back on IMAGE_PROCESS_FAILED, but not on other 400s", async () => {
+    tg.failNext("sendPhoto", { status: 400, description: "Bad Request: IMAGE_PROCESS_FAILED" });
+    await fileSender(make())({ ...base, target: dm, file: image });
+    expect(tg.messages[0]?.file?.kind).toBe("document");
+    tg.messages.length = 0;
+    tg.calls.length = 0;
+    tg.failNext("sendPhoto", { status: 400, description: "Bad Request: chat not found" });
+    const e = await sendErr(fileSender(make())({ ...base, target: dm, file: image }));
+    expect(e).toMatchObject({ retryable: false, reason: "target_gone" });
+    expect(tg.messages).toHaveLength(0);
+    expect(tg.calls.filter((c) => c.method === "sendDocument")).toHaveLength(0);
+  });
+
+  it("never sends a file as a photo", async () => {
+    const pngAsFile = { ...image, kind: "file" as const };
+    await fileSender(make())({ ...base, target: dm, file: pngAsFile });
+    expect(tg.calls.map((c) => c.method)).toEqual(["sendDocument"]);
+    expect(tg.messages[0]?.file?.kind).toBe("document");
+  });
+
+  it("sends a file as a document with its name and no caption", async () => {
+    const r = await fileSender(make())({ ...base, target: dm, file: pdf });
+    expect(tg.messages).toHaveLength(1);
+    expect(tg.messages[0]).toMatchObject({
+      chatId: 42,
+      text: "",
+      file: { kind: "document", name: "report.pdf", contentType: "application/pdf" },
+    });
+    expect(tg.messages[0]?.messageThreadId).toBeUndefined();
+    expect(tg.messages[0]?.replyToMessageId).toBeUndefined();
+    expect(r.messageId).toBe(`42:${tg.messages[0]?.messageId}`);
+  });
+
+  it("maps 413 to too_large, a flood wait to retryable, a blocked bot to target_gone", async () => {
+    tg.failNext("sendDocument", { status: 413, description: "Request Entity Too Large" });
+    const big = await sendErr(fileSender(make())({ ...base, target: dm, file: pdf }));
+    expect(big).toMatchObject({ retryable: false, reason: "too_large" });
+    tg.failNext("sendDocument", { status: 429, description: "Too Many Requests", retryAfter: 4 });
+    const limited = await sendErr(fileSender(make())({ ...base, target: dm, file: pdf }));
+    expect(limited).toMatchObject({ retryable: true, retryAfterMs: 4000 });
+    tg.failNext("sendDocument", {
+      status: 403,
+      description: "Forbidden: bot was blocked by the user",
+    });
+    const gone = await sendErr(fileSender(make())({ ...base, target: dm, file: pdf }));
+    expect(gone).toMatchObject({ retryable: false, reason: "target_gone" });
+    expect(tg.calls.filter((c) => c.method === "sendDocument")).toHaveLength(3);
+  });
+
+  it("a network failure is retryable and never names the token", async () => {
+    const dead = createTelegramChannel({ apiUrl: "http://127.0.0.1:1", log });
+    const e = await sendErr(fileSender(dead)({ ...base, target: dm, file: pdf }));
+    expect(e.retryable).toBe(true);
+    const printed = `${String(e)} ${JSON.stringify(e)} ${String(e.cause ?? "")} ${e.stack ?? ""}`;
+    expect(printed).not.toContain(config.botToken);
+    expect(printed).not.toContain("127.0.0.1");
+  });
+
+  it("still resolves when recording the thread fails", async () => {
+    const kv = {
+      get: async () => null,
+      set: async () => {
+        throw new Error("kv down");
+      },
+    } as unknown as Kv;
+    const r = await fileSender(make(kv))({
+      ...base,
+      target: { chatId: "-100", chatType: "group", threadId: "-100:5" },
+      file: pdf,
+    });
+    expect(r.messageId).toMatch(/^-100:\d+$/);
+  });
+});
+
 describe("update", () => {
   it("edits the message text as HTML", async () => {
     const { messageId } = await make().send({ ...base, target: dm, message: { text: "a" } });

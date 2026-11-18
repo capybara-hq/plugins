@@ -33,7 +33,8 @@ export {
  * - Setup checks (`permissions.setupChecks`): the live rows of the `slack-app` guide, read only.
  * 凭据都由内核按配置传入，故不需要 `secrets` 权限。`permissions.network` 只展示：OIDC 与 Web API 都在
  * `slack.com`；Socket Mode 的 WSS 主机由 Slack 分配（如 `wss-primary.slack.com`、`wss-backup.slack.com`、
- * `wss-111.slack.com`），清单不支持通配，列出主要的一个。
+ * `wss-111.slack.com`），清单不支持通配，列出主要的一个。File uploads (`sendFile`) POST to the signed URL
+ * Slack returns on `files.slack.com`.
  */
 export default defineExtension({
   name: "slack",
@@ -41,7 +42,7 @@ export default defineExtension({
   sdk: "^0.1.0-rc.0",
   provides: [CHANNEL_EXTENSION_POINT, IDENTITY_SOURCE_EXTENSION_POINT, DIRECTORY_EXTENSION_POINT],
   permissions: {
-    network: ["slack.com", "wss-primary.slack.com"],
+    network: ["slack.com", "wss-primary.slack.com", "files.slack.com"],
     setupChecks: ["bot-token", "bot-scopes", "app-token"],
   },
   config: { deployment: SlackDeployment, org: SlackDirectoryConfig },

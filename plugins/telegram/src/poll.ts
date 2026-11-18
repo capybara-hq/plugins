@@ -19,12 +19,12 @@ export const TOKEN_REJECTED_ERROR = "Telegram bot token rejected";
 
 export interface LongPollingArgs {
   /** Short calls: `getMe`, `getWebhookInfo`, `answerCallbackQuery`. */
-  api: TelegramApi;
+  api: Pick<TelegramApi, "call">;
   /**
    * `getUpdates` only: a client whose request timeout exceeds the long-poll timeout (the caller
    * builds it with `pollTimeoutSec * 1000 + 10_000`). Defaults to `api`.
    */
-  pollApi?: TelegramApi;
+  pollApi?: Pick<TelegramApi, "call">;
   connectionId: string;
   onEvent: ChannelConnectArgs["onEvent"];
   signal: AbortSignal;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toChannelSendError } from "../src/errors.js";
+import { toChannelSendError, toUploadSendError, uploadStatusError } from "../src/errors.js";
 
 const platform = (error: string) =>
   Object.assign(new Error(`An API error occurred: ${error}`), {
@@ -83,5 +83,33 @@ describe("toChannelSendError", () => {
     const u = toChannelSendError(new Error("boom xoxb-123"));
     expect(u).toMatchObject({ retryable: true });
     expect(u.message).not.toContain("xoxb");
+  });
+});
+
+describe("toUploadSendError", () => {
+  it("missing_scope / not_allowed_token_type → rejected (text sends keep auth for missing_scope)", () => {
+    for (const code of ["missing_scope", "not_allowed_token_type"]) {
+      expect(toUploadSendError(platform(code))).toMatchObject({
+        retryable: false,
+        reason: "rejected",
+        message: `Slack API error: ${code}`,
+      });
+    }
+    expect(toChannelSendError(platform("missing_scope"))).toMatchObject({ reason: "auth" });
+    expect(toUploadSendError(platform("invalid_auth"))).toMatchObject({ reason: "auth" });
+    expect(toUploadSendError(platform("internal_error"))).toMatchObject({ retryable: true });
+  });
+});
+
+describe("uploadStatusError", () => {
+  it("5xx / 429 retryable, 413 too_large, other statuses rejected; the message names only the status", () => {
+    expect(uploadStatusError(502)).toMatchObject({ retryable: true });
+    expect(uploadStatusError(429)).toMatchObject({ retryable: true });
+    expect(uploadStatusError(429, "4")).toMatchObject({ retryable: true, retryAfterMs: 4000 });
+    expect(uploadStatusError(429, "soon").retryAfterMs).toBeUndefined();
+    expect(uploadStatusError(413)).toMatchObject({ retryable: false, reason: "too_large" });
+    expect(uploadStatusError(403)).toMatchObject({ retryable: false, reason: "rejected" });
+    expect(uploadStatusError(403).message).toBe("files upload failed with status 403");
+    expect(uploadStatusError(403).cause).toBeUndefined();
   });
 });

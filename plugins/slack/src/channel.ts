@@ -23,7 +23,13 @@ import {
   typedCommand,
 } from "./commands.js";
 import { workspaceTokenProblem } from "./config.js";
-import { blocksRejected, platformErrorCode, toChannelSendError } from "./errors.js";
+import {
+  blocksRejected,
+  platformErrorCode,
+  toChannelSendError,
+  toUploadSendError,
+  uploadStatusError,
+} from "./errors.js";
 import { eventToInbound, type SlackProfile, userInfoProfile } from "./inbound.js";
 import { handleSlackWebhook, type SlackEnvelope, type SlashOutcome } from "./webhook.js";
 
@@ -140,6 +146,37 @@ function threadTsOf(target: ChannelTarget): string | undefined {
   if (target.chatType !== "group" || target.threadId === undefined) return undefined;
   const ts = target.threadId.slice(target.threadId.lastIndexOf(":") + 1);
   return /^\d+\.\d+$/.test(ts) ? ts : undefined;
+}
+
+/** Slack's file size limit for uploads (1 GB, https://docs.slack.dev/messaging/working-with-files). */
+export const SLACK_FILE_MAX_BYTES = 1_073_741_824;
+
+/**
+ * A model-supplied file name made safe as a Slack file name and title: control and format
+ * characters (bidi overrides, zero-width marks) dropped, path separators replaced, at most 255
+ * characters; empty → `file`.
+ */
+export function slackFileName(name: string): string {
+  const clean = name
+    .replace(/[\p{Cc}\p{Cf}]/gu, "")
+    .replace(/[/\\]/g, "_")
+    .trim();
+  return [...clean].slice(0, 255).join("") || "file";
+}
+
+/**
+ * The message the completed upload was shared as: `files[0].shares.{public,private}.<channel>[0].ts`.
+ * Slack fills `shares` only once sharing is done, so it is often missing; then there is no id.
+ */
+function sharedMessageTs(answer: unknown, channel: string): string | undefined {
+  const file = (answer as { files?: unknown[] } | null)?.files?.[0] as
+    | { shares?: Record<string, Record<string, { ts?: unknown }[] | undefined> | undefined> }
+    | undefined;
+  for (const kind of ["public", "private"]) {
+    const ts = file?.shares?.[kind]?.[channel]?.[0]?.ts;
+    if (typeof ts === "string" && ts !== "") return ts;
+  }
+  return undefined;
 }
 
 /** 消息 id `<频道>:<ts>` → 频道与 ts。 */
@@ -474,7 +511,13 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
 
   return {
     connectionSchema: SlackConnection,
-    features: { cards: true, edit: true, threads: true, minEditIntervalMs: MIN_EDIT_INTERVAL_MS },
+    features: {
+      cards: true,
+      edit: true,
+      threads: true,
+      minEditIntervalMs: MIN_EDIT_INTERVAL_MS,
+      files: { maxBytes: SLACK_FILE_MAX_BYTES, imageMaxBytes: SLACK_FILE_MAX_BYTES },
+    },
 
     async verify({ config, signal }) {
       const c = parse(config);
@@ -701,6 +744,63 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
       }
       if (last === undefined) throw new ChannelSendError("nothing to send", { retryable: false });
       return { messageId: last };
+    },
+
+    // One file, one message, through Slack's external upload: files.getUploadURLExternal, a POST of
+    // the bytes to the returned signed URL, files.completeUploadExternal into the channel (and
+    // thread). `kind` makes no difference (Slack shows images inline either way); `idempotencyKey`
+    // is ignored (Ruling R5). The signed URL is a credential: it is sent no token and never appears in
+    // an error or a log. No retries here; the kernel retries.
+    async sendFile({ config, target, file, signal }) {
+      const c = parse(config);
+      const client = web(c.botToken, signal);
+      const name = slackFileName(file.name);
+      let upload: { upload_url?: unknown; file_id?: unknown };
+      try {
+        upload = (await client.apiCall("files.getUploadURLExternal", {
+          filename: name,
+          length: file.data.byteLength,
+        })) as typeof upload;
+      } catch (e) {
+        throw toUploadSendError(e);
+      }
+      const { upload_url: url, file_id: id } = upload;
+      if (typeof url !== "string" || url === "" || typeof id !== "string" || id === "") {
+        throw new ChannelSendError("Slack returned no upload URL", {
+          retryable: false,
+          reason: "rejected",
+        });
+      }
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/octet-stream" },
+          body: file.data,
+          signal,
+        });
+      } catch {
+        // No cause: a fetch error may carry the URL
+        throw new ChannelSendError(
+          signal.aborted ? "files upload aborted" : "files upload failed (network)",
+          { retryable: true },
+        );
+      }
+      await res.body?.cancel().catch(() => undefined);
+      if (!res.ok) throw uploadStatusError(res.status, res.headers.get("retry-after"));
+      const threadTs = threadTsOf(target);
+      let done: unknown;
+      try {
+        done = await client.apiCall("files.completeUploadExternal", {
+          files: JSON.stringify([{ id, title: name }]),
+          channel_id: target.chatId,
+          ...(threadTs !== undefined && { thread_ts: threadTs }),
+        });
+      } catch (e) {
+        throw toUploadSendError(e);
+      }
+      const ts = sharedMessageTs(done, target.chatId);
+      return ts === undefined ? {} : { messageId: `${target.chatId}:${ts}` };
     },
 
     async update({ config, messageId, message, signal, locale }) {

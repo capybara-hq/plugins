@@ -2,6 +2,7 @@ import {
   type Channel,
   type ChannelSendArgs,
   ChannelSendError,
+  type ChannelSendFileArgs,
   type ChannelTarget,
   type ExtensionContext,
   type Logger,
@@ -20,6 +21,12 @@ import { answerWebhookCallback, handleTelegramWebhook, webhookBotIdentity } from
 
 /** Telegram allows about 20 messages a minute in a group; edits count (spec "Send, update"). */
 export const MIN_EDIT_INTERVAL_MS = 3000;
+
+/**
+ * Bot API upload limits (https://core.telegram.org/bots/api#sending-files, read 2026-11-19):
+ * 10 MB for a photo, 50 MB for other files sent by multipart.
+ */
+export const FILE_LIMITS = { maxBytes: 50_000_000, imageMaxBytes: 10_000_000 } as const;
 
 export interface TelegramChannelOptions {
   /** Bot API root (default https://api.telegram.org; tests point it at the fake). */
@@ -73,6 +80,16 @@ const richRefused = (e: unknown) => {
   const mapped = toChannelSendError(e);
   return !mapped.retryable && (mapped.reason === "rejected" || mapped.reason === "too_large");
 };
+
+/**
+ * Telegram refused an image as a photo for the picture itself (dimensions, ratio, a file it cannot
+ * decode: `PHOTO_INVALID_DIMENSIONS`, `PHOTO_EXT_INVALID`, `IMAGE_PROCESS_FAILED`, ...): it may
+ * still go out as a document.
+ */
+const photoRefused = (e: unknown) =>
+  e instanceof TelegramApiError &&
+  (e.errorCode ?? e.status) === 400 &&
+  /PHOTO_|IMAGE_PROCESS_FAILED/.test(e.description ?? "");
 
 const notModified = (e: unknown) =>
   e instanceof TelegramApiError && /message is not modified/i.test(e.description ?? "");
@@ -211,9 +228,99 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
     return r.message_id;
   }
 
+  /**
+   * Where a message to `target` goes: in a group thread it replies to the thread root (in the
+   * recorded forum topic), and every sent message is recorded so a reply to it finds the thread.
+   */
+  async function threading(botId: string, target: ChannelTarget) {
+    const store = threadStore(o.kv, botId);
+    const threadId = target.chatType === "group" ? target.threadId : undefined;
+    const extra: { reply_parameters?: Record<string, unknown>; message_thread_id?: number } = {};
+    if (threadId !== undefined) {
+      extra.reply_parameters = {
+        message_id: parseMessageId(threadId).messageId,
+        allow_sending_without_reply: true,
+      };
+      const topic = await store.topicOf(threadId);
+      if (topic !== undefined) extra.message_thread_id = topic;
+    }
+    const record = async (sent: number) => {
+      if (threadId === undefined) return;
+      // The message is delivered: a failing record must not fail the send (the kernel would
+      // resend it). Only a later reply to this message loses its thread.
+      try {
+        await store.recordSent(target.chatId, sent, threadId);
+      } catch {
+        o.log.warn("telegram: could not record a sent message's thread", {
+          chatId: target.chatId,
+          messageId: sent,
+        });
+      }
+    };
+    return { extra, record };
+  }
+
+  /**
+   * One file as one message: an image as a photo, once more as a document when Telegram refuses
+   * the picture (never a file as a photo); a file as a document. No caption.
+   */
+  async function sendFile({ config, target, file, signal }: ChannelSendFileArgs) {
+    const { api, botId } = apiFor(config);
+    const { extra, record } = await threading(botId, target);
+    const fields: Record<string, string> = { chat_id: target.chatId };
+    if (extra.reply_parameters) fields.reply_parameters = JSON.stringify(extra.reply_parameters);
+    if (extra.message_thread_id !== undefined) {
+      fields.message_thread_id = String(extra.message_thread_id);
+    }
+    const upload = (method: "sendPhoto" | "sendDocument") =>
+      api.upload<{ message_id?: number } | undefined>(
+        method,
+        fields,
+        {
+          field: method === "sendPhoto" ? "photo" : "document",
+          name: file.name,
+          contentType: file.contentType,
+          data: file.data,
+        },
+        signal,
+      );
+    let r: { message_id?: number } | undefined;
+    try {
+      if (file.kind === "image") {
+        try {
+          r = await upload("sendPhoto");
+        } catch (e) {
+          if (!photoRefused(e)) throw e;
+          o.log.warn("telegram: Telegram refused an image as a photo; it is sent as a document", {
+            ...(e instanceof TelegramApiError && { error: e.description ?? e.message }),
+          });
+          r = await upload("sendDocument");
+        }
+      } else {
+        r = await upload("sendDocument");
+      }
+    } catch (e) {
+      throw toChannelSendError(e);
+    }
+    if (typeof r?.message_id !== "number") {
+      throw new ChannelSendError("Telegram returned no message id", {
+        retryable: false,
+        reason: "rejected",
+      });
+    }
+    await record(r.message_id);
+    return { messageId: `${target.chatId}:${r.message_id}` };
+  }
+
   return {
     connectionSchema: TelegramConnection,
-    features: { cards: true, edit: true, threads: true, minEditIntervalMs: MIN_EDIT_INTERVAL_MS },
+    features: {
+      cards: true,
+      edit: true,
+      threads: true,
+      minEditIntervalMs: MIN_EDIT_INTERVAL_MS,
+      files: { ...FILE_LIMITS },
+    },
 
     async verify({ config, signal }) {
       const { call } = apiFor(config, signal);
@@ -316,30 +423,7 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
       if (rich === undefined && posts.length === 0) {
         throw new ChannelSendError("nothing to send", { retryable: false });
       }
-      const store = threadStore(o.kv, botId);
-      const inThread = target.chatType === "group" && target.threadId !== undefined;
-      const extra: Record<string, unknown> = {};
-      if (inThread && target.threadId !== undefined) {
-        extra.reply_parameters = {
-          message_id: parseMessageId(target.threadId).messageId,
-          allow_sending_without_reply: true,
-        };
-        const topic = await store.topicOf(target.threadId);
-        if (topic !== undefined) extra.message_thread_id = topic;
-      }
-      const record = async (sent: number) => {
-        if (!inThread || target.threadId === undefined) return;
-        // The message is delivered: a failing record must not fail the send (the kernel would
-        // resend it). Only a later reply to this message loses its thread.
-        try {
-          await store.recordSent(target.chatId, sent, target.threadId);
-        } catch {
-          o.log.warn("telegram: could not record a sent message's thread", {
-            chatId: target.chatId,
-            messageId: sent,
-          });
-        }
-      };
+      const { extra, record } = await threading(botId, target);
       if (rich !== undefined) {
         const sent = await sendRich({ call }, target, rich, extra);
         if (sent !== undefined) {
@@ -355,6 +439,8 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
       }
       return { messageId: `${target.chatId}:${last}` };
     },
+
+    sendFile,
 
     async update({ config, messageId, message, locale, signal }) {
       const { call, botId } = apiFor(config, signal);

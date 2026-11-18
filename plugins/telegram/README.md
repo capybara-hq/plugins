@@ -4,8 +4,8 @@ The official Telegram plugin. It provides one capability:
 
 - `channel@1` (bot): talk to Capybara agents in a private chat with a Telegram bot, or by mentioning the bot in a group.
   Messages arrive by long polling (`getUpdates`, the default, no public URL needed) or by webhook (optional),
-  replies are sent with `sendMessage` and streamed by editing, and approval / question / connection / binding
-  cards are rendered as inline keyboards.
+  replies are sent with `sendMessage` and streamed by editing, approval / question / connection / binding
+  cards are rendered as inline keyboards, and files the agent produces are sent as photos or documents.
 
 It does not provide login (`identity-source@1`) or a directory (`directory@1`); see [Out of scope](#out-of-scope).
 
@@ -14,7 +14,7 @@ global (one person has the same id for every bot), so one person is one identity
 
 The Telegram docs cited here are the [Bot API reference](https://core.telegram.org/bots/api) (Bot API 10.3), consulted on 2026-11-08.
 
-Verified live on 2026-11-08 against a real bot: verify, send, edit, a 5000-character split send and a card with an inline callback keyboard, in a private chat and in a basic group. Verified live on 2026-11-10: a reply with a table sent as a rich message, and a plain draft edited into one and edited again, in a private chat (live test `rich table`; in Node, a slow IPv4 connect can lose to an unreachable IPv6 address: run it with `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=3000` if every call fails with a network error). Not covered live: a person clicking a card button, webhook mode and forum supergroups.
+Verified live on 2026-11-08 against a real bot: verify, send, edit, a 5000-character split send and a card with an inline callback keyboard, in a private chat and in a basic group. Verified live on 2026-11-10: a reply with a table sent as a rich message, and a plain draft edited into one and edited again, in a private chat (live test `rich table`; in Node, a slow IPv4 connect can lose to an unreachable IPv6 address: run it with `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=3000` if every call fails with a network error). Verified live on 2026-11-19: `sendFile` with a PNG as a photo and a text file as a document in a private chat (live test `sendFile`). Not covered live: a person clicking a card button, webhook mode and forum supergroups (files in a topic are covered only against the fake).
 
 ## Create the bot
 
@@ -105,6 +105,13 @@ The deployment-level config lives under the kernel config `extensionConfig.teleg
   and edits count; a 429 is honored through `retry_after`. "message is not modified" on an edit counts as success.
   [`sendMessageDraft`](https://core.telegram.org/bots/api#sendmessagedraft) and `sendRichMessageDraft` are not used: it exists only in private chats, is a 30-second preview that must be followed by a real
   `sendMessage`, and does not fit the kernel's send-then-edit model.
+- **Files** (`sendFile`, `features.files: { maxBytes: 50_000_000, imageMaxBytes: 10_000_000 }`, the Bot API's multipart limits
+  ([Sending files](https://core.telegram.org/bots/api#sending-files))): one message per file, no caption, into the same chat, thread
+  and forum topic as the text, and the sent message is recorded in the thread store like a text reply. An image (`kind: "image"`) goes
+  out with [`sendPhoto`](https://core.telegram.org/bots/api#sendphoto); when Telegram refuses the picture itself (a 400 with
+  `PHOTO_...` or `IMAGE_PROCESS_FAILED`, e.g. its dimension or ratio rules) the plugin sends it once more with
+  [`sendDocument`](https://core.telegram.org/bots/api#senddocument). Any other file is a document; a file is never sent as a photo.
+  An upload has its own timeout of 115 s. No bot permission or BotFather setting is needed.
 - **Idempotency**: the Bot API has no idempotent send, so `idempotencyKey` is ignored. A send whose response is lost and is retried can show the message twice; the alternative (never retrying) would lose messages.
 - **Permission manifest**: `network: ["api.telegram.org"]`, shown only and not enforced.
 
@@ -136,7 +143,7 @@ with button labels in the org's language. Link buttons are used only for http(s)
 | 401 Unauthorized | `auth` (not retryable) |
 | 403 (bot blocked, kicked, can't initiate conversation) | `target_gone` |
 | 400 chat not found, or the group migrated to a supergroup | `target_gone` |
-| 400 message too long | `too_large` |
+| 400 message too long, 413 Request Entity Too Large (an upload) | `too_large` |
 | other 400 | `rejected` |
 
 The Bot API puts the token in the URL path (`/bot<token>/<method>`), so error messages and logs carry only the method, Telegram's `error_code` and its short description, never the URL.
@@ -180,7 +187,7 @@ If the kernel then answers non-2xx and Telegram redelivers, the spinner has alre
 
 - **Login (`identity-source@1`)**: Telegram login gives no email and its widget does not fit the kernel's redirect / callback flow; binding through the bot already links a Telegram user to an account (maintainer decision).
 - **Directory (`directory@1`)**: the Bot API cannot list group members and Telegram has no organization concept (maintainer decision).
-- **Media**: attachments, voice, stickers, polls, inline mode, business accounts and broadcast channels are not handled; media without a caption sends no event.
+- **Media**: inbound attachments, voice, stickers, polls, albums (media groups), inline mode, business accounts and broadcast channels are not handled; media without a caption sends no event.
 - **Proxy**: no proxy support for networks where `api.telegram.org` is unreachable (maintainer decision); `apiUrl` can point at a reverse proxy you run.
 
 ## Icon

@@ -28,6 +28,16 @@ describe("toChannelSendError", () => {
       new TelegramApiError("sendMessage", { network: true, timeout: true }),
       { retryable: true },
     ],
+    [
+      "413 → too_large",
+      api(413, "Request Entity Too Large"),
+      { retryable: false, reason: "too_large" },
+    ],
+    [
+      "a proxy's bare HTTP 413 → too_large",
+      new TelegramApiError("sendDocument", { status: 413 }),
+      { retryable: false, reason: "too_large" },
+    ],
     ["401 → auth", api(401, "Unauthorized"), { retryable: false, reason: "auth" }],
     [
       "403 blocked → target_gone",

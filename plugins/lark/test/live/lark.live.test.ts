@@ -136,6 +136,43 @@ describe.skipIf(!READY)("Lark live", () => {
   });
 
   it.skipIf(!filled(CHAT_ID))(
+    "live: send an image and a file into the test chat",
+    async () => {
+      const target = { chatId: CHAT_ID as string, chatType: CHAT_TYPE } as const;
+      const png = Uint8Array.from(
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+          "base64",
+        ),
+      );
+      const image = await channel.sendFile?.({
+        config: creds(),
+        target,
+        file: { name: "live.png", contentType: "image/png", kind: "image", data: png },
+        signal: timeout(60_000),
+        locale: "en",
+        idempotencyKey: `live-img-${Date.now()}`,
+      });
+      expect(image?.messageId).toMatch(/^om_/);
+      const file = await channel.sendFile?.({
+        config: creds(),
+        target,
+        file: {
+          name: `live-${Date.now()}.txt`,
+          contentType: "text/plain",
+          kind: "file",
+          data: new TextEncoder().encode(`Capybara live file ${stamp}\n`),
+        },
+        signal: timeout(60_000),
+        locale: "en",
+        idempotencyKey: `live-file-${Date.now()}`,
+      });
+      expect(file?.messageId).toMatch(/^om_/);
+    },
+    150_000,
+  );
+
+  it.skipIf(!filled(CHAT_ID))(
     "live: send, update, and render an approval card in the test chat",
     async () => {
       const target = { chatId: CHAT_ID as string, chatType: CHAT_TYPE } as const;

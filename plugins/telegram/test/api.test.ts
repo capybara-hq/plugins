@@ -106,6 +106,72 @@ describe("telegramApi", () => {
   });
 });
 
+describe("telegramApi.upload", () => {
+  const file = {
+    field: "document",
+    name: "a b.txt",
+    contentType: "text/plain",
+    data: new TextEncoder().encode("hello"),
+  };
+
+  it("POSTs the fields and the file as multipart and returns the result", async () => {
+    const api = telegramApi({ apiUrl: fake.apiUrl, token: fake.bot.token });
+    const r = await api.upload<{ message_id: number }>(
+      "sendDocument",
+      { chat_id: "42", reply_parameters: JSON.stringify({ message_id: 3 }) },
+      file,
+    );
+    expect(r.message_id).toBe(fake.messages[0]?.messageId);
+    expect(fake.messages[0]).toMatchObject({
+      chatId: 42,
+      replyToMessageId: 3,
+      file: { kind: "document", name: "a b.txt", contentType: "text/plain" },
+    });
+    expect(fake.messages[0]?.file?.data.toString()).toBe("hello");
+  });
+
+  it("an error envelope throws with the method and description, never the token", async () => {
+    fake.failNext("sendDocument", { status: 413, description: "Request Entity Too Large" });
+    const api = telegramApi({ apiUrl: fake.apiUrl, token: fake.bot.token });
+    const e = await caught(api.upload("sendDocument", { chat_id: "42" }, file));
+    expect(e).toMatchObject({ method: "sendDocument", status: 413, errorCode: 413 });
+    expect(e.message).toBe("Telegram sendDocument failed: 413 Request Entity Too Large");
+    expect(toChannelSendError(e)).toMatchObject({ retryable: false, reason: "too_large" });
+    expect(printed(e)).not.toContain(fake.bot.token);
+  });
+
+  it("a refused connection throws a network error without the token, URL or a cause", async () => {
+    const { apiUrl } = fake;
+    const token = fake.bot.token;
+    await fake.close();
+    const api = telegramApi({ apiUrl, token });
+    const e = await caught(api.upload("sendPhoto", { chat_id: "42" }, file));
+    expect(e).toMatchObject({ method: "sendPhoto", network: true });
+    expect(e.message).toBe("Telegram sendPhoto failed: network error");
+    expect(e.cause).toBeUndefined();
+    expect(printed(e)).not.toContain(token);
+    expect(printed(e)).not.toContain(apiUrl);
+    fake = await startFakeTelegram(); // afterEach closes it
+  });
+
+  it("uploads have their own timeout, longer than a call's", async () => {
+    fake.delay("sendDocument", 300);
+    const api = telegramApi({
+      apiUrl: fake.apiUrl,
+      token: fake.bot.token,
+      timeoutMs: 100,
+      uploadTimeoutMs: 5_000,
+    });
+    await api.upload("sendDocument", { chat_id: "42" }, file);
+    expect(fake.messages).toHaveLength(1);
+    const short = telegramApi({ apiUrl: fake.apiUrl, token: fake.bot.token, uploadTimeoutMs: 100 });
+    const e = await caught(short.upload("sendDocument", { chat_id: "42" }, file));
+    expect(e.message).toBe("Telegram sendDocument failed: timeout");
+    expect(printed(e)).not.toContain(fake.bot.token);
+    fake.delay("sendDocument", 0);
+  });
+});
+
 /** A raw server whose handler controls exactly what is written (the fake always answers whole). */
 async function rawServer(handle: (res: ServerResponse) => void) {
   let headersSent!: () => void;

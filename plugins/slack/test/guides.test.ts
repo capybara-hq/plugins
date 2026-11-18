@@ -142,6 +142,13 @@ describe("guides/slack-app.md", () => {
     );
   });
 
+  it("both manifests (en and zh) ask for files:write (conversation files)", () => {
+    for (const locale of ["en", "zh"] as const) {
+      expect(doc("slack-app", locale)).toContain("- files:write # upload conversation files");
+    }
+    expect(REQUIRED_BOT_SCOPES).toContain("files:write");
+  });
+
   for (const mode of ["long_connection", "webhook"] as const) {
     it(`${mode}: renders to a manifest with the plugin's scopes, events and commands`, () => {
       const m = appManifest(mode);

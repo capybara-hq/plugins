@@ -34,6 +34,7 @@ The long connection **supports only enterprise self-built apps** (not store apps
    | `im:message.p2p_msg:readonly` (读取用户发给机器人的单聊消息; read DMs sent to the bot) | Receive DM messages |
    | `im:message.group_at_msg:readonly` (接收群聊中@机器人消息事件; receive events for messages that @-mention the bot in group chats) | Receive messages that @-mention the bot in groups |
    | `im:message:send_as_bot` (以应用的身份发消息; send messages as the app) | Send and reply to messages, update cards |
+   | `im:resource` (获取与上传图片或文件资源; read and upload images or files; `im:resource:upload`, 上传文件V2, also works) | Send files and images the agent produced as native attachments; without it those files are sent as links |
    | `tenant:tenant:readonly` (获取企业信息; get enterprise info) | Read `tenant_key` (the tenant) when validating the connection |
    | `contact:user.base:readonly` (获取用户基本信息; get basic user info) | The speaker's display name and avatar; people-change events |
 
@@ -95,6 +96,7 @@ only one replica hold one long connection per channel connection at any moment; 
   and after 5 in a row, or when the endpoint explicitly refuses (such as exceeding the connection limit), it reports an error; the kernel records `last_error` and backs off.
 - **Profile**: the display name / avatar come from [Get a single user's info](https://open.larksuite.com/document/uAjLw4CM/ukTMukTMukTM/reference/contact-v3/user/get)
   (cached per process for 10 minutes, at most 1000 people, 1 second timeout; if the lookup fails it is left out).
+- **Files** (`sendFile`): an image (up to 10 MB) is uploaded with `POST /im/v1/images` and sent as an `image` message; any other file (up to 30 MB) with `POST /im/v1/files` and sent as a `file` message (`file_type` from the extension: `pdf`, `doc`/`docx` → `doc`, `xls`/`xlsx` → `xls`, `ppt`/`pptx` → `ppt`, `mp4`, `opus`, else `stream`). It goes into the thread like text, and the idempotency key is the message `uuid`. A missing upload permission (`99991672`) is reported as `rejected`, not `auth`, so only that file falls back to a link; `234006` → `too_large`.
 - **Error mapping**: rate limits (429 / `99991400` / `230020`), 5xx and network errors → retryable; token / permission / app disabled (such as
   `99991663`, `99991672`, `10014`, `230006`, `230027`) → `auth`; bot not in the group, group dissolved, user unreachable (`230002`,
   `232009`, `230013`, `230053`…) → `target_gone`; `230025` → `too_large`; others → `rejected`. Error messages carry only the error code.
