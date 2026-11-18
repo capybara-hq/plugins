@@ -235,13 +235,13 @@ default 900 seconds, Ruling M20); to run long commands, raise `runtime.maxRunSec
 ## Permission profiles (operation contract)
 
 The provider implements the permission operation contract of `sandbox@2` (plugin SDK
-0.1.0-rc.28): `permissionSupport`, a fresh immutable `operation` per invocation, owner `browse`,
+0.1.0-rc.31): `permissionSupport`, a fresh immutable `operation` per invocation, owner `browse`,
 trusted `prepare` (skills and attachments), `revokeOperation` and exact `background` supervision
 (`start`, `status`, `tail`, `readOutput`, `stop`). It changes nothing about the device: one VM, its
 OS user, files, installed environment and network stay shared, no conversation grant updates the
 VM's network, and no other VM is ever made from copied files.
 
-**Restricted profiles are unavailable on the tested template.** The SDK's restricted launcher
+**Full access only (known limitation, accepted by the maintainers).** The SDK's restricted launcher
 needs Landlock ABI 6 (and per-task child lists, a seccomp listener and pidfds). The tested
 template (`capybara-sandbox-0-1-0-rc-13`, E2B cloud, 2026-11-17) runs Linux `6.1.189+` x86_64
 with LSMs `capability,landlock` and **Landlock ABI 2**; child lists exist, the seccomp user
@@ -261,7 +261,9 @@ adds no namespace launcher (no new privileges, no relaxed hardening). So:
   access.
 - Full access runs the provider's ordinary exec wrapper (the existing OS user, environment and VM
   network, no restricted syscall, socket or daemonization filter) behind an admission check, and
-  native file calls through the SDK native helper on `/` as the device user.
+  native file calls through the SDK native helper on `/` as the device user. The restricted
+  domain's mandatory write denies (SDK 0.1.0-rc.31: shell startup, git internals, hook managers,
+  `.envrc`, `.npmrc`, ...) therefore never apply on E2B; they arrive with the restricted path.
 
 **Runtime staging.** Templates built before the runtime existed have none, so the provider stages
 it in the VM itself on first use: the SDK's `native-files.py` and `linux-sandbox.py` (unchanged

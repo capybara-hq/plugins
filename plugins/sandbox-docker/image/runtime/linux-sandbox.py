@@ -1,5 +1,34 @@
 import ctypes
+import sys
+
+
+def protect_self():
+    """Makes this process (launcher, supervisor and broker thread) non-dumpable, first thing.
+
+    execve resets dumpability, and without Yama a same-uid process (another session's Full work)
+    could otherwise ptrace the launcher or open its /proc/<pid>/mem, environ and fd. Non-dumpable,
+    those need CAP_SYS_PTRACE; fork inherits it, so the pre-exec child is covered until its own
+    execve. Only a tracer still attached at this point is detected (and refused); see the
+    documented exec-to-prctl window below for what is not.
+    """
+    if not sys.platform.startswith("linux"):
+        return None
+    if ctypes.CDLL(None, use_errno=True).prctl(4, 0, 0, 0, 0) != 0:  # PR_SET_DUMPABLE 0
+        return "The launcher could not make itself non-dumpable"
+    try:
+        with open("/proc/self/status") as handle:
+            for line in handle:
+                if line.startswith("TracerPid:") and int(line.split()[1]) != 0:
+                    return "The launcher was traced before it became non-dumpable"
+    except (OSError, ValueError):
+        return "The launcher could not confirm that it is not traced"
+    return None
+
+
+SELF_PROTECTION = protect_self()
+
 import errno
+import importlib.machinery
 import importlib.util
 import ipaddress
 import json
@@ -37,6 +66,20 @@ import time
 # - UNIX sockets in every network kind: stream/seqpacket only (datagram and raw are refused);
 #   pathname connect/bind only to sockets inside the write roots, resolved through the pinned
 #   descriptors; abstract and unnamed addresses are refused. socketpair() is unaffected.
+# - The launcher makes itself non-dumpable before anything else (protect_self), so a same-uid
+#   process outside the operation cannot ptrace it or read its mem, environ or fd afterwards.
+#   The window between the interpreter's exec and that first statement remains: only a tracer
+#   still attached when protect_self runs is detected (the launcher then refuses). Anything done
+#   or opened in the window is not detected: a /proc/<pid>/mem descriptor (read or write) keeps
+#   working, and writes through it, process_vm_writev or pidfd_getfd made then leave no trace.
+#   Closing the window needs a separate uid for Full work, or a non-dumpable zygote that the
+#   consumer starts once and that forks a fresh launcher per operation (no exec in between).
+# - The restricted command and the native helper are dumpable again after their own execve: the
+#   broker must read the command's memory. Their memory and /proc/<pid>/environ stay readable,
+#   and they stay ptraceable, by same-uid Full work on the device; consumers must not pass
+#   per-session secrets through the command's environment or arguments. A consumer that signals
+#   or inspects a launcher uses the pid and start time it recorded (the "session" event, its own
+#   child), never a process found by an environment marker, which any same-uid process can copy.
 # - The launcher creates one closed session (setsid is denied inside it) and reports it in a
 #   "session" event; if the supervisor is lost, the consumer runs "reap" with that event to end
 #   every owned process. Brokered calls fail (ENOSYS) once the broker is gone.
@@ -67,6 +110,8 @@ ARCHES = {
             "socket": 198, "socketpair": 199, "bind": 200, "listen": 201, "connect": 203, "sendto": 206,
             "sendmsg": 211, "add_key": 217, "request_key": 218, "keyctl": 219, "clone": 220,
             "setns": 268, "sendmmsg": 269, "userfaultfd": 282,
+            "mknodat": 33, "mkdirat": 34, "unlinkat": 35, "symlinkat": 36, "linkat": 37,
+            "renameat": 38, "truncate": 45, "openat": 56, "renameat2": 276,
         },
     },
     "x86_64": {
@@ -81,11 +126,15 @@ ARCHES = {
             "fremovexattr": 199, "utimes": 235, "add_key": 248, "request_key": 249,
             "keyctl": 250, "fchownat": 260, "futimesat": 261, "fchmodat": 268, "unshare": 272,
             "utimensat": 280, "sendmmsg": 307, "setns": 308, "userfaultfd": 323,
+            "open": 2, "truncate": 76, "rename": 82, "mkdir": 83, "rmdir": 84, "creat": 85,
+            "link": 86, "unlink": 87, "symlink": 88, "mknod": 133, "openat": 257, "mkdirat": 258,
+            "mknodat": 259, "unlinkat": 263, "renameat": 264, "linkat": 265, "symlinkat": 266,
+            "renameat2": 316,
         },
     },
 }
 COMMON = {"io_uring_setup": 425, "io_uring_enter": 426, "io_uring_register": 427,
-          "clone3": 435, "fchmodat2": 452, "setxattrat": 463, "removexattrat": 466,
+          "clone3": 435, "openat2": 437, "fchmodat2": 452, "setxattrat": 463, "removexattrat": 466,
           "file_setattr": 469}
 NR_CLOSE_RANGE = 436
 # CLONE_NEWNS | NEWCGROUP | NEWUTS | NEWIPC | NEWUSER | NEWPID | NEWNET | NEWTIME
@@ -109,6 +158,99 @@ DEFAULT_SYSTEM_ROOTS = ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/pro
 DEVICE_FILES = ("/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty")
 
 RET_ALLOW, RET_NOTIFY, RET_KILL = 0x7FFF0000, 0x7FC00000, 0x80000000
+# O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | __O_TMPFILE (generic values on both architectures)
+WRITE_OPEN_FLAGS = 0o20001103
+O_TMPFILE_BIT = 0o20000000
+AT_REMOVEDIR, AT_SYMLINK_FOLLOW = 0x200, 0x400
+RENAME_NOREPLACE, RENAME_EXCHANGE = 1, 2
+FILE_OPS = ("open", "openat", "creat", "mkdir", "mkdirat", "mknod", "mknodat", "rmdir", "unlink",
+            "unlinkat", "symlink", "symlinkat", "link", "linkat", "rename", "renameat",
+            "renameat2", "truncate")
+STD_STREAMS = {"/dev/stdin": 0, "/dev/stdout": 1, "/dev/stderr": 2}
+
+
+# The write policy shared with every consumer (sandbox-write-denies.ts): write_denied(path) and
+# move_denied(source, destination, is_dir).
+
+import unicodedata as _unicodedata
+WRITE_DENIES = [[_unicodedata.normalize("NFKC", n).casefold() for n in e] for e in [[".gitconfig"],[".gitmodules"],[".bashrc"],[".bash_profile"],[".zshrc"],[".zprofile"],[".profile"],[".ripgreprc"],[".mcp.json"],[".envrc"],[".npmrc"],[".vscode"],[".idea"],[".claude","commands"],[".claude","agents"],[".husky"],[".huskyrc"],[".huskyrc.json"],[".huskyrc.js"],["husky.config.js"],[".pre-commit-config.yaml"],[".pre-commit-config.yml"],["lefthook.yml"],["lefthook.yaml"],["lefthook.json"],["lefthook.toml"],[".lefthook.yml"],[".lefthook.yaml"],[".lefthook.json"],[".lefthook.toml"],["lefthook-local.yml"],["lefthook-local.yaml"],["lefthook-local.json"],["lefthook-local.toml"],[".lefthook-local.yml"],[".lefthook-local.yaml"],[".lefthook-local.json"],[".lefthook-local.toml"],[".lefthook"],[".lefthook-local"],[".config","lefthook.yml"],[".config","lefthook.yaml"],[".config","lefthook.json"],[".config","lefthook.toml"],[".overcommit.yml"],[".simple-git-hooks.json"],[".simple-git-hooks.js"],[".simple-git-hooks.cjs"],["simple-git-hooks.json"],["simple-git-hooks.js"],["simple-git-hooks.cjs"],[".githooks"]]]
+GIT_ALLOWED_DIRECTORIES = set(["objects","refs","logs","rebase-merge","rebase-apply","sequencer"])
+GIT_ALLOWED_FILES = set(["index","head","orig_head","fetch_head","merge_head","merge_msg","merge_mode","merge_rr","auto_merge","cherry_pick_head","revert_head","rebase_head","bisect_log","bisect_start","bisect_expected_rev","bisect_ancestors_ok","bisect_names","bisect_terms","packed-refs","packed-refs.new","merge_autostash","commit_editmsg","tag_editmsg","squash_msg","shallow","description","gc.pid","gc.log","info","modules","worktrees"])
+GIT_DANGER = set(["config","config.worktree","commondir","gitdir","hooks","info"])
+PROTECTED_PATH_NAMES = set([".git",".gitconfig",".gitmodules",".bashrc",".bash_profile",".zshrc",".zprofile",".profile",".ripgreprc",".mcp.json",".envrc",".npmrc",".vscode",".idea",".claude",".husky",".huskyrc",".huskyrc.json",".huskyrc.js","husky.config.js",".pre-commit-config.yaml",".pre-commit-config.yml","lefthook.yml","lefthook.yaml","lefthook.json","lefthook.toml",".lefthook.yml",".lefthook.yaml",".lefthook.json",".lefthook.toml","lefthook-local.yml","lefthook-local.yaml","lefthook-local.json","lefthook-local.toml",".lefthook-local.yml",".lefthook-local.yaml",".lefthook-local.json",".lefthook-local.toml",".lefthook",".lefthook-local",".config",".overcommit.yml",".simple-git-hooks.json",".simple-git-hooks.js",".simple-git-hooks.cjs","simple-git-hooks.json","simple-git-hooks.js","simple-git-hooks.cjs",".githooks"])
+
+
+def _fold_parts(path):
+    return [_unicodedata.normalize("NFKC", p).casefold() for p in path.split("/") if p]
+
+
+def _holds_head(head, prefix):
+    if head == "logs":
+        return not prefix or (len(prefix) == 3 and prefix[0] == "refs" and prefix[1] == "remotes")
+    if head == "refs":
+        return len(prefix) == 2 and prefix[0] == "remotes"
+    return head == "sequencer" and not prefix
+
+
+def _subtree_allowed(head, rest):
+    for k, name in enumerate(rest):
+        if name == ".git":
+            return False
+        if name == "head" and not (k == len(rest) - 1 and _holds_head(head, rest[:k])):
+            return False
+        if name in ("objects", "commondir", "gitdir") and _holds_head(head, rest[:k]):
+            return False
+    return True
+
+
+def _git_internal_allowed(rel):
+    if not rel:
+        return True
+    head = rel[0]
+    if head in GIT_ALLOWED_DIRECTORIES:
+        return _subtree_allowed(head, rel[1:])
+    if head in ("modules", "worktrees") and len(rel) > 1:
+        rest = rel[1:]
+        if head == "worktrees":
+            return _git_internal_allowed(rest[1:])
+        readings = [rest[k + 1:] for k in range(len(rest))]
+        if any(r and r[0] in GIT_DANGER and not _git_internal_allowed(r) for r in readings):
+            return False
+        return any(r and _git_internal_allowed(r) for r in readings)
+    if len(rel) == 1:
+        base = head[:-5] if head.endswith(".lock") else head
+        stash = base.startswith("index.stash.") and base[12:].isascii() and base[12:].isdigit()
+        return base in GIT_ALLOWED_FILES or stash
+    return head == "info" and len(rel) == 2 and rel[1] in ("exclude", "exclude.lock")
+
+
+def write_denied(path):
+    names = _fold_parts(path)
+    for entry in WRITE_DENIES:
+        for i in range(len(names) - len(entry) + 1):
+            if names[i:i + len(entry)] == entry:
+                return True
+    if ".git" in names:
+        return not _git_internal_allowed(names[names.index(".git") + 1:])
+    return bool(names) and names[-1] == "head"
+
+
+def move_denied(source, destination, is_dir):
+    src, dst = _fold_parts(source), _fold_parts(destination)
+
+    def protected_at(names):
+        return next((k for k, n in enumerate(names) if n in PROTECTED_PATH_NAMES), -1)
+
+    def same_prefix(n):
+        return n >= 0 and len(dst) > n + 1 and dst[:n + 1] == src[:n + 1]
+    i = protected_at(src)
+    if i >= 0 and not same_prefix(i):
+        return True
+    j = protected_at(dst)
+    if is_dir and j >= 0 and not (i == j and same_prefix(j)):
+        return True
+    return (not is_dir) and bool(dst) and dst[-1] == ".git"
+
 def RET_ERRNO(code):
     return 0x00050000 | code
 
@@ -155,9 +297,20 @@ def ioctl(fd, request, buffer):
         raise OSError(code, os.strerror(code))
 
 
-def load_native():
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "native-files.py")
-    spec = importlib.util.spec_from_file_location("capybara_native_files", path)
+def load_native(fd=None):
+    """The native helper beside this file, or (exec mode) from a sealed descriptor the consumer
+    verified, so the bytes it checked are the bytes that run."""
+    if fd is not None:
+        if type(fd) is not int or fd < 3:
+            raise Refused("INVALID_REQUEST", "Supply an inherited native helper descriptor")
+        os.set_inheritable(fd, False)
+        path = "/proc/self/fd/%d" % fd
+    else:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "native-files.py")
+    # an explicit source loader: a descriptor path has no .py suffix to infer one from
+    spec = importlib.util.spec_from_loader(
+        "capybara_native_files",
+        importlib.machinery.SourceFileLoader("capybara_native_files", path))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module, path
@@ -258,10 +411,22 @@ def build_filter(table, network_mediated, brokered):
                  "lremovexattr", "fremovexattr", "connect", "listen"):
         if name in nr:
             simple[nr[name]] = notify
-    if network_mediated:
+    if network_mediated or brokered:
+        # a pathname UNIX bind creates a file: the broker makes it (and checks the denies)
         simple[nr["bind"]] = notify
+    if brokered:
+        # Every filesystem write goes through the broker (Landlock grants the command read
+        # access to its write roots only, so anything left unmediated fails closed).
+        for name in FILE_OPS:
+            if name in nr and name not in ("open", "openat"):
+                simple[nr[name]] = RET_NOTIFY
+        simple[nr["openat2"]] = RET_ERRNO(errno.ENOSYS)  # its flags sit behind a pointer
     for number in simple:
         p.jeq(number, "r%d" % number)
+    if brokered:
+        p.jeq(nr["openat"], "openat")
+        if "open" in nr:
+            p.jeq(nr["open"], "open")
     p.jeq(nr["ioctl"], "ioctl")
     p.jeq(nr["socket"], "socket")
     p.jeq(nr["socketpair"], "socketpair")
@@ -277,6 +442,18 @@ def build_filter(table, network_mediated, brokered):
         p.ret(action)
     p.label("enosys")
     p.ret(RET_ERRNO(errno.ENOSYS))
+    if brokered:
+        p.label("openat")
+        p.ld_arg(2)
+        p.jset(WRITE_OPEN_FLAGS, "notify")
+        p.ret(RET_ALLOW)
+        if "open" in nr:
+            p.label("open")
+            p.ld_arg(1)
+            p.jset(WRITE_OPEN_FLAGS, "notify")
+            p.ret(RET_ALLOW)
+        p.label("notify")
+        p.ret(RET_NOTIFY)
     p.label("ioctl")
     p.ld_arg(1)
     for request in DENIED_IOCTLS:
@@ -374,7 +551,7 @@ def verify_roots(native, request):
     return result, seen
 
 
-def landlock_ruleset(roots, system_roots, network_mediated):
+def landlock_ruleset(roots, system_roots, network_mediated, brokered_writes=False):
     attr = struct.pack("QQQ", FS_ALL, NET_MEDIATED if network_mediated else 0, SCOPE_ALL)
     attr_buffer = ctypes.create_string_buffer(attr, len(attr))
     ruleset = syscall(NR_LANDLOCK_CREATE, attr_buffer, len(attr), 0)
@@ -388,7 +565,8 @@ def landlock_ruleset(roots, system_roots, network_mediated):
     for root in roots["read"]:
         rule(root["fd"], FS_READ)
     for root in roots["write"]:
-        rule(root["fd"], FS_ALL)
+        # Brokered: the command reads its write roots; the broker performs every write.
+        rule(root["fd"], FS_READ if brokered_writes else FS_ALL)
     opened = []
     try:
         for path in system_roots:
@@ -457,6 +635,8 @@ class Broker:
         self.sockets = {}
         self.lock = threading.Lock()
         self.counts = {}
+        # Creation modes are the command's (its umask is applied explicitly), never the broker's.
+        os.umask(0)
 
     # Target memory and descriptors are opened first and then checked with ID_VALID, so a
     # recycled PID can never be read in place of the notifying task.
@@ -508,7 +688,24 @@ class Broker:
         value = os.readlink("/proc/%d/%s" % (pid, name))
         if not self.valid(ident):
             raise OSError(errno.ESRCH, "Target exited")
-        return value
+        return self.rebase(value)
+
+    def rebase(self, path):
+        """A location the kernel reports (a cwd, a descriptor) in terms of the pinned roots'
+        recorded paths: a root renamed during the operation keeps its grant, as in Landlock,
+        and resolution continues from its pinned descriptor."""
+        if not path.startswith("/"):
+            return path
+        best = None
+        for root in self.files.roots["read"] + self.files.roots["write"]:
+            try:
+                now = os.readlink("/proc/self/fd/%d" % root["fd"])
+            except OSError:
+                continue
+            if now == path or path.startswith(now.rstrip("/") + "/"):
+                if best is None or len(now) > best[0]:
+                    best = (len(now), root["path"].rstrip("/") + path[len(now.rstrip("/")):])
+        return best[1] if best else path
 
     # Every mutation is applied to an O_PATH descriptor resolved from the pinned write roots by
     # the native helper's own no-follow traversal, never to a string the target can change.
@@ -540,7 +737,7 @@ class Broker:
             os.close(parent)
 
     def in_scope(self, obj):
-        where = os.readlink("/proc/self/fd/%d" % obj)
+        where = self.rebase(os.readlink("/proc/self/fd/%d" % obj))
         if not where.startswith("/") or where.endswith(" (deleted)"):
             raise Denied()
         candidate = self.resolve(where, False)
@@ -552,6 +749,17 @@ class Broker:
             raise Denied()
 
     def object(self, pid, ident, mem, dirfd, address, flags, follow_default=True):
+        """The O_PATH object a metadata change applies to; a mandatory write deny is refused."""
+        obj = self.object_unchecked(pid, ident, mem, dirfd, address, flags, follow_default)
+        try:
+            if write_denied(self.rebase(os.readlink("/proc/self/fd/%d" % obj))):
+                raise Denied()
+        except BaseException:
+            os.close(obj)
+            raise
+        return obj
+
+    def object_unchecked(self, pid, ident, mem, dirfd, address, flags, follow_default=True):
         dirfd = ctypes.c_int32(dirfd & 0xFFFFFFFF).value
         follow = follow_default and not (flags & AT_SYMLINK_NOFOLLOW)
         path = None if address == 0 else os.fsdecode(self.string(mem, address))
@@ -600,6 +808,8 @@ class Broker:
             if name == "listen":
                 return self.listen(ident, pid, args)
             mem = self.memory(pid, ident)
+            if name in FILE_OPS:
+                return self.file_op(ident, pid, mem, name, args)
             if name == "connect":
                 return self.connect(ident, pid, mem, args)
             if name == "bind":
@@ -692,6 +902,312 @@ class Broker:
             return 0, 0
         return None, errno.ENOSYS
 
+    # ---- brokered filesystem writes ---------------------------------------------------------
+    # The command's path is copied once; every step after that works on the broker's own
+    # descriptors (pinned roots, no-follow traversal) and the deny check applies to the broker's
+    # resolution, so nothing the command changes afterwards can redirect a write.
+
+    def umask_of(self, pid, ident):
+        with open("/proc/%d/status" % pid) as handle:
+            text = handle.read()
+        if not self.valid(ident):
+            raise OSError(errno.ESRCH, "Target exited")
+        for line in text.splitlines():
+            if line.startswith("Umask:"):
+                return int(line.split()[1], 8)
+        return 0o022
+
+    def path_arg(self, pid, ident, mem, dirfd, address):
+        dirfd = ctypes.c_int32(dirfd & 0xFFFFFFFF).value
+        path = os.fsdecode(self.string(mem, address))
+        if path == "":
+            raise OSError(errno.ENOENT, "Empty path")
+        if not path.startswith("/"):
+            if dirfd == AT_FDCWD:
+                base = self.target_link(pid, ident, "cwd")
+            elif dirfd >= 0:
+                base = self.target_link(pid, ident, "fd/%d" % dirfd)
+            else:
+                raise OSError(errno.EBADF, "Bad descriptor")
+            if not base.startswith("/") or base.endswith(" (deleted)"):
+                raise Denied()
+            path = base.rstrip("/") + "/" + path
+        return path
+
+    def entry(self, path):
+        """(parent descriptor, final name, resolved path) of path's last component, unfollowed.
+        The parent is resolved inside the pinned write roots, following in-scope links."""
+        path = os.path.normpath(path)
+        head, name = os.path.split(path)
+        if not name or name in (".", ".."):
+            raise OSError(errno.EBUSY, "Not an entry")
+        try:
+            dparent, dname, resolved, _ = self.files.resolve(head, True, False, 0, True)
+            try:
+                parent = os.open(dname, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                                 | os.O_CLOEXEC, dir_fd=dparent)
+            finally:
+                os.close(dparent)
+        except (self.native.ScopeDenied, ValueError):
+            raise Denied()
+        return parent, name, resolved.rstrip("/") + "/" + name
+
+    def followed(self, path):
+        """entry() after following final in-scope links (a dangling one names its target)."""
+        parent, name, resolved = self.entry(path)
+        for _ in range(40):
+            try:
+                info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                return parent, name, resolved
+            if not stat.S_ISLNK(info.st_mode):
+                return parent, name, resolved
+            target = os.readlink(name, dir_fd=parent)
+            os.close(parent)
+            parent, name, resolved = self.entry(
+                os.path.join(os.path.dirname(resolved), target))
+        os.close(parent)
+        raise OSError(errno.ELOOP, "Too many links")
+
+    @staticmethod
+    def refuse(resolved, name, creates_entry=False):
+        if write_denied(resolved):
+            raise Denied()
+        # a non-directory named .git is a gitdir pointer to configuration written elsewhere
+        if creates_entry and _fold_parts(name) == [".git"]:
+            raise Denied()
+
+    def send_fd(self, ident, fd, cloexec):
+        data = struct.pack("QIIII", ident, ADDFD_SEND, fd, 0, os.O_CLOEXEC if cloexec else 0)
+        buffer = ctypes.create_string_buffer(data, len(data))
+        if libc.ioctl(self.listener, NOTIF_ADDFD, buffer) < 0:
+            return None, ctypes.get_errno()
+        return "sent", 0
+
+    def special_open(self, ident, pid, path, flags):
+        """Device files and the command's own descriptors outside the roots, or None."""
+        reopen = flags & ~(os.O_CREAT | os.O_EXCL | O_TMPFILE_BIT) | os.O_CLOEXEC
+        if path == "/dev/tty":
+            raise OSError(errno.ENXIO, "No controlling terminal")
+        if path in DEVICE_FILES:
+            fd = os.open(path, reopen | os.O_NOFOLLOW)
+            if not stat.S_ISCHR(os.fstat(fd).st_mode):
+                os.close(fd)
+                raise Denied()
+            return fd
+        number = STD_STREAMS.get(path)
+        parts = path.split("/")
+        if number is None and len(parts) == 4 and parts[1] == "dev" and parts[2] == "fd":
+            number = parts[3]
+        elif (number is None and len(parts) == 5 and parts[1] == "proc" and parts[3] == "fd"
+              and (parts[2] in ("self", "thread-self") or parts[2] == str(pid))):
+            number = parts[4]
+        if number is None:
+            return None
+        if not str(number).isdigit():
+            raise OSError(errno.ENOENT, "No such descriptor")
+        obj = os.open("/proc/%d/fd/%d" % (pid, int(number)), os.O_PATH | os.O_CLOEXEC)
+        try:
+            if not self.valid(ident):
+                raise OSError(errno.ESRCH, "Target exited")
+            mode = os.fstat(obj).st_mode
+            if stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode) or stat.S_ISCHR(mode):
+                # The command's own pipe or terminal: reopening it widens nothing.
+                return os.open("/proc/self/fd/%d" % obj, reopen)
+            where = self.rebase(os.readlink("/proc/self/fd/%d" % obj))
+        finally:
+            os.close(obj)
+        return where  # a file: resolved like any other path
+
+    def open_entry(self, ident, parent, final, flags, mode):
+        """Opens the resolved entry. A FIFO is opened without blocking this broker thread on a
+        peer that may never come: it is retried while the notifying call is still waiting."""
+        flags |= os.O_NOFOLLOW | os.O_CLOEXEC
+        try:
+            info = os.stat(final, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            info = None
+        if info is None or not stat.S_ISFIFO(info.st_mode) or flags & os.O_NONBLOCK:
+            return os.open(final, flags, mode, dir_fd=parent)
+        while True:
+            try:
+                fd = os.open(final, flags | os.O_NONBLOCK, mode, dir_fd=parent)
+            except OSError as error:
+                if error.errno != errno.ENXIO:
+                    raise
+                if not self.valid(ident):
+                    raise OSError(errno.EINTR, "The call was abandoned")
+                time.sleep(0.05)
+                continue
+            os.set_blocking(fd, True)
+            return fd
+
+    def file_op(self, ident, pid, mem, name, args):
+        if name in ("open", "openat", "creat"):
+            if name == "open":
+                dirfd, address, flags, mode = AT_FDCWD, args[0], args[1], args[2]
+            elif name == "openat":
+                dirfd, address, flags, mode = args[0], args[1], args[2], args[3]
+            else:
+                dirfd, address, mode = AT_FDCWD, args[0], args[1]
+                flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC
+            flags &= 0xFFFFFFFF
+            path = self.path_arg(pid, ident, mem, dirfd, address)
+            special = self.special_open(ident, pid, os.path.normpath(path), flags)
+            if isinstance(special, int):
+                try:
+                    return self.send_fd(ident, special, flags & os.O_CLOEXEC)
+                finally:
+                    os.close(special)
+            if isinstance(special, str):
+                path = special
+            umask = self.umask_of(pid, ident)
+            exclusive = flags & os.O_CREAT and flags & os.O_EXCL
+            if flags & O_TMPFILE_BIT or exclusive or flags & os.O_NOFOLLOW:
+                parent, final, resolved = self.entry(path)
+            else:
+                parent, final, resolved = self.followed(path)
+            try:
+                self.refuse(resolved, final, not flags & O_TMPFILE_BIT)
+                fd = self.open_entry(ident, parent, final, flags, mode & 0o7777 & ~umask)
+            finally:
+                os.close(parent)
+            try:
+                return self.send_fd(ident, fd, flags & os.O_CLOEXEC)
+            finally:
+                os.close(fd)
+        if name in ("mkdir", "mkdirat", "mknod", "mknodat"):
+            if name in ("mkdir", "mknod"):
+                dirfd, address, rest = AT_FDCWD, args[0], args[1:]
+            else:
+                dirfd, address, rest = args[0], args[1], args[2:]
+            mode = rest[0] & 0xFFFFFFFF
+            umask = self.umask_of(pid, ident)
+            parent, final, resolved = self.entry(self.path_arg(pid, ident, mem, dirfd, address))
+            try:
+                if name.startswith("mkdir"):
+                    self.refuse(resolved, final)
+                    os.mkdir(final, mode & 0o7777 & ~umask, dir_fd=parent)
+                else:
+                    kind = stat.S_IFMT(mode) or stat.S_IFREG
+                    if kind not in (stat.S_IFREG, stat.S_IFIFO, stat.S_IFSOCK):
+                        return None, errno.EPERM
+                    self.refuse(resolved, final, True)
+                    os.mknod(final, kind | (mode & 0o7777 & ~umask), 0, dir_fd=parent)
+            finally:
+                os.close(parent)
+            return 0, 0
+        if name in ("rmdir", "unlink", "unlinkat"):
+            if name == "unlinkat":
+                dirfd, address, flags = args[0], args[1], args[2]
+                if flags & ~AT_REMOVEDIR:
+                    return None, errno.EINVAL
+            else:
+                dirfd, address = AT_FDCWD, args[0]
+                flags = AT_REMOVEDIR if name == "rmdir" else 0
+            parent, final, resolved = self.entry(self.path_arg(pid, ident, mem, dirfd, address))
+            try:
+                self.refuse(resolved, final)
+                if flags & AT_REMOVEDIR:
+                    os.rmdir(final, dir_fd=parent)
+                else:
+                    os.unlink(final, dir_fd=parent)
+            finally:
+                os.close(parent)
+            return 0, 0
+        if name in ("symlink", "symlinkat"):
+            target = os.fsdecode(self.string(mem, args[0]))
+            if name == "symlink":
+                dirfd, address = AT_FDCWD, args[1]
+            else:
+                dirfd, address = args[1], args[2]
+            parent, final, resolved = self.entry(self.path_arg(pid, ident, mem, dirfd, address))
+            try:
+                self.refuse(resolved, final, True)
+                os.symlink(target, final, dir_fd=parent)
+            finally:
+                os.close(parent)
+            return 0, 0
+        if name in ("link", "linkat"):
+            if name == "link":
+                odir, oaddr, ndir, naddr, flags = AT_FDCWD, args[0], AT_FDCWD, args[1], 0
+            else:
+                odir, oaddr, ndir, naddr, flags = args[:5]
+            if flags & AT_EMPTY_PATH:
+                return None, errno.ENOENT  # needs CAP_DAC_READ_SEARCH, which commands lack
+            if flags & ~AT_SYMLINK_FOLLOW:
+                return None, errno.EINVAL
+            source = self.path_arg(pid, ident, mem, odir, oaddr)
+            sparent, sname, sresolved = (self.followed(source) if flags & AT_SYMLINK_FOLLOW
+                                         else self.entry(source))
+            try:
+                self.refuse(sresolved, sname)
+                dparent, dname, dresolved = self.entry(
+                    self.path_arg(pid, ident, mem, ndir, naddr))
+                try:
+                    self.refuse(dresolved, dname, True)
+                    if move_denied(sresolved, dresolved, False):
+                        raise Denied()
+                    os.link(sname, dname, src_dir_fd=sparent, dst_dir_fd=dparent,
+                            follow_symlinks=False)
+                finally:
+                    os.close(dparent)
+            finally:
+                os.close(sparent)
+            return 0, 0
+        if name in ("rename", "renameat", "renameat2"):
+            if name == "rename":
+                odir, oaddr, ndir, naddr, flags = AT_FDCWD, args[0], AT_FDCWD, args[1], 0
+            elif name == "renameat":
+                odir, oaddr, ndir, naddr = args[:4]
+                flags = 0
+            else:
+                odir, oaddr, ndir, naddr, flags = args[:5]
+            flags &= 0xFFFFFFFF
+            if flags & ~(RENAME_NOREPLACE | RENAME_EXCHANGE):
+                return None, errno.EINVAL
+            sparent, sname, sresolved = self.entry(self.path_arg(pid, ident, mem, odir, oaddr))
+            try:
+                dparent, dname, dresolved = self.entry(
+                    self.path_arg(pid, ident, mem, ndir, naddr))
+                try:
+                    self.refuse(sresolved, sname)
+                    self.refuse(dresolved, dname)
+                    moves = [(sparent, sname, sresolved, dresolved)]
+                    if flags & RENAME_EXCHANGE:
+                        moves.append((dparent, dname, dresolved, sresolved))
+                    for parent, entry, origin, to in moves:
+                        try:
+                            info = os.stat(entry, dir_fd=parent, follow_symlinks=False)
+                        except FileNotFoundError:
+                            continue
+                        # nothing leaves a protected name, nor is a directory moved under one
+                        if move_denied(origin, to, stat.S_ISDIR(info.st_mode)):
+                            raise Denied()
+                    if libc.renameat2(sparent, os.fsencode(sname), dparent, os.fsencode(dname),
+                                      ctypes.c_uint(flags)) < 0:
+                        return None, ctypes.get_errno()
+                finally:
+                    os.close(dparent)
+            finally:
+                os.close(sparent)
+            return 0, 0
+        if name == "truncate":
+            length = ctypes.c_int64(args[1]).value
+            parent, final, resolved = self.followed(self.path_arg(pid, ident, mem, AT_FDCWD,
+                                                                  args[0]))
+            try:
+                self.refuse(resolved, final)
+                fd = os.open(final, os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
+            finally:
+                os.close(parent)
+            try:
+                os.ftruncate(fd, length)
+            finally:
+                os.close(fd)
+            return 0, 0
+        return None, errno.ENOSYS
+
     def socket(self, ident, args):
         domain = args[0] & 0xFFFFFFFF
         kind = args[1] & 0xFFFFFFFF
@@ -760,8 +1276,11 @@ class Broker:
                 raise OSError(errno.ECONNREFUSED, "Not a socket")
             return obj, "/proc/self/fd/%d" % obj
         try:
-            parent, final, _, _ = self.files.resolve(path, True, False, 0, False)
+            parent, final, resolved, _ = self.files.resolve(path, True, False, 0, False)
         except (self.native.ScopeDenied, ValueError):
+            raise Denied()
+        if write_denied(resolved):
+            os.close(parent)
             raise Denied()
         return parent, "/proc/self/fd/%d/%s" % (parent, final)
 
@@ -803,8 +1322,10 @@ class Broker:
             finally:
                 os.close(handle)
         _, address, _, _ = self.inet_address(raw, size)
-        # Restricted none/allowlist listens on loopback only (product decision).
-        if address is None or str(address) not in ("127.0.0.1", "::1"):
+        # Restricted none/allowlist listens on loopback only (product decision); environment
+        # lifts only the network filter.
+        if address is None or (self.endpoints is not None
+                               and str(address) not in ("127.0.0.1", "::1")):
             return None, errno.EACCES
         copied = ctypes.create_string_buffer(raw, size)
         if libc.bind(own, copied, ctypes.c_uint32(size)) < 0:
@@ -895,6 +1416,10 @@ class Broker:
         elif value != "sent":
             self.respond(ident, value, code)
 
+    # Each notification is served on its own thread. That is sound because no handler keeps
+    # shared mutable state across its steps (socket ownership is locked): every check is made on
+    # the broker's own resolution, and every effect is one syscall on descriptors that handler
+    # holds, so concurrent notifications interleave only as the kernel would interleave the calls.
     def loop(self, stop):
         poller = select.poll()
         poller.register(self.listener, select.POLLIN)
@@ -1129,7 +1654,9 @@ def reap(session):
 
 def run(request, report):
     machine, table = arch()
-    native, native_path = load_native()
+    if request.get("nativeFd") is not None and request.get("mode") != "exec":
+        raise Refused("INVALID_REQUEST", "A native helper descriptor serves exec mode only")
+    native, native_path = load_native(request.get("nativeFd"))
     status = probe_static(table, request.get("candidateArch") is True)
     if status:
         raise Refused("UNAVAILABLE", status)
@@ -1147,8 +1674,10 @@ def run(request, report):
     os.set_inheritable(cwd, False)
     # The staged runtime directory (trusted, consumer-verified) stays readable for the helper.
     system_roots = list(request.get("systemRoots", DEFAULT_SYSTEM_ROOTS))
-    system_roots.append(os.path.dirname(native_path))
-    ruleset = landlock_ruleset(roots, system_roots, network_mediated or mode == "native")
+    if request.get("nativeFd") is None:
+        system_roots.append(os.path.dirname(native_path))
+    ruleset = landlock_ruleset(roots, system_roots, network_mediated or mode == "native",
+                               mode == "exec")
     pinned_fds = [r["fd"] for r in roots["read"] + roots["write"]]
     launch = {"event": "launch", "arch": machine, "validated": machine in VALIDATED_ARCHES,
               "landlockAbi": landlock_abi(), "roots": seen,
@@ -1220,7 +1749,8 @@ def run(request, report):
     if native_in is not None:
         os.close(native_in)
         body = dict(request.get("native", {}))
-        body["roots"] = roots
+        # restricted native writes honour the mandatory write denies too
+        body["roots"] = dict(roots, denyWrites=True)
         data = json.dumps(body).encode()
         while data:
             data = data[os.write(native_out, data):]
@@ -1291,6 +1821,8 @@ def probe_static(table, candidate=False):
         return "Restricted Linux execution requires Linux"
     if table is None:
         return "No syscall inventory exists for %s" % machine
+    if SELF_PROTECTION:
+        return SELF_PROTECTION
     if machine not in VALIDATED_ARCHES and not candidate:
         return "The syscall inventory is not validated on %s" % machine
     abi = landlock_abi()
@@ -1332,6 +1864,10 @@ def probe_primitives(candidate):
     if pid == 0:
         try:
             parent_sock.close()
+            # Dumpable like a real restricted child after its execve, so the broker's memory read
+            # is exercised as in a launch (fork inherited non-dumpable; the probe holds no secret).
+            if libc.prctl(4, 1, 0, 0, 0) != 0:  # PR_SET_DUMPABLE 1
+                os._exit(3)
             if libc.prctl(38, 1, 0, 0, 0) != 0:
                 os._exit(3)
             attr = struct.pack("QQQ", FS_ALL, NET_CONNECT_TCP, SCOPE_ALL)

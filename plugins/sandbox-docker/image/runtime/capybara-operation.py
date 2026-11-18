@@ -546,8 +546,11 @@ def direct(request):
             pinned += write
             read = pin([p for p in request["readRoots"] if p not in request["writeRoots"]])
             pinned += read
+            # Restricted roots: native writes refuse the SDK's mandatory write denies (as the
+            # launcher's broker and its native mode do).
             roots = {"read": [{"path": e["path"], "fd": e["fd"]} for e in read],
-                     "write": [{"path": e["path"], "fd": e["fd"]} for e in write]}
+                     "write": [{"path": e["path"], "fd": e["fd"]} for e in write],
+                     "denyWrites": True}
         elif kind == "prepare":
             if protected(request["native"]["path"], False):
                 raise Refused("SCOPE_DENIED", "The path is reserved for the provider")
@@ -918,7 +921,9 @@ def open_output(request):
             pinned += write
             if not write:
                 raise Refused("SCOPE_DENIED", "Restricted execution needs an existing writable root")
-            roots = {"read": [], "write": [{"path": e["path"], "fd": e["fd"]} for e in write]}
+            # A restricted operation's output file honours the mandatory write denies too.
+            roots = {"read": [], "write": [{"path": e["path"], "fd": e["fd"]} for e in write],
+                     "denyWrites": True}
         if protected(request["outputPath"], True):
             raise Refused("SCOPE_DENIED", "The output path is reserved for the provider")
         try:
