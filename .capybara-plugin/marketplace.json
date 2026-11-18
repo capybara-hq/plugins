@@ -690,7 +690,7 @@
     },
     {
       "name": "file-preview",
-      "version": "0.1.0-rc.1",
+      "version": "0.1.0-rc.2",
       "summary": {
         "en": "Previews code, archives, spreadsheets, documents, PDFs, SVG and HTML files in the conversation; entries inside archives are previewed regardless of per-previewer settings",
         "zh": "在对话中预览代码、压缩包、表格、文档、PDF、SVG 和 HTML 文件；压缩包内的条目不受各预览器开关影响，一律可预览"
@@ -741,8 +741,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-file-preview",
-          "version": "0.1.0-rc.1",
-          "integrity": "sha512-kDbkk0G7uCM/Id9HNfJpUXf4zu4w0mMmaenw6bmUiqLEMUVgQf2VOB3i2jj2HVhaqsfc3qElTEYupTq+zpLVpQ=="
+          "version": "0.1.0-rc.2",
+          "integrity": "sha512-pEV/P8ahHt2wU3xudhUmJKX6sKfJCG+q+MNo0T+AiySl31TyPl7bsg9el5Romtg3iFbFlOh7DameL5YgAAzVnw=="
         }
       }
     }
