@@ -1,5 +1,11 @@
 # @capybara-hq/plugin-lark
 
+## 0.1.0-rc.13
+
+### Minor Changes
+
+- 8ba30b9: Send conversation files as native Lark images and files (`sendFile`: images up to 10 MB, files up to 30 MB). Admins must add the `im:resource` permission (获取与上传图片或文件资源) to the app and publish a new version; without it files are delivered as links.
+
 ## 0.1.0-rc.12
 
 ### Patch Changes

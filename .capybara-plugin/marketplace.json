@@ -89,7 +89,7 @@
     },
     {
       "name": "lark",
-      "version": "0.1.0-rc.12",
+      "version": "0.1.0-rc.13",
       "summary": {
         "en": "Lark (channel@1 bot over the Lark long connection with interactive cards, identity-source@1 web login, directory@1)"
       },
@@ -125,8 +125,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-lark",
-          "version": "0.1.0-rc.12",
-          "integrity": "sha512-5Eko/ye6lvPKdxgheu4wyr4Kl4y1j+tAuob9zGtevp6xcvzqQ4gBO1NZCBQa3TJN9BMkkqZTvOhW0YJDOSdYuA=="
+          "version": "0.1.0-rc.13",
+          "integrity": "sha512-fDAYVXwtciQA3gvDY4WNZ0rYBnkLn09h6OdGg7aVJWeO/t0a4aH8pHVn204eR6TosdDYmpEFv/2582qZnK3fsg=="
         }
       }
     },
@@ -296,7 +296,7 @@
     },
     {
       "name": "slack",
-      "version": "0.1.0-rc.12",
+      "version": "0.1.0-rc.13",
       "summary": {
         "en": "Slack (channel@1 bot over Socket Mode with Block Kit cards, identity-source@1 Sign in with Slack, directory@1)"
       },
@@ -314,6 +314,7 @@
           "config.deployment:openidUrl",
           "config.org.secret:botToken",
           "config.org:teamId",
+          "permissions.network:files.slack.com",
           "permissions.network:slack.com",
           "permissions.network:wss-primary.slack.com",
           "provides:channel@1",
@@ -334,8 +335,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-slack",
-          "version": "0.1.0-rc.12",
-          "integrity": "sha512-dRikgajS8b4reLuctFZsZYxVhd0fLWtC37qkeLZ5xrCyLZDL5I5MGE3BIzTOz8F3Uk8Oh78NkYDeNWAfwt8kUw=="
+          "version": "0.1.0-rc.13",
+          "integrity": "sha512-VJ+oq2LbRKRX50H5iy77TRJa3Icam7NThnEB3M2Bp0lUo9szYMPnjzXwirwOTUWh0nrkFjmTpzqoM0ms95RBzQ=="
         }
       }
     },
@@ -517,7 +518,7 @@
     },
     {
       "name": "telegram",
-      "version": "0.1.0-rc.11",
+      "version": "0.1.0-rc.12",
       "summary": {
         "en": "Telegram (channel@1 bot over the Bot API: long polling or webhook, inline keyboard cards)",
         "zh": "Telegram 机器人渠道（channel@1，Bot API：长轮询或 webhook，内联键盘卡片）"
@@ -539,8 +540,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-telegram",
-          "version": "0.1.0-rc.11",
-          "integrity": "sha512-Ygt//ETTMCi6COUudtmmBx1elGEtlTvKtV0GQrgSwdIFRwjtXXYL8Q1HnK/NOzOsYCvsOijxZZbwZg471uTmLA=="
+          "version": "0.1.0-rc.12",
+          "integrity": "sha512-bFyaM7skrO7AKH2mQrwHO9zB80AwC7D0NiFiSwhjm1ogPXm4OmauafKWQmkQH1kz4V2zs5ahY6mdwR2V1BCSWQ=="
         }
       }
     },
