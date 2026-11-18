@@ -143,7 +143,9 @@ describe("buildUi", () => {
         .split("\n")
         .map((line) => line.trim().split(" ")[0] ?? "");
     const bundled = listed("Bundled packages:");
-    const embedded = listed("Embedded in prebuilt bundles (dependencies of a bundled *.min.js):");
+    const embedded = listed(
+      "Embedded in prebuilt bundles (dependency closure of a bundled *.min.js):",
+    );
     // what the brief names, at the versions installed for the bundles that pull them in
     const expectIn = async (list: string[], name: string, from?: string) =>
       expect(list, name).toContain(`${name}@${await versionOf(pkgDir(name, from))}`);
@@ -165,6 +167,40 @@ describe("buildUi", () => {
     }
     const dompurify = await readFile(join(pkgDir("dompurify"), "LICENSE"), "utf8");
     expect(text).toContain(dompurify.trimEnd());
+  });
+
+  it("lists the whole production closure of every prebuilt bundle, not only direct dependencies", async () => {
+    const { dir } = await sharedBuild();
+    const text = await readFile(join(dir, THIRD_PARTY_LICENSES), "utf8");
+    // exceljs's and JSZip's browser bundles inline their dependencies and theirs in turn
+    const seen = new Set<string>();
+    const walk = async (pkg: string): Promise<void> => {
+      const json = JSON.parse(await readFile(join(pkg, "package.json"), "utf8")) as {
+        dependencies?: Record<string, string>;
+      };
+      for (const dep of Object.keys(json.dependencies ?? {})) {
+        let depDir: string;
+        try {
+          depDir = pkgDir(dep, pkg);
+        } catch {
+          continue;
+        }
+        if (seen.has(depDir)) continue;
+        seen.add(depDir);
+        await walk(depDir);
+      }
+    };
+    await walk(pkgDir("exceljs"));
+    await walk(pkgDir("jszip", pkgDir("mammoth")));
+    for (const depDir of seen) {
+      const name = JSON.parse(await readFile(join(depDir, "package.json"), "utf8")) as {
+        name: string;
+      };
+      const key = `${name.name}@${await versionOf(depDir)}`;
+      expect(text, key).toContain(`${"=".repeat(78)}\n${key}\nLicense: `);
+    }
+    // a transitive one: exceljs -> archiver -> zip-stream -> compress-commons
+    expect(text).toMatch(/^ {2}compress-commons@/m);
   });
 
   it("fails when a bundled package has no license file", async () => {

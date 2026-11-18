@@ -56,7 +56,8 @@ see below).
   is shown. SVG is never sanitized or inserted as markup: it is shown only as an
   `<img src="blob:…">`, where it cannot run scripts or load anything.
 - Links in previewed content are not clickable.
-- Third-party licenses ship in `ui/THIRD-PARTY-LICENSES.txt` (and pdf.js's data licenses beside
+- Third-party licenses ship in `ui/THIRD-PARTY-LICENSES.txt`, including the full dependency
+  closure of prebuilt bundles such as exceljs's (and pdf.js's data licenses beside
   their files).
 
 ## Known limitations
