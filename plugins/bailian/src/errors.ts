@@ -39,13 +39,36 @@ function isInputTooLong(message: string): boolean {
   return /Range of input length should be/i.test(message);
 }
 
+/** How a call maps its errors. */
+export interface ErrorOptions {
+  /**
+   * Content moderation codes become `refusal` (image generation). Chat keeps `invalid_request`,
+   * which also lets the kernel drop the attachments a moderated media request carried.
+   */
+  moderationIsRefusal?: boolean;
+}
+
+/**
+ * DashScope's content moderation codes: `DataInspectionFailed` (input or output, also after the
+ * prompt rewrite) and the other `DataInspection*` codes, and `IPInfringementSuspect` (image
+ * generation docs, 2026-11-18).
+ */
+export function isModerationCode(code: string | null | undefined): boolean {
+  return (code ?? "").startsWith("DataInspection") || code === "IPInfringementSuspect";
+}
+
 /**
  * The kind of a DashScope error. `status` is undefined for an error event inside a 200 stream;
  * an unknown code there is `server` (retryable), an unknown 4xx is `invalid_request`.
  */
-export function kindFor(status: number | undefined, body: ErrorBody): ModelErrorKind {
+export function kindFor(
+  status: number | undefined,
+  body: ErrorBody,
+  opts: ErrorOptions = {},
+): ModelErrorKind {
   const code = body.code ?? "";
   const message = body.message ?? "";
+  if (opts.moderationIsRefusal && isModerationCode(code)) return "refusal";
   if (code === "InvalidApiKey" || code.startsWith("AccessDenied") || code === "Arrearage") {
     return "auth";
   }
@@ -55,8 +78,8 @@ export function kindFor(status: number | undefined, body: ErrorBody): ModelError
   // misreading a rate limit as auth would fail a run that could have succeeded.
   if (code.startsWith("Throttling")) return "rate_limited";
   if (isInputTooLong(message)) return "context_overflow";
-  // Content moderation (input or output): the SDK has no refusal error kind; not retryable.
-  if (code.startsWith("DataInspection")) return "invalid_request";
+  // Content moderation (input or output) in chat: not retryable.
+  if (isModerationCode(code)) return "invalid_request";
   if (status !== undefined) {
     if (status === 401 || status === 403) return "auth";
     if (status === 429) return "rate_limited";
@@ -79,8 +102,9 @@ export function errorFromBody(
   status: number | undefined,
   body: ErrorBody,
   headers?: Headers,
+  opts: ErrorOptions = {},
 ): ModelError {
-  const kind = kindFor(status, body);
+  const kind = kindFor(status, body, opts);
   const ms = kind === "rate_limited" ? retryAfterMs(headers) : undefined;
   const label = [status, body.code]
     .filter((x) => x !== undefined && x !== null && x !== "")
@@ -91,9 +115,12 @@ export function errorFromBody(
 }
 
 /** Reads the error body of a non-2xx response: JSON, or an SSE `data:` line holding the JSON. */
-export async function errorFromResponse(res: Response): Promise<ModelError> {
+export async function errorFromResponse(
+  res: Response,
+  opts: ErrorOptions = {},
+): Promise<ModelError> {
   const text = await res.text().catch(() => "");
-  return errorFromBody(res.status, parseErrorText(text), res.headers);
+  return errorFromBody(res.status, parseErrorText(text), res.headers, opts);
 }
 
 export function parseErrorText(text: string): ErrorBody {

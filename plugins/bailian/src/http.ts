@@ -1,5 +1,5 @@
 import type { Target } from "./config.js";
-import { type ErrorBody, errorFromBody, errorFromResponse } from "./errors.js";
+import { type ErrorBody, type ErrorOptions, errorFromBody, errorFromResponse } from "./errors.js";
 
 /** Headers of every request. No retries anywhere: retrying is the kernel's. */
 export function headers(t: Target, extra: Record<string, string> = {}): Record<string, string> {
@@ -13,18 +13,27 @@ export function headers(t: Target, extra: Record<string, string> = {}): Record<s
 export async function requestJson<T>(
   t: Target,
   path: string,
-  init: { method: "GET" | "POST"; body?: unknown; signal?: AbortSignal | undefined },
+  init: {
+    method: "GET" | "POST";
+    body?: unknown;
+    signal?: AbortSignal | undefined;
+    headers?: Record<string, string>;
+    errors?: ErrorOptions;
+  },
 ): Promise<T> {
   const res = await fetch(`${t.baseUrl}${path}`, {
     method: init.method,
-    headers: headers(t, init.body !== undefined ? { "Content-Type": "application/json" } : {}),
+    headers: headers(t, {
+      ...(init.body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...init.headers,
+    }),
     ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
     ...(init.signal ? { signal: init.signal } : {}),
   });
-  if (!res.ok) throw await errorFromResponse(res);
+  if (!res.ok) throw await errorFromResponse(res, init.errors);
   const json = (await res.json()) as T & ErrorBody & { success?: boolean; output?: unknown };
   if (json.success === false || (json.code && json.output == null)) {
-    throw errorFromBody(undefined, json, res.headers);
+    throw errorFromBody(undefined, json, res.headers, init.errors);
   }
   return json;
 }

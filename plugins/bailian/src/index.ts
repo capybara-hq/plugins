@@ -14,9 +14,10 @@ import {
 } from "./config.js";
 import { embedTexts } from "./embed.js";
 import { toModelError } from "./errors.js";
+import { generateBailianImage, type PollTiming } from "./image.js";
 import { type Endpoint, endpointOf, findModel, listBailianModels } from "./list.js";
 import { streamGeneration } from "./map-stream.js";
-import { ENDPOINT_CACHE_TTL_SECONDS } from "./tables.js";
+import { ENDPOINT_CACHE_TTL_SECONDS, IMAGE_POLL_INITIAL_MS, IMAGE_POLL_MAX_MS } from "./tables.js";
 
 export { type BailianDefaults, baseUrlFor } from "./config.js";
 
@@ -31,6 +32,8 @@ export interface BailianDeps {
   kv?: Kv | undefined;
   /** listModels warns about embedding models missing from the bundled table. */
   log?: Pick<Logger, "warn"> | undefined;
+  /** Image task polling (tests shorten it); defaults 1 s doubling to 5 s. */
+  imagePoll?: PollTiming | undefined;
 }
 
 /**
@@ -112,6 +115,18 @@ export function createBailianProvider(
         throw toModelError(e, opts.signal);
       }
     },
+    async generateImage(req, opts) {
+      try {
+        if (opts.signal.aborted) throw new ModelError("aborted", "Request aborted");
+        return await generateBailianImage(resolveTarget(defaults, opts.config), req, {
+          signal: opts.signal,
+          poll: deps.imagePoll ?? { initialMs: IMAGE_POLL_INITIAL_MS, maxMs: IMAGE_POLL_MAX_MS },
+          downloadOrigins: defaults.downloadOrigins ?? [],
+        });
+      } catch (e) {
+        throw toModelError(e, opts.signal);
+      }
+    },
   };
 }
 
@@ -133,6 +148,10 @@ export default defineExtension({
       "cn-hongkong.maas.aliyuncs.com",
       "ap-northeast-1.maas.aliyuncs.com",
       "eu-central-1.maas.aliyuncs.com",
+      // Result images of image generation: signed links on the OSS result buckets
+      // (dashscope-*.oss-cn-beijing.aliyuncs.com, dashscope-*.oss-accelerate.aliyuncs.com)
+      "oss-cn-beijing.aliyuncs.com",
+      "oss-accelerate.aliyuncs.com",
     ],
   },
   config: { deployment: DeploymentConfig },

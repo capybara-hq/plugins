@@ -5,6 +5,7 @@ import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_OUTPUT_TOKENS,
   EMBEDDING_MODELS,
+  IMAGE_MODELS,
   LIST_MAX_PAGES,
   LIST_PAGE_SIZE,
   REASONING_STREAM_IDLE_MS,
@@ -59,8 +60,8 @@ export const endpointOf = (raw: RawModel): Endpoint => (isVision(raw) ? "multimo
 /**
  * Capability codes → kind. `TG` / `VU` chat (one chat model with vision when both); `TR` is used
  * for embedding and rerank models alike (live list): an embedding model from the bundled table, a
- * model named `*rerank*` rerank (list-only), anything else skipped; `IG` / `VG` / `ASR` / `TTS` the
- * list-only kinds. `ME` (multimodal embedding: `embed` is text only), the realtime / omni codes,
+ * model named `*rerank*` rerank (list-only), anything else skipped; `IG` image generation (callable
+ * when bundled in IMAGE_MODELS, else list-only); `VG` / `ASR` / `TTS` the list-only kinds. `ME` (multimodal embedding: `embed` is text only), the realtime / omni codes,
  * `3D-generation`, `World-Model` and unknown codes have no SDK kind: skipped.
  */
 function kindOf(id: string, caps: string[]): ModelKind | "skip" | "unknown-embedding" {
@@ -171,6 +172,19 @@ export function mapModel(raw: RawModel): Mapped {
   if (kind === "embedding") {
     const e = EMBEDDING_MODELS[id];
     if (e !== undefined) out.embedding = { ...e, dimensions: [...e.dimensions] };
+  }
+  if (kind === "image_generation") {
+    // Bundled models only: the list carries no sizes or limits, the others stay list-only
+    const g = IMAGE_MODELS[id];
+    if (g !== undefined) {
+      out.imageGeneration = {
+        sizes: g.sizes.map((s) => ({ ...s })),
+        defaultSize: { ...g.defaultSize },
+        maxImages: g.maxImages,
+        maxReferenceImages: g.maxReferenceImages,
+        outputMediaTypes: [...g.outputMediaTypes],
+      };
+    }
   }
   return { info: out };
 }
