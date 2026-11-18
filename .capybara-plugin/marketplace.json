@@ -690,7 +690,7 @@
     },
     {
       "name": "file-preview",
-      "version": "0.1.0-rc.2",
+      "version": "0.1.0-rc.3",
       "summary": {
         "en": "Previews code, archives, spreadsheets, documents, PDFs and SVG files in the conversation; entries inside archives are previewed regardless of per-previewer settings",
         "zh": "在对话中预览代码、压缩包、表格、文档、PDF 和 SVG 文件；压缩包内的条目不受各预览器开关影响，一律可预览"
@@ -706,7 +706,6 @@
           "permissions.http.public:GET /ui/assets/:file",
           "permissions.http.public:GET /ui/code",
           "permissions.http.public:GET /ui/docx",
-          "permissions.http.public:GET /ui/html",
           "permissions.http.public:GET /ui/pdf",
           "permissions.http.public:GET /ui/sheet",
           "permissions.http.public:GET /ui/svg",
@@ -714,7 +713,6 @@
           "provides:file-preview@1",
           "ui.embed:code",
           "ui.embed:docx",
-          "ui.embed:html",
           "ui.embed:pdf",
           "ui.embed:sheet",
           "ui.embed:svg",
@@ -724,14 +722,12 @@
           "permissions.http.public:GET /ui/assets/:file",
           "permissions.http.public:GET /ui/code",
           "permissions.http.public:GET /ui/docx",
-          "permissions.http.public:GET /ui/html",
           "permissions.http.public:GET /ui/pdf",
           "permissions.http.public:GET /ui/sheet",
           "permissions.http.public:GET /ui/svg",
           "permissions.http.public:GET /ui/zip",
           "ui.embed:code",
           "ui.embed:docx",
-          "ui.embed:html",
           "ui.embed:pdf",
           "ui.embed:sheet",
           "ui.embed:svg",
@@ -741,8 +737,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-file-preview",
-          "version": "0.1.0-rc.2",
-          "integrity": "sha512-pEV/P8ahHt2wU3xudhUmJKX6sKfJCG+q+MNo0T+AiySl31TyPl7bsg9el5Romtg3iFbFlOh7DameL5YgAAzVnw=="
+          "version": "0.1.0-rc.3",
+          "integrity": "sha512-4GMeq6gpjloCmTrEidiUHX5v6PN4oTfRDWcx+sLb5NlUoSk5DaJVVtJDc5oNDzow09OSm62DJchDOBJItLdwrA=="
         }
       }
     }
