@@ -1,5 +1,14 @@
 # @capybara-hq/plugin-ark
 
+## 0.1.0-rc.10
+
+### Patch Changes
+
+- 3e9eb21: Image generation: Seedream models (5.5, 5.0 pro / flash / lite, 4.5, 4.0) list their image facts
+  and are callable through `generateImage` (`/images/generations`, one image per call, base64,
+  no watermark; an item without base64 data is a `server` error, URLs are never fetched);
+  content moderation maps to `refusal`.
+
 ## 0.1.0-rc.9
 
 ### Patch Changes

@@ -195,7 +195,7 @@ export function createArkProvider(defaults: ArkDefaults): ModelProvider {
 /** Volcengine Ark model provider plugin: chat (thinking, encrypted replay), embeddings, images. */
 export default defineExtension({
   name: "ark",
-  version: "0.1.0-rc.9",
+  version: "0.1.0-rc.10",
   sdk: "^0.1.0-rc.4",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
   // The two regions' data and control planes (display only, the platform does not intercept)

@@ -169,7 +169,7 @@
     },
     {
       "name": "openai",
-      "version": "0.1.0-rc.10",
+      "version": "0.1.0-rc.11",
       "summary": {
         "en": "OpenAI model provider (model-provider@2) using the official SDK and the native Responses API"
       },
@@ -183,6 +183,7 @@
         "keys": [
           "config.deployment.secret:apiKey",
           "config.deployment:baseUrl",
+          "config.deployment:imageModels",
           "config.deployment:models",
           "config.deployment:organization",
           "config.deployment:reasoningSummary",
@@ -194,8 +195,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-openai",
-          "version": "0.1.0-rc.10",
-          "integrity": "sha512-0dO5a/89XrYy6BMsvbew5yLL2JhBP7mcTYasJARyVbJRfyv5R2ljiVlNiM9QyEXGIrLCn1TPRgylIEIGlMGjlw=="
+          "version": "0.1.0-rc.11",
+          "integrity": "sha512-vFV/CgyPyRdE2OJ2JO+esoDeJ2jP+6jMqIautSOHyCMvpWkrg3UGnUH1iBN1z1Dy0cp293ddwo2CZAmlS6FI7w=="
         }
       }
     },
@@ -403,7 +404,7 @@
     },
     {
       "name": "ark",
-      "version": "0.1.0-rc.9",
+      "version": "0.1.0-rc.10",
       "summary": {
         "en": "Model provider (model-provider@2) for Volcengine Ark chat, embedding and image generation models",
         "zh": "火山方舟对话、嵌入与图片生成模型（model-provider@2）"
@@ -435,14 +436,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-ark",
-          "version": "0.1.0-rc.9",
-          "integrity": "sha512-5LtkgqeJsdU0jTKW5KmdeKoznkKu8jH86BrHJZnAqClhZxHqrErTtvOIAYsY98ia6V3C3X/si2ocMbcz0rAsDg=="
+          "version": "0.1.0-rc.10",
+          "integrity": "sha512-8SRYcBBb/wROJX8ByBisL/SKNg7z4RvWFq8X7L+944QBzSed4YHwNATLRDTL4pW1l6VIC2rr+0DeSBCjmsF4Qw=="
         }
       }
     },
     {
       "name": "bailian",
-      "version": "0.1.0-rc.9",
+      "version": "0.1.0-rc.10",
       "summary": {
         "en": "Model provider (model-provider@2) for Alibaba Cloud Model Studio (Bailian) chat, embedding and image generation models",
         "zh": "阿里云百炼对话、嵌入与图片生成模型（model-provider@2）"
@@ -465,6 +466,13 @@
           "permissions.network:dashscope-us.aliyuncs.com",
           "permissions.network:dashscope.aliyuncs.com",
           "permissions.network:eu-central-1.maas.aliyuncs.com",
+          "permissions.network:oss-accelerate.aliyuncs.com",
+          "permissions.network:oss-ap-northeast-1.aliyuncs.com",
+          "permissions.network:oss-ap-southeast-1.aliyuncs.com",
+          "permissions.network:oss-cn-beijing.aliyuncs.com",
+          "permissions.network:oss-cn-hongkong.aliyuncs.com",
+          "permissions.network:oss-eu-central-1.aliyuncs.com",
+          "permissions.network:oss-us-east-1.aliyuncs.com",
           "provides:model-provider@2"
         ],
         "sensitive": ["config.deployment.secret:apiKey"]
@@ -472,8 +480,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-bailian",
-          "version": "0.1.0-rc.9",
-          "integrity": "sha512-DU9D5qiPtKLhyJDI0i3ZF6OI+QeJj9zOIFpzwuyGAay981JbJxe0YRPrIrANhDVxmGUyUmdb1NF7yHSoFgEoKA=="
+          "version": "0.1.0-rc.10",
+          "integrity": "sha512-yXDrvaJh3DtGg/hHpYFSJkoRxQdJCJQM6Y+mNLL1Cff53FraGYAZZi7ZIc1FnK9jFEp6nfHgnsuCJcvRmvpqqg=="
         }
       }
     },
