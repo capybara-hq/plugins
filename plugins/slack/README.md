@@ -42,8 +42,26 @@ Each check makes one read-only call, passes the kernel's abort signal on and nev
 limits and Slack outages answer "unknown", never "failing". The guide also uses the kernel checks
 `capybara:public-url`, `capybara:webhook-public` and `capybara:webhook-received`.
 
+The manifest's bot scopes:
+
+| scope | Purpose |
+|---|---|
+| `chat:write` | Post and update replies and cards |
+| `files:write` | Upload conversation files (artifacts the agent delivers) |
+| `commands` | Slash commands `/new`, `/env`, `/capybara` |
+| `im:write` | `conversations.open`: tell the bot's own DM from other DMs |
+| `im:history` | `message.im`: direct messages to the bot |
+| `app_mentions:read` | `app_mention`: @capybara in channels |
+| `channels:history` / `groups:history` | Thread replies in public / private channels |
+| `users:read` | `users.info`; `team_join` / `user_change`; `users.list` |
+| `users:read.email` | Directory: email addresses in `users.list` |
+
 Notes for operators:
 
+- **Apps created before file delivery** lack `files:write`: the `bot-scopes` check names it. Re-paste
+  the manifest from the setup guide (or add the bot scope `files:write` under **OAuth & Permissions**)
+  and **reinstall the app** to the workspace; the bot token stays the same. Until then the bot's
+  replies still arrive and each delivered file is shown as a link.
 - The org must enable the `slack` plugin before it can create a connection (its org-level fields are
   optional and only for [directory sync](#directory-directory1)). The tokens are stored in the
   secret store, and the API only returns "set".
@@ -241,7 +259,7 @@ app** to the workspace (Slack asks for it because the scopes changed). The bot t
 - **DMs**: every text message goes to the kernel. **Channels**: only messages that @-mention the bot (a new message gets a thread reply under it), and replies inside threads
   (the kernel currently handles only those that @-mention the bot). Edits, deletions, messages from the bot itself and other bots, and other messages with a `subtype` are ignored;
   file shares with a caption (`file_share`, only the text is taken) and thread replies also sent to the channel (`thread_broadcast`) are handled as text.
-  M4 handles text only. The text has the bot @-mention removed (only the whitespace on both sides of the @ is tidied; indentation and line breaks are kept) and `&amp;` / `&lt;` / `&gt;` are unescaped.
+  Inbound handles text only. The text has the bot @-mention removed (only the whitespace on both sides of the @ is tidied; indentation and line breaks are kept) and `&amp;` / `&lt;` / `&gt;` are unescaped.
   In link addresses inside model replies, `<`, `>` and `|` are percent-encoded, so model text cannot inject control sequences such as `<!channel>`.
 - **ids**: message id = `<channel id>:<ts>` (unique and stable within a connection); group-chat thread id = `<channel id>:<thread_ts>`, which is the message id of the thread's root message;
   the card-click `eventId` = `<channel>:<card message ts>:<clicker>:<action_ts>` (the payload is the same on redelivery, so it is stable).
@@ -257,6 +275,17 @@ app** to the workspace (Slack asks for it because the scopes changed). The bot t
 - **Reconnect**: managed by the plugin (SDK auto-reconnect is turned off). When Slack recycles a connection normally it reconnects immediately; consecutive short-lived (under 10 seconds) connections back off exponentially
   (with jitter), and after 5 in a row, or on receiving `link_disabled`, it reports an error; the kernel records `last_error` and backs off.
 - **Idempotency**: `chat.postMessage` has no idempotency parameter, so `idempotencyKey` is ignored.
+- **Conversation files** (`sendFile`, `features.files`: 1 GB for any file, images included): one file
+  per message, uploaded with [`files.getUploadURLExternal`](https://docs.slack.dev/reference/methods/files.getUploadURLExternal),
+  a POST of the bytes to the returned signed URL (sent no token), then
+  [`files.completeUploadExternal`](https://docs.slack.dev/reference/methods/files.completeUploadExternal)
+  into the conversation's channel and thread (`files:write`). Images and other files take the same
+  path (Slack previews images itself). The model-supplied name loses control and bidi characters and
+  path separators. The message id is returned only when Slack's answer already lists the share
+  (`files[0].shares`); `idempotencyKey` is ignored. Failures: a missing `files:write`
+  (`missing_scope`, `not_allowed_token_type`) is `rejected`, not `auth`, so the text keeps flowing and
+  the kernel shows the file as a link; a failed upload POST says only its HTTP status (5xx and 429
+  retryable, 413 `too_large`, else `rejected`), never the signed URL. No retries in the plugin.
 - **Profile, time zone and language**: every speaker is looked up with
   [`users.info`](https://docs.slack.dev/reference/methods/users.info) `include_locale=true` (Tier 4, `users:read`):
   `user.tz` becomes `sender.timeZone` and `user.locale` becomes `sender.locale`, passed as is (the kernel

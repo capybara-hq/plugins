@@ -102,6 +102,7 @@ describe("plugin manifest", () => {
       edit: true,
       threads: true,
       minEditIntervalMs: 2500,
+      files: { maxBytes: 1_073_741_824, imageMaxBytes: 1_073_741_824 },
     });
     expect(ch.connectionSchema.safeParse(config()).success).toBe(true);
     expect(
@@ -241,6 +242,9 @@ describe("send / update", () => {
     expect(await send()).toMatchObject({ retryable: true });
     slack.failNext("chat.postMessage", { error: "token_revoked" });
     expect(await send()).toMatchObject({ retryable: false, reason: "auth" });
+    // Text keeps the general table: a missing scope on chat.postMessage is an auth failure
+    slack.failNext("chat.postMessage", { error: "missing_scope" });
+    expect(await send()).toMatchObject({ retryable: false, reason: "auth" });
     slack.failNext("chat.postMessage", { error: "not_in_channel" });
     expect(await send()).toMatchObject({ retryable: false, reason: "target_gone" });
     slack.failNext("chat.postMessage", { error: "msg_too_long" });
@@ -306,6 +310,168 @@ describe("send / update", () => {
       locale: "en",
     });
     expect(slack.finalText(f as never)).toBe("Results\n\n• *a* — `1`\n• *b* — 2");
+  });
+});
+
+describe("sendFile", () => {
+  const thread = { chatId: "C1", chatType: "group" as const, threadId: "C1:1700.000100" };
+  const bytes = (n: number) => Uint8Array.from({ length: n }, (_, i) => (i * 7) % 256);
+  const sendFile = (
+    opts: {
+      name?: string;
+      kind?: "image" | "file";
+      data?: Uint8Array;
+      target?: typeof thread | { chatId: string; chatType: "dm" };
+      signal?: AbortSignal;
+      log?: typeof log;
+    } = {},
+  ) =>
+    createSlackChannel({ apiUrl: slack.apiUrl, log: opts.log ?? log }).sendFile?.({
+      config: config(),
+      target: opts.target ?? thread,
+      file: {
+        name: opts.name ?? "report.csv",
+        contentType: "text/csv",
+        kind: opts.kind ?? "file",
+        data: opts.data ?? bytes(300),
+      },
+      signal: opts.signal ?? signal(),
+      locale: "en",
+      idempotencyKey: "k1",
+    });
+  const failure = (p: Promise<unknown> | undefined) =>
+    (p as Promise<unknown>).then(
+      () => {
+        throw new Error("expected a failure");
+      },
+      (e: unknown) => e as Error & { retryable: boolean; reason?: string },
+    );
+
+  it("uploads the bytes into the thread as one file (one message), with no message id from the fake", async () => {
+    const before = slack.files.length;
+    const messages = slack.messages.length;
+    const data = bytes(1234);
+    const r = await sendFile({ data, kind: "image", name: "chart.png" });
+    expect(slack.files.length).toBe(before + 1);
+    const f = slack.files.at(-1);
+    expect(f).toMatchObject({
+      filename: "chart.png",
+      title: "chart.png",
+      channel: "C1",
+      threadTs: "1700.000100",
+    });
+    expect(Buffer.compare(f?.data as Buffer, Buffer.from(data))).toBe(0);
+    expect(slack.messages.length).toBe(messages);
+    // The fake's completeUploadExternal answers no shares: no message id
+    expect(r).toEqual({});
+    const get = slack.calls.filter((c) => c.method === "files.getUploadURLExternal").at(-1);
+    expect(get?.body.filename).toBe("chart.png");
+    expect(Number(get?.body.length)).toBe(1234);
+  });
+
+  it("a DM gets the file without thread_ts", async () => {
+    await sendFile({ target: { chatId: "D1", chatType: "dm" } });
+    const f = slack.files.at(-1);
+    expect(f).toMatchObject({ channel: "D1", filename: "report.csv" });
+    expect(f?.threadTs).toBeUndefined();
+  });
+
+  it("the message id comes from the shares in completeUploadExternal's answer", async () => {
+    slack.failNext("files.completeUploadExternal", {
+      body: {
+        ok: true,
+        files: [{ id: "F1", shares: { public: { C1: [{ ts: "1700.000200" }] } } }],
+      },
+    });
+    expect(await sendFile()).toEqual({ messageId: "C1:1700.000200" });
+  });
+
+  it("a model-supplied name is cleaned for Slack (no path separators or control characters)", async () => {
+    await sendFile({ name: "../a/b\\c\u0007\u202e.txt" });
+    expect(slack.files.at(-1)?.filename).toBe(".._a_b_c.txt");
+  });
+
+  it("missing_scope or a wrong token type on any upload step is rejected, never auth", async () => {
+    for (const method of ["files.getUploadURLExternal", "files.completeUploadExternal"]) {
+      for (const error of ["missing_scope", "not_allowed_token_type"]) {
+        slack.failNext(method, { error });
+        expect(await failure(sendFile())).toMatchObject({
+          name: "ChannelSendError",
+          retryable: false,
+          reason: "rejected",
+        });
+      }
+    }
+    // Other errors keep the general table
+    slack.failNext("files.completeUploadExternal", { error: "not_in_channel" });
+    expect(await failure(sendFile())).toMatchObject({ retryable: false, reason: "target_gone" });
+    slack.failNext("files.getUploadURLExternal", { error: "token_revoked" });
+    expect(await failure(sendFile())).toMatchObject({ retryable: false, reason: "auth" });
+    slack.failNext("files.getUploadURLExternal", { status: 429, retryAfter: 2 });
+    expect(await failure(sendFile())).toMatchObject({ retryable: true, retryAfterMs: 2000 });
+    slack.failNext("files.getUploadURLExternal", { body: { ok: true } });
+    expect(await failure(sendFile())).toMatchObject({ retryable: false, reason: "rejected" });
+  });
+
+  it("a failed upload POST is mapped by status, and no error or log names the upload URL", async () => {
+    const lines: string[] = [];
+    const capture = {
+      info: (...m: unknown[]) => lines.push(JSON.stringify(m)),
+      warn: (...m: unknown[]) => lines.push(JSON.stringify(m)),
+      error: (...m: unknown[]) => lines.push(JSON.stringify(m)),
+    };
+    const cases: [number, Record<string, unknown>][] = [
+      [500, { retryable: true }],
+      [503, { retryable: true }],
+      [429, { retryable: true }],
+      [413, { retryable: false, reason: "too_large" }],
+      [400, { retryable: false, reason: "rejected" }],
+    ];
+    for (const [status, expected] of cases) {
+      const before = slack.files.length;
+      slack.failNext("upload", { status });
+      const e = await failure(sendFile({ log: capture }));
+      expect(e).toMatchObject({ name: "ChannelSendError", ...expected });
+      expect(e.message).toBe(`files upload failed with status ${status}`);
+      const url = slack.calls.filter((c) => c.method === "files.getUploadURLExternal").length;
+      expect(url).toBeGreaterThan(0);
+      for (const text of [e.message, String(e.stack), JSON.stringify(e), String(e.cause ?? "")]) {
+        expect(text).not.toContain(slack.url);
+        expect(text).not.toContain("/upload/");
+        expect(text).not.toMatch(/F\d{8}/);
+      }
+      expect(slack.files.length).toBe(before);
+    }
+    for (const l of lines) {
+      expect(l).not.toContain(slack.url);
+      expect(l).not.toContain("/upload/");
+    }
+  });
+
+  it("does not retry: one upload POST per call", async () => {
+    const gets = () => slack.calls.filter((c) => c.method === "files.getUploadURLExternal").length;
+    const before = gets();
+    slack.failNext("upload", { status: 500 }, 2);
+    await failure(sendFile());
+    expect(gets()).toBe(before + 1);
+    // The second queued failure is still there: the plugin made no second upload
+    await failure(sendFile());
+    expect(await sendFile()).toEqual({});
+  });
+
+  it("an abort during the upload rejects without completing the upload", async () => {
+    const before = slack.files.length;
+    slack.delay("upload", 2000);
+    try {
+      const ac = new AbortController();
+      const p = failure(sendFile({ signal: ac.signal }));
+      setTimeout(() => ac.abort(), 50);
+      const e = await p;
+      expect(e.message).not.toContain("/upload/");
+      expect(slack.files.length).toBe(before);
+    } finally {
+      slack.delay("upload", 0);
+    }
   });
 });
 

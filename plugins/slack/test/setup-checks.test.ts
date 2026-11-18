@@ -250,6 +250,15 @@ describe("bot-scopes", () => {
     expect(r.fix?.en).toContain("reinstall");
   });
 
+  it("a token without files:write (installed before file delivery) is failing naming it", async () => {
+    const apiUrl = await scopesServer(
+      REQUIRED_BOT_SCOPES.filter((s) => s !== "files:write").join(","),
+    );
+    const r = await run(botScopesCheck({ apiUrl: () => apiUrl }), args(tokens()));
+    expect(r.status).toBe("failing");
+    expect(r.reason?.en).toBe("The app is missing the bot scopes files:write.");
+  });
+
   it("unknown when Slack reports no scopes", async () => {
     // The fake Slack sends no x-oauth-scopes header
     const r = await run(botScopesCheck(opts()), args(tokens()));
