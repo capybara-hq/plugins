@@ -1,8 +1,8 @@
 # Volcengine Ark models
 
-Model provider (`model-provider@2`) for Volcengine Ark chat and embedding models on the data plane
-(`https://ark.<region>.volces.com/api/v3`). Chat uses the official `openai` SDK (Chat Completions);
-the model list, endpoints and embeddings use plain `fetch`.
+Model provider (`model-provider@2`) for Volcengine Ark chat, embedding and image generation models
+on the data plane (`https://ark.<region>.volces.com/api/v3`). Chat uses the official `openai` SDK (Chat Completions);
+the model list, endpoints, embeddings and images use plain `fetch`.
 
 ## Config
 
@@ -40,11 +40,22 @@ with `auth` before any request.
   the provider sends one input per call (batch 1, sequential). Dimensions are 1024 or 2048
   (default 2048) for `doubao-embedding-vision-250615` and `-251215`.
 
+- Image generation (Seedream) uses `POST /api/v3/images/generations`. The list marks image models
+  (`domain: ImageGeneration`) but gives no sizes, so the facts come from a family table
+  (`src/tables.ts`): 5.5, 5.0 pro / flash / lite, 4.5, 4.0; any other image model is listed but not
+  callable. Sizes are fixed pixel `WxH` lists inside each family's pixel range (default
+  2048x2048), one image per call (`maxImages` 1: Ark has no `n`, and group generation may return
+  fewer), reference images as data URLs (10 or 14 per family), `response_format: b64_json` and
+  `watermark: false` always (no config option). Usage reports Ark's `output_tokens` and the image
+  count. Content moderation codes map to `refusal`.
+
 ## Verified live (2026-11-08, cn-beijing)
 
 Conformance suite on `doubao-seed-2-1-pro-260915` with embeddings on `doubao-embedding-vision-251215`
 (`encrypted_content` replay included), and on `deepseek-v4-flash-ga-260731` (caching included). With
-the management keys, three endpoints were listed and a chat call to one answered.
+the management keys, three endpoints were listed and a chat call to one answered. On 2026-11-18
+one 1024x1024 image on `doubao-seedream-5-0-flash-260915` (JPEG, base64), and the pixel range
+errors of 5.5, 5.0 pro, 5.0 flash and 4.0 (`20260415`).
 
 ## Known limits
 

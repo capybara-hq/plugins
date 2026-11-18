@@ -93,8 +93,31 @@ export function toModelError(e: unknown, signal?: AbortSignal): ModelError {
   return make("server");
 }
 
-/** A non-2xx `fetch` response (list, embeddings) → ModelError. */
-export async function httpError(res: Response, what: string): Promise<ModelError> {
+/**
+ * Ark's content-moderation codes (published error code list, docs 82379/1299023, read 2026-11-18):
+ * `InputTextSensitiveContentDetected`, `InputImageSensitiveContentDetected`,
+ * `OutputImageSensitiveContentDetected` (with `.PolicyViolation` / `.DeepFake` / … suffixes),
+ * `SensitiveContentDetected(.…)`, `InputImageRiskDetection`, `OutputImageRiskDetection` and
+ * `ContentSecurityDetectionError`.
+ */
+export function isModerationCode(code: string | null | undefined): boolean {
+  if (typeof code !== "string") return false;
+  return (
+    code.includes("SensitiveContentDetected") ||
+    code.includes("RiskDetection") ||
+    code === "ContentSecurityDetectionError"
+  );
+}
+
+/**
+ * A non-2xx `fetch` response (list, embeddings, images) → ModelError. With `refusals`, a
+ * moderation code is `refusal` carrying the vendor's code and reason.
+ */
+export async function httpError(
+  res: Response,
+  what: string,
+  opts: { refusals?: boolean } = {},
+): Promise<ModelError> {
   let code: string | null = null;
   let message = `HTTP ${res.status}`;
   try {
@@ -103,6 +126,9 @@ export async function httpError(res: Response, what: string): Promise<ModelError
     if (typeof body.error?.message === "string") message = body.error.message;
   } catch {
     // not JSON: keep the status
+  }
+  if (opts.refusals === true && isModerationCode(code)) {
+    return new ModelError("refusal", `Ark: ${what}: ${code}: ${message}`);
   }
   const kind = kindFromStatus(res.status, code);
   const ms = kind === "rate_limited" ? retryAfterMs(res.headers) : undefined;

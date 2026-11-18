@@ -15,6 +15,8 @@ import {
 export const SEED = "doubao-seed-2-0-lite-260428";
 export const DEEPSEEK = "deepseek-v4-flash-ga-260731";
 export const EMBED = "doubao-embedding-vision-251215";
+export const SEEDREAM = "doubao-seedream-5-0-flash-260915";
+export const SEEDREAM_4 = "doubao-seedream-4-0-20260415";
 
 const features = (o: { tools?: boolean; cache?: boolean; thinking?: string[] } = {}) => ({
   batch: { batch_chat: false, batch_job: false },
@@ -156,8 +158,29 @@ export const MODELS_BODY = {
     {
       api_supported: { "images/generations": true },
       domain: "ImageGeneration",
-      id: "doubao-seedream-5-0-flash-260915",
+      id: SEEDREAM,
+      modalities: { input_modalities: ["text", "image"], output_modalities: ["image"] },
       name: "doubao-seedream-5-0-flash",
+      object: "model",
+      status: "Published",
+      task_type: ["text_to_image", "image_to_image"],
+      version: "260915",
+    },
+    // Live shape (2026-11-18): no api_supported, no modalities
+    {
+      domain: "ImageGeneration",
+      id: SEEDREAM_4,
+      name: "doubao-seedream-4-0",
+      object: "model",
+      status: "Published",
+      version: "20260415",
+    },
+    // An image model with no bundled facts: listed, not callable (no imageGeneration)
+    {
+      api_supported: { "images/generations": true },
+      domain: "ImageGeneration",
+      id: "doubao-seededit-3-0-i2i-250628",
+      name: "doubao-seededit-3-0-i2i",
       object: "model",
       status: "Published",
     },
@@ -377,7 +400,83 @@ function violation(b: Body, issued: Set<string>): string | null {
   return null;
 }
 
-/** Routes for the conformance suite: `/api/v3/models`, chat and multimodal embeddings. */
+/** A tiny JPEG (SOI + JFIF APP0 + EOI): the bytes the plugin sniffs, nothing more. */
+export const FAKE_JPEG_BASE64 = Buffer.from([
+  0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01,
+  0x00, 0x01, 0x00, 0x00, 0xff, 0xd9,
+]).toString("base64");
+
+export interface ImageBody {
+  model?: unknown;
+  prompt?: unknown;
+  size?: unknown;
+  image?: unknown;
+  response_format?: unknown;
+  watermark?: unknown;
+  [k: string]: unknown;
+}
+
+/** `POST /api/v3/images/generations` in the shape seen live (2026-11-18, seedream 5.0 flash). */
+export const imageOk = (o: { size: string; b64?: string; format?: string }): FakeResponse => {
+  const [w, h] = o.size.split("x").map(Number);
+  const tokens = ((w ?? 0) * (h ?? 0)) / 256;
+  return {
+    status: 200,
+    json: {
+      model: SEEDREAM,
+      created: 1_794_980_225,
+      data: [
+        {
+          size: o.size,
+          output_format: o.format ?? "jpeg",
+          background: "opaque",
+          b64_json: o.b64 ?? FAKE_JPEG_BASE64,
+        },
+      ],
+      usage: { input_images: 0, generated_images: 1, output_tokens: tokens, total_tokens: tokens },
+    },
+  };
+};
+
+/** Seedream's checks as the API makes them (live 2026-11-18): pixel `WxH`, area per family. */
+function imageRoute(b: ImageBody): FakeResponse {
+  const range: Record<string, [number, number]> = {
+    [SEEDREAM]: [921_600, 4_624_220],
+    [SEEDREAM_4]: [921_600, 16_777_216],
+  };
+  const r = typeof b.model === "string" ? range[b.model] : undefined;
+  if (r === undefined) {
+    return errorJson(404, {
+      code: "InvalidEndpointOrModel.NotFound",
+      message: `The model or endpoint ${String(b.model)} does not exist or you do not have access to it.`,
+      type: "Not Found",
+    });
+  }
+  const bad = (message: string, param = "") =>
+    errorJson(400, { code: "InvalidParameter", message, param });
+  if (b.response_format !== "b64_json") return bad("response_format must be b64_json here");
+  if (b.watermark !== false) return bad("watermark must be false here");
+  if ("n" in b || "sequential_image_generation" in b) return bad("one image per request here");
+  if (typeof b.prompt !== "string" || b.prompt === "") return bad("prompt is required", "prompt");
+  const m = typeof b.size === "string" ? /^(\d+)x(\d+)$/.exec(b.size) : null;
+  if (m === null) return bad("must be 'WIDTHxHEIGHT' or a supported size preset", "size");
+  const area = Number(m[1]) * Number(m[2]);
+  if (area < r[0] || area > r[1]) return bad(`image area out of range`, "size");
+  if (b.image !== undefined) {
+    const refs = Array.isArray(b.image) ? b.image : [b.image];
+    if (refs.length === 0 || refs.some((x) => parseDataUrl(x) === null))
+      return bad("image must be a data URL or URL", "image");
+  }
+  if (b.prompt.includes("forbidden")) {
+    return errorJson(400, {
+      code: "OutputImageSensitiveContentDetected",
+      message: "The request failed because the output image may contain sensitive information.",
+    });
+  }
+  return imageOk({ size: b.size as string });
+}
+
+/** Routes for the conformance suite: `/api/v3/models`, chat, multimodal embeddings and images. */
 export function arkRoutes(): (req: FakeRequest) => FakeResponse {
   const cachedPrefixes = new Set<string>();
   const issued = new Set<string>();
@@ -423,6 +522,7 @@ export function arkRoutes(): (req: FakeRequest) => FakeResponse {
         },
       };
     }
+    if (req.path === "/api/v3/images/generations") return imageRoute(req.body as ImageBody);
     if (req.path !== "/api/v3/chat/completions") {
       return errorJson(404, { code: "NotFound", message: "not found", type: "Not Found" });
     }
