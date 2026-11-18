@@ -2,6 +2,7 @@ import {
   type ImageGenerateRequest,
   type ImageGenerateResult,
   type ImageMediaType,
+  isModelError,
   ModelError,
 } from "@capybara-hq/plugin-sdk";
 import type { Target } from "./config.js";
@@ -163,11 +164,22 @@ async function generateTask(
   for (;;) {
     await sleep(wait, opts.signal);
     wait = Math.min(wait * 2, opts.poll.maxMs);
-    const res = await requestJson<TaskResponse>(t, `/api/v1/tasks/${encodeURIComponent(id)}`, {
-      method: "GET",
-      signal: opts.signal,
-      errors: ERRORS,
-    });
+    let res: TaskResponse;
+    try {
+      res = await requestJson<TaskResponse>(t, `/api/v1/tasks/${encodeURIComponent(id)}`, {
+        method: "GET",
+        signal: opts.signal,
+        errors: ERRORS,
+      });
+    } catch (e) {
+      // A throttled poll is not a failed call: the task runs on; wait longer (still at most
+      // maxMs, still ended by the signal) and poll again
+      if (isModelError(e) && e.kind === "rate_limited") {
+        wait = Math.min(Math.max(wait * 2, e.retryAfterMs ?? 0), opts.poll.maxMs);
+        continue;
+      }
+      throw e;
+    }
     const out = res.output ?? {};
     switch (out.task_status) {
       case "PENDING":
@@ -210,11 +222,39 @@ function sniff(b: Uint8Array): ImageMediaType | undefined {
   return undefined;
 }
 
+/** The largest result image read (bytes); larger downloads are refused. */
+export const MAX_IMAGE_DOWNLOAD_BYTES = 50 * 2 ** 20;
+const TOO_LARGE = "a result image is larger than the 50 MB download cap";
+
+/** The response body, refused past `MAX_IMAGE_DOWNLOAD_BYTES` (announced or counted). */
+async function readCapped(res: Response): Promise<Uint8Array> {
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_IMAGE_DOWNLOAD_BYTES) {
+    await res.body?.cancel().catch(() => {});
+    throw server(TOO_LARGE);
+  }
+  if (res.body === null) return new Uint8Array();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = res.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_IMAGE_DOWNLOAD_BYTES) {
+      await reader.cancel().catch(() => {});
+      throw server(TOO_LARGE);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+
 /**
  * Downloads one result image. Only https hosts under `aliyuncs.com` (the OSS result buckets, live:
  * `dashscope-*.oss-cn-beijing.aliyuncs.com`, `dashscope-*.oss-accelerate.aliyuncs.com`) are
- * fetched, without the API key and without following redirects, so a response cannot point the
- * plugin at another address.
+ * fetched, without the API key and without following redirects (a redirect is `server`), so a
+ * response cannot point the plugin at another address; at most 50 MB is read.
  */
 async function download(
   raw: unknown,
@@ -231,12 +271,16 @@ async function download(
   if (!vendor && !opts.downloadOrigins.includes(url.origin)) {
     throw server(`a result image is on an unexpected host (${url.hostname})`);
   }
-  const res = await fetch(url, { signal: opts.signal, redirect: "error" });
+  const res = await fetch(url, { signal: opts.signal, redirect: "manual" });
+  if (res.status >= 300 && res.status < 400) {
+    await res.body?.cancel().catch(() => {});
+    throw server(`downloading a result image was redirected (HTTP ${res.status}); not followed`);
+  }
   if (!res.ok) {
     await res.body?.cancel().catch(() => {});
     throw server(`downloading a result image failed with HTTP ${res.status}`);
   }
-  const bytes = new Uint8Array(await res.arrayBuffer());
+  const bytes = await readCapped(res);
   const mediaType = sniff(bytes);
   if (mediaType === undefined) throw server("a result image is not a PNG, JPEG, GIF or WebP");
   if (!info.outputMediaTypes.includes(mediaType)) {

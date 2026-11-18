@@ -138,9 +138,11 @@ const QWEN_IMAGE_2: ImageModelInfo = {
 
 /**
  * wan2.6 / wan2.5 sizes: the docs' recommended list (1280*1280 default, 1104*1472, 1472*1104,
- * 960*1696, 1696*960) plus a 3:2 pair. The docs give an area of 1280*1280 to 1440*1440; wan2.6
- * answers with 589824 (768*768) to 2073600 (1440*1440) live 2026-11-18. All declared sizes fit
- * both.
+ * 960*1696, 1696*960) plus a 3:2 pair (1632*1088). The docs state an area of 1280*1280 to
+ * 1440*1440, but their own recommended 1104*1472 (1,625,088) and 960*1696 (1,628,160) fall just
+ * below 1280*1280 (1,638,400); wan2.6 accepts 589824 (768*768) to 2073600 (1440*1440) live
+ * 2026-11-18. Every declared size is inside the live range (area 768*768 to 1440*1440, ratio 1:4
+ * to 4:1; asserted in test/image.test.ts); wan2.5 was not probed live.
  */
 // capybara:allow-module-state a read-only list of documented sizes
 const WAN_25_SIZES = [
@@ -153,7 +155,10 @@ const WAN_25_SIZES = [
   size(1088, 1632),
 ];
 
-/** wan2.2 and earlier: each side 512-1440, at most about 2 megapixels, default 1024*1024. */
+/**
+ * wan2.2 and earlier: each side 512-1440, at most 1440*1440 pixels (docs), default 1024*1024
+ * (asserted in test/image.test.ts).
+ */
 // capybara:allow-module-state a read-only list of documented sizes
 const WAN_22_SIZES = [
   size(1024, 1024),

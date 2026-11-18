@@ -149,8 +149,15 @@ export default defineExtension({
       "ap-northeast-1.maas.aliyuncs.com",
       "eu-central-1.maas.aliyuncs.com",
       // Result images of image generation: signed links on the OSS result buckets
-      // (dashscope-*.oss-cn-beijing.aliyuncs.com, dashscope-*.oss-accelerate.aliyuncs.com)
+      // ({bucket}.oss-{region}.aliyuncs.com, live: dashscope-*.oss-cn-beijing.aliyuncs.com,
+      // dashscope-*.oss-accelerate.aliyuncs.com). The code downloads from any https host under
+      // aliyuncs.com (no redirects); the OSS endpoints of the supported regions stand for them.
       "oss-cn-beijing.aliyuncs.com",
+      "oss-us-east-1.aliyuncs.com",
+      "oss-ap-southeast-1.aliyuncs.com",
+      "oss-cn-hongkong.aliyuncs.com",
+      "oss-ap-northeast-1.aliyuncs.com",
+      "oss-eu-central-1.aliyuncs.com",
       "oss-accelerate.aliyuncs.com",
     ],
   },

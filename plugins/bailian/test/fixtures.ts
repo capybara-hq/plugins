@@ -480,6 +480,36 @@ export async function startImageServer(): Promise<ImageServer> {
     hits.push(path);
     headers.push(req.headers);
     if (path.startsWith("/stall/")) return;
+    if (path.startsWith("/redirect/")) {
+      res.writeHead(302, { location: "/img/a.png" }).end();
+      return;
+    }
+    if (path.startsWith("/declared-huge/")) {
+      // announces 60 MB; the client must refuse before reading
+      res.writeHead(200, { "content-type": "image/png", "content-length": String(60 * 2 ** 20) });
+      res.write(IMAGE_PNG);
+      return;
+    }
+    if (path.startsWith("/endless/")) {
+      // no content-length: 1 MB chunks until the client stops reading (or 60 MB)
+      res.writeHead(200, { "content-type": "image/png" });
+      const chunk = Buffer.alloc(2 ** 20);
+      IMAGE_PNG.copy(chunk);
+      let sent = 0;
+      const pump = () => {
+        while (sent < 60 && !res.destroyed) {
+          sent++;
+          if (!res.write(sent === 1 ? chunk : Buffer.alloc(2 ** 20))) {
+            res.once("drain", pump);
+            return;
+          }
+        }
+        res.end();
+      };
+      res.on("error", () => {});
+      pump();
+      return;
+    }
     if (path.startsWith("/missing/")) {
       res.writeHead(404).end("NoSuchKey");
     } else if (path.startsWith("/text/")) {

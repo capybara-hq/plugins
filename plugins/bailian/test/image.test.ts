@@ -114,6 +114,42 @@ describe("image models in the list", () => {
       }
     }
   });
+
+  it("every declared size is inside its family's pixel rules", () => {
+    const area = (s: { width: number; height: number }) => s.width * s.height;
+    const family = (prefix: string) =>
+      Object.entries(IMAGE_MODELS).filter(([id]) => id.startsWith(prefix));
+    // Qwen-Image 2.0: area 512*512 to 2048*2048 (live 2026-11-18)
+    for (const [id, info] of family("qwen-image-2.0")) {
+      for (const s of info.sizes) {
+        expect(area(s), `${id} ${s.width}x${s.height}`).toBeGreaterThanOrEqual(512 * 512);
+        expect(area(s), `${id} ${s.width}x${s.height}`).toBeLessThanOrEqual(2048 * 2048);
+      }
+    }
+    // wan2.6 / wan2.5: area 768*768 to 1440*1440 (wan2.6 live), ratio 1:4 to 4:1; the docs'
+    // stated minimum of 1280*1280 is not asserted: their own recommended 1104*1472 and 960*1696
+    // fall below it
+    for (const [id, info] of [...family("wan2.6-"), ...family("wan2.5-")]) {
+      for (const s of info.sizes) {
+        expect(area(s), `${id} ${s.width}x${s.height}`).toBeGreaterThanOrEqual(768 * 768);
+        expect(area(s), `${id} ${s.width}x${s.height}`).toBeLessThanOrEqual(1440 * 1440);
+        expect(Math.max(s.width, s.height) / Math.min(s.width, s.height)).toBeLessThanOrEqual(4);
+      }
+    }
+    // wan2.2 and earlier: each side 512 to 1440, at most 1440*1440 pixels
+    for (const [id, info] of [...family("wan2.2-"), ...family("wanx2.")]) {
+      for (const s of info.sizes) {
+        for (const side of [s.width, s.height]) {
+          expect(side, `${id} ${s.width}x${s.height}`).toBeGreaterThanOrEqual(512);
+          expect(side, `${id} ${s.width}x${s.height}`).toBeLessThanOrEqual(1440);
+        }
+        expect(area(s), `${id} ${s.width}x${s.height}`).toBeLessThanOrEqual(1440 * 1440);
+      }
+    }
+    expect(family("qwen-image-2.0").length).toBeGreaterThan(0);
+    expect(family("wan2.5-").length + family("wan2.6-").length).toBe(2);
+    expect(family("wan2.2-").length + family("wanx2.").length).toBe(5);
+  });
 });
 
 describe("generateImage: sync multimodal-generation", () => {
@@ -237,6 +273,31 @@ describe("generateImage: async text2image task", () => {
     expect(info && validateImageGenerateResult(req, info, res)).toBeNull();
   });
 
+  it("a 429 on a poll lengthens the wait and polling continues", async () => {
+    let polls = 0;
+    const provider = await providerWith((r) => {
+      if (r.path === TEXT2IMAGE_PATH) return taskSubmitted("t-429");
+      polls++;
+      if (polls <= 2) {
+        return errorJson(429, "Throttling.RateQuota", "Requests rate limit exceeded");
+      }
+      return taskStatus("t-429", "SUCCEEDED", { results: [{ url: `${images.url}/img/t.png` }] });
+    });
+    const { res, error } = await generate(provider, wanxReq());
+    expect(error).toBeUndefined();
+    expect(res?.images).toHaveLength(1);
+    expect(polls).toBe(3);
+  });
+
+  it("a 429 on the submit is rate_limited", async () => {
+    const provider = await providerWith(() =>
+      errorJson(429, "Throttling.RateQuota", "Requests rate limit exceeded"),
+    );
+    const { error } = await generate(provider, wanxReq());
+    expect(kindOf(error)).toBe("rate_limited");
+    expect(generationRequests().map((r) => r.path)).toEqual([TEXT2IMAGE_PATH]);
+  });
+
   it("accepts a JPEG from a model that declares it", async () => {
     const provider = await providerWith((r) =>
       r.path === TEXT2IMAGE_PATH
@@ -357,6 +418,23 @@ describe("generateImage: errors", () => {
     const provider = await providerWith(() => multimodalImages([`${images.url}/img/a.jpg`]));
     const { error } = await generate(provider, qwenReq());
     expect(kindOf(error)).toBe("server");
+  });
+
+  it.each([
+    ["a download announcing more than 50 MB", "/declared-huge/a.png"],
+    ["a download streaming past 50 MB", "/endless/a.png"],
+  ])("%s is server, naming the cap", async (_label, path) => {
+    const provider = await providerWith(() => multimodalImages([`${images.url}${path}`]));
+    const { error } = await generate(provider, qwenReq());
+    expect(kindOf(error)).toBe("server");
+    expect(messageOf(error)).toContain("50 MB");
+  });
+
+  it("a redirected download is server (not retryable network) and is not followed", async () => {
+    const provider = await providerWith(() => multimodalImages([`${images.url}/redirect/a.png`]));
+    const { error } = await generate(provider, qwenReq());
+    expect(kindOf(error)).toBe("server");
+    expect(images.hits).toEqual(["/redirect/a.png"]);
   });
 
   it("refuses to download a URL outside the vendor's hosts", async () => {
