@@ -405,8 +405,8 @@
       "name": "ark",
       "version": "0.1.0-rc.9",
       "summary": {
-        "en": "Model provider (model-provider@2) for Volcengine Ark chat and embedding models",
-        "zh": "火山方舟对话与嵌入模型（model-provider@2）"
+        "en": "Model provider (model-provider@2) for Volcengine Ark chat, embedding and image generation models",
+        "zh": "火山方舟对话、嵌入与图片生成模型（model-provider@2）"
       },
       "displayName": {
         "zh": "火山方舟模型",
@@ -444,8 +444,8 @@
       "name": "bailian",
       "version": "0.1.0-rc.9",
       "summary": {
-        "en": "Model provider (model-provider@2) for Alibaba Cloud Model Studio (Bailian) chat and embedding models",
-        "zh": "阿里云百炼对话与嵌入模型（model-provider@2）"
+        "en": "Model provider (model-provider@2) for Alibaba Cloud Model Studio (Bailian) chat, embedding and image generation models",
+        "zh": "阿里云百炼对话、嵌入与图片生成模型（model-provider@2）"
       },
       "displayName": {
         "zh": "阿里云百炼模型",

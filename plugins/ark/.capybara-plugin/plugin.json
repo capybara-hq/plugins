@@ -10,7 +10,7 @@
   "icon": "./icon.svg",
   "description": {
     "en": "Model provider (model-provider@2) for Volcengine Ark chat, embedding and image generation models",
-    "zh": "火山方舟对话、嵌入与图像生成模型（model-provider@2）"
+    "zh": "火山方舟对话、嵌入与图片生成模型（model-provider@2）"
   },
   "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/ark#readme"
 }
