@@ -1,8 +1,12 @@
 # @capybara-hq/plugin-file-preview
 
 Previews files from a conversation in the right panel. The plugin provides `file-preview@1` with
-seven previewers; each is a sandboxed embed. Markdown, CSV / TSV and bitmap images stay with the
-kernel's built-in previewers and are never claimed here.
+six previewers; each is a sandboxed embed. Markdown, CSV / TSV, bitmap images and HTML stay with
+the kernel's built-in previewers and are never claimed here.
+
+HTML is rendered by the kernel's built-in previewer (full rendering, CDN allowlist) since a kernel
+release after 0.1.0-rc.50. This plugin no longer has an `html` previewer; on an older kernel an HTML
+file has no previewer from this plugin.
 
 ## Previewers
 
@@ -14,19 +18,17 @@ kernel's built-in previewers and are never claimed here.
 | `docx` | The document converted to sanitized HTML | `docx` |
 | `pdf` | Pages rendered lazily on canvases (no text selection) | `pdf` |
 | `svg` | The image, shown only as `<img src="blob:…">` | `svg`; `image/svg+xml` |
-| `html` | A static, sanitized rendering of the page, with a source mode (the code previewer) | `html`, `htm`; `text/html` |
 
 The exact lists are in `src/previewers.ts`.
 
 Code highlighting covers `ts` / `tsx`, `js` / `jsx` / `mjs` / `cjs`, `py`, `go`, `rs`, `java`, `kt`,
 `swift`, `c` / `h`, `cpp` / `hpp`, `cs`, `rb`, `sh` / `bash` / `zsh`, `ps1`, `sql`, `json` / `jsonc`,
 `yaml` / `yml`, `toml`, `ini`, `xml`, `css`, `scss`, `proto`, `log`, `env`, `dockerfile`, `makefile`
-(and Dockerfile / Makefile entries inside an archive), and HTML in the html previewer's source
-mode. Other accepted files (for example `vue`, `svelte`, `php`, `graphql`,
-`lua`, `r`, `dart`, `scala`, `gradle`, `txt`) show as plain text.
+(and Dockerfile / Makefile entries inside an archive). Other accepted files (for example `vue`,
+`svelte`, `php`, `graphql`, `lua`, `r`, `dart`, `scala`, `gradle`, `txt`) show as plain text.
 
 Inside a zip, an entry is previewed by the previewer its extension selects; in addition `png`,
-`jpg` / `jpeg`, `gif` and `webp` entries show as images and `md`, `csv` and `tsv` entries as text.
+`jpg` / `jpeg`, `gif` and `webp` entries show as images and `md`, `csv`, `tsv`, `html` and `htm` entries as text (HTML is never rendered here).
 Bare names such as `Dockerfile` or `.env` do match inside archives (unlike files opened directly,
 see below).
 
@@ -52,7 +54,7 @@ see below).
   allows `connect-src 'self'` only, and the embed fetches nothing: the file arrives over the
   message bridge, and the embed's own scripts and data are loaded as modules.
 - Parsing and rendering of untrusted formats run in workers started from `blob:` URLs.
-- docx and HTML output goes through a sanitizer (DOMPurify plus the plugin's own rules) before it
+- docx output goes through a sanitizer (DOMPurify plus the plugin's own rules) before it
   is shown. SVG is never sanitized or inserted as markup: it is shown only as an
   `<img src="blob:…">`, where it cannot run scripts or load anything.
 - Links in previewed content are not clickable.
@@ -62,8 +64,6 @@ see below).
 
 ## Known limitations
 
-- HTML is static: no scripts, no CDN resources, no external styles or images, no embedded audio or
-  video. Running pages needs a separate content origin, which is a later project.
 - Bare file names such as `Dockerfile`, `Makefile` and `.env` do not match files opened directly:
   previewers are chosen by extension or MIME type, and these names have none.
 - Entries inside a zip are previewed regardless of the org's per-previewer settings (disabling a

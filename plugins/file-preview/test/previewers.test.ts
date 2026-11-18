@@ -16,17 +16,9 @@ const takers = (name: string, contentType: string): PreviewerId[] =>
   ).map((p) => p.id);
 
 describe("PREVIEWERS", () => {
-  it("is a valid file-preview@1 provider with the seven ids in order", () => {
+  it("is a valid file-preview@1 provider with the six ids in order", () => {
     expect(validateFilePreviewProvider(toProvider())).toEqual([]);
-    expect(PREVIEWERS.map((p) => p.id)).toEqual([
-      "code",
-      "zip",
-      "sheet",
-      "docx",
-      "pdf",
-      "svg",
-      "html",
-    ]);
+    expect(PREVIEWERS.map((p) => p.id)).toEqual(["code", "zip", "sheet", "docx", "pdf", "svg"]);
   });
 
   it("never claims Markdown, CSV / TSV or bitmap images (the built-ins stay first)", () => {
@@ -46,9 +38,12 @@ describe("PREVIEWERS", () => {
     expect(takers("A.GO", "application/octet-stream")).toEqual(["code"]);
   });
 
-  it("html takes web pages and code does not", () => {
-    expect(takers("a.htm", "text/html")).toEqual(["html"]);
-    expect(takers("a.html", "application/octet-stream")).toEqual(["html"]);
+  it("never claims HTML (the kernel renders it) and has no html embed", () => {
+    expect(takers("r.html", "text/html")).toEqual([]);
+    expect(takers("a.htm", "text/html")).toEqual([]);
+    expect(takers("a.html", "application/octet-stream")).toEqual([]);
+    expect(toProvider().previewers.map((p) => p.id)).not.toContain("html");
+    expect(PREVIEWERS.map((p) => p.id)).not.toContain("html");
   });
 
   it("sheet takes xlsx / xlsm only; zip takes jar; docx, pdf and svg by type and extension", () => {
