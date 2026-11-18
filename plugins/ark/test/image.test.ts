@@ -189,12 +189,13 @@ describe("ark: image generation", () => {
     expect(res?.images[0]?.mediaType).toBe("image/png");
   });
 
-  it("downloads an image that comes back as a URL", async () => {
-    const jpeg = Buffer.from(FAKE_JPEG_BASE64, "base64");
+  it("an item without b64_json (a URL only) -> server, nothing downloaded", async () => {
     let downloaded = 0;
     const tos = createServer((_req, res) => {
       downloaded++;
-      res.writeHead(200, { "content-type": "image/jpeg" }).end(jpeg);
+      res
+        .writeHead(200, { "content-type": "image/jpeg" })
+        .end(Buffer.from(FAKE_JPEG_BASE64, "base64"));
     });
     await new Promise<void>((resolve) => tos.listen(0, "127.0.0.1", resolve));
     try {
@@ -206,9 +207,10 @@ describe("ark: image generation", () => {
           usage: { generated_images: 1, output_tokens: 16384, total_tokens: 16384 },
         },
       });
-      const res = await provider().generateImage?.(req(), { signal: signal() });
-      expect(downloaded).toBe(1);
-      expect(res?.images).toEqual([{ mediaType: "image/jpeg", data: FAKE_JPEG_BASE64 }]);
+      const e = await failure(req());
+      expect(kindOf(e)).toBe("server");
+      expect((e as Error).message).toBe("Ark: the image response carries no image");
+      expect(downloaded).toBe(0);
     } finally {
       await new Promise((resolve) => tos.close(resolve));
     }

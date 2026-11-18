@@ -10,7 +10,6 @@ import { imageGenerationInfo } from "./tables.js";
 /** One entry of the response's `data` (live 2026-11-18: `size`, `output_format`, `b64_json`). */
 interface RawImage {
   b64_json?: unknown;
-  url?: unknown;
   error?: { code?: unknown; message?: unknown } | null;
 }
 
@@ -31,27 +30,6 @@ function sniff(b64: string): ImageMediaType | null {
   const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
   if (png.every((b, i) => head[i] === b)) return "image/png";
   return null;
-}
-
-/**
- * The vendor's image URL (valid 24 h) as base64, with the call's signal. Only a fallback: the
- * request asks for `b64_json`, so a URL is not expected.
- */
-async function download(url: string, signal: AbortSignal): Promise<string> {
-  let res: Response;
-  try {
-    res = await fetch(url, { signal });
-  } catch (cause) {
-    throw fetchError(cause, "downloading the image", signal);
-  }
-  if (!res.ok) {
-    throw new ModelError("server", `Ark: downloading the image: HTTP ${res.status}`);
-  }
-  try {
-    return Buffer.from(await res.arrayBuffer()).toString("base64");
-  } catch (cause) {
-    throw fetchError(cause, "downloading the image", signal);
-  }
 }
 
 /** One `POST {baseUrl}/images/generations` → one image and its output tokens. */
@@ -103,10 +81,11 @@ async function generateOne(
     const kind = isModerationCode(code) ? "refusal" : (kindFromCode(code) ?? "server");
     throw new ModelError(kind, `Ark: ${WHAT}: ${code || "error"}: ${message}`.trim());
   }
-  let data: string;
-  if (typeof item.b64_json === "string" && item.b64_json !== "") data = item.b64_json;
-  else if (typeof item.url === "string" && item.url !== "") data = await download(item.url, signal);
-  else throw new ModelError("server", "Ark: the image response carries no image");
+  // The request asks for `b64_json`; an item without it (e.g. a URL only) is a vendor fault
+  if (typeof item.b64_json !== "string" || item.b64_json === "") {
+    throw new ModelError("server", "Ark: the image response carries no image");
+  }
+  const data = item.b64_json;
   const mediaType = sniff(data);
   if (mediaType === null) {
     throw new ModelError("server", "Ark: the returned image is neither JPEG nor PNG");

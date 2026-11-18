@@ -85,9 +85,11 @@ export const DEFAULT_MAX_OUTPUT = 4_096;
  *   flash). Default 2048x2048, the documented 2K 1:1 default.
  * - One image per call (`maxImages` 1): Ark has no `n`; group generation's `max_images` is only an
  *   upper bound and may return fewer, so the kernel never asks for more than one.
- * - Reference images (`image`): 10 on 5.5 / 5.0 pro / 5.0 flash, 14 on 5.0 lite / 4.5 / 4.0. The
- *   id `doubao-seedream-5-0-` (no suffix) is taken to be 5.0 lite (not activated on the test
- *   account, so not checked live): sizes from the 4.5 / lite range, and the lower reference limit.
+ * - Reference images (`image`): 10 on 5.5 / 5.0 pro / 5.0 flash, 14 on 4.5 / 4.0. The id
+ *   `doubao-seedream-5-0-` (no suffix) is taken to be 5.0 lite (not activated on the test account,
+ *   so not checked live): sizes from the 4.5 / lite range, and deliberately the conservative 10
+ *   references of the 5.x family rather than the documented 14 (unverified; a lower limit only
+ *   refuses requests the vendor might have taken).
  * - Output: JPEG by default (live), PNG on request; the provider sniffs the bytes.
  */
 // capybara:allow-module-state read-only size list
