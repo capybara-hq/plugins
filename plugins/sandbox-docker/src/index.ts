@@ -130,7 +130,7 @@ export function providerConfig(
  */
 const plugin = defineExtension({
   name: "sandbox-docker",
-  version: "0.1.0-rc.18",
+  version: "0.1.0-rc.19",
   // The operation contract and its staged runtime (SANDBOX_RUNTIME_SOURCE v2) are the SDK's from
   // rc.28 on (its staged launcher bytes); the network contract (`limits.mode` /
   // `limits.network`) from rc.22.
