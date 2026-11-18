@@ -16,16 +16,19 @@ const STANDARD_SIZES = [
 ];
 
 /**
- * gpt-image-2 and later accept any WxH with both sides divisible by 16 (ratio at most 3:1, max
- * 3840x2160, anything above 2560x1440 experimental). The contract wants a fixed list, so these are a
- * documented few at or below 2560x1440.
+ * gpt-image-2 and later accept any WxH with both sides divisible by 16, ratio at most 3:1, up to
+ * 3840x2160, with anything above 2560x1440 pixels experimental. The contract wants a fixed list, so
+ * these are a few sizes that follow that rule and stay at or below 2560x1440 pixels (3,686,400):
+ * 1920x1920 is the square of exactly that count; 2048x2048 is above it and left out.
  */
 // capybara:allow-module-state a read-only table of documented sizes
 const FLEXIBLE_SIZES = [
   ...STANDARD_SIZES,
-  { width: 2048, height: 2048 },
+  { width: 1920, height: 1920 },
   { width: 2048, height: 1152 },
   { width: 1152, height: 2048 },
+  { width: 2560, height: 1440 },
+  { width: 1440, height: 2560 },
 ];
 
 /**
@@ -57,8 +60,9 @@ const KNOWN_IMAGE_MODELS: Record<string, ModelImageGenerationInfo> = Object.from
 // capybara:allow-module-state a read-only list of model ids
 export const KNOWN_IMAGE_MODEL_IDS = Object.keys(KNOWN_IMAGE_MODELS);
 
+/** The model's listing entry; its facts are a copy, never the shared table object. */
 export function imageModelInfo(id: string): ModelInfo {
-  const info = KNOWN_IMAGE_MODELS[id];
+  const info = Object.hasOwn(KNOWN_IMAGE_MODELS, id) ? KNOWN_IMAGE_MODELS[id] : undefined;
   if (info === undefined) throw new Error(`Unknown OpenAI image model "${id}"`);
   return {
     id,
@@ -75,7 +79,7 @@ export function imageModelInfo(id: string): ModelInfo {
       documents: false,
     },
     parameters: [],
-    imageGeneration: info,
+    imageGeneration: structuredClone(info),
   };
 }
 
@@ -96,9 +100,11 @@ function imageError(e: unknown, signal: AbortSignal): ModelError {
   return toModelError(e, signal);
 }
 
-const EXTENSION: Record<string, string> = {
+/** Reference image types the edits endpoint takes, and their file extensions. */
+// capybara:allow-module-state a read-only map of media types
+const EXTENSION: Readonly<Record<string, string>> = {
   "image/png": "png",
-  "image/jpeg": "jpg",
+  "image/jpeg": "jpeg",
   "image/webp": "webp",
 };
 
@@ -116,8 +122,16 @@ export async function generateOpenAIImage(
     size,
     output_format: "png",
   } as const;
+  const refs = req.referenceImages ?? [];
+  for (const r of refs) {
+    if (!Object.hasOwn(EXTENSION, r.mediaType)) {
+      throw new ModelError(
+        "invalid_request",
+        `OpenAI: reference images must be PNG, JPEG or WebP, not ${r.mediaType}`,
+      );
+    }
+  }
   try {
-    const refs = req.referenceImages ?? [];
     const res =
       refs.length === 0
         ? await client.images.generate(common, { signal })
@@ -128,7 +142,7 @@ export async function generateOpenAIImage(
                 refs.map((r, i) =>
                   toFile(
                     Buffer.from(r.data, "base64"),
-                    `reference-${i}.${EXTENSION[r.mediaType] ?? "png"}`,
+                    `reference-${i}.${EXTENSION[r.mediaType]}`,
                     {
                       type: r.mediaType,
                     },
@@ -138,9 +152,17 @@ export async function generateOpenAIImage(
             },
             { signal },
           );
-    const images = (res.data ?? []).flatMap((d) =>
-      d.b64_json === undefined ? [] : [{ mediaType: "image/png" as const, data: d.b64_json }],
-    );
+    const data = res.data ?? [];
+    if (data.length !== req.n || data.some((d) => typeof d.b64_json !== "string" || !d.b64_json)) {
+      throw new ModelError(
+        "server",
+        `OpenAI: the image response carries ${data.filter((d) => d.b64_json).length} b64_json image(s), expected ${req.n}`,
+      );
+    }
+    const images = data.map((d) => ({
+      mediaType: "image/png" as const,
+      data: d.b64_json as string,
+    }));
     return {
       images,
       // Tokens are for the whole request; GPT image models never return a revised prompt.

@@ -57,8 +57,13 @@ export interface OpenAIProviderOptions {
   models: ModelConfig[];
   /** 部署级默认值："off" 时不请求推理摘要；默认 "auto"。agent 的 thinking 参数可覆盖。 */
   reasoningSummary?: "auto" | "off" | undefined;
-  /** Image generation model ids (a subset of the known GPT image models); none by default. */
+  /**
+   * Image generation model ids; ids without facts in the plugin's table are ignored with one
+   * warning. None by default.
+   */
   imageModels?: string[] | undefined;
+  /** Receives the warning about ignored image model ids. */
+  log?: { warn(message: string): void } | undefined;
 }
 
 /**
@@ -129,13 +134,15 @@ export function createOpenAIProvider(opts: OpenAIProviderOptions): ModelProvider
   });
   const models = opts.models;
   const reasoningSummary = opts.reasoningSummary ?? "auto";
-  const imageModels = opts.imageModels ?? [];
-  const unknown = imageModels.filter((id) => !KNOWN_IMAGE_MODEL_IDS.includes(id));
+  const configuredImageModels = opts.imageModels ?? [];
+  // An id without facts (a retired or misspelled model) is skipped, never a broken provider
+  const unknown = configuredImageModels.filter((id) => !KNOWN_IMAGE_MODEL_IDS.includes(id));
   if (unknown.length > 0) {
-    throw new Error(
-      `Unknown image model(s) ${unknown.join(", ")}; known: ${KNOWN_IMAGE_MODEL_IDS.join(", ")}`,
+    opts.log?.warn(
+      `openai: ignoring unknown image model(s) ${unknown.join(", ")}; known: ${KNOWN_IMAGE_MODEL_IDS.join(", ")}`,
     );
   }
+  const imageModels = configuredImageModels.filter((id) => KNOWN_IMAGE_MODEL_IDS.includes(id));
 
   return {
     listModels: async () => [
@@ -174,8 +181,11 @@ const DeploymentConfig = z.object({
   reasoningSummary: ui(z.enum(["auto", "off"]).default("auto"), {
     label: { zh: "推理摘要", en: "Reasoning summary" },
   }),
-  /** Image generation model ids to offer; only ids with facts in the plugin's table are accepted. */
-  imageModels: ui(z.array(z.enum(KNOWN_IMAGE_MODEL_IDS as [string, ...string[]])).optional(), {
+  /**
+   * Image generation model ids to offer. Any string is accepted (a retired id never breaks the
+   * config); ids without facts in the plugin's table are ignored with a warning.
+   */
+  imageModels: ui(z.array(z.string().min(1)).optional(), {
     label: { zh: "图像生成模型", en: "Image generation models" },
   }),
 });
@@ -200,6 +210,7 @@ export default defineExtension({
         models: cfg.models,
         reasoningSummary: cfg.reasoningSummary,
         imageModels: cfg.imageModels,
+        log: ctx.log,
       }),
     );
   },

@@ -11,8 +11,9 @@ import {
   isPngBase64,
   startFakeModelServer,
 } from "@capybara-hq/testing";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createOpenAIProvider } from "../src/index.js";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { z } from "zod";
+import plugin, { createOpenAIProvider } from "../src/index.js";
 import { errorJson, imageResponse, PNG_BASE64 } from "./fixtures.js";
 
 let server: FakeModelServer;
@@ -23,8 +24,12 @@ beforeAll(async () => {
 });
 afterAll(() => server.stop());
 
-const provider = (imageModels = ["gpt-image-1-mini"]): ModelProvider =>
+const provider = (
+  imageModels = ["gpt-image-1-mini"],
+  log?: { warn: (msg: string, meta?: Record<string, unknown>) => void },
+): ModelProvider =>
   createOpenAIProvider({
+    ...(log ? { log } : {}),
     apiKey: "sk-fixture",
     baseUrl: `${server.url}/v1`,
     models: [
@@ -89,8 +94,57 @@ describe("image models listing", () => {
     }
   });
 
-  it("rejects an image model id the plugin has no facts for", () => {
-    expect(() => provider(["gpt-image-1"])).toThrow(/gpt-image-1/);
+  it("ignores an image model id the plugin has no facts for, with one warning", async () => {
+    const warn = vi.fn();
+    const p = provider(["gpt-image-1", "gpt-image-2", "gpt-image-0"], { warn });
+    const ids = (await p.listModels()).map((m) => m.id);
+    expect(ids).toEqual(["gpt-5.5", "gpt-image-2"]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toMatch(/gpt-image-1, gpt-image-0/);
+    const e = await rejection(call(p, request({ model: "gpt-image-1" })));
+    expect((e as { kind: string }).kind).toBe("invalid_request");
+  });
+
+  it("the deployment config accepts a retired image model id", () => {
+    const schema = plugin.config?.deployment as z.ZodObject;
+    const parsed = schema.safeParse({
+      apiKey: "sk-x",
+      models: [
+        { id: "gpt-5.5", contextWindow: 1000, maxOutputTokens: 100, reasoning: true, vision: true },
+      ],
+      imageModels: ["gpt-image-1", "gpt-image-2"],
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("returns a copy of the facts, not the shared table", async () => {
+    const first = (await provider(["gpt-image-2"]).listModels()).find(
+      (m) => m.id === "gpt-image-2",
+    );
+    first?.imageGeneration?.sizes.push({ width: 16, height: 16 });
+    if (first?.imageGeneration) first.imageGeneration.maxImages = 99;
+    const again = (await provider(["gpt-image-2"]).listModels()).find(
+      (m) => m.id === "gpt-image-2",
+    );
+    expect(again?.imageGeneration?.maxImages).toBe(10);
+    expect(again?.imageGeneration?.sizes).not.toContainEqual({ width: 16, height: 16 });
+  });
+
+  it("gpt-image-2 / 2.5 sizes follow the documented rule (/16, ratio <= 3:1, <= 2560x1440 pixels)", async () => {
+    const ids = ["gpt-image-2", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare"];
+    for (const m of await provider(ids).listModels()) {
+      if (m.kind !== "image_generation") continue;
+      for (const s of m.imageGeneration?.sizes ?? []) {
+        const label = `${m.id} ${s.width}x${s.height}`;
+        expect(s.width % 16 === 0 && s.height % 16 === 0, label).toBe(true);
+        expect(
+          Math.max(s.width, s.height) / Math.min(s.width, s.height),
+          label,
+        ).toBeLessThanOrEqual(3);
+        expect(s.width * s.height, label).toBeLessThanOrEqual(2560 * 1440);
+      }
+      expect(m.imageGeneration?.sizes).not.toContainEqual({ width: 2048, height: 2048 });
+    }
   });
 });
 
@@ -155,12 +209,45 @@ describe("generate with reference images", () => {
     expect(body).toMatch(/name="n"\r\n\r\n1/);
     expect(body).toMatch(/name="output_format"\r\n\r\npng/);
     expect(body).toMatch(/Content-Type: image\/jpeg/);
+    expect(body).toMatch(/filename="reference-0\.png"/);
+    expect(body).toMatch(/filename="reference-1\.jpeg"/);
     expect(res.images).toHaveLength(1);
     expect(res.usage.outputImages).toBe(1);
   });
 });
 
 describe("errors", () => {
+  it.each([
+    ["fewer b64_json items than n", 2, () => imageResponse(1)],
+    [
+      "an item without b64_json",
+      1,
+      (): FakeResponse => ({
+        status: 200,
+        json: { data: [{ url: "https://example.invalid/a.png" }], usage: { input_tokens: 1 } },
+      }),
+    ],
+  ])("%s -> server", async (_label, n, response) => {
+    next = response;
+    const e = await rejection(call(provider(), request({ n })));
+    expect((e as { kind: string }).kind).toBe("server");
+    expect((e as Error).message).toMatch(/OpenAI: the image response carries/);
+  });
+
+  it("a reference image of another type is invalid_request before any request", async () => {
+    next = () => imageResponse(1);
+    server.requests.length = 0;
+    const e = await rejection(
+      call(
+        provider(),
+        request({ referenceImages: [{ mediaType: "image/gif", data: PNG_BASE64 }] }),
+      ),
+    );
+    expect((e as { kind: string }).kind).toBe("invalid_request");
+    expect((e as Error).message).toMatch(/image\/gif/);
+    expect(server.requests).toHaveLength(0);
+  });
+
   it("moderation 400 -> refusal with the vendor reason", async () => {
     next = () =>
       errorJson(400, {
