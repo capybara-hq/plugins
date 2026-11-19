@@ -81,8 +81,10 @@ export const DEFAULT_MAX_OUTPUT = 4_096;
  *
  * - Sizes are pixel `WxH` strings, a fixed list per family (the API takes any size inside a pixel
  *   range; the kernel needs a list): the 2K set fits every family's range (3,686,400 to
- *   4,624,220 pixels), 1024x1024 is added where the minimum is 921,600 (live: generated on 5.0
- *   flash). Default 2048x2048, the documented 2K 1:1 default.
+ *   4,624,220 pixels); the 1K set (1024x1024 and six 1K ratios, 921,600 pixels or more) is added
+ *   where the minimum is 921,600 (5.5, 5.0 flash, 5.0 pro, 4.0), so a small image can be asked for
+ *   to keep a conversation's image history light. Default 2048x2048, the documented 2K 1:1
+ *   default.
  * - One image per call (`maxImages` 1): Ark has no `n`; group generation's `max_images` is only an
  *   upper bound and may return fewer, so the kernel never asks for more than one.
  * - Reference images (`image`): 10 on 5.5 / 5.0 pro / 5.0 flash, 14 on 4.5 / 4.0. The id
@@ -90,7 +92,7 @@ export const DEFAULT_MAX_OUTPUT = 4_096;
  *   so not checked live): sizes from the 4.5 / lite range, and deliberately the conservative 10
  *   references of the 5.x family rather than the documented 14 (unverified; a lower limit only
  *   refuses requests the vendor might have taken).
- * - Output: JPEG by default (live), PNG on request; the provider sniffs the bytes.
+ * - Output: JPEG by default (live), PNG on request (5.5 returns PNG); the provider sniffs the bytes.
  */
 // capybara:allow-module-state read-only size list
 const TWO_K: ImageSize[] = [
@@ -103,7 +105,17 @@ const TWO_K: ImageSize[] = [
   { width: 1584, height: 2816 },
 ];
 // capybara:allow-module-state read-only size list
-const WITH_1K: ImageSize[] = [...TWO_K, { width: 1024, height: 1024 }];
+const ONE_K: ImageSize[] = [
+  { width: 1024, height: 1024 },
+  { width: 1152, height: 864 },
+  { width: 864, height: 1152 },
+  { width: 1248, height: 832 },
+  { width: 832, height: 1248 },
+  { width: 1280, height: 720 },
+  { width: 720, height: 1280 },
+];
+// capybara:allow-module-state read-only size list
+const WITH_1K: ImageSize[] = [...ONE_K, ...TWO_K];
 
 const seedream = (sizes: ImageSize[], maxReferenceImages: number): ModelImageGenerationInfo => ({
   sizes,
