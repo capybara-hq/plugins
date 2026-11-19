@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   isSandboxPermissionUnsupportedError,
   type SandboxHandle,
@@ -207,4 +208,20 @@ describe("operation scopes", () => {
       expect(calls.some((c) => c.cmd.includes("exec") && c.method === "run")).toBe(false);
     },
   );
+
+  it("never runs the SDK's Linux launcher: native work uses the helper on / (the device kind)", async () => {
+    const { ops: o, calls } = ops();
+    const stdins: string[] = [];
+    const op = await o.operation(h, scope(), sig());
+    // the fake records the agent command; native work is "direct" with the device kind
+    await op.writeFile("/workspace/a", new TextEncoder().encode("x"), sig()).catch(() => undefined);
+    for (const c of calls) stdins.push(c.cmd.join(" "));
+    expect(stdins.some((c) => / direct$/.test(c))).toBe(true);
+    expect(stdins.some((c) => / (exec|native) capybara-exec /.test(c))).toBe(false);
+    // and no code path hands a scope to the launcher (its files lock, filesLockFd, is therefore
+    // never needed: the container is the sandbox, no restricted command runs here)
+    const source = readFileSync(new URL("../src/operations.ts", import.meta.url), "utf8");
+    expect(source).not.toMatch(/OPERATION_AGENT, "(exec|native)"/);
+    expect(source).not.toMatch(/linux-sandbox|filesLockFd/);
+  });
 });

@@ -29,6 +29,7 @@ SELF_PROTECTION = protect_self()
 
 import contextlib
 import errno
+import fcntl
 import importlib.machinery
 import importlib.util
 import ipaddress
@@ -312,9 +313,16 @@ SOCK_NONBLOCK, SOCK_CLOEXEC = 0o4000, 0o2000000
 SOL_SOCKET, SO_DOMAIN, IPPROTO_TCP = 1, 39, 6
 SO_REUSEPORT, SO_ATTACH_REUSEPORT_CBPF, SO_ATTACH_REUSEPORT_EBPF = 15, 51, 52
 LOOPBACK = ("127.0.0.1", "::1")
-# How long a guarded directory move waits for the operation's other writes (a FIFO open waiting
+# How long a guarded directory move waits for the device's other writes (a FIFO open waiting
 # for its peer holds them) before it fails with EBUSY.
 EXCLUSIVE_WAIT_S = 5
+# How long a write waits for a guarded move of the device (which holds the device's files lock
+# exclusively for a few renames) before it fails with EBUSY: only a lock held from outside every
+# sandbox (Full work of the owner) can take that long.
+SHARED_WAIT_S = 30
+# The faultInjection seam's pause before a named mkdir, and the marker announcing it.
+PAUSE_S = 2
+PAUSE_MARKER = ".capybara-test-paused"
 AT_FDCWD = -100
 AT_SYMLINK_NOFOLLOW = 0x100
 AT_EMPTY_PATH = 0x1000
@@ -758,12 +766,59 @@ class SharedLock:
                 self.condition.notify_all()
 
 
+class DeviceFilesLock:
+    """The device's files lock, shared by every operation of the device: an flock on a file outside
+    every sandbox, inherited as a descriptor ("filesLockFd") that the restricted command never
+    holds. Every acquisition reopens it through /proc/self/fd (this process is non-dumpable, so no
+    other process can), because flock belongs to an open file description: each holder needs its
+    own. Shared and exclusive acquisitions both poll without blocking up to their bound, so a
+    waiting exclusive holder never holds back new shared ones (as in SharedLock)."""
+
+    def __init__(self, fd):
+        self.fd = fd
+
+    def acquire(self, mode, timeout, message):
+        fd = os.open("/proc/self/fd/%d" % self.fd, os.O_RDONLY | os.O_CLOEXEC)
+        deadline = time.monotonic() + timeout
+        delay = 0.0005
+        while True:
+            try:
+                fcntl.flock(fd, mode | fcntl.LOCK_NB)
+                return fd
+            except OSError as error:
+                if error.errno not in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EINTR):
+                    os.close(fd)
+                    raise
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                raise OSError(errno.EBUSY, message)
+            time.sleep(delay)
+            delay = min(delay * 2, 0.005)
+
+    @contextlib.contextmanager
+    def shared(self):
+        fd = self.acquire(fcntl.LOCK_SH, SHARED_WAIT_S, "A guarded move of the device did not end")
+        try:
+            yield
+        finally:
+            os.close(fd)  # closing the last descriptor of the description releases the lock
+
+    @contextlib.contextmanager
+    def exclusive(self, timeout):
+        """Raises EBUSY when the shared holders do not leave within timeout seconds."""
+        fd = self.acquire(fcntl.LOCK_EX, timeout, "The device's other writes did not finish")
+        try:
+            yield
+        finally:
+            os.close(fd)
+
+
 class NeedsExclusive(Exception):
     """A directory move into a guarded prefix: redone holding the files lock exclusively."""
 
 
 class Broker:
-    def __init__(self, native, roots, table, endpoints, listener):
+    def __init__(self, native, roots, table, endpoints, listener, files_lock=None):
         self.native = native
         self.files = native.NativeFiles(roots)
         self.names = {number: name for name, number in dict(table["nr"], **COMMON).items()}
@@ -772,12 +827,17 @@ class Broker:
         self.sockets = {}
         self.lock = threading.Lock()
         # Every mutating file operation holds this shared; a directory move into a guarded prefix
-        # holds it exclusively (staging, listing and the final rename).
-        self.files_lock = SharedLock()
+        # holds it exclusively (staging, listing and the final rename). With the consumer's
+        # "filesLockFd" it is the device's lock, so the exclusion spans every operation of the
+        # device; without one it spans this operation only.
+        self.files_lock = files_lock or SharedLock()
         # A failure the broker could not undo: the supervisor ends the operation and reports it.
         self.fatal = None
-        # A test fixture's injected fault (request "faultInjection"); never set in production.
+        # A test fixture's injected faults (request "faultInjection"); never set in production:
+        # fault "fail" fails a staged move; pause_mkdir names a mkdir that, once checked, marks its
+        # parent (PAUSE_MARKER) and waits PAUSE_S before its effect.
         self.fault = None
+        self.pause_mkdir = None
         self.counts = {}
         # Creation modes are the command's (its umask is applied explicitly), never the broker's.
         os.umask(0)
@@ -1126,6 +1186,88 @@ class Broker:
         if creates_entry and _fold_parts(name) == [".git"]:
             raise Denied()
 
+    # ---- post-effect verification ------------------------------------------------------------
+    # A write is checked on the path its parent descriptor had, then applied through that
+    # descriptor. The device's files lock keeps every sandboxed guarded move out of that window,
+    # but a process outside the sandbox can still move the parent meanwhile. So after each
+    # descriptor-relative create or rename the broker reads where the parent sits now and, when
+    # the entry landed at a denied path, undoes the effect and refuses; an effect it cannot undo
+    # ends the operation (fail).
+
+    def placed(self, parent, name):
+        """name below the parent descriptor, at the parent's current path (rebased onto the
+        pinned roots' recorded paths); None when the parent is no longer reachable."""
+        try:
+            where = self.rebase(os.readlink("/proc/self/fd/%d" % parent))
+        except OSError:
+            return None
+        if not where.startswith("/") or where.endswith(" (deleted)"):
+            return None
+        return where.rstrip("/") + "/" + name
+
+    def verify(self, denied, undo, what):
+        """Undoes an applied effect and refuses it when denied() says it landed somewhere denied
+        (denied reads the entry's current place); an undo that fails ends the operation."""
+        try:
+            if not denied():
+                return
+        except Denied:
+            pass
+        try:
+            undo()
+        except OSError as error:
+            self.fail("%s landed at a protected path after its check and could not be undone (%s)"
+                      % (what, error.strerror))
+        raise Denied()
+
+    def created_denied(self, parent, name, creates_entry=False, link=False):
+        """Whether the entry name below parent now sits at a path the write policy denies."""
+        now = self.placed(parent, name)
+        if now is None:
+            return False
+        if write_denied(now) or (creates_entry and _fold_parts(name) == [".git"]):
+            return True
+        return link and bool(_prefix_next(_fold_parts(now)))
+
+    @staticmethod
+    def remove_own(parent, name, ident, is_dir=False):
+        """Removes the entry the broker just made (ident: its (st_dev, st_ino)), never another."""
+        info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (info.st_dev, info.st_ino) != ident:
+            raise OSError(errno.ESTALE, "The created entry was replaced")
+        if is_dir:
+            os.rmdir(name, dir_fd=parent)
+        else:
+            os.unlink(name, dir_fd=parent)
+
+    @staticmethod
+    def identity(parent, name):
+        info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        return info.st_dev, info.st_ino
+
+    def moved_denied(self, sparent, sname, dparent, dname, kinds):
+        """Whether a rename, judged at its parents' current places, broke the write policy:
+        kinds lists ((parent, name), is_dir) of each entry that moved, by its source."""
+        source, destination = self.placed(sparent, sname), self.placed(dparent, dname)
+        if source is None or destination is None:
+            return False
+        ends = {(sparent, sname): (source, destination), (dparent, dname): (destination, source)}
+        for key, is_dir in kinds:
+            origin, to = ends[key]
+            # an unstaged directory landing at a guarded place was never listed there
+            if move_denied(origin, to, is_dir) or (is_dir and _prefix_next(_fold_parts(to))):
+                return True
+        return write_denied(source) or write_denied(destination)
+
+    @staticmethod
+    def move_back(sparent, sname, dparent, dname, flags):
+        """Reverses a rename: an exchange is exchanged again, a move moved back (never replacing)."""
+        back = RENAME_EXCHANGE if flags & RENAME_EXCHANGE else RENAME_NOREPLACE
+        if libc.renameat2(dparent, os.fsencode(dname), sparent, os.fsencode(sname),
+                          ctypes.c_uint(back)) < 0:
+            code = ctypes.get_errno()
+            raise OSError(code, os.strerror(code))
+
     def staged_move(self, sparent, sname, dparent, dname, origin, to):
         """A directory move into a guarded place (a proper prefix of a multi-component deny). The
         directory is first renamed to a fresh reserved staging name beside it, which the write
@@ -1146,6 +1288,12 @@ class Broker:
             code = errno.EIO
         elif libc.renameat2(sparent, os.fsencode(stage), dparent, os.fsencode(dname),
                             ctypes.c_uint(RENAME_NOREPLACE)) == 0:
+            def placed_denied():
+                now = self.placed(dparent, dname)
+                return now is not None and move_denied(origin, now, True,
+                                                       self.listing(dparent, dname))
+            self.verify(placed_denied,
+                        lambda: self.move_back(sparent, sname, dparent, dname, 0), "A moved directory")
             return 0, 0
         else:
             code = ctypes.get_errno()
@@ -1162,6 +1310,14 @@ class Broker:
         self.fail("A directory bound for %s could be moved neither into place nor back; it is in "
                   "quarantine as %s" % (to, os.path.join(where, quarantine if moved else stage)))
         return None, code
+
+    @staticmethod
+    def pause(parent):
+        """The test seam's pause between a write's check and its effect, announced by a marker
+        the broker creates in the parent it holds."""
+        os.close(os.open(PAUSE_MARKER, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o644,
+                         dir_fd=parent))
+        time.sleep(PAUSE_S)
 
     def fail(self, message):
         """Ends the operation for a failure the broker could not undo: the supervisor kills the
@@ -1276,9 +1432,35 @@ class Broker:
                 parent, final, resolved = self.entry(path)
             else:
                 parent, final, resolved = self.followed(path)
+            tmpfile = flags & O_TMPFILE_BIT
+            # truncation waits for the post-effect check (a read-only open truncates itself)
+            truncate = flags & os.O_TRUNC and flags & os.O_ACCMODE != os.O_RDONLY
             try:
-                self.refuse(resolved, final, not flags & O_TMPFILE_BIT)
-                fd = self.open_entry(ident, parent, final, flags, mode & 0o7777 & ~umask)
+                self.refuse(resolved, final, not tmpfile)
+                try:
+                    before = os.stat(final, dir_fd=parent, follow_symlinks=False)
+                except FileNotFoundError:
+                    before = None
+                fd = self.open_entry(ident, parent, final, flags & ~os.O_TRUNC if truncate
+                                     else flags, mode & 0o7777 & ~umask)
+                try:
+                    if tmpfile:
+                        # no name was made: the file vanishes with its descriptor
+                        self.verify(lambda: self.created_denied(parent, final),
+                                    lambda: None, "A temporary file")
+                    else:
+                        info = os.fstat(fd)
+                        made = before is None and flags & os.O_CREAT
+                        self.verify(
+                            lambda: self.created_denied(parent, final, True),
+                            (lambda: self.remove_own(parent, final, (info.st_dev, info.st_ino)))
+                            if made else (lambda: None),
+                            "A created file" if made else "An opened file")
+                    if truncate and stat.S_ISREG(os.fstat(fd).st_mode):
+                        os.ftruncate(fd, 0)
+                except BaseException:
+                    os.close(fd)
+                    raise
             finally:
                 os.close(parent)
             try:
@@ -1296,13 +1478,21 @@ class Broker:
             try:
                 if name.startswith("mkdir"):
                     self.refuse(resolved, final)
+                    if self.pause_mkdir is not None and final == self.pause_mkdir:
+                        self.pause(parent)
                     os.mkdir(final, mode & 0o7777 & ~umask, dir_fd=parent)
+                    made = self.identity(parent, final)
+                    self.verify(lambda: self.created_denied(parent, final),
+                                lambda: self.remove_own(parent, final, made, True), "A directory")
                 else:
                     kind = stat.S_IFMT(mode) or stat.S_IFREG
                     if kind not in (stat.S_IFREG, stat.S_IFIFO, stat.S_IFSOCK):
                         return None, errno.EPERM
                     self.refuse(resolved, final, True)
                     os.mknod(final, kind | (mode & 0o7777 & ~umask), 0, dir_fd=parent)
+                    made = self.identity(parent, final)
+                    self.verify(lambda: self.created_denied(parent, final, True),
+                                lambda: self.remove_own(parent, final, made), "A created node")
             finally:
                 os.close(parent)
             return 0, 0
@@ -1339,6 +1529,9 @@ class Broker:
                 if _prefix_next(_fold_parts(resolved)):
                     raise Denied()
                 os.symlink(target, final, dir_fd=parent)
+                made = self.identity(parent, final)
+                self.verify(lambda: self.created_denied(parent, final, True, link=True),
+                            lambda: self.remove_own(parent, final, made), "A symbolic link")
             finally:
                 os.close(parent)
             return 0, 0
@@ -1364,6 +1557,16 @@ class Broker:
                         raise Denied()
                     os.link(sname, dname, src_dir_fd=sparent, dst_dir_fd=dparent,
                             follow_symlinks=False)
+                    made = self.identity(dparent, dname)
+
+                    def linked_denied():
+                        source_now = self.placed(sparent, sname)
+                        target_now = self.placed(dparent, dname)
+                        return self.created_denied(dparent, dname, True) or (
+                            source_now is not None and target_now is not None
+                            and move_denied(source_now, target_now, False))
+                    self.verify(linked_denied, lambda: self.remove_own(dparent, dname, made),
+                                "A hard link")
                 finally:
                     os.close(dparent)
             finally:
@@ -1391,12 +1594,14 @@ class Broker:
                     if flags & RENAME_EXCHANGE:
                         moves.append(((dparent, dname), dresolved, sresolved))
                     staged = None
+                    kinds = []
                     for (parent, entry), origin, to in moves:
                         try:
                             info = os.stat(entry, dir_fd=parent, follow_symlinks=False)
                         except FileNotFoundError:
                             continue
                         is_dir = stat.S_ISDIR(info.st_mode)
+                        kinds.append(((parent, entry), is_dir))
                         if is_dir and _prefix_next(_fold_parts(to)):
                             # a directory bound for a guarded place: checked in staging
                             if flags & RENAME_EXCHANGE:
@@ -1413,6 +1618,9 @@ class Broker:
                     if libc.renameat2(sparent, os.fsencode(sname), dparent, os.fsencode(dname),
                                       ctypes.c_uint(flags)) < 0:
                         return None, ctypes.get_errno()
+                    self.verify(lambda: self.moved_denied(sparent, sname, dparent, dname, kinds),
+                                lambda: self.move_back(sparent, sname, dparent, dname, flags),
+                                "A move")
                 finally:
                     os.close(dparent)
             finally:
@@ -1425,6 +1633,13 @@ class Broker:
             try:
                 self.refuse(resolved, final)
                 fd = os.open(final, os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
+                try:
+                    # checked again at the parent's current place before the effect
+                    self.verify(lambda: self.created_denied(parent, final), lambda: None,
+                                "A truncation")
+                except BaseException:
+                    os.close(fd)
+                    raise
             finally:
                 os.close(parent)
             try:
@@ -1652,8 +1867,12 @@ class Broker:
     # the broker's own resolution, and every effect is one syscall on descriptors that handler
     # holds, so concurrent notifications interleave only as the kernel would interleave the calls.
     # The one multi-step check, a directory move into a guarded prefix (staging, listing, rename),
-    # holds the files lock exclusively (waiting at most EXCLUSIVE_WAIT_S, then EBUSY); its staging
-    # name is reserved, so no other operation writes into it either.
+    # holds the files lock exclusively (waiting at most EXCLUSIVE_WAIT_S, then EBUSY) while every
+    # other write holds it shared from its check to its effect. With the consumer's device lock
+    # this spans every operation of the device: no write of another operation can be checked
+    # against a parent that such a move relocates before the write's effect (its staging name is
+    # reserved too, so no path-based write reaches it). Each create or rename is then verified at
+    # its parent's current place (verify), which covers moves made outside every sandbox.
     def loop(self, stop):
         poller = select.poll()
         poller.register(self.listener, select.POLLIN)
@@ -1769,6 +1988,39 @@ def endpoints_of(network):
             allowed.add((str(address), port, scope if address.version == 6 else 0))
         return allowed
     raise Refused("INVALID_REQUEST", "Unknown network kind")
+
+
+def device_files_lock(request, roots, system_roots):
+    """The inherited descriptor of the device's files lock ("filesLockFd", exec mode), or None.
+
+    It must be a regular file outside every root this command reads or writes (and every system
+    root): the restricted command could otherwise open it and hold it, stalling the device's
+    writes. The descriptor itself never reaches the command (close_except before exec)."""
+    fd = request.get("filesLockFd")
+    if fd is None:
+        return None
+    if request.get("mode") != "exec" or not isinstance(fd, int) or isinstance(fd, bool) or fd < 3:
+        raise Refused("INVALID_REQUEST", "A files lock descriptor serves exec mode only")
+    try:
+        info = os.fstat(fd)
+        where = os.readlink("/proc/self/fd/%d" % fd)
+    except OSError:
+        raise Refused("INVALID_REQUEST", "The files lock descriptor is not open")
+    if not stat.S_ISREG(info.st_mode) or not where.startswith("/") or where.endswith(" (deleted)"):
+        raise Refused("INVALID_REQUEST", "The files lock is not a regular file")
+    reach = [r["path"] for r in roots["read"] + roots["write"]] + list(system_roots)
+    for entry in roots["read"] + roots["write"]:
+        try:
+            reach.append(os.readlink("/proc/self/fd/%d" % entry["fd"]))
+        except OSError:
+            pass
+    for root in reach:
+        root = os.path.normpath(root)
+        if root == "/" or where == root or where.startswith(root + "/"):
+            raise Refused("SCOPE_DENIED", "The device's files lock is inside the granted root %s"
+                          % root)
+    os.set_inheritable(fd, False)
+    return fd
 
 
 def restrict_child(table, ruleset, network_mediated, brokered, channel):
@@ -1911,6 +2163,7 @@ def run(request, report):
     system_roots = list(request.get("systemRoots", DEFAULT_SYSTEM_ROOTS))
     if request.get("nativeFd") is None:
         system_roots.append(os.path.dirname(native_path))
+    files_lock = device_files_lock(request, roots, system_roots)
     ruleset = landlock_ruleset(roots, system_roots, network_mediated or mode == "native",
                                mode == "exec")
     pinned_fds = [r["fd"] for r in roots["read"] + roots["write"]]
@@ -1998,10 +2251,13 @@ def run(request, report):
         if not fds:
             kill_tree()
             raise Refused("UNAVAILABLE", "The restricted child did not hand over its listener")
-        broker = Broker(native, roots, table, endpoints, fds[0])
+        broker = Broker(native, roots, table, endpoints, fds[0],
+                        DeviceFilesLock(files_lock) if files_lock is not None else None)
         fault = request.get("faultInjection")
         if isinstance(fault, dict) and fault.get("stagedMove") == "fail":
             broker.fault = "fail"  # a test fixture's seam
+        if isinstance(fault, dict) and isinstance(fault.get("pauseBeforeMkdir"), str):
+            broker.pause_mkdir = fault["pauseBeforeMkdir"]  # a test fixture's seam
         thread = threading.Thread(target=broker.loop, args=(stop_r,), daemon=True)
         thread.start()
     # Reported only once every restriction is installed and the broker holds the listener.
