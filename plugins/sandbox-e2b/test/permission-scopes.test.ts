@@ -19,10 +19,10 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import { type FakeE2BServer, startFakeE2B } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { envdCloseStdin, envdSendInput, envdStart } from "../src/e2b-api.js";
+import { envdCloseStdin, envdSendInput, envdStart, OPEN_PUBLIC_DENIED } from "../src/e2b-api.js";
 import { createE2BSandbox, type E2BSandboxConfig, publishedImage } from "../src/index.js";
 import { OPERATION_AGENT_SHA256, OPERATION_AGENT_SOURCE } from "../src/operation-agent-source.js";
-import { ROOT_AGENT_PRECHECK, rootAgentArgs } from "../src/provider.js";
+import { appliedNetworkOf, ROOT_AGENT_PRECHECK, rootAgentArgs } from "../src/provider.js";
 import {
   OPERATION_AGENT,
   OPS_DIR,
@@ -210,7 +210,13 @@ describe("operation factory fails closed (fake E2B)", { timeout: 20_000 }, () =>
             res.end(
               JSON.stringify(
                 s
-                  ? { sandboxID: s.id, state: s.state, envdAccessToken: s.envdAccessToken }
+                  ? {
+                      sandboxID: s.id,
+                      state: s.state,
+                      envdAccessToken: s.envdAccessToken,
+                      ...(s.allowInternetAccess === false && { allowInternetAccess: false }),
+                      network: s.network ?? {},
+                    }
                   : { code: 404, message: "not found" },
               ),
             );
@@ -318,6 +324,25 @@ describe("operation factory fails closed (fake E2B)", { timeout: 20_000 }, () =>
       }
     }
     expect(vmCalls(h.id)).toBe(before);
+  });
+
+  it("refuses an operation narrower than the VM's applied network before any VM call", async () => {
+    const name = `cap-device-${randomUUID()}`;
+    const net: SandboxLimits = { ...limits, network: { kind: "allowlist", hosts: ["pypi.org"] } };
+    const fileSystem = await sbx.createFileSystem({ name, limits: net, signal: sig() });
+    const g = await sbx.create({ name, limits: net, fileSystem, signal: sig() });
+    const before = vmCalls(g.id);
+    for (const network of [
+      { kind: "none" as const },
+      { kind: "allowlist" as const, hosts: ["example.com"] },
+    ]) {
+      const op = await sbx.operation?.(g, scope({ network }), sig());
+      const e = await op
+        ?.exec({ command: "true", timeoutMs: 1000, maxOutputBytes: 10, signal: sig() })
+        .catch((x: unknown) => x);
+      expect(isSandboxScopeDeniedError(e), network.kind).toBe(true);
+    }
+    expect(vmCalls(g.id)).toBe(before);
   });
 
   it("validates the scope before anything else", async () => {
@@ -607,7 +632,13 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
           res.end(
             JSON.stringify(
               sb
-                ? { sandboxID: sb.id, state: sb.state, envdAccessToken: sb.envdAccessToken }
+                ? {
+                    sandboxID: sb.id,
+                    state: sb.state,
+                    envdAccessToken: sb.envdAccessToken,
+                    ...(sb.allowInternetAccess === false && { allowInternetAccess: false }),
+                    network: sb.network ?? {},
+                  }
                 : { code: 404, message: "not found" },
             ),
           );
@@ -837,5 +868,25 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
     expect(connects()).toBe(before);
     expect(fake.sandboxes.get(h.id)?.state).toBe("paused");
     held.delete(entry.pid);
+  });
+});
+
+describe("the VM's applied network (GET /sandboxes/{id})", () => {
+  it("maps E2B's recorded network policy, and an outdated open-public deny list to unknown", () => {
+    expect(
+      appliedNetworkOf({ allowInternetAccess: false, network: { allowPublicTraffic: false } }),
+    ).toEqual({ mode: "none", allowHosts: [] });
+    expect(
+      appliedNetworkOf({ network: { allowOut: ["pypi.org"], denyOut: ["0.0.0.0/0"] } }),
+    ).toEqual({ mode: "allowlist", allowHosts: ["pypi.org"] });
+    expect(appliedNetworkOf({ network: { denyOut: [...OPEN_PUBLIC_DENIED] } })).toEqual({
+      mode: "open-public",
+      allowHosts: [],
+    });
+    // an open-public VM made with a shorter deny list allows more than open-public: unknown
+    expect(appliedNetworkOf({ network: { denyOut: ["10.0.0.0/8"] } })).toBeNull();
+    // internet on with nothing denied: unknown
+    expect(appliedNetworkOf({ network: {} })).toBeNull();
+    expect(appliedNetworkOf({})).toBeNull();
   });
 });

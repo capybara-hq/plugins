@@ -92,6 +92,11 @@ export interface OperationTransport {
     prefix: string[],
     nonce: string,
   ): Promise<ExecResult>;
+  /**
+   * The network policy the VM applies (`GET /sandboxes/{id}`, never connects), or null when it is
+   * unknown; SandboxGoneError when the VM is gone.
+   */
+  appliedNetwork(h: SandboxHandle, signal: AbortSignal): Promise<AppliedNetwork | null>;
   /** Kills every foreground execution whose control path carries `uuid` (reboots if it cannot). */
   killOperation(h: SandboxHandle, uuid: string, signal: AbortSignal): Promise<void>;
   /** Test-only hooks (E2BSandboxTestOptions). */
@@ -313,6 +318,31 @@ const OUTSIDE_UNSUPPORTED =
 const NARROWER_UNSUPPORTED =
   "sandbox-e2b runs operations on the whole instance only (the microVM is the sandbox): a narrower filesystem grant needs restricted filters, and the SDK launcher's Landlock ABI 6 is not available on this template";
 
+/** The network a VM applies: no network, an allowlist of hosts, or open-public. */
+export interface AppliedNetwork {
+  mode: "none" | "allowlist" | "open-public";
+  allowHosts: string[];
+}
+
+/**
+ * Whether the VM's applied network allows nothing beyond the operation's network (pure). The VM
+ * network covers every operation (no per-operation hosts), so an operation whose network is
+ * narrower than the VM's would be silently widened: it is refused instead. A VM whose network is
+ * unknown admits nothing. Hosts compare case-insensitively as written.
+ */
+export function appliedWithin(
+  network: SandboxOperationScope["network"],
+  applied: AppliedNetwork | null,
+): boolean {
+  if (applied === null) return false;
+  if (network.kind === "open-public") return true;
+  if (network.kind === "environment") return false;
+  if (applied.mode === "none") return true;
+  if (network.kind === "none" || applied.mode === "open-public") return false;
+  const granted = new Set(network.hosts.map((host) => host.toLowerCase()));
+  return applied.allowHosts.every((host) => granted.has(host.toLowerCase()));
+}
+
 /**
  * Whether a scope is the whole instance: the kernel names `/` (plus the working root) readable and
  * writable on an instance-boundary device. Anything narrower would need restricted filters.
@@ -336,6 +366,19 @@ export interface OperationDeps {
 /** The permission-capable methods of the E2B provider. */
 export function createOperations(deps: OperationDeps) {
   const { transport: t } = deps;
+
+  /** Refuses an operation whose network is narrower than the VM's (before any VM call). */
+  const checkNetwork = async (
+    h: SandboxHandle,
+    scope: SandboxOperationScope,
+    signal: AbortSignal,
+  ) => {
+    if (!appliedWithin(scope.network, await t.appliedNetwork(h, signal))) {
+      throw new SandboxScopeDeniedError(
+        "The VM's network allows more than this operation's network (or is not this provider version's); sandbox-e2b cannot narrow it per operation, so the operation is refused. Changing the device's network or resetting its files applies the current policy",
+      );
+    }
+  };
 
   /** Root-run record steps (consume, markers, background records). */
   const rootStep = async (
@@ -464,6 +507,7 @@ export function createOperations(deps: OperationDeps) {
     signal.throwIfAborted();
     checkPath(String(native.path));
     const input = { ...native, dataB64: undefined, data: digestOf(native.dataB64) };
+    // native work runs no command and opens no connection: the network does not apply
     const runner = await t.session(h, signal);
     await consume(h, scope, method, inputHash(method, scope, input), signal, runner);
     const result = await direct(
@@ -490,6 +534,7 @@ export function createOperations(deps: OperationDeps) {
   ): Promise<ExecResult> => {
     args.signal.throwIfAborted();
     const input = { ...args, signal: undefined, env: args.env };
+    await checkNetwork(h, scope, args.signal);
     await consume(h, scope, "exec", inputHash("exec", scope, input), args.signal);
     const ctl = operationControlPath(scope.tag, scope.operationId);
     return t.execFull(
@@ -512,9 +557,9 @@ export function createOperations(deps: OperationDeps) {
 
   /**
    * Only the whole instance runs here (`isInstanceScope`): the escalated pair and any narrower
-   * filesystem grant are refused before any effect, never widened. Every network kind within the
-   * instance runs under the VM's own network policy (no per-operation hosts): the kernel admits an
-   * operation only within the network the instance runs (its applied limits).
+   * filesystem grant are refused before any effect, never widened. Every operation runs under the
+   * VM's own network policy (no per-operation hosts); one whose network is narrower than the VM's
+   * applied policy is refused when it runs (`checkNetwork`), never silently widened.
    */
   const checkScope = (scope: SandboxOperationScope) => {
     if (scope.filesystem.kind === "device" || scope.network.kind === "environment") {
@@ -671,6 +716,7 @@ export function createOperations(deps: OperationDeps) {
         throw new SandboxScopeDeniedError("The output path is reserved for the provider");
       }
       const input2 = { ...args, signal: undefined };
+      await checkNetwork(h, scope, args.signal);
       const consumed = await record(
         h,
         scope,

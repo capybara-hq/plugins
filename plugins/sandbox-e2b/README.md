@@ -161,15 +161,20 @@ link-local and loopback.
 `OPEN_DENIED` (`OPEN_PUBLIC_DENIED` in `src/e2b-api.ts`) is every IPv4 range the SDK closes in open-public mode, taken from
 plugin-sdk's `OPEN_PUBLIC_DENIED_CIDRS` (private, CGNAT, loopback, link-local and metadata including `168.63.129.16`, multicast,
 broadcast and the reserved and documentation ranges, `198.18.0.0/15` among them), plus `fc00::/7`, `fe80::/10` and `::1/128`.
-`open-public` sends no `allowOut` (E2B's allowed entries take precedence over denied ones) and ignores its `hosts`. `0.0.0.0/8` is
-not listed: E2B rejects it as an invalid CIDR (live 2026-11-14), and inside the microVM it reaches only the VM itself. The SDK's
+`open-public` sends no `allowOut` (E2B's allowed entries take precedence over denied ones) and ignores its `hosts`. The expanded
+list is accepted on create and on `update` (live 2026-11-19). `0.0.0.0/8` is not listed: E2B rejects it as an invalid CIDR (live
+2026-11-14). A connection to `0.1.2.3` from inside an open-public VM does not reach a service, but it is not refused by the VM
+either: E2B's network layer accepts the TCP connection and closes it without data (`curl: (52) Empty reply from server`, live
+2026-11-19), so where E2B's layer would send such traffic is E2B's to say; treat `0.0.0.0/8` as a residual next to MMDS. The SDK's
 IPv6 closed ranges are not sent (E2B rejects `::/0`; the microVM has no IPv6 route, below). E2B enforces `denyOut` by resolved destination IPv4 (`curl --resolve example.com:80:10.0.0.1`
 is refused, verified live 2026-11-14), so a public name that resolves to a private address is refused too.
 
 **Residual: the E2B metadata endpoint (MMDS) is reachable under every network policy.** The sandbox's own Firecracker MMDS at
 `169.254.169.254` is not subject to E2B's egress filter: it answers `GET /latest/meta-data/` (401 without a token) and hands out
 a token with `PUT /latest/api/token` even with `denyOut: ["169.254.169.254/32"]`, with every private range denied, under an
-allowlist and with the network fully closed (`allow_internet_access: false`) — verified live on 2026-11-14. Refusing
+allowlist and with the network fully closed (`allow_internet_access: false`) — verified live on 2026-11-14. With a session token,
+`GET /` answers 200 with the fields `accessTokenHash`, `address`, `envID` and `instanceID` (field names recorded live on
+2026-11-19, values not). Refusing
 `open-public` therefore removed no exposure, so the plugin maps it (decision D1 of core's 2026-11-15 auto mode hardening spec)
 and states the residual here instead. Deployments for which the MMDS exposure is not acceptable run their devices on the Docker
 plugin, whose egress proxy refuses private and metadata addresses by resolved IP.
@@ -255,9 +260,14 @@ no per-call host grants. So:
 - `operation` and `background.start` run the kernel's whole-instance scope (`filesystem: scoped`
   with `/` and the working root readable and writable) under every profile: the provider's ordinary
   exec wrapper (the existing OS user, environment and VM network) behind the admission check, and
-  native file calls through the SDK native helper on `/` as the device user. The operation's
-  network kind is the VM's: the kernel admits an operation only within the network the instance
-  runs (its applied limits).
+  native file calls through the SDK native helper on `/` as the device user. The VM's network
+  policy covers every operation, so an operation must allow at least what the VM applies, read from
+  `GET /sandboxes/{id}` (no connect): `allowInternetAccess: false` is no network, `network.allowOut`
+  an allowlist, internet access with `network.denyOut` covering this version's `OPEN_DENIED`
+  open-public (field names verified live 2026-11-19). A narrower operation, or a VM whose policy is
+  anything else (an open-public VM made with a shorter deny list by an earlier version), is refused
+  with `SandboxScopeDeniedError` before any VM call, never silently widened; changing the device's
+  network or resetting its files applies the current policy.
 - They refuse before any VM call, with `SandboxPermissionUnsupportedError` and never widened, the
   escalated pair (device files plus the environment network: an instance has no outside) and any
   filesystem grant narrower than the whole instance (restricted filters: the SDK launcher needs

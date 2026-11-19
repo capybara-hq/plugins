@@ -257,7 +257,53 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
       ]) {
         expect(await reaches(oh, ip), ip).toBe(false);
       }
+      // 0.0.0.0/8 is not in denyOut (E2B rejects it): the VM's own stack must refuse it
+      const zero = await sbx.exec(oh, {
+        ...who(),
+        command:
+          "curl -sS -o /dev/null --connect-timeout 3 --max-time 5 http://0.1.2.3/ 2>&1 && echo reached || echo failed",
+        timeoutMs: 30_000,
+        maxOutputBytes: 16 * 1024,
+        signal: AbortSignal.timeout(120_000),
+      });
+      console.info(
+        `[e2b-live] 0.1.2.3 under open-public: ${zero.stdout.trim().replaceAll("\n", " | ")}`,
+      );
+      expect(zero.stdout.trim()).toMatch(/failed$/);
       console.info(`[e2b-live] metadata endpoint under open-public: HTTP ${await mmds(oh)}`);
+      // what MMDS serves at / with a session token: field names only (the token never leaves the
+      // VM's shell and no value is printed)
+      const names = [
+        "import json, re, sys",
+        "raw = open('/tmp/mmds').read()",
+        "try:",
+        "    data = json.loads(raw)",
+        "except ValueError:",
+        "    for line in raw.splitlines():",
+        "        if re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,40}/?', line):",
+        "            print('listing:', line)",
+        "    sys.exit()",
+        "def walk(value, path):",
+        "    if isinstance(value, dict):",
+        "        for key in value:",
+        "            walk(value[key], path + [str(key)])",
+        "    else:",
+        "        print('/'.join(path) or '(scalar)')",
+        "walk(data, [])",
+      ].join("\n");
+      const fields = await sbx.exec(oh, {
+        ...who(),
+        command:
+          "t=$(curl -sS -X PUT -H 'X-metadata-token-ttl-seconds: 60' --max-time 10 http://169.254.169.254/latest/api/token); " +
+          `curl -sS -o /tmp/mmds -w '%{http_code}\\n' -H "X-metadata-token: $t" -H 'Accept: application/json' --max-time 10 http://169.254.169.254/; ` +
+          `printf %s ${Buffer.from(names).toString("base64")} | base64 -d | python3 -; rm -f /tmp/mmds`,
+        timeoutMs: 30_000,
+        maxOutputBytes: 64 * 1024,
+        signal: AbortSignal.timeout(120_000),
+      });
+      console.info(
+        `[e2b-live] MMDS GET / (field names only): ${fields.stdout.trim().replaceAll("\n", ", ")}`,
+      );
     } finally {
       await sbx.destroyFileSystemByName(openName, sig());
     }

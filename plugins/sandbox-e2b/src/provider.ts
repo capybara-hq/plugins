@@ -44,6 +44,7 @@ import {
 } from "./listing.js";
 import {
   type AgentRunOpts,
+  type AppliedNetwork,
   createOperations,
   type OperationTransport,
   refusedFrame,
@@ -494,6 +495,27 @@ type NetworkPolicy =
   | { kind: "none" }
   | { kind: "allowlist"; hosts: string[] }
   | { kind: "open-public" };
+
+/**
+ * The network a VM applies, from `GET /sandboxes/{id}` (pure; field names verified live
+ * 2026-11-19): `allowInternetAccess: false` is no network, `network.allowOut` an allowlist, and
+ * internet access with `network.denyOut` covering this version's {@link OPEN_PUBLIC_DENIED}
+ * open-public. Anything else (internet on with a shorter deny list, or none) is unknown: it may
+ * allow more than this provider's open-public.
+ */
+export function appliedNetworkOf(info: {
+  allowInternetAccess?: boolean;
+  network?: { allowOut?: string[]; denyOut?: string[]; [field: string]: unknown } | null;
+}): AppliedNetwork | null {
+  if (info.allowInternetAccess === false) return { mode: "none", allowHosts: [] };
+  const allowOut = info.network?.allowOut ?? [];
+  if (allowOut.length > 0) return { mode: "allowlist", allowHosts: [...allowOut] };
+  const denied = new Set(info.network?.denyOut ?? []);
+  if (OPEN_PUBLIC_DENIED.every((cidr) => denied.has(cidr))) {
+    return { mode: "open-public", allowHosts: [] };
+  }
+  return null;
+}
 
 /** The create-body fields of a network policy (`POST /v2/sandboxes`). */
 function createNetworkOf(policy: NetworkPolicy): Record<string, unknown> {
@@ -1282,6 +1304,23 @@ export function createE2BSandbox(
       }
     },
     execFull: (h, args, ctl, prefix, nonce) => execWith(h, args, ctl, prefix, nonce),
+    async appliedNetwork(h, signal) {
+      signal.throwIfAborted();
+      checkId(h.id);
+      try {
+        const info = (
+          await api.json<Parameters<typeof appliedNetworkOf>[0]>("GET", `/sandboxes/${enc(h.id)}`, {
+            signal,
+          })
+        ).data;
+        return appliedNetworkOf(info ?? {});
+      } catch (e) {
+        if (isE2BNotFound(e)) {
+          throw new SandboxGoneError(`sandbox ${h.id} no longer exists`, { cause: e });
+        }
+        throw e;
+      }
+    },
     async killOperation(h, uuid, signal) {
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid)) {
         throw new Error("invalid operation control id");
