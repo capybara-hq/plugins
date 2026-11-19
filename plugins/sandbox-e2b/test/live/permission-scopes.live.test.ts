@@ -41,17 +41,15 @@ import {
  *   reads a credential file or prints the key). `CAPYBARA_TEST_E2B_TEMPLATE` picks the template
  *   (unset: the alias built from this plugin's published image). Optional
  *   `CAPYBARA_TEST_E2B_API_URL` / `CAPYBARA_TEST_E2B_DOMAIN`.
- * - `CAPYBARA_TEST_REQUIRE_LINUX_RESTRICTED=1` (evidence mode) fails unless the template reports
- *   restricted support. The tested template does not (Linux 6.1, Landlock ABI 2 below the
- *   required 6), so that run fails by design: the support test names the template's facts.
  * - One VM for the whole file, owned by name and id; `afterAll` deletes it and asserts it absent
  *   (also after a failure).
- * - Covers: the template-specific probe (staged runtime root-owned and hash-checked), the SDK
- *   permission conformance's fail-closed branch on the actual provider, the SDK native
- *   conformance through Full access operations, Full access keeping the VM's OS rights and
- *   network (positive and negative) without restricted filters and without any VM-wide network
- *   update, consume-once, revocation before launch and of exactly the running operation, both
- *   overlap orders of a refused restricted grant and a Full operation, background executions
+ * - Covers: support v2 (the microVM is the sandbox: `boundary: "instance"`, no restricted
+ *   filters, no outside; the staged runtime root-owned and hash-checked), the SDK permission
+ *   conformance on the actual provider, the SDK native conformance through whole-instance
+ *   operations, every profile running the whole instance with the VM's OS rights and network
+ *   (positive and negative) without any VM-wide network update, the escalated pair refused,
+ *   consume-once, revocation before launch and of exactly the running operation, both overlap
+ *   orders of a refused narrower grant and a whole-instance operation, background executions
  *   (status, tail, positional reads, idempotent start, lost acknowledgement, natural exit, stop,
  *   revocation), records out of the device user's reach, trusted preparation, owner browsing, a
  *   planted runtime directory root never runs, concurrent first-time staging, an aborted native
@@ -65,7 +63,6 @@ const env = process.env;
 const API_KEY = env.CAPYBARA_TEST_E2B_API_KEY;
 const TEMPLATE = env.CAPYBARA_TEST_E2B_TEMPLATE;
 const READY = filled(API_KEY);
-const REQUIRED = env.CAPYBARA_TEST_REQUIRE_LINUX_RESTRICTED === "1";
 
 if (!READY) console.info("[e2b-live] skipped: CAPYBARA_TEST_E2B_API_KEY not filled");
 
@@ -76,7 +73,6 @@ const limits: SandboxLimits = {
   cpu: 1,
   memoryMb: 2048,
   diskMb: 5120,
-  mode: "sandbox",
   network: { kind: "allowlist", hosts: ["pypi.org"] },
 };
 const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
@@ -93,9 +89,15 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
   const realFetch = globalThis.fetch;
   const lostAck = new Set<string>();
 
+  /** The kernel's scope on an instance-boundary device: the whole filesystem plus the root. */
+  const INSTANCE: SandboxFileScope = {
+    kind: "scoped",
+    readRoots: ["/", "/workspace"],
+    writeRoots: ["/", "/workspace"],
+  };
   const scope = (
-    filesystem: SandboxFileScope = { kind: "device" },
-    network: SandboxNetworkScope = { kind: "environment" },
+    filesystem: SandboxFileScope = INSTANCE,
+    network: SandboxNetworkScope = { kind: "allowlist", hosts: ["pypi.org"] },
     over: Partial<SandboxOperationScope> = {},
   ): SandboxOperationScope => ({
     operationId: `op-${randomUUID()}`,
@@ -104,7 +106,8 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
     rootConversationId: "conv-live",
     profileRevision: 1,
     ceilingRevision: "c1",
-    profile: filesystem.kind === "device" ? "full-access" : "approve-for-me",
+    profile:
+      filesystem === INSTANCE || filesystem.kind === "device" ? "full-access" : "approve-for-me",
     actor: { accountId: "live", conversationId: "conv-live" },
     tag: randomUUID(),
     filesystem,
@@ -126,13 +129,13 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
       tag: randomUUID(),
       actor: { accountId: "live", conversationId: "inspect" },
     });
-  const full = async (s: SandboxOperationScope = scope()) => {
+  const instanceOp = async (s: SandboxOperationScope = scope()) => {
     const op = await sbx.operation?.(h, s, sig());
     if (!op) throw new Error("no operation support");
     return op;
   };
-  const fullExec = async (command: string, timeoutMs = 60_000) =>
-    (await full()).exec({ command, timeoutMs, maxOutputBytes: 1 << 20, signal: sig() });
+  const instanceExec = async (command: string, timeoutMs = 60_000) =>
+    (await instanceOp()).exec({ command, timeoutMs, maxOutputBytes: 1 << 20, signal: sig() });
   const waitForText = async (path: string, pending?: Promise<unknown>) => {
     let settled = false;
     void pending?.then(
@@ -217,7 +220,7 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
     expect(listed).toEqual([]);
   });
 
-  it("reports the template's own facts: restricted unavailable, Full access and background available", async () => {
+  it("reports support v2: the instance boundary, no restricted filters, no outside, background available", async () => {
     const support = (await sbx.permissionSupport?.(h, sig())) as SandboxPermissionSupport;
     console.info(`[e2b-live] permission support: ${JSON.stringify(support)}`);
     const facts = await sh(
@@ -227,19 +230,14 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
         `stat -c "%u %a %F %n" ${RUNTIME_DIR} ${RUNTIME_DIR}/* ${OPS_DIR}`,
     );
     console.info(`[e2b-live] template facts:\n${facts.stdout}${facts.stderr}`);
-    if (REQUIRED) {
-      expect(
-        support.restricted,
-        `CAPYBARA_TEST_REQUIRE_LINUX_RESTRICTED=1 but: ${support.unavailableReason ?? "unsupported"}`,
-      ).not.toBeNull();
-    }
-    expect(support).toMatchObject({
-      version: 1,
+    expect(support).toEqual({
+      version: 2,
+      boundary: "instance",
       restricted: null,
-      fullAccess: true,
+      network: { openPublic: true, allowlist: true, perOperationHosts: false },
+      outsideSandbox: false,
       background: true,
     });
-    expect(support.unavailableReason).toMatch(/template kernel \S+/);
     // the staged runtime and the records are root-owned and not writable by the device user
     for (const line of facts.stdout
       .split("\n")
@@ -333,12 +331,12 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
     if (r.exitCode !== 0) throw new Error(`seed failed: ${r.stderr}`);
   };
 
-  it("passes the SDK native conformance through Full access operations", async () => {
+  it("passes the SDK native conformance through whole-instance operations", async () => {
     const root = `/workspace/native-${randomUUID()}`;
     await sh(`mkdir -p ${root}`);
     await runSandboxNativeConformance({
       root,
-      operation: async () => full(),
+      operation: async () => instanceOp(),
       seed,
       dispose: async () => {
         await sh(`rm -rf ${root}`);
@@ -346,34 +344,35 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
     });
   });
 
-  it("Full access keeps the VM's OS rights and network, without restricted filters or a network update", async () => {
+  it("every profile runs the whole instance with the VM's OS rights and network, without a network update", async () => {
     const before = await api.json<{ network?: unknown }>("GET", `/sandboxes/${ownedId}`, {
       signal: sig(),
     });
-    const r = await fullExec(
-      "id -u; grep -E '^(NoNewPrivs|Seccomp):' /proc/self/status; setsid true && echo setsid=ok; " +
-        "touch /tmp/full-outside && echo outside=ok; " +
-        "curl -sS -m 20 -o /dev/null -w 'pypi=%{http_code}\\n' https://pypi.org/simple/ || echo pypi=fail; " +
-        "curl -sS -m 10 -o /dev/null https://example.com/ 2>/dev/null && echo example=reached || echo example=refused",
-      90_000,
-    );
-    console.info(`[e2b-live] Full access controls:\n${r.stdout}${r.stderr}`);
-    expect(r.exitCode).toBe(0);
-    expect(r.stdout).toContain("1000\n");
-    expect(r.stdout).toMatch(/NoNewPrivs:\s+0/);
-    expect(r.stdout).toMatch(/Seccomp:\s+0/);
-    expect(r.stdout).toContain("setsid=ok");
-    expect(r.stdout).toContain("outside=ok");
-    // the VM's own allowlist (pypi.org) decides: positive and negative
-    expect(r.stdout).toContain("pypi=200");
-    expect(r.stdout).toContain("example=refused");
-    // a conversation's narrower or wider grant never changes the VM network: refused, unchanged
+    for (const profile of ["request-approval", "approve-for-me", "full-access"] as const) {
+      const r = await (await instanceOp(scope(INSTANCE, undefined, { profile }))).exec({
+        command:
+          "id -u; grep -E '^(NoNewPrivs|Seccomp):' /proc/self/status; setsid true && echo setsid=ok; " +
+          `touch /tmp/whole-${profile} && echo outside=ok; ` +
+          "curl -sS -m 20 -o /dev/null -w 'pypi=%{http_code}\\n' https://pypi.org/simple/ || echo pypi=fail; " +
+          "curl -sS -m 10 -o /dev/null https://example.com/ 2>/dev/null && echo example=reached || echo example=refused",
+        timeoutMs: 90_000,
+        maxOutputBytes: 1 << 20,
+        signal: sig(),
+      });
+      console.info(`[e2b-live] whole instance (${profile}):\n${r.stdout}${r.stderr}`);
+      expect(r.exitCode, profile).toBe(0);
+      expect(r.stdout).toContain("1000\n");
+      expect(r.stdout).toMatch(/NoNewPrivs:\s+0/);
+      expect(r.stdout).toMatch(/Seccomp:\s+0/);
+      expect(r.stdout).toContain("setsid=ok");
+      expect(r.stdout).toContain("outside=ok");
+      // the VM's own allowlist (pypi.org) decides: positive and negative
+      expect(r.stdout, profile).toContain("pypi=200");
+      expect(r.stdout, profile).toContain("example=refused");
+    }
+    // an instance has no outside: the escalated pair is refused, the VM network unchanged
     const e = await sbx
-      .operation?.(
-        h,
-        scope({ kind: "device" }, { kind: "allowlist", hosts: ["example.com"] }),
-        sig(),
-      )
+      .operation?.(h, scope({ kind: "device" }, { kind: "environment" }), sig())
       .catch((x: unknown) => x);
     expect(isSandboxPermissionUnsupportedError(e)).toBe(true);
     const after = await api.json<{ network?: unknown }>("GET", `/sandboxes/${ownedId}`, {
@@ -385,7 +384,7 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
 
   it("consumes an operation ID once and never repeats its effect", async () => {
     const s = scope();
-    const op = await full(s);
+    const op = await instanceOp(s);
     const path = `/workspace/once-${randomUUID()}`;
     const first = await op.exec({
       command: `echo x >> ${path}; echo ran`,
@@ -407,7 +406,7 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
     expect(isSandboxScopeValidationError(other)).toBe(true);
     expect((await sh(`wc -l < ${path}`)).stdout.trim()).toBe("1");
     const expired = await (
-      await full(scope(undefined, undefined, { admitBeforeMs: Date.now() - 1 }))
+      await instanceOp(scope(undefined, undefined, { admitBeforeMs: Date.now() - 1 }))
     )
       .exec({ command: `echo x >> ${path}`, timeoutMs: 30_000, maxOutputBytes: 100, signal: sig() })
       .catch((x: unknown) => x);
@@ -423,7 +422,7 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
     });
     await sbx.revokeOperation?.(h, refOf(early), sig());
     const marker = `/workspace/revoked-${randomUUID()}`;
-    const refused = await (await full(early))
+    const refused = await (await instanceOp(early))
       .exec({ command: `touch ${marker}`, timeoutMs: 30_000, maxOutputBytes: 100, signal: sig() })
       .catch((x: unknown) => x);
     expect(isSandboxScopeDeniedError(refused)).toBe(true);
@@ -433,13 +432,13 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
     const pidA = `/workspace/rev-a-${randomUUID()}`;
     const pidB = `/workspace/rev-b-${randomUUID()}`;
     const siblingAbort = new AbortController();
-    const runA = (await full(a)).exec({
+    const runA = (await instanceOp(a)).exec({
       command: `echo $$ > ${pidA}; sleep 600`,
       timeoutMs: 600_000,
       maxOutputBytes: 100,
       signal: sig(),
     });
-    const runB = (await full()).exec({
+    const runB = (await instanceOp()).exec({
       command: `echo $$ > ${pidB}; sleep 600`,
       timeoutMs: 600_000,
       maxOutputBytes: 100,
@@ -456,7 +455,7 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
     expect(await alive(pb)).toBe(false);
   });
 
-  it("refuses restricted grants in both overlap orders while Full access runs unaffected", async () => {
+  it("refuses narrower grants in both overlap orders while whole-instance work runs unaffected", async () => {
     const marker = `/workspace/perm-root/overlap-${randomUUID()}`;
     const restrictedRun = async () =>
       (await sbx.operation?.(h, scope(restricted()), sig()))?.exec({
@@ -465,19 +464,19 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
         maxOutputBytes: 100,
         signal: sig(),
       });
-    // Full first, then a restricted grant while it runs
+    // whole-instance work first, then a narrower grant while it runs
     const fullPid = `/workspace/overlap-full-${randomUUID()}`;
-    const long = fullExec(`echo $$ > ${fullPid}; sleep 3; echo full-done`);
+    const long = instanceExec(`echo $$ > ${fullPid}; sleep 3; echo full-done`);
     await waitForText(fullPid, long);
     expect(
       isSandboxPermissionUnsupportedError(await restrictedRun().catch((x: unknown) => x)),
     ).toBe(true);
     expect((await long).stdout.trim()).toBe("full-done");
-    // restricted first (refused), then Full
+    // narrower first (refused), then the whole instance
     expect(
       isSandboxPermissionUnsupportedError(await restrictedRun().catch((x: unknown) => x)),
     ).toBe(true);
-    expect((await fullExec("echo after")).stdout.trim()).toBe("after");
+    expect((await instanceExec("echo after")).stdout.trim()).toBe("after");
     expect(await sbx.stat(h, marker, sig())).toBeNull();
   });
 
@@ -506,7 +505,7 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
       };
     };
 
-    it("supervises Full access work exactly: status, tail, positional reads, idempotent start and stop", async () => {
+    it("supervises whole-instance work exactly: status, tail, positional reads, idempotent start and stop", async () => {
       const s = scope();
       const taskId = `task-${randomUUID()}`;
       const outputPath = `/workspace/bg-${randomUUID()}.log`;
@@ -598,8 +597,8 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
     });
   });
 
-  it("keeps the records and the runtime out of the device user's reach, even with Full access", async () => {
-    const r = await fullExec(
+  it("keeps the records and the runtime out of the device user's reach, even on the whole instance", async () => {
+    const r = await instanceExec(
       `ls ${OPS_DIR} 2>/dev/null && echo listed || echo unlisted; ` +
         `touch ${OPS_DIR}/forged 2>/dev/null && echo forged || echo refused; ` +
         `: >> ${OPERATION_AGENT} 2>/dev/null && echo agent-writable || echo agent-readonly`,
@@ -607,8 +606,8 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
     expect(r.stdout).toContain("unlisted");
     expect(r.stdout).toContain("refused");
     expect(r.stdout).toContain("agent-readonly");
-    // a Full command cannot fake the admission refusal (no nonce): its own exit is reported
-    const fake = await fullExec(
+    // a command cannot fake the admission refusal (no nonce): its own exit is reported
+    const fake = await instanceExec(
       `printf 'R\\000\\000\\000\\101{"events":[{"event":"refused","code":"REVOKED"}],"nonce":"x"}'; exit 125`,
     );
     expect(fake.exitCode).toBe(125);
@@ -704,7 +703,7 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
         `chown -R 1000:1000 ${RUNTIME_DIR} && chmod 0777 ${RUNTIME_DIR} && echo planted`,
     );
     expect(planted.out).toContain("planted");
-    const r = await fullExec("echo verified");
+    const r = await instanceExec("echo verified");
     expect(r.stdout.trim()).toBe("verified");
     expect(await sbx.stat(h, "/tmp/pwned-root", sig())).toBeNull();
     const after = await sh(
@@ -717,7 +716,7 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
   it("concurrent first-time staging: both calls run, one trusted runtime remains", async () => {
     const removed = await rootSh(`rm -rf ${RUNTIME_DIR} && echo removed`);
     expect(removed.out).toContain("removed");
-    const [a, b] = await Promise.all([fullExec("echo first"), fullExec("echo second")]);
+    const [a, b] = await Promise.all([instanceExec("echo first"), instanceExec("echo second")]);
     expect(a.stdout.trim()).toBe("first");
     expect(b.stdout.trim()).toBe("second");
     const after = await sh(
@@ -730,7 +729,7 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
   it("an aborted native write is killed in the VM and never lands", async () => {
     const path = `/workspace/aborted-${randomUUID()}.bin`;
     const ac = new AbortController();
-    const op = await full();
+    const op = await instanceOp();
     // ~40 MB travels through envd stdin for tens of seconds: abort once the agent runs
     const write = op.writeFile(path, new Uint8Array(40 * 1024 * 1024).fill(7), ac.signal);
     const agentPids = async () =>

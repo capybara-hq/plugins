@@ -46,6 +46,8 @@
  *   目标再 chown 给指定用户（不防符号链接），所以本插件只往 root 专用的中转目录上传，再以沙箱用户在沙箱里搬运。
  */
 
+import { OPEN_PUBLIC_DENIED_CIDRS } from "@capybara-hq/plugin-sdk";
+
 /** envd 端口。 */
 export const ENVD_PORT = 49983;
 /** 控制面请求的默认上限（毫秒；调用方的 signal 另外生效）。 */
@@ -68,21 +70,18 @@ export const ALL_TRAFFIC = "0.0.0.0/0";
 export const IPV6_DENIED = ["fc00::/7", "fe80::/10", "::1/128"] as const;
 
 /**
- * The `denyOut` of `open-public` (internet access on): the private, loopback, link-local and
- * CGNAT IPv4 ranges plus {@link IPV6_DENIED}. `0.0.0.0/8` is left out because E2B rejects it as
- * invalid (live 2026-11-14). MMDS (169.254.169.254) answers whatever this says (README "Network
- * policy").
+ * The `denyOut` of `open-public` (internet access on): every IPv4 range the SDK closes in
+ * open-public mode (`OPEN_PUBLIC_DENIED_CIDRS`: private, CGNAT, link-local and metadata, loopback,
+ * multicast, broadcast, NAT and reserved ranges), except `0.0.0.0/8`, which E2B rejects as invalid
+ * (live 2026-11-14; inside the microVM it reaches only the VM itself), plus {@link IPV6_DENIED}
+ * (the microVM has no IPv6 route; E2B rejects `::/0`). MMDS (169.254.169.254) answers whatever
+ * this says (README "Network policy").
  */
 // capybara:allow-module-state a read-only list of CIDR constants, never mutated
-export const OPEN_PUBLIC_DENIED = [
-  "10.0.0.0/8",
-  "172.16.0.0/12",
-  "192.168.0.0/16",
-  "127.0.0.0/8",
-  "169.254.0.0/16",
-  "100.64.0.0/10",
+export const OPEN_PUBLIC_DENIED: readonly string[] = Object.freeze([
+  ...OPEN_PUBLIC_DENIED_CIDRS.filter((cidr) => !cidr.includes(":") && cidr !== "0.0.0.0/8"),
   ...IPV6_DENIED,
-] as const;
+]);
 
 /**
  * The body of `PUT /sandboxes/{id}/network` this plugin sends (a subset of E2B's

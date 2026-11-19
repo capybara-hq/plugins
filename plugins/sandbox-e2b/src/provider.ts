@@ -442,8 +442,8 @@ function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
 
 /**
  * The root-independent path checks (absolute, no `..` or empty segments, no control characters):
- * which roots a file call may reach is the kernel's, by mode (auto mode reaches any path, the
- * container is the boundary; sandbox mode is held to the roots before the call gets here).
+ * which roots a file call may reach is the kernel's (the microVM is the boundary: a cloud
+ * device's scope is the whole instance).
  */
 function checkPath(p: string): void {
   const errors = validateSandboxPathShape(p);
@@ -1021,25 +1021,20 @@ export function createE2BSandbox(
    * nothing). Residual: E2B serves the microVM metadata endpoint (Firecracker MMDS at
    * 169.254.169.254) whatever `denyOut` says, under an allowlist too (verified live 2026-11-14).
    *
-   * `mode` (`auto` | `sandbox`) is validated but changes nothing here: both run in the same E2B
-   * microVM, where the container is the boundary. A limits object
-   * without `mode` / `network` (an older kernel that sent `tier` / `egress` / `allowHosts`) is
-   * refused rather than guessed.
+   * The microVM is the sandbox (core approval-only profiles design, decision 1): this network is
+   * the sandbox network of every operation, so the limits carry no mode. A limits object without
+   * `network` (an older kernel that sent `tier` / `egress` / `allowHosts`) is refused rather than
+   * guessed.
    */
   const networkOf = (limits: SandboxLimits, name: string): NetworkPolicy => {
-    const runtime = limits as { mode?: unknown; network?: unknown };
-    if (runtime.mode !== "auto" && runtime.mode !== "sandbox") {
-      throw new Error(
-        'sandbox-e2b: the sandbox limits carry no mode ("auto" | "sandbox"); this plugin implements the sandbox@2 limits that a kernel sends from 0.1.0-rc.29 on (limits.mode / limits.network). An older kernel sent tier / egress / allowHosts instead; upgrade the kernel and the sandbox plugins together, and never open the network as a fallback.',
-      );
-    }
+    const runtime = limits as { network?: unknown };
     const network = runtime.network as { kind?: unknown; hosts?: unknown } | undefined;
     const kind = network?.kind;
     const hosts = network?.hosts;
     if (kind === "open-public") return { kind: "open-public" };
     if (kind !== "allowlist" || !Array.isArray(hosts) || hosts.some((h) => typeof h !== "string")) {
       throw new Error(
-        'sandbox-e2b: the sandbox limits carry no valid network (expected { kind: "allowlist", hosts } or { kind: "open-public", hosts }); this plugin implements the sandbox@2 limits that a kernel sends from 0.1.0-rc.29 on (limits.mode / limits.network). An older kernel sent tier / egress / allowHosts instead; upgrade the kernel and the sandbox plugins together.',
+        'sandbox-e2b: the sandbox limits carry no valid network (expected { kind: "allowlist", hosts } or { kind: "open-public", hosts }); this plugin implements the sandbox@2 limits of the approval-only profiles kernel (limits.network, no mode). An older kernel sent tier / egress / allowHosts instead; upgrade the kernel and the sandbox plugins together, and never open the network as a fallback.',
       );
     }
     for (const host of hosts) {
@@ -1310,7 +1305,11 @@ export function createE2BSandbox(
     loseBackgroundAck: test.loseBackgroundAck,
     backgroundStartCommand: test.backgroundStartCommand,
   };
-  const operations = createOperations({ transport, decode: decodeOutput });
+  const operations = createOperations({
+    transport,
+    decode: decodeOutput,
+    network: { allowlist: cfg.domainAllowlist },
+  });
 
   // ---------- 契约 ----------
 
@@ -1326,7 +1325,7 @@ export function createE2BSandbox(
       if (!NAME_RE.test(name)) throw new Error(`invalid sandbox name: ${name}`);
       checkLimits(limits);
       // the network is set here; `update` changes it on the running sandbox (README "Network
-      // policy"). One template for every mode: the network policy changes only the network.
+      // policy"). One template for every network policy: the policy changes only the network.
       const policy = networkOf(limits, name);
       // made before under this name (the kernel stopped before recording the handle): return it
       const [existing] = await idsByName(name, "running,paused", signal);
@@ -1390,7 +1389,6 @@ export function createE2BSandbox(
       }
       deps.log.info("sandbox-e2b: sandbox network updated", {
         sandboxId: h.id,
-        mode: limits.mode,
         network: policy.kind,
       });
       return "updated";
@@ -1557,8 +1555,8 @@ export function createE2BSandbox(
       return { size: Number(m[1]), isDir: m[2] === "directory" };
     },
 
-    // the sandbox's workspace is the whole area in either mode (core spec 2026-11-14 §4.2), so
-    // `limits.mode` changes nothing here
+    // the sandbox's workspace is the whole area a cloud device offers (core spec 2026-11-14 §4.2):
+    // the microVM is the sandbox, and the kernel scopes a cloud device's projects to it
     async list(h, path, opts) {
       opts.signal.throwIfAborted();
       const p = checkListPath(path);
@@ -1573,8 +1571,8 @@ export function createE2BSandbox(
       return finishScan(b, r, NO_PYTHON);
     },
 
-    // The operation contract (operations.ts): fresh immutable scopes per invocation; Full access
-    // only on this provider (restricted scopes are refused, see permissionSupport).
+    // The operation contract (operations.ts): fresh immutable scopes per invocation, on the
+    // whole instance (the microVM is the sandbox, see permissionSupport).
     permissionSupport: operations.permissionSupport,
     operation: operations.operation,
     prepare: operations.prepare,

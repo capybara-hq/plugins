@@ -106,7 +106,6 @@ const allowlist: SandboxLimits = {
   cpu: 1,
   memoryMb: 2048,
   diskMb: 5120,
-  mode: "sandbox",
   network: { kind: "allowlist", hosts: ["pypi.org"] },
 };
 
@@ -231,7 +230,6 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
     const openName = `cap-device-live-${randomUUID()}`;
     const open: SandboxLimits = {
       ...allowlist,
-      mode: "auto",
       network: { kind: "open-public", hosts: [] },
     };
     try {
@@ -245,7 +243,18 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
         signal: AbortSignal.timeout(120_000),
       });
       expect(pub.stdout).toMatch(/^[23]\d\d$/);
-      for (const ip of ["10.0.0.1", "192.168.0.1", "172.16.0.1", "100.64.0.1"]) {
+      // the SDK's closed IPv4 classes: private, CGNAT, reserved (benchmarking, the fake-IP range),
+      // TEST-NET, the Azure WireServer and multicast
+      for (const ip of [
+        "10.0.0.1",
+        "192.168.0.1",
+        "172.16.0.1",
+        "100.64.0.1",
+        "198.18.0.1",
+        "192.0.0.1",
+        "203.0.113.1",
+        "168.63.129.16",
+      ]) {
         expect(await reaches(oh, ip), ip).toBe(false);
       }
       console.info(`[e2b-live] metadata endpoint under open-public: HTTP ${await mmds(oh)}`);
@@ -257,7 +266,6 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
   it("update: allowlist → open-public → allowlist", async () => {
     const open: SandboxLimits = {
       ...allowlist,
-      mode: "auto",
       network: { kind: "open-public", hosts: [] },
     };
     expect(await sbx.update?.(h, open, sig())).toBe("updated");

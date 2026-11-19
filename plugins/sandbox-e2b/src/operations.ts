@@ -41,13 +41,16 @@ import {
  * operation factory, owner browsing, trusted preparation, revocation and exact background
  * supervision, all through the provider's agent inside the one device VM.
  *
- * Restricted grants are refused before any effect: the SDK launcher needs Landlock ABI 6, which
- * the tested template kernel lacks (README "Permission profiles"), and
- * this provider adds no other mechanism (no new privileges, no VM-wide network change for a
- * conversation, no copied-files VM). Full access (device files plus the environment network) runs
- * the provider's ordinary exec and native paths behind an admission check, with the VM's existing
- * OS user, environment and network. Every method resolves nothing itself: the immutable scope is
- * the whole grant.
+ * The microVM is the sandbox (core approval-only profiles design, decision 1): its whole
+ * filesystem is every operation's scope and its E2B network policy (open-public with the SDK's
+ * closed IPv4 classes denied, or the device's allowlist) is the sandbox network. Support v2 says so
+ * (`boundary: "instance"`, no restricted filters, no outside, no per-operation hosts). The kernel's
+ * whole-instance scope runs the provider's ordinary exec and native paths behind the durable
+ * admission, with the VM's existing OS user, environment and network. A narrower filesystem grant
+ * (restricted filters: the SDK launcher needs Landlock ABI 6, which the tested template kernel
+ * lacks, README "Permission profiles") and the escalated pair (an instance has no outside) are
+ * refused before any effect, never widened. Every method resolves nothing itself: the immutable
+ * scope is the whole grant.
  */
 
 /** One command in the VM (provider.ts `run`). */
@@ -305,12 +308,29 @@ function nativeResult(method: NativeMethod, value: unknown): unknown {
   return value;
 }
 
-const RESTRICTED_UNSUPPORTED =
-  "sandbox-e2b runs Full access only: restricted operation scopes need the SDK launcher's Landlock ABI 6, which this template's kernel does not provide (see permissionSupport)";
+const OUTSIDE_UNSUPPORTED =
+  "sandbox-e2b has no outside of its instance: the microVM is the sandbox, so an escalated (device) operation cannot run here";
+const NARROWER_UNSUPPORTED =
+  "sandbox-e2b runs operations on the whole instance only (the microVM is the sandbox): a narrower filesystem grant needs restricted filters, and the SDK launcher's Landlock ABI 6 is not available on this template";
+
+/**
+ * Whether a scope is the whole instance: the kernel names `/` (plus the working root) readable and
+ * writable on an instance-boundary device. Anything narrower would need restricted filters.
+ */
+export function isInstanceScope(scope: SandboxOperationScope): boolean {
+  return (
+    scope.filesystem.kind === "scoped" &&
+    scope.network.kind !== "environment" &&
+    scope.filesystem.readRoots.includes("/") &&
+    scope.filesystem.writeRoots.includes("/")
+  );
+}
 
 export interface OperationDeps {
   transport: OperationTransport;
   decode: (buf: Buffer, truncated: boolean) => string;
+  /** What the VM's network policy offers: allowlists are off where domain allowlists are. */
+  network: { allowlist: boolean };
 }
 
 /** The permission-capable methods of the E2B provider. */
@@ -433,7 +453,7 @@ export function createOperations(deps: OperationDeps) {
     return parseFrames(r.stdout).result;
   };
 
-  /** Full access native work: the helper on "/" as the device user (descriptor-relative). */
+  /** Native work on the whole instance: the helper on "/" as the device user (descriptor-relative). */
   const nativeOp = async (
     h: SandboxHandle,
     scope: SandboxOperationScope,
@@ -491,13 +511,16 @@ export function createOperations(deps: OperationDeps) {
   };
 
   /**
-   * Only Full access (device files plus the environment network) runs here; any restricted grant
-   * is refused before an effect, never widened to Full.
+   * Only the whole instance runs here (`isInstanceScope`): the escalated pair and any narrower
+   * filesystem grant are refused before any effect, never widened. Every network kind within the
+   * instance runs under the VM's own network policy (no per-operation hosts): the kernel admits an
+   * operation only within the network the instance runs (its applied limits).
    */
   const checkScope = (scope: SandboxOperationScope) => {
-    if (scope.filesystem.kind !== "device" || scope.network.kind !== "environment") {
-      throw new SandboxPermissionUnsupportedError(RESTRICTED_UNSUPPORTED);
+    if (scope.filesystem.kind === "device" || scope.network.kind === "environment") {
+      throw new SandboxPermissionUnsupportedError(OUTSIDE_UNSUPPORTED);
     }
+    if (!isInstanceScope(scope)) throw new SandboxPermissionUnsupportedError(NARROWER_UNSUPPORTED);
   };
 
   const checkReadRoots = (readRoots: readonly string[]) => {
@@ -627,7 +650,7 @@ export function createOperations(deps: OperationDeps) {
   };
 
   /**
-   * Exact background supervision of Full access work: a detached supervisor per operation inside
+   * Exact background supervision of whole-instance work: a detached supervisor per operation inside
    * the VM records itself (pid and start time) with a root recorder before `start` acknowledges,
    * appends merged output to the root spool and to `outputPath`, and records the exit. Status,
    * tail, output reads and stop use only the recorded identity and never resume the VM.
@@ -815,10 +838,13 @@ export function createOperations(deps: OperationDeps) {
 
   return {
     /**
-     * Runtime support of this VM: the staged runtime's owners, modes and digests, then the SDK
-     * launcher's own probe on this template's kernel. Restricted support stays null in this
-     * provider version whatever the probe says (no restricted execution path exists here); the
-     * reason names the template's facts. Never connects or resumes the VM.
+     * Support v2 of this VM (approval-only profiles design, "SDK and protocol"): the microVM is the
+     * sandbox (`boundary: "instance"`, no restricted filters, no outside), its network policy
+     * offers open-public and (unless domain allowlists are off) allowlists, never per-operation
+     * hosts, and background work is supervised exactly. The agent's probe stages the runtime when
+     * this VM has none yet; the staged runtime must then be root-owned, read-only and match its
+     * digests, otherwise nothing is offered and the reason says why. Never connects or resumes
+     * the VM.
      */
     async permissionSupport(
       h: SandboxHandle,
@@ -826,13 +852,16 @@ export function createOperations(deps: OperationDeps) {
     ): Promise<SandboxPermissionSupport> {
       signal.throwIfAborted();
       const unavailable = (reason: string): SandboxPermissionSupport => ({
-        version: 1,
+        version: 2,
+        boundary: "instance",
         restricted: null,
-        fullAccess: false,
+        network: { openPublic: false, allowlist: false, perOperationHosts: false },
+        outsideSandbox: false,
         background: false,
         unavailableReason: reason,
       });
-      // The agent's probe first: running it stages the runtime when this VM has none yet.
+      // The agent's probe first: running it stages the runtime when this VM has none yet (its
+      // launcher facts no longer matter: restricted filters are not offered on an instance).
       const probe = await t.runIfRunning(h, {
         cmd: [PYTHON, "-I", OPERATION_AGENT, "probe"],
         user: "sandbox",
@@ -873,26 +902,27 @@ export function createOperations(deps: OperationDeps) {
         }
       }
       const expect = Object.fromEntries(files.map((f) => [f.name, f.sha256]));
-      for (const line of lines.slice(names.length + 2)) {
+      const digests = lines.slice(names.length + 2);
+      if (digests.length !== names.length) {
+        return unavailable("The staged operation runtime is incomplete");
+      }
+      for (const line of digests) {
         const [digest, name] = line.split(/\s+/);
         if (!name || expect[name] !== digest) {
           return unavailable(`The staged ${name ?? "runtime"} does not match its digest`);
         }
       }
-      const result = parseFrames(probe.stdout).result;
-      const report = result?.probe;
-      const kernel = typeof result?.kernel === "string" ? result.kernel : "unknown";
-      const facts = `template kernel ${kernel}${report?.arch ? ` (${report.arch})` : ""}`;
-      const reason =
-        report?.restricted === null || report?.restricted === undefined
-          ? `Restricted execution is unavailable on this E2B template: ${report?.reason ?? "the runtime probe failed"} (${facts})`
-          : `The launcher probe passes on this E2B template (${facts}), but sandbox-e2b has no validated restricted execution path; restricted profiles stay unavailable`;
       return {
-        version: 1,
+        version: 2,
+        boundary: "instance",
         restricted: null,
-        fullAccess: true,
+        network: {
+          openPublic: true,
+          allowlist: deps.network.allowlist,
+          perOperationHosts: false,
+        },
+        outsideSandbox: false,
         background: true,
-        unavailableReason: reason,
       };
     },
 
