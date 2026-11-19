@@ -7,10 +7,12 @@ import { dirname } from "node:path";
 import {
   isFileSystemGoneError,
   isSandboxGoneError,
+  isSandboxScopeDeniedError,
   type Logger,
   OPEN_PUBLIC_DENIED_CIDRS,
   type SandboxActor,
   type SandboxLimits,
+  type SandboxOperationScope,
   type SandboxProvider,
 } from "@capybara-hq/plugin-sdk";
 import { type FakeE2BCall, type FakeE2BServer, startFakeE2B } from "@capybara-hq/testing";
@@ -784,6 +786,135 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     });
   });
 
+  describe("an open-public VM made with an earlier, shorter deny list", () => {
+    /** Network update bodies the stub accepted, by sandbox id. */
+    const puts = new Map<string, unknown[]>();
+    /** Sandbox ids whose next network update fails with this status. */
+    const failPut = new Map<string, number>();
+    let proxy: Awaited<ReturnType<typeof proxyOf>>;
+    let s: ReturnType<typeof make>;
+    beforeAll(async () => {
+      // E2B's answers for GET /sandboxes/{id} (the recorded policy) and PUT .../network (applied
+      // to the fake's state), as verified live 2026-11-19
+      proxy = await proxyOf(fake, (method, path, body) => {
+        const get = /^\/sandboxes\/([^/]+)$/.exec(path);
+        if (method === "GET" && get?.[1]) {
+          const sb = fake.sandboxes.get(decodeURIComponent(get[1]));
+          if (!sb) return { status: 404, body: { code: 404, message: "not found" } };
+          return {
+            status: 200,
+            body: {
+              sandboxID: sb.id,
+              state: sb.state,
+              envdAccessToken: sb.envdAccessToken,
+              ...(sb.allowInternetAccess === false && { allowInternetAccess: false }),
+              network: sb.network ?? {},
+            },
+          };
+        }
+        const put = /^\/sandboxes\/([^/]+)\/network$/.exec(path);
+        if (method !== "PUT" || !put?.[1]) return undefined;
+        const id = decodeURIComponent(put[1]);
+        const sb = fake.sandboxes.get(id);
+        if (sb?.state !== "running")
+          return { status: 404, body: { code: 404, message: "not found" } };
+        const status = failPut.get(id);
+        if (status !== undefined) {
+          failPut.delete(id);
+          return { status, body: { code: status, message: "update failed" } };
+        }
+        const b = JSON.parse(body.toString("utf8")) as {
+          allow_internet_access?: boolean;
+          allowOut?: string[];
+          denyOut?: string[];
+        };
+        puts.set(id, [...(puts.get(id) ?? []), b]);
+        if (b.allow_internet_access === undefined) delete sb.allowInternetAccess;
+        else sb.allowInternetAccess = b.allow_internet_access;
+        sb.network = {
+          ...(b.allowOut && { allowOut: b.allowOut }),
+          ...(b.denyOut && { denyOut: b.denyOut }),
+        };
+        return { status: 204, body: undefined };
+      });
+      s = make({ apiUrl: proxy.url });
+    });
+    afterAll(async () => {
+      await proxy?.close();
+    });
+    /** An open-public VM whose recorded deny list is the earlier, shorter one. */
+    const outdated = async () => {
+      const h = await provision(s, limits({ kind: "open-public", hosts: [] }));
+      const sb = fake.sandboxes.get(h.id);
+      if (!sb) throw new Error("no sandbox");
+      sb.allowInternetAccess = true;
+      sb.network = { denyOut: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] };
+      return h;
+    };
+    const current = { allow_internet_access: true, denyOut: OPEN_DENIED };
+    const instanceScope = (network: SandboxOperationScope["network"]): SandboxOperationScope => ({
+      operationId: `op-${randomUUID()}`,
+      admitBeforeMs: Date.now() + 60_000,
+      deviceId: "dev-1",
+      rootConversationId: "conv-1",
+      profileRevision: 1,
+      ceilingRevision: "c1",
+      profile: "full-access",
+      actor: { accountId: "acc-1", conversationId: "conv-1" },
+      tag: randomUUID(),
+      filesystem: {
+        kind: "scoped",
+        readRoots: ["/", "/workspace"],
+        writeRoots: ["/", "/workspace"],
+      },
+      network,
+    });
+
+    it("resume re-applies the current open-public policy", async () => {
+      const h = await outdated();
+      await s.suspend(h, sig());
+      expect(await s.resume(h, sig())).toBe("resumed");
+      expect(puts.get(h.id)).toEqual([current]);
+    });
+
+    it("an operation re-applies it before it runs, never refusing the device for good", async () => {
+      const h = await outdated();
+      await s.suspend(h, sig());
+      const op = await s.operation?.(h, instanceScope({ kind: "open-public" }), sig());
+      // the agent cannot run in the fake: what matters is that the network check passed
+      const e = await op
+        ?.exec({ command: "true", timeoutMs: 5000, maxOutputBytes: 10, signal: sig() })
+        .catch((x: unknown) => x);
+      expect(isSandboxScopeDeniedError(e)).toBe(false);
+      expect(puts.get(h.id)).toEqual([current]);
+    });
+
+    it("a failed re-apply on an operation is an ordinary, retryable error that names the way out", async () => {
+      const h = await outdated();
+      failPut.set(h.id, 500);
+      const op = await s.operation?.(h, instanceScope({ kind: "open-public" }), sig());
+      const e = await op
+        ?.exec({ command: "true", timeoutMs: 5000, maxOutputBytes: 10, signal: sig() })
+        .catch((x: unknown) => x);
+      expect(isSandboxScopeDeniedError(e)).toBe(false);
+      expect(String((e as Error).message)).toMatch(/re-apply|reset/i);
+      // a later attempt succeeds
+      const again = await s.operation?.(h, instanceScope({ kind: "open-public" }), sig());
+      await again
+        ?.exec({ command: "true", timeoutMs: 5000, maxOutputBytes: 10, signal: sig() })
+        .catch(() => undefined);
+      expect(puts.get(h.id)).toEqual([current]);
+    });
+
+    it("update answers recreate when the network update fails (the kernel then offers a file reset)", async () => {
+      const h = await outdated();
+      failPut.set(h.id, 500);
+      expect(await s.update?.(h, limits({ kind: "open-public", hosts: [] }), sig())).toBe(
+        "recreate",
+      );
+    });
+  });
+
   describe("update (network of a running sandbox)", () => {
     /** Network update bodies the stub accepted, by sandbox id. */
     const updates = new Map<string, unknown[]>();
@@ -918,18 +1049,23 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       expect(isSandboxGoneError(e2)).toBe(true);
     });
 
-    it("other failures stay ordinary errors (at connect, and 401 / 5xx on the update)", async () => {
+    it("a failed connect or an auth failure is an ordinary error; a failed update answers recreate", async () => {
       const h = await provision(s, limits());
       fake.failNext({ method: "POST", path: /\/connect$/ }, 500, "boom");
       const e = await s.update?.(h, limits(), sig()).catch((x: unknown) => x);
       expect(e).toBeInstanceOf(Error);
       expect(isSandboxGoneError(e)).toBe(false);
-      for (const status of [401, 500, 503]) {
+      for (const status of [401, 403]) {
         failUpdate.set(h.id, status);
         const u = await s.update?.(h, limits(), sig()).catch((x: unknown) => x);
         expect(u).toBeInstanceOf(Error);
         expect(String((u as Error).message)).toMatch(new RegExp(`HTTP ${status}`));
         expect(isSandboxGoneError(u)).toBe(false);
+      }
+      // the VM keeps its old policy: the kernel records it unapplied and offers a file reset
+      for (const status of [500, 503]) {
+        failUpdate.set(h.id, status);
+        expect(await s.update?.(h, limits(), sig())).toBe("recreate");
       }
       expect(updates.get(h.id)).toBeUndefined();
     });

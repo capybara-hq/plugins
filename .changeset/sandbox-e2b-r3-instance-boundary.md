@@ -13,5 +13,6 @@ fresh one. Needs the R3 core release.
 
 Security review: an operation whose network is narrower than the VM's applied policy (read from
 `GET /sandboxes/{id}`) is refused instead of silently widened; an open-public VM made with an earlier,
-shorter deny list counts as unknown and is refused until its network is re-applied. The README records the
+shorter deny list gets the current policy re-applied on resume and on the next operation (a failed
+re-apply is retried; a failed `update` answers `recreate`), so no device is left refusing every command. The README records the
 live findings for `0.0.0.0/8` and the MMDS fields.

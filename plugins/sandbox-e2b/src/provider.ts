@@ -517,6 +517,19 @@ export function appliedNetworkOf(info: {
   return null;
 }
 
+/**
+ * Whether a VM's recorded policy is open-public made by an earlier version (pure): internet access
+ * on, no allowlist, and a deny list that does not cover this version's {@link OPEN_PUBLIC_DENIED}.
+ * Such a VM gets the current open-public policy re-applied (it only narrows).
+ */
+export function outdatedOpenPublic(info: Parameters<typeof appliedNetworkOf>[0]): boolean {
+  return (
+    info.allowInternetAccess !== false &&
+    (info.network?.allowOut ?? []).length === 0 &&
+    appliedNetworkOf(info) === null
+  );
+}
+
 /** The create-body fields of a network policy (`POST /v2/sandboxes`). */
 function createNetworkOf(policy: NetworkPolicy): Record<string, unknown> {
   switch (policy.kind) {
@@ -1074,6 +1087,50 @@ export function createE2BSandbox(
     return hosts.length > 0 ? { kind: "allowlist", hosts: [...hosts] } : { kind: "none" };
   };
 
+  /**
+   * The network a VM applies (`GET /sandboxes/{id}`). An open-public VM made by an earlier version
+   * with a shorter deny list gets the current open-public policy re-applied first (connecting it
+   * unless `connected`), so an upgrade never leaves a device refusing every operation; a failed
+   * re-apply is an ordinary error (retried on the next use; a file reset also applies it).
+   */
+  const currentNetwork = async (
+    id: string,
+    signal: AbortSignal,
+    connected: boolean,
+  ): Promise<AppliedNetwork | null> => {
+    signal.throwIfAborted();
+    checkId(id);
+    let info: Parameters<typeof appliedNetworkOf>[0];
+    try {
+      info =
+        (
+          await api.json<Parameters<typeof appliedNetworkOf>[0]>("GET", `/sandboxes/${enc(id)}`, {
+            signal,
+          })
+        ).data ?? {};
+    } catch (e) {
+      if (isE2BNotFound(e))
+        throw new SandboxGoneError(`sandbox ${id} no longer exists`, { cause: e });
+      throw e;
+    }
+    if (!outdatedOpenPublic(info)) return appliedNetworkOf(info);
+    if (!connected) await attach(id, signal);
+    try {
+      await updateNetwork(api, id, updateNetworkOf({ kind: "open-public" }), signal);
+    } catch (e) {
+      if (isE2BNotFound(e))
+        throw new SandboxGoneError(`sandbox ${id} no longer exists`, { cause: e });
+      throw new Error(
+        "sandbox-e2b: the VM's open-public network predates this plugin version and re-applying the current policy failed; the next use retries it, and resetting the device's files applies it too",
+        { cause: e },
+      );
+    }
+    deps.log.info("sandbox-e2b: re-applied the current open-public network to an older VM", {
+      sandboxId: id,
+    });
+    return { mode: "open-public", allowHosts: [] };
+  };
+
   // ---------- operations (permission profiles) ----------
 
   /**
@@ -1304,23 +1361,7 @@ export function createE2BSandbox(
       }
     },
     execFull: (h, args, ctl, prefix, nonce) => execWith(h, args, ctl, prefix, nonce),
-    async appliedNetwork(h, signal) {
-      signal.throwIfAborted();
-      checkId(h.id);
-      try {
-        const info = (
-          await api.json<Parameters<typeof appliedNetworkOf>[0]>("GET", `/sandboxes/${enc(h.id)}`, {
-            signal,
-          })
-        ).data;
-        return appliedNetworkOf(info ?? {});
-      } catch (e) {
-        if (isE2BNotFound(e)) {
-          throw new SandboxGoneError(`sandbox ${h.id} no longer exists`, { cause: e });
-        }
-        throw e;
-      }
-    },
+    appliedNetwork: (h, signal) => currentNetwork(h.id, signal, false),
     async killOperation(h, uuid, signal) {
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid)) {
         throw new Error("invalid operation control id");
@@ -1424,7 +1465,15 @@ export function createE2BSandbox(
         if (isE2BNotFound(e)) {
           throw new SandboxGoneError(`E2B sandbox ${h.id} no longer exists`, { cause: e });
         }
-        throw e;
+        // an aborted call and a credential problem (no reset would help) stay errors
+        if (signal.aborted || isStatus(e, 401) || isStatus(e, 403)) throw e;
+        // the VM keeps its old policy: "recreate" lets the kernel record it unapplied and offer
+        // a file reset, never a device left without a way forward
+        deps.log.warn("sandbox-e2b: network update failed; answering recreate", {
+          sandboxId: h.id,
+          err: (e instanceof Error ? e.message : String(e)).slice(0, 300),
+        });
+        return "recreate";
       }
       deps.log.info("sandbox-e2b: sandbox network updated", {
         sandboxId: h.id,
@@ -1464,6 +1513,16 @@ export function createE2BSandbox(
     async resume(h, signal) {
       try {
         await attach(h.id, signal);
+        // an open-public VM made by an earlier version gets the current policy re-applied
+        // (best effort: the connect just succeeded, so any failure here, even an odd 404 from the
+        // control plane, is logged and retried by the next operation's network check)
+        await currentNetwork(h.id, signal, true).catch((e: unknown) => {
+          if (signal.aborted) throw e;
+          deps.log.warn("sandbox-e2b: could not re-apply the current network on resume", {
+            sandboxId: h.id,
+            err: (e instanceof Error ? e.message : String(e)).slice(0, 300),
+          });
+        });
       } catch (e) {
         if (e instanceof SandboxGoneError) return "gone";
         throw e;

@@ -231,6 +231,9 @@ configuration at once, with no restart: running commands keep running, new conne
   the update; a 404 after that means the sandbox is gone (`SandboxGoneError`). Limits the plugin cannot read throw before the connect.
 - **Only the network changes.** cpu / memory / disk and the template stay. A new allowlist host needs a change of the device's
   network list (a host cannot be granted per call: the VM's network policy covers the whole instance).
+- **A failed update answers `"recreate"`** (other than a gone VM, an abort, or a 401 / 403 credential error, which stay
+  errors): the VM keeps its old policy, and the kernel records the limits unapplied and offers a file reset, so the device always
+  has a way forward.
 - Connections already open when the rules narrow are E2B's business; the docs do not say whether they are cut.
 
 **Command time limit**: a single command runs at most `sandbox.limits.maxCommandSeconds`, and no more than the time left in the run it belongs to (`runtime.maxRunSeconds`,
@@ -264,10 +267,12 @@ no per-call host grants. So:
   policy covers every operation, so an operation must allow at least what the VM applies, read from
   `GET /sandboxes/{id}` (no connect): `allowInternetAccess: false` is no network, `network.allowOut`
   an allowlist, internet access with `network.denyOut` covering this version's `OPEN_DENIED`
-  open-public (field names verified live 2026-11-19). A narrower operation, or a VM whose policy is
-  anything else (an open-public VM made with a shorter deny list by an earlier version), is refused
-  with `SandboxScopeDeniedError` before any VM call, never silently widened; changing the device's
-  network or resetting its files applies the current policy.
+  open-public (field names verified live 2026-11-19). A narrower operation is refused with
+  `SandboxScopeDeniedError` before any VM call, never silently widened. An open-public VM made by
+  an earlier version with a shorter deny list is upgraded, not refused: `resume` and the network
+  check of every operation re-apply the current open-public policy (`PUT /sandboxes/{id}/network`,
+  connecting the VM first). A failed re-apply is an ordinary error, retried on the next use; a
+  file reset also applies the current policy.
 - They refuse before any VM call, with `SandboxPermissionUnsupportedError` and never widened, the
   escalated pair (device files plus the environment network: an instance has no outside) and any
   filesystem grant narrower than the whole instance (restricted filters: the SDK launcher needs
