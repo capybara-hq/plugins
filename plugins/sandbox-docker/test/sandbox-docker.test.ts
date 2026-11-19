@@ -15,6 +15,7 @@ import {
   execArgv,
   IN_SANDBOX_GRACE_SECONDS,
 } from "../src/index.js";
+import { hostDeniedCidrs } from "../src/provider.js";
 import {
   buildTestImages,
   cleanupTestResources,
@@ -1118,9 +1119,13 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       signal: sig(),
     });
     try {
-      expect((await inspect(`${name}-egress`)).Config.Env).toContain(
-        'DENIED_CIDRS=["203.0.113.0/24"]',
+      // the deployment's ranges, then (a local Docker endpoint) this machine's own addresses
+      const deniedEnv = (await inspect(`${name}-egress`)).Config.Env.find((e: string) =>
+        e.startsWith("DENIED_CIDRS="),
       );
+      const denied = JSON.parse(String(deniedEnv).slice("DENIED_CIDRS=".length)) as string[];
+      expect(denied[0]).toBe("203.0.113.0/24");
+      expect(denied.slice(1)).toEqual(hostDeniedCidrs("http://127.0.0.1:2375"));
       await open.suspend(h, sig());
       expect(await locked.resume(h, sig())).toBe("gone");
       expect((await inspect(name)).State.Running).toBe(false);

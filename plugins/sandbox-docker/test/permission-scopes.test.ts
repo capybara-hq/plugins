@@ -299,6 +299,9 @@ describe.skipIf(!dockerAvailable)(
         signal: o.signal ?? sig(),
       });
 
+    /** A Python program run inside the sandbox without shell quoting (base64 on the command line). */
+    const py = (program: string, args: string[] = []) =>
+      `printf %s ${Buffer.from(program).toString("base64")} | base64 -d | python3 - ${args.join(" ")}`;
     const inspectRead = async (h: SandboxHandle, path: string) =>
       JSON.parse(await dexec(h.id, "1000", ["python3", "-I", "-c", INSPECT, "read", path])) as
         | string
@@ -598,15 +601,28 @@ describe.skipIf(!dockerAvailable)(
         "curl -sS -m 20 http://allowed.example.com/; echo; " +
         "curl -sS -m 20 http://denied.example.com/ -o /dev/null -w 'denied=%{http_code}\\n'; " +
         `curl -sS -m 5 --noproxy '*' http://${target.getIpAddress(netName)}/ -o /dev/null 2>/dev/null && echo direct || echo no-direct`;
+      const r0 = await run(
+        h,
+        instance({ kind: "allowlist", hosts: ["allowed.example.com"] }),
+        curl,
+        {
+          cwd: "/workspace",
+        },
+      );
+      expect(r0.stdout).toContain("hello-allowed.example.com");
+      expect(r0.stdout).toContain("denied=403");
+      expect(r0.stdout).toContain("no-direct");
+      // an operation narrower than the instance's network would be silently widened: refused
       for (const network of [
-        { kind: "allowlist", hosts: ["allowed.example.com"] } as const,
         { kind: "none" } as const,
+        { kind: "allowlist", hosts: ["other.example.com"] } as const,
       ]) {
-        const r = await run(h, instance(network), curl, { cwd: "/workspace" });
-        expect(r.stdout, network.kind).toContain("hello-allowed.example.com");
-        expect(r.stdout, network.kind).toContain("denied=403");
-        expect(r.stdout, network.kind).toContain("no-direct");
+        const refused = await run(h, instance(network), "printf ran > /workspace/narrow-ran", {
+          cwd: "/workspace",
+        }).catch((e) => e);
+        expect(isSandboxScopeDeniedError(refused), network.kind).toBe(true);
       }
+      expect(await inspectRead(h, "/workspace/narrow-ran")).toBeNull();
       // an open-public instance: public names on any port, the SDK's closed classes refused
       const open = await newDevice(sbx, { kind: "open-public", hosts: [] });
       const r = await run(
@@ -623,6 +639,158 @@ describe.skipIf(!dockerAvailable)(
       for (const ip of ["10.0.0.1", "169.254.169.254", "100.64.0.1", "127.0.0.1", "198.18.0.1"]) {
         expect(r.stdout).toContain(`${ip}=403`);
       }
+    });
+
+    it("the sandbox reaches neither its internal network's gateway nor the Docker host directly", async () => {
+      const port = 18900 + Math.floor(Math.random() * 90);
+      const listener = `cap-perm-hostsvc-${RUN}`;
+      // a service on the Docker host itself (host network), counting TCP and UDP receipts
+      await docker(
+        "run",
+        "-d",
+        "--name",
+        listener,
+        "--label",
+        `${TEST_LABEL}=${RUN}`,
+        "--network",
+        "host",
+        "--user",
+        "root",
+        images.egressImage,
+        "node",
+        "-e",
+        // counts by kind: TCP connections, and UDP datagrams by payload ("c" control, "x" sandbox)
+        `const fs=require("fs");const n={};const bump=(k)=>{n[k]=(n[k]||0)+1;fs.writeFileSync("/tmp/n.tmp",JSON.stringify(n));fs.renameSync("/tmp/n.tmp","/tmp/n")};` +
+          `require("net").createServer((c)=>{c.on("error",()=>{});bump("tcp");c.end("hi")}).listen(${port},"0.0.0.0");` +
+          `require("dgram").createSocket("udp4").on("message",(m)=>bump("udp-"+m)).bind(${port},"0.0.0.0");`,
+      );
+      try {
+        const counts = (): Record<string, number> =>
+          JSON.parse(
+            spawnSync("docker", ["exec", listener, "cat", "/tmp/n"], { encoding: "utf8" }).stdout ||
+              "{}",
+          );
+        const hostIp = (
+          await docker(
+            "run",
+            "--rm",
+            "--network",
+            "host",
+            images.egressImage,
+            "node",
+            "-e",
+            `const i=Object.values(require("os").networkInterfaces()).flat().find((a)=>a.family==="IPv4"&&!a.internal);console.log(i.address)`,
+          )
+        ).trim();
+        // control: the service answers on the host's address from the host network (retried
+        // until the listener is up)
+        const fromHost = (script: string) =>
+          spawnSync(
+            "docker",
+            ["run", "--rm", "--network", "host", images.egressImage, "node", "-e", script],
+            { encoding: "utf8" },
+          ).status;
+        for (let i = 0; (counts().tcp ?? 0) < 1; i++) {
+          if (i >= 30) {
+            const state = spawnSync(
+              "docker",
+              ["inspect", "-f", "{{.State.Status}} {{.State.ExitCode}}", listener],
+              { encoding: "utf8" },
+            );
+            const logs = spawnSync("docker", ["logs", listener], { encoding: "utf8" });
+            throw new Error(
+              `the host service never answered: ${JSON.stringify(counts())} state=${state.stdout}${state.stderr} logs=${logs.stdout}${logs.stderr} host=${hostIp} port=${port}`,
+            );
+          }
+          fromHost(
+            `require("net").connect(${port},${JSON.stringify(hostIp)},function(){this.end();process.exit(0)}).on("error",()=>process.exit(1))`,
+          );
+        }
+        expect(counts().tcp).toBe(1);
+        const h = await newDevice(sbx, { kind: "open-public", hosts: [] });
+        const inspectNet = (name: string) =>
+          JSON.parse(
+            spawnSync("docker", ["network", "inspect", name], { encoding: "utf8" }).stdout,
+          )[0];
+        const internal = inspectNet(`${h.id}-net`);
+        expect(internal.Options["com.docker.network.bridge.inhibit_ipv4"]).toBe("true");
+        expect(internal.EnableIPv6).toBe(false);
+        const subnet = String(internal.IPAM.Config[0].Subnet).split("/")[0] as string;
+        const firstHost = subnet.replace(/\.0$/, ".1");
+        const shared = inspectNet(netName);
+        const sharedGateway = String(shared.IPAM.Config[0].Gateway ?? "");
+        const targets = [firstHost, hostIp, sharedGateway].filter((x) => x !== "");
+        const probe = py(
+          "import socket,sys\nfor ip in sys.argv[2:]:\n" +
+            " try:\n  socket.create_connection((ip,int(sys.argv[1])),3).close(); print('tcp-reached',ip)\n" +
+            " except OSError: print('tcp-failed',ip)\n" +
+            " try:\n  s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.sendto(b'x',(ip,int(sys.argv[1]))); print('udp-sent',ip)\n" +
+            " except OSError: print('udp-failed',ip)",
+          [String(port), ...targets],
+        );
+        const r = await run(h, instance({ kind: "open-public" }), probe, { cwd: "/workspace" });
+        expect(r.exitCode, r.stderr).toBe(0);
+        expect(r.stdout).toContain(`tcp-failed ${hostIp}`);
+        console.info(
+          `[sandbox-docker permission] direct host probe: ${r.stdout.trim().replaceAll("\n", "; ")}`,
+        );
+        expect(r.stdout).not.toContain("tcp-reached");
+        // a datagram may leave the socket, but it never arrives at the host's service: control
+        // datagrams from the host network (sent after the sandbox's, until one arrives) are counted
+        // apart from the sandbox's
+        for (let i = 0; (counts()["udp-c"] ?? 0) < 1; i++) {
+          if (i >= 30) throw new Error(`no control datagram arrived: ${JSON.stringify(counts())}`);
+          fromHost(
+            `const s=require("dgram").createSocket("udp4");s.send("c",${port},${JSON.stringify(hostIp)},()=>s.close())`,
+          );
+        }
+        expect(counts()["udp-x"] ?? 0).toBe(0);
+        expect(counts().tcp).toBe(1);
+        // the egress proxy (the internal network's only other member) still works
+        const viaProxy = await run(
+          h,
+          instance({ kind: "open-public" }),
+          "curl -sS -m 20 http://allowed.example.com/",
+          {
+            cwd: "/workspace",
+          },
+        );
+        expect(viaProxy.stdout).toContain("hello-allowed.example.com");
+      } finally {
+        spawnSync("docker", ["rm", "-f", listener]);
+      }
+    });
+
+    it("an external DNS query from the sandbox never resolves (no DNS side channel)", async () => {
+      const h = await newDevice(sbx, { kind: "allowlist", hosts: ["allowed.example.com"] });
+      const probe = py(
+        "import random,socket,struct\n" +
+          "name='capy-%d.example.com'%random.randrange(1<<30)\n" +
+          "for n in (name,'example.com'):\n" +
+          " try:\n  socket.getaddrinfo(n,80); print('resolved',n)\n except OSError: print('unresolved',n)\n" +
+          "q=struct.pack('>HHHHHH',1,0x0100,1,0,0,0)+b''.join(bytes([len(l)])+l.encode() for l in name.split('.'))+b'\\0'+struct.pack('>HH',1,1)\n" +
+          "servers=[l.split()[1] for l in open('/etc/resolv.conf') if l.startswith('nameserver')]+['8.8.8.8','1.1.1.1']\n" +
+          "for s in servers:\n" +
+          " u=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); u.settimeout(3)\n" +
+          " try:\n  u.sendto(q,(s,53)); d=u.recv(512); print('answer',s,d[3]&15,struct.unpack('>H',d[6:8])[0])\n" +
+          " except OSError: print('noanswer',s)",
+      );
+      const r = await run(
+        h,
+        instance({ kind: "allowlist", hosts: ["allowed.example.com"] }),
+        probe,
+        {
+          cwd: "/workspace",
+        },
+      );
+      expect(r.exitCode, r.stderr).toBe(0);
+      expect(r.stdout).toMatch(/^unresolved example\.com$/m);
+      console.info(
+        `[sandbox-docker permission] DNS probe: ${r.stdout.trim().replaceAll("\n", "; ")}`,
+      );
+      expect(r.stdout).not.toMatch(/^resolved /m);
+      // a reply from Docker's embedded resolver may come back, but never with an answer record
+      for (const m of r.stdout.matchAll(/^answer \S+ (\d+) (\d+)$/gm)) expect(m[2]).toBe("0");
     });
 
     it("consumes an operation ID once and never repeats its effect", async () => {
@@ -1315,6 +1483,51 @@ describe.skipIf(!dockerAvailable)(
         }
         return result;
       };
+
+      it("the agent refuses every restricted request (exec, native, probe, writable scoped roots)", async () => {
+        const root = await newRoot(device, "agent-refuse");
+        const uuid = randomUUID();
+        const ctl = `/tmp/.capybara-exec-agent-${uuid}`;
+        const body = {
+          opKey: "0".repeat(64),
+          admitBeforeMs: Date.now() + 60_000,
+          ctl,
+          expect: sdkRuntimeDigests(),
+          writeRoots: [root],
+          readRoots: [],
+          network: { kind: "none" },
+          command: `printf ran > ${root}/ran`,
+          cwd: root,
+          env: {},
+          timeoutMs: 10_000,
+          maxOutputBytes: 1024,
+          native: { method: "writeFile", path: `${root}/native`, dataB64: "eA==" },
+        };
+        const refusal = (r: { stdout: Buffer }) =>
+          (
+            (resultOf(r.stdout)?.events as { event: string; code?: string }[] | undefined) ?? []
+          ).find((e) => e.event === "refused")?.code;
+        for (const args of [
+          ["exec", "capybara-exec", ctl],
+          ["native", "capybara-exec", ctl],
+          ["probe"],
+        ]) {
+          const r = agentCall(device, "1000", args, body);
+          expect(refusal(r), args[0]).toBe("INVALID_REQUEST");
+        }
+        for (const extra of [
+          { kind: "scoped" },
+          { kind: "scoped", requireRestricted: true, writeRoots: [] },
+        ]) {
+          const r = agentCall(device, "1000", ["direct"], { ...body, ...extra });
+          expect(refusal(r), JSON.stringify(extra)).toBe("UNAVAILABLE");
+        }
+        expect(await inspectRead(device, `${root}/ran`)).toBeNull();
+        expect(await inspectRead(device, `${root}/native`)).toBeNull();
+        // the agent carries no launcher path at all
+        const source = await readFile(`${imageDir}runtime/capybara-operation.py`, "utf8");
+        expect(source).not.toMatch(/def restricted\(|LAUNCHER|class Forwarder/);
+      });
 
       it("R1: a same-uid writer cannot inject frames into a supervisor's channel", async () => {
         const root = await newRoot(device, "r1");

@@ -197,9 +197,20 @@ public network). This plugin version goes together with the approval-only profil
     load balancer, the kernel's public URL, a corporate range reached over the internet) unless they are listed in `deniedCidrs`; in
     `open-public` mode any other public address is reachable, including the host's own public IP when it has one. Cloud metadata
     services at other addresses (for example a provider-specific public one) are reachable unless listed there too.
-  - Known limitation: on Linux hosts with older Docker, a container in the internal network may be able to reach services the host
-    listens on at that bridge address; do not have host services listen on 0.0.0.0, or use a firewall to block inbound traffic from
-    the sandbox subnet.
+  - **No host gateway, no IPv6**: the internal network is created with `com.docker.network.bridge.inhibit_ipv4: "true"` and
+    `EnableIPv6: false`, so the Docker host has no address on it and the sandbox cannot reach services the host listens on
+    (`0.0.0.0` included) directly, over TCP or UDP; the egress proxy is reached on the bridge itself. This needs **Docker Engine 25
+    or newer**: the first instance created checks `/version` and refuses an older engine with an English error. An instance whose
+    internal network was made by an earlier plugin version answers `gone` on resume (and `recreate` on `update`), so the kernel
+    recreates it, files kept, on a hardened network. `test/permission-scopes.test.ts` proves it against a service on the host
+    network (TCP and UDP to the internal network's first address, the host's address and the shared network's gateway).
+  - **The Docker host's own addresses**: when the Docker endpoint is local (a UNIX socket or a loopback address), the plugin adds
+    this machine's non-loopback interface addresses to the egress proxy's denied ranges, so a public address of the host is closed
+    in open-public mode too. With a **remote** Docker host (the usual socket-proxy container on another machine), the plugin cannot
+    know that host's addresses: list them in `deniedCidrs`.
+  - **DNS**: Docker's embedded resolver on an internal network does not resolve external names (it answers SERVFAIL), and direct
+    UDP to an outside resolver has no route, so DNS is no side channel out of the sandbox; names are resolved only by the egress
+    proxy. `test/permission-scopes.test.ts` probes it under the allowlist.
 - `/dev/shm`, PidsLimit 1024, the read-only root file system, uid 1000, `CapDrop: ALL` and `no-new-privileges` are the same for every
   instance.
 
@@ -245,16 +256,19 @@ directory crossings, no running outside the sandbox and no per-call host grants.
   staged bytes, the SDK bundle or `SHA256SUMS` drift. After an SDK upgrade, copy the bundle files
   into `image/runtime`, update `OPERATION_AGENT_SHA256` and regenerate `SHA256SUMS`
   (`runtimeChecksums()`); the agent re-checks the SDK digests and root ownership before native work
-  and background starts. The launcher is staged but not used (no restricted filters on an
-  instance).
+  and background starts. The launcher is staged with its bundle but never run: the agent carries no
+  restricted launch path (`exec`, `native` and `probe` are unknown commands, and `direct` refuses a
+  writable or restricted scoped request with `UNAVAILABLE`).
 - **Whole-instance operations**: the kernel's scope on an instance-boundary device is
   `filesystem: scoped` with `/` (and the working root) readable and writable; it runs the ordinary
   exec wrapper and environment after the agent's admission check, and native calls use the helper
   on `/`, under every profile. A refusal by that check is accepted only with the per-call nonce the
   agent removes from its environment before exec, so a command cannot report itself as "not
-  executed". The operation's network kind (`open-public`, `allowlist`, `none`) is the instance's: the
-  egress proxy applies to the whole container, and the kernel admits an operation only within the
-  network the instance runs (its applied limits).
+  executed". The egress proxy applies to the whole container, so an operation must allow at least
+  what the instance applies (its container labels): an open-public operation runs on any instance,
+  an allowlist one only where the instance's hosts are all in its list (or the instance has no
+  network), a `none` one only on an instance without network. A narrower operation is refused with
+  `SandboxScopeDeniedError` before any effect, never silently widened.
 - **Refused before any effect** (`SandboxPermissionUnsupportedError`, never widened): the escalated
   pair (`filesystem: device` with the `environment` network: an instance has no outside) and any
   filesystem grant narrower than the whole instance (it would need restricted filters).

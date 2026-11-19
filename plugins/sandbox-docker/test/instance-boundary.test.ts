@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   isSandboxPermissionUnsupportedError,
+  isSandboxScopeDeniedError,
   type SandboxHandle,
   type SandboxOperationScope,
 } from "@capybara-hq/plugin-sdk";
@@ -9,6 +10,8 @@ import { describe, expect, it } from "vitest";
 import {
   type AgentRun,
   type AgentRunOpts,
+  type AppliedNetwork,
+  appliedWithin,
   createOperations,
   type OperationTransport,
 } from "../src/operations.js";
@@ -54,7 +57,10 @@ function stagedAnswer(tamper?: "digest" | "writable") {
   return `${lines.join("\n")}\n`;
 }
 
-function fakeTransport(staged = stagedAnswer()) {
+function fakeTransport(
+  staged = stagedAnswer(),
+  applied: AppliedNetwork | null = { mode: "open-public", allowHosts: [] },
+) {
   const calls: { method: string; cmd: string[] }[] = [];
   const t: OperationTransport = {
     async run(_h, o: AgentRunOpts) {
@@ -70,6 +76,10 @@ function fakeTransport(staged = stagedAnswer()) {
     async execFull(_h, args, _ctl, prefix) {
       calls.push({ method: "execFull", cmd: [...prefix, args.command] });
       return { exitCode: 0, stdout: "ran", stderr: "", truncated: false, timedOut: false };
+    },
+    async appliedNetwork() {
+      calls.push({ method: "appliedNetwork", cmd: [] });
+      return applied;
     },
     async killOperation() {
       calls.push({ method: "killOperation", cmd: [] });
@@ -141,8 +151,8 @@ describe("support v2", () => {
 });
 
 describe("operation scopes", () => {
-  const ops = () => {
-    const f = fakeTransport();
+  const ops = (applied?: AppliedNetwork) => {
+    const f = fakeTransport(undefined, applied);
     return {
       ...f,
       ops: createOperations({ transport: f.t, network: { openPublic: true } }),
@@ -191,7 +201,12 @@ describe("operation scopes", () => {
   ])(
     "runs the whole-instance scope on the instance's own exec ($kind network)",
     async (network) => {
-      const { ops: o, calls } = ops();
+      // the instance applies exactly the operation's network (as the kernel admits it)
+      const { ops: o, calls } = ops(
+        network.kind === "allowlist"
+          ? { mode: "allowlist", allowHosts: [...network.hosts] }
+          : { mode: network.kind, allowHosts: [] },
+      );
       for (const profile of ["request-approval", "approve-for-me", "full-access"] as const) {
         const op = await o.operation(h, scope({ profile, network }), sig());
         const r = await op.exec({
@@ -223,5 +238,65 @@ describe("operation scopes", () => {
     const source = readFileSync(new URL("../src/operations.ts", import.meta.url), "utf8");
     expect(source).not.toMatch(/OPERATION_AGENT, "(exec|native)"/);
     expect(source).not.toMatch(/linux-sandbox|filesLockFd/);
+  });
+});
+
+describe("the instance's applied network bounds every operation (never widened)", () => {
+  const none: AppliedNetwork = { mode: "none", allowHosts: [] };
+  const allow = (...hosts: string[]): AppliedNetwork => ({ mode: "allowlist", allowHosts: hosts });
+  const open: AppliedNetwork = { mode: "open-public", allowHosts: [] };
+
+  it("admits a scope only when the instance allows nothing beyond it", () => {
+    expect(appliedWithin({ kind: "open-public" }, open)).toBe(true);
+    expect(appliedWithin({ kind: "open-public" }, allow("a.example.com"))).toBe(true);
+    expect(appliedWithin({ kind: "open-public" }, none)).toBe(true);
+    expect(
+      appliedWithin({ kind: "allowlist", hosts: ["a.example.com"] }, allow("a.example.com")),
+    ).toBe(true);
+    expect(
+      appliedWithin(
+        { kind: "allowlist", hosts: ["A.example.com", "b.example.com"] },
+        allow("a.example.com"),
+      ),
+    ).toBe(true);
+    expect(appliedWithin({ kind: "allowlist", hosts: ["a.example.com"] }, none)).toBe(true);
+    expect(appliedWithin({ kind: "none" }, none)).toBe(true);
+    // narrower than the instance: refused
+    expect(appliedWithin({ kind: "none" }, allow("a.example.com"))).toBe(false);
+    expect(appliedWithin({ kind: "none" }, open)).toBe(false);
+    expect(
+      appliedWithin(
+        { kind: "allowlist", hosts: ["a.example.com"] },
+        allow("a.example.com", "b.example.com"),
+      ),
+    ).toBe(false);
+    expect(appliedWithin({ kind: "allowlist", hosts: ["a.example.com"] }, open)).toBe(false);
+    // an instance whose network is unknown admits nothing narrower than open-public
+    expect(appliedWithin({ kind: "none" }, null)).toBe(false);
+    expect(appliedWithin({ kind: "open-public" }, null)).toBe(false);
+  });
+
+  it("refuses exec and a background start before consuming anything (native work opens no connection)", async () => {
+    const { t, calls } = fakeTransport(undefined, allow("a.example.com"));
+    const o = createOperations({ transport: t, network: { openPublic: true } });
+    const narrow = scope({ network: { kind: "none" } });
+    const op = await o.operation(h, narrow, sig());
+    const attempts = [
+      op.exec({ command: "true", timeoutMs: 1000, maxOutputBytes: 10, signal: sig() }),
+      o.background.start(h, narrow, {
+        command: "true",
+        timeoutMs: 1000,
+        maxOutputBytes: 100,
+        signal: sig(),
+        taskId: "t1",
+        outputPath: "/workspace/.capybara/tasks/t1.out",
+        retainUntilMs: Date.now() + 60_000,
+      }),
+    ];
+    for (const attempt of attempts) {
+      expect(isSandboxScopeDeniedError(await attempt.catch((x: unknown) => x))).toBe(true);
+    }
+    expect(calls.some((c) => c.cmd.includes("consume"))).toBe(false);
+    expect(calls.some((c) => c.method === "execFull")).toBe(false);
   });
 });
