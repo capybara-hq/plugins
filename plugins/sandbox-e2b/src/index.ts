@@ -97,10 +97,10 @@ export function providerConfig(
 const plugin = defineExtension({
   name: "sandbox-e2b",
   version: "0.1.0-rc.19",
-  // The permission operation contract (`permissionSupport`, `operation`, `background`, ...) and its
-  // parsers are the SDK's from rc.28 on (the network contract `limits.mode` / `limits.network`
-  // from rc.22).
-  sdk: "^0.1.0-rc.28",
+  // Support v2 (the instance boundary), limits without `mode`, list / scan without limits and the
+  // closed address classes are the R3 SDK's (approval-only profiles). The release PR sets the
+  // published R3 rc here and in package.json.
+  sdk: "^0.1.0-rc.36",
   provides: [SANDBOX_EXTENSION_POINT],
   // 只用部署配置与 E2B 的 API，不用任何需要声明的平台能力
   permissions: {},
