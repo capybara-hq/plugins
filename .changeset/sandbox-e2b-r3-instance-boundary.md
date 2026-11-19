@@ -10,3 +10,8 @@ profile; a narrower filesystem grant and the escalated pair are refused before a
 every closed IPv4 class of the SDK table (metadata, multicast, reserved and the fake-IP range too; the MMDS
 residual stays), and the runtime directory is named after every staged file, so new SDK bytes stage a
 fresh one. Needs the R3 core release.
+
+Security review: an operation whose network is narrower than the VM's applied policy (read from
+`GET /sandboxes/{id}`) is refused instead of silently widened; an open-public VM made with an earlier,
+shorter deny list counts as unknown and is refused until its network is re-applied. The README records the
+live findings for `0.0.0.0/8` and the MMDS fields.
