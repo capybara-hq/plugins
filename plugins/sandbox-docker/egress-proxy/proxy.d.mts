@@ -14,11 +14,40 @@ export interface EgressProxyConfig {
   /** Test only: host name -> pinned IP (exempt from the private address check; allowlist still needs the list). */
   testHosts?: Record<string, string>;
   lookup?: (host: string) => Promise<{ address: string }[]>;
+  /** Encrypted DNS for fake-IP answers; default {@link createEncryptedDns} with the SDK's endpoints. */
+  encryptedDns?: EncryptedDns;
   /** Receives one English line per refusal; default console.warn. */
   log?: (msg: string) => void;
 }
 
 export const MODES: readonly EgressProxyMode[];
+/** A copy of plugin-sdk's OPEN_PUBLIC_DENIED_CIDRS: every closed address, in both modes. */
+export const CLOSED_CIDRS: readonly string[];
+/** A copy of plugin-sdk's SANDBOX_FAKE_IP_DNS. */
+export const FAKE_IP_DNS: {
+  readonly fakeIpCidr: string;
+  readonly endpoints: readonly string[];
+  readonly timeoutMs: number;
+  readonly cacheTtlCapSeconds: number;
+  readonly cacheMaxNames: number;
+};
+/** The refusal when a fake-IP answer could not be resolved through encrypted DNS. */
+export const FAKE_IP_REFUSAL: string;
+export interface EncryptedDns {
+  resolve(name: string): Promise<string[]>;
+}
+export function isFakeIp(address: string): boolean;
+export function dnsQuery(name: string, qtype: 1 | 28): Buffer;
+export function dnsAnswers(
+  raw: Uint8Array,
+  qtype: 1 | 28,
+): { addresses: string[]; ttl: number | null };
+export function createEncryptedDns(seams?: {
+  endpoints?: readonly string[];
+  ca?: string | Buffer;
+  fetch?: (url: string, query: Uint8Array, timeoutMs: number) => Promise<Uint8Array>;
+  clock?: () => number;
+}): EncryptedDns & { cacheSize(): number };
 /** The deployment's denied CIDRs as a BlockList; throws on an entry that is not a CIDR. */
 export function deniedList(cidrs: readonly string[]): BlockList;
 export function isForbiddenAddress(ip: string, denied?: BlockList): boolean;
@@ -34,6 +63,8 @@ export function resolveTarget(
     lookup: (host: string) => Promise<{ address: string }[]>;
     /** The deployment's denied ranges ({@link deniedList}). */
     denied?: BlockList;
+    /** Re-resolves a fake-IP answer; without it such an answer is refused. */
+    encryptedDns?: EncryptedDns;
   },
 ): Promise<string[]>;
 export function connectAny(

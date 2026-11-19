@@ -654,7 +654,8 @@ describe("hardening", () => {
     "3fff::1",
     "5f00::1",
     "64:ff9b:1::808:808",
-    "::ffff:0:808:808",
+    // the well-known NAT64 prefix is closed whatever it embeds (the SDK's address classes)
+    "64:ff9b::808:808",
     "fec0::1",
     "100::1",
     "4000::1",
@@ -662,7 +663,8 @@ describe("hardening", () => {
     expect(isForbiddenAddress(ip)).toBe(true);
   });
 
-  it.each(["2a00:1450:4001::1", "2606:4700::1111", "64:ff9b::808:808", "2002:808:808::1"])(
+  // SIIT (::ffff:0:a.b.c.d) and 6to4 forms are judged by the IPv4 address they embed
+  it.each(["2a00:1450:4001::1", "2606:4700::1111", "::ffff:0:808:808", "2002:808:808::1"])(
     "IPv6 %s is allowed",
     (ip) => {
       expect(isForbiddenAddress(ip)).toBe(false);
