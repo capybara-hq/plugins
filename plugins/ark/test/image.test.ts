@@ -106,6 +106,53 @@ describe("ark: image generation", () => {
     expect(edit?.imageGeneration).toBeUndefined();
   });
 
+  it("1K families list the 1K set plus the 2K set; 5.0 lite and 4.5 stay 2K only", async () => {
+    const ids = [
+      "doubao-seedream-5-5-261028",
+      "doubao-seedream-5-0-flash-260128",
+      "doubao-seedream-5-0-pro-260128",
+      "doubao-seedream-4-0-250828",
+      "doubao-seedream-5-0-260128",
+      "doubao-seedream-4-5-251128",
+    ];
+    route = () => ({
+      status: 200,
+      json: { data: ids.map((id) => ({ domain: "ImageGeneration", id, status: "Retiring" })) },
+    });
+    const models = await provider().listModels();
+    const key = (s: { width: number; height: number }) => `${s.width}x${s.height}`;
+    const oneK = [
+      "1024x1024",
+      "1152x864",
+      "864x1152",
+      "1248x832",
+      "832x1248",
+      "1280x720",
+      "720x1280",
+    ];
+    const twoK = [
+      "2048x2048",
+      "2304x1728",
+      "1728x2304",
+      "2496x1664",
+      "1664x2496",
+      "2816x1584",
+      "1584x2816",
+    ];
+    for (const id of ids.slice(0, 4)) {
+      const info = models.find((m) => m.id === id)?.imageGeneration;
+      expect(isValidImageGenerationInfo(info), id).toBe(true);
+      expect(info?.sizes.map(key), id).toEqual([...oneK, ...twoK]);
+      expect(info?.defaultSize, id).toEqual({ width: 2048, height: 2048 });
+      for (const s of info?.sizes ?? []) {
+        expect(s.width * s.height, id).toBeGreaterThanOrEqual(921_600);
+      }
+    }
+    for (const id of ids.slice(4)) {
+      expect(models.find((m) => m.id === id)?.imageGeneration?.sizes.map(key), id).toEqual(twoK);
+    }
+  });
+
   it("4.5 and 5.0 lite sizes stay above their 3.69 MP minimum", async () => {
     route = () => ({
       status: 200,
@@ -331,7 +378,7 @@ const LIVE_REGION = process.env.CAPYBARA_TEST_ARK_REGION;
 if (!LIVE_KEY)
   console.info("[plugin-ark] CAPYBARA_TEST_ARK_API_KEY not set: live image test skipped");
 
-describe.skipIf(!LIVE_KEY)("live", { timeout: 180_000 }, () => {
+describe.skipIf(!LIVE_KEY)("live", { timeout: 900_000 }, () => {
   it("live: generates one small image on an activated Seedream model", async (ctx) => {
     const provider = createArkProvider({
       apiKey: LIVE_KEY ?? "",
@@ -354,22 +401,34 @@ describe.skipIf(!LIVE_KEY)("live", { timeout: 180_000 }, () => {
     for (const m of ordered.slice(0, 4)) {
       const info = m.imageGeneration;
       if (info === undefined) continue;
-      // the smallest declared size keeps the cost and the payload down
-      const size = [...info.sizes].sort((a, b) => a.width * a.height - b.width * b.height)[0];
-      if (size === undefined) continue;
-      const r: ImageGenerateRequest = {
-        model: m.id,
-        prompt: "a small red square on a white background",
-        size,
-        n: 1,
-        params: {},
-      };
+      // the smallest declared size keeps the cost and the payload down;
+      // CAPYBARA_TEST_ARK_IMAGE_SIZES (comma-separated WxH) generates one image per listed size
+      const wanted = (process.env.CAPYBARA_TEST_ARK_IMAGE_SIZES ?? "")
+        .split(",")
+        .map((x) => x.trim())
+        .filter((x) => x !== "");
+      const sizes =
+        wanted.length > 0
+          ? info.sizes.filter((s) => wanted.includes(`${s.width}x${s.height}`))
+          : [[...info.sizes].sort((a, b) => a.width * a.height - b.width * b.height)[0]].flatMap(
+              (s) => (s === undefined ? [] : [s]),
+            );
+      if (sizes.length === 0) continue;
       try {
-        const res = await provider.generateImage?.(r, { signal: AbortSignal.timeout(170_000) });
-        expect(validateImageGenerateResult(r, info, res)).toBeNull();
-        console.info(
-          `[plugin-ark] live image ${m.id} ${size.width}x${size.height}: ${res?.images[0]?.mediaType}, ${res?.images[0]?.data.length} base64 chars, usage ${JSON.stringify(res?.usage)}`,
-        );
+        for (const size of sizes) {
+          const r: ImageGenerateRequest = {
+            model: m.id,
+            prompt: "a small red square on a white background",
+            size,
+            n: 1,
+            params: {},
+          };
+          const res = await provider.generateImage?.(r, { signal: AbortSignal.timeout(170_000) });
+          expect(validateImageGenerateResult(r, info, res)).toBeNull();
+          console.info(
+            `[plugin-ark] live image ${m.id} ${size.width}x${size.height}: ${res?.images[0]?.mediaType}, ${res?.images[0]?.data.length} base64 chars, usage ${JSON.stringify(res?.usage)}`,
+          );
+        }
         return;
       } catch (e) {
         const notActivated =
