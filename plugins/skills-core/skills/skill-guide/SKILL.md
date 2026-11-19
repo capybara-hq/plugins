@@ -63,23 +63,24 @@ read [references/format.md](references/format.md) when you need one of them.
 
 ## Steps
 
-1. Write the directory in your sandbox, for example `/workspace/skills/<name>/`.
-2. Zip it from its parent so the folder is the top level:
-   `cd /workspace/skills && zip -r <name>.zip <name>`
-   (a zip with `SKILL.md` at its root also works).
+1. Write the directory on the device, under its workspace directory (for example `skills/<name>/`
+   there).
+2. Package the skill directory as a zip archive whose top level is the folder (or `SKILL.md` itself),
+   with any archiver available on the device.
 3. Register it: call the `Platform` tool, operation `agents.register-skill`, input
-   `{ "filePath": "/workspace/skills/<name>.zip" }`. Use the absolute path of the zip in the sandbox.
+   `{ "filePath": "<absolute path of the zip on the device>" }`.
    On a private agent the first registration shows the person a confirmation card (they may choose to
-   remember it); on a shared agent they confirm every time. Wait for the answer; if it is refused or
-   fails, read the error, fix the package and register again.
+   remember it); on a shared agent they confirm every time. Wait for the answer. If registration
+   fails, read the error, fix the package and register again; if the person declines at the
+   confirmation, do not register again unless they ask.
 4. Test it: load it with the `Skill` tool (skill `<name>`); it is available in the same run. Follow it
    on a small realistic task, and fix what is unclear. A skill that is manual-only (see
    references/format.md) is not loadable by you: a person runs it with `/<name>`.
 5. Upgrade: change the files and register again with the same name. Every registration is a complete
-   new version: files you leave out are not part of it, so zip the whole directory, not just the
-   changed files.
+   new version: files you leave out are not part of it, so package the whole directory, not just
+   the changed files.
 
-Limits: 10 MB per file, 50 MB in total, 1000 files.
+The package limits are in [references/format.md](references/format.md).
 
 Refusals to expect:
 
@@ -92,8 +93,6 @@ Refusals to expect:
 
 ## Sharing with the org
 
-A skill you register belongs to this agent. To make it available to the whole org, the owner asks
-you to share it (or does it on the agent page): call `Platform` `agents.share-skill` with
-`{ "agentId": "<this agent's id, from agents.list>", "skillId": "<the skill's id, from agents.skills>" }`. An org admin has to confirm it in the inbox; when the owner is an org
-admin it is immediate. Read [references/sharing.md](references/sharing.md) before sharing or when you
-upgrade an org skill: it covers versions, the maintainer role and name conflicts.
+A skill you register belongs to this agent. The owner can make it available to the whole org by
+sharing it. Read [references/sharing.md](references/sharing.md) before sharing or when you upgrade
+an org skill: it covers the steps, versions, the maintainer role and name conflicts.

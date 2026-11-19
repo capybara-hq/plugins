@@ -32,7 +32,7 @@ import {
 
 /** The refusal outside a one-to-one conversation with its owner. */
 export const NOT_AVAILABLE =
-  "Memory is only available in one-to-one conversations with their owner. Do not call the memory tools in this conversation; answer without them.";
+  "Memory is only available in one-to-one conversations with their owner. This call was refused; continue without memory.";
 
 /** How long `write` / `edit` wait for the embedding before leaving it to the queue. */
 export const EMBED_WAIT_MS = 5_000;
@@ -80,7 +80,7 @@ function optStr(input: unknown, key: string): string | undefined {
 const PATH_FIELD = {
   type: "string",
   description:
-    'Memory path "<type>/<name>.md", the type being user, feedback, project or reference; deeper directories are allowed. Examples: "feedback/reply-in-chinese.md", "project/github/probe.md".',
+    'Memory path "<type>/<name>.md", the type being user, feedback, project or reference; deeper directories are allowed. Examples: "feedback/code-review-style.md", "project/billing/q3-migration.md".',
 };
 
 const VIEW: ToolSpec = {
@@ -88,17 +88,17 @@ const VIEW: ToolSpec = {
   title: "View memory",
   description:
     "Read a memory in full, or list a memory directory. " +
-    'Pass a memory path (e.g. "feedback/reply-in-chinese.md") to get its description, body and links ' +
+    'Pass a memory path (e.g. "feedback/code-review-style.md") to get its description, body and links ' +
     '(links to memories not written yet are marked); pass a directory (e.g. "project/") or "/" to list ' +
     "what it contains. Use it before relying on a memory whose index line looks relevant, and before " +
-    "editing one. Reading a memory counts as a recall.",
+    "editing one.",
   inputSchema: {
     type: "object",
     properties: {
       path: {
         type: "string",
         description:
-          'A memory path like "user/role.md", a directory like "project/" or "project/github/", or "/" for the root.',
+          'A memory path like "user/role.md", a directory like "project/" or "project/billing/", or "/" for the root.',
       },
     },
     required: ["path"],
@@ -117,7 +117,7 @@ const SEARCH: ToolSpec = {
     "Search your memories of this member by words and by meaning. " +
     "Returns matching memory paths with their description and a snippet, best first. Use it to find " +
     "memories not listed in the index, and to check for an existing memory on a topic before writing " +
-    "a new one. Each returned hit counts as a recall.",
+    "a new one.",
   inputSchema: {
     type: "object",
     properties: {
@@ -125,7 +125,8 @@ const SEARCH: ToolSpec = {
         type: "string",
         minLength: 1,
         maxLength: MAX_QUERY_LENGTH,
-        description: 'Words or a question, in any language, e.g. "reply language" or "部署流程".',
+        description:
+          'Words or a question, in any language, e.g. "code review style" or "部署流程".',
       },
       limit: {
         type: "integer",
@@ -148,14 +149,8 @@ const WRITE: ToolSpec = {
   title: "Write memory",
   description:
     "Create or replace a memory about this member, kept across conversations with this agent. " +
-    "Save when the member asks you to remember something, or on your own when you learn something " +
-    "that will help in later conversations: who they are (user/), how they want work done (feedback/), " +
-    "ongoing work and its constraints (project/), where external things live (reference/). Keep one " +
-    "fact or topic per memory; check the index or search first and update an existing memory instead " +
-    "of writing a duplicate. For feedback and project memories, lead with the rule or fact, then a " +
-    '"Why:" line and a "How to apply:" line; write absolute dates. Link related memories with ' +
-    "[[name]] or [[type/path.md]]. Do not save secrets, or what only this conversation needs. " +
-    "Writing an existing path replaces its description and body.",
+    "Writing an existing path replaces its description and body; the description becomes the " +
+    "memory's line in the index. What to save and how to write it is in the memory guidance.",
   inputSchema: {
     type: "object",
     properties: {

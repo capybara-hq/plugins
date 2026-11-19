@@ -23,7 +23,7 @@ const SEGMENT_RE =
   /^[a-z0-9\-_.\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+$/u;
 
 const TYPE_LIST = MEMORY_TYPES.map((t) => `${t}/`).join(", ");
-const EXAMPLE = '"feedback/reply-in-chinese.md"';
+const EXAMPLE = '"feedback/code-review-style.md"';
 
 const isType = (s: string): s is MemoryType => (MEMORY_TYPES as readonly string[]).includes(s);
 
@@ -47,7 +47,7 @@ function segmentError(seg: string, original: string): string | null {
 /**
  * Parses and normalises a memory path: trims, lowercases ASCII, strips leading `/`, appends `.md`
  * when missing. `dirs` are the directory segments, the type first (`["project", "github"]` for
- * `project/github/probe.md`); `name` is the file name without `.md`.
+ * `project/billing/q3-migration.md`); `name` is the file name without `.md`.
  */
 export function parsePath(input: string): ParsedPath {
   const original = input.trim();
