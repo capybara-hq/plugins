@@ -405,7 +405,7 @@
     },
     {
       "name": "ark",
-      "version": "0.1.0-rc.10",
+      "version": "0.1.0-rc.11",
       "summary": {
         "en": "Model provider (model-provider@2) for Volcengine Ark chat, embedding and image generation models",
         "zh": "火山方舟对话、嵌入与图片生成模型（model-provider@2）"
@@ -437,8 +437,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-ark",
-          "version": "0.1.0-rc.10",
-          "integrity": "sha512-8SRYcBBb/wROJX8ByBisL/SKNg7z4RvWFq8X7L+944QBzSed4YHwNATLRDTL4pW1l6VIC2rr+0DeSBCjmsF4Qw=="
+          "version": "0.1.0-rc.11",
+          "integrity": "sha512-rE0tPudbL0AjY9f6cTdM0wSFtyhWsKOaEFy6GOZ79wISw9F5Y0ap3RVaiaeW9c0lZPxKdhqIzi18xARu/A1jVQ=="
         }
       }
     },
