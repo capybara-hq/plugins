@@ -586,6 +586,8 @@ function dohFetch(url, query, timeoutMs, ca) {
         method: "GET",
         headers: { accept: "application/dns-message" },
         timeout: timeoutMs,
+        // one deadline for the whole exchange (connect, TLS, response)
+        signal: AbortSignal.timeout(Math.max(1, Math.floor(timeoutMs))),
         ...(ca !== undefined && { ca }),
       },
       (res) => {
@@ -604,10 +606,8 @@ function dohFetch(url, query, timeoutMs, ca) {
         res.on("error", reject);
       },
     );
-    const timer = setTimeout(() => req.destroy(new Error("DoH timed out.")), timeoutMs);
     req.on("timeout", () => req.destroy(new Error("DoH timed out.")));
     req.on("error", reject);
-    req.on("close", () => clearTimeout(timer));
     req.end();
   });
 }
