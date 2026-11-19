@@ -44,19 +44,18 @@ import {
 } from "./docker-env.js";
 
 /**
- * The operation contract on the actual provider: the published SDK runtime staged in the real
- * sandbox image, driven through the socket proxy into a container with the provider's unchanged
- * hardening. The permission conformance suite of @capybara-hq/testing runs against it (positive
- * shell / Python / Node / curl controls, sibling, symlink and protected-path denials, both overlap
- * orders, component and root swaps, mutable syscall pointers, exact cancellation and narrowing),
- * plus the provider's own cases: Full against restricted, the per-operation allowlist forwarder
- * through the real egress proxy, durable consumption and revocation, preparation, browsing and
- * fail-closed images. Skipped without Docker; CAPYBARA_TEST_REQUIRE_LINUX_RESTRICTED=1 (evidence
- * mode) fails instead of skipping, and fails when the runtime reports restricted unavailable.
+ * The operation contract on the actual provider, an instance-boundary device (core approval-only
+ * profiles design, decision 1): the real sandbox image, driven through the socket proxy into a
+ * container with the provider's unchanged hardening. The container is the sandbox: support v2
+ * reports `boundary: "instance"` with no restricted filters and no outside; the kernel's
+ * whole-instance scope runs under every profile on the provider's ordinary exec and file paths,
+ * under the instance's own egress proxy; a narrower grant and the escalated pair are refused
+ * before any effect. Plus durable consumption and revocation, exact background supervision,
+ * preparation, browsing and fail-closed images. The permission conformance suite of
+ * @capybara-hq/testing runs against it. Skipped without Docker.
  */
 
 const exec = promisify(execFile);
-const required = process.env.CAPYBARA_TEST_REQUIRE_LINUX_RESTRICTED === "1";
 const imageDir = fileURLToPath(new URL("../image/", import.meta.url));
 const RUN = randomUUID().slice(0, 8);
 const sig = () => AbortSignal.timeout(300_000);
@@ -87,17 +86,10 @@ describe("staged runtime", () => {
   });
 });
 
-describe.runIf(required && !dockerAvailable)("Linux restricted runtime is required", () => {
-  it("has Docker", () => {
-    throw new Error("CAPYBARA_TEST_REQUIRE_LINUX_RESTRICTED=1 but Docker is not available");
-  });
-});
-
 const limits = (network: SandboxLimits["network"]): SandboxLimits => ({
   cpu: 1,
   memoryMb: 1024,
   diskMb: 2048,
-  mode: "auto",
   network,
 });
 
@@ -105,7 +97,7 @@ const limits = (network: SandboxLimits["network"]): SandboxLimits => ({
  * The granted endpoint is a service outside the device, reached only by its allowlisted name
  * through the operation's forwarder and the instance's real egress proxy (which pins the name to
  * the service's address, exempt from its private-address check). The ungranted endpoints listen
- * on the device's loopback, where Full access reaches them directly.
+ * on the device's loopback.
  */
 const GRANTED_NAME = "granted.permission.example";
 const GRANTED_PORT = 18080;
@@ -265,20 +257,28 @@ describe.skipIf(!dockerAvailable)(
       ...overrides,
     });
 
-    const restricted = (
-      writeRoots: string[],
+    /** The kernel's scope on an instance-boundary device: the whole filesystem plus the root. */
+    const INSTANCE_ROOTS = ["/", "/workspace"];
+    const instance = (
       network: SandboxPermissionGrant["network"] = { kind: "none" },
-      readRoots: string[] = [],
+      profile: SandboxPermissionGrant["profile"] = "full-access",
     ): SandboxPermissionGrant => ({
-      profile: "approve-for-me",
-      filesystem: { kind: "scoped", readRoots, writeRoots },
+      profile,
+      filesystem: { kind: "scoped", readRoots: INSTANCE_ROOTS, writeRoots: INSTANCE_ROOTS },
       network,
     });
-    const full: SandboxPermissionGrant = {
+    /** Running outside the sandbox: an instance has no outside. */
+    const escalated: SandboxPermissionGrant = {
       profile: "full-access",
       filesystem: { kind: "device" },
       network: { kind: "environment" },
     };
+    /** A grant narrower than the instance would need restricted filters. */
+    const narrower = (writeRoots: string[]): SandboxPermissionGrant => ({
+      profile: "approve-for-me",
+      filesystem: { kind: "scoped", readRoots: [], writeRoots },
+      network: { kind: "none" },
+    });
 
     const run = async (
       h: SandboxHandle,
@@ -379,14 +379,6 @@ describe.skipIf(!dockerAvailable)(
         `[sandbox-docker permission] ${JSON.stringify({
           support,
           kernel: (await dexec(device.id, "1000", ["uname", "-srm"])).trim(),
-          landlockAbi: (
-            await dexec(device.id, "1000", [
-              "python3",
-              "-I",
-              "-c",
-              "import ctypes; print(ctypes.CDLL(None).syscall(444, None, 0, 1))",
-            ])
-          ).trim(),
           docker: host(
             "docker",
             "version",
@@ -404,11 +396,6 @@ describe.skipIf(!dockerAvailable)(
           ),
         })}`,
       );
-      if (required && support.restricted === null) {
-        throw new Error(
-          `CAPYBARA_TEST_REQUIRE_LINUX_RESTRICTED=1 but: ${support.unavailableReason ?? "unsupported"}`,
-        );
-      }
     }, 1_800_000);
 
     afterAll(async () => {
@@ -417,13 +404,6 @@ describe.skipIf(!dockerAvailable)(
       await cleanupTestResources(RUN);
       await proxy?.stop();
     }, 300_000);
-
-    /** Skips a mechanism case where restricted mode is unavailable, or fails in evidence mode. */
-    const requireRestricted = (context: { skip: (note?: string) => void }) => {
-      if (support.restricted !== null) return;
-      if (required) throw new Error(`restricted unavailable: ${support.unavailableReason}`);
-      context.skip(`restricted unavailable: ${support.unavailableReason}`);
-    };
 
     it("keeps the container hardening unchanged", async () => {
       const inspect = JSON.parse(await docker("inspect", device.id))[0].HostConfig;
@@ -448,32 +428,54 @@ describe.skipIf(!dockerAvailable)(
       ).toMatch(/^0 755\n(0 644\n){4}refused\n$/);
     });
 
-    it("reports support from the launcher's own probe, never from a fixture", async () => {
-      const arch = (await dexec(device.id, "1000", ["uname", "-m"])).trim();
-      const probe = JSON.parse(
-        await dexec(device.id, "1000", [
-          "python3",
-          "-I",
-          "/opt/capybara-runtime/linux-sandbox.py",
-          "probe",
-        ]),
-      ) as { restricted: object | null; landlockAbi?: number };
-      expect(support.version).toBe(1);
-      expect(support.fullAccess).toBe(true);
-      expect(support.background).toBe(true);
-      if (probe.restricted === null) {
-        expect(support.restricted).toBeNull();
-        expect(support.unavailableReason).toBeTruthy();
-      } else {
-        expect(["aarch64", "x86_64"]).toContain(arch);
-        expect(probe.landlockAbi).toBeGreaterThanOrEqual(6);
-        expect(support.restricted).toEqual({
-          filesystem: true,
-          network: true,
-          native: true,
-          concurrentScopes: true,
-        });
+    it("reports support v2: the instance boundary, no restricted filters, no outside", async () => {
+      expect(support).toEqual({
+        version: 2,
+        boundary: "instance",
+        restricted: null,
+        network: { openPublic: true, allowlist: true, perOperationHosts: false },
+        outsideSandbox: false,
+        background: true,
+      });
+      // a deployment that refuses the open network reports it
+      const closed = createDockerSandbox(
+        {
+          endpoint: proxy.endpoint,
+          runtime: "runc",
+          network: netName,
+          egressProxyImage: images.egressImage,
+          defaultImage: images.sandboxImage,
+          refuseOpenNetwork: true,
+        },
+        { labels: { [TEST_LABEL]: RUN } },
+      );
+      expect((await closed.permissionSupport(device, sig())).network.openPublic).toBe(false);
+    });
+
+    it("refuses the escalated pair and narrower grants before any effect", async () => {
+      const root = `/workspace/refuse-${randomUUID().slice(0, 8)}`;
+      await dexec(device.id, "1000", ["mkdir", root]);
+      for (const grant of [escalated, narrower([root])]) {
+        const e = await run(device, grant, `printf ran > ${root}/ran`, { cwd: root }).catch(
+          (x) => x,
+        );
+        expect(isSandboxPermissionUnsupportedError(e), grant.filesystem.kind).toBe(true);
+        const b = await sbx.background
+          .start(device, scopeFor(grant), {
+            command: `printf ran > ${root}/bg-ran`,
+            cwd: root,
+            timeoutMs: 30_000,
+            maxOutputBytes: 1024,
+            signal: sig(),
+            taskId: `task-${randomUUID().slice(0, 8)}`,
+            outputPath: `${root}/out.log`,
+            retainUntilMs: Date.now() + 600_000,
+          })
+          .catch((x) => x);
+        expect(isSandboxPermissionUnsupportedError(b), grant.filesystem.kind).toBe(true);
       }
+      expect(await inspectRead(device, `${root}/ran`)).toBeNull();
+      expect(await inspectRead(device, `${root}/bg-ran`)).toBeNull();
     });
 
     it("passes the permission conformance on the actual provider", async () => {
@@ -563,76 +565,70 @@ describe.skipIf(!dockerAvailable)(
       await runSandboxPermissionConformance(fixture);
     });
 
-    it("runs Full access without the restricted filters that restricted work gets", async (context) => {
-      requireRestricted(context);
-      const root = `/workspace/compare-${randomUUID().slice(0, 8)}`;
+    it("runs the whole instance under every profile with the container's own hardening", async () => {
+      const root = `/workspace/whole-${randomUUID().slice(0, 8)}`;
       await dexec(device.id, "1000", ["mkdir", root]);
-      const probe =
+      const probe = (profile: string) =>
         "grep -E '^(Seccomp_filters|NoNewPrivs):' /proc/self/status | tr '\\n' ' '; " +
-        "python3 -c 'import os; os.setsid(); print(\"setsid-ok\")' 2>/dev/null || echo setsid-denied; " +
         "cat /etc/hostname > /dev/null && echo etc-read; " +
-        "printf x > /workspace/outside-compare 2>/dev/null && echo outside-write || echo outside-denied";
-      const f = await run(device, full, probe, { cwd: root });
-      const r = await run(device, restricted([root]), probe, { cwd: root });
-      expect(f.exitCode).toBe(0);
-      expect(r.exitCode).toBe(0);
-      const filters = (out: string) => Number(out.match(/Seccomp_filters:\s+(\d+)/)?.[1]);
-      console.info(
-        `[sandbox-docker permission] full: ${f.stdout.trim()} | restricted: ${r.stdout.trim()}`,
-      );
-      // Full keeps only the container's own filter; restricted adds the launcher's.
-      expect(filters(r.stdout)).toBeGreaterThan(filters(f.stdout));
-      expect(f.stdout).toMatch(/setsid-ok/);
-      expect(f.stdout).toMatch(/outside-write/);
-      expect(r.stdout).toMatch(/setsid-denied/);
-      expect(r.stdout).toMatch(/etc-read/);
-      expect(r.stdout).toMatch(/outside-denied/);
-    });
-
-    it("reaches allowlisted hosts only through the operation's forwarder and the real egress proxy", async (context) => {
-      requireRestricted(context);
-      const h = await newDevice(sbx, {
-        kind: "allowlist",
-        hosts: ["allowed.example.com", "denied.example.com"],
-      });
-      const root = "/workspace/net";
-      await dexec(h.id, "1000", ["mkdir", root]);
-      const curl = (host: string) => `curl -fsS -m 20 http://${host}/; true`;
-      const exec = async (grant: SandboxPermissionGrant, command: string) =>
-        (await sbx.operation(h, scopeFor(grant), sig())).exec({
-          command,
+        `printf x > /workspace/outside-${profile} && echo outside-write; ` +
+        `printf x > /tmp/tmp-${profile} && echo tmp-write`;
+      const seen: string[] = [];
+      for (const profile of ["request-approval", "approve-for-me", "full-access"] as const) {
+        const r = await run(device, instance({ kind: "none" }, profile), probe(profile), {
           cwd: root,
-          timeoutMs: 120_000,
-          maxOutputBytes: 1 << 20,
-          signal: sig(),
         });
-      const allowed = await exec(
-        restricted([root], { kind: "allowlist", hosts: ["allowed.example.com"] }),
-        `curl -fsS -m 20 http://allowed.example.com/; echo; curl -sS -m 20 http://denied.example.com/ -o /dev/null -w 'denied=%{http_code}\\n'; ` +
-          `python3 -c 'import os,socket; h=os.environ["HTTP_PROXY"]; print("proxy", h.startswith("http://127.0.0.1:"))'; ` +
-          // The instance's egress proxy itself is not an endpoint of this operation.
-          `python3 -c 'import socket, sys; socket.create_connection((sys.argv[1], 3128), 5)' ${h.id}-egress 2>/dev/null && echo egress-direct || echo egress-refused`,
-      );
-      expect(allowed.stdout).toContain("hello-allowed.example.com");
-      expect(allowed.stdout).toContain("denied=403");
-      expect(allowed.stdout).toContain("proxy True");
-      expect(allowed.stdout).toContain("egress-refused");
-      const none = await exec(restricted([root]), curl("allowed.example.com"));
-      expect(none.stdout).not.toContain("hello-");
-      // Environment lifts only the operation filter: the instance network still applies.
-      const environment = await exec(
-        restricted([root], { kind: "environment" }),
-        "curl -fsS -m 20 http://denied.example.com/; echo; curl -sS -m 10 http://other.example.org/ -o /dev/null -w 'other=%{http_code}\\n'",
-      );
-      expect(environment.stdout).toContain("hello-denied.example.com");
-      expect(environment.stdout).not.toContain("other=200");
+        expect(r.exitCode, r.stderr).toBe(0);
+        expect(r.stdout).toMatch(/etc-read/);
+        expect(r.stdout).toMatch(/outside-write/);
+        expect(r.stdout).toMatch(/tmp-write/);
+        expect(r.stdout).toMatch(/NoNewPrivs:\s+1/);
+        seen.push(r.stdout.replace(/(outside|tmp)-write/g, ""));
+        expect(text(await inspectRead(device, `/workspace/outside-${profile}`))).toBe("x");
+      }
+      // the same sandbox under every profile: only the container's own seccomp filter applies
+      expect(new Set(seen).size).toBe(1);
+      console.info(`[sandbox-docker permission] whole instance: ${seen[0]?.trim()}`);
     });
 
-    it("consumes an operation ID once and never repeats its effect", async (context) => {
-      requireRestricted(context);
+    it("the instance's egress proxy is the sandbox network of every operation", async () => {
+      // an allowlist instance: only its hosts, whatever network kind the operation names
+      const h = await newDevice(sbx, { kind: "allowlist", hosts: ["allowed.example.com"] });
+      const curl =
+        "curl -sS -m 20 http://allowed.example.com/; echo; " +
+        "curl -sS -m 20 http://denied.example.com/ -o /dev/null -w 'denied=%{http_code}\\n'; " +
+        `curl -sS -m 5 --noproxy '*' http://${target.getIpAddress(netName)}/ -o /dev/null 2>/dev/null && echo direct || echo no-direct`;
+      for (const network of [
+        { kind: "allowlist", hosts: ["allowed.example.com"] } as const,
+        { kind: "none" } as const,
+      ]) {
+        const r = await run(h, instance(network), curl, { cwd: "/workspace" });
+        expect(r.stdout, network.kind).toContain("hello-allowed.example.com");
+        expect(r.stdout, network.kind).toContain("denied=403");
+        expect(r.stdout, network.kind).toContain("no-direct");
+      }
+      // an open-public instance: public names on any port, the SDK's closed classes refused
+      const open = await newDevice(sbx, { kind: "open-public", hosts: [] });
+      const r = await run(
+        open,
+        instance({ kind: "open-public" }),
+        "curl -sS -m 20 http://allowed.example.com:80/; echo; " +
+          "for ip in 10.0.0.1 169.254.169.254 100.64.0.1 127.0.0.1 198.18.0.1; do " +
+          // through the proxy even for loopback (the image's NO_PROXY keeps the VM's own loopback
+          // local: that is the instance itself, inside the sandbox)
+          "curl -sS -m 10 --noproxy '' http://$ip/ -o /dev/null -w \"$ip=%{http_code}\\n\"; done",
+        { cwd: "/workspace" },
+      );
+      expect(r.stdout).toContain("hello-allowed.example.com");
+      for (const ip of ["10.0.0.1", "169.254.169.254", "100.64.0.1", "127.0.0.1", "198.18.0.1"]) {
+        expect(r.stdout).toContain(`${ip}=403`);
+      }
+    });
+
+    it("consumes an operation ID once and never repeats its effect", async () => {
       const root = `/workspace/once-${randomUUID().slice(0, 8)}`;
       await dexec(device.id, "1000", ["mkdir", root]);
-      const scope = scopeFor(restricted([root]));
+      const scope = scopeFor(instance());
       const first = await sbx.operation(device, scope, sig());
       await first.writeFile(`${root}/a`, enc.encode("first"), sig());
       // A retry with the same input is an unknown outcome; other input under the ID is invalid.
@@ -645,7 +641,7 @@ describe.skipIf(!dockerAvailable)(
       expect(isSandboxScopeValidationError(other)).toBe(true);
       expect(text(await inspectRead(device, `${root}/a`))).toBe("first");
       // An exec retried with its ID never runs twice.
-      const execScope = scopeFor(restricted([root]));
+      const execScope = scopeFor(instance());
       const args = {
         command: "echo run >> runs",
         cwd: root,
@@ -662,7 +658,7 @@ describe.skipIf(!dockerAvailable)(
       expect(isSandboxOperationOutcomeUnknownError(repeated)).toBe(true);
       expect(text(await inspectRead(device, `${root}/runs`))).toBe("run\n");
       // A passed admission deadline admits nothing.
-      const late = await run(device, restricted([root]), "echo late > late", {
+      const late = await run(device, instance(), "echo late > late", {
         cwd: root,
         scope: { admitBeforeMs: Date.now() - 1 },
       }).catch((e) => e);
@@ -670,12 +666,11 @@ describe.skipIf(!dockerAvailable)(
       expect(await inspectRead(device, `${root}/late`)).toBeNull();
     });
 
-    it("revokes before launch and cancels exactly the revoked running work", async (context) => {
-      requireRestricted(context);
+    it("revokes before launch and cancels exactly the revoked running work", async () => {
       const root = `/workspace/revoke-${randomUUID().slice(0, 8)}`;
       await dexec(device.id, "1000", ["mkdir", root]);
       // Revoked before it starts: refused, nothing runs.
-      const early = scopeFor(restricted([root]));
+      const early = scopeFor(instance());
       await sbx.revokeOperation(
         device,
         { operationId: early.operationId, admitBeforeMs: early.admitBeforeMs },
@@ -692,9 +687,8 @@ describe.skipIf(!dockerAvailable)(
         .catch((e) => e);
       expect(isSandboxScopeDeniedError(refused)).toBe(true);
       expect(await inspectRead(device, `${root}/early`)).toBeNull();
-      // Running restricted and Full work with a sibling each: only the revoked ones end.
-      for (const grant of [restricted([root]), full]) {
-        const tag = grant === full ? "full" : "restricted";
+      // Running work with a sibling: only the revoked one ends.
+      for (const [tag, grant] of [["instance", instance()]] as const) {
         const victim = scopeFor(grant);
         const sibling = run(
           device,
@@ -727,19 +721,18 @@ describe.skipIf(!dockerAvailable)(
       }
     });
 
-    it("killTagged ends a restricted operation's whole tree and nothing else", async (context) => {
-      requireRestricted(context);
+    it("killTagged ends a tagged operation's whole tree and nothing else", async () => {
       const root = `/workspace/tagged-${randomUUID().slice(0, 8)}`;
       await dexec(device.id, "1000", ["mkdir", root]);
       const other = run(
         device,
-        restricted([root]),
+        instance(),
         `printf r > other-ready; until [ -e release ]; do sleep 0.01; done; printf kept > kept`,
         { cwd: root, scope: { tag: "keep-me" } },
       );
       const victim = run(
         device,
-        restricted([root]),
+        instance(),
         `(sleep 1300 & echo $! > child); nohup sleep 1301 > /dev/null 2>&1 & echo $! > nohup; printf r > ready; sleep 1302`,
         { cwd: root, scope: { tag: "kill-me" } },
       );
@@ -910,14 +903,13 @@ describe.skipIf(!dockerAvailable)(
         return root;
       };
 
-      it("supervises restricted work exactly: status, tail, positional reads, idempotent start and stop", async (context) => {
-        requireRestricted(context);
+      it("supervises work exactly: status, tail, positional reads, idempotent start and stop", async () => {
         const root = await newRoot("bg");
-        const scope = scopeFor(restricted([root]));
+        const scope = scopeFor(instance());
         const args = bgArgs(
           root,
           `echo started >> starts; printf 'line-1\\n'; printf 'line-2\\n' >&2; (sleep 1400 & echo $! > child); ` +
-            `printf r > ready; until [ -e release ]; do sleep 0.01; done; { printf pwn > ${root}-outside; } 2>/dev/null; echo done; sleep 1401`,
+            `printf r > ready; until [ -e release ]; do sleep 0.01; done; echo done; sleep 1401`,
         );
         const ref = await sbx.background.start(device, scope, args);
         await waitFor(device, `${root}/ready`);
@@ -967,8 +959,6 @@ describe.skipIf(!dockerAvailable)(
           text: "done\n",
           truncated: true,
         });
-        // The starting grant stays restricted for the whole lifetime.
-        expect(await inspectRead(device, `${root}-outside`)).toBeNull();
         expect(text(await inspectRead(device, `${root}/out.log`))).toContain("done");
         await expect(
           sbx.background.readOutput(device, ref, { offset: 0, maxBytes: 65_537, signal: sig() }),
@@ -991,17 +981,16 @@ describe.skipIf(!dockerAvailable)(
         });
       });
 
-      it("reports a natural exit, keeps siblings alive and refuses an output path outside the scope", async (context) => {
-        requireRestricted(context);
+      it("reports a natural exit and keeps siblings alive", async () => {
         const root = await newRoot("bg-exit");
         const keep = await sbx.background.start(
           device,
-          scopeFor(restricted([root])),
+          scopeFor(instance()),
           bgArgs(root, "printf r > keep-ready; sleep 1500", { outputPath: `${root}/keep.log` }),
         );
         const ref = await sbx.background.start(
           device,
-          scopeFor(restricted([root])),
+          scopeFor(instance()),
           bgArgs(root, "echo bye; exit 3", { outputPath: `${root}/exit.log` }),
         );
         await waitFor(device, `${root}/keep-ready`);
@@ -1022,21 +1011,11 @@ describe.skipIf(!dockerAvailable)(
         expect(await sbx.background.stop(device, keep, { graceMs: 0, signal: sig() })).toEqual({
           outcome: "stopped",
         });
-        const outside = await sbx.background
-          .start(
-            device,
-            scopeFor(restricted([root])),
-            bgArgs(root, "echo ran > ran", { outputPath: "/workspace/escape.log" }),
-          )
-          .catch((e) => e);
-        expect(isSandboxScopeDeniedError(outside)).toBe(true);
-        expect(await inspectRead(device, `${root}/ran`)).toBeNull();
-        expect(await inspectRead(device, "/workspace/escape.log")).toBeNull();
       });
 
-      it("runs Full access in the background and revocation stops exactly that execution", async () => {
+      it("runs the whole instance in the background and revocation stops exactly that execution", async () => {
         const root = await newRoot("bg-full");
-        const scope = scopeFor(full);
+        const scope = scopeFor(instance());
         const ref = await sbx.background.start(
           device,
           scope,
@@ -1067,7 +1046,7 @@ describe.skipIf(!dockerAvailable)(
         await dexec(h.id, "1000", ["mkdir", "/workspace/p"]);
         const ref = await sbx.background.start(
           h,
-          scopeFor(full),
+          scopeFor(instance()),
           bgArgs("/workspace/p", "sleep 1700"),
         );
         await sbx.suspend(h, sig());
@@ -1105,24 +1084,10 @@ describe.skipIf(!dockerAvailable)(
         return Number(text(await inspectRead(h, path)));
       };
 
-      it("I1: refuses restricted roots that contain the provider's records or control files", async (context) => {
-        requireRestricted(context);
-        for (const writeRoots of [["/tmp"], ["/"], ["/opt"], ["/skills"]]) {
-          const fg = await run(device, restricted(writeRoots), "true", {
-            cwd: writeRoots[0] as string,
-          }).catch((e) => e);
-          expect(isSandboxScopeDeniedError(fg), `exec ${writeRoots}`).toBe(true);
-          const started = await sbx.background
-            .start(device, scopeFor(restricted(writeRoots)), bg(writeRoots[0] as string, "true"))
-            .catch((e) => e);
-          expect(isSandboxScopeDeniedError(started), `background ${writeRoots}`).toBe(true);
-        }
-      });
-
-      it("I1: file writes (even with Full access) cannot change the root-owned records; revocation stops the task", async () => {
+      it("I1: file writes cannot change the root-owned records; revocation stops the task", async () => {
         const root = await newRoot(device, "forge");
         // Full access shares the device uid: the strongest in-device writer short of root.
-        const scope = scopeFor(full);
+        const scope = scopeFor(instance());
         const id = operationUuid(scope.operationId);
         const forged = JSON.stringify({
           state: "exited",
@@ -1156,7 +1121,7 @@ describe.skipIf(!dockerAvailable)(
         const root = await newRoot(device, "i2a");
         const taskId = `task-${randomUUID().slice(0, 8)}`;
         barriers.set(taskId, `${root}/barrier`);
-        const scope = scopeFor(full);
+        const scope = scopeFor(instance());
         const ref = await sbx.background.start(
           device,
           scope,
@@ -1182,7 +1147,7 @@ describe.skipIf(!dockerAvailable)(
         barriers.set(taskId, `${root}/barrier`);
         const ref = await sbx.background.start(
           device,
-          scopeFor(full),
+          scopeFor(instance()),
           bg(root, `echo $$ > ${root}/child; exec sleep 1800`, taskId),
         );
         let settled = false;
@@ -1210,11 +1175,10 @@ describe.skipIf(!dockerAvailable)(
         if (child !== null) expect(await alive(device, [Number(text(child))])).toEqual([]);
       });
 
-      it("I3: a revocation survives an instance restart, and a restart during revocation is not reported as success", async (context) => {
-        requireRestricted(context);
+      it("I3: a revocation survives an instance restart, and a restart during revocation is not reported as success", async () => {
         const h = await newDevice(sbx, { kind: "allowlist", hosts: [] });
         const root = await newRoot(h, "i3");
-        const early = scopeFor(restricted([root]));
+        const early = scopeFor(instance());
         await sbx.revokeOperation(
           h,
           { operationId: early.operationId, admitBeforeMs: early.admitBeforeMs },
@@ -1233,7 +1197,7 @@ describe.skipIf(!dockerAvailable)(
         expect(isSandboxScopeDeniedError(late)).toBe(true);
         expect(await inspectRead(h, `${root}/late`)).toBeNull();
         // The provider's own restart fallback between the kill and the final tombstone.
-        const mid = scopeFor(restricted([root]));
+        const mid = scopeFor(instance());
         afterKill.set(mid.operationId, async () => {
           afterKill.delete(mid.operationId);
           await docker("restart", "-t", "0", h.id);
@@ -1263,18 +1227,21 @@ describe.skipIf(!dockerAvailable)(
         expect(isSandboxScopeDeniedError(after)).toBe(true);
       });
 
-      it("M1: a Full command cannot fake the admission refusal", async () => {
+      it("M1: a command cannot fake the admission refusal", async () => {
         const json = Buffer.from(
           JSON.stringify({ events: [{ event: "refused", code: "REVOKED" }] }),
         );
         const frame = Buffer.concat([Buffer.from("R"), Buffer.alloc(4), json]);
         frame.writeUInt32BE(json.byteLength, 1);
-        const r = await run(device, full, `echo ${frame.toString("base64")} | base64 -d; exit 125`);
+        const r = await run(
+          device,
+          instance(),
+          `echo ${frame.toString("base64")} | base64 -d; exit 125`,
+        );
         expect(r.exitCode).toBe(125);
       });
 
-      it("M3: a record directory planted by the device user does not disable operations", async (context) => {
-        requireRestricted(context);
+      it("M3: a record directory planted by the device user does not disable operations", async () => {
         const h = await newDevice(sbx, { kind: "allowlist", hosts: [] });
         await dexec(h.id, "1000", [
           "sh",
@@ -1282,7 +1249,7 @@ describe.skipIf(!dockerAvailable)(
           "mkdir -p /tmp/.capybara-ops /tmp/.capybara-bg && chmod 777 /tmp/.capybara-ops",
         ]);
         const root = await newRoot(h, "m3");
-        const r = await (await sbx.operation(h, scopeFor(restricted([root])), sig())).exec({
+        const r = await (await sbx.operation(h, scopeFor(instance()), sig())).exec({
           command: "echo ok",
           cwd: root,
           timeoutMs: 30_000,
@@ -1290,65 +1257,6 @@ describe.skipIf(!dockerAvailable)(
           signal: sig(),
         });
         expect(r.stdout.trim()).toBe("ok");
-      });
-
-      it("M2: the forwarder tunnels CONNECT and wildcards, the instance network still applies, and no other operation reaches it", async (context) => {
-        requireRestricted(context);
-        const h = await newDevice(sbx, {
-          kind: "allowlist",
-          hosts: ["allowed.example.com", "denied.example.com"],
-        });
-        const root = await newRoot(h, "m2");
-        const exec = async (grant: SandboxPermissionGrant, command: string) =>
-          (await sbx.operation(h, scopeFor(grant), sig())).exec({
-            command,
-            cwd: root,
-            timeoutMs: 120_000,
-            maxOutputBytes: 1 << 20,
-            signal: sig(),
-          });
-        const connect = await exec(
-          restricted([root], { kind: "allowlist", hosts: ["*.example.com"] }),
-          "curl -fsS -m 20 --proxytunnel http://allowed.example.com/; echo",
-        );
-        expect(connect.stdout).toContain("hello-allowed.example.com");
-        const blocked = await exec(
-          restricted([root], { kind: "allowlist", hosts: ["other.example.org"] }),
-          "curl -sS -m 20 -o /dev/null -w 'code=%{http_code}\\n' http://other.example.org/; true",
-        );
-        expect(blocked.stdout).not.toContain("code=200");
-        // A long-running operation publishes its forwarder port; another one cannot use it.
-        const holder = (
-          await sbx.operation(
-            h,
-            scopeFor(restricted([root], { kind: "allowlist", hosts: ["allowed.example.com"] })),
-            sig(),
-          )
-        ).exec({
-          command: `printf '%s' "\${HTTP_PROXY##*:}" > ${root}/port; until [ -e ${root}/release ]; do sleep 0.01; done`,
-          cwd: root,
-          timeoutMs: 120_000,
-          maxOutputBytes: 1024,
-          signal: sig(),
-        });
-        const port = Number(
-          await (async () => {
-            await waitFor(h, `${root}/port`);
-            return text(await inspectRead(h, `${root}/port`));
-          })(),
-        );
-        for (const network of [
-          { kind: "none" } as const,
-          { kind: "allowlist", hosts: ["allowed.example.com"] } as const,
-        ]) {
-          const r = await exec(
-            restricted([root], network),
-            `python3 -c 'import socket; socket.create_connection(("127.0.0.1", ${port}), 5)' 2>/dev/null && echo borrowed || echo refused`,
-          );
-          expect(r.stdout.trim(), network.kind).toBe("refused");
-        }
-        await dexec(h.id, "1000", ["touch", `${root}/release`]);
-        expect((await holder).exitCode).toBe(0);
       });
     });
 
@@ -1408,10 +1316,9 @@ describe.skipIf(!dockerAvailable)(
         return result;
       };
 
-      it("R1: a same-uid writer cannot inject frames into a supervisor's channel", async (context) => {
-        requireRestricted(context);
+      it("R1: a same-uid writer cannot inject frames into a supervisor's channel", async () => {
         const root = await newRoot(device, "r1");
-        const scope = scopeFor(restricted([root]));
+        const scope = scopeFor(instance());
         const ref = await sbx.background.start(
           device,
           scope,
@@ -1455,7 +1362,7 @@ print("wrote=%d" % wrote)
 
       it("R2: a stop that finds the record still starting cancels the late launch", async () => {
         const root = await newRoot(device, "r2");
-        const scope = scopeFor(full);
+        const scope = scopeFor(instance());
         const executionId = operationUuid(scope.operationId);
         const opKey = createHash("sha256").update(scope.operationId).digest("hex");
         const secret = randomUUID().replaceAll("-", "");
@@ -1544,7 +1451,7 @@ print("wrote=%d" % wrote)
         spoolCaps.set(taskId, 1000);
         const ref = await sbx.background.start(
           h,
-          scopeFor(full),
+          scopeFor(instance()),
           bg(root, "head -c 5000 /dev/zero | tr '\\0' a; echo; printf done > done", taskId),
         );
         for (;;) {
@@ -1578,7 +1485,7 @@ print("wrote=%d" % wrote)
 
       it("R5: a same-input retry after a generation change is an unknown outcome", async () => {
         const h = await newDevice(sbx, { kind: "allowlist", hosts: [] });
-        const scope = scopeFor(full);
+        const scope = scopeFor(instance());
         const args = {
           command: "echo run >> /workspace/r5",
           timeoutMs: 30_000,
@@ -1597,7 +1504,7 @@ print("wrote=%d" % wrote)
 
       it("R7: a same-uid process that connects first never captures the record", async () => {
         const root = await newRoot(device, "r7");
-        const scope = scopeFor(full);
+        const scope = scopeFor(instance());
         const executionId = operationUuid(scope.operationId);
         const taskId = `task-${randomUUID().slice(0, 8)}`;
         // The attacker reads every bound socket name from /proc/net/unix and runs the real agent's
@@ -1724,7 +1631,7 @@ print(n)
 
       it("R8: a forged identity with a wrong token is refused and the real start proceeds", async () => {
         const root = await newRoot(device, "r8w");
-        const scope = scopeFor(full);
+        const scope = scopeFor(instance());
         const taskId = `task-${randomUUID().slice(0, 8)}`;
         let forged: Record<string, unknown> | null = null;
         beforeLaunch.set(taskId, async (_task, leaked) => {
@@ -1755,7 +1662,7 @@ print(n)
 
       it("R8: the right token with a different command binds nothing and runs nothing", async () => {
         const root = await newRoot(device, "r8d");
-        const scope = scopeFor(full);
+        const scope = scopeFor(instance());
         const taskId = `task-${randomUUID().slice(0, 8)}`;
         let forged: Record<string, unknown> | null = null;
         beforeLaunch.set(taskId, async (_task, leaked) => {
@@ -1792,7 +1699,7 @@ print(n)
 
       it("R8: a start refused because another supervisor bound the record stops that supervisor", async () => {
         const root = await newRoot(device, "r8b");
-        const scope = scopeFor(full);
+        const scope = scopeFor(instance());
         const taskId = `task-${randomUUID().slice(0, 8)}`;
         let forged: Record<string, unknown> | null = null;
         // The worst case of a leak: the whole request, so the forged identity matches the grant.
@@ -1818,7 +1725,7 @@ print(n)
 
       it("R8: a lost acknowledgement after a genuine bind keeps the task; the same-id retry returns its ref", async () => {
         const root = await newRoot(device, "r8g");
-        const scope = scopeFor(full);
+        const scope = scopeFor(instance());
         const taskId = `task-${randomUUID().slice(0, 8)}`;
         loseAck.add(taskId);
         const args = bg(root, `echo $$ >> ${root}/launches; exec sleep 1804`, taskId);
@@ -1843,7 +1750,7 @@ print(n)
 
       it("R8: a forged bind whose refusal reply was lost is stopped, lost and serves no output", async () => {
         const root = await newRoot(device, "r8f");
-        const scope = scopeFor(full);
+        const scope = scopeFor(instance());
         const taskId = `task-${randomUUID().slice(0, 8)}`;
         let forged: Record<string, unknown> | null = null;
         beforeLaunch.set(taskId, async (_task, leaked) => {
@@ -1877,7 +1784,7 @@ print(n)
       for (const variant of ["killed", "stopped", "acked"] as const) {
         it(`R9: a forged bind whose real bg-start was ${variant} before forking is never kept`, async () => {
           const root = await newRoot(device, `r9${variant[0]}`);
-          const scope = scopeFor(full);
+          const scope = scopeFor(instance());
           const taskId = `task-${randomUUID().slice(0, 8)}`;
           const marker = `capybara-r9-${randomUUID().slice(0, 8)}`;
           let forged: Record<string, unknown> | null = null;
@@ -1934,7 +1841,7 @@ os.kill(os.getpid(), signal.SIGKILL)  # ${marker}`;
 
       it("R8: stealing bg-start's stdin, forging a supervisor and writing the request back binds nothing", async () => {
         const root = await newRoot(device, "r8s");
-        const scope = scopeFor(full);
+        const scope = scopeFor(instance());
         const taskId = `task-${randomUUID().slice(0, 8)}`;
         // Deterministic stand-in for the reviewer's /proc watcher: the hook gets the exact bytes
         // written to bg-start's stdin, runs a forged supervisor with the stolen token and its own
@@ -1998,13 +1905,20 @@ os.kill(os.getpid(), signal.SIGKILL)  # ${marker}`;
       try {
         const h = await newDevice(sbx, { kind: "allowlist", hosts: [] }, tag);
         const report = await sbx.permissionSupport(h, sig());
-        expect(report.restricted).toBeNull();
-        expect(report.fullAccess).toBe(false);
+        expect(report).toMatchObject({
+          version: 2,
+          boundary: "instance",
+          restricted: null,
+          network: { openPublic: false, allowlist: false, perOperationHosts: false },
+          outsideSandbox: false,
+          background: false,
+        });
         expect(report.unavailableReason).toMatch(/digest/);
         await dexec(h.id, "1000", ["mkdir", "/workspace/p"]);
-        const error = await run(h, restricted(["/workspace/p"]), "echo ran > ran", {
-          cwd: "/workspace/p",
-        }).catch((e) => e);
+        // the agent verifies the staged bytes before native work: nothing is written
+        const error = await (await sbx.operation(h, scopeFor(instance()), sig()))
+          .writeFile("/workspace/p/ran", enc.encode("ran"), sig())
+          .catch((e) => e);
         expect(isSandboxPermissionUnsupportedError(error)).toBe(true);
         expect(await inspectRead(h, "/workspace/p/ran")).toBeNull();
       } finally {

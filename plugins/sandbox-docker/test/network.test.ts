@@ -9,7 +9,7 @@ import {
 } from "../src/provider.js";
 
 /**
- * The sandbox network without Docker: what `create` builds for `limits.mode` / `limits.network`
+ * The sandbox network without Docker: what `create` builds for `limits.network`
  * (proxy mode, host list, environment, shm size), the refusal of the open public network, and when
  * `update` may change only the egress proxy.
  */
@@ -25,12 +25,11 @@ const allow = (hosts: string[] = L): SandboxLimits["network"] => ({
 
 const limits = (
   network: SandboxLimits["network"],
-  o: { memoryMb?: number; mode?: SandboxLimits["mode"] } = {},
+  o: { memoryMb?: number } = {},
 ): SandboxLimits => ({
   cpu: 1,
   memoryMb: o.memoryMb ?? 2048,
   diskMb: 1024,
-  mode: o.mode ?? "auto",
   network,
 });
 
@@ -51,11 +50,6 @@ describe("planInstance", () => {
 
   it("allowlist: the proxy with the host list on any port", () => {
     expect(planInstance(limits(allow()))).toMatchObject({ mode: "allowlist", allowHosts: L });
-    // the same for the sandbox mode: the container profile does not depend on it
-    expect(planInstance(limits(allow(), { mode: "sandbox" }))).toMatchObject({
-      mode: "allowlist",
-      allowHosts: L,
-    });
   });
 
   it("an empty allowlist is the kill switch: no network at all", () => {

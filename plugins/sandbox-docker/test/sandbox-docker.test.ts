@@ -49,7 +49,6 @@ const limits = (network: SandboxLimits["network"]): SandboxLimits => ({
   cpu: 1,
   memoryMb: 512,
   diskMb: 1024,
-  mode: "auto",
   network,
 });
 
@@ -463,8 +462,8 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
   });
 
   it("file calls reach a clean absolute path outside the roots; malformed paths are refused", async () => {
-    // the roots by mode are the kernel's: auto mode's file tools reach any path (auto mode spec
-    // §4.1), sandbox mode's are checked before the call reaches the provider
+    // the roots are the kernel's: a cloud device's scope is the whole instance (the container is
+    // the sandbox)
     const h = await newSandbox(sbx, {
       name: sbxName(),
       image: images.sandboxImage,
@@ -692,7 +691,6 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
           ]),
         );
         expect(c.Config.Labels).toMatchObject({
-          "dev.capybara.sandbox.mode": "auto",
           "dev.capybara.sandbox.network": "allowlist",
           "dev.capybara.sandbox.allow-hosts": '["allowed.example.com"]',
         });
@@ -735,9 +733,10 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
         expect(c.HostConfig.NetworkMode).toBe(`${name}-net`);
         expect(c.HostConfig.ShmSize).toBe(128 * 1024 * 1024);
         expect(c.Config.Labels).toMatchObject({
-          "dev.capybara.sandbox.mode": "auto",
           "dev.capybara.sandbox.network": "open-public",
         });
+        // the instance network is the whole contract: no device mode is recorded
+        expect(c.Config.Labels).not.toHaveProperty("dev.capybara.sandbox.mode");
         expect(c.Config.Env).toContain(`ALL_PROXY=http://${name}-egress:3128`);
         const pe = await envOf(`${name}-egress`);
         expect(pe).toEqual(expect.arrayContaining(["MODE=open-public", "SOCKS_PORT=1080"]));

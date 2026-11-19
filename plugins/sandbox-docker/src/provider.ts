@@ -42,9 +42,9 @@ export function publishedImages(version: string): { sandbox: string; egress: str
 }
 
 /**
- * The SDK's provider with `update` always present: it applies a new `limits.mode` / `limits.network`
- * to an existing instance, `"updated"` when only the egress proxy had to change (recreated with the
- * new mode and hosts), `"recreate"` when the container itself must be recreated (network or
+ * The SDK's provider with `update` always present: it applies a new `limits.network` to an existing
+ * instance, `"updated"` when only the egress proxy had to change (recreated with the new proxy mode
+ * and hosts), `"recreate"` when the container itself must be recreated (network or
  * environment differ, or the container is gone). Limits are fixed when the instance (container) is
  * created.
  */
@@ -191,14 +191,15 @@ const LABEL_NAME = "dev.capybara.sandbox.name";
 const LABEL_ROLE = "dev.capybara.sandbox.role";
 const LABEL_ALLOW = "dev.capybara.sandbox.allow-hosts";
 /**
- * The device mode (`auto` / `sandbox`) and network (`open-public` / `allowlist`, with the host
- * list in `LABEL_ALLOW`) the container was created with. The network and host list are a lower
- * bound of what its egress proxy allows: `update` changes the proxy in place only when the new
- * proxy allows at least as much, so a proxy rebuilt from these labels (resume, after it went
- * missing) never allows more than the one in force.
+ * The network (`open-public` / `allowlist` / `none`, with the host list in `LABEL_ALLOW`) the
+ * container was created with. The network and host list are a lower bound of what its egress
+ * proxy allows: `update` changes the proxy in place only when the new proxy allows at least as
+ * much, so a proxy rebuilt from these labels (resume, after it went missing) never allows more
+ * than the one in force.
  */
-const LABEL_MODE = "dev.capybara.sandbox.mode";
 const LABEL_NET = "dev.capybara.sandbox.network";
+/** The proxy mode an egress proxy container runs (on the proxy container itself). */
+const LABEL_EGRESS_MODE = "dev.capybara.sandbox.mode";
 
 /**
  * Container / volume / network names: `create`'s and `createFileSystem`'s name
@@ -233,11 +234,6 @@ function networkOf(limits: SandboxLimits): SandboxLimits["network"] {
     throw new Error(`unknown sandbox network kind: ${String(network.kind)}`);
   }
   return network;
-}
-
-/** The device mode; a kernel that predates it is recorded as `sandbox`. */
-function modeOf(limits: SandboxLimits): "auto" | "sandbox" {
-  return limits.mode === "auto" || limits.mode === "sandbox" ? limits.mode : "sandbox";
 }
 
 /**
@@ -306,9 +302,8 @@ export function egressProxyEnv(
 }
 
 /** The labels that record a plan on the sandbox container. */
-function planLabels(limits: SandboxLimits, plan: InstancePlan): Record<string, string> {
+function planLabels(plan: InstancePlan): Record<string, string> {
   return {
-    [LABEL_MODE]: modeOf(limits),
     [LABEL_NET]: plan.mode,
     [LABEL_ALLOW]: JSON.stringify(plan.allowHosts),
   };
@@ -507,8 +502,8 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 
 /**
  * The root-independent path checks (absolute, no `..` or empty segments, no control characters):
- * which roots a file call may reach is the kernel's, by mode (auto mode reaches any path, the
- * container is the boundary; sandbox mode is held to the roots before the call gets here).
+ * which roots a file call may reach is the kernel's (the container is the boundary: a cloud
+ * device's scope is the whole instance).
  */
 function checkPath(p: string): void {
   const errors = validateSandboxPathShape(p);
@@ -790,7 +785,7 @@ export function createDockerSandbox(
         Env: egressProxyEnv(mode, allowHosts, test.egressTestHosts, cfg.deniedCidrs),
         Labels: {
           ...baseLabels(name, "egress"),
-          [LABEL_MODE]: mode,
+          [LABEL_EGRESS_MODE]: mode,
           [LABEL_ALLOW]: JSON.stringify(allowHosts),
         },
         HostConfig: {
@@ -1217,8 +1212,6 @@ export function createDockerSandbox(
       }
     },
     execFull: (h, args, ctl, prefix, nonce) => execWith(h, args, ctl, prefix, nonce),
-    cancelRestricted: (h, ctl) =>
-      killOrRestart(h.id, ["/usr/bin/python3", "-I", OPERATION_AGENT, "cancel", ctl]),
     killOperation: async (h, uuid, signal) => {
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid)) {
         throw new Error("invalid operation control id");
@@ -1237,7 +1230,10 @@ export function createDockerSandbox(
     backgroundStartCommand: test.backgroundStartCommand,
     interceptBackgroundStdin: test.interceptBackgroundStdin,
   };
-  const operations = createOperations({ transport, decode: decodeOutput });
+  const operations = createOperations({
+    transport,
+    network: { openPublic: !cfg.refuseOpenNetwork },
+  });
 
   // ---------- 契约 ----------
 
@@ -1321,7 +1317,7 @@ export function createDockerSandbox(
             WorkingDir: "/workspace",
             Cmd: ["sleep", "infinity"],
             Env: sandboxEnv(name, plan.mode),
-            Labels: { ...baseLabels(name, "sandbox"), ...planLabels(limits, plan) },
+            Labels: { ...baseLabels(name, "sandbox"), ...planLabels(plan) },
             HostConfig: {
               Runtime: cfg.runtime,
               Init: true,
@@ -1375,7 +1371,7 @@ export function createDockerSandbox(
 
     resume,
 
-    // Called under the kernel's exclusive lease when the device mode or network changed
+    // Called under the kernel's exclusive lease when the device's network changed
     async update(h, limits, signal) {
       signal.throwIfAborted();
       checkLimits(limits);
@@ -1536,8 +1532,8 @@ export function createDockerSandbox(
       return { size: Number(m[1]), isDir: m[2] === "directory" };
     },
 
-    // the container's workspace is the whole area in either mode (core spec 2026-11-14 §4.2), so
-    // `limits.mode` changes nothing here
+    // the container's workspace is the whole area a cloud device offers (core spec 2026-11-14
+    // §4.2): the instance is the sandbox, and the kernel scopes a cloud device's projects to it
     async list(h, path, opts) {
       opts.signal.throwIfAborted();
       const p = checkListPath(path);
