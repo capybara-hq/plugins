@@ -586,7 +586,7 @@
     },
     {
       "name": "skills-core",
-      "version": "0.1.0-rc.1",
+      "version": "0.1.0-rc.2",
       "summary": {
         "en": "Core skills every agent can use; today skill-guide, which teaches an agent to write, register, test and share its own skills",
         "zh": "每个智能体都能用的核心技能；目前是 skill-guide，教智能体编写、注册、测试并分享自己的技能"
@@ -604,8 +604,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-skills-core",
-          "version": "0.1.0-rc.1",
-          "integrity": "sha512-eIad/YOTGMAjOQPEVrN6jfq/WHhpJUn5FifbELnFmRij1yo+mI4b/5/72DZ0cjsRXFWhUODen2IPmhYH/YZqWQ=="
+          "version": "0.1.0-rc.2",
+          "integrity": "sha512-I0jlrKU+bqiGRW65jVLftT2S5Oa4QVaG1hDr6+1TT8gtAMjOkl87lNNrWJFHeOvp1bJBbx6ccLGffSUVesHqlA=="
         }
       }
     },
@@ -636,7 +636,7 @@
     },
     {
       "name": "memory",
-      "version": "0.1.0-rc.5",
+      "version": "0.1.0-rc.6",
       "summary": {
         "en": "Memory for agents: each agent remembers each member across conversations, with an index at run start, memory tools, hybrid search and a memory page",
         "zh": "智能体记忆：每个智能体跨会话记住每位成员，运行开始时给出记忆索引，提供记忆工具、混合检索和记忆页面"
@@ -684,8 +684,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-memory",
-          "version": "0.1.0-rc.5",
-          "integrity": "sha512-5AJXoXOEsJjhqIr3ELwyRLHsn6zAuq72wjiZD2HeIenpZ12y4XtwoAztrAvq06dfjUvZojd7V/WtNFDUzfaT6Q=="
+          "version": "0.1.0-rc.6",
+          "integrity": "sha512-BuzF/aSZHK7VxRUP07Ggz1ZTu0+yDZLOUmescsZfQsRjbMx4wJTifCselGVSBmdHuu8ZxTjCgO4SbGkiKnnTYA=="
         }
       }
     },
