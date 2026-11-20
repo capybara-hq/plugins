@@ -33,7 +33,6 @@ const limits = (hosts: string[] = []): SandboxLimits => ({
   cpu: 1,
   memoryMb: 512,
   diskMb: 1024,
-  mode: "auto",
   network: { kind: "allowlist", hosts },
 });
 

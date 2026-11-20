@@ -9,21 +9,17 @@ export { OPERATION_AGENT_SHA256 } from "./operation-agent-source.js";
  * published image, and templates built before the runtime existed have none): the provider
  * uploads these files as root to its root-only staging area, root checks them against
  * `SHA256SUMS` and moves them into {@link RUNTIME_DIR} (root-owned, 0755 / 0644). The directory is
- * named after the agent's digest, so a provider version only ever runs its own agent, and
- * `verify_runtime` re-checks the SDK files on each launch.
+ * named after the digest of every staged file (its `SHA256SUMS`), so a provider version only ever
+ * runs its own agent next to its own SDK bytes (an SDK upgrade that changes them stages a fresh
+ * directory instead of meeting old bytes), and `verify_runtime` re-checks the SDK files on each
+ * launch.
  *
  * - `native-files.py`, `linux-sandbox.py`: the SDK's `SANDBOX_RUNTIME_SOURCE` bytes, unchanged.
- *   The launcher only answers the template probe here (restricted execution is unavailable on
- *   the tested template kernel, see the agent header and README "Permission profiles").
+ *   The launcher only answers the template probe here (the microVM is the sandbox: no restricted
+ *   filters are offered, see the agent header and README "Permission profiles").
  * - `capybara-operation.py`: this provider's agent (`runtime/capybara-operation.py`).
  */
 export const RUNTIME_BASE = "/opt/capybara-e2b-runtime";
-
-/** This provider version's runtime directory (named after the agent's digest). */
-export const RUNTIME_DIR = `${RUNTIME_BASE}/${OPERATION_AGENT_SHA256.slice(0, 16)}`;
-
-/** The agent inside {@link RUNTIME_DIR}. */
-export const OPERATION_AGENT = `${RUNTIME_DIR}/capybara-operation.py`;
 
 /** The root-owned record directory (consume records, tombstones, background records). */
 export const OPS_DIR = "/opt/capybara-e2b-ops";
@@ -87,3 +83,10 @@ export function runtimeChecksums(): string {
     .map((f) => `${f.sha256}  ${f.name}\n`)
     .join("");
 }
+
+// Declared after the staged files they are named by (module initialisation order).
+/** This provider version's runtime directory (named after the digest of every staged file). */
+export const RUNTIME_DIR = `${RUNTIME_BASE}/${createHash("sha256").update(runtimeChecksums()).digest("hex").slice(0, 16)}`;
+
+/** The agent inside {@link RUNTIME_DIR}. */
+export const OPERATION_AGENT = `${RUNTIME_DIR}/capybara-operation.py`;

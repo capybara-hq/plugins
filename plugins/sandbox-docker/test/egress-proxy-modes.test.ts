@@ -163,6 +163,27 @@ describe("modes", () => {
     expect(() => main({ PORT: "0", DENIED_CIDRS: '"203.0.114.0/24"' })).toThrow(/DENIED_CIDRS/);
   });
 
+  it("judges CAPYBARA_EGRESS_TEST_RESOLVE answers like any resolution (no exemption)", async () => {
+    const started = main({
+      MODE: "allowlist",
+      PORT: "0",
+      SOCKS_PORT: "0",
+      ALLOW_HOSTS: '["metadata.permission.example"]',
+      CAPYBARA_EGRESS_TEST_RESOLVE: '{"metadata.permission.example":"169.254.169.254"}',
+    });
+    try {
+      if (!started.http.listening) await new Promise((r) => started.http.once("listening", r));
+      const port = (started.http.address() as AddressInfo).port;
+      const out = await tunnel(port, "metadata.permission.example:80");
+      expect(out).toMatch(/^HTTP\/1\.1 403/);
+      expect(out).toMatch(/private or reserved address/);
+    } finally {
+      started.socks.close();
+      started.http.closeAllConnections();
+      started.http.close();
+    }
+  });
+
   it("refuses an unknown mode", () => {
     expect(() => main({ MODE: "strict", PORT: "0" })).toThrow(/expected open-public or allowlist/);
     expect(() => main({ MODE: "wide", PORT: "0" })).toThrow(/Unknown MODE/);
@@ -654,7 +675,8 @@ describe("hardening", () => {
     "3fff::1",
     "5f00::1",
     "64:ff9b:1::808:808",
-    "::ffff:0:808:808",
+    // the well-known NAT64 prefix is closed whatever it embeds (the SDK's address classes)
+    "64:ff9b::808:808",
     "fec0::1",
     "100::1",
     "4000::1",
@@ -662,7 +684,8 @@ describe("hardening", () => {
     expect(isForbiddenAddress(ip)).toBe(true);
   });
 
-  it.each(["2a00:1450:4001::1", "2606:4700::1111", "64:ff9b::808:808", "2002:808:808::1"])(
+  // SIIT (::ffff:0:a.b.c.d) and 6to4 forms are judged by the IPv4 address they embed
+  it.each(["2a00:1450:4001::1", "2606:4700::1111", "::ffff:0:808:808", "2002:808:808::1"])(
     "IPv6 %s is allowed",
     (ip) => {
       expect(isForbiddenAddress(ip)).toBe(false);

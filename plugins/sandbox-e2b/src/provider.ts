@@ -44,6 +44,7 @@ import {
 } from "./listing.js";
 import {
   type AgentRunOpts,
+  type AppliedNetwork,
   createOperations,
   type OperationTransport,
   refusedFrame,
@@ -442,8 +443,8 @@ function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
 
 /**
  * The root-independent path checks (absolute, no `..` or empty segments, no control characters):
- * which roots a file call may reach is the kernel's, by mode (auto mode reaches any path, the
- * container is the boundary; sandbox mode is held to the roots before the call gets here).
+ * which roots a file call may reach is the kernel's (the microVM is the boundary: a cloud
+ * device's scope is the whole instance).
  */
 function checkPath(p: string): void {
   const errors = validateSandboxPathShape(p);
@@ -494,6 +495,40 @@ type NetworkPolicy =
   | { kind: "none" }
   | { kind: "allowlist"; hosts: string[] }
   | { kind: "open-public" };
+
+/**
+ * The network a VM applies, from `GET /sandboxes/{id}` (pure; field names verified live
+ * 2026-11-19): `allowInternetAccess: false` is no network, `network.allowOut` an allowlist, and
+ * internet access with `network.denyOut` covering this version's {@link OPEN_PUBLIC_DENIED}
+ * open-public. Anything else (internet on with a shorter deny list, or none) is unknown: it may
+ * allow more than this provider's open-public.
+ */
+export function appliedNetworkOf(info: {
+  allowInternetAccess?: boolean;
+  network?: { allowOut?: string[]; denyOut?: string[]; [field: string]: unknown } | null;
+}): AppliedNetwork | null {
+  if (info.allowInternetAccess === false) return { mode: "none", allowHosts: [] };
+  const allowOut = info.network?.allowOut ?? [];
+  if (allowOut.length > 0) return { mode: "allowlist", allowHosts: [...allowOut] };
+  const denied = new Set(info.network?.denyOut ?? []);
+  if (OPEN_PUBLIC_DENIED.every((cidr) => denied.has(cidr))) {
+    return { mode: "open-public", allowHosts: [] };
+  }
+  return null;
+}
+
+/**
+ * Whether a VM's recorded policy is open-public made by an earlier version (pure): internet access
+ * on, no allowlist, and a deny list that does not cover this version's {@link OPEN_PUBLIC_DENIED}.
+ * Such a VM gets the current open-public policy re-applied (it only narrows).
+ */
+export function outdatedOpenPublic(info: Parameters<typeof appliedNetworkOf>[0]): boolean {
+  return (
+    info.allowInternetAccess !== false &&
+    (info.network?.allowOut ?? []).length === 0 &&
+    appliedNetworkOf(info) === null
+  );
+}
 
 /** The create-body fields of a network policy (`POST /v2/sandboxes`). */
 function createNetworkOf(policy: NetworkPolicy): Record<string, unknown> {
@@ -1021,25 +1056,20 @@ export function createE2BSandbox(
    * nothing). Residual: E2B serves the microVM metadata endpoint (Firecracker MMDS at
    * 169.254.169.254) whatever `denyOut` says, under an allowlist too (verified live 2026-11-14).
    *
-   * `mode` (`auto` | `sandbox`) is validated but changes nothing here: both run in the same E2B
-   * microVM, where the container is the boundary. A limits object
-   * without `mode` / `network` (an older kernel that sent `tier` / `egress` / `allowHosts`) is
-   * refused rather than guessed.
+   * The microVM is the sandbox (core approval-only profiles design, decision 1): this network is
+   * the sandbox network of every operation, so the limits carry no mode. A limits object without
+   * `network` (an older kernel that sent `tier` / `egress` / `allowHosts`) is refused rather than
+   * guessed.
    */
   const networkOf = (limits: SandboxLimits, name: string): NetworkPolicy => {
-    const runtime = limits as { mode?: unknown; network?: unknown };
-    if (runtime.mode !== "auto" && runtime.mode !== "sandbox") {
-      throw new Error(
-        'sandbox-e2b: the sandbox limits carry no mode ("auto" | "sandbox"); this plugin implements the sandbox@2 limits that a kernel sends from 0.1.0-rc.29 on (limits.mode / limits.network). An older kernel sent tier / egress / allowHosts instead; upgrade the kernel and the sandbox plugins together, and never open the network as a fallback.',
-      );
-    }
+    const runtime = limits as { network?: unknown };
     const network = runtime.network as { kind?: unknown; hosts?: unknown } | undefined;
     const kind = network?.kind;
     const hosts = network?.hosts;
     if (kind === "open-public") return { kind: "open-public" };
     if (kind !== "allowlist" || !Array.isArray(hosts) || hosts.some((h) => typeof h !== "string")) {
       throw new Error(
-        'sandbox-e2b: the sandbox limits carry no valid network (expected { kind: "allowlist", hosts } or { kind: "open-public", hosts }); this plugin implements the sandbox@2 limits that a kernel sends from 0.1.0-rc.29 on (limits.mode / limits.network). An older kernel sent tier / egress / allowHosts instead; upgrade the kernel and the sandbox plugins together.',
+        'sandbox-e2b: the sandbox limits carry no valid network (expected { kind: "allowlist", hosts } or { kind: "open-public", hosts }); this plugin implements the sandbox@2 limits of the approval-only profiles kernel (limits.network, no mode). An older kernel sent tier / egress / allowHosts instead; upgrade the kernel and the sandbox plugins together, and never open the network as a fallback.',
       );
     }
     for (const host of hosts) {
@@ -1055,6 +1085,50 @@ export function createE2BSandbox(
       return { kind: "none" };
     }
     return hosts.length > 0 ? { kind: "allowlist", hosts: [...hosts] } : { kind: "none" };
+  };
+
+  /**
+   * The network a VM applies (`GET /sandboxes/{id}`). An open-public VM made by an earlier version
+   * with a shorter deny list gets the current open-public policy re-applied first (connecting it
+   * unless `connected`), so an upgrade never leaves a device refusing every operation; a failed
+   * re-apply is an ordinary error (retried on the next use; a file reset also applies it).
+   */
+  const currentNetwork = async (
+    id: string,
+    signal: AbortSignal,
+    connected: boolean,
+  ): Promise<AppliedNetwork | null> => {
+    signal.throwIfAborted();
+    checkId(id);
+    let info: Parameters<typeof appliedNetworkOf>[0];
+    try {
+      info =
+        (
+          await api.json<Parameters<typeof appliedNetworkOf>[0]>("GET", `/sandboxes/${enc(id)}`, {
+            signal,
+          })
+        ).data ?? {};
+    } catch (e) {
+      if (isE2BNotFound(e))
+        throw new SandboxGoneError(`sandbox ${id} no longer exists`, { cause: e });
+      throw e;
+    }
+    if (!outdatedOpenPublic(info)) return appliedNetworkOf(info);
+    if (!connected) await attach(id, signal);
+    try {
+      await updateNetwork(api, id, updateNetworkOf({ kind: "open-public" }), signal);
+    } catch (e) {
+      if (isE2BNotFound(e))
+        throw new SandboxGoneError(`sandbox ${id} no longer exists`, { cause: e });
+      throw new Error(
+        "sandbox-e2b: the VM's open-public network predates this plugin version and re-applying the current policy failed; the next use retries it, and resetting the device's files applies it too",
+        { cause: e },
+      );
+    }
+    deps.log.info("sandbox-e2b: re-applied the current open-public network to an older VM", {
+      sandboxId: id,
+    });
+    return { mode: "open-public", allowHosts: [] };
   };
 
   // ---------- operations (permission profiles) ----------
@@ -1287,6 +1361,7 @@ export function createE2BSandbox(
       }
     },
     execFull: (h, args, ctl, prefix, nonce) => execWith(h, args, ctl, prefix, nonce),
+    appliedNetwork: (h, signal) => currentNetwork(h.id, signal, false),
     async killOperation(h, uuid, signal) {
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid)) {
         throw new Error("invalid operation control id");
@@ -1310,7 +1385,11 @@ export function createE2BSandbox(
     loseBackgroundAck: test.loseBackgroundAck,
     backgroundStartCommand: test.backgroundStartCommand,
   };
-  const operations = createOperations({ transport, decode: decodeOutput });
+  const operations = createOperations({
+    transport,
+    decode: decodeOutput,
+    network: { allowlist: cfg.domainAllowlist },
+  });
 
   // ---------- 契约 ----------
 
@@ -1326,7 +1405,7 @@ export function createE2BSandbox(
       if (!NAME_RE.test(name)) throw new Error(`invalid sandbox name: ${name}`);
       checkLimits(limits);
       // the network is set here; `update` changes it on the running sandbox (README "Network
-      // policy"). One template for every mode: the network policy changes only the network.
+      // policy"). One template for every network policy: the policy changes only the network.
       const policy = networkOf(limits, name);
       // made before under this name (the kernel stopped before recording the handle): return it
       const [existing] = await idsByName(name, "running,paused", signal);
@@ -1386,11 +1465,18 @@ export function createE2BSandbox(
         if (isE2BNotFound(e)) {
           throw new SandboxGoneError(`E2B sandbox ${h.id} no longer exists`, { cause: e });
         }
-        throw e;
+        // an aborted call and a credential problem (no reset would help) stay errors
+        if (signal.aborted || isStatus(e, 401) || isStatus(e, 403)) throw e;
+        // the VM keeps its old policy: "recreate" lets the kernel record it unapplied and offer
+        // a file reset, never a device left without a way forward
+        deps.log.warn("sandbox-e2b: network update failed; answering recreate", {
+          sandboxId: h.id,
+          err: (e instanceof Error ? e.message : String(e)).slice(0, 300),
+        });
+        return "recreate";
       }
       deps.log.info("sandbox-e2b: sandbox network updated", {
         sandboxId: h.id,
-        mode: limits.mode,
         network: policy.kind,
       });
       return "updated";
@@ -1427,6 +1513,16 @@ export function createE2BSandbox(
     async resume(h, signal) {
       try {
         await attach(h.id, signal);
+        // an open-public VM made by an earlier version gets the current policy re-applied
+        // (best effort: the connect just succeeded, so any failure here, even an odd 404 from the
+        // control plane, is logged and retried by the next operation's network check)
+        await currentNetwork(h.id, signal, true).catch((e: unknown) => {
+          if (signal.aborted) throw e;
+          deps.log.warn("sandbox-e2b: could not re-apply the current network on resume", {
+            sandboxId: h.id,
+            err: (e instanceof Error ? e.message : String(e)).slice(0, 300),
+          });
+        });
       } catch (e) {
         if (e instanceof SandboxGoneError) return "gone";
         throw e;
@@ -1557,8 +1653,8 @@ export function createE2BSandbox(
       return { size: Number(m[1]), isDir: m[2] === "directory" };
     },
 
-    // the sandbox's workspace is the whole area in either mode (core spec 2026-11-14 §4.2), so
-    // `limits.mode` changes nothing here
+    // the sandbox's workspace is the whole area a cloud device offers (core spec 2026-11-14 §4.2):
+    // the microVM is the sandbox, and the kernel scopes a cloud device's projects to it
     async list(h, path, opts) {
       opts.signal.throwIfAborted();
       const p = checkListPath(path);
@@ -1573,8 +1669,8 @@ export function createE2BSandbox(
       return finishScan(b, r, NO_PYTHON);
     },
 
-    // The operation contract (operations.ts): fresh immutable scopes per invocation; Full access
-    // only on this provider (restricted scopes are refused, see permissionSupport).
+    // The operation contract (operations.ts): fresh immutable scopes per invocation, on the
+    // whole instance (the microVM is the sandbox, see permissionSupport).
     permissionSupport: operations.permissionSupport,
     operation: operations.operation,
     prepare: operations.prepare,

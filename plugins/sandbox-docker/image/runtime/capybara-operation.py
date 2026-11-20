@@ -1,17 +1,14 @@
-# Trusted in-container consumer of the SDK's Linux runtime for the sandbox-docker provider (staged
-# root-owned and hash-checked next to linux-sandbox.py and native-files.py). It never decides
-# authority: every request carries the operation's immutable scope, already resolved by the kernel.
+# Trusted in-container consumer for the sandbox-docker provider (staged root-owned and
+# hash-checked next to the SDK's native-files.py). It never decides authority: every request
+# carries the operation's immutable scope, already resolved by the kernel. The container is the
+# sandbox (instance boundary): no restricted launch exists here, and a request for one is refused.
 #
-#   exec / native   restricted work (run as the sandbox user): pins the granted roots once, runs the
-#                   launcher (Landlock plus the seccomp broker) on those descriptors and streams its
-#                   output as frames; the same pinned descriptors serve rules, broker and helper.
-#   direct          native work without the launcher (Full access on "/", read-only scopes, owner
-#                   browsing, trusted preparation); descriptor-relative, no-follow traversal.
-#   full            Full access exec: checks admission, then execs the provider's ordinary wrapper.
-#   cancel          ends one exact operation by its control path (SIGTERM, then SIGKILL).
+#   direct          native work on "/" (the whole instance), owner browsing (read roots only) and
+#                   trusted preparation; descriptor-relative, no-follow traversal.
+#   full            whole-instance exec: checks admission, then execs the provider's ordinary
+#                   wrapper.
 #   bg-*            background executions: a detached trusted supervisor per operation, with an
 #                   append-only output spool and a status record (start/status/tail/read/stop).
-#   probe           the launcher's own probe.
 #   consume/revoke  (root) the durable operation records, tombstones and cancellation markers in
 #   cancel-mark     the root-owned record directory on the skills volume.
 import base64
@@ -34,7 +31,6 @@ import threading
 import time
 
 RUNTIME = os.path.dirname(os.path.abspath(__file__))
-LAUNCHER = os.path.join(RUNTIME, "linux-sandbox.py")
 NATIVE = os.path.join(RUNTIME, "native-files.py")
 # The record directory: written by root through the skills volume's root-only writable mount
 # (persistent across instance restarts), checked by the sandbox user through the read-only /skills.
@@ -42,11 +38,10 @@ OPS_ROOT = "/opt/capybara/skills/.capybara-ops"
 OPS_VIEW = "/skills/.capybara-ops"
 # Write roots that contain these would reach the provider's records or control files.
 PROTECTED = ("/tmp/.capybara-exec-", "/skills/.capybara-ops", "/opt/capybara")
-MARKER = "capybara-exec"
 CHUNK = 65536
-PROXY_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy",
-              "GRPC_PROXY", "grpc_proxy", "NO_PROXY", "no_proxy", "GIT_SSH_COMMAND")
 libc = ctypes.CDLL(None, use_errno=True)
+RESTRICTED_REFUSAL = ("Restricted execution is not offered: the container is the sandbox "
+                      "(instance boundary)")
 
 
 class Refused(Exception):
@@ -205,318 +200,6 @@ def pin_under(base, relative, create):
 
 # ---- per-operation allowlist forwarder ----------------------------------------------------
 
-def host_allowed(host, hosts):
-    host = host.lower().rstrip(".")
-    for entry in hosts:
-        if entry.startswith("*."):
-            if host.endswith(entry[1:]) and host != entry[2:]:
-                return True
-        elif host == entry:
-            return True
-    return False
-
-
-def split_target(target, default_port):
-    if target.startswith("["):
-        return None, None  # allowlist hosts are names, never address literals
-    host, _, port = target.partition(":")
-    try:
-        number = int(port) if port else default_port
-    except ValueError:
-        return None, None
-    if not host or not 0 < number < 65536:
-        return None, None
-    return host, number
-
-
-class Forwarder:
-    """A loopback HTTP proxy owned by one operation: CONNECT and absolute http:// requests to the
-    operation's allowlisted hosts become CONNECT tunnels through the instance's egress proxy, which
-    still applies the instance network. Only this operation's broker grants its endpoint."""
-
-    def __init__(self, hosts, upstream):
-        self.hosts = hosts
-        self.upstream = upstream
-        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server.bind(("127.0.0.1", 0))
-        self.server.listen(64)
-        self.port = self.server.getsockname()[1]
-        threading.Thread(target=self.accept, daemon=True).start()
-
-    def accept(self):
-        while True:
-            try:
-                client, _ = self.server.accept()
-            except OSError:
-                return
-            threading.Thread(target=self.handle, args=(client,), daemon=True).start()
-
-    @staticmethod
-    def splice(a, b):
-        def pump(src, dst):
-            try:
-                while True:
-                    data = src.recv(CHUNK)
-                    if not data:
-                        break
-                    dst.sendall(data)
-            except OSError:
-                pass
-            for sock in (src, dst):
-                try:
-                    sock.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
-        threading.Thread(target=pump, args=(b, a), daemon=True).start()
-        pump(a, b)
-
-    def tunnel(self, host, port):
-        if self.upstream is None:
-            return None, b""
-        up = socket.create_connection(self.upstream, 30)
-        up.sendall(("CONNECT %s:%d HTTP/1.1\r\nHost: %s:%d\r\n\r\n" % (host, port, host, port)).encode())
-        head = b""
-        while b"\r\n\r\n" not in head:
-            data = up.recv(4096)
-            if not data or len(head) > 16384:
-                up.close()
-                return None, b""
-            head += data
-        status, _, rest = head.partition(b"\r\n\r\n")
-        parts = status.split(b" ")
-        if len(parts) < 2 or parts[1] != b"200":
-            up.close()
-            return None, status + b"\r\n\r\n"
-        up.settimeout(None)
-        return up, rest
-
-    def handle(self, client):
-        try:
-            client.settimeout(30)
-            head = b""
-            while b"\r\n\r\n" not in head:
-                data = client.recv(4096)
-                if not data or len(head) > 16384:
-                    client.close()
-                    return
-                head += data
-            head, _, body = head.partition(b"\r\n\r\n")
-            lines = head.split(b"\r\n")
-            method, target, version = (lines[0].decode("latin-1").split(" ") + ["", "", ""])[:3]
-            if method == "CONNECT":
-                host, port = split_target(target, 443)
-                rewritten = None
-            elif target.startswith("http://"):
-                authority, _, path = target[7:].partition("/")
-                host, port = split_target(authority, 80)
-                headers = [line for line in lines[1:]
-                           if not line.lower().startswith((b"proxy-", b"connection:"))]
-                rewritten = ("%s /%s %s\r\n" % (method, path, version)).encode() + b"\r\n".join(
-                    headers + [b"Connection: close"]) + b"\r\n\r\n"
-            else:
-                host, port = None, None
-                rewritten = None
-            if host is None or not host_allowed(host, self.hosts):
-                client.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n"
-                               b"Connection: close\r\n\r\n")
-                client.close()
-                return
-            up, early = self.tunnel(host, port)
-            if up is None:
-                client.sendall(early or b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n"
-                               b"Connection: close\r\n\r\n")
-                client.close()
-                return
-            client.settimeout(None)
-            if rewritten is None:
-                client.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
-                if body:
-                    up.sendall(body)
-            else:
-                up.sendall(rewritten + body)
-            if early:
-                client.sendall(early)
-            self.splice(client, up)
-        except OSError:
-            try:
-                client.close()
-            except OSError:
-                pass
-
-    def close(self):
-        try:
-            self.server.close()
-        except OSError:
-            pass
-
-
-def upstream_proxy():
-    value = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
-    if not value or not value.startswith("http://"):
-        return None
-    host, port = split_target(value[7:].rstrip("/"), 3128)
-    return None if host is None else (host, port)
-
-
-def network_for(request, forwarders):
-    """The launcher's network and the child's proxy environment for the operation scope."""
-    scope = request["network"]
-    env = {key: value for key, value in os.environ.items() if key not in PROXY_KEYS}
-    if scope["kind"] == "environment":
-        env.update({key: os.environ[key] for key in PROXY_KEYS if key in os.environ})
-        return {"kind": "environment"}, env
-    if scope["kind"] == "none":
-        return {"kind": "none"}, env
-    # The operation's only endpoint is its own forwarder: allowlisted names are reached through it
-    # and the instance's egress proxy, never by a direct connect.
-    forwarder = Forwarder(scope["hosts"], upstream_proxy())
-    forwarders.append(forwarder)
-    endpoints = [{"address": "127.0.0.1", "port": forwarder.port}]
-    proxy = "http://127.0.0.1:%d" % forwarder.port
-    for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
-        env[key] = proxy
-    env["NO_PROXY"] = env["no_proxy"] = "localhost,127.0.0.1,::1"
-    return {"kind": "endpoints", "endpoints": endpoints}, env
-
-
-# ---- restricted launch --------------------------------------------------------------------
-
-def pdeathsig():
-    # The launcher cancels (and ends its whole tree) if this agent is lost; a background
-    # supervisor launches with cancellation blocked, which the launcher must not inherit.
-    libc.prctl(1, signal.SIGTERM, 0, 0, 0)
-    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
-
-
-def restricted(mode, request, sink=None, done=None):
-    admit(request)
-    verify_runtime(request["expect"])
-    write_paths = request["writeRoots"]
-    write = pin(write_paths, True)
-    read = []
-    forwarders = []
-    try:
-        read = pin([path for path in request["readRoots"] if path not in write_paths])
-        if not write:
-            raise Refused("SCOPE_DENIED", "Restricted execution needs an existing writable root")
-        network, env = network_for(request, forwarders) if mode == "exec" else ({"kind": "none"}, {})
-        env.update(request.get("env") or {})
-        report_r, report_w = os.pipe()
-        body = {"mode": mode, "roots": {"read": read, "write": write}, "network": network,
-                "reportFd": report_w, "env": env or None, "cwd": request.get("cwd")}
-        if mode == "exec":
-            body["argv"] = ["/bin/sh", "-c", request["command"]]
-            body["timeoutMs"] = request["timeoutMs"]
-        else:
-            body["native"] = request["native"]
-        try:
-            launcher = subprocess.Popen(
-                [sys.executable, "-I", LAUNCHER], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, pass_fds=[report_w] + [e["fd"] for e in read + write],
-                env={"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8"},
-                start_new_session=True, preexec_fn=pdeathsig)
-        finally:
-            os.close(report_w)
-            close_pinned(read + write)
-            read, write = [], []
-        return supervise(launcher, report_r, body, request, mode, sink, done)
-    finally:
-        close_pinned(read + write)
-        for forwarder in forwarders:
-            forwarder.close()
-
-
-def supervise(launcher, report_r, body, request, mode, sink=None, done=None):
-    cancelled = []
-
-    def cancel(signum, _frame):
-        cancelled.append(signum)
-        try:
-            launcher.send_signal(signal.SIGTERM)
-        except OSError:
-            pass
-    signal.signal(signal.SIGTERM, cancel)
-    signal.signal(signal.SIGINT, cancel)
-    signal.signal(signal.SIGHUP, cancel)
-    # A background stop that arrived while blocked is delivered now, with the launcher known.
-    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
-    try:
-        launcher.stdin.write(json.dumps(body).encode())
-        launcher.stdin.close()
-    except OSError:
-        pass
-    limit = request.get("maxOutputBytes", CHUNK)
-    used = [0]
-    truncated = [False]
-    native_out = bytearray()
-
-    def copy(stream, kind):
-        while True:
-            data = stream.read1(CHUNK) if hasattr(stream, "read1") else stream.read(CHUNK)
-            if not data:
-                return
-            if sink is not None:
-                sink(data)
-                continue
-            if mode == "native" and kind == b"O":
-                native_out.extend(data)
-                continue
-            with out_lock:
-                room = limit + 1 - used[0]
-                keep = data[:max(room, 0)]
-                used[0] += len(keep)
-                if len(keep) < len(data):
-                    truncated[0] = True
-            if keep:
-                frame(kind, keep)
-    threads = [threading.Thread(target=copy, args=(launcher.stdout, b"O")),
-               threading.Thread(target=copy, args=(launcher.stderr, b"E"))]
-    for thread in threads:
-        thread.start()
-    events = []
-
-    def read_events():
-        with os.fdopen(report_r, "rb") as stream:
-            for line in stream:
-                try:
-                    events.append(json.loads(line))
-                except ValueError:
-                    pass
-    reader = threading.Thread(target=read_events)
-    reader.start()
-    # The launcher enforces timeoutMs itself; this is the hard stop if it does not.
-    limit_s = request["timeoutMs"] / 1000 + 10 if mode == "exec" else 300
-    try:
-        code = launcher.wait(timeout=limit_s)
-    except subprocess.TimeoutExpired:
-        launcher.send_signal(signal.SIGTERM)
-        try:
-            code = launcher.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            launcher.kill()
-            code = launcher.wait()
-    reader.join()
-    session = next((e for e in events if e.get("event") == "session"), None)
-    if session is not None:
-        # Whatever happened to the supervisor, end its closed session (exact SID and leader start
-        # time), so nothing owned outlives it and no orphan keeps the output pipes open.
-        subprocess.run([sys.executable, "-I", LAUNCHER, "reap"], input=json.dumps(session).encode(),
-                       capture_output=True)
-    for thread in threads:
-        thread.join()
-    result = {"code": code, "events": events, "truncated": truncated[0],
-              "cancelled": bool(cancelled)}
-    if mode == "native":
-        text = bytes(native_out).decode("utf-8", "replace").strip()
-        try:
-            result["native"] = json.loads(text) if text else None
-        except ValueError:
-            result["native"] = None
-    (done or finish)(result)
-
-
-# ---- direct native work -------------------------------------------------------------------
-
 def native_error(native, error):
     code = ("SCOPE_DENIED" if isinstance(error, native.ScopeDenied)
             else errno.errorcode.get(getattr(error, "errno", None), "INVALID_NATIVE_REQUEST"))
@@ -524,7 +207,7 @@ def native_error(native, error):
 
 
 def direct(request):
-    """Native work on pinned descriptors without the launcher (no execution happens here)."""
+    """Native work on pinned descriptors (no execution happens here)."""
     admit(request)
     verify_runtime(request["expect"])
     native = load(NATIVE, "capybara_native_files")
@@ -537,20 +220,13 @@ def direct(request):
             pinned.append({"fd": fd})
             roots["write"].append({"path": "/", "fd": fd})
         elif kind == "scoped":
-            if request.get("requireRestricted"):
-                launcher = load(LAUNCHER, "capybara_linux_sandbox")
-                reason = launcher.probe_static(launcher.arch()[1])
-                if reason:
-                    raise Refused("UNAVAILABLE", reason)
-            write = pin(request["writeRoots"], True)
-            pinned += write
-            read = pin([p for p in request["readRoots"] if p not in request["writeRoots"]])
+            # Owner browsing only: read roots, metadata. A writable scoped root or a restricted
+            # request would need restricted filters, which this instance-boundary agent refuses.
+            if request.get("writeRoots") or request.get("requireRestricted"):
+                raise Refused("UNAVAILABLE", RESTRICTED_REFUSAL)
+            read = pin(request["readRoots"])
             pinned += read
-            # Restricted roots: native writes refuse the SDK's mandatory write denies (as the
-            # launcher's broker and its native mode do).
-            roots = {"read": [{"path": e["path"], "fd": e["fd"]} for e in read],
-                     "write": [{"path": e["path"], "fd": e["fd"]} for e in write],
-                     "denyWrites": True}
+            roots = {"read": [{"path": e["path"], "fd": e["fd"]} for e in read], "write": []}
         elif kind == "prepare":
             if protected(request["native"]["path"], False):
                 raise Refused("SCOPE_DENIED", "The path is reserved for the provider")
@@ -917,13 +593,7 @@ def open_output(request):
             pinned.append({"fd": fd})
             roots = {"read": [], "write": [{"path": "/", "fd": fd}]}
         else:
-            write = pin(request["writeRoots"], True)
-            pinned += write
-            if not write:
-                raise Refused("SCOPE_DENIED", "Restricted execution needs an existing writable root")
-            # A restricted operation's output file honours the mandatory write denies too.
-            roots = {"read": [], "write": [{"path": e["path"], "fd": e["fd"]} for e in write],
-                     "denyWrites": True}
+            raise Refused("UNAVAILABLE", RESTRICTED_REFUSAL)
         if protected(request["outputPath"], True):
             raise Refused("SCOPE_DENIED", "The output path is reserved for the provider")
         try:
@@ -1052,10 +722,9 @@ def bg_supervise(request, channel, out, ready_w):
                 time.sleep(0.01)
         # A revocation or cancellation recorded after the start acknowledgement still wins.
         admit(request)
-        if request["kind"] == "device":
-            full_supervise(request, sink, done)
-        else:
-            restricted("exec", request, sink, done)
+        if request["kind"] != "device":
+            raise Refused("UNAVAILABLE", RESTRICTED_REFUSAL)
+        full_supervise(request, sink, done)
     except Refused as error:
         done({"events": [{"event": "refused", "code": error.code}], "cancelled": False})
     except Exception:
@@ -1286,51 +955,6 @@ def bg_stop_claim(request):
     return outcome
 
 
-# ---- exact cancellation -------------------------------------------------------------------
-
-def agents(ctl=None, uuid=None):
-    """This agent's own processes running one exact operation, by their argv (never stdout)."""
-    found = []
-    for entry in os.listdir("/proc"):
-        if not entry.isdigit():
-            continue
-        try:
-            with open("/proc/%s/cmdline" % entry, "rb") as handle:
-                args = handle.read().split(b"\0")
-        except OSError:
-            continue
-        if (len(args) < 6 or args[2] != os.fsencode(os.path.abspath(__file__))
-                or args[3] not in (b"exec", b"native") or args[4] != MARKER.encode()):
-            continue
-        target = os.fsdecode(args[5])
-        if (ctl is not None and target == ctl) or (
-                uuid is not None and target.startswith("/tmp/.capybara-exec-")
-                and target.endswith("-" + uuid)):
-            found.append(int(entry))
-    return found
-
-
-def cancel(ctl=None, uuid=None):
-    """SIGTERM lets the launcher end its whole tree; SIGKILL only if that does not happen.
-    At most 12 s, inside the provider's 15 s kill budget."""
-    for pid in agents(ctl, uuid):
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            pass
-    deadline = time.monotonic() + 8
-    while agents(ctl, uuid) and time.monotonic() < deadline:
-        time.sleep(0.02)
-    for pid in agents(ctl, uuid):
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
-    while agents(ctl, uuid) and time.monotonic() < deadline + 4:
-        time.sleep(0.02)
-    return 0
-
-
 # ---- durable records (root) ---------------------------------------------------------------
 
 def generation():
@@ -1447,20 +1071,10 @@ def main():
             return 125
         if command == "bg-start":
             libc.prctl(4, 0, 0, 0, 0)  # PR_SET_DUMPABLE 0, before the request is read
-        if command == "cancel":
-            if sys.argv[2] == "--uuid":
-                return cancel(uuid=sys.argv[3])
-            return cancel(ctl=sys.argv[2])
-        if command == "probe":
-            done = subprocess.run([sys.executable, "-I", LAUNCHER, "probe"], capture_output=True)
-            finish({"probe": json.loads(done.stdout)})
-            return 0
         request = read_request()
         if command in ROOT_COMMANDS and os.getuid() != 0:
             raise ValueError("root-only command")
-        if command in ("exec", "native"):
-            restricted(command, request)
-        elif command == "direct":
+        if command == "direct":
             direct(request)
         elif command == "init":
             records()  # also prunes expired records and spools when the instance starts

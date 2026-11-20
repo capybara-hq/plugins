@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { isIP } from "node:net";
+import { type NetworkInterfaceInfo, networkInterfaces } from "node:os";
 import type { Duplex } from "node:stream";
 import {
   type ExecResult,
@@ -42,9 +44,9 @@ export function publishedImages(version: string): { sandbox: string; egress: str
 }
 
 /**
- * The SDK's provider with `update` always present: it applies a new `limits.mode` / `limits.network`
- * to an existing instance, `"updated"` when only the egress proxy had to change (recreated with the
- * new mode and hosts), `"recreate"` when the container itself must be recreated (network or
+ * The SDK's provider with `update` always present: it applies a new `limits.network` to an existing
+ * instance, `"updated"` when only the egress proxy had to change (recreated with the new proxy mode
+ * and hosts), `"recreate"` when the container itself must be recreated (network or
  * environment differ, or the container is gone). Limits are fixed when the instance (container) is
  * created.
  */
@@ -129,6 +131,11 @@ export interface DockerSandboxTestOptions {
    */
   egressTestHosts?: Record<string, string>;
   /**
+   * The egress proxy's resolver answers these host names with the given IPs, with no exemption:
+   * the answer is judged like any resolved address (a name that resolves into a closed class).
+   */
+  egressTestResolve?: Record<string, string>;
+  /**
    * A file the background supervisor of `taskId` waits for after it recorded itself and before its
    * final admission check (a readiness barrier for the start/revoke and start/stop race tests).
    */
@@ -191,14 +198,15 @@ const LABEL_NAME = "dev.capybara.sandbox.name";
 const LABEL_ROLE = "dev.capybara.sandbox.role";
 const LABEL_ALLOW = "dev.capybara.sandbox.allow-hosts";
 /**
- * The device mode (`auto` / `sandbox`) and network (`open-public` / `allowlist`, with the host
- * list in `LABEL_ALLOW`) the container was created with. The network and host list are a lower
- * bound of what its egress proxy allows: `update` changes the proxy in place only when the new
- * proxy allows at least as much, so a proxy rebuilt from these labels (resume, after it went
- * missing) never allows more than the one in force.
+ * The network (`open-public` / `allowlist` / `none`, with the host list in `LABEL_ALLOW`) the
+ * container was created with. The network and host list are a lower bound of what its egress
+ * proxy allows: `update` changes the proxy in place only when the new proxy allows at least as
+ * much, so a proxy rebuilt from these labels (resume, after it went missing) never allows more
+ * than the one in force.
  */
-const LABEL_MODE = "dev.capybara.sandbox.mode";
 const LABEL_NET = "dev.capybara.sandbox.network";
+/** The proxy mode an egress proxy container runs (on the proxy container itself). */
+const LABEL_EGRESS_MODE = "dev.capybara.sandbox.mode";
 
 /**
  * Container / volume / network names: `create`'s and `createFileSystem`'s name
@@ -233,11 +241,6 @@ function networkOf(limits: SandboxLimits): SandboxLimits["network"] {
     throw new Error(`unknown sandbox network kind: ${String(network.kind)}`);
   }
   return network;
-}
-
-/** The device mode; a kernel that predates it is recorded as `sandbox`. */
-function modeOf(limits: SandboxLimits): "auto" | "sandbox" {
-  return limits.mode === "auto" || limits.mode === "sandbox" ? limits.mode : "sandbox";
 }
 
 /**
@@ -296,19 +299,88 @@ export function egressProxyEnv(
   allowHosts: string[],
   testHosts?: Record<string, string>,
   deniedCidrs: readonly string[] = [],
+  testResolve?: Record<string, string>,
 ): string[] {
   const env = [`MODE=${mode}`, `PORT=${PROXY_PORT}`, `SOCKS_PORT=${SOCKS_PORT}`];
   // open-public has no host list: any public host
   if (mode === "allowlist") env.push(`ALLOW_HOSTS=${JSON.stringify(allowHosts)}`);
   if (deniedCidrs.length > 0) env.push(`DENIED_CIDRS=${JSON.stringify(deniedCidrs)}`);
   if (testHosts) env.push(`CAPYBARA_EGRESS_TEST_HOSTS=${JSON.stringify(testHosts)}`);
+  if (testResolve) env.push(`CAPYBARA_EGRESS_TEST_RESOLVE=${JSON.stringify(testResolve)}`);
   return env;
 }
 
-/** The labels that record a plan on the sandbox container. */
-function planLabels(limits: SandboxLimits, plan: InstancePlan): Record<string, string> {
+/**
+ * The bridge option that leaves the internal network's host side without an IPv4 address: the
+ * sandbox then has no gateway on the Docker host to reach services listening there (the egress
+ * proxy, its only peer, is reached on the bridge itself).
+ */
+const INHIBIT_IPV4 = "com.docker.network.bridge.inhibit_ipv4";
+
+/** The body that creates an instance's internal network (pure): no exit, no host gateway, no IPv6. */
+export function internalNetworkCreateBody(name: string, labels: Record<string, string>) {
   return {
-    [LABEL_MODE]: modeOf(limits),
+    Name: sandboxResourceNames(name).network,
+    Driver: "bridge",
+    Internal: true,
+    EnableIPv6: false,
+    Options: { [INHIBIT_IPV4]: "true" },
+    Labels: labels,
+  };
+}
+
+/** Whether an existing internal network has no host gateway (made by this provider version). */
+export function internalNetworkHardened(options: Record<string, string> | null | undefined) {
+  return options?.[INHIBIT_IPV4] === "true";
+}
+
+/** The oldest Docker Engine whose bridge driver applies {@link INHIBIT_IPV4}. */
+const MIN_ENGINE_MAJOR = 25;
+
+/** Whether a Docker Engine version (`/version` `Version`) is supported (pure). */
+export function engineSupported(version: string): boolean {
+  const major = /^(\d+)\./.exec(version)?.[1];
+  return major !== undefined && Number(major) >= MIN_ENGINE_MAJOR;
+}
+
+/**
+ * The Docker host's own addresses as denied CIDRs for the egress proxy (pure): when the endpoint is
+ * local (a UNIX socket or a loopback address) the host is this machine, so its non-loopback
+ * interface addresses are closed in every mode on top of the SDK's classes (a public address of the
+ * host would otherwise be reachable in open-public mode). A remote Docker host's addresses are not
+ * known here: list them in `deniedCidrs` (README).
+ */
+export function hostDeniedCidrs(
+  endpoint: string,
+  interfaces: NodeJS.Dict<NetworkInterfaceInfo[]> = networkInterfaces(),
+): string[] {
+  let host: string;
+  if (endpoint.startsWith("/") || endpoint.startsWith("unix:")) host = "localhost";
+  else {
+    try {
+      host = new URL(endpoint.replace(/^tcp:/, "http:")).hostname.replace(/^\[|\]$/g, "");
+    } catch {
+      return [];
+    }
+  }
+  const local = host === "localhost" || host === "::1" || /^127\./.test(host);
+  if (!local) return [];
+  const out: string[] = [];
+  for (const list of Object.values(interfaces)) {
+    for (const i of list ?? []) {
+      if (i.internal) continue;
+      const address = i.address.split("%")[0] as string;
+      const family = isIP(address);
+      if (family === 4) out.push(`${address}/32`);
+      else if (family === 6) out.push(`${address}/128`);
+    }
+  }
+  return [...new Set(out)];
+}
+
+/** The labels that record a plan on the sandbox container. */
+function planLabels(plan: InstancePlan): Record<string, string> {
+  return {
     [LABEL_NET]: plan.mode,
     [LABEL_ALLOW]: JSON.stringify(plan.allowHosts),
   };
@@ -446,15 +518,12 @@ const KILL_TAGGED_SCRIPT =
   'k "$q"; kill -9 "$q" 2>/dev/null; done; done; exit 0';
 
 /**
- * Kills every execution whose control path ends with one operation's UUID, whatever its tag
- * (`revokeOperation`): the agent stops restricted work gracefully and the operation's background
- * agent (`$2`), then the ordinary forced pass for Full access wrappers. Background executions
+ * Kills every foreground execution whose control path ends with one operation's UUID, whatever
+ * its tag (`revokeOperation`): the forced pass over the ordinary wrappers. Background executions
  * are stopped by their root-owned record (operations.ts).
  */
 const KILL_OPERATION_SCRIPT =
-  // The agent's graceful cancel takes at most 12 s, inside killOrRestart's 15 s budget.
-  `${KILL_TREE}/usr/bin/python3 -I "$2" cancel --uuid "$1" 2>/dev/null; ` +
-  'for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-[a-z0-9-]+-$1( |$)"); do ' +
+  `${KILL_TREE}for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-[a-z0-9-]+-$1( |$)"); do ` +
   'k "$q"; kill -9 "$q" 2>/dev/null; done; exit 0';
 
 /** The control file of one exec: carries the holder's tag when there is one. */
@@ -507,8 +576,8 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 
 /**
  * The root-independent path checks (absolute, no `..` or empty segments, no control characters):
- * which roots a file call may reach is the kernel's, by mode (auto mode reaches any path, the
- * container is the boundary; sandbox mode is held to the roots before the call gets here).
+ * which roots a file call may reach is the kernel's (the container is the boundary: a cloud
+ * device's scope is the whole instance).
  */
 function checkPath(p: string): void {
   const errors = validateSandboxPathShape(p);
@@ -737,21 +806,46 @@ export function createDockerSandbox(
     }
   };
 
-  const ensureInternalNetwork = async (name: string, signal: AbortSignal) => {
+  /** The engine check, once per provider (the engine does not change under a running kernel). */
+  let engineChecked: Promise<void> | undefined;
+  const checkEngine = (signal: AbortSignal) => {
+    engineChecked ??= api
+      .json<{ Version?: string }>("GET", "/version", { signal })
+      .then((v) => {
+        if (!engineSupported(String(v.Version ?? ""))) {
+          throw new Error(
+            `sandbox-docker needs Docker Engine ${MIN_ENGINE_MAJOR} or newer (found ${String(v.Version)}): older bridge drivers keep a host gateway on the sandbox's internal network. Upgrade Docker.`,
+          );
+        }
+      })
+      .catch((e: unknown) => {
+        engineChecked = undefined;
+        throw e;
+      });
+    return engineChecked;
+  };
+
+  /**
+   * Ensures the instance's internal network; `false` when it exists but was made by an earlier
+   * version (a host gateway on the bridge), which only a recreate of the instance replaces.
+   */
+  const ensureInternalNetwork = async (name: string, signal: AbortSignal): Promise<boolean> => {
     const n = sandboxResourceNames(name);
     try {
-      await api.json("GET", `/networks/${enc(n.network)}`, { signal });
+      const existing = await api.json<{ Options?: Record<string, string> | null }>(
+        "GET",
+        `/networks/${enc(n.network)}`,
+        { signal },
+      );
+      return internalNetworkHardened(existing.Options);
     } catch (e) {
       if (!isStatus(e, 404)) throw e;
+      await checkEngine(signal);
       await postCreate("/networks/create", {
-        body: {
-          Name: n.network,
-          Driver: "bridge",
-          Internal: true,
-          Labels: baseLabels(name, "network"),
-        },
+        body: internalNetworkCreateBody(name, baseLabels(name, "network")),
         signal,
       }).catch(ignore(409));
+      return true;
     }
   };
 
@@ -787,10 +881,16 @@ export function createDockerSandbox(
       n.egress,
       {
         Image: cfg.egressProxyImage,
-        Env: egressProxyEnv(mode, allowHosts, test.egressTestHosts, cfg.deniedCidrs),
+        Env: egressProxyEnv(
+          mode,
+          allowHosts,
+          test.egressTestHosts,
+          [...(cfg.deniedCidrs ?? []), ...hostDeniedCidrs(cfg.endpoint)],
+          test.egressTestResolve,
+        ),
         Labels: {
           ...baseLabels(name, "egress"),
-          [LABEL_MODE]: mode,
+          [LABEL_EGRESS_MODE]: mode,
           [LABEL_ALLOW]: JSON.stringify(allowHosts),
         },
         HostConfig: {
@@ -822,10 +922,11 @@ export function createDockerSandbox(
     mode: ProxyMode,
     allowHosts: string[],
     signal: AbortSignal,
-  ) => {
+  ): Promise<boolean> => {
     const n = sandboxResourceNames(name);
     await ensureSharedNetwork(signal);
-    await ensureInternalNetwork(name, signal);
+    // an internal network of an earlier version keeps a host gateway: only a recreate replaces it
+    if (!(await ensureInternalNetwork(name, signal))) return false;
     let running: boolean;
     try {
       const c = await api.json<{ State: { Running: boolean; Paused?: boolean } }>(
@@ -839,12 +940,13 @@ export function createDockerSandbox(
       if (!isStatus(e, 404)) throw e;
       // a concurrent auto-start may create it at the same moment: a name conflict is fine
       await createEgress(name, mode, allowHosts, signal, true);
-      return;
+      return true;
     }
     if (!running) {
       await start(n.egress, signal);
       await waitEgressReady(n.egress, signal);
     }
+    return true;
   };
 
   // ---------- exec ----------
@@ -1137,7 +1239,10 @@ export function createDockerSandbox(
     // "gone" makes the kernel recreate it under the current rule (create then refuses or builds
     // the allowlist). Auto-start goes through here too, so exec answers SandboxGoneError.
     if (net.mode === "open-public" && cfg.refuseOpenNetwork) return "gone";
-    if (net.mode !== "none") await ensureEgressRunning(h.id, net.mode, net.allowHosts, signal);
+    // An internal network made by an earlier version (a host gateway on the bridge) answers
+    // "gone" as well: the kernel recreates the instance on the same files with a hardened one.
+    if (net.mode !== "none" && !(await ensureEgressRunning(h.id, net.mode, net.allowHosts, signal)))
+      return "gone";
     try {
       // A `docker pause`d container still reports Running, but exec answers 409: unpause it.
       if (c.State.Paused) await unpause(h.id, signal);
@@ -1217,15 +1322,28 @@ export function createDockerSandbox(
       }
     },
     execFull: (h, args, ctl, prefix, nonce) => execWith(h, args, ctl, prefix, nonce),
-    cancelRestricted: (h, ctl) =>
-      killOrRestart(h.id, ["/usr/bin/python3", "-I", OPERATION_AGENT, "cancel", ctl]),
+    async appliedNetwork(h, signal) {
+      try {
+        const c = await api.json<{ Config: { Labels: Record<string, string> | null } }>(
+          "GET",
+          `/containers/${enc(h.id)}/json`,
+          { signal },
+        );
+        return labelNetwork(c.Config.Labels ?? {});
+      } catch (e) {
+        if (isStatus(e, 404)) {
+          throw new SandboxGoneError(`sandbox container ${h.id} no longer exists`, { cause: e });
+        }
+        throw e;
+      }
+    },
     killOperation: async (h, uuid, signal) => {
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid)) {
         throw new Error("invalid operation control id");
       }
       await killOrRestart(
         h.id,
-        ["/bin/sh", "-c", KILL_OPERATION_SCRIPT, "capybara-killop", uuid, OPERATION_AGENT],
+        ["/bin/sh", "-c", KILL_OPERATION_SCRIPT, "capybara-killop", uuid],
         signal,
       );
     },
@@ -1237,7 +1355,10 @@ export function createDockerSandbox(
     backgroundStartCommand: test.backgroundStartCommand,
     interceptBackgroundStdin: test.interceptBackgroundStdin,
   };
-  const operations = createOperations({ transport, decode: decodeOutput });
+  const operations = createOperations({
+    transport,
+    network: { openPublic: !cfg.refuseOpenNetwork },
+  });
 
   // ---------- 契约 ----------
 
@@ -1321,7 +1442,7 @@ export function createDockerSandbox(
             WorkingDir: "/workspace",
             Cmd: ["sleep", "infinity"],
             Env: sandboxEnv(name, plan.mode),
-            Labels: { ...baseLabels(name, "sandbox"), ...planLabels(limits, plan) },
+            Labels: { ...baseLabels(name, "sandbox"), ...planLabels(plan) },
             HostConfig: {
               Runtime: cfg.runtime,
               Init: true,
@@ -1375,7 +1496,7 @@ export function createDockerSandbox(
 
     resume,
 
-    // Called under the kernel's exclusive lease when the device mode or network changed
+    // Called under the kernel's exclusive lease when the device's network changed
     async update(h, limits, signal) {
       signal.throwIfAborted();
       checkLimits(limits);
@@ -1400,7 +1521,7 @@ export function createDockerSandbox(
         .json("DELETE", `/containers/${enc(n.egress)}`, { query: { force: true }, signal })
         .catch(ignore(404));
       await ensureSharedNetwork(signal);
-      await ensureInternalNetwork(h.id, signal);
+      if (!(await ensureInternalNetwork(h.id, signal))) return "recreate";
       try {
         await createEgress(h.id, proxyModeOf(plan), plan.allowHosts, signal);
       } catch (e) {
@@ -1536,8 +1657,8 @@ export function createDockerSandbox(
       return { size: Number(m[1]), isDir: m[2] === "directory" };
     },
 
-    // the container's workspace is the whole area in either mode (core spec 2026-11-14 §4.2), so
-    // `limits.mode` changes nothing here
+    // the container's workspace is the whole area a cloud device offers (core spec 2026-11-14
+    // §4.2): the instance is the sandbox, and the kernel scopes a cloud device's projects to it
     async list(h, path, opts) {
       opts.signal.throwIfAborted();
       const p = checkListPath(path);

@@ -12,58 +12,267 @@
 // (CONNECT only; for `socat ... SOCKS4A:`).
 //
 // Every mode: refuse malformed names (control characters, bad labels); resolve, then check EVERY
-// resolved IP: private, loopback, link-local (including the 169.254.169.254 metadata address),
-// CGNAT, ULA, unspecified, multicast, reserved and documentation addresses, the Azure WireServer
-// (168.63.129.16) and the deployment's own ranges (DENIED_CIDRS, a JSON array of CIDRs from the
-// plugin's `deniedCidrs` setting) are refused (this blocks DNS rebinding such as 10.0.0.1.nip.io);
-// then connect to an address that was checked, never resolving a second time. When the first
-// address cannot be reached the next checked one is tried.
+// resolved IP against the SDK's closed address classes (CLOSED_CIDRS, a copy of plugin-sdk's
+// OPEN_PUBLIC_DENIED_CIDRS: private, CGNAT, ULA, link-local and metadata, loopback, multicast,
+// broadcast, unspecified, NAT64 and reserved) and the deployment's own ranges (DENIED_CIDRS, a JSON
+// array of CIDRs from the plugin's `deniedCidrs` setting); one closed address refuses the name
+// (this blocks DNS rebinding such as 10.0.0.1.nip.io). Then connect to an address that was checked,
+// never resolving a second time; when the first cannot be reached the next checked one is tried.
+// A name the system resolver answers with a fake IP (198.18.0.0/15, a fake-IP router or proxy) is
+// resolved again through DNS-over-HTTPS (FAKE_IP_DNS, a copy of plugin-sdk's SANDBOX_FAKE_IP_DNS)
+// and only that answer is judged and dialled; when encrypted DNS fails the name is refused and the
+// fake address is never dialled.
 //
 // Test only: CAPYBARA_EGRESS_TEST_HOSTS (JSON object name -> IP) pins a name to an IP and exempts
 // it from the private address check (in allowlist it must still be on the list; in open-public a
-// pinned name is allowed). The plugin's deployment config cannot set it; only tests that call
-// createDockerSandbox directly can.
+// pinned name is allowed). CAPYBARA_EGRESS_TEST_RESOLVE (JSON object name -> IP) answers a name
+// as a resolver would, with no exemption: the answer is judged like any resolved address (a name
+// resolving into a closed class). The plugin's deployment config can set neither; only tests that
+// call createDockerSandbox directly can.
 //
 // Dependency-free, Node >= 22. Error text reaches the model (through curl / pip output): English.
 import { lookup as dnsLookup } from "node:dns/promises";
 import { createServer, request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { BlockList, connect, createServer as createNetServer, isIP } from "node:net";
 
 // This file runs in the egress proxy container (not in the kernel process); the module-level
 // objects below are constant tables, read-only after start.
+
+/**
+ * Every address closed in open-public mode, in both modes: the SDK's `OPEN_PUBLIC_DENIED_CIDRS`
+ * (plugin-sdk `network-classes.ts`, computed from its address-class table: private, CGNAT, ULA,
+ * link-local, metadata, loopback, multicast, broadcast, unspecified, NAT64 and reserved, with the
+ * embedded IPv6 forms expanded), copied because this container carries no SDK.
+ * `test/egress-proxy-classes.test.ts` keeps the copy equal to the SDK's list.
+ */
 // capybara:allow-module-state read-only constant table (egress proxy container, not the kernel)
-const BLOCKED_V4 = [
-  ["0.0.0.0", 8], // unspecified / this network
-  ["10.0.0.0", 8],
-  ["100.64.0.0", 10], // CGNAT
-  ["127.0.0.0", 8],
-  ["169.254.0.0", 16], // link-local (including cloud metadata 169.254.169.254)
-  ["172.16.0.0", 12],
-  ["192.0.0.0", 24],
-  ["192.0.2.0", 24],
-  ["192.88.99.0", 24],
-  ["192.168.0.0", 16],
-  ["198.18.0.0", 15],
-  ["198.51.100.0", 24],
-  ["203.0.113.0", 24],
-  ["224.0.0.0", 4], // multicast
-  ["240.0.0.0", 4], // reserved and broadcast
-  ["168.63.129.16", 32], // Azure WireServer / host DNS (a public address only the host answers)
-];
-// IPv6 is default deny: only global unicast 2000::/3 is reachable, minus the special-purpose
-// blocks below (addresses that embed an IPv4 address are judged by it first, see
-// isForbiddenAddress).
-// capybara:allow-module-state read-only constant table (egress proxy container, not the kernel)
-const BLOCKED_V6 = [
-  ["2001::", 23], // IETF protocol assignments, including Teredo 2001::/32 and benchmarking
-  ["2001:db8::", 32], // documentation
-  ["3fff::", 20], // documentation
-];
+export const CLOSED_CIDRS = Object.freeze([
+  "0.0.0.0/8",
+  "10.0.0.0/8",
+  "100.64.0.0/10",
+  "127.0.0.0/8",
+  "168.63.129.16/32",
+  "169.254.0.0/16",
+  "172.16.0.0/12",
+  "192.0.0.0/24",
+  "192.0.2.0/24",
+  "192.88.99.0/24",
+  "192.168.0.0/16",
+  "198.18.0.0/15",
+  "198.51.100.0/24",
+  "203.0.113.0/24",
+  "224.0.0.0/3",
+  "::/104",
+  "::a00:0/104",
+  "::6440:0/106",
+  "::7f00:0/104",
+  "::a83f:8110/128",
+  "::a9fe:0/112",
+  "::ac10:0/108",
+  "::c000:0/120",
+  "::c000:200/120",
+  "::c058:6300/120",
+  "::c0a8:0/112",
+  "::c612:0/111",
+  "::c633:6400/120",
+  "::cb00:7100/120",
+  "::e000:0/99",
+  "::1:0:0/96",
+  "::2:0:0/95",
+  "::4:0:0/94",
+  "::8:0:0/93",
+  "::10:0:0/92",
+  "::20:0:0/91",
+  "::40:0:0/90",
+  "::80:0:0/89",
+  "::100:0:0/88",
+  "::200:0:0/87",
+  "::400:0:0/86",
+  "::800:0:0/85",
+  "::1000:0:0/84",
+  "::2000:0:0/83",
+  "::4000:0:0/82",
+  "::8000:0:0/82",
+  "::c000:0:0/83",
+  "::e000:0:0/84",
+  "::f000:0:0/85",
+  "::f800:0:0/86",
+  "::fc00:0:0/87",
+  "::fe00:0:0/88",
+  "::ff00:0:0/89",
+  "::ff80:0:0/90",
+  "::ffc0:0:0/91",
+  "::ffe0:0:0/92",
+  "::fff0:0:0/93",
+  "::fff8:0:0/94",
+  "::fffc:0:0/95",
+  "::fffe:0:0/96",
+  "::ffff:0:0/104",
+  "::ffff:a00:0/104",
+  "::ffff:6440:0/106",
+  "::ffff:7f00:0/104",
+  "::ffff:a83f:8110/128",
+  "::ffff:a9fe:0/112",
+  "::ffff:ac10:0/108",
+  "::ffff:c000:0/120",
+  "::ffff:c000:200/120",
+  "::ffff:c058:6300/120",
+  "::ffff:c0a8:0/112",
+  "::ffff:c612:0/111",
+  "::ffff:c633:6400/120",
+  "::ffff:cb00:7100/120",
+  "::ffff:e000:0/99",
+  "::1:0:0:0/80",
+  "::2:0:0:0/79",
+  "::4:0:0:0/78",
+  "::8:0:0:0/77",
+  "::10:0:0:0/76",
+  "::20:0:0:0/75",
+  "::40:0:0:0/74",
+  "::80:0:0:0/73",
+  "::100:0:0:0/72",
+  "::200:0:0:0/71",
+  "::400:0:0:0/70",
+  "::800:0:0:0/69",
+  "::1000:0:0:0/68",
+  "::2000:0:0:0/67",
+  "::4000:0:0:0/66",
+  "::8000:0:0:0/66",
+  "::c000:0:0:0/67",
+  "::e000:0:0:0/68",
+  "::f000:0:0:0/69",
+  "::f800:0:0:0/70",
+  "::fc00:0:0:0/71",
+  "::fe00:0:0:0/72",
+  "::ff00:0:0:0/73",
+  "::ff80:0:0:0/74",
+  "::ffc0:0:0:0/75",
+  "::ffe0:0:0:0/76",
+  "::fff0:0:0:0/77",
+  "::fff8:0:0:0/78",
+  "::fffc:0:0:0/79",
+  "::fffe:0:0:0/80",
+  "::ffff:0:0:0/104",
+  "::ffff:0:a00:0/104",
+  "::ffff:0:6440:0/106",
+  "::ffff:0:7f00:0/104",
+  "::ffff:0:a83f:8110/128",
+  "::ffff:0:a9fe:0/112",
+  "::ffff:0:ac10:0/108",
+  "::ffff:0:c000:0/120",
+  "::ffff:0:c000:200/120",
+  "::ffff:0:c058:6300/120",
+  "::ffff:0:c0a8:0/112",
+  "::ffff:0:c612:0/111",
+  "::ffff:0:c633:6400/120",
+  "::ffff:0:cb00:7100/120",
+  "::ffff:0:e000:0/99",
+  "::ffff:1:0:0/96",
+  "::ffff:2:0:0/95",
+  "::ffff:4:0:0/94",
+  "::ffff:8:0:0/93",
+  "::ffff:10:0:0/92",
+  "::ffff:20:0:0/91",
+  "::ffff:40:0:0/90",
+  "::ffff:80:0:0/89",
+  "::ffff:100:0:0/88",
+  "::ffff:200:0:0/87",
+  "::ffff:400:0:0/86",
+  "::ffff:800:0:0/85",
+  "::ffff:1000:0:0/84",
+  "::ffff:2000:0:0/83",
+  "::ffff:4000:0:0/82",
+  "::ffff:8000:0:0/81",
+  "0:0:0:1::/64",
+  "0:0:0:2::/63",
+  "0:0:0:4::/62",
+  "0:0:0:8::/61",
+  "0:0:0:10::/60",
+  "0:0:0:20::/59",
+  "0:0:0:40::/58",
+  "0:0:0:80::/57",
+  "0:0:0:100::/56",
+  "0:0:0:200::/55",
+  "0:0:0:400::/54",
+  "0:0:0:800::/53",
+  "0:0:0:1000::/52",
+  "0:0:0:2000::/51",
+  "0:0:0:4000::/50",
+  "0:0:0:8000::/49",
+  "0:0:1::/48",
+  "0:0:2::/47",
+  "0:0:4::/46",
+  "0:0:8::/45",
+  "0:0:10::/44",
+  "0:0:20::/43",
+  "0:0:40::/42",
+  "0:0:80::/41",
+  "0:0:100::/40",
+  "0:0:200::/39",
+  "0:0:400::/38",
+  "0:0:800::/37",
+  "0:0:1000::/36",
+  "0:0:2000::/35",
+  "0:0:4000::/34",
+  "0:0:8000::/33",
+  "0:1::/32",
+  "0:2::/31",
+  "0:4::/30",
+  "0:8::/29",
+  "0:10::/28",
+  "0:20::/27",
+  "0:40::/26",
+  "0:80::/25",
+  "0:100::/24",
+  "0:200::/23",
+  "0:400::/22",
+  "0:800::/21",
+  "0:1000::/20",
+  "0:2000::/19",
+  "0:4000::/18",
+  "0:8000::/17",
+  "1::/16",
+  "2::/15",
+  "4::/14",
+  "8::/13",
+  "10::/12",
+  "20::/11",
+  "40::/10",
+  "80::/9",
+  "100::/8",
+  "200::/7",
+  "400::/6",
+  "800::/5",
+  "1000::/4",
+  "2001::/23",
+  "2001:db8::/32",
+  "2002::/24",
+  "2002:a00::/24",
+  "2002:6440::/26",
+  "2002:7f00::/24",
+  "2002:a83f:8110::/48",
+  "2002:a9fe::/32",
+  "2002:ac10::/28",
+  "2002:c000::/40",
+  "2002:c000:200::/40",
+  "2002:c058:6300::/40",
+  "2002:c0a8::/32",
+  "2002:c612::/31",
+  "2002:c633:6400::/40",
+  "2002:cb00:7100::/40",
+  "2002:e000::/19",
+  "3fff::/20",
+  "4000::/2",
+  "8000::/1",
+]);
 
 // capybara:allow-module-state address table built once at start, read-only (proxy container)
 const blocked = new BlockList();
-for (const [a, p] of BLOCKED_V4) blocked.addSubnet(a, p, "ipv4");
-for (const [a, p] of BLOCKED_V6) blocked.addSubnet(a, p, "ipv6");
+for (const cidr of CLOSED_CIDRS) {
+  const [address, prefix] = cidr.split("/");
+  blocked.addSubnet(address, Number(prefix), address.includes(":") ? "ipv6" : "ipv4");
+}
 
 /** IPv6 text -> 8 numbers of 16 bits; null when it does not parse. */
 function v6Groups(ip) {
@@ -112,10 +321,11 @@ export function deniedList(cidrs) {
 }
 
 /**
- * Whether connecting to a resolved IP is forbidden: the built-in ranges, plus `denied` (the
- * deployment's ranges, {@link deniedList}). IPv6 addresses that embed an IPv4 address
- * (IPv4-mapped ::ffff:0:0/96, IPv4-compatible ::/96, NAT64 64:ff9b::/96, 6to4 2002::/16) are
- * judged by the embedded IPv4; anything unrecognised is forbidden.
+ * Whether connecting to a resolved IP is forbidden: {@link CLOSED_CIDRS} (the SDK's closed classes,
+ * NAT64 closed whatever it embeds), plus `denied` (the deployment's ranges, {@link deniedList}),
+ * which also judge the IPv4 address an IPv6 form embeds (IPv4-mapped ::ffff:0:0/96,
+ * IPv4-compatible ::/96, SIIT ::ffff:0:0:0/96, NAT64 64:ff9b::/96, 6to4 2002::/16). Anything
+ * unrecognised is forbidden.
  * @param {string} ip
  * @param {BlockList} [denied]
  */
@@ -125,17 +335,17 @@ export function isForbiddenAddress(ip, denied) {
   if (family !== 6) return true;
   const g = v6Groups(ip);
   if (g === null) return true;
+  const canonical = g.map((x) => x.toString(16)).join(":");
+  if (blocked.check(canonical, "ipv6")) return true;
+  if (denied === undefined) return false;
+  if (denied.check(canonical, "ipv6")) return true;
   const zeros = (from, to) => g.slice(from, to).every((x) => x === 0);
-  const v4 = (hi, lo) => isForbiddenAddress(v4Of(hi, lo), denied);
-  if (zeros(0, 5) && g[5] === 0xffff) return v4(g[6], g[7]);
-  if (zeros(0, 6) && (g[6] !== 0 || g[7] > 1)) return v4(g[6], g[7]);
+  const v4 = (hi, lo) => denied.check(v4Of(hi, lo), "ipv4");
+  if (zeros(0, 5) && (g[5] === 0xffff || g[5] === 0)) return v4(g[6], g[7]);
+  if (zeros(0, 4) && g[4] === 0xffff && g[5] === 0) return v4(g[6], g[7]);
   if (g[0] === 0x64 && g[1] === 0xff9b && zeros(2, 6)) return v4(g[6], g[7]);
   if (g[0] === 0x2002) return v4(g[1], g[2]);
-  // Everything outside global unicast 2000::/3 (loopback, ULA, link-local, multicast, the local-use
-  // NAT64 prefix 64:ff9b:1::/48, SIIT ::ffff:0:0:0/96, 5f00::/16, ...) is forbidden.
-  if ((g[0] & 0xe000) !== 0x2000) return true;
-  const canonical = g.map((x) => x.toString(16)).join(":");
-  return blocked.check(canonical, "ipv6") || (denied?.check(canonical, "ipv6") ?? false);
+  return false;
 }
 
 /** Normalise a host name: lowercase, without trailing dots and IPv6 brackets. */
@@ -188,7 +398,7 @@ class Refused extends Error {
 /**
  * Decide which IPs may be connected to: host check for the mode -> resolve -> no address may be
  * forbidden. Returns every checked address (in resolution order).
- * @param {{ mode?: "open-public" | "allowlist"; allowHosts: string[]; testHosts: Record<string, string>; lookup: (h: string) => Promise<{ address: string }[]>; denied?: BlockList }} opts
+ * @param {{ mode?: "open-public" | "allowlist"; allowHosts: string[]; testHosts: Record<string, string>; lookup: (h: string) => Promise<{ address: string }[]>; denied?: BlockList; encryptedDns?: { resolve(name: string): Promise<string[]> } }} opts
  */
 export async function resolveTarget(host, opts) {
   const mode = opts.mode ?? "open-public";
@@ -227,6 +437,19 @@ export async function resolveTarget(host, opts) {
     throw new Refused(502, `Cannot resolve ${h}.`);
   }
   if (addrs.length === 0) throw new Refused(502, `Cannot resolve ${h}.`);
+  // A fake-IP resolver's answer is never dialled: the name is resolved again through encrypted
+  // DNS, and only that answer counts (judged like any resolved address below).
+  if (isIP(h) === 0 && addrs.some((a) => isFakeIp(a.address))) {
+    let real;
+    try {
+      if (!opts.encryptedDns) throw new Error("no encrypted DNS");
+      real = await opts.encryptedDns.resolve(h);
+    } catch {
+      throw new Refused(403, FAKE_IP_REFUSAL);
+    }
+    if (real.length === 0) throw new Refused(502, `Cannot resolve ${h}.`);
+    addrs = real.map((address) => ({ address }));
+  }
   if (addrs.some((a) => isForbiddenAddress(a.address, opts.denied))) {
     throw new Refused(
       403,
@@ -234,6 +457,212 @@ export async function resolveTarget(host, opts) {
     );
   }
   return addrs.map((a) => a.address);
+}
+
+// ---- fake-IP resolvers: encrypted DNS --------------------------------------------------------
+
+/**
+ * The SDK's `SANDBOX_FAKE_IP_DNS` (plugin-sdk `network-classes.ts`), copied because this container
+ * carries no SDK; `test/egress-proxy-classes.test.ts` keeps it equal. A router or local proxy in
+ * fake-IP mode (OpenClash and the like) answers every name with an address in `fakeIpCidr`, which
+ * is closed (reserved): such an answer is the signal to re-resolve the name through DNS-over-HTTPS
+ * (RFC 8484, GET, wire format) at these IP-literal endpoints, TLS verified against the endpoint's IP
+ * SAN, so no DNS is needed to reach them.
+ */
+// capybara:allow-module-state read-only constant (egress proxy container, not the kernel)
+export const FAKE_IP_DNS = Object.freeze({
+  fakeIpCidr: "198.18.0.0/15",
+  endpoints: Object.freeze([
+    "https://1.1.1.1/dns-query",
+    "https://1.0.0.1/dns-query",
+    "https://8.8.8.8/dns-query",
+    "https://8.8.4.4/dns-query",
+  ]),
+  timeoutMs: 5000,
+  cacheTtlCapSeconds: 300,
+  cacheMaxNames: 256,
+});
+
+/** The refusal when the resolver gave a fake IP and encrypted DNS did not answer. */
+export const FAKE_IP_REFUSAL =
+  "The network's DNS resolver answers with fake IPs (198.18.0.0/15, a fake-IP resolver such as a router's proxy) and encrypted DNS did not answer; the fake address is never dialled.";
+
+// capybara:allow-module-state address table built once at start, read-only (proxy container)
+const fakeIpRange = new BlockList();
+{
+  const [address, prefix] = FAKE_IP_DNS.fakeIpCidr.split("/");
+  fakeIpRange.addSubnet(address, Number(prefix), "ipv4");
+}
+
+/** Whether a resolved address is a fake-IP resolver's answer (IPv4, or IPv4-mapped IPv6). */
+export function isFakeIp(address) {
+  const ip = String(address).split("%")[0];
+  if (isIP(ip) === 4) return fakeIpRange.check(ip, "ipv4");
+  const g = isIP(ip) === 6 ? v6Groups(ip) : null;
+  if (g === null || !g.slice(0, 5).every((x) => x === 0) || g[5] !== 0xffff) return false;
+  return fakeIpRange.check(v4Of(g[6], g[7]), "ipv4");
+}
+
+/**
+ * A recursive DNS query in wire format (ID 0, as RFC 8484 recommends) for `name` and `qtype`
+ * (1 = A, 28 = AAAA).
+ * @param {string} name
+ * @param {1 | 28} qtype
+ */
+export function dnsQuery(name, qtype) {
+  const parts = [Buffer.from([0, 0, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0])];
+  for (const label of name.replace(/\.$/, "").toLowerCase().split(".")) {
+    const data = Buffer.from(label, "ascii");
+    if (data.byteLength === 0 || data.byteLength > 63) throw new Error("Not a DNS name.");
+    parts.push(Buffer.from([data.byteLength]), data);
+  }
+  parts.push(Buffer.from([0, 0, qtype, 0, 1]));
+  return Buffer.concat(parts);
+}
+
+function skipName(data, at) {
+  for (;;) {
+    const length = data[at];
+    if (length === undefined) throw new Error("Malformed DNS message.");
+    if (length === 0) return at + 1;
+    if ((length & 0xc0) === 0xc0) return at + 2;
+    at += 1 + length;
+  }
+}
+
+/**
+ * The `qtype` records (class IN) of a DNS response and their smallest TTL (null without records).
+ * An error response (other than a missing name) or a malformed message throws.
+ * @param {Uint8Array} raw
+ * @param {1 | 28} qtype
+ */
+export function dnsAnswers(raw, qtype) {
+  const data = Buffer.from(raw);
+  if (data.byteLength < 12) throw new Error("Malformed DNS message.");
+  const flags = data.readUInt16BE(2);
+  if ((flags & 0x8000) === 0 || ![0, 3].includes(flags & 0xf)) {
+    throw new Error("DNS error response.");
+  }
+  const questions = data.readUInt16BE(4);
+  const answers = data.readUInt16BE(6);
+  let at = 12;
+  for (let i = 0; i < questions; i++) at = skipName(data, at) + 4;
+  const addresses = [];
+  let ttl = null;
+  for (let i = 0; i < answers; i++) {
+    at = skipName(data, at);
+    if (at + 10 > data.byteLength) throw new Error("Malformed DNS message.");
+    const type = data.readUInt16BE(at);
+    const cls = data.readUInt16BE(at + 2);
+    const recordTtl = data.readUInt32BE(at + 4);
+    const length = data.readUInt16BE(at + 8);
+    at += 10;
+    if (at + length > data.byteLength) throw new Error("Truncated DNS answer.");
+    const record = data.subarray(at, at + length);
+    at += length;
+    if (cls !== 1 || type !== qtype || length !== (qtype === 1 ? 4 : 16)) continue;
+    addresses.push(
+      qtype === 1
+        ? [...record].join(".")
+        : Array.from({ length: 8 }, (_, g) => record.readUInt16BE(g * 2).toString(16)).join(":"),
+    );
+    ttl = ttl === null ? recordTtl : Math.min(ttl, recordTtl);
+  }
+  return { addresses: addresses.map(canonicalIp), ttl };
+}
+
+/** An address in Node's canonical text form (compressed IPv6). */
+function canonicalIp(ip) {
+  if (isIP(ip) !== 6) return ip;
+  return new URL(`http://[${ip}]/`).hostname.slice(1, -1);
+}
+
+/** One DoH GET over HTTPS; `ca` replaces the trust store (tests). */
+function dohFetch(url, query, timeoutMs, ca) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    target.searchParams.set("dns", Buffer.from(query).toString("base64url"));
+    const req = httpsRequest(
+      target,
+      {
+        method: "GET",
+        headers: { accept: "application/dns-message" },
+        timeout: timeoutMs,
+        // one deadline for the whole exchange (connect, TLS, response)
+        signal: AbortSignal.timeout(Math.max(1, Math.floor(timeoutMs))),
+        ...(ca !== undefined && { ca }),
+      },
+      (res) => {
+        const parts = [];
+        let size = 0;
+        res.on("data", (c) => {
+          size += c.byteLength;
+          if (size > 65_536) req.destroy(new Error("DoH answer too large."));
+          else parts.push(c);
+        });
+        res.on("end", () =>
+          res.statusCode === 200
+            ? resolve(Buffer.concat(parts))
+            : reject(new Error(`DoH answered ${res.statusCode}.`)),
+        );
+        res.on("error", reject);
+      },
+    );
+    req.on("timeout", () => req.destroy(new Error("DoH timed out.")));
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+/**
+ * Encrypted DNS for fake-IP networks ({@link FAKE_IP_DNS}): the endpoints in order, one deadline
+ * per name covering A and AAAA at every endpoint, each endpoint getting an equal share of the time
+ * left (its two queries share it). An answer is cached only when both queries succeeded at one
+ * endpoint, for its smallest TTL capped at `cacheTtlCapSeconds`, for at most `cacheMaxNames` names
+ * (the oldest goes first). `resolve` rejects with {@link FAKE_IP_REFUSAL} when no endpoint answers.
+ * `endpoints`, `ca`, `fetch` and `clock` (milliseconds) are test seams.
+ * @param {{ endpoints?: readonly string[]; ca?: string | Buffer; fetch?: (url: string, query: Uint8Array, timeoutMs: number) => Promise<Uint8Array>; clock?: () => number }} [seams]
+ */
+export function createEncryptedDns(seams = {}) {
+  const endpoints = [...(seams.endpoints ?? FAKE_IP_DNS.endpoints)];
+  const fetchDns = seams.fetch ?? ((url, query, ms) => dohFetch(url, query, ms, seams.ca));
+  const clock = seams.clock ?? Date.now;
+  /** name -> { expires, addresses }, in insertion order (the oldest first). */
+  const cache = new Map();
+  return {
+    cacheSize: () => cache.size,
+    /** @param {string} name */
+    async resolve(name) {
+      const key = name.toLowerCase().replace(/\.$/, "");
+      const hit = cache.get(key);
+      if (hit && hit.expires > clock()) return [...hit.addresses];
+      const end = clock() + FAKE_IP_DNS.timeoutMs;
+      for (let i = 0; i < endpoints.length; i++) {
+        const shareEnd = clock() + (end - clock()) / (endpoints.length - i);
+        try {
+          const addresses = [];
+          let ttl = FAKE_IP_DNS.cacheTtlCapSeconds;
+          for (const qtype of [1, 28]) {
+            const left = shareEnd - clock();
+            if (left <= 0) throw new Error("The endpoint's share of the deadline ran out.");
+            const answer = dnsAnswers(
+              await fetchDns(endpoints[i], dnsQuery(key, qtype), left),
+              qtype,
+            );
+            addresses.push(...answer.addresses);
+            if (answer.ttl !== null) ttl = Math.min(ttl, answer.ttl);
+          }
+          cache.delete(key);
+          while (cache.size >= FAKE_IP_DNS.cacheMaxNames) cache.delete(cache.keys().next().value);
+          cache.set(key, { expires: clock() + ttl * 1000, addresses });
+          return [...addresses];
+        } catch {
+          // the next endpoint, within what is left of the deadline
+        }
+      }
+      throw new Error(FAKE_IP_REFUSAL);
+    },
+  };
 }
 
 /** Each address gets this long to connect before the next one is tried. */
@@ -336,6 +765,7 @@ function proxyOptions(cfg) {
     testHosts: cfg.testHosts ?? {},
     denied: deniedList(cfg.deniedCidrs ?? []),
     lookup: cfg.lookup ?? defaultLookup,
+    encryptedDns: cfg.encryptedDns ?? createEncryptedDns(),
     log: cfg.log ?? defaultLog,
   };
 }
@@ -353,7 +783,7 @@ const MAX_CONNECTIONS = 512;
 /**
  * Create the HTTP proxy server (not listening): absolute-URL HTTP forwarding, CONNECT tunnels and
  * GET /healthz. Both modes allow any port 1-65535.
- * @param {{ mode?: "open-public" | "allowlist"; allowHosts?: string[]; deniedCidrs?: string[]; testHosts?: Record<string, string>; lookup?: (h: string) => Promise<{ address: string }[]>; log?: (msg: string) => void }} cfg
+ * @param {{ mode?: "open-public" | "allowlist"; allowHosts?: string[]; deniedCidrs?: string[]; testHosts?: Record<string, string>; lookup?: (h: string) => Promise<{ address: string }[]>; encryptedDns?: { resolve(name: string): Promise<string[]> }; log?: (msg: string) => void }} cfg
  */
 export function createEgressProxy(cfg) {
   const opts = proxyOptions(cfg);
@@ -556,7 +986,7 @@ function parseSocks(buf, stage) {
  * SOCKS4a CONNECT. Same host and resolved-address checks as the HTTP proxy for the mode; any port.
  * IP literals (SOCKS5 ATYP IPv4 / IPv6, plain SOCKS4) are only allowed in open-public mode, when
  * public.
- * @param {{ mode?: "open-public" | "allowlist"; allowHosts?: string[]; testHosts?: Record<string, string>; lookup?: (h: string) => Promise<{ address: string }[]>; log?: (msg: string) => void }} cfg
+ * @param {{ mode?: "open-public" | "allowlist"; allowHosts?: string[]; testHosts?: Record<string, string>; lookup?: (h: string) => Promise<{ address: string }[]>; encryptedDns?: { resolve(name: string): Promise<string[]> }; log?: (msg: string) => void }} cfg
  */
 export function createSocksProxy(cfg) {
   const opts = proxyOptions(cfg);
@@ -722,6 +1152,12 @@ export function main(env = process.env) {
   }
   const allowHosts = mode === "open-public" ? [] : JSON.parse(env.ALLOW_HOSTS ?? "[]");
   const testHosts = JSON.parse(env.CAPYBARA_EGRESS_TEST_HOSTS ?? "{}");
+  const testResolve = JSON.parse(env.CAPYBARA_EGRESS_TEST_RESOLVE ?? "{}");
+  /** @param {string} h */
+  const lookup = (h) =>
+    Object.hasOwn(testResolve, h)
+      ? Promise.resolve([{ address: String(testResolve[h]) }])
+      : defaultLookup(h);
   const deniedCidrs = JSON.parse(env.DENIED_CIDRS ?? "[]");
   if (!Array.isArray(deniedCidrs)) {
     throw new Error("DENIED_CIDRS must be a JSON array of CIDR strings.");
@@ -729,14 +1165,14 @@ export function main(env = process.env) {
   deniedList(deniedCidrs);
   const port = Number(env.PORT ?? 3128);
   const socksPort = Number(env.SOCKS_PORT ?? 1080);
-  const http = createEgressProxy({ mode, allowHosts, deniedCidrs, testHosts });
+  const http = createEgressProxy({ mode, allowHosts, deniedCidrs, testHosts, lookup });
   const hosts = mode === "open-public" ? "any public host" : allowHosts.join(", ") || "(none)";
   http.listen(port, () => {
     console.log(
       `egress proxy (${mode}) listening on ${port}; allow: ${hosts}; extra denied: ${deniedCidrs.join(", ") || "(none)"}`,
     );
   });
-  const socks = createSocksProxy({ mode, allowHosts, deniedCidrs, testHosts });
+  const socks = createSocksProxy({ mode, allowHosts, deniedCidrs, testHosts, lookup });
   socks.listen(socksPort, () => {
     console.log(`egress SOCKS proxy (${mode}) listening on ${socksPort}`);
   });

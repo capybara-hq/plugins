@@ -36,10 +36,16 @@ import {
 /*
  * The operation-capable half of the provider (core spec 2026-11-16 permission operation contract):
  * runtime capabilities, the per-invocation operation factory, owner browsing, trusted preparation
- * and revocation. Restricted work runs through the SDK's Linux launcher inside the existing
- * container, under the container's unchanged hardening (no capability, seccomp, privilege or
- * instance network change, no extra container). Full access runs the provider's ordinary exec and
- * file paths. Every method resolves nothing itself: the immutable scope is the whole grant.
+ * and revocation.
+ *
+ * The instance is the sandbox (core approval-only profiles design, decision 1): the container,
+ * under its unchanged hardening, is the boundary; its whole filesystem is every operation's scope
+ * and its egress proxy (open-public with the SDK's closed classes, or the device's allowlist) is the
+ * sandbox network. Support v2 says so (`boundary: "instance"`, no restricted filters, no outside,
+ * no per-operation hosts). The kernel's whole-instance scope runs the provider's ordinary exec and
+ * file paths behind the durable admission; a narrower filesystem grant, the escalated pair and a
+ * network narrower than the instance's applied one are refused before any effect, never widened. Every method resolves nothing itself: the immutable
+ * scope is the whole grant.
  */
 
 /** One command in the container (provider.ts `run` behind auto-start). */
@@ -69,7 +75,7 @@ export interface OperationTransport {
   run(h: SandboxHandle, o: AgentRunOpts): Promise<AgentRun>;
   /** Runs only in an already running container: never starts or resumes it. */
   runIfRunning(h: SandboxHandle, o: AgentRunOpts): Promise<AgentRun | "not-running">;
-  /** The provider's ordinary exec (Full access), with an admission prefix before its wrapper. */
+  /** The provider's ordinary exec, with an admission prefix before its wrapper. */
   execFull(
     h: SandboxHandle,
     args: SandboxExecOptions & { tag: string },
@@ -77,9 +83,12 @@ export interface OperationTransport {
     prefix: string[],
     nonce: string,
   ): Promise<ExecResult>;
-  /** Kills one restricted operation by its control path (graceful, then forced), as the sandbox user. */
-  cancelRestricted(h: SandboxHandle, ctl: string): Promise<void>;
-  /** Kills every foreground execution (restricted or Full) whose control path carries `uuid`. */
+  /**
+   * The network the instance applies (its container labels), or null when they are missing or
+   * unreadable; SandboxGoneError when the container is gone. Never starts the instance.
+   */
+  appliedNetwork(h: SandboxHandle, signal: AbortSignal): Promise<AppliedNetwork | null>;
+  /** Kills every foreground execution whose control path carries `uuid`. */
   killOperation(h: SandboxHandle, uuid: string, signal: AbortSignal): Promise<void>;
   /** Test-only hooks (DockerSandboxTestOptions). */
   backgroundLaunchBarrier?: ((taskId: string) => string | undefined) | undefined;
@@ -253,27 +262,6 @@ export function refusedFrame(raw: Buffer, nonce: string): Error | "cancelled" | 
   return refusalError(result);
 }
 
-/** Combined stdout + stderr limit with a UTF-8 safe cut, as the provider's ordinary exec. */
-function collect(frames: Frames, max: number, decode: (b: Buffer, t: boolean) => string) {
-  let used = 0;
-  let truncated = false;
-  const take = (parts: Buffer[]) => {
-    const keep: Buffer[] = [];
-    for (const p of parts) {
-      const room = max - used;
-      if (p.byteLength > room) truncated = true;
-      if (room <= 0) continue;
-      const part = p.byteLength > room ? p.subarray(0, room) : p;
-      used += part.byteLength;
-      keep.push(part);
-    }
-    return Buffer.concat(keep);
-  };
-  const out = take(frames.out);
-  const err = take(frames.err);
-  return { stdout: decode(out, truncated), stderr: decode(err, truncated), truncated };
-}
-
 function checkPath(p: string): void {
   const errors = validateSandboxPathShape(p);
   if (errors.length > 0) {
@@ -323,9 +311,54 @@ function nativeResult(method: NativeMethod, value: unknown): unknown {
   return value;
 }
 
+const OUTSIDE_UNSUPPORTED =
+  "sandbox-docker has no outside of its instance: the container is the sandbox, so an escalated (device) operation cannot run here";
+const NARROWER_UNSUPPORTED =
+  "sandbox-docker runs operations on the whole instance only (the container is the sandbox): a narrower filesystem grant needs restricted filters this provider does not offer";
+
 export interface OperationDeps {
   transport: OperationTransport;
-  decode: (buf: Buffer, truncated: boolean) => string;
+  /** What the instance network offers: open-public is off where the deployment refuses it. */
+  network: { openPublic: boolean };
+}
+
+/** The network an instance applies: no network, its egress proxy's host list, or open-public. */
+export interface AppliedNetwork {
+  mode: "none" | "allowlist" | "open-public";
+  allowHosts: string[];
+}
+
+/**
+ * Whether the instance's applied network allows nothing beyond the operation's network (pure).
+ * The instance network covers every operation (no per-operation hosts), so an operation whose
+ * network is narrower than the instance's would be silently widened: it is refused instead. An
+ * instance whose network is unknown admits nothing. Hosts compare case-insensitively as written
+ * (the kernel names the instance's own patterns).
+ */
+export function appliedWithin(
+  network: SandboxOperationScope["network"],
+  applied: AppliedNetwork | null,
+): boolean {
+  if (applied === null) return false;
+  if (network.kind === "open-public") return true;
+  if (network.kind === "environment") return false;
+  if (applied.mode === "none") return true;
+  if (network.kind === "none" || applied.mode === "open-public") return false;
+  const granted = new Set(network.hosts.map((host) => host.toLowerCase()));
+  return applied.allowHosts.every((host) => granted.has(host.toLowerCase()));
+}
+
+/**
+ * Whether a scope is the whole instance: the kernel names `/` (plus the working root) readable and
+ * writable on an instance-boundary device. Anything narrower would need restricted filters.
+ */
+export function isInstanceScope(scope: SandboxOperationScope): boolean {
+  return (
+    scope.filesystem.kind === "scoped" &&
+    scope.network.kind !== "environment" &&
+    // writable roots are also readable (SandboxFileScope): a writable `/` is the whole instance
+    scope.filesystem.writeRoots.includes("/")
+  );
 }
 
 /** The permission-capable methods of the Docker provider. */
@@ -384,6 +417,19 @@ export function createOperations(deps: OperationDeps) {
     }
   };
 
+  /** Refuses an operation whose network is narrower than the instance's (before any effect). */
+  const checkNetwork = async (
+    h: SandboxHandle,
+    scope: SandboxOperationScope,
+    signal: AbortSignal,
+  ) => {
+    if (!appliedWithin(scope.network, await t.appliedNetwork(h, signal))) {
+      throw new SandboxScopeDeniedError(
+        "The instance's network allows more than this operation's network; sandbox-docker cannot narrow it per operation, so the operation is refused",
+      );
+    }
+  };
+
   /** Consumes a foreground operation: a duplicate is an unknown outcome, never a repeat. */
   const consume = async (
     h: SandboxHandle,
@@ -406,15 +452,7 @@ export function createOperations(deps: OperationDeps) {
     return { run: r, frames: parseFrames(r.stdout) };
   };
 
-  const restrictedFiles = (scope: SandboxOperationScope) => {
-    if (scope.filesystem.kind !== "scoped") throw new Error("not a scoped grant");
-    return {
-      writeRoots: [...scope.filesystem.writeRoots],
-      readRoots: [...scope.filesystem.readRoots],
-    };
-  };
-
-  /** Restricted native work: through the launcher when a root is writable, else descriptors only. */
+  /** Native work on the whole instance: the helper on "/" as the device user (descriptor-relative). */
   const nativeOp = async (
     h: SandboxHandle,
     scope: SandboxOperationScope,
@@ -425,109 +463,23 @@ export function createOperations(deps: OperationDeps) {
     signal.throwIfAborted();
     checkPath(String(native.path));
     const input = { ...native, dataB64: undefined, data: digestOf(native.dataB64) };
+    // native work runs no command and opens no connection: the network does not apply
     await consume(h, scope, method, inputHash(method, scope, input), signal);
-    const base = {
-      opKey: opKey(scope.operationId),
-      admitBeforeMs: scope.admitBeforeMs,
-      expect: sdkRuntimeDigests(),
-      native: { method, ...native },
-    };
-    if (scope.filesystem.kind === "device") {
-      const { frames } = await agent(h, {
-        cmd: [PYTHON, "-I", OPERATION_AGENT, "direct"],
-        user: "sandbox",
-        stdin: request({ ...base, kind: "device" }),
-        maxOutputBytes: NATIVE_MAX_OUTPUT,
-        signal,
-      });
-      signal.throwIfAborted();
-      return nativeResult(method, nativeReply(frames.result, false));
-    }
-    const roots = restrictedFiles(scope);
-    const ctl = operationControlPath(scope.tag, scope.operationId);
-    if (roots.writeRoots.length === 0) {
-      const { frames } = await agent(h, {
-        cmd: [PYTHON, "-I", OPERATION_AGENT, "direct"],
-        user: "sandbox",
-        stdin: request({ ...base, ...roots, kind: "scoped", requireRestricted: true }),
-        maxOutputBytes: NATIVE_MAX_OUTPUT,
-        signal,
-      });
-      signal.throwIfAborted();
-      return nativeResult(method, nativeReply(frames.result, true));
-    }
-    const { run, frames } = await agent(h, {
-      cmd: [PYTHON, "-I", OPERATION_AGENT, "native", "capybara-exec", ctl],
-      user: "sandbox",
-      stdin: request({ ...base, ...roots, ctl, network: { kind: "none" } }),
-      maxOutputBytes: NATIVE_MAX_OUTPUT,
-      signal,
-      kill: () => cancelOperation(h, scope, ctl),
-    });
-    if (run.aborted) signal.throwIfAborted();
-    return nativeResult(method, nativeReply(frames.result, true));
-  };
-
-  const defaultCwd = (scope: SandboxOperationScope) => {
-    if (scope.filesystem.kind !== "scoped") return "/workspace";
-    const w = scope.filesystem.writeRoots;
-    return w.includes("/workspace") ? "/workspace" : (w[0] ?? "/");
-  };
-
-  const execRestricted = async (
-    h: SandboxHandle,
-    scope: SandboxOperationScope,
-    args: SandboxExecOptions,
-  ): Promise<ExecResult> => {
-    const roots = restrictedFiles(scope);
-    const ctl = operationControlPath(scope.tag, scope.operationId);
-    const cwd = args.cwd ?? defaultCwd(scope);
-    const r = await t.run(h, {
-      cmd: [PYTHON, "-I", OPERATION_AGENT, "exec", "capybara-exec", ctl],
+    const { frames } = await agent(h, {
+      cmd: [PYTHON, "-I", OPERATION_AGENT, "direct"],
       user: "sandbox",
       stdin: request({
         opKey: opKey(scope.operationId),
         admitBeforeMs: scope.admitBeforeMs,
-        ctl,
         expect: sdkRuntimeDigests(),
-        ...roots,
-        network: scope.network,
-        command: args.command,
-        cwd,
-        env: checkedEnv(args.env),
-        timeoutMs: args.timeoutMs,
-        maxOutputBytes: args.maxOutputBytes,
+        kind: "device",
+        native: { method, ...native },
       }),
-      // Frames add five bytes per chunk; the agent forwards at most maxOutputBytes + 1 payload.
-      maxOutputBytes: 6 * (args.maxOutputBytes + 1) + (1 << 20),
-      timeoutMs: args.timeoutMs,
-      signal: args.signal,
-      kill: () => cancelOperation(h, scope, ctl),
+      maxOutputBytes: NATIVE_MAX_OUTPUT,
+      signal,
     });
-    const frames = parseFrames(r.stdout);
-    const output = collect(frames, args.maxOutputBytes, deps.decode);
-    if (r.timedOut || r.aborted) {
-      return { exitCode: null, ...output, timedOut: r.timedOut };
-    }
-    const error = refusalError(frames.result);
-    if (error) throw error;
-    const exit = frames.result?.events?.find((e) => e.event === "exit");
-    if (!frames.result || !exit) {
-      if (frames.result?.events?.some((e) => e.code === "CANCELLED")) {
-        return { exitCode: null, ...output, timedOut: false };
-      }
-      throw new Error(
-        `Restricted execution gave no result: ${r.stderr.toString("utf8").trim().slice(0, 300)}`,
-      );
-    }
-    const code = exit.exitCode;
-    return {
-      exitCode:
-        exit.timedOut || code === null || code === undefined ? null : code < 0 ? 128 - code : code,
-      ...output,
-      truncated: output.truncated || frames.result.truncated === true,
-      timedOut: exit.timedOut === true,
-    };
+    signal.throwIfAborted();
+    return nativeResult(method, nativeReply(frames.result, false));
   };
 
   const execOp = async (
@@ -537,43 +489,39 @@ export function createOperations(deps: OperationDeps) {
   ): Promise<ExecResult> => {
     args.signal.throwIfAborted();
     const input = { ...args, signal: undefined, env: args.env };
+    await checkNetwork(h, scope, args.signal);
     await consume(h, scope, "exec", inputHash("exec", scope, input), args.signal);
-    if (scope.filesystem.kind === "device") {
-      const ctl = operationControlPath(scope.tag, scope.operationId);
-      return t.execFull(
-        h,
-        { ...args, tag: scope.tag },
+    const ctl = operationControlPath(scope.tag, scope.operationId);
+    return t.execFull(
+      h,
+      { ...args, tag: scope.tag },
+      ctl,
+      [
+        PYTHON,
+        "-I",
+        OPERATION_AGENT,
+        "full",
+        opKey(scope.operationId),
+        String(scope.admitBeforeMs),
         ctl,
-        [
-          PYTHON,
-          "-I",
-          OPERATION_AGENT,
-          "full",
-          opKey(scope.operationId),
-          String(scope.admitBeforeMs),
-          ctl,
-          "--",
-        ],
-        randomBytes(16).toString("hex"),
-      );
-    }
-    return execRestricted(h, scope, args);
+        "--",
+      ],
+      randomBytes(16).toString("hex"),
+    );
   };
 
-  /** Full access needs the device filesystem and the environment network together. */
+  /**
+   * Only the whole instance runs here (`isInstanceScope`): the escalated pair (an instance has no
+   * outside) and any narrower filesystem grant (restricted filters this provider does not offer)
+   * are refused before any effect, never widened. Every operation runs under the instance's own
+   * egress proxy (no per-operation hosts); one whose network is narrower than the instance's
+   * applied network is refused when it runs (`checkNetwork`), never silently widened.
+   */
   const checkScope = (scope: SandboxOperationScope) => {
-    if (scope.filesystem.kind === "device" && scope.network.kind !== "environment") {
-      throw new SandboxPermissionUnsupportedError(
-        "sandbox-docker cannot narrow the network of device-wide work without restricted filters",
-      );
+    if (scope.filesystem.kind === "device" || scope.network.kind === "environment") {
+      throw new SandboxPermissionUnsupportedError(OUTSIDE_UNSUPPORTED);
     }
-    if (scope.filesystem.kind !== "scoped") return;
-    for (const root of [...scope.filesystem.readRoots, ...scope.filesystem.writeRoots]) {
-      if (posix.normalize(root) !== root) {
-        throw new SandboxScopeDeniedError("Granted roots must be canonical absolute paths");
-      }
-    }
-    checkRoots(scope.filesystem.readRoots, scope.filesystem.writeRoots);
+    if (!isInstanceScope(scope)) throw new SandboxPermissionUnsupportedError(NARROWER_UNSUPPORTED);
   };
 
   const checkRoots = (readRoots: readonly string[], writeRoots: readonly string[]) => {
@@ -591,20 +539,6 @@ export function createOperations(deps: OperationDeps) {
         );
       }
     }
-  };
-
-  /**
-   * Cancels one restricted foreground operation: a root-owned cancellation marker (checked by the
-   * agent right before launching), then the exact agent by its control path.
-   */
-  const cancelOperation = async (h: SandboxHandle, scope: SandboxOperationScope, ctl: string) => {
-    await rootStep(
-      h,
-      "cancel-mark",
-      { opKey: opKey(scope.operationId), expiresAtMs: scope.admitBeforeMs + RECORD_RETENTION_MS },
-      AbortSignal.timeout(15_000),
-    ).catch(() => undefined);
-    await t.cancelRestricted(h, ctl);
   };
 
   /** Root-run record steps (consume, markers, background records): never start the instance. */
@@ -759,6 +693,7 @@ export function createOperations(deps: OperationDeps) {
       }
       checkPath(args.outputPath);
       const input2 = { ...args, signal: undefined };
+      await checkNetwork(h, scope, args.signal);
       const consumed = await record(
         h,
         scope,
@@ -779,16 +714,6 @@ export function createOperations(deps: OperationDeps) {
         await abortIfContested(h, scope, ref);
         return ref;
       }
-      const roots =
-        scope.filesystem.kind === "scoped"
-          ? {
-              writeRoots: [...scope.filesystem.writeRoots],
-              readRoots: [...scope.filesystem.readRoots],
-            }
-          : { writeRoots: [], readRoots: [] };
-      if (scope.filesystem.kind === "scoped") {
-        checkRoots(scope.filesystem.readRoots, scope.filesystem.writeRoots);
-      }
       // The exact request the supervisor runs. Root records its digest before anything launches,
       // and the recorder binds the record only to a supervisor that reports the same digest.
       const barrier = t.backgroundLaunchBarrier?.(args.taskId);
@@ -798,11 +723,13 @@ export function createOperations(deps: OperationDeps) {
         admitBeforeMs: scope.admitBeforeMs,
         expect: sdkRuntimeDigests(),
         executionId: ref.executionId,
-        kind: scope.filesystem.kind,
-        ...roots,
+        // the whole instance: the agent's device kind (no launcher), under the instance network
+        kind: "device",
+        writeRoots: [],
+        readRoots: [],
         network: scope.network,
         command: args.command,
-        cwd: args.cwd ?? defaultCwd(scope),
+        cwd: args.cwd ?? "/workspace",
         env: checkedEnv(args.env),
         timeoutMs: args.timeoutMs,
         maxOutputBytes: args.maxOutputBytes,
@@ -961,20 +888,29 @@ export function createOperations(deps: OperationDeps) {
   };
 
   return {
+    /**
+     * Support v2 of this instance (approval-only profiles design, "SDK and protocol"): the
+     * container is the sandbox (`boundary: "instance"`, no restricted filters, no outside), its
+     * egress proxy offers open-public (unless the deployment refuses it) and allowlists, never
+     * per-operation hosts, and background work is supervised exactly. The staged runtime (the
+     * agent's records and native helper) must be root-owned, read-only and match its digests;
+     * otherwise nothing is offered and the reason says why. Never starts or resumes the instance.
+     */
     async permissionSupport(
       h: SandboxHandle,
       signal: AbortSignal,
     ): Promise<SandboxPermissionSupport> {
       signal.throwIfAborted();
       const unavailable = (reason: string): SandboxPermissionSupport => ({
-        version: 1,
+        version: 2,
+        boundary: "instance",
         restricted: null,
-        fullAccess: false,
+        network: { openPublic: false, allowlist: false, perOperationHosts: false },
+        outsideSandbox: false,
         background: false,
         unavailableReason: reason,
       });
       const names = Object.keys(stagedRuntimeDigests()).sort();
-      // Probing never starts or resumes the instance.
       const staged = await t.runIfRunning(h, {
         cmd: [
           "/bin/sh",
@@ -1002,38 +938,27 @@ export function createOperations(deps: OperationDeps) {
           return unavailable("The staged operation runtime is not root-owned and read-only");
         }
       }
-      for (const line of lines.slice(names.length + 2)) {
+      const digests = lines.slice(names.length + 2);
+      if (digests.length !== names.length) {
+        return unavailable("The staged operation runtime is incomplete");
+      }
+      for (const line of digests) {
         const [digest, name] = line.split(/\s+/);
         if (!name || expect[name] !== digest) {
           return unavailable(`The staged ${name ?? "runtime"} does not match its digest`);
         }
       }
-      const probe = await t.runIfRunning(h, {
-        cmd: [PYTHON, "-I", OPERATION_AGENT, "probe"],
-        user: "sandbox",
-        maxOutputBytes: 1 << 20,
-        signal,
-      });
-      if (probe === "not-running") {
-        throw new Error("The device instance is not running; probe it during execution");
-      }
-      const report = parseFrames(probe.stdout).result?.probe;
-      const claims = report?.restricted as Record<string, unknown> | null | undefined;
-      const complete =
-        claims?.filesystem === true &&
-        claims.network === true &&
-        claims.native === true &&
-        claims.concurrentScopes === true;
       return {
-        version: 1,
-        restricted: complete
-          ? { filesystem: true, network: true, native: true, concurrentScopes: true }
-          : null,
-        fullAccess: true,
+        version: 2,
+        boundary: "instance",
+        restricted: null,
+        network: {
+          openPublic: deps.network.openPublic,
+          allowlist: true,
+          perOperationHosts: false,
+        },
+        outsideSandbox: false,
         background: true,
-        ...(complete
-          ? {}
-          : { unavailableReason: report?.reason ?? "The restricted runtime probe failed" }),
       };
     },
 

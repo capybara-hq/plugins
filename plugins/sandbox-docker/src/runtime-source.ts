@@ -2,13 +2,14 @@ import { createHash } from "node:crypto";
 import { SANDBOX_RUNTIME_SOURCE } from "@capybara-hq/plugin-sdk";
 
 /**
- * The restricted runtime staged in the sandbox image (`image/runtime`, copied root-owned to
+ * The operation runtime staged in the sandbox image (`image/runtime`, copied root-owned to
  * {@link RUNTIME_DIR} by the Dockerfile, which checks `SHA256SUMS` at build time):
  *
  * - `native-files.py` and `linux-sandbox.py`: the SDK's `SANDBOX_RUNTIME_SOURCE` bytes, unchanged
- *   (the native helper, and the launcher with its Landlock rules and seccomp broker);
- * - `capybara-operation.py`: this provider's trusted consumer (pins roots, runs the launcher,
- *   frames output, the per-operation allowlist forwarder, exact cancellation, records).
+ *   (the native helper; the launcher is staged with its bundle but never run: the container is the
+ *   sandbox, and the agent refuses restricted requests);
+ * - `capybara-operation.py`: this provider's trusted consumer (admission records, the native
+ *   helper on `/`, the whole-instance exec admission, background supervision).
  *
  * `test/permission-scopes.test.ts` asserts the staged copies equal the SDK bytes and these digests.
  */
@@ -19,7 +20,7 @@ export const OPERATION_AGENT = `${RUNTIME_DIR}/capybara-operation.py`;
 
 /** SHA-256 of `image/runtime/capybara-operation.py` (asserted by the tests). */
 export const OPERATION_AGENT_SHA256 =
-  "eb7217da155ff07842ad58333b88e5b8beecc209943e7987ef3b3c6e1fd74af3";
+  "0459ca268c00950cfaf0838a9d505dc25d40b0b5b1e23ca6a042804b6c48417a";
 
 /** The SDK bundle version the staged files come from. */
 export const RUNTIME_BUNDLE_VERSION = 2;

@@ -26,8 +26,8 @@ import {
 
 /**
  * `list` / `scan` (project root, core spec 2026-11-14 §4.1, §4.2) on real Docker: read inside the
- * container as the sandbox user, the container's workspace being the whole reachable area in either
- * mode. The case list follows core's device tests (its listing and docker executor tests).
+ * container as the sandbox user, the container's workspace being the whole reachable area (the
+ * instance is the sandbox). The case list follows core's device tests (its listing and docker executor tests).
  * Skipped without Docker.
  */
 
@@ -43,12 +43,10 @@ const waitFor = async (cond: () => boolean, ms = 30_000) => {
 };
 const sig = () => AbortSignal.timeout(120_000);
 const actor: SandboxActor = { accountId: "acc-1", conversationId: "conv-1" };
-type Mode = SandboxLimits["mode"];
 const limits = (): SandboxLimits => ({
   cpu: 1,
   memoryMb: 512,
   diskMb: 1024,
-  mode: "auto",
   network: { kind: "allowlist", hosts: [] },
 });
 
@@ -110,33 +108,31 @@ describe.skipIf(!dockerAvailable)("sandbox-docker list and scan", { timeout: 120
     expect(r.exitCode, r.stderr).toBe(0);
     return dir;
   };
-  const list = (path: string, limit = 100, mode: Mode = "auto", signal = sig(), on = h) => {
+  const list = (path: string, limit = 100, signal = sig(), on = h) => {
     if (sbx.list === undefined) throw new Error("sandbox-docker offers no list");
-    return sbx.list(on, path, { limit, limits: { mode }, signal });
+    return sbx.list(on, path, { limit, signal });
   };
-  const scan = (base: string, mode: Mode = "auto", signal = sig(), on = h) => {
+  const scan = (base: string, signal = sig(), on = h) => {
     if (sbx.scan === undefined) throw new Error("sandbox-docker offers no scan");
-    return sbx.scan(on, base, { limits: { mode }, signal });
+    return sbx.scan(on, base, { signal });
   };
   const names = async (base: string) => (await scan(base)).map((c) => c.path.slice(base.length));
 
   describe("list", () => {
-    it("sorts entries by code unit and says which are directories, in either mode", async () => {
+    it("sorts entries by code unit and says which are directories", async () => {
       // U+1F600 (surrogates D83D DE00) sorts before U+FF5E by code unit, after it by code point
       const d = await fixture("mkdir B a; : > _x; : > é; : > ～; : > 😀");
-      for (const mode of ["auto", "sandbox"] as const) {
-        expect(await list(d, 10, mode)).toEqual({
-          entries: [
-            { name: "B", isDir: true },
-            { name: "_x", isDir: false },
-            { name: "a", isDir: true },
-            { name: "é", isDir: false },
-            { name: "😀", isDir: false },
-            { name: "～", isDir: false },
-          ],
-          truncated: false,
-        });
-      }
+      expect(await list(d, 10)).toEqual({
+        entries: [
+          { name: "B", isDir: true },
+          { name: "_x", isDir: false },
+          { name: "a", isDir: true },
+          { name: "é", isDir: false },
+          { name: "😀", isDir: false },
+          { name: "～", isDir: false },
+        ],
+        truncated: false,
+      });
     });
 
     it("cuts at the limit and says it was truncated", async () => {
@@ -180,21 +176,19 @@ describe.skipIf(!dockerAvailable)("sandbox-docker list and scan", { timeout: 120
       await expect(list(`${d}/closed`)).rejects.toThrow(/cannot be read/);
     });
 
-    it("throws for a path outside the workspace, also through a link, in either mode", async () => {
+    it("throws for a path outside the workspace, also through a link", async () => {
       const d = await fixture("ln -s /etc etc");
-      for (const mode of ["auto", "sandbox"] as const) {
-        // a missing child below a link out throws too: null would tell whether /etc/nope exists
-        for (const path of [
-          "/",
-          "/etc",
-          "/tmp",
-          "/skills",
-          "/workspacex",
-          `${d}/etc`,
-          `${d}/etc/nope`,
-        ]) {
-          await expect(list(path, 10, mode), `${mode} ${path}`).rejects.toThrow(/outside/);
-        }
+      // a missing child below a link out throws too: null would tell whether /etc/nope exists
+      for (const path of [
+        "/",
+        "/etc",
+        "/tmp",
+        "/skills",
+        "/workspacex",
+        `${d}/etc`,
+        `${d}/etc/nope`,
+      ]) {
+        await expect(list(path, 10), path).rejects.toThrow(/outside/);
       }
       await expect(list("/workspace/../etc")).rejects.toThrow(/outside/);
       await expect(list("relative")).rejects.toThrow(/path/);
@@ -319,10 +313,8 @@ describe.skipIf(!dockerAvailable)("sandbox-docker list and scan", { timeout: 120
       expect(await scan(`${d}/missing`)).toEqual([]);
       await expect(scan(`${d}/f`)).rejects.toThrow(/not a directory/);
       await expect(scan(`${d}/closed`)).rejects.toThrow(/cannot be read/);
-      for (const mode of ["auto", "sandbox"] as const) {
-        for (const base of ["/", "/home", "/tmp", `${d}/etc`]) {
-          await expect(scan(base, mode), `${mode} ${base}`).rejects.toThrow(/outside/);
-        }
+      for (const base of ["/", "/home", "/tmp", `${d}/etc`]) {
+        await expect(scan(base), base).rejects.toThrow(/outside/);
       }
     });
 
@@ -347,8 +339,8 @@ describe.skipIf(!dockerAvailable)("sandbox-docker list and scan", { timeout: 120
     it("rejects at once when the signal is already aborted", async () => {
       const ac = new AbortController();
       ac.abort(new Error("stop"));
-      await expect(list("/workspace", 10, "auto", ac.signal)).rejects.toThrow(/stop/);
-      await expect(scan("/workspace", "auto", ac.signal)).rejects.toThrow(/stop/);
+      await expect(list("/workspace", 10, ac.signal)).rejects.toThrow(/stop/);
+      await expect(scan("/workspace", ac.signal)).rejects.toThrow(/stop/);
     });
 
     it("an abort while the list exec is being started rejects with its reason", async () => {
@@ -389,9 +381,8 @@ describe.skipIf(!dockerAvailable)("sandbox-docker list and scan", { timeout: 120
           { labels: { [TEST_LABEL]: RUN } },
         );
         for (const op of [
-          (s: AbortSignal) =>
-            slow.list(h, "/workspace", { limit: 10, limits: { mode: "auto" }, signal: s }),
-          (s: AbortSignal) => slow.scan(h, "/workspace", { limits: { mode: "auto" }, signal: s }),
+          (s: AbortSignal) => slow.list(h, "/workspace", { limit: 10, signal: s }),
+          (s: AbortSignal) => slow.scan(h, "/workspace", { signal: s }),
         ]) {
           held = false;
           const ac = new AbortController();
@@ -410,20 +401,20 @@ describe.skipIf(!dockerAvailable)("sandbox-docker list and scan", { timeout: 120
       const own = await create();
       const d = await fixture("mkdir -p p/.git", own);
       await docker("stop", "-t", "0", own.id);
-      expect(await list(d, 10, "auto", sig(), own)).toEqual({
+      expect(await list(d, 10, sig(), own)).toEqual({
         entries: [{ name: "p", isDir: true }],
         truncated: false,
       });
       await docker("stop", "-t", "0", own.id);
-      expect(await scan(d, "auto", sig(), own)).toEqual([{ path: `${d}/p`, suggestedName: "p" }]);
+      expect(await scan(d, sig(), own)).toEqual([{ path: `${d}/p`, suggestedName: "p" }]);
     });
 
     it("a removed container is SandboxGoneError", async () => {
       const own = await create();
       await docker("rm", "-f", own.id);
       for (const op of [
-        () => list("/workspace", 10, "auto", sig(), own),
-        () => scan("/workspace", "auto", sig(), own),
+        () => list("/workspace", 10, sig(), own),
+        () => scan("/workspace", sig(), own),
       ]) {
         expect(isSandboxGoneError(await op().catch((e: unknown) => e))).toBe(true);
       }

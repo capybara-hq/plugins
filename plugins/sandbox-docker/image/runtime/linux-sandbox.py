@@ -27,7 +27,9 @@ def protect_self():
 
 SELF_PROTECTION = protect_self()
 
+import contextlib
 import errno
+import fcntl
 import importlib.machinery
 import importlib.util
 import ipaddress
@@ -62,10 +64,19 @@ import time
 #   /proc/self/fd and /proc/self/maps reads). hidepid needs a mount and PID namespaces need new
 #   privileges, both outside this launcher's design. Consumers keep secrets out of command lines.
 # - Network none/allowlist: TCP sockets may bind and listen on loopback (127.0.0.1, ::1) only;
-#   connections go only to the endpoints the consumer granted. Environment lifts that filter.
+#   connections go only to the endpoints the consumer granted. A command's own loopback listener
+#   is reachable from outside the sandbox, never from the command's own client: the broker cannot
+#   tell an own listener from another process's at the address dialled (a listener can be
+#   re-listened after another socket took its port, or share it through SO_REUSEPORT).
+#   SO_REUSEPORT and its group programs (SO_ATTACH_REUSEPORT_CBPF / EBPF) are refused (EPERM), and
+#   a socket with SO_REUSEPORT set never binds or listens: joining a foreign service's reuseport
+#   group would receive that service's connections. Environment lifts that filter.
 # - UNIX sockets in every network kind: stream/seqpacket only (datagram and raw are refused);
-#   pathname connect/bind only to sockets inside the write roots, resolved through the pinned
-#   descriptors; abstract and unnamed addresses are refused. socketpair() is unaffected.
+#   a pathname bind only inside the write roots, resolved through the pinned descriptors, and a
+#   pathname connect only to a socket this operation bound itself (its dev and inode recorded at
+#   the brokered bind), never to one another process made, even inside a write root (a user
+#   D-Bus, a rootless docker.sock, ssh-agent, tmux); abstract and unnamed addresses are refused.
+#   socketpair() is unaffected.
 # - The launcher makes itself non-dumpable before anything else (protect_self), so a same-uid
 #   process outside the operation cannot ptrace it or read its mem, environ or fd afterwards.
 #   The window between the interpreter's exec and that first statement remains: only a tracer
@@ -108,6 +119,7 @@ ARCHES = {
             "lremovexattr": 15, "fremovexattr": 16, "ioctl": 29, "fchmod": 52, "fchmodat": 53,
             "fchownat": 54, "fchown": 55, "utimensat": 88, "unshare": 97, "setsid": 157,
             "socket": 198, "socketpair": 199, "bind": 200, "listen": 201, "connect": 203, "sendto": 206,
+            "setsockopt": 208,
             "sendmsg": 211, "add_key": 217, "request_key": 218, "keyctl": 219, "clone": 220,
             "setns": 268, "sendmmsg": 269, "userfaultfd": 282,
             "mknodat": 33, "mkdirat": 34, "unlinkat": 35, "symlinkat": 36, "linkat": 37,
@@ -120,7 +132,7 @@ ARCHES = {
         "x32": True,
         "nr": {
             "ioctl": 16, "socket": 41, "connect": 42, "sendto": 44, "sendmsg": 46, "bind": 49,
-            "listen": 50, "socketpair": 53, "clone": 56, "chmod": 90, "fchmod": 91, "chown": 92, "fchown": 93,
+            "listen": 50, "socketpair": 53, "setsockopt": 54, "clone": 56, "chmod": 90, "fchmod": 91, "chown": 92, "fchown": 93,
             "lchown": 94, "setsid": 112, "utime": 132, "uselib": 134, "setxattr": 188,
             "lsetxattr": 189, "fsetxattr": 190, "removexattr": 197, "lremovexattr": 198,
             "fremovexattr": 199, "utimes": 235, "add_key": 248, "request_key": 249,
@@ -173,11 +185,14 @@ STD_STREAMS = {"/dev/stdin": 0, "/dev/stdout": 1, "/dev/stderr": 2}
 # move_denied(source, destination, is_dir).
 
 import unicodedata as _unicodedata
-WRITE_DENIES = [[_unicodedata.normalize("NFKC", n).casefold() for n in e] for e in [[".gitconfig"],[".gitmodules"],[".bashrc"],[".bash_profile"],[".zshrc"],[".zprofile"],[".profile"],[".ripgreprc"],[".mcp.json"],[".envrc"],[".npmrc"],[".vscode"],[".idea"],[".claude","commands"],[".claude","agents"],[".husky"],[".huskyrc"],[".huskyrc.json"],[".huskyrc.js"],["husky.config.js"],[".pre-commit-config.yaml"],[".pre-commit-config.yml"],["lefthook.yml"],["lefthook.yaml"],["lefthook.json"],["lefthook.toml"],[".lefthook.yml"],[".lefthook.yaml"],[".lefthook.json"],[".lefthook.toml"],["lefthook-local.yml"],["lefthook-local.yaml"],["lefthook-local.json"],["lefthook-local.toml"],[".lefthook-local.yml"],[".lefthook-local.yaml"],[".lefthook-local.json"],[".lefthook-local.toml"],[".lefthook"],[".lefthook-local"],[".config","lefthook.yml"],[".config","lefthook.yaml"],[".config","lefthook.json"],[".config","lefthook.toml"],[".overcommit.yml"],[".simple-git-hooks.json"],[".simple-git-hooks.js"],[".simple-git-hooks.cjs"],["simple-git-hooks.json"],["simple-git-hooks.js"],["simple-git-hooks.cjs"],[".githooks"]]]
+WRITE_DENIES = [[_unicodedata.normalize("NFKC", n).casefold() for n in e] for e in [[".gitconfig"],[".gitmodules"],[".bashrc"],[".bash_profile"],[".zshrc"],[".zprofile"],[".profile"],[".ripgreprc"],[".mcp.json"],[".envrc"],[".npmrc"],[".vscode"],[".idea"],[".claude","commands"],[".claude","agents"],[".husky"],[".huskyrc"],[".huskyrc.json"],[".huskyrc.js"],["husky.config.js"],[".pre-commit-config.yaml"],[".pre-commit-config.yml"],["lefthook.yml"],["lefthook.yaml"],["lefthook.json"],["lefthook.toml"],[".lefthook.yml"],[".lefthook.yaml"],[".lefthook.json"],[".lefthook.toml"],["lefthook-local.yml"],["lefthook-local.yaml"],["lefthook-local.json"],["lefthook-local.toml"],[".lefthook-local.yml"],[".lefthook-local.yaml"],[".lefthook-local.json"],[".lefthook-local.toml"],[".lefthook"],[".lefthook-local"],[".config","lefthook.yml"],[".config","lefthook.yaml"],[".config","lefthook.json"],[".config","lefthook.toml"],[".overcommit.yml"],[".simple-git-hooks.json"],[".simple-git-hooks.js"],[".simple-git-hooks.cjs"],["simple-git-hooks.json"],["simple-git-hooks.js"],["simple-git-hooks.cjs"],[".githooks"],[".zshenv"],[".zlogin"],[".zlogout"],[".bash_login"],[".bash_logout"],[".logout"],[".tcshrc"],[".cshrc"],[".kshrc"],[".config","git","config"],[".config","fish","config.fish"],[".config","fish","conf.d"],["library","launchagents"],["library","launchdaemons"],[".config","systemd"],[".local","share","systemd"],[".config","environment.d"],[".config","autostart"],[".config","autostart-scripts"],[".config","plasma-workspace","env"],[".xprofile"],[".xsessionrc"],[".local","bin"],[".cargo","bin"]]]
+SYSTEM_WRITE_DENIES = [[_unicodedata.normalize("NFKC", n).casefold() for n in p.split("/") if n] for p in ["/var/spool/cron","/var/spool/at","/private/var/at/tabs","/private/var/at/jobs","/var/at"]]
+PREFIX_GUARDED = [(e, False) for e in WRITE_DENIES if len(e) > 1] + [(e, True) for e in SYSTEM_WRITE_DENIES]
 GIT_ALLOWED_DIRECTORIES = set(["objects","refs","logs","rebase-merge","rebase-apply","sequencer"])
 GIT_ALLOWED_FILES = set(["index","head","orig_head","fetch_head","merge_head","merge_msg","merge_mode","merge_rr","auto_merge","cherry_pick_head","revert_head","rebase_head","bisect_log","bisect_start","bisect_expected_rev","bisect_ancestors_ok","bisect_names","bisect_terms","packed-refs","packed-refs.new","merge_autostash","commit_editmsg","tag_editmsg","squash_msg","shallow","description","gc.pid","gc.log","info","modules","worktrees"])
 GIT_DANGER = set(["config","config.worktree","commondir","gitdir","hooks","info"])
-PROTECTED_PATH_NAMES = set([".git",".gitconfig",".gitmodules",".bashrc",".bash_profile",".zshrc",".zprofile",".profile",".ripgreprc",".mcp.json",".envrc",".npmrc",".vscode",".idea",".claude",".husky",".huskyrc",".huskyrc.json",".huskyrc.js","husky.config.js",".pre-commit-config.yaml",".pre-commit-config.yml","lefthook.yml","lefthook.yaml","lefthook.json","lefthook.toml",".lefthook.yml",".lefthook.yaml",".lefthook.json",".lefthook.toml","lefthook-local.yml","lefthook-local.yaml","lefthook-local.json","lefthook-local.toml",".lefthook-local.yml",".lefthook-local.yaml",".lefthook-local.json",".lefthook-local.toml",".lefthook",".lefthook-local",".config",".overcommit.yml",".simple-git-hooks.json",".simple-git-hooks.js",".simple-git-hooks.cjs","simple-git-hooks.json","simple-git-hooks.js","simple-git-hooks.cjs",".githooks"])
+PROTECTED_PATH_NAMES = set([".git",".gitconfig",".gitmodules",".bashrc",".bash_profile",".zshrc",".zprofile",".profile",".ripgreprc",".mcp.json",".envrc",".npmrc",".vscode",".idea",".husky",".huskyrc",".huskyrc.json",".huskyrc.js","husky.config.js",".pre-commit-config.yaml",".pre-commit-config.yml","lefthook.yml","lefthook.yaml","lefthook.json","lefthook.toml",".lefthook.yml",".lefthook.yaml",".lefthook.json",".lefthook.toml","lefthook-local.yml","lefthook-local.yaml","lefthook-local.json","lefthook-local.toml",".lefthook-local.yml",".lefthook-local.yaml",".lefthook-local.json",".lefthook-local.toml",".lefthook",".lefthook-local",".overcommit.yml",".simple-git-hooks.json",".simple-git-hooks.js",".simple-git-hooks.cjs","simple-git-hooks.json","simple-git-hooks.js","simple-git-hooks.cjs",".githooks",".zshenv",".zlogin",".zlogout",".bash_login",".bash_logout",".logout",".tcshrc",".cshrc",".kshrc",".xprofile",".xsessionrc"])
+RESERVED_NAME_PREFIX = ".capybara-staging-"
 
 
 def _fold_parts(path):
@@ -226,6 +241,11 @@ def _git_internal_allowed(rel):
 
 def write_denied(path):
     names = _fold_parts(path)
+    if any(n.startswith(RESERVED_NAME_PREFIX) for n in names):
+        return True
+    for system in SYSTEM_WRITE_DENIES:
+        if names[:len(system)] == system:
+            return True
     for entry in WRITE_DENIES:
         for i in range(len(names) - len(entry) + 1):
             if names[i:i + len(entry)] == entry:
@@ -235,8 +255,38 @@ def write_denied(path):
     return bool(names) and names[-1] == "head"
 
 
-def move_denied(source, destination, is_dir):
+def _prefix_next(dst):
+    nxt = []
+    for names, anchored in PREFIX_GUARDED:
+        for k in range(1, len(names)):
+            if (anchored and len(dst) != k) or len(dst) < k:
+                continue
+            if dst[len(dst) - k:] == names[:k]:
+                nxt.append(names[k])
+    return nxt
+
+
+def move_denied(source, destination, is_dir, entries=None):
+    if write_denied(source) or write_denied(destination):
+        return True
     src, dst = _fold_parts(source), _fold_parts(destination)
+    # an anchored deny's ancestor never moves away: a link resolved into it would dangle
+    for names, anchored in PREFIX_GUARDED:
+        if anchored and len(src) < len(names) and names[:len(src)] == src:
+            return True
+    nxt = _prefix_next(dst)
+    if nxt:
+        if not is_dir:
+            return True
+        if entries is None:
+            # no entries given: list the source path itself, refusing what cannot be listed
+            try:
+                import os as _os
+                entries = _os.listdir(source)
+            except OSError:
+                return True
+        if any(_unicodedata.normalize("NFKC", n).casefold() in nxt for n in entries):
+            return True
 
     def protected_at(names):
         return next((k for k, n in enumerate(names) if n in PROTECTED_PATH_NAMES), -1)
@@ -264,6 +314,14 @@ AF_UNSPEC, AF_UNIX, AF_INET, AF_INET6, AF_NETLINK = 0, 1, 2, 10, 16
 SOCK_STREAM, SOCK_DGRAM, SOCK_SEQPACKET = 1, 2, 5
 SOCK_NONBLOCK, SOCK_CLOEXEC = 0o4000, 0o2000000
 SOL_SOCKET, SO_DOMAIN, IPPROTO_TCP = 1, 39, 6
+SO_REUSEPORT, SO_ATTACH_REUSEPORT_CBPF, SO_ATTACH_REUSEPORT_EBPF = 15, 51, 52
+LOOPBACK = ("127.0.0.1", "::1")
+# How long a guarded directory move waits for the device's other writes (a FIFO open waiting
+# for its peer holds them) before it fails with EBUSY.
+EXCLUSIVE_WAIT_S = 5
+# The faultInjection seam's pause before a named mkdir, and the marker announcing it.
+PAUSE_S = 2
+PAUSE_MARKER = ".capybara-test-paused"
 AT_FDCWD = -100
 AT_SYMLINK_NOFOLLOW = 0x100
 AT_EMPTY_PATH = 0x1000
@@ -433,10 +491,25 @@ def build_filter(table, network_mediated, brokered):
     p.jeq(nr["unshare"], "namespaces")
     p.jeq(nr["clone"], "namespaces")
     if network_mediated:
+        p.jeq(nr["setsockopt"], "setsockopt")
         p.jeq(nr["sendto"], "fastopen3")
         p.jeq(nr["sendmmsg"], "fastopen3")
         p.jeq(nr["sendmsg"], "fastopen2")
     p.ret(RET_ALLOW)
+    if network_mediated:
+        # SO_REUSEPORT and its group programs: joining a foreign service's reuseport group would
+        # receive that service's connections (kept close to the dispatch: jumps reach 255 at most)
+        p.label("setsockopt")
+        p.ld_arg(1)
+        p.jeq(SOL_SOCKET, "sockopt_name")
+        p.ret(RET_ALLOW)
+        p.label("sockopt_name")
+        p.ld_arg(2)
+        for option in (SO_REUSEPORT, SO_ATTACH_REUSEPORT_CBPF, SO_ATTACH_REUSEPORT_EBPF):
+            p.jeq(option, "sockopt_eperm")
+        p.ret(RET_ALLOW)
+        p.label("sockopt_eperm")
+        p.ret(RET_ERRNO(errno.EPERM))
     for number, action in simple.items():
         p.label("r%d" % number)
         p.ret(action)
@@ -609,8 +682,8 @@ def socket_domain(fd):
     return struct.unpack("i", socket_option(fd, SOL_SOCKET, SO_DOMAIN))[0]
 
 
-def socket_name(fd):
-    """The bound IP address of a broker-owned socket (0.0.0.0 / :: when unbound)."""
+def socket_address(fd):
+    """The bound (IP address, port) of a broker-owned socket ((0.0.0.0 / ::, 0) when unbound)."""
     buffer = ctypes.create_string_buffer(128)
     length = ctypes.c_uint32(128)
     if libc.getsockname(fd, buffer, ctypes.byref(length)) < 0:
@@ -618,22 +691,110 @@ def socket_name(fd):
         raise OSError(code, os.strerror(code))
     raw = buffer.raw[:length.value]
     family = struct.unpack("H", raw[:2])[0]
+    port = struct.unpack(">H", raw[2:4])[0]
     if family == AF_INET:
-        return str(ipaddress.ip_address(raw[4:8]))
+        return str(ipaddress.ip_address(raw[4:8])), port
     if family == AF_INET6:
-        return str(ipaddress.ip_address(raw[8:24]))
-    return None
+        return str(ipaddress.ip_address(raw[8:24])), port
+    return None, None
+
+
+def socket_name(fd):
+    """The bound IP address of a broker-owned socket (0.0.0.0 / :: when unbound)."""
+    return socket_address(fd)[0]
+
+
+def socket_int(fd, name):
+    return struct.unpack("i", socket_option(fd, SOL_SOCKET, name))[0]
+
+
+def add_write_denies(paths, *modules):
+    """Absolute write denies the consumer resolved for this operation (a protected home location
+    reached through a link, at its resolved target): denied with everything beneath them, and
+    guarded against a prepared directory or a link moved onto a proper prefix, exactly like
+    SYSTEM_WRITE_DENIES. Extends the policy of this process and of the given modules (one
+    operation per launcher process)."""
+    if not isinstance(paths, list) or not all(
+            isinstance(p, str) and p.startswith("/") and os.path.normpath(p) == p for p in paths):
+        raise Refused("INVALID_REQUEST", "Supply absolute normalized write denies")
+    folded = [_fold_parts(p) for p in paths]
+    for policy in (globals(),) + tuple(vars(m) for m in modules):
+        if "SYSTEM_WRITE_DENIES" in policy and "PREFIX_GUARDED" in policy:
+            policy["SYSTEM_WRITE_DENIES"].extend(folded)
+            policy["PREFIX_GUARDED"].extend((names, True) for names in folded)
+
+
+class SharedLock:
+    """Many shared holders or one exclusive holder. New shared holders are not held back by a
+    waiting exclusive one: a shared holder may wait long (a FIFO open waiting for its peer)."""
+
+    def __init__(self):
+        self.condition = threading.Condition()
+        self.readers = 0
+        self.writer = False
+
+    @contextlib.contextmanager
+    def shared(self):
+        with self.condition:
+            while self.writer:
+                self.condition.wait()
+            self.readers += 1
+        try:
+            yield
+        finally:
+            with self.condition:
+                self.readers -= 1
+                self.condition.notify_all()
+
+    @contextlib.contextmanager
+    def exclusive(self, timeout):
+        """Raises EBUSY when the shared holders do not leave within timeout seconds."""
+        deadline = time.monotonic() + timeout
+        with self.condition:
+            while self.writer or self.readers:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise OSError(errno.EBUSY, "The operation's other writes did not finish")
+                self.condition.wait(left)
+            self.writer = True
+        try:
+            yield
+        finally:
+            with self.condition:
+                self.writer = False
+                self.condition.notify_all()
+
+
+class NeedsExclusive(Exception):
+    """A directory move into a guarded prefix: redone holding the files lock exclusively."""
 
 
 class Broker:
-    def __init__(self, native, roots, table, endpoints, listener):
+    def __init__(self, native, roots, table, endpoints, listener, files_lock=None):
         self.native = native
         self.files = native.NativeFiles(roots)
         self.names = {number: name for name, number in dict(table["nr"], **COMMON).items()}
         self.endpoints = endpoints
         self.listener = listener
         self.sockets = {}
+        # (st_dev, st_ino) of every pathname UNIX socket this operation bound through the broker:
+        # the only sockets a pathname connect may reach. A socket another process made, even one
+        # inside a write root (a user D-Bus, a rootless docker.sock, ssh-agent, tmux), stays
+        # unreachable, as no sandboxed client connects to a foreign loopback listener either.
+        self.unix_bound = set()
         self.lock = threading.Lock()
+        # Every mutating file operation holds this shared; a directory move into a guarded prefix
+        # holds it exclusively (staging, listing and the final rename). With the consumer's
+        # "filesLockFd" it is the device's lock, so the exclusion spans every operation of the
+        # device; without one it spans this operation only.
+        self.files_lock = files_lock or SharedLock()
+        # A failure the broker could not undo: the supervisor ends the operation and reports it.
+        self.fatal = None
+        # A test fixture's injected faults (request "faultInjection"); never set in production:
+        # fault "fail" fails a staged move; pause_mkdir names a mkdir that, once checked, marks its
+        # parent (PAUSE_MARKER) and waits PAUSE_S before its effect.
+        self.fault = None
+        self.pause_mkdir = None
         self.counts = {}
         # Creation modes are the command's (its umask is applied explicitly), never the broker's.
         os.umask(0)
@@ -808,13 +969,18 @@ class Broker:
             if name == "listen":
                 return self.listen(ident, pid, args)
             mem = self.memory(pid, ident)
-            if name in FILE_OPS:
-                return self.file_op(ident, pid, mem, name, args)
             if name == "connect":
                 return self.connect(ident, pid, mem, args)
-            if name == "bind":
-                return self.bind(ident, pid, mem, args)
-            return self.metadata(ident, pid, mem, name, args)
+            try:
+                with self.files_lock.shared():
+                    if name in FILE_OPS:
+                        return self.file_op(ident, pid, mem, name, args)
+                    if name == "bind":
+                        return self.bind(ident, pid, mem, args)
+                    return self.metadata(ident, pid, mem, name, args)
+            except NeedsExclusive:
+                with self.files_lock.exclusive(EXCLUSIVE_WAIT_S):
+                    return self.file_op(ident, pid, mem, name, args, exclusive=True)
         except Denied:
             return None, errno.EACCES
         except OSError as error:
@@ -977,6 +1143,162 @@ class Broker:
         if creates_entry and _fold_parts(name) == [".git"]:
             raise Denied()
 
+    # ---- post-effect verification ------------------------------------------------------------
+    # A write is checked on the path its parent descriptor had, then applied through that
+    # descriptor. The device's files lock keeps every sandboxed guarded move out of that window,
+    # but a process outside the sandbox can still move the parent meanwhile. So after each
+    # descriptor-relative create or rename the broker reads where the parent sits now and, when
+    # the entry landed at a denied path, undoes the effect and refuses; an effect it cannot undo
+    # ends the operation (fail).
+
+    def placed(self, parent, name):
+        """name below the parent descriptor, at the parent's current path (rebased onto the
+        pinned roots' recorded paths); None when the parent is no longer reachable."""
+        try:
+            where = self.rebase(os.readlink("/proc/self/fd/%d" % parent))
+        except OSError:
+            return None
+        if not where.startswith("/") or where.endswith(" (deleted)"):
+            return None
+        return where.rstrip("/") + "/" + name
+
+    def verify(self, denied, undo, what):
+        """Undoes an applied effect and refuses it when denied() says it landed somewhere denied
+        (denied reads the entry's current place); an undo that fails ends the operation."""
+        try:
+            if not denied():
+                return
+        except Denied:
+            pass
+        try:
+            undo()
+        except OSError as error:
+            self.fail("%s landed at a protected path after its check and could not be undone (%s)"
+                      % (what, error.strerror))
+        raise Denied()
+
+    def created_denied(self, parent, name, creates_entry=False, link=False):
+        """Whether the entry name below parent now sits at a path the write policy denies."""
+        now = self.placed(parent, name)
+        if now is None:
+            return False
+        if write_denied(now) or (creates_entry and _fold_parts(name) == [".git"]):
+            return True
+        return link and bool(_prefix_next(_fold_parts(now)))
+
+    @staticmethod
+    def remove_own(parent, name, ident, is_dir=False):
+        """Removes the entry the broker just made (ident: its (st_dev, st_ino)), never another."""
+        info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (info.st_dev, info.st_ino) != ident:
+            raise OSError(errno.ESTALE, "The created entry was replaced")
+        if is_dir:
+            os.rmdir(name, dir_fd=parent)
+        else:
+            os.unlink(name, dir_fd=parent)
+
+    @staticmethod
+    def identity(parent, name):
+        info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        return info.st_dev, info.st_ino
+
+    def moved_denied(self, sparent, sname, dparent, dname, kinds):
+        """Whether a rename, judged at its parents' current places, broke the write policy:
+        kinds lists ((parent, name), is_dir) of each entry that moved, by its source."""
+        source, destination = self.placed(sparent, sname), self.placed(dparent, dname)
+        if source is None or destination is None:
+            return False
+        ends = {(sparent, sname): (source, destination), (dparent, dname): (destination, source)}
+        for key, is_dir in kinds:
+            origin, to = ends[key]
+            # an unstaged directory landing at a guarded place was never listed there
+            if move_denied(origin, to, is_dir) or (is_dir and _prefix_next(_fold_parts(to))):
+                return True
+        return write_denied(source) or write_denied(destination)
+
+    @staticmethod
+    def move_back(sparent, sname, dparent, dname, flags):
+        """Reverses a rename: an exchange is exchanged again, a move moved back (never replacing)."""
+        back = RENAME_EXCHANGE if flags & RENAME_EXCHANGE else RENAME_NOREPLACE
+        if libc.renameat2(dparent, os.fsencode(dname), sparent, os.fsencode(sname),
+                          ctypes.c_uint(back)) < 0:
+            code = ctypes.get_errno()
+            raise OSError(code, os.strerror(code))
+
+    def staged_move(self, sparent, sname, dparent, dname, origin, to):
+        """A directory move into a guarded place (a proper prefix of a multi-component deny). The
+        directory is first renamed to a fresh reserved staging name beside it, which the write
+        policy denies to every sandboxed write, so no process of this or another operation can add
+        the guarded next component while it is listed and checked there; it is then renamed into
+        place with NOREPLACE. A refused or failed step moves it back to its source; when that
+        fails too (its name was taken meanwhile) it goes to a quarantine name, also reserved, and
+        the operation ends with the failure reported."""
+        fault = self.fault == "fail"
+        stage = RESERVED_NAME_PREFIX + os.urandom(8).hex()
+        if libc.renameat2(sparent, os.fsencode(sname), sparent, os.fsencode(stage),
+                          ctypes.c_uint(RENAME_NOREPLACE)) < 0:
+            return None, ctypes.get_errno()
+        entries = self.listing(sparent, stage)
+        if entries is None or move_denied(origin, to, True, entries):
+            code = errno.EACCES
+        elif fault:
+            code = errno.EIO
+        elif libc.renameat2(sparent, os.fsencode(stage), dparent, os.fsencode(dname),
+                            ctypes.c_uint(RENAME_NOREPLACE)) == 0:
+            def placed_denied():
+                now = self.placed(dparent, dname)
+                return now is not None and move_denied(origin, now, True,
+                                                       self.listing(dparent, dname))
+            self.verify(placed_denied,
+                        lambda: self.move_back(sparent, sname, dparent, dname, 0), "A moved directory")
+            return 0, 0
+        else:
+            code = ctypes.get_errno()
+        if not fault and libc.renameat2(sparent, os.fsencode(stage), sparent, os.fsencode(sname),
+                                        ctypes.c_uint(RENAME_NOREPLACE)) == 0:
+            return None, code
+        quarantine = RESERVED_NAME_PREFIX + "quarantine-" + os.urandom(8).hex()
+        moved = libc.renameat2(sparent, os.fsencode(stage), sparent, os.fsencode(quarantine),
+                               ctypes.c_uint(RENAME_NOREPLACE)) == 0
+        try:
+            where = self.rebase(os.readlink("/proc/self/fd/%d" % sparent))
+        except OSError:
+            where = os.path.dirname(origin)
+        self.fail("A directory bound for %s could be moved neither into place nor back; it is in "
+                  "quarantine as %s" % (to, os.path.join(where, quarantine if moved else stage)))
+        return None, code
+
+    @staticmethod
+    def pause(parent):
+        """The test seam's pause between a write's check and its effect, announced by a marker
+        the broker creates in the parent it holds."""
+        os.close(os.open(PAUSE_MARKER, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o644,
+                         dir_fd=parent))
+        time.sleep(PAUSE_S)
+
+    def fail(self, message):
+        """Ends the operation for a failure the broker could not undo: the supervisor kills the
+        whole tree (as for a cancel) and reports the message in its exit event."""
+        if self.fatal is None:
+            self.fatal = message
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    @staticmethod
+    def listing(parent, name):
+        """The names in the directory name below parent, opened without following a link; None
+        when it cannot be listed."""
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                         dir_fd=parent)
+        except OSError:
+            return None
+        try:
+            return os.listdir(fd)
+        except OSError:
+            return None
+        finally:
+            os.close(fd)
+
     def send_fd(self, ident, fd, cloexec):
         data = struct.pack("QIIII", ident, ADDFD_SEND, fd, 0, os.O_CLOEXEC if cloexec else 0)
         buffer = ctypes.create_string_buffer(data, len(data))
@@ -1042,7 +1364,7 @@ class Broker:
             os.set_blocking(fd, True)
             return fd
 
-    def file_op(self, ident, pid, mem, name, args):
+    def file_op(self, ident, pid, mem, name, args, exclusive=False):
         if name in ("open", "openat", "creat"):
             if name == "open":
                 dirfd, address, flags, mode = AT_FDCWD, args[0], args[1], args[2]
@@ -1067,9 +1389,35 @@ class Broker:
                 parent, final, resolved = self.entry(path)
             else:
                 parent, final, resolved = self.followed(path)
+            tmpfile = flags & O_TMPFILE_BIT
+            # truncation waits for the post-effect check (a read-only open truncates itself)
+            truncate = flags & os.O_TRUNC and flags & os.O_ACCMODE != os.O_RDONLY
             try:
-                self.refuse(resolved, final, not flags & O_TMPFILE_BIT)
-                fd = self.open_entry(ident, parent, final, flags, mode & 0o7777 & ~umask)
+                self.refuse(resolved, final, not tmpfile)
+                try:
+                    before = os.stat(final, dir_fd=parent, follow_symlinks=False)
+                except FileNotFoundError:
+                    before = None
+                fd = self.open_entry(ident, parent, final, flags & ~os.O_TRUNC if truncate
+                                     else flags, mode & 0o7777 & ~umask)
+                try:
+                    if tmpfile:
+                        # no name was made: the file vanishes with its descriptor
+                        self.verify(lambda: self.created_denied(parent, final),
+                                    lambda: None, "A temporary file")
+                    else:
+                        info = os.fstat(fd)
+                        made = before is None and flags & os.O_CREAT
+                        self.verify(
+                            lambda: self.created_denied(parent, final, True),
+                            (lambda: self.remove_own(parent, final, (info.st_dev, info.st_ino)))
+                            if made else (lambda: None),
+                            "A created file" if made else "An opened file")
+                    if truncate and stat.S_ISREG(os.fstat(fd).st_mode):
+                        os.ftruncate(fd, 0)
+                except BaseException:
+                    os.close(fd)
+                    raise
             finally:
                 os.close(parent)
             try:
@@ -1087,13 +1435,21 @@ class Broker:
             try:
                 if name.startswith("mkdir"):
                     self.refuse(resolved, final)
+                    if self.pause_mkdir is not None and final == self.pause_mkdir:
+                        self.pause(parent)
                     os.mkdir(final, mode & 0o7777 & ~umask, dir_fd=parent)
+                    made = self.identity(parent, final)
+                    self.verify(lambda: self.created_denied(parent, final),
+                                lambda: self.remove_own(parent, final, made, True), "A directory")
                 else:
                     kind = stat.S_IFMT(mode) or stat.S_IFREG
                     if kind not in (stat.S_IFREG, stat.S_IFIFO, stat.S_IFSOCK):
                         return None, errno.EPERM
                     self.refuse(resolved, final, True)
                     os.mknod(final, kind | (mode & 0o7777 & ~umask), 0, dir_fd=parent)
+                    made = self.identity(parent, final)
+                    self.verify(lambda: self.created_denied(parent, final, True),
+                                lambda: self.remove_own(parent, final, made), "A created node")
             finally:
                 os.close(parent)
             return 0, 0
@@ -1124,7 +1480,15 @@ class Broker:
             parent, final, resolved = self.entry(self.path_arg(pid, ident, mem, dirfd, address))
             try:
                 self.refuse(resolved, final, True)
+                # a link named for a proper prefix of a multi-component deny (.config, .claude)
+                # would redirect the protected entry beneath it; move_denied refuses moving one
+                # there too
+                if _prefix_next(_fold_parts(resolved)):
+                    raise Denied()
                 os.symlink(target, final, dir_fd=parent)
+                made = self.identity(parent, final)
+                self.verify(lambda: self.created_denied(parent, final, True, link=True),
+                            lambda: self.remove_own(parent, final, made), "A symbolic link")
             finally:
                 os.close(parent)
             return 0, 0
@@ -1150,6 +1514,16 @@ class Broker:
                         raise Denied()
                     os.link(sname, dname, src_dir_fd=sparent, dst_dir_fd=dparent,
                             follow_symlinks=False)
+                    made = self.identity(dparent, dname)
+
+                    def linked_denied():
+                        source_now = self.placed(sparent, sname)
+                        target_now = self.placed(dparent, dname)
+                        return self.created_denied(dparent, dname, True) or (
+                            source_now is not None and target_now is not None
+                            and move_denied(source_now, target_now, False))
+                    self.verify(linked_denied, lambda: self.remove_own(dparent, dname, made),
+                                "A hard link")
                 finally:
                     os.close(dparent)
             finally:
@@ -1173,20 +1547,37 @@ class Broker:
                 try:
                     self.refuse(sresolved, sname)
                     self.refuse(dresolved, dname)
-                    moves = [(sparent, sname, sresolved, dresolved)]
+                    moves = [((sparent, sname), sresolved, dresolved)]
                     if flags & RENAME_EXCHANGE:
-                        moves.append((dparent, dname, dresolved, sresolved))
-                    for parent, entry, origin, to in moves:
+                        moves.append(((dparent, dname), dresolved, sresolved))
+                    staged = None
+                    kinds = []
+                    for (parent, entry), origin, to in moves:
                         try:
                             info = os.stat(entry, dir_fd=parent, follow_symlinks=False)
                         except FileNotFoundError:
                             continue
+                        is_dir = stat.S_ISDIR(info.st_mode)
+                        kinds.append(((parent, entry), is_dir))
+                        if is_dir and _prefix_next(_fold_parts(to)):
+                            # a directory bound for a guarded place: checked in staging
+                            if flags & RENAME_EXCHANGE:
+                                raise Denied()
+                            if not exclusive:
+                                raise NeedsExclusive()
+                            staged = (origin, to)
+                            continue
                         # nothing leaves a protected name, nor is a directory moved under one
-                        if move_denied(origin, to, stat.S_ISDIR(info.st_mode)):
+                        if move_denied(origin, to, is_dir):
                             raise Denied()
+                    if staged is not None:
+                        return self.staged_move(sparent, sname, dparent, dname, *staged)
                     if libc.renameat2(sparent, os.fsencode(sname), dparent, os.fsencode(dname),
                                       ctypes.c_uint(flags)) < 0:
                         return None, ctypes.get_errno()
+                    self.verify(lambda: self.moved_denied(sparent, sname, dparent, dname, kinds),
+                                lambda: self.move_back(sparent, sname, dparent, dname, flags),
+                                "A move")
                 finally:
                     os.close(dparent)
             finally:
@@ -1199,6 +1590,13 @@ class Broker:
             try:
                 self.refuse(resolved, final)
                 fd = os.open(final, os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
+                try:
+                    # checked again at the parent's current place before the effect
+                    self.verify(lambda: self.created_denied(parent, final), lambda: None,
+                                "A truncation")
+                except BaseException:
+                    os.close(fd)
+                    raise
             finally:
                 os.close(parent)
             try:
@@ -1318,15 +1716,20 @@ class Broker:
                 buffer, length = self.unix_address(target)
                 if libc.bind(own, buffer, ctypes.c_uint32(length)) < 0:
                     return None, ctypes.get_errno()
+                # the socket file bind created, through the same pinned parent descriptor
+                created = os.lstat(target)
+                with self.lock:
+                    self.unix_bound.add((created.st_dev, created.st_ino))
                 return 0, 0
             finally:
                 os.close(handle)
         _, address, _, _ = self.inet_address(raw, size)
         # Restricted none/allowlist listens on loopback only (product decision); environment
         # lifts only the network filter.
-        if address is None or (self.endpoints is not None
-                               and str(address) not in ("127.0.0.1", "::1")):
+        if address is None or (self.endpoints is not None and str(address) not in LOOPBACK):
             return None, errno.EACCES
+        if self.endpoints is not None and socket_int(own, SO_REUSEPORT):
+            return None, errno.EPERM  # never into a foreign service's reuseport group
         copied = ctypes.create_string_buffer(raw, size)
         if libc.bind(own, copied, ctypes.c_uint32(size)) < 0:
             return None, ctypes.get_errno()
@@ -1347,6 +1750,10 @@ class Broker:
             host = socket_name(own)
             if host not in ("127.0.0.1", "::1"):
                 return None, errno.EACCES
+        if self.endpoints is not None and socket_domain(own) != AF_UNIX \
+                and socket_int(own, SO_REUSEPORT):
+            self.release(inode)
+            return None, errno.EPERM  # never into a foreign service's reuseport group
         result = libc.listen(own, ctypes.c_int(args[1] & 0xFFFFFFFF))
         code = ctypes.get_errno() if result < 0 else 0
         # A listening socket never connects; drop the broker's reference so close semantics
@@ -1365,6 +1772,13 @@ class Broker:
         if socket_domain(own) == AF_UNIX:
             handle, target = self.unix_target(pid, ident, raw, False)
             try:
+                # only a socket this operation bound itself: the descriptor pins the inode, and
+                # the connect goes through it, so a swapped path cannot change what is reached
+                found = os.fstat(handle)
+                with self.lock:
+                    own_socket = (found.st_dev, found.st_ino) in self.unix_bound
+                if not own_socket:
+                    return None, errno.EACCES
                 buffer, length = self.unix_address(target)
                 result = libc.connect(own, buffer, ctypes.c_uint32(length))
                 code = ctypes.get_errno() if result < 0 else 0
@@ -1420,6 +1834,13 @@ class Broker:
     # shared mutable state across its steps (socket ownership is locked): every check is made on
     # the broker's own resolution, and every effect is one syscall on descriptors that handler
     # holds, so concurrent notifications interleave only as the kernel would interleave the calls.
+    # The one multi-step check, a directory move into a guarded prefix (staging, listing, rename),
+    # holds the files lock exclusively (waiting at most EXCLUSIVE_WAIT_S, then EBUSY) while every
+    # other write holds it shared from its check to its effect. With the consumer's device lock
+    # this spans every operation of the device: no write of another operation can be checked
+    # against a parent that such a move relocates before the write's effect (its staging name is
+    # reserved too, so no path-based write reaches it). Each create or rename is then verified at
+    # its parent's current place (verify), which covers moves made outside every sandbox.
     def loop(self, stop):
         poller = select.poll()
         poller.register(self.listener, select.POLLIN)
@@ -1535,6 +1956,39 @@ def endpoints_of(network):
             allowed.add((str(address), port, scope if address.version == 6 else 0))
         return allowed
     raise Refused("INVALID_REQUEST", "Unknown network kind")
+
+
+def device_files_lock(request, roots, system_roots):
+    """The inherited descriptor of the device's files lock ("filesLockFd", exec mode), or None.
+
+    It must be a regular file outside every root this command reads or writes (and every system
+    root): the restricted command could otherwise open it and hold it, stalling the device's
+    writes. The descriptor itself never reaches the command (close_except before exec)."""
+    fd = request.get("filesLockFd")
+    if fd is None:
+        return None
+    if request.get("mode") != "exec" or not isinstance(fd, int) or isinstance(fd, bool) or fd < 3:
+        raise Refused("INVALID_REQUEST", "A files lock descriptor serves exec mode only")
+    try:
+        info = os.fstat(fd)
+        where = os.readlink("/proc/self/fd/%d" % fd)
+    except OSError:
+        raise Refused("INVALID_REQUEST", "The files lock descriptor is not open")
+    if not stat.S_ISREG(info.st_mode) or not where.startswith("/") or where.endswith(" (deleted)"):
+        raise Refused("INVALID_REQUEST", "The files lock is not a regular file")
+    reach = [r["path"] for r in roots["read"] + roots["write"]] + list(system_roots)
+    for entry in roots["read"] + roots["write"]:
+        try:
+            reach.append(os.readlink("/proc/self/fd/%d" % entry["fd"]))
+        except OSError:
+            pass
+    for root in reach:
+        root = os.path.normpath(root)
+        if root == "/" or where == root or where.startswith(root + "/"):
+            raise Refused("SCOPE_DENIED", "The device's files lock is inside the granted root %s"
+                          % root)
+    os.set_inheritable(fd, False)
+    return fd
 
 
 def restrict_child(table, ruleset, network_mediated, brokered, channel):
@@ -1661,6 +2115,7 @@ def run(request, report):
     if status:
         raise Refused("UNAVAILABLE", status)
     roots, seen = verify_roots(native, request)
+    add_write_denies(request.get("writeDenies", []), native)
     network = request.get("network", {"kind": "none"})
     endpoints = endpoints_of(network)
     network_mediated = endpoints is not None
@@ -1676,6 +2131,7 @@ def run(request, report):
     system_roots = list(request.get("systemRoots", DEFAULT_SYSTEM_ROOTS))
     if request.get("nativeFd") is None:
         system_roots.append(os.path.dirname(native_path))
+    files_lock = device_files_lock(request, roots, system_roots)
     ruleset = landlock_ruleset(roots, system_roots, network_mediated or mode == "native",
                                mode == "exec")
     pinned_fds = [r["fd"] for r in roots["read"] + roots["write"]]
@@ -1763,7 +2219,13 @@ def run(request, report):
         if not fds:
             kill_tree()
             raise Refused("UNAVAILABLE", "The restricted child did not hand over its listener")
-        broker = Broker(native, roots, table, endpoints, fds[0])
+        broker = Broker(native, roots, table, endpoints, fds[0],
+                        native.DeviceFilesLock(files_lock) if files_lock is not None else None)
+        fault = request.get("faultInjection")
+        if isinstance(fault, dict) and fault.get("stagedMove") == "fail":
+            broker.fault = "fail"  # a test fixture's seam
+        if isinstance(fault, dict) and isinstance(fault.get("pauseBeforeMkdir"), str):
+            broker.pause_mkdir = fault["pauseBeforeMkdir"]  # a test fixture's seam
         thread = threading.Thread(target=broker.loop, args=(stop_r,), daemon=True)
         thread.start()
     # Reported only once every restriction is installed and the broker holds the listener.
@@ -1803,11 +2265,16 @@ def supervise(pid, request, report, broker, thread, stop_w, cancellation):
     if thread is not None:
         thread.join()
     counts = {}
+    fatal = None
     if broker is not None:
         counts = dict(broker.counts)
+        fatal = broker.fatal
         broker.close()
-    report.write({"event": "exit", "exitCode": exit_code, "timedOut": timed_out,
-                  "cancelled": bool(cancelled), "killed": survivors, "brokered": counts})
+    event = {"event": "exit", "exitCode": exit_code, "timedOut": timed_out,
+             "cancelled": bool(cancelled), "killed": survivors, "brokered": counts}
+    if fatal is not None:
+        event["fatal"] = fatal
+    report.write(event)
     if exit_code is None:
         return 124 if timed_out else 143
     return exit_code if exit_code >= 0 else 128 - exit_code

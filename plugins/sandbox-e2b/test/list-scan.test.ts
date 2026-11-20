@@ -22,17 +22,15 @@ import { finishList, finishScan, LIST_PATH } from "../src/listing.js";
  * `list` / `scan` (project root, core spec 2026-11-14 §4.1, §4.2) on E2B, against the fake E2B
  * (startFakeE2B: commands run on this machine with the sandbox roots mapped to a temp directory):
  * read inside the sandbox through its command execution, the workspace being the whole reachable
- * area in either mode. The case list follows core's device tests (its listing and docker executor
+ * area (the microVM is the sandbox). The case list follows core's device tests (its listing and docker executor
  * tests) and the same cases in the Docker plugin.
  */
 
 const sig = () => AbortSignal.timeout(20_000);
-type Mode = SandboxLimits["mode"];
 const limits = (): SandboxLimits => ({
   cpu: 1,
   memoryMb: 2048,
   diskMb: 5120,
-  mode: "sandbox",
   network: { kind: "allowlist", hosts: [] },
 });
 const silent: Logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
@@ -155,33 +153,31 @@ describe("sandbox-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
     expect(r.exitCode, r.stderr).toBe(0);
     return dir;
   };
-  const list = (path: string, limit = 100, mode: Mode = "auto", signal = sig(), on = h) => {
+  const list = (path: string, limit = 100, signal = sig(), on = h) => {
     if (sbx.list === undefined) throw new Error("sandbox-e2b offers no list");
-    return sbx.list(on, path, { limit, limits: { mode }, signal });
+    return sbx.list(on, path, { limit, signal });
   };
-  const scan = (base: string, mode: Mode = "auto", signal = sig(), on = h) => {
+  const scan = (base: string, signal = sig(), on = h) => {
     if (sbx.scan === undefined) throw new Error("sandbox-e2b offers no scan");
-    return sbx.scan(on, base, { limits: { mode }, signal });
+    return sbx.scan(on, base, { signal });
   };
   const names = async (base: string) => (await scan(base)).map((c) => c.path.slice(base.length));
 
   describe("list", () => {
-    it("sorts entries by code unit and says which are directories, in either mode", async () => {
+    it("sorts entries by code unit and says which are directories", async () => {
       // U+1F600 (surrogates D83D DE00) sorts before U+FF5E by code unit, after it by code point
       const d = await fixture("mkdir B a; : > _x; : > é; : > ～; : > 😀");
-      for (const mode of ["auto", "sandbox"] as const) {
-        expect(await list(d, 10, mode)).toEqual({
-          entries: [
-            { name: "B", isDir: true },
-            { name: "_x", isDir: false },
-            { name: "a", isDir: true },
-            { name: "é", isDir: false },
-            { name: "😀", isDir: false },
-            { name: "～", isDir: false },
-          ],
-          truncated: false,
-        });
-      }
+      expect(await list(d, 10)).toEqual({
+        entries: [
+          { name: "B", isDir: true },
+          { name: "_x", isDir: false },
+          { name: "a", isDir: true },
+          { name: "é", isDir: false },
+          { name: "😀", isDir: false },
+          { name: "～", isDir: false },
+        ],
+        truncated: false,
+      });
     });
 
     it("cuts at the limit and says it was truncated", async () => {
@@ -225,21 +221,19 @@ describe("sandbox-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
       await expect(list(`${d}/closed`)).rejects.toThrow(/cannot be read/);
     });
 
-    it("throws for a path outside the workspace, also through a link, in either mode", async () => {
+    it("throws for a path outside the workspace, also through a link", async () => {
       const d = await fixture("ln -s /etc etc");
-      for (const mode of ["auto", "sandbox"] as const) {
-        // a missing child below a link out throws too: null would tell whether /etc/nope exists
-        for (const path of [
-          "/",
-          "/etc",
-          "/tmp",
-          "/skills",
-          "/workspacex",
-          `${d}/etc`,
-          `${d}/etc/nope`,
-        ]) {
-          await expect(list(path, 10, mode), `${mode} ${path}`).rejects.toThrow(/outside/);
-        }
+      // a missing child below a link out throws too: null would tell whether /etc/nope exists
+      for (const path of [
+        "/",
+        "/etc",
+        "/tmp",
+        "/skills",
+        "/workspacex",
+        `${d}/etc`,
+        `${d}/etc/nope`,
+      ]) {
+        await expect(list(path, 10), path).rejects.toThrow(/outside/);
       }
       await expect(list("/workspace/../etc")).rejects.toThrow(/outside/);
       await expect(list("relative")).rejects.toThrow(/path/);
@@ -255,9 +249,7 @@ describe("sandbox-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
 
     it("runs with the system PATH, never the image's (whose first entry the sandbox user can write)", async () => {
       const plain = createE2BSandbox(cfg, { log: silent }, { envdUrl: fake.url });
-      await plain
-        .list?.(h, "/workspace", { limit: 1, limits: { mode: "auto" }, signal: sig() })
-        .catch(() => undefined); // this machine may keep python3 / timeout elsewhere
+      await plain.list?.(h, "/workspace", { limit: 1, signal: sig() }).catch(() => undefined); // this machine may keep python3 / timeout elsewhere
       const start = fake.calls.filter((c) => c.path === "/process.Process/Start").at(-1);
       const proc = (start?.body as { process?: { envs?: Record<string, string>; args?: string[] } })
         ?.process;
@@ -354,10 +346,8 @@ describe("sandbox-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
       expect(await scan(`${d}/missing`)).toEqual([]);
       await expect(scan(`${d}/f`)).rejects.toThrow(/not a directory/);
       await expect(scan(`${d}/closed`)).rejects.toThrow(/cannot be read/);
-      for (const mode of ["auto", "sandbox"] as const) {
-        for (const base of ["/", "/home", "/tmp", `${d}/etc`]) {
-          await expect(scan(base, mode), `${mode} ${base}`).rejects.toThrow(/outside/);
-        }
+      for (const base of ["/", "/home", "/tmp", `${d}/etc`]) {
+        await expect(scan(base), base).rejects.toThrow(/outside/);
       }
     });
 
@@ -382,14 +372,14 @@ describe("sandbox-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
     it("rejects at once when the signal is already aborted", async () => {
       const ac = new AbortController();
       ac.abort(new Error("stop"));
-      await expect(list("/workspace", 10, "auto", ac.signal)).rejects.toThrow(/stop/);
-      await expect(scan("/workspace", "auto", ac.signal)).rejects.toThrow(/stop/);
+      await expect(list("/workspace", 10, ac.signal)).rejects.toThrow(/stop/);
+      await expect(scan("/workspace", ac.signal)).rejects.toThrow(/stop/);
     });
 
     it("an abort in flight rejects with its reason", async () => {
       const ops = [
-        (s: AbortSignal) => list("/workspace", 10, "auto", s),
-        (s: AbortSignal) => scan("/workspace", "auto", s),
+        (s: AbortSignal) => list("/workspace", 10, s),
+        (s: AbortSignal) => scan("/workspace", s),
       ];
       for (const op of ops) {
         const starts = () => fake.calls.filter((c) => c.path === "/process.Process/Start").length;
@@ -408,7 +398,7 @@ describe("sandbox-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
       const empty = scratch();
       try {
         const bare = createE2BSandbox(cfg, { log: silent }, { envdUrl: fake.url, listPath: empty });
-        const o = { limits: { mode: "auto" as const }, signal: sig() };
+        const o = { signal: sig() };
         await expect(bare.list?.(h, "/workspace", { ...o, limit: 1 })).rejects.toThrow(
           /no python3 or no timeout/,
         );
@@ -421,20 +411,20 @@ describe("sandbox-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
     it("starts a paused sandbox first", async () => {
       const g = await provision();
       await sbx.suspend(g, sig());
-      expect(await list("/workspace", 10, "auto", sig(), g)).toEqual({
+      expect(await list("/workspace", 10, sig(), g)).toEqual({
         entries: [],
         truncated: false,
       });
       await sbx.suspend(g, sig());
-      expect(await scan("/workspace", "auto", sig(), g)).toEqual([]);
+      expect(await scan("/workspace", sig(), g)).toEqual([]);
     });
 
     it("a sandbox that is gone is SandboxGoneError", async () => {
       const g = await provision();
       await fake.expire(g.id);
       for (const op of [
-        () => list("/workspace", 10, "auto", sig(), g),
-        () => scan("/workspace", "auto", sig(), g),
+        () => list("/workspace", 10, sig(), g),
+        () => scan("/workspace", sig(), g),
       ]) {
         expect(isSandboxGoneError(await op().catch((e: unknown) => e))).toBe(true);
       }

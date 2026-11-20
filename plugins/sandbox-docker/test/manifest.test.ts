@@ -23,7 +23,6 @@ const netLimits = (network: SandboxLimits["network"]): SandboxLimits => ({
   cpu: 1,
   memoryMb: 256,
   diskMb: 256,
-  mode: "auto",
   network,
 });
 
@@ -51,9 +50,10 @@ describe("sandbox-docker manifest", () => {
     expect(SANDBOX_EXTENSION_POINT).toBe("sandbox@2");
     expect(plugin.provides).toEqual(["sandbox@2"]);
     expect(plugin.permissions).toEqual({});
-    // the kernel checks this range against the installed SDK version; the operation contract
-    // and its staged runtime bytes (SANDBOX_RUNTIME_SOURCE v2) need rc.28
-    expect(plugin.sdk).toBe("^0.1.0-rc.28");
+    // the kernel checks this range against the installed SDK version; support v2 (the instance
+    // boundary), limits without mode and the staged runtime bytes need the R3 SDK (the release
+    // PR sets the published R3 rc here and in src/index.ts)
+    expect(plugin.sdk).toBe("^0.1.0-rc.39");
   });
 
   it("deployment config: defaults, endpoint schemes", () => {

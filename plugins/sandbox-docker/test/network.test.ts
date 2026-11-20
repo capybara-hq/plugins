@@ -2,14 +2,18 @@ import type { SandboxLimits } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import {
   egressProxyEnv,
+  engineSupported,
+  hostDeniedCidrs,
   type InstancePlan,
+  internalNetworkCreateBody,
+  internalNetworkHardened,
   planInstance,
   sandboxEnv,
   updateDecision,
 } from "../src/provider.js";
 
 /**
- * The sandbox network without Docker: what `create` builds for `limits.mode` / `limits.network`
+ * The sandbox network without Docker: what `create` builds for `limits.network`
  * (proxy mode, host list, environment, shm size), the refusal of the open public network, and when
  * `update` may change only the egress proxy.
  */
@@ -25,12 +29,11 @@ const allow = (hosts: string[] = L): SandboxLimits["network"] => ({
 
 const limits = (
   network: SandboxLimits["network"],
-  o: { memoryMb?: number; mode?: SandboxLimits["mode"] } = {},
+  o: { memoryMb?: number } = {},
 ): SandboxLimits => ({
   cpu: 1,
   memoryMb: o.memoryMb ?? 2048,
   diskMb: 1024,
-  mode: o.mode ?? "auto",
   network,
 });
 
@@ -51,11 +54,6 @@ describe("planInstance", () => {
 
   it("allowlist: the proxy with the host list on any port", () => {
     expect(planInstance(limits(allow()))).toMatchObject({ mode: "allowlist", allowHosts: L });
-    // the same for the sandbox mode: the container profile does not depend on it
-    expect(planInstance(limits(allow(), { mode: "sandbox" }))).toMatchObject({
-      mode: "allowlist",
-      allowHosts: L,
-    });
   });
 
   it("an empty allowlist is the kill switch: no network at all", () => {
@@ -176,6 +174,14 @@ describe("egressProxyEnv", () => {
       'CAPYBARA_EGRESS_TEST_HOSTS={"a.example.com":"10.0.0.1"}',
     );
   });
+
+  it("test resolver answers go through CAPYBARA_EGRESS_TEST_RESOLVE", () => {
+    const env = egressProxyEnv("allowlist", [], undefined, [], {
+      "m.example.com": "169.254.169.254",
+    });
+    expect(env).toContain('CAPYBARA_EGRESS_TEST_RESOLVE={"m.example.com":"169.254.169.254"}');
+    expect(egressProxyEnv("allowlist", []).some((e) => e.includes("TEST_RESOLVE"))).toBe(false);
+  });
 });
 
 describe("updateDecision", () => {
@@ -221,5 +227,59 @@ describe("updateDecision", () => {
         at(allow()),
       ),
     ).toBe("recreate");
+  });
+});
+
+describe("instance network hardening (no Docker)", () => {
+  it("creates the internal network without a host-side IPv4 gateway and without IPv6", () => {
+    const body = internalNetworkCreateBody("cap-device-x", { a: "b" });
+    expect(body).toMatchObject({
+      Name: "cap-device-x-net",
+      Driver: "bridge",
+      Internal: true,
+      EnableIPv6: false,
+      Options: { "com.docker.network.bridge.inhibit_ipv4": "true" },
+      Labels: { a: "b" },
+    });
+    expect(internalNetworkHardened({ "com.docker.network.bridge.inhibit_ipv4": "true" })).toBe(
+      true,
+    );
+    // a network made by an earlier version (gateway on the host bridge) is not hardened
+    expect(internalNetworkHardened({})).toBe(false);
+    expect(internalNetworkHardened(null)).toBe(false);
+  });
+
+  it("denies the Docker host's own interface addresses when Docker is local, never loopback", () => {
+    const interfaces = {
+      lo0: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+      en0: [
+        { address: "203.0.113.7", family: "IPv4", internal: false },
+        { address: "2001:db8::7", family: "IPv6", internal: false },
+        { address: "fe80::1%en0", family: "IPv6", internal: false },
+      ],
+    } as unknown as Parameters<typeof hostDeniedCidrs>[1];
+    for (const endpoint of [
+      "unix:///var/run/docker.sock",
+      "/var/run/docker.sock",
+      "http://127.0.0.1:2375",
+      "tcp://localhost:2375",
+      "http://[::1]:2375",
+    ]) {
+      expect(hostDeniedCidrs(endpoint, interfaces), endpoint).toEqual([
+        "203.0.113.7/32",
+        "2001:db8::7/128",
+        "fe80::1/128",
+      ]);
+    }
+    // a remote Docker host: its addresses are not this machine's (README: deniedCidrs)
+    expect(hostDeniedCidrs("http://docker-proxy:2375", interfaces)).toEqual([]);
+    expect(hostDeniedCidrs("tcp://10.0.0.5:2375", interfaces)).toEqual([]);
+  });
+
+  it("needs Docker Engine 25 or newer (the bridge option that removes the host gateway)", () => {
+    expect(engineSupported("29.9.3")).toBe(true);
+    expect(engineSupported("25.0.0")).toBe(true);
+    expect(engineSupported("24.0.9")).toBe(false);
+    expect(engineSupported("not-a-version")).toBe(false);
   });
 });

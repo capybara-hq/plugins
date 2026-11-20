@@ -19,10 +19,10 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import { type FakeE2BServer, startFakeE2B } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { envdCloseStdin, envdSendInput, envdStart } from "../src/e2b-api.js";
+import { envdCloseStdin, envdSendInput, envdStart, OPEN_PUBLIC_DENIED } from "../src/e2b-api.js";
 import { createE2BSandbox, type E2BSandboxConfig, publishedImage } from "../src/index.js";
 import { OPERATION_AGENT_SHA256, OPERATION_AGENT_SOURCE } from "../src/operation-agent-source.js";
-import { ROOT_AGENT_PRECHECK, rootAgentArgs } from "../src/provider.js";
+import { appliedNetworkOf, ROOT_AGENT_PRECHECK, rootAgentArgs } from "../src/provider.js";
 import {
   OPERATION_AGENT,
   OPS_DIR,
@@ -35,7 +35,8 @@ import {
 /**
  * Permission profiles on E2B (core spec 2026-11-16 permission operation contract), without a VM:
  * the staged runtime bytes, the envd stdin calls the agent requests travel on, and every
- * fail-closed path that must refuse before any E2B call (restricted grants, a stopped instance
+ * fail-closed path that must refuse before any E2B call (the escalated pair and grants narrower
+ * than the instance, which is the sandbox; a stopped instance
  * that status / stop / revoke must never resume, foreign references, preparation roots). The
  * behaviour inside a VM (admission, records, background supervision, the template probe) is
  * proven on a real template by test/live/permission-scopes.live.test.ts.
@@ -47,7 +48,6 @@ const limits: SandboxLimits = {
   cpu: 1,
   memoryMb: 2048,
   diskMb: 5120,
-  mode: "sandbox",
   network: { kind: "allowlist", hosts: [] },
 };
 
@@ -59,10 +59,11 @@ describe("staged runtime", () => {
     expect(OPERATION_AGENT_SHA256).toBe(sha256(file));
   });
 
-  it("stages the SDK runtime bytes unchanged next to the agent, in a directory named by its digest", () => {
+  it("stages the SDK runtime bytes unchanged next to the agent, in a directory named by their digests", () => {
     expect(SANDBOX_RUNTIME_SOURCE.version).toBe(2);
     expect(RUNTIME_BASE).toBe("/opt/capybara-e2b-runtime");
-    expect(RUNTIME_DIR).toBe(`${RUNTIME_BASE}/${OPERATION_AGENT_SHA256.slice(0, 16)}`);
+    // named after every staged file: new SDK bytes stage a fresh directory
+    expect(RUNTIME_DIR).toBe(`${RUNTIME_BASE}/${sha256(runtimeChecksums()).slice(0, 16)}`);
     expect(OPERATION_AGENT).toBe(`${RUNTIME_DIR}/capybara-operation.py`);
     expect(OPS_DIR).toBe("/opt/capybara-e2b-ops");
     const files = runtimeFiles();
@@ -177,8 +178,9 @@ describe("operation factory fails closed (fake E2B)", { timeout: 20_000 }, () =>
     profile: "full-access",
     actor: { accountId: "acc-1", conversationId: "conv-1" },
     tag: randomUUID(),
-    filesystem: { kind: "device" },
-    network: { kind: "environment" },
+    // the kernel's instance scope: the whole filesystem plus the working root
+    filesystem: { kind: "scoped", readRoots: ["/", "/workspace"], writeRoots: ["/", "/workspace"] },
+    network: { kind: "open-public" },
     ...over,
   });
   const restrictedScope = () =>
@@ -208,7 +210,13 @@ describe("operation factory fails closed (fake E2B)", { timeout: 20_000 }, () =>
             res.end(
               JSON.stringify(
                 s
-                  ? { sandboxID: s.id, state: s.state, envdAccessToken: s.envdAccessToken }
+                  ? {
+                      sandboxID: s.id,
+                      state: s.state,
+                      envdAccessToken: s.envdAccessToken,
+                      ...(s.allowInternetAccess === false && { allowInternetAccess: false }),
+                      network: s.network ?? {},
+                    }
                   : { code: 404, message: "not found" },
               ),
             );
@@ -270,34 +278,77 @@ describe("operation factory fails closed (fake E2B)", { timeout: 20_000 }, () =>
     expect(sbx.background).toBeDefined();
   });
 
-  it("refuses restricted grants before any VM call: exec, native and background", async () => {
+  it("refuses the escalated pair and narrower grants before any VM call: exec, native and background", async () => {
     const before = vmCalls(h.id);
-    const e1 = await sbx.operation?.(h, restrictedScope(), sig()).catch((x: unknown) => x);
+    // an instance has no outside
+    const escalated = scope({ filesystem: { kind: "device" }, network: { kind: "environment" } });
+    const e1 = await sbx.operation?.(h, escalated, sig()).catch((x: unknown) => x);
     expect(isSandboxPermissionUnsupportedError(e1)).toBe(true);
+    // a grant narrower than the instance would need restricted filters
+    const e2 = await sbx.operation?.(h, restrictedScope(), sig()).catch((x: unknown) => x);
+    expect(isSandboxPermissionUnsupportedError(e2)).toBe(true);
     const readOnly = scope({
       profile: "request-approval",
       filesystem: { kind: "scoped", readRoots: ["/workspace"], writeRoots: [] },
       network: { kind: "none" },
     });
-    const e2 = await sbx.operation?.(h, readOnly, sig()).catch((x: unknown) => x);
-    expect(isSandboxPermissionUnsupportedError(e2)).toBe(true);
-    // device-wide work with a narrowed network would need restricted filters too
-    const narrowed = scope({ network: { kind: "allowlist", hosts: ["example.com"] } });
-    const e3 = await sbx.operation?.(h, narrowed, sig()).catch((x: unknown) => x);
+    const e3 = await sbx.operation?.(h, readOnly, sig()).catch((x: unknown) => x);
     expect(isSandboxPermissionUnsupportedError(e3)).toBe(true);
-    const e4 = await sbx.background
-      ?.start(h, restrictedScope(), {
-        command: "true",
-        timeoutMs: 1000,
-        maxOutputBytes: 100,
-        signal: sig(),
-        taskId: "t1",
-        outputPath: "/workspace/out.log",
-        retainUntilMs: Date.now() + 60_000,
-      })
-      .catch((x: unknown) => x);
-    expect(isSandboxPermissionUnsupportedError(e4)).toBe(true);
+    for (const refused of [restrictedScope(), escalated]) {
+      const e4 = await sbx.background
+        ?.start(h, refused, {
+          command: "true",
+          timeoutMs: 1000,
+          maxOutputBytes: 100,
+          signal: sig(),
+          taskId: "t1",
+          outputPath: "/workspace/out.log",
+          retainUntilMs: Date.now() + 60_000,
+        })
+        .catch((x: unknown) => x);
+      expect(isSandboxPermissionUnsupportedError(e4)).toBe(true);
+    }
     expect(vmCalls(h.id)).toBe(before);
+  });
+
+  it("builds an operation for the whole instance under every profile and network kind, without a VM call", async () => {
+    const before = vmCalls(h.id);
+    for (const profile of ["request-approval", "approve-for-me", "full-access"] as const) {
+      for (const network of [
+        { kind: "open-public" as const },
+        { kind: "allowlist" as const, hosts: ["example.com"] },
+        { kind: "none" as const },
+      ]) {
+        const op = await sbx.operation?.(h, scope({ profile, network }), sig());
+        expect(typeof op?.exec).toBe("function");
+      }
+    }
+    expect(vmCalls(h.id)).toBe(before);
+  });
+
+  it("takes a writable / as the whole instance: writable roots are also readable", async () => {
+    const filesystem = { kind: "scoped" as const, readRoots: [], writeRoots: ["/"] };
+    const op = await sbx.operation?.(h, scope({ filesystem }), sig());
+    expect(typeof op?.exec).toBe("function");
+  });
+
+  it("refuses an operation narrower than the VM's applied network before any VM call", async () => {
+    const name = `cap-device-${randomUUID()}`;
+    const net: SandboxLimits = { ...limits, network: { kind: "allowlist", hosts: ["pypi.org"] } };
+    const fileSystem = await sbx.createFileSystem({ name, limits: net, signal: sig() });
+    const g = await sbx.create({ name, limits: net, fileSystem, signal: sig() });
+    const before = vmCalls(g.id);
+    for (const network of [
+      { kind: "none" as const },
+      { kind: "allowlist" as const, hosts: ["example.com"] },
+    ]) {
+      const op = await sbx.operation?.(g, scope({ network }), sig());
+      const e = await op
+        ?.exec({ command: "true", timeoutMs: 1000, maxOutputBytes: 10, signal: sig() })
+        .catch((x: unknown) => x);
+      expect(isSandboxScopeDeniedError(e), network.kind).toBe(true);
+    }
+    expect(vmCalls(g.id)).toBe(before);
   });
 
   it("validates the scope before anything else", async () => {
@@ -587,7 +638,13 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
           res.end(
             JSON.stringify(
               sb
-                ? { sandboxID: sb.id, state: sb.state, envdAccessToken: sb.envdAccessToken }
+                ? {
+                    sandboxID: sb.id,
+                    state: sb.state,
+                    envdAccessToken: sb.envdAccessToken,
+                    ...(sb.allowInternetAccess === false && { allowInternetAccess: false }),
+                    network: sb.network ?? {},
+                  }
                 : { code: 404, message: "not found" },
             ),
           );
@@ -680,7 +737,7 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
     await fake?.close();
   });
 
-  const fullOp = () =>
+  const instanceOp = () =>
     sbx.operation?.(
       h,
       {
@@ -693,8 +750,12 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
         profile: "full-access",
         actor: { accountId: "a", conversationId: "c" },
         tag: randomUUID(),
-        filesystem: { kind: "device" },
-        network: { kind: "environment" },
+        filesystem: {
+          kind: "scoped",
+          readRoots: ["/", "/workspace"],
+          writeRoots: ["/", "/workspace"],
+        },
+        network: { kind: "none" },
       },
       sig(),
     );
@@ -719,7 +780,7 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
   };
 
   it("never starts the agent as root without the inline verification", async () => {
-    const op = await fullOp();
+    const op = await instanceOp();
     // on the test machine nothing is root-owned: the consume step refuses or fails, either way
     await op?.stat("/workspace", sig()).catch(() => undefined);
     const rootAgent = fake.calls.filter((c) => {
@@ -736,7 +797,7 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
   for (const deferStart of [false, true]) {
     it(`an aborted agent command is killed in the VM${deferStart ? " (aborted before its pid was known)" : ""}`, async () => {
       await running();
-      const op = await fullOp();
+      const op = await instanceOp();
       const ac = new AbortController();
       const step = holdNext({ deferStart });
       const write = op?.writeFile("/workspace/never.txt", new Uint8Array([1]), ac.signal);
@@ -755,7 +816,7 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
   for (const deferStart of [false, true]) {
     it(`a kill that fails reboots the VM${deferStart ? " (pid reported after the abort)" : ""}`, async () => {
       await running();
-      const op = await fullOp();
+      const op = await instanceOp();
       const ac = new AbortController();
       const step = holdNext({ deferStart, failKill: true });
       const write = op?.writeFile("/workspace/never.txt", new Uint8Array([1]), ac.signal);
@@ -772,7 +833,7 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
 
   it("a start event after the kill grace period reboots the VM", async () => {
     await running();
-    const op = await fullOp();
+    const op = await instanceOp();
     const ac = new AbortController();
     const step = holdNext({ deferStart: true });
     const write = op?.writeFile("/workspace/never.txt", new Uint8Array([1]), ac.signal);
@@ -813,5 +874,25 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
     expect(connects()).toBe(before);
     expect(fake.sandboxes.get(h.id)?.state).toBe("paused");
     held.delete(entry.pid);
+  });
+});
+
+describe("the VM's applied network (GET /sandboxes/{id})", () => {
+  it("maps E2B's recorded network policy, and an outdated open-public deny list to unknown", () => {
+    expect(
+      appliedNetworkOf({ allowInternetAccess: false, network: { allowPublicTraffic: false } }),
+    ).toEqual({ mode: "none", allowHosts: [] });
+    expect(
+      appliedNetworkOf({ network: { allowOut: ["pypi.org"], denyOut: ["0.0.0.0/0"] } }),
+    ).toEqual({ mode: "allowlist", allowHosts: ["pypi.org"] });
+    expect(appliedNetworkOf({ network: { denyOut: [...OPEN_PUBLIC_DENIED] } })).toEqual({
+      mode: "open-public",
+      allowHosts: [],
+    });
+    // an open-public VM made with a shorter deny list allows more than open-public: unknown
+    expect(appliedNetworkOf({ network: { denyOut: ["10.0.0.0/8"] } })).toBeNull();
+    // internet on with nothing denied: unknown
+    expect(appliedNetworkOf({ network: {} })).toBeNull();
+    expect(appliedNetworkOf({})).toBeNull();
   });
 });

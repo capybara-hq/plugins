@@ -106,7 +106,6 @@ const allowlist: SandboxLimits = {
   cpu: 1,
   memoryMb: 2048,
   diskMb: 5120,
-  mode: "sandbox",
   network: { kind: "allowlist", hosts: ["pypi.org"] },
 };
 
@@ -231,7 +230,6 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
     const openName = `cap-device-live-${randomUUID()}`;
     const open: SandboxLimits = {
       ...allowlist,
-      mode: "auto",
       network: { kind: "open-public", hosts: [] },
     };
     try {
@@ -245,10 +243,67 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
         signal: AbortSignal.timeout(120_000),
       });
       expect(pub.stdout).toMatch(/^[23]\d\d$/);
-      for (const ip of ["10.0.0.1", "192.168.0.1", "172.16.0.1", "100.64.0.1"]) {
+      // the SDK's closed IPv4 classes: private, CGNAT, reserved (benchmarking, the fake-IP range),
+      // TEST-NET, the Azure WireServer and multicast
+      for (const ip of [
+        "10.0.0.1",
+        "192.168.0.1",
+        "172.16.0.1",
+        "100.64.0.1",
+        "198.18.0.1",
+        "192.0.0.1",
+        "203.0.113.1",
+        "168.63.129.16",
+      ]) {
         expect(await reaches(oh, ip), ip).toBe(false);
       }
+      // 0.0.0.0/8 is not in denyOut (E2B rejects it): the VM's own stack must refuse it
+      const zero = await sbx.exec(oh, {
+        ...who(),
+        command:
+          "curl -sS -o /dev/null --connect-timeout 3 --max-time 5 http://0.1.2.3/ 2>&1 && echo reached || echo failed",
+        timeoutMs: 30_000,
+        maxOutputBytes: 16 * 1024,
+        signal: AbortSignal.timeout(120_000),
+      });
+      console.info(
+        `[e2b-live] 0.1.2.3 under open-public: ${zero.stdout.trim().replaceAll("\n", " | ")}`,
+      );
+      expect(zero.stdout.trim()).toMatch(/failed$/);
       console.info(`[e2b-live] metadata endpoint under open-public: HTTP ${await mmds(oh)}`);
+      // what MMDS serves at / with a session token: field names only (the token never leaves the
+      // VM's shell and no value is printed)
+      const names = [
+        "import json, re, sys",
+        "raw = open('/tmp/mmds').read()",
+        "try:",
+        "    data = json.loads(raw)",
+        "except ValueError:",
+        "    for line in raw.splitlines():",
+        "        if re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,40}/?', line):",
+        "            print('listing:', line)",
+        "    sys.exit()",
+        "def walk(value, path):",
+        "    if isinstance(value, dict):",
+        "        for key in value:",
+        "            walk(value[key], path + [str(key)])",
+        "    else:",
+        "        print('/'.join(path) or '(scalar)')",
+        "walk(data, [])",
+      ].join("\n");
+      const fields = await sbx.exec(oh, {
+        ...who(),
+        command:
+          "t=$(curl -sS -X PUT -H 'X-metadata-token-ttl-seconds: 60' --max-time 10 http://169.254.169.254/latest/api/token); " +
+          `curl -sS -o /tmp/mmds -w '%{http_code}\\n' -H "X-metadata-token: $t" -H 'Accept: application/json' --max-time 10 http://169.254.169.254/; ` +
+          `printf %s ${Buffer.from(names).toString("base64")} | base64 -d | python3 -; rm -f /tmp/mmds`,
+        timeoutMs: 30_000,
+        maxOutputBytes: 64 * 1024,
+        signal: AbortSignal.timeout(120_000),
+      });
+      console.info(
+        `[e2b-live] MMDS GET / (field names only): ${fields.stdout.trim().replaceAll("\n", ", ")}`,
+      );
     } finally {
       await sbx.destroyFileSystemByName(openName, sig());
     }
@@ -257,7 +312,6 @@ describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
   it("update: allowlist → open-public → allowlist", async () => {
     const open: SandboxLimits = {
       ...allowlist,
-      mode: "auto",
       network: { kind: "open-public", hosts: [] },
     };
     expect(await sbx.update?.(h, open, sig())).toBe("updated");

@@ -15,6 +15,7 @@ import {
   execArgv,
   IN_SANDBOX_GRACE_SECONDS,
 } from "../src/index.js";
+import { hostDeniedCidrs } from "../src/provider.js";
 import {
   buildTestImages,
   cleanupTestResources,
@@ -49,7 +50,6 @@ const limits = (network: SandboxLimits["network"]): SandboxLimits => ({
   cpu: 1,
   memoryMb: 512,
   diskMb: 1024,
-  mode: "auto",
   network,
 });
 
@@ -463,8 +463,8 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
   });
 
   it("file calls reach a clean absolute path outside the roots; malformed paths are refused", async () => {
-    // the roots by mode are the kernel's: auto mode's file tools reach any path (auto mode spec
-    // §4.1), sandbox mode's are checked before the call reaches the provider
+    // the roots are the kernel's: a cloud device's scope is the whole instance (the container is
+    // the sandbox)
     const h = await newSandbox(sbx, {
       name: sbxName(),
       image: images.sandboxImage,
@@ -692,7 +692,6 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
           ]),
         );
         expect(c.Config.Labels).toMatchObject({
-          "dev.capybara.sandbox.mode": "auto",
           "dev.capybara.sandbox.network": "allowlist",
           "dev.capybara.sandbox.allow-hosts": '["allowed.example.com"]',
         });
@@ -735,9 +734,10 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
         expect(c.HostConfig.NetworkMode).toBe(`${name}-net`);
         expect(c.HostConfig.ShmSize).toBe(128 * 1024 * 1024);
         expect(c.Config.Labels).toMatchObject({
-          "dev.capybara.sandbox.mode": "auto",
           "dev.capybara.sandbox.network": "open-public",
         });
+        // the instance network is the whole contract: no device mode is recorded
+        expect(c.Config.Labels).not.toHaveProperty("dev.capybara.sandbox.mode");
         expect(c.Config.Env).toContain(`ALL_PROXY=http://${name}-egress:3128`);
         const pe = await envOf(`${name}-egress`);
         expect(pe).toEqual(expect.arrayContaining(["MODE=open-public", "SOCKS_PORT=1080"]));
@@ -1112,16 +1112,27 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       { labels: { [TEST_LABEL]: RUN } },
     );
     const name = sbxName();
+    // The host's interfaces change while other test files create and remove Docker networks
+    // (veth link-local addresses): bracket the create with two snapshots.
+    const hostBefore = hostDeniedCidrs("http://127.0.0.1:2375");
     const h = await newSandbox(open, {
       name,
       image: images.sandboxImage,
       limits: limits(OPEN),
       signal: sig(),
     });
+    const hostAfter = hostDeniedCidrs("http://127.0.0.1:2375");
     try {
-      expect((await inspect(`${name}-egress`)).Config.Env).toContain(
-        'DENIED_CIDRS=["203.0.113.0/24"]',
+      // the deployment's ranges, then (a local Docker endpoint) this machine's own addresses
+      const deniedEnv = (await inspect(`${name}-egress`)).Config.Env.find((e: string) =>
+        e.startsWith("DENIED_CIDRS="),
       );
+      const denied = JSON.parse(String(deniedEnv).slice("DENIED_CIDRS=".length)) as string[];
+      expect(denied[0]).toBe("203.0.113.0/24");
+      const host = denied.slice(1);
+      // every address present throughout is denied; nothing but this machine's addresses is added
+      expect(host).toEqual(expect.arrayContaining(hostBefore.filter((c) => hostAfter.includes(c))));
+      expect(host.filter((c) => !hostBefore.includes(c) && !hostAfter.includes(c))).toEqual([]);
       await open.suspend(h, sig());
       expect(await locked.resume(h, sig())).toBe("gone");
       expect((await inspect(name)).State.Running).toBe(false);
