@@ -326,6 +326,12 @@ describe("operation factory fails closed (fake E2B)", { timeout: 20_000 }, () =>
     expect(vmCalls(h.id)).toBe(before);
   });
 
+  it("takes a writable / as the whole instance: writable roots are also readable", async () => {
+    const filesystem = { kind: "scoped" as const, readRoots: [], writeRoots: ["/"] };
+    const op = await sbx.operation?.(h, scope({ filesystem }), sig());
+    expect(typeof op?.exec).toBe("function");
+  });
+
   it("refuses an operation narrower than the VM's applied network before any VM call", async () => {
     const name = `cap-device-${randomUUID()}`;
     const net: SandboxLimits = { ...limits, network: { kind: "allowlist", hosts: ["pypi.org"] } };

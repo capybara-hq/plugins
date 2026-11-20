@@ -351,7 +351,7 @@ export function isInstanceScope(scope: SandboxOperationScope): boolean {
   return (
     scope.filesystem.kind === "scoped" &&
     scope.network.kind !== "environment" &&
-    scope.filesystem.readRoots.includes("/") &&
+    // writable roots are also readable (SandboxFileScope): a writable `/` is the whole instance
     scope.filesystem.writeRoots.includes("/")
   );
 }
