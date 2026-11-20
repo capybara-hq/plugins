@@ -72,8 +72,11 @@ import time
 #   a socket with SO_REUSEPORT set never binds or listens: joining a foreign service's reuseport
 #   group would receive that service's connections. Environment lifts that filter.
 # - UNIX sockets in every network kind: stream/seqpacket only (datagram and raw are refused);
-#   pathname connect/bind only to sockets inside the write roots, resolved through the pinned
-#   descriptors; abstract and unnamed addresses are refused. socketpair() is unaffected.
+#   a pathname bind only inside the write roots, resolved through the pinned descriptors, and a
+#   pathname connect only to a socket this operation bound itself (its dev and inode recorded at
+#   the brokered bind), never to one another process made, even inside a write root (a user
+#   D-Bus, a rootless docker.sock, ssh-agent, tmux); abstract and unnamed addresses are refused.
+#   socketpair() is unaffected.
 # - The launcher makes itself non-dumpable before anything else (protect_self), so a same-uid
 #   process outside the operation cannot ptrace it or read its mem, environ or fd afterwards.
 #   The window between the interpreter's exec and that first statement remains: only a tracer
@@ -182,7 +185,7 @@ STD_STREAMS = {"/dev/stdin": 0, "/dev/stdout": 1, "/dev/stderr": 2}
 # move_denied(source, destination, is_dir).
 
 import unicodedata as _unicodedata
-WRITE_DENIES = [[_unicodedata.normalize("NFKC", n).casefold() for n in e] for e in [[".gitconfig"],[".gitmodules"],[".bashrc"],[".bash_profile"],[".zshrc"],[".zprofile"],[".profile"],[".ripgreprc"],[".mcp.json"],[".envrc"],[".npmrc"],[".vscode"],[".idea"],[".claude","commands"],[".claude","agents"],[".husky"],[".huskyrc"],[".huskyrc.json"],[".huskyrc.js"],["husky.config.js"],[".pre-commit-config.yaml"],[".pre-commit-config.yml"],["lefthook.yml"],["lefthook.yaml"],["lefthook.json"],["lefthook.toml"],[".lefthook.yml"],[".lefthook.yaml"],[".lefthook.json"],[".lefthook.toml"],["lefthook-local.yml"],["lefthook-local.yaml"],["lefthook-local.json"],["lefthook-local.toml"],[".lefthook-local.yml"],[".lefthook-local.yaml"],[".lefthook-local.json"],[".lefthook-local.toml"],[".lefthook"],[".lefthook-local"],[".config","lefthook.yml"],[".config","lefthook.yaml"],[".config","lefthook.json"],[".config","lefthook.toml"],[".overcommit.yml"],[".simple-git-hooks.json"],[".simple-git-hooks.js"],[".simple-git-hooks.cjs"],["simple-git-hooks.json"],["simple-git-hooks.js"],["simple-git-hooks.cjs"],[".githooks"],[".zshenv"],[".zlogin"],[".zlogout"],[".bash_login"],[".bash_logout"],[".logout"],[".tcshrc"],[".cshrc"],[".kshrc"],[".config","git","config"],[".config","fish","config.fish"],[".config","fish","conf.d"],["library","launchagents"],["library","launchdaemons"],[".config","systemd"],[".local","share","systemd"],[".config","environment.d"],[".config","autostart"],[".config","autostart-scripts"],[".config","plasma-workspace","env"],[".xprofile"],[".xsessionrc"]]]
+WRITE_DENIES = [[_unicodedata.normalize("NFKC", n).casefold() for n in e] for e in [[".gitconfig"],[".gitmodules"],[".bashrc"],[".bash_profile"],[".zshrc"],[".zprofile"],[".profile"],[".ripgreprc"],[".mcp.json"],[".envrc"],[".npmrc"],[".vscode"],[".idea"],[".claude","commands"],[".claude","agents"],[".husky"],[".huskyrc"],[".huskyrc.json"],[".huskyrc.js"],["husky.config.js"],[".pre-commit-config.yaml"],[".pre-commit-config.yml"],["lefthook.yml"],["lefthook.yaml"],["lefthook.json"],["lefthook.toml"],[".lefthook.yml"],[".lefthook.yaml"],[".lefthook.json"],[".lefthook.toml"],["lefthook-local.yml"],["lefthook-local.yaml"],["lefthook-local.json"],["lefthook-local.toml"],[".lefthook-local.yml"],[".lefthook-local.yaml"],[".lefthook-local.json"],[".lefthook-local.toml"],[".lefthook"],[".lefthook-local"],[".config","lefthook.yml"],[".config","lefthook.yaml"],[".config","lefthook.json"],[".config","lefthook.toml"],[".overcommit.yml"],[".simple-git-hooks.json"],[".simple-git-hooks.js"],[".simple-git-hooks.cjs"],["simple-git-hooks.json"],["simple-git-hooks.js"],["simple-git-hooks.cjs"],[".githooks"],[".zshenv"],[".zlogin"],[".zlogout"],[".bash_login"],[".bash_logout"],[".logout"],[".tcshrc"],[".cshrc"],[".kshrc"],[".config","git","config"],[".config","fish","config.fish"],[".config","fish","conf.d"],["library","launchagents"],["library","launchdaemons"],[".config","systemd"],[".local","share","systemd"],[".config","environment.d"],[".config","autostart"],[".config","autostart-scripts"],[".config","plasma-workspace","env"],[".xprofile"],[".xsessionrc"],[".local","bin"],[".cargo","bin"]]]
 SYSTEM_WRITE_DENIES = [[_unicodedata.normalize("NFKC", n).casefold() for n in p.split("/") if n] for p in ["/var/spool/cron","/var/spool/at","/private/var/at/tabs","/private/var/at/jobs","/var/at"]]
 PREFIX_GUARDED = [(e, False) for e in WRITE_DENIES if len(e) > 1] + [(e, True) for e in SYSTEM_WRITE_DENIES]
 GIT_ALLOWED_DIRECTORIES = set(["objects","refs","logs","rebase-merge","rebase-apply","sequencer"])
@@ -316,10 +319,6 @@ LOOPBACK = ("127.0.0.1", "::1")
 # How long a guarded directory move waits for the device's other writes (a FIFO open waiting
 # for its peer holds them) before it fails with EBUSY.
 EXCLUSIVE_WAIT_S = 5
-# How long a write waits for a guarded move of the device (which holds the device's files lock
-# exclusively for a few renames) before it fails with EBUSY: only a lock held from outside every
-# sandbox (Full work of the owner) can take that long.
-SHARED_WAIT_S = 30
 # The faultInjection seam's pause before a named mkdir, and the marker announcing it.
 PAUSE_S = 2
 PAUSE_MARKER = ".capybara-test-paused"
@@ -766,53 +765,6 @@ class SharedLock:
                 self.condition.notify_all()
 
 
-class DeviceFilesLock:
-    """The device's files lock, shared by every operation of the device: an flock on a file outside
-    every sandbox, inherited as a descriptor ("filesLockFd") that the restricted command never
-    holds. Every acquisition reopens it through /proc/self/fd (this process is non-dumpable, so no
-    other process can), because flock belongs to an open file description: each holder needs its
-    own. Shared and exclusive acquisitions both poll without blocking up to their bound, so a
-    waiting exclusive holder never holds back new shared ones (as in SharedLock)."""
-
-    def __init__(self, fd):
-        self.fd = fd
-
-    def acquire(self, mode, timeout, message):
-        fd = os.open("/proc/self/fd/%d" % self.fd, os.O_RDONLY | os.O_CLOEXEC)
-        deadline = time.monotonic() + timeout
-        delay = 0.0005
-        while True:
-            try:
-                fcntl.flock(fd, mode | fcntl.LOCK_NB)
-                return fd
-            except OSError as error:
-                if error.errno not in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EINTR):
-                    os.close(fd)
-                    raise
-            if time.monotonic() >= deadline:
-                os.close(fd)
-                raise OSError(errno.EBUSY, message)
-            time.sleep(delay)
-            delay = min(delay * 2, 0.005)
-
-    @contextlib.contextmanager
-    def shared(self):
-        fd = self.acquire(fcntl.LOCK_SH, SHARED_WAIT_S, "A guarded move of the device did not end")
-        try:
-            yield
-        finally:
-            os.close(fd)  # closing the last descriptor of the description releases the lock
-
-    @contextlib.contextmanager
-    def exclusive(self, timeout):
-        """Raises EBUSY when the shared holders do not leave within timeout seconds."""
-        fd = self.acquire(fcntl.LOCK_EX, timeout, "The device's other writes did not finish")
-        try:
-            yield
-        finally:
-            os.close(fd)
-
-
 class NeedsExclusive(Exception):
     """A directory move into a guarded prefix: redone holding the files lock exclusively."""
 
@@ -825,6 +777,11 @@ class Broker:
         self.endpoints = endpoints
         self.listener = listener
         self.sockets = {}
+        # (st_dev, st_ino) of every pathname UNIX socket this operation bound through the broker:
+        # the only sockets a pathname connect may reach. A socket another process made, even one
+        # inside a write root (a user D-Bus, a rootless docker.sock, ssh-agent, tmux), stays
+        # unreachable, as no sandboxed client connects to a foreign loopback listener either.
+        self.unix_bound = set()
         self.lock = threading.Lock()
         # Every mutating file operation holds this shared; a directory move into a guarded prefix
         # holds it exclusively (staging, listing and the final rename). With the consumer's
@@ -1759,6 +1716,10 @@ class Broker:
                 buffer, length = self.unix_address(target)
                 if libc.bind(own, buffer, ctypes.c_uint32(length)) < 0:
                     return None, ctypes.get_errno()
+                # the socket file bind created, through the same pinned parent descriptor
+                created = os.lstat(target)
+                with self.lock:
+                    self.unix_bound.add((created.st_dev, created.st_ino))
                 return 0, 0
             finally:
                 os.close(handle)
@@ -1811,6 +1772,13 @@ class Broker:
         if socket_domain(own) == AF_UNIX:
             handle, target = self.unix_target(pid, ident, raw, False)
             try:
+                # only a socket this operation bound itself: the descriptor pins the inode, and
+                # the connect goes through it, so a swapped path cannot change what is reached
+                found = os.fstat(handle)
+                with self.lock:
+                    own_socket = (found.st_dev, found.st_ino) in self.unix_bound
+                if not own_socket:
+                    return None, errno.EACCES
                 buffer, length = self.unix_address(target)
                 result = libc.connect(own, buffer, ctypes.c_uint32(length))
                 code = ctypes.get_errno() if result < 0 else 0
@@ -2252,7 +2220,7 @@ def run(request, report):
             kill_tree()
             raise Refused("UNAVAILABLE", "The restricted child did not hand over its listener")
         broker = Broker(native, roots, table, endpoints, fds[0],
-                        DeviceFilesLock(files_lock) if files_lock is not None else None)
+                        native.DeviceFilesLock(files_lock) if files_lock is not None else None)
         fault = request.get("faultInjection")
         if isinstance(fault, dict) and fault.get("stagedMove") == "fail":
             broker.fault = "fail"  # a test fixture's seam
