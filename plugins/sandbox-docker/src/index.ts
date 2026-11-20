@@ -134,7 +134,7 @@ const plugin = defineExtension({
   // Support v2 (the instance boundary), limits without `mode`, list / scan without limits and the
   // staged runtime bytes are the R3 SDK's (approval-only profiles). The release PR sets the
   // published R3 rc here and in package.json.
-  sdk: "^0.1.0-rc.36",
+  sdk: "^0.1.0-rc.39",
   provides: [SANDBOX_EXTENSION_POINT],
   // 只用部署配置与 Docker endpoint，不用任何需要声明的平台能力
   permissions: {},

@@ -10,7 +10,8 @@ the escalated pair are refused before any effect. Limits carry no `mode`, `list`
 and the image stages the R3 SDK runtime bytes. The egress proxy refuses exactly the SDK's closed address
 classes (`OPEN_PUBLIC_DENIED_CIDRS`; NAT64 is now closed whatever it embeds) and re-resolves a fake-IP
 answer (198.18.0.0/15) through DNS-over-HTTPS per `SANDBOX_FAKE_IP_DNS`, never dialling the fake address.
-Needs the R3 core release (plugin-sdk, kernel) and a rebuilt sandbox and egress image.
+Needs the R3 core release (`@capybara-hq/plugin-sdk@^0.1.0-rc.39`, kernel 0.1.0-rc.55; an earlier
+kernel refuses the manifest) and a rebuilt sandbox and egress image.
 
 Security review: the instance's internal network is created with `com.docker.network.bridge.inhibit_ipv4`
 and no IPv6, so the sandbox cannot reach the Docker host's services through a bridge gateway (Docker Engine

@@ -9,7 +9,8 @@ profile; a narrower filesystem grant and the escalated pair are refused before a
 `mode` (the "limits carry no mode" error is gone), `list` / `scan` take no limits, `open-public` denies
 every closed IPv4 class of the SDK table (metadata, multicast, reserved and the fake-IP range too; the MMDS
 residual stays), and the runtime directory is named after every staged file, so new SDK bytes stage a
-fresh one. Needs the R3 core release.
+fresh one. Needs the R3 core release (`@capybara-hq/plugin-sdk@^0.1.0-rc.39`, kernel 0.1.0-rc.55;
+an earlier kernel refuses the manifest).
 
 Security review: an operation whose network is narrower than the VM's applied policy (read from
 `GET /sandboxes/{id}`) is refused instead of silently widened; an open-public VM made with an earlier,
