@@ -174,6 +174,14 @@ describe("egressProxyEnv", () => {
       'CAPYBARA_EGRESS_TEST_HOSTS={"a.example.com":"10.0.0.1"}',
     );
   });
+
+  it("test resolver answers go through CAPYBARA_EGRESS_TEST_RESOLVE", () => {
+    const env = egressProxyEnv("allowlist", [], undefined, [], {
+      "m.example.com": "169.254.169.254",
+    });
+    expect(env).toContain('CAPYBARA_EGRESS_TEST_RESOLVE={"m.example.com":"169.254.169.254"}');
+    expect(egressProxyEnv("allowlist", []).some((e) => e.includes("TEST_RESOLVE"))).toBe(false);
+  });
 });
 
 describe("updateDecision", () => {

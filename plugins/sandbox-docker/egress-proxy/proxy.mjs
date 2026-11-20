@@ -25,8 +25,10 @@
 //
 // Test only: CAPYBARA_EGRESS_TEST_HOSTS (JSON object name -> IP) pins a name to an IP and exempts
 // it from the private address check (in allowlist it must still be on the list; in open-public a
-// pinned name is allowed). The plugin's deployment config cannot set it; only tests that call
-// createDockerSandbox directly can.
+// pinned name is allowed). CAPYBARA_EGRESS_TEST_RESOLVE (JSON object name -> IP) answers a name
+// as a resolver would, with no exemption: the answer is judged like any resolved address (a name
+// resolving into a closed class). The plugin's deployment config can set neither; only tests that
+// call createDockerSandbox directly can.
 //
 // Dependency-free, Node >= 22. Error text reaches the model (through curl / pip output): English.
 import { lookup as dnsLookup } from "node:dns/promises";
@@ -1150,6 +1152,12 @@ export function main(env = process.env) {
   }
   const allowHosts = mode === "open-public" ? [] : JSON.parse(env.ALLOW_HOSTS ?? "[]");
   const testHosts = JSON.parse(env.CAPYBARA_EGRESS_TEST_HOSTS ?? "{}");
+  const testResolve = JSON.parse(env.CAPYBARA_EGRESS_TEST_RESOLVE ?? "{}");
+  /** @param {string} h */
+  const lookup = (h) =>
+    Object.hasOwn(testResolve, h)
+      ? Promise.resolve([{ address: String(testResolve[h]) }])
+      : defaultLookup(h);
   const deniedCidrs = JSON.parse(env.DENIED_CIDRS ?? "[]");
   if (!Array.isArray(deniedCidrs)) {
     throw new Error("DENIED_CIDRS must be a JSON array of CIDR strings.");
@@ -1157,14 +1165,14 @@ export function main(env = process.env) {
   deniedList(deniedCidrs);
   const port = Number(env.PORT ?? 3128);
   const socksPort = Number(env.SOCKS_PORT ?? 1080);
-  const http = createEgressProxy({ mode, allowHosts, deniedCidrs, testHosts });
+  const http = createEgressProxy({ mode, allowHosts, deniedCidrs, testHosts, lookup });
   const hosts = mode === "open-public" ? "any public host" : allowHosts.join(", ") || "(none)";
   http.listen(port, () => {
     console.log(
       `egress proxy (${mode}) listening on ${port}; allow: ${hosts}; extra denied: ${deniedCidrs.join(", ") || "(none)"}`,
     );
   });
-  const socks = createSocksProxy({ mode, allowHosts, deniedCidrs, testHosts });
+  const socks = createSocksProxy({ mode, allowHosts, deniedCidrs, testHosts, lookup });
   socks.listen(socksPort, () => {
     console.log(`egress SOCKS proxy (${mode}) listening on ${socksPort}`);
   });

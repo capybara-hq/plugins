@@ -194,6 +194,14 @@ describe("operation scopes", () => {
     expect(calls).toEqual([]);
   });
 
+  it("takes a writable / as the whole instance: writable roots are also readable", async () => {
+    const { ops: o } = ops();
+    const filesystem = { kind: "scoped" as const, readRoots: [], writeRoots: ["/"] };
+    await expect(
+      o.operation(h, scope({ profile: "approve-for-me", filesystem }), sig()),
+    ).resolves.toBeDefined();
+  });
+
   it.each([
     { kind: "open-public" as const },
     { kind: "allowlist" as const, hosts: ["example.com"] },

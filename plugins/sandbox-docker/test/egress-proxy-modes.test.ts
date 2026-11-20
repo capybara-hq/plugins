@@ -163,6 +163,27 @@ describe("modes", () => {
     expect(() => main({ PORT: "0", DENIED_CIDRS: '"203.0.114.0/24"' })).toThrow(/DENIED_CIDRS/);
   });
 
+  it("judges CAPYBARA_EGRESS_TEST_RESOLVE answers like any resolution (no exemption)", async () => {
+    const started = main({
+      MODE: "allowlist",
+      PORT: "0",
+      SOCKS_PORT: "0",
+      ALLOW_HOSTS: '["metadata.permission.example"]',
+      CAPYBARA_EGRESS_TEST_RESOLVE: '{"metadata.permission.example":"169.254.169.254"}',
+    });
+    try {
+      if (!started.http.listening) await new Promise((r) => started.http.once("listening", r));
+      const port = (started.http.address() as AddressInfo).port;
+      const out = await tunnel(port, "metadata.permission.example:80");
+      expect(out).toMatch(/^HTTP\/1\.1 403/);
+      expect(out).toMatch(/private or reserved address/);
+    } finally {
+      started.socks.close();
+      started.http.closeAllConnections();
+      started.http.close();
+    }
+  });
+
   it("refuses an unknown mode", () => {
     expect(() => main({ MODE: "strict", PORT: "0" })).toThrow(/expected open-public or allowlist/);
     expect(() => main({ MODE: "wide", PORT: "0" })).toThrow(/Unknown MODE/);

@@ -131,6 +131,11 @@ export interface DockerSandboxTestOptions {
    */
   egressTestHosts?: Record<string, string>;
   /**
+   * The egress proxy's resolver answers these host names with the given IPs, with no exemption:
+   * the answer is judged like any resolved address (a name that resolves into a closed class).
+   */
+  egressTestResolve?: Record<string, string>;
+  /**
    * A file the background supervisor of `taskId` waits for after it recorded itself and before its
    * final admission check (a readiness barrier for the start/revoke and start/stop race tests).
    */
@@ -294,12 +299,14 @@ export function egressProxyEnv(
   allowHosts: string[],
   testHosts?: Record<string, string>,
   deniedCidrs: readonly string[] = [],
+  testResolve?: Record<string, string>,
 ): string[] {
   const env = [`MODE=${mode}`, `PORT=${PROXY_PORT}`, `SOCKS_PORT=${SOCKS_PORT}`];
   // open-public has no host list: any public host
   if (mode === "allowlist") env.push(`ALLOW_HOSTS=${JSON.stringify(allowHosts)}`);
   if (deniedCidrs.length > 0) env.push(`DENIED_CIDRS=${JSON.stringify(deniedCidrs)}`);
   if (testHosts) env.push(`CAPYBARA_EGRESS_TEST_HOSTS=${JSON.stringify(testHosts)}`);
+  if (testResolve) env.push(`CAPYBARA_EGRESS_TEST_RESOLVE=${JSON.stringify(testResolve)}`);
   return env;
 }
 
@@ -874,10 +881,13 @@ export function createDockerSandbox(
       n.egress,
       {
         Image: cfg.egressProxyImage,
-        Env: egressProxyEnv(mode, allowHosts, test.egressTestHosts, [
-          ...(cfg.deniedCidrs ?? []),
-          ...hostDeniedCidrs(cfg.endpoint),
-        ]),
+        Env: egressProxyEnv(
+          mode,
+          allowHosts,
+          test.egressTestHosts,
+          [...(cfg.deniedCidrs ?? []), ...hostDeniedCidrs(cfg.endpoint)],
+          test.egressTestResolve,
+        ),
         Labels: {
           ...baseLabels(name, "egress"),
           [LABEL_EGRESS_MODE]: mode,

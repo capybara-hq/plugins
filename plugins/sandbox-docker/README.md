@@ -340,6 +340,9 @@ The second parameter of `createDockerSandbox(config, testOptions)` can be passed
 - `labels`: adds extra labels to all resources (tests clean up by label);
 - `egressTestHosts`: the egress proxy pins these host names to the given IPs and exempts them from the private-address check (in `allowlist` mode they must also be on the list),
   so that a local HTTP service in a test can serve as an allowed target. It is passed in through the proxy container's environment variable `CAPYBARA_EGRESS_TEST_HOSTS`.
+- `egressTestResolve`: the egress proxy's resolver answers these host names with the given IPs, with no exemption (the answer is
+  judged like any resolved address), so a test can allowlist a name that resolves into a closed class. Passed in through
+  `CAPYBARA_EGRESS_TEST_RESOLVE`.
 - `backgroundLaunchBarrier` (a file a background supervisor waits for after it recorded itself and before its final admission
   check) and `afterRevokeKill` (runs inside `revokeOperation` between the kill and the final tombstone): readiness hooks for the
   start/revoke, start/stop and restart race tests.

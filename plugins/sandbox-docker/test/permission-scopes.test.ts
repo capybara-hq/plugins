@@ -94,58 +94,23 @@ const limits = (network: SandboxLimits["network"]): SandboxLimits => ({
 });
 
 /**
- * The granted endpoint is a service outside the device, reached only by its allowlisted name
- * through the operation's forwarder and the instance's real egress proxy (which pins the name to
- * the service's address, exempt from its private-address check). The ungranted endpoints listen
- * on the device's loopback.
+ * The endpoints are services outside the device, on the instance's outer network: the granted one
+ * is reached only by its allowlisted name through the operation's forwarder and the instance's real
+ * egress proxy (which pins the name to the service's address, exempt from its private-address
+ * check); the ungranted one is on no list, so neither its name nor its address is reachable (the
+ * container is the sandbox: its own loopback is inside it, so no endpoint may listen there).
  */
 const GRANTED_NAME = "granted.permission.example";
 const GRANTED_PORT = 18080;
-const ENDPOINTS = { u4: ["127.0.0.1", 18081], u6: ["::1", 18082] };
-const UNGRANTED_NAMES = {
-  u4: "ungranted4.permission.example",
-  u6: "ungranted6.permission.example",
-};
-const RECEIPTS = "/tmp/capybara-receipts";
+const UNGRANTED_NAME = "ungranted.permission.example";
+const UNGRANTED_PORT = 18081;
+/**
+ * A name the egress proxy's resolver answers with the cloud metadata address, with no exemption
+ * (egressTestResolve): an allowlisted name that resolves into a closed class must still be refused.
+ */
+const METADATA_NAME = "metadata.permission.example";
+const METADATA_ADDRESS = "169.254.169.254";
 
-/** Controlled endpoints, run as root so the device user cannot forge their receipt counts. */
-const LISTEN = `
-import json, os, socket, sys, threading
-directory, endpoints = sys.argv[1], json.loads(sys.argv[2])
-os.makedirs(directory, mode=0o755, exist_ok=True)
-def serve(name, host, port):
-    server = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind((host, port))
-    server.listen(128)
-    count = 0
-    while True:
-        conn, _ = server.accept()
-        count += 1
-        path = os.path.join(directory, name)
-        with open(path + ".tmp", "w") as handle:
-            handle.write(str(count))
-        os.chmod(path + ".tmp", 0o644)
-        os.rename(path + ".tmp", path)
-        try:
-            conn.sendall(b"HTTP/1.0 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nok")
-        except OSError:
-            pass
-        conn.close()
-for name, (host, port) in endpoints.items():
-    threading.Thread(target=serve, args=(name, host, port), daemon=True).start()
-threading.Event().wait()
-`;
-const WAIT_READY = `
-import socket
-for host, port in ((${JSON.stringify(ENDPOINTS.u4[0])}, ${ENDPOINTS.u4[1]}), (${JSON.stringify(ENDPOINTS.u6[0])}, ${ENDPOINTS.u6[1]})):
-    while True:
-        try:
-            socket.create_connection((host, port)).close()
-            break
-        except OSError:
-            pass
-`;
 const SEED = `
 import base64, json, os, sys
 for e in json.load(sys.stdin):
@@ -194,6 +159,7 @@ describe.skipIf(!dockerAvailable)(
     const netName = `capybara-sandbox-perm-${RUN}`;
     let target: StartedTestContainer;
     let grantedService: StartedTestContainer;
+    let ungrantedService: StartedTestContainer;
     const made: string[] = [];
     /** Test hooks: a file a background supervisor waits for before admission; revoke steps. */
     const barriers = new Map<string, string>();
@@ -336,17 +302,22 @@ describe.skipIf(!dockerAvailable)(
         .withWaitStrategy(Wait.forLogMessage("ready"))
         .start();
       const targetIp = target.getIpAddress(netName);
-      // The conformance suite's granted endpoint: counts every accepted connection itself.
-      grantedService = await new GenericContainer(images.egressImage)
-        .withNetworkMode(netName)
-        .withUser("root")
-        .withCommand([
-          "node",
-          "-e",
-          `let n = 0; const fs = require("fs"); require("net").createServer((c) => { n++; fs.writeFileSync("/tmp/count.tmp", String(n)); fs.renameSync("/tmp/count.tmp", "/tmp/count"); c.end("HTTP/1.0 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nok"); }).listen(${GRANTED_PORT}, () => console.log("ready"))`,
-        ])
-        .withWaitStrategy(Wait.forLogMessage("ready"))
-        .start();
+      // The conformance suite's endpoints: each counts every accepted connection itself.
+      const countingService = (port: number) =>
+        new GenericContainer(images.egressImage)
+          .withNetworkMode(netName)
+          .withUser("root")
+          .withCommand([
+            "node",
+            "-e",
+            `let n = 0; const fs = require("fs"); require("net").createServer((c) => { n++; fs.writeFileSync("/tmp/count.tmp", String(n)); fs.renameSync("/tmp/count.tmp", "/tmp/count"); c.end("HTTP/1.0 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nok"); }).listen(${port}, () => console.log("ready"))`,
+          ])
+          .withWaitStrategy(Wait.forLogMessage("ready"))
+          .start();
+      [grantedService, ungrantedService] = await Promise.all([
+        countingService(GRANTED_PORT),
+        countingService(UNGRANTED_PORT),
+      ]);
       sbx = createDockerSandbox(
         {
           endpoint: proxy.endpoint,
@@ -362,6 +333,7 @@ describe.skipIf(!dockerAvailable)(
             "denied.example.com": targetIp,
             [GRANTED_NAME]: grantedService.getIpAddress(netName),
           },
+          egressTestResolve: { [METADATA_NAME]: METADATA_ADDRESS },
           backgroundLaunchBarrier: (taskId) => barriers.get(taskId),
           afterRevokeKill: (operationId) => afterKill.get(operationId)?.() ?? Promise.resolve(),
           backgroundSpoolCapBytes: (taskId) => spoolCaps.get(taskId),
@@ -404,6 +376,7 @@ describe.skipIf(!dockerAvailable)(
     afterAll(async () => {
       await target?.stop();
       await grantedService?.stop();
+      await ungrantedService?.stop();
       await cleanupTestResources(RUN);
       await proxy?.stop();
     }, 300_000);
@@ -485,20 +458,6 @@ describe.skipIf(!dockerAvailable)(
       // A device whose instance network allowlists the granted name: its allowlist operations
       // reach it only through their own forwarder and the instance's egress proxy.
       const net = await newDevice(sbx, { kind: "allowlist", hosts: [GRANTED_NAME] });
-      spawnSync("docker", [
-        "exec",
-        "-d",
-        "-u",
-        "0",
-        net.id,
-        "python3",
-        "-I",
-        "-c",
-        LISTEN,
-        RECEIPTS,
-        JSON.stringify(ENDPOINTS),
-      ]);
-      await dexec(net.id, "1000", ["python3", "-I", "-c", WAIT_READY]);
       const id = randomUUID().slice(0, 8);
       const root = `/workspace/project-${id}`;
       const sibling = `/workspace/sibling-${id}`;
@@ -508,12 +467,10 @@ describe.skipIf(!dockerAvailable)(
         "-c",
         `mkdir ${root} ${sibling} && printf rc > ${protectedPath}`,
       ]);
-      const loopback = (name: keyof typeof ENDPOINTS) => ({
-        name: UNGRANTED_NAMES[name],
-        address: ENDPOINTS[name][0] as string,
-        port: ENDPOINTS[name][1] as number,
-        receipts: async () => Number(text(await inspectRead(net, `${RECEIPTS}/${name}`)) ?? 0),
-      });
+      const counted = (service: StartedTestContainer) => async () => {
+        const r = await service.exec(["cat", "/tmp/count"]);
+        return r.exitCode === 0 ? Number(r.output.trim()) : 0;
+      };
       const fixture: SandboxPermissionFixture = {
         root,
         sibling,
@@ -523,16 +480,30 @@ describe.skipIf(!dockerAvailable)(
             name: GRANTED_NAME,
             address: grantedService.getIpAddress(netName),
             port: GRANTED_PORT,
-            receipts: async () => {
-              const r = await grantedService.exec(["cat", "/tmp/count"]);
-              return r.exitCode === 0 ? Number(r.output.trim()) : 0;
-            },
+            receipts: counted(grantedService),
           },
-          ungranted: [loopback("u4"), loopback("u6")],
+          ungranted: [
+            {
+              name: UNGRANTED_NAME,
+              address: ungrantedService.getIpAddress(netName),
+              port: UNGRANTED_PORT,
+              receipts: counted(ungrantedService),
+            },
+          ],
           // The provider's production path: allowlisted names only through the operation's
           // forwarder and the real egress proxy; no direct endpoint mapping exists.
           access: "proxy",
+          // A name served at the cloud metadata address: the harness asks for it by name with it
+          // on the operation's hosts. The instance list holds the granted name only (the harness
+          // also proves a scope naming more hosts widens nothing, and a scope narrower than the
+          // instance list is refused), so the proxy refuses it by its list; the closed-class
+          // refusal of an allowlisted metadata name is proved right after, on a device whose own
+          // list names it.
+          closedGranted: [
+            { label: "metadata", host: METADATA_NAME, port: 80, address: METADATA_ADDRESS },
+          ],
         },
+        instanceNetwork: "allowlist",
         support: () => sbx.permissionSupport(net, sig()),
         operation: (grant) => sbx.operation(net, scopeFor(grant), sig()),
         async seed(entries: readonly NativeFixtureEntry[]) {
@@ -566,6 +537,16 @@ describe.skipIf(!dockerAvailable)(
         dispose: async () => undefined,
       };
       await runSandboxPermissionConformance(fixture);
+
+      // An allowlisted name that resolves to the metadata address is refused by its class.
+      const meta = await newDevice(sbx, { kind: "allowlist", hosts: [METADATA_NAME] });
+      const probe = await run(
+        meta,
+        instance({ kind: "allowlist", hosts: [METADATA_NAME] }),
+        `curl -sS -m 10 -w ' %{http_code}' http://${METADATA_NAME}/`,
+      );
+      expect(probe.stdout).toMatch(/resolves to a private or reserved address/);
+      expect(probe.stdout).toMatch(/ 403$/);
     });
 
     it("runs the whole instance under every profile with the container's own hardening", async () => {
