@@ -88,6 +88,8 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
   const networkUpdates: string[] = [];
   const realFetch = globalThis.fetch;
   const lostAck = new Set<string>();
+  /** Further VMs a test made (destroyed by that test, and again here after a failure). */
+  const extraNames: string[] = [];
 
   /** The kernel's scope on an instance-boundary device: the whole filesystem plus the root. */
   const INSTANCE: SandboxFileScope = {
@@ -120,8 +122,9 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
     writeRoots,
   });
   /** Trusted out-of-band inspection: the provider's ordinary exec, never an operation. */
-  const sh = async (command: string, timeoutMs = 60_000) =>
-    sbx.exec(h, {
+  const sh = async (command: string, timeoutMs = 60_000) => shOn(h, command, timeoutMs);
+  const shOn = async (handle: SandboxHandle, command: string, timeoutMs = 60_000) =>
+    sbx.exec(handle, {
       command,
       timeoutMs,
       maxOutputBytes: 1 << 20,
@@ -192,6 +195,7 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
     globalThis.fetch = realFetch;
     if (!sbx || !api) return;
     await sbx.destroyFileSystemByName(name, sig());
+    for (const extra of extraNames) await sbx.destroyFileSystemByName(extra, sig());
     if (ownedId !== undefined) {
       const gone = await api
         .json("GET", `/sandboxes/${ownedId}`, { signal: sig() })
@@ -249,77 +253,112 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
     }
   });
 
-  it("passes the SDK permission conformance on the actual provider (fail-closed branch)", async () => {
-    await sh("mkdir -p /workspace/perm-root /workspace/perm-sibling");
-    // Counting endpoints inside the VM (loopback): each accepted connection appends a line.
-    const server = (port: number, log: string) =>
-      `nohup python3 -c ${quote(
-        "import socket,sys\ns=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n" +
-          "s.bind(('127.0.0.1', int(sys.argv[1]))); s.listen(16)\n" +
-          "while True:\n c,_=s.accept(); open(sys.argv[2],'a').write('x\\n'); c.close()",
-      )} ${port} ${log} >/dev/null 2>&1 &`;
-    // readiness: both ports listening (/proc/net/tcp, state 0A), without connecting to them
-    await sh(
-      `${server(18080, "/tmp/perm-granted.log")} ${server(18081, "/tmp/perm-ungranted.log")} ` +
-        "until grep -q ':46A0 00000000:0000 0A' /proc/net/tcp && grep -q ':46A1 00000000:0000 0A' /proc/net/tcp; do :; done",
-    );
-    const receipts = (log: string) => async () => {
-      const r = await sh(`cat ${log} 2>/dev/null | wc -l`);
-      return Number(r.stdout.trim());
+  it("passes the SDK permission conformance on the actual provider (instance boundary)", async () => {
+    // A VM of its own whose allowlist names exactly the granted name (the harness proves a scope
+    // naming more hosts widens nothing; one naming fewer is refused as narrower than the VM's).
+    const confName = `cap-device-perm-${randomUUID()}`;
+    extraNames.push(confName);
+    const confLimits: SandboxLimits = {
+      ...limits,
+      network: { kind: "allowlist", hosts: ["granted.permission.example"] },
     };
-    await runSandboxPermissionConformance({
-      root: "/workspace/perm-root",
-      sibling: "/workspace/perm-sibling",
-      protectedPaths: ["/workspace/perm-sibling/protected"],
-      endpoints: {
-        granted: {
-          name: "granted.permission.example",
-          address: "127.0.0.1",
-          port: 18080,
-          receipts: receipts("/tmp/perm-granted.log"),
-        },
-        ungranted: [
-          {
-            name: "ungranted.permission.example",
-            address: "127.0.0.1",
-            port: 18081,
-            receipts: receipts("/tmp/perm-ungranted.log"),
-          },
-        ],
-        // E2B has no egress proxy of its own and this provider no forwarder: "direct" is the only
-        // honest description (moot here: restricted grants are refused before any effect).
-        access: "direct",
-      },
-      support: async () => (await sbx.permissionSupport?.(h, sig())) as SandboxPermissionSupport,
-      operation: async (grant) => {
-        const op = await sbx.operation?.(h, scope(grant.filesystem, grant.network), sig());
-        if (!op) throw new Error("no operation support");
-        return op;
-      },
-      seed: async (entries) => seed(entries),
-      inspect: {
-        readFile: async (path) =>
-          (await sbx.readFile(h, path, { maxBytes: 1 << 20, signal: sig() }))?.data ?? null,
-        mode: async (path) => {
-          const r = await sh(`stat -c %a ${quote(path)} 2>/dev/null || true`);
-          return r.stdout.trim() === "" ? null : Number.parseInt(r.stdout.trim(), 8);
-        },
-        alive: async (pids) => {
-          const out: number[] = [];
-          for (const p of pids) if (await alive(String(p))) out.push(p);
-          return out;
-        },
-      },
-      dispose: async () => {
-        await sh("pkill -f 'perm-granted.log|perm-ungranted.log' || true");
-      },
+    const fileSystem = await sbx.createFileSystem({
+      name: confName,
+      limits: confLimits,
+      signal: sig(),
     });
-    // the refused restricted exec left nothing behind
-    expect((await sh("ls -A /workspace/perm-root")).stdout.trim()).toBe("");
+    console.info(`[e2b-live] conformance VM ${confName} id ${fileSystem.id}`);
+    const ch = await sbx.create({ name: confName, limits: confLimits, fileSystem, signal: sig() });
+    const run = (command: string, timeoutMs?: number) => shOn(ch, command, timeoutMs);
+    try {
+      await run("mkdir -p /workspace/perm-root /workspace/perm-sibling");
+      await run("printf rc > /workspace/perm-sibling/protected");
+      // E2B lets the fixture count no connection outside the VM, and the VM's own loopback is
+      // inside the sandbox: the endpoints are public addresses the allowlist must refuse, with no
+      // receipts of their own (every refusal is proved by the command's own failure).
+      const none = async () => 0;
+      await runSandboxPermissionConformance({
+        root: "/workspace/perm-root",
+        sibling: "/workspace/perm-sibling",
+        protectedPaths: ["/workspace/perm-sibling/protected"],
+        endpoints: {
+          // A documentation address (TEST-NET-3): the name resolves nowhere, so no connection can
+          // reach it; the positive allowlist reach is "the network allowlist" above (pypi.org).
+          granted: {
+            name: "granted.permission.example",
+            address: "203.0.113.10",
+            port: 18080,
+            receipts: none,
+          },
+          // A public name on no allowlist, on a port E2B filters by IP only (by name the request
+          // never gets an answer). Its raw address is the IPv6 one: E2B's egress accepts the TCP
+          // handshake for a refused IPv4 destination and drops the data (README, "A rejected TCP
+          // connection may look connected"), so a raw IPv4 connect cannot tell a refusal apart;
+          // the VM has no IPv6 route, so this connect fails as a refusal must.
+          ungranted: [
+            {
+              name: "one.one.one.one",
+              address: "2606:4700:4700::1111",
+              port: 8080,
+              receipts: none,
+            },
+          ],
+          // E2B has no egress proxy of its own and this provider no forwarder.
+          access: "direct",
+          namedReach: {
+            unavailable:
+              "E2B lets the fixture map no name to an endpoint it can count (no hosts entry the VM's " +
+              "allowlist honours); the positive reach is this file's pypi.org allowlist test",
+          },
+          // A name the VM's resolver does not know, served at the metadata address in the
+          // harness's sense: an allowlisted name never reaches a closed class (E2B's own metadata
+          // service answers regardless of policy, a residual recorded in the README).
+          closedGranted: [
+            {
+              label: "metadata",
+              host: "metadata.permission.example",
+              port: 80,
+              address: "169.254.169.254",
+            },
+          ],
+        },
+        instanceNetwork: "allowlist",
+        support: async () => (await sbx.permissionSupport?.(ch, sig())) as SandboxPermissionSupport,
+        operation: async (grant) => {
+          const op = await sbx.operation?.(ch, scope(grant.filesystem, grant.network), sig());
+          if (!op) throw new Error("no operation support");
+          return op;
+        },
+        seed: async (entries) => seedWith(run, entries),
+        inspect: {
+          readFile: async (path) =>
+            (await sbx.readFile(ch, path, { maxBytes: 1 << 20, signal: sig() }))?.data ?? null,
+          mode: async (path) => {
+            const r = await run(`stat -c %a ${quote(path)} 2>/dev/null || true`);
+            return r.stdout.trim() === "" ? null : Number.parseInt(r.stdout.trim(), 8);
+          },
+          alive: async (pids) => {
+            const out: number[] = [];
+            for (const p of pids) {
+              const r = await run(`kill -0 ${p} 2>/dev/null && echo alive || echo gone`);
+              if (r.stdout.trim() === "alive") out.push(p);
+            }
+            return out;
+          },
+        },
+        dispose: async () => undefined,
+      });
+    } finally {
+      await sbx.destroyFileSystemByName(confName, sig());
+    }
   });
 
   /** Trusted setup in one ordinary exec (the native conformance seeds hundreds of entries). */
-  const seed = async (entries: readonly NativeFixtureEntry[]) => {
+  const seed = async (entries: readonly NativeFixtureEntry[]) => seedWith(sh, entries);
+  const seedWith = async (
+    run: (command: string, timeoutMs?: number) => ReturnType<typeof sh>,
+    entries: readonly NativeFixtureEntry[],
+  ) => {
     const lines = entries.map((e) => {
       const dir = `mkdir -p "$(dirname ${quote(e.path)})"`;
       if (e.kind === "directory") return `mkdir -p ${quote(e.path)}`;
@@ -327,7 +366,7 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
       const b64 = Buffer.from(e.data).toString("base64");
       return `${dir} && printf %s ${quote(b64)} | base64 -d > ${quote(e.path)}`;
     });
-    const r = await sh(["set -e", ...lines].join("\n"), 120_000);
+    const r = await run(["set -e", ...lines].join("\n"), 120_000);
     if (r.exitCode !== 0) throw new Error(`seed failed: ${r.stderr}`);
   };
 
