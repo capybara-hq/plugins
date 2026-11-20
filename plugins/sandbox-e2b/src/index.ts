@@ -96,7 +96,7 @@ export function providerConfig(
  */
 const plugin = defineExtension({
   name: "sandbox-e2b",
-  version: "0.1.0-rc.19",
+  version: "0.1.0-rc.20",
   // Support v2 (the instance boundary), limits without `mode`, list / scan without limits and the
   // closed address classes are the R3 SDK's (approval-only profiles). The release PR sets the
   // published R3 rc here and in package.json.
