@@ -1112,12 +1112,16 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       { labels: { [TEST_LABEL]: RUN } },
     );
     const name = sbxName();
+    // The host's interfaces change while other test files create and remove Docker networks
+    // (veth link-local addresses): bracket the create with two snapshots.
+    const hostBefore = hostDeniedCidrs("http://127.0.0.1:2375");
     const h = await newSandbox(open, {
       name,
       image: images.sandboxImage,
       limits: limits(OPEN),
       signal: sig(),
     });
+    const hostAfter = hostDeniedCidrs("http://127.0.0.1:2375");
     try {
       // the deployment's ranges, then (a local Docker endpoint) this machine's own addresses
       const deniedEnv = (await inspect(`${name}-egress`)).Config.Env.find((e: string) =>
@@ -1125,7 +1129,10 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
       );
       const denied = JSON.parse(String(deniedEnv).slice("DENIED_CIDRS=".length)) as string[];
       expect(denied[0]).toBe("203.0.113.0/24");
-      expect(denied.slice(1)).toEqual(hostDeniedCidrs("http://127.0.0.1:2375"));
+      const host = denied.slice(1);
+      // every address present throughout is denied; nothing but this machine's addresses is added
+      expect(host).toEqual(expect.arrayContaining(hostBefore.filter((c) => hostAfter.includes(c))));
+      expect(host.filter((c) => !hostBefore.includes(c) && !hostAfter.includes(c))).toEqual([]);
       await open.suspend(h, sig());
       expect(await locked.resume(h, sig())).toBe("gone");
       expect((await inspect(name)).State.Running).toBe(false);
