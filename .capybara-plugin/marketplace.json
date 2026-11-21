@@ -848,6 +848,47 @@
           "integrity": "sha512-1oICjXwtiRx/hwWvo8v4L8KIVlj5dmbPc01P4efFgGtY8Rfmn3aDRFVE+4+yVlj2iM+1a+DhHsIR2JVv1rDp8g=="
         }
       }
+    },
+    {
+      "name": "google",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Sign in with Google: OpenID Connect login for Google Workspace accounts, with the hosted domain enforced on the verified ID token",
+        "zh": "使用 Google 登录：Google Workspace 账号通过 OpenID Connect 登录，托管域在校验过的 ID token 上强制检查"
+      },
+      "displayName": {
+        "zh": "Google",
+        "en": "Google"
+      },
+      "icon": "./plugins/google/icon.svg",
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/google#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment.secret:clientSecret",
+          "config.deployment:allowConsumerAccounts",
+          "config.deployment:allowedDomains",
+          "config.deployment:clientId",
+          "config.deployment:endpoints.authorizationUrl",
+          "config.deployment:endpoints.discoveryUrl",
+          "config.deployment:endpoints.issuers",
+          "config.deployment:endpoints.jwksUrl",
+          "config.deployment:endpoints.tokenUrl",
+          "permissions.network:accounts.google.com",
+          "permissions.network:oauth2.googleapis.com",
+          "permissions.network:www.googleapis.com",
+          "provides:identity-source@1",
+          "setup.check:google-client",
+          "setup.check:google-discovery"
+        ],
+        "sensitive": ["config.deployment.secret:clientSecret", "provides:identity-source@1"]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-google",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-bt473KU1uaRhtVEXBs8RGCtuCTkkz8FxB4KOGVbL01xO0R4bmaReZT6vmtsb8UugurwarDDn0m3A6BU7Ipbt7A=="
+        }
+      }
     }
   ]
 }
