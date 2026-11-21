@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "name": "push-fcm",
+  "displayName": {
+    "zh": "FCM 推送",
+    "en": "FCM push"
+  },
+  "version": "0.1.0-rc.0",
+  "publisher": "Capybara",
+  "icon": "./icon.svg",
+  "description": {
+    "en": "Firebase Cloud Messaging push provider (push-provider@1 over the FCM HTTP v1 API with a service account)",
+    "zh": "Firebase Cloud Messaging 推送服务（push-provider@1，FCM HTTP v1 接口，使用服务账号）"
+  },
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/push-fcm#readme",
+  "setupGuides": [
+    {
+      "id": "fcm-service-account",
+      "place": "extension-deployment"
+    }
+  ]
+}

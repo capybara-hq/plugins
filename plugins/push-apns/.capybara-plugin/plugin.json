@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "name": "push-apns",
+  "displayName": {
+    "zh": "APNs 推送",
+    "en": "APNs push"
+  },
+  "version": "0.1.0-rc.0",
+  "publisher": "Capybara",
+  "icon": "./icon.svg",
+  "description": {
+    "en": "Apple Push Notification service (push-provider@1: token-based HTTP/2 delivery to iOS apps)",
+    "zh": "Apple 推送通知服务（push-provider@1：基于令牌的 HTTP/2 推送，送达 iOS 应用）"
+  },
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/push-apns#readme",
+  "setupGuides": [
+    {
+      "id": "apns-key",
+      "place": "extension-deployment"
+    }
+  ]
+}

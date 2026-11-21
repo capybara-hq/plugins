@@ -62,6 +62,15 @@
       "path": "plugins/openai-compatible"
     },
     {
+      "path": "plugins/push-apns"
+    },
+    {
+      "path": "plugins/push-fcm"
+    },
+    {
+      "path": "plugins/push-jpush"
+    },
+    {
       "path": "plugins/sandbox-docker"
     },
     {
