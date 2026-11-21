@@ -230,7 +230,7 @@
     },
     {
       "name": "sandbox-docker",
-      "version": "0.1.0-rc.20",
+      "version": "0.1.0-rc.21",
       "summary": {
         "en": "Conversation sandboxes (sandbox@2) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist per org"
       },
@@ -256,14 +256,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-sandbox-docker",
-          "version": "0.1.0-rc.20",
-          "integrity": "sha512-jWPQZ3TpxMuw8QcP22vkSKp2vSSexL8N66SBm8DcSX7HiveeU1O3nVGiPk/esZ4BKXCkjfYpYCtbBW68y+38Sw=="
+          "version": "0.1.0-rc.21",
+          "integrity": "sha512-os0kmtDtTPUyBEJUNQdxfuYCwet6X7lZrIq6Dyo2hXLCV0ZkPPfONY8ctRh6+qzD52PjHC1YWKAZQesYW5I6ww=="
         }
       }
     },
     {
       "name": "sandbox-e2b",
-      "version": "0.1.0-rc.20",
+      "version": "0.1.0-rc.21",
       "summary": {
         "en": "Devices (sandbox@2) as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, an allowlist or the open internet with local ranges denied (E2B's metadata service stays reachable)",
         "zh": "E2B 沙箱承载设备（sandbox@2，E2B 云或自托管）：暂停沙箱保留文件，从已发布镜像构建模板，网络为出站白名单或开放公网（拒绝私有、回环与链路本地地址；E2B 元数据端点仍可达，见 README）"
@@ -289,8 +289,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-sandbox-e2b",
-          "version": "0.1.0-rc.20",
-          "integrity": "sha512-wdqdFXXWmpqz8Frvp65b8Lt5hjJrwUZU0whTTP3Pv5qqdIwx7NoaM48DzN4zsxMC4+Fp8fRTcoXjr+wyBM7xwQ=="
+          "version": "0.1.0-rc.21",
+          "integrity": "sha512-xRECQWm75fUX/RLoeTmGRdNffPX6M/PZ+Z5ZwXzsXfwK4FB7Q8sX1wctxTNYzyhJXPkxHzSNvDGQEYlSNnxLSg=="
         }
       }
     },
