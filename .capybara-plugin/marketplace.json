@@ -742,6 +742,112 @@
           "integrity": "sha512-4GMeq6gpjloCmTrEidiUHX5v6PN4oTfRDWcx+sLb5NlUoSk5DaJVVtJDc5oNDzow09OSm62DJchDOBJItLdwrA=="
         }
       }
+    },
+    {
+      "name": "push-apns",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Apple Push Notification service (push-provider@1: token-based HTTP/2 delivery to iOS apps)",
+        "zh": "Apple 推送通知服务（push-provider@1：基于令牌的 HTTP/2 推送，送达 iOS 应用）"
+      },
+      "displayName": {
+        "zh": "APNs 推送",
+        "en": "APNs push"
+      },
+      "icon": "./plugins/push-apns/icon.svg",
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/push-apns#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment.secret:key",
+          "config.deployment:bundles",
+          "config.deployment:keyId",
+          "config.deployment:teamId",
+          "permissions.network:api.push.apple.com",
+          "permissions.network:api.sandbox.push.apple.com",
+          "provides:push-provider@1",
+          "setup.check:apns-credentials"
+        ],
+        "sensitive": ["config.deployment.secret:key", "provides:push-provider@1"]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-push-apns",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-6GW9hNjF0fF9uaVXgkMjRtsGKO2eluaXt7mipHqLnwT/g/S3XFARhyVlIUTs1FZ1SPaSVvB+coJmX5G4L9sbyg=="
+        }
+      }
+    },
+    {
+      "name": "push-fcm",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Firebase Cloud Messaging push provider (push-provider@1 over the FCM HTTP v1 API with a service account)",
+        "zh": "Firebase Cloud Messaging 推送服务（push-provider@1，FCM HTTP v1 接口，使用服务账号）"
+      },
+      "displayName": {
+        "zh": "FCM 推送",
+        "en": "FCM push"
+      },
+      "icon": "./plugins/push-fcm/icon.svg",
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/push-fcm#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment.secret:serviceAccount",
+          "config.deployment:applicationIds",
+          "permissions.network:fcm.googleapis.com",
+          "permissions.network:oauth2.googleapis.com",
+          "provides:push-provider@1",
+          "setup.check:fcm-credentials"
+        ],
+        "sensitive": ["config.deployment.secret:serviceAccount", "provides:push-provider@1"]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-push-fcm",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-M2f3EKco41e1JvS05lsWsqrXA9LSqVdEQNMizkvjWxzcx9ccDmAUXSoK0+TLyE/bqjv39VQ1eSmbvqSQUdT7iQ=="
+        }
+      }
+    },
+    {
+      "name": "push-jpush",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "JPush (push-provider@1): push notifications to Android phones in mainland China through JPush and the Huawei, Honor, Xiaomi, OPPO and vivo vendor channels",
+        "zh": "极光推送（push-provider@1）：经极光及华为、荣耀、小米、OPPO、vivo 厂商通道，向中国大陆的 Android 手机发送推送通知"
+      },
+      "displayName": {
+        "zh": "极光推送",
+        "en": "JPush"
+      },
+      "icon": "./plugins/push-jpush/icon.svg",
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/push-jpush#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment.secret:masterSecret",
+          "config.deployment:appKey",
+          "config.deployment:applicationIds",
+          "config.deployment:huawei.category",
+          "config.deployment:oppo.category",
+          "config.deployment:oppo.channelId",
+          "config.deployment:oppo.notifyLevel",
+          "config.deployment:vivo.category",
+          "config.deployment:vivo.templateId",
+          "config.deployment:xiaomi.channelId",
+          "config.deployment:xiaomi.templateId",
+          "permissions.network:api.jpush.cn",
+          "provides:push-provider@1",
+          "setup.check:jpush-credentials"
+        ],
+        "sensitive": ["config.deployment.secret:masterSecret", "provides:push-provider@1"]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-push-jpush",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-1oICjXwtiRx/hwWvo8v4L8KIVlj5dmbPc01P4efFgGtY8Rfmn3aDRFVE+4+yVlj2iM+1a+DhHsIR2JVv1rDp8g=="
+        }
+      }
     }
   ]
 }

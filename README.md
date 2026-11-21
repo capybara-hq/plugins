@@ -17,6 +17,9 @@ npm; the kernel verifies each download against that integrity.
 | [`slack`](plugins/slack) | Slack bot (`channel@1`), Sign in with Slack (`identity-source@1`), directory sync (`directory@1`) |
 | [`lark`](plugins/lark) | Lark bot (`channel@1`), Lark login (`identity-source@1`), directory sync (`directory@1`) |
 | [`telegram`](plugins/telegram) | Telegram bot (`channel@1`; long polling or webhook, inline keyboard cards) |
+| [`push-apns`](plugins/push-apns) | Apple Push Notification service (`push-provider@1`; HTTP/2 token auth) for self-built iOS apps |
+| [`push-fcm`](plugins/push-fcm) | Firebase Cloud Messaging HTTP v1 (`push-provider@1`) for self-built Android apps |
+| [`push-jpush`](plugins/push-jpush) | JPush (`push-provider@1`): Huawei, Honor, Xiaomi, OPPO and vivo phones without Google Play services |
 | [`jina`](plugins/jina) | Web search and page reading through Jina (`web-search@1`, `web-fetch@1`) |
 | [`sandbox-docker`](plugins/sandbox-docker) | Conversation sandboxes as Docker containers (`sandbox@1`) |
 | [`sandbox-e2b`](plugins/sandbox-e2b) | Conversation sandboxes on E2B (`sandbox@1`) |
