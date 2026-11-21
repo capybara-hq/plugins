@@ -103,11 +103,18 @@ export const GoogleDeployment = z.object({
   endpoints: ui(
     z
       .object({
-        authorizationUrl: endpointUrl,
-        tokenUrl: endpointUrl,
-        jwksUrl: endpointUrl,
-        issuers: z.array(z.string().min(1).max(200)).min(1).max(5),
-        discoveryUrl: endpointUrl,
+        authorizationUrl: ui(endpointUrl, {
+          label: { zh: "授权端点", en: "Authorization endpoint" },
+        }),
+        tokenUrl: ui(endpointUrl, { label: { zh: "令牌端点", en: "Token endpoint" } }),
+        jwksUrl: ui(endpointUrl, { label: { zh: "JWKS 地址", en: "JWKS URL" } }),
+        issuers: ui(z.array(z.string().min(1).max(200)).min(1).max(5), {
+          label: { zh: "签发者", en: "Issuers" },
+          widget: "tags",
+        }),
+        discoveryUrl: ui(endpointUrl, {
+          label: { zh: "OpenID 配置地址", en: "OpenID configuration URL" },
+        }),
       })
       .partial()
       .optional(),
