@@ -9,6 +9,14 @@ export { FcmDeployment, parseServiceAccount } from "./config.js";
 export { FCM_ENDPOINTS, type FcmEndpoints } from "./oauth.js";
 export { makeFcmProvider } from "./provider.js";
 
+// The manifest identity at the top level, where `capybara-plugin sync-versions` finds its version.
+// capybara:allow-module-state read-only manifest constants, never mutated
+const MANIFEST = Object.freeze({
+  name: "push-fcm",
+  version: "0.1.0-rc.0",
+  sdk: "^0.1.0-rc.46",
+} as const);
+
 /**
  * Firebase Cloud Messaging push provider (`push-provider@1`, FCM HTTP v1). Deployment config: the
  * service account key file (secret) and the Android application ids it covers. Access tokens come
@@ -17,9 +25,7 @@ export { makeFcmProvider } from "./provider.js";
  */
 export function fcmExtension(endpoints: FcmEndpoints = FCM_ENDPOINTS) {
   return defineExtension({
-    name: "push-fcm",
-    version: "0.1.0-rc.0",
-    sdk: "^0.1.0-rc.46",
+    ...MANIFEST,
     provides: [PUSH_PROVIDER_EXTENSION_POINT],
     permissions: {
       network: ["oauth2.googleapis.com", "fcm.googleapis.com"],
