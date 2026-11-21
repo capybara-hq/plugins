@@ -215,11 +215,18 @@ describe("google-client", () => {
     const r = await run(clientCheck(), config({ allowedDomains: ["gmail.com"] }));
     expect(r.status).toBe("failing");
     expect(r.reason?.en).toContain("allowedDomains");
+    expect(r.reason?.zh).toContain("allowedDomains");
     expect(tokenRequests).toHaveLength(0);
   });
 
   it.each([
     ["a 2xx (never stored)", { status: 200, body: { access_token: MARKER, id_token: MARKER } }],
+    ["invalid_grant on a 302", { status: 302, body: { error: "invalid_grant" } }],
+    ["invalid_grant on a 500", { status: 500, body: { error: "invalid_grant" } }],
+    [
+      "an oversized body",
+      { status: 400, raw: JSON.stringify({ error: "invalid_grant", pad: "x".repeat(70_000) }) },
+    ],
     ["redirect_uri_mismatch", { status: 400, body: { error: "redirect_uri_mismatch" } }],
     ["an odd error code", { status: 400, body: { error: `Bad ${MARKER}` } }],
     ["a 503", { status: 503, body: {} }],

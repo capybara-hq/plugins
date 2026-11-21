@@ -43,7 +43,10 @@ function load(args: SetupCheckArgs): Loaded {
     // parseDeployment's message names field paths and fixed texts only, never a value
     return {
       status: "failing",
-      reason: { en: `${(e as Error).message}.`.slice(0, 300) },
+      reason: {
+        en: `${(e as Error).message}.`.slice(0, 300),
+        zh: `平台配置无效：${(e as Error).message.replace(/^[^:]*: /, "")}。`.slice(0, 300),
+      },
       fix: {
         en: "Correct the listed fields of this page's config and save.",
         zh: "按提示修改本页配置中列出的字段并保存。",
@@ -83,7 +86,7 @@ export function discoveryCheck(): SetupCheckDefinition {
       }
       let doc: Record<string, unknown>;
       try {
-        const parsed: unknown = await res.json();
+        const parsed: unknown = await readJson(res);
         if (typeof parsed !== "object" || parsed === null) throw new Error("not an object");
         doc = parsed as Record<string, unknown>;
       } catch {
@@ -195,13 +198,14 @@ export function clientCheck(): SetupCheckDefinition {
       }
       let code: string | undefined;
       try {
-        const body = (await res.json()) as { error?: unknown } | null;
+        const body = (await readJson(res)) as { error?: unknown } | null;
         code =
           typeof body?.error === "string" && OAUTH_ERROR.test(body.error) ? body.error : undefined;
       } catch {
         code = undefined;
       }
-      if (code === "invalid_grant") {
+      // Google answers a refused code with 400 invalid_grant; the same code on any other status is odd
+      if (code === "invalid_grant" && res.status === 400) {
         return {
           status: "ok",
           reason: {
@@ -224,6 +228,21 @@ export function clientCheck(): SetupCheckDefinition {
       return unexpected(code ?? `HTTP ${res.status}`);
     },
   };
+}
+
+/** The largest response body a check reads (Google's answers are a few KB). */
+const MAX_BODY_BYTES = 64 * 1024;
+
+/** The body as JSON; throws without reading when the declared length is over the cap. */
+async function readJson(res: Response): Promise<unknown> {
+  const length = Number(res.headers.get("content-length") ?? "0");
+  if (length > MAX_BODY_BYTES) {
+    await res.body?.cancel().catch(() => {});
+    throw new Error("response too large");
+  }
+  const text = await res.text();
+  if (text.length > MAX_BODY_BYTES) throw new Error("response too large");
+  return JSON.parse(text);
 }
 
 function unreachable(en: string, zh: string): SetupCheckResult {
