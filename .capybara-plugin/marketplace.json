@@ -886,7 +886,7 @@
         "npm": {
           "package": "@capybara-hq/plugin-google",
           "version": "0.1.0-rc.0",
-          "integrity": "sha512-bt473KU1uaRhtVEXBs8RGCtuCTkkz8FxB4KOGVbL01xO0R4bmaReZT6vmtsb8UugurwarDDn0m3A6BU7Ipbt7A=="
+          "integrity": "sha512-T+RMnzZslrU55CrLBEoy7hdyajTvjadvBC5Jv8MeFJICFz3J8r/FCwlItf09wwbYyalRBt/Pas6ghfm9yo8SqA=="
         }
       }
     }
