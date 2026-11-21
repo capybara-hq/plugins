@@ -12,6 +12,15 @@
 
 **Core issues:** core#551 (fake OIDC, phase 1 tests), core#552 (`authorizationParams`, blocks phase 2), core#553 (refusal reason, phase 1), core#554 (`signInCallbackUrl` at `extension-deployment` and guide limits; not blocking).
 
+## Maintainer answers (2026-11-22)
+
+- core#553 (refusal reason) is in phase 1.
+- The live test uses an Internal Web OAuth client in a Workspace-owned project, kept in
+  `~/.capybara-test.env`; the maintainer creates it. Until then the live test skips.
+- The maintainer stages the npm name `@capybara-hq/plugin-google` (`0.0.0-stage`) before the plugin
+  PR merges, so `release --auto` can publish it.
+- core#552 gets a short design note in core before code.
+
 ## Global Constraints
 
 - Plugin dir `plugins/google`, npm `@capybara-hq/plugin-google`, plugin and extension name `google`, `repository.directory: plugins/google`, first version `0.1.0-rc.0`. Not a bootstrap plugin; no core pin.
