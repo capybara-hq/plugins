@@ -7,7 +7,8 @@
    时，请使用归属于你的 Workspace 组织的项目。
 2. 打开 **Google Auth Platform → 品牌塑造** 和 **目标对象**。只有自己的 Workspace 登录时选择用户类型
    **内部**；需要个人账号或多个 Workspace 域登录时选择 **外部**。两种情况下 `openid email profile`
-   这几个范围都不需要应用验证。
+   这几个范围都不需要应用验证。外部应用创建后处于 **测试** 状态，只有列出的测试用户能登录：请打开
+   **目标对象 → 发布应用**，让状态变为 **正式版**。
 3. 打开 **Google Auth Platform → 客户端 → 创建客户端**，应用类型选 **Web 应用**，并原样添加这个已获授权的
    重定向 URI：
 
@@ -26,7 +27,7 @@
    再把 `google:<你的域>`（例如 `google:example.com`）加入 `auth.trustedIdentitySources`。
 
 > **不要把 `google:consumer` 加入 `auth.trustedIdentitySources`。** 任何人都能用任意邮箱地址注册 Google
-> 账号；信任个人账号会让陌生人接管现有账号。
+> 账号，而 Google 在那里只为 `@gmail.com` 地址担保；信任整个个人账号租户没有好处，只会给陌生人更多可乘之机。
 
 重定向 URI 无法自动检查：如果登录时 Google 显示 `redirect_uri_mismatch`，请把客户端里的重定向 URI 与上面的
-逐字比对。
+逐字比对。如果除少数人外所有人都收到 Google 的 `access_denied`，说明外部应用仍处于测试状态。

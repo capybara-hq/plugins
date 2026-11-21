@@ -103,7 +103,8 @@ export function toExternalIdentity(
   claims: Record<string, unknown>,
   hd: string | undefined,
 ): ExternalIdentity {
-  const sub = nonEmpty(claims.sub);
+  // exact, untrimmed: the signed identifier
+  const sub = typeof claims.sub === "string" && claims.sub !== "" ? claims.sub : undefined;
   if (sub === undefined) throw new Error("Google ID token rejected: no sub");
   const tenantId = hd ?? CONSUMER_TENANT;
   const email = emailOf(claims);

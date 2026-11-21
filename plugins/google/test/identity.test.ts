@@ -346,6 +346,8 @@ describe("callback", () => {
     expect((await rejection(login())).message).toBe("Google token exchange failed: HTTP 401");
     answer = () => ({ status: 302, body: {} });
     expect((await rejection(login())).message).toBe("Google token exchange failed: HTTP 302");
+    answer = () => ({ status: 200, body: { id_token: "x", pad: "p".repeat(70_000) } });
+    expect((await rejection(login())).message).toBe("Google token exchange failed: no id_token");
     answer = () => ({ status: 200, body: { access_token: "ya29.only-access" } });
     expect((await rejection(login())).message).toBe("Google token exchange failed: no id_token");
   });

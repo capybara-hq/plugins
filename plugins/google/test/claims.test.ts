@@ -227,6 +227,10 @@ describe("toExternalIdentity", () => {
     },
   );
 
+  it("keeps sub exactly as signed", () => {
+    expect(toExternalIdentity({ sub: " 77 " }, "example.com").externalId).toBe(" 77 ");
+  });
+
   it("refuses claims without a subject", () => {
     expect(() => toExternalIdentity({ sub: "" }, "example.com")).toThrow(/sub/);
     expect(() => toExternalIdentity({}, "example.com")).toThrow(/sub/);

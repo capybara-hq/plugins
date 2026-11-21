@@ -40,7 +40,8 @@ Invalid config never fails startup: the login page shows the source as unavailab
 Why the tenant is `hd`: trust in `auth.trustedIdentitySources` is per tenant, so the super admin can
 trust `google:example.com` (their own Workspace, whose admins control every address in it) without
 trusting every Google account. **Never list `google:consumer` in `auth.trustedIdentitySources`:**
-anyone can create a Google account on any email address. The email domain is not required to equal
+anyone can create a Google account on any email address, and Google vouches only for `@gmail.com`
+addresses there. The email domain is not required to equal
 `hd` (Workspace users on secondary domains are legitimate).
 
 A person whose organization changes its primary domain arrives under a new `source` and becomes a

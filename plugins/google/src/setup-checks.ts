@@ -9,6 +9,7 @@ import {
   type GoogleEndpoints,
   parseDeployment,
 } from "./config.js";
+import { readJsonCapped } from "./http.js";
 
 /**
  * The platform setup checks of Sign in with Google (place `extension-deployment`, spec §4.6). Both
@@ -86,7 +87,7 @@ export function discoveryCheck(): SetupCheckDefinition {
       }
       let doc: Record<string, unknown>;
       try {
-        const parsed: unknown = await readJson(res);
+        const parsed: unknown = await readJsonCapped(res);
         if (typeof parsed !== "object" || parsed === null) throw new Error("not an object");
         doc = parsed as Record<string, unknown>;
       } catch {
@@ -198,7 +199,7 @@ export function clientCheck(): SetupCheckDefinition {
       }
       let code: string | undefined;
       try {
-        const body = (await readJson(res)) as { error?: unknown } | null;
+        const body = (await readJsonCapped(res)) as { error?: unknown } | null;
         code =
           typeof body?.error === "string" && OAUTH_ERROR.test(body.error) ? body.error : undefined;
       } catch {
@@ -228,21 +229,6 @@ export function clientCheck(): SetupCheckDefinition {
       return unexpected(code ?? `HTTP ${res.status}`);
     },
   };
-}
-
-/** The largest response body a check reads (Google's answers are a few KB). */
-const MAX_BODY_BYTES = 64 * 1024;
-
-/** The body as JSON; throws without reading when the declared length is over the cap. */
-async function readJson(res: Response): Promise<unknown> {
-  const length = Number(res.headers.get("content-length") ?? "0");
-  if (length > MAX_BODY_BYTES) {
-    await res.body?.cancel().catch(() => {});
-    throw new Error("response too large");
-  }
-  const text = await res.text();
-  if (text.length > MAX_BODY_BYTES) throw new Error("response too large");
-  return JSON.parse(text);
 }
 
 function unreachable(en: string, zh: string): SetupCheckResult {

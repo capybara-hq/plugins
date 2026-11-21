@@ -3,6 +3,7 @@ import type { ExternalIdentity, IdentitySource } from "@capybara-hq/plugin-sdk";
 import { createRemoteJWKSet, type JWTPayload, type JWTVerifyGetKey, jwtVerify } from "jose";
 import { hostedDomainGate, toExternalIdentity } from "./claims.js";
 import { loginConfig } from "./config.js";
+import { readJsonCapped } from "./http.js";
 
 /** The scopes login requests: non-sensitive, no app verification needed. */
 export const GOOGLE_OIDC_SCOPES = "openid email profile";
@@ -62,7 +63,7 @@ async function exchangeCode(
   }
   let body: Record<string, unknown> | undefined;
   try {
-    body = (await res.json()) as Record<string, unknown>;
+    body = (await readJsonCapped(res)) as Record<string, unknown>;
   } catch {
     body = undefined;
   }

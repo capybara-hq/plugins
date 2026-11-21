@@ -9,7 +9,8 @@ never on what the browser sends.
 2. Open **Google Auth Platform → Branding** and **Audience**. Choose the user type **Internal** when
    only your own Workspace signs in; choose **External** when consumer accounts or several
    Workspace domains must sign in. The scopes `openid email profile` need no app verification
-   either way.
+   either way. An External app starts in **Testing**, where only listed test users can sign in:
+   open **Audience → Publish app** so its status is **In production**.
 3. Open **Google Auth Platform → Clients → Create client**, application type **Web application**,
    and add this authorized redirect URI exactly:
 
@@ -30,8 +31,9 @@ never on what the browser sends.
    `google:example.com`) to `auth.trustedIdentitySources`.
 
 > **Never add `google:consumer` to `auth.trustedIdentitySources`.** Anyone can create a Google
-> account on any email address; trusting consumer accounts would let a stranger take over an
-> existing account.
+> account on any email address, and Google vouches only for `@gmail.com` addresses there; trusting
+> the whole consumer tenant buys nothing and widens what a stranger could try.
 
 The redirect URI cannot be checked automatically: if Google shows `redirect_uri_mismatch` at login,
-compare the client's redirect URI with the one above character by character.
+compare the client's redirect URI with the one above character by character. If Google answers
+`access_denied` for everyone outside a few people, the External app is still in Testing.
