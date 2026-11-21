@@ -545,6 +545,8 @@ Google's granular consent may grant fewer scopes than requested; the kernel stor
 
 ## 10. Decisions for the reviewer
 
+**Accepted 2026-11-22 by the maintainer:** every recommendation below (D1–D14).
+
 | # | Decision | Recommendation | Alternatives |
 |---|---|---|---|
 | D1 | One plugin or two | **One `google` plugin** (sign-in + templates), like `slack` | `google` (login) + `google-workspace` (templates): smaller installs, two guides sets, "connect Google" split |
