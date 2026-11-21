@@ -1,4 +1,5 @@
 import { type ExternalIdentity, IdentitySourceRefused } from "@capybara-hq/plugin-sdk";
+import { asciiLower, HOSTNAME } from "./domain.js";
 
 /**
  * The plugin's authorization decision and identity mapping, as pure functions over the claims of
@@ -12,8 +13,6 @@ export const CONSUMER_TENANT = "consumer";
 
 /** The longest display name the plugin reports. */
 const DISPLAY_NAME_CHARS = 200;
-/** A hostname, as `hd` must look before it becomes a tenant id. */
-const HOSTNAME = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
 export interface HostedDomainPolicy {
   allowedDomains: string[];
@@ -23,15 +22,22 @@ export interface HostedDomainPolicy {
 const nonEmpty = (v: unknown): string | undefined =>
   typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
 
-/** The `hd` claim lowercased; a missing, empty or non-string `hd` is none. */
+/** The `hd` claim lowercased (ASCII); a missing, empty or non-string `hd` is none. */
 function hostedDomainOf(claims: { hd?: unknown }): string | undefined {
-  return nonEmpty(claims.hd)?.toLowerCase();
+  const hd = nonEmpty(claims.hd);
+  return hd === undefined ? undefined : asciiLower(hd);
+}
+
+/** The email lowercased (ASCII), or none when missing, empty or not plain ASCII. */
+function emailOf(claims: { email?: unknown }): string | undefined {
+  const email = nonEmpty(claims.email);
+  return email === undefined || !/^[\x21-\x7e]+$/.test(email) ? undefined : asciiLower(email);
 }
 
 function refuse(shown: string): never {
-  const capped = shown.length > 253 ? `${shown.slice(0, 253)}…` : shown;
+  // `shown` is "none", "(invalid)" or an hd that passed HOSTNAME (at most 253 characters).
   throw new IdentitySourceRefused(
-    `Google account not allowed: hosted domain ${capped} is not permitted`,
+    `Google account not allowed: hosted domain ${shown} is not permitted`,
   );
 }
 
@@ -81,7 +87,7 @@ export function emailIsAuthoritative(claims: {
   email_verified?: unknown;
   hd?: unknown;
 }): boolean {
-  const email = nonEmpty(claims.email)?.toLowerCase();
+  const email = emailOf(claims);
   if (email === undefined || claims.email_verified !== true) return false;
   return hostedDomainOf(claims) !== undefined || /^[^@]+@gmail\.com$/.test(email);
 }
@@ -100,7 +106,7 @@ export function toExternalIdentity(
   const sub = nonEmpty(claims.sub);
   if (sub === undefined) throw new Error("Google ID token rejected: no sub");
   const tenantId = hd ?? CONSUMER_TENANT;
-  const email = nonEmpty(claims.email)?.toLowerCase();
+  const email = emailOf(claims);
   const fullName = [nonEmpty(claims.given_name), nonEmpty(claims.family_name)]
     .filter((p) => p !== undefined)
     .join(" ");
@@ -112,7 +118,8 @@ export function toExternalIdentity(
     externalId: sub,
     tenantId,
     ...(email !== undefined && { email }),
-    emailVerified: email !== undefined && emailIsAuthoritative(claims),
+    // authority from the gated hd, so the tenant and emailVerified can never disagree
+    emailVerified: email !== undefined && emailIsAuthoritative({ ...claims, hd }),
     displayName: cap(displayName),
     ...(avatarUrl !== undefined && { avatarUrl }),
   };

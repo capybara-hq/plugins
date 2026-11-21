@@ -176,8 +176,8 @@ D4).
 | `allowConsumerAccounts` | boolean | `false` | Only read when `allowedDomains` is empty. `false`: an ID token without `hd` is refused (any Workspace domain may sign in). `true`: consumer accounts (`@gmail.com` and Google accounts on other addresses) may sign in too |
 | `endpoints` | object, optional, advanced | Google's | `authorizationUrl`, `tokenUrl`, `jwksUrl`, `issuers` (array). Only for tests and egress proxies, like Slack's `apiUrl` / `openidUrl`; platform-only, so no org can point it elsewhere |
 
-Validation: `allowedDomains` entries are hostnames (`/^[a-z0-9.-]+\.[a-z]{2,}$/` after lowercasing),
-deduplicated. Invalid config never fails startup (core rule): `authorizeUrl` throws, and the kernel
+Validation: `allowedDomains` entries are hostnames (ASCII labels with inner hyphens, a letter or
+`xn--` TLD, after trimming and ASCII lowercasing; the regex is `src/domain.ts`), deduplicated. Invalid config never fails startup (core rule): `authorizeUrl` throws, and the kernel
 shows `sso.unavailable` on the login page.
 
 `authorizeUrl` is synchronous in the contract, so the endpoints are fixed constants (Google says to
@@ -215,7 +215,8 @@ No `access_type=offline`: login needs no refresh token, and the plugin stores no
    the kernel's nonce (constant-time compare); if `azp` is present it must equal `clientId`.
 4. **Hosted-domain gate, on the verified claims only** (never on the URL `hd` parameter, never on
    the email domain):
-   - `hd` = the `hd` claim lowercased, or undefined.
+   - `hd` = the `hd` claim lowercased, or undefined. A present `hd` that is not a hostname (the
+     same rule as `allowedDomains`) is refused, so it can never become a tenant such as `consumer`.
    - `allowedDomains` non-empty: refuse unless `hd` is defined and listed.
    - `allowedDomains` empty and `allowConsumerAccounts` false: refuse unless `hd` is defined.
    - Otherwise accept.

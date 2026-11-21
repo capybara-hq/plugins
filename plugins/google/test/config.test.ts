@@ -56,6 +56,12 @@ describe("GoogleDeployment", () => {
     },
   );
 
+  it("accepts a punycode TLD", () => {
+    expect(loginConfig({ ...base, allowedDomains: ["Example.XN--P1AI"] }).allowedDomains).toEqual([
+      "example.xn--p1ai",
+    ]);
+  });
+
   it("refuses more than 50 domains", () => {
     const many = Array.from({ length: 51 }, (_, i) => `d${i}.example.com`);
     expect(GoogleDeployment.safeParse({ ...base, allowedDomains: many }).success).toBe(false);

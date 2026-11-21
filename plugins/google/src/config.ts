@@ -1,5 +1,6 @@
 import { secret, ui } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
+import { asciiLower, HOSTNAME } from "./domain.js";
 
 /** Google's OpenID Connect endpoints, as the plugin uses them. */
 export interface GoogleEndpoints {
@@ -26,8 +27,6 @@ export const GOOGLE_ENDPOINTS: Readonly<GoogleEndpoints> = Object.freeze({
   discoveryUrl: "https://accounts.google.com/.well-known/openid-configuration",
 });
 
-/** A hostname: dot-separated labels of letters, digits and inner hyphens, a letter TLD. */
-const HOSTNAME = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 /** Consumer mail domains: their accounts carry no `hd`, so listing them would lock everyone out. */
 const CONSUMER_DOMAINS = new Set(["gmail.com", "googlemail.com"]); // capybara:allow-module-state read-only constant
 
@@ -49,7 +48,7 @@ const endpointUrl = z.string().refine(
 const domain = z
   .string()
   .trim()
-  .toLowerCase()
+  .overwrite(asciiLower)
   .regex(HOSTNAME, "must be a domain name such as example.com")
   .refine((d) => !CONSUMER_DOMAINS.has(d), {
     message:

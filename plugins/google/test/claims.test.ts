@@ -74,9 +74,30 @@ describe("hostedDomainGate", () => {
     }
   });
 
-  it("caps a long hd in the refusal message", () => {
+  it("refuses an overlong hd as invalid", () => {
     const err = refusal(() => hostedDomainGate({ hd: `${"a".repeat(500)}.example` }, listed));
-    expect(err.message.length).toBeLessThan(400);
+    expect(err.message).toContain("(invalid)");
+  });
+
+  it("trims whitespace around hd; whitespace alone is none", () => {
+    expect(hostedDomainGate({ hd: " Example.com\n" }, listed)).toBe("example.com");
+    expect(hostedDomainGate({ hd: "  " }, anyone)).toBeUndefined();
+    expect(
+      isIdentitySourceRefused(refusal(() => hostedDomainGate({ hd: "  " }, anyWorkspace))),
+    ).toBe(true);
+  });
+
+  it("accepts a punycode TLD", () => {
+    const policy = { allowedDomains: ["example.xn--p1ai"], allowConsumerAccounts: false };
+    expect(hostedDomainGate({ hd: "Example.XN--P1AI" }, policy)).toBe("example.xn--p1ai");
+  });
+
+  it("does not fold non-ASCII lookalikes into ASCII", () => {
+    // U+212A KELVIN SIGN lowercases to "k" with toLowerCase
+    const policy = { allowedDomains: ["kexample.com"], allowConsumerAccounts: false };
+    expect(
+      isIdentitySourceRefused(refusal(() => hostedDomainGate({ hd: "\u212Aexample.com" }, policy))),
+    ).toBe(true);
   });
 });
 
@@ -106,6 +127,19 @@ describe("emailIsAuthoritative", () => {
     ["empty hd counts as none", { hd: "", email: "a@customer.com", email_verified: true }, false],
     ["gmail as a subdomain is not gmail", { email: "a@x.gmail.com", email_verified: true }, false],
     ["gmail lookalike", { email: "a@notgmail.com", email_verified: true }, false],
+    ["upper-case hd", { hd: "EXAMPLE.COM", email: "a@example.com", email_verified: true }, true],
+    ["gmail with whitespace", { email: " a@gmail.com\n", email_verified: true }, true],
+    ["gmail with a Cyrillic a", { email: "a@gm\u0430il.com", email_verified: true }, false],
+    [
+      "googlemail.com is not taken as authoritative",
+      { email: "a@googlemail.com", email_verified: true },
+      false,
+    ],
+    [
+      "non-ASCII email with hd",
+      { hd: "example.com", email: "\u212Aim@example.com", email_verified: true },
+      false,
+    ],
   ] as const)("%s -> %s", (_name, claims, expected) => {
     expect(emailIsAuthoritative(claims)).toBe(expected);
   });
@@ -150,6 +184,24 @@ describe("toExternalIdentity", () => {
   it("is never verified without an email", () => {
     const id = toExternalIdentity(
       { sub: "3", hd: "example.com", email_verified: true },
+      "example.com",
+    );
+    expect(id.email).toBeUndefined();
+    expect(id.emailVerified).toBe(false);
+  });
+
+  it("decides email authority from the gated hd, not the raw claim", () => {
+    const id = toExternalIdentity(
+      { sub: "4", hd: "example.com", email: "a@customer.com", email_verified: true },
+      undefined,
+    );
+    expect(id.source).toBe("google:consumer");
+    expect(id.emailVerified).toBe(false);
+  });
+
+  it("drops an email that is not plain ASCII", () => {
+    const id = toExternalIdentity(
+      { sub: "5", hd: "example.com", email: "\u212Aim@example.com", email_verified: true },
       "example.com",
     );
     expect(id.email).toBeUndefined();
