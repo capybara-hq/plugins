@@ -20,6 +20,7 @@ export const BRAND_ICON_EXEMPTIONS: Readonly<Record<string, string>> = {
   bailian: "vendor-specific provider (Alibaba Cloud Model Studio): keeps its own provider mark",
   deepseek: "vendor brand: the DeepSeek whale",
   github: "vendor brand: the GitHub mark",
+  google: "vendor brand: the Google G mark",
   jina: "vendor brand: the Jina logo",
   lark: "vendor brand: the Lark mark",
   openai: "vendor brand: the OpenAI knot",

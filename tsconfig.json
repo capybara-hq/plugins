@@ -41,6 +41,9 @@
       "path": "plugins/file-preview/test"
     },
     {
+      "path": "plugins/google"
+    },
+    {
       "path": "plugins/jina"
     },
     {

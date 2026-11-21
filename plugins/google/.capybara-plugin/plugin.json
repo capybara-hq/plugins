@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "google",
+  "displayName": {
+    "zh": "Google",
+    "en": "Google"
+  },
+  "version": "0.1.0-rc.0",
+  "publisher": "Capybara",
+  "icon": "./icon.svg",
+  "description": {
+    "en": "Sign in with Google: OpenID Connect login for Google Workspace accounts, with the hosted domain enforced on the verified ID token",
+    "zh": "使用 Google 登录：Google Workspace 账号通过 OpenID Connect 登录，托管域在校验过的 ID token 上强制检查"
+  },
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/google#readme"
+}
