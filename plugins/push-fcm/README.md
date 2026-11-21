@@ -24,7 +24,7 @@ Env example: `CAPYBARA_EXTENSION_CONFIG__PUSH_FCM__APPLICATION_IDS='["com.exampl
   `https://oauth2.googleapis.com/token` for the scope
   `https://www.googleapis.com/auth/firebase.messaging`. The access token is cached in `ctx.kv`
   under `fcm-token-<sha256(client_email)>` for `expires_in − 300` seconds, shared by every replica.
-  A 401 from FCM drops the cached token, so the kernel's retry exchanges a new one.
+  A 401 from FCM (other than `THIRD_PARTY_AUTH_ERROR`) drops the cached token, so the kernel's retry exchanges a new one.
 - **Request**: `POST https://fcm.googleapis.com/v1/projects/<project_id>/messages:send`, one per
   registration (in parallel, one token exchange per call):
 
@@ -55,11 +55,11 @@ Env example: `CAPYBARA_EXTENSION_CONFIG__PUSH_FCM__APPLICATION_IDS='["com.exampl
 |---|---|
 | 200 | `delivered` |
 | 404 `UNREGISTERED`; 400 `INVALID_ARGUMENT` naming `message.token` | `unregistered` (the kernel deletes the registration) |
-| 401; 403 (`SENDER_ID_MISMATCH` and others); `THIRD_PARTY_AUTH_ERROR` | failed `auth` |
-| 429 (`QUOTA_EXCEEDED`) | failed `rate_limited`, `Retry-After` → `retryAfterMs` |
+| 401; 403 (`SENDER_ID_MISMATCH` and others); `THIRD_PARTY_AUTH_ERROR`; a 404 that is not `UNREGISTERED` (wrong `project_id`) | failed `auth` |
+| 429 (`QUOTA_EXCEEDED`) | failed `rate_limited`, `Retry-After` (seconds or a date, capped at one hour) → `retryAfterMs` |
 | any other 4xx, 5xx, a network error, an abort | failed `transient` |
 | token endpoint `invalid_grant` / `invalid_client` / `unauthorized_client` | thrown `PushError` `auth` (every registration of the call) |
-| token endpoint 429 / other failure | thrown `PushError` `rate_limited` / `transient` |
+| token endpoint 429 (with its `Retry-After`) / other failure | thrown `PushError` `rate_limited` / `transient` |
 
 Result messages name HTTP statuses and FCM / OAuth error codes only: never a device token, an
 access token or any part of the service account.

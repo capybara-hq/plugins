@@ -13,6 +13,7 @@ import {
   type TokenKv,
   tokenCacheKey,
 } from "./oauth.js";
+import { retryAfterMs } from "./retry-after.js";
 
 /** The FCM v1 request body for one device (`android.collapse_key` carries the collapse id). */
 export function fcmRequestBody(token: string, m: PushMessage) {
@@ -34,7 +35,7 @@ export function fcmRequestBody(token: string, m: PushMessage) {
   };
 }
 
-interface FcmErrorBody {
+export interface FcmErrorBody {
   status: string | undefined;
   errorCode: string | undefined;
   fields: string[];
@@ -45,7 +46,7 @@ const safeEnum = (v: unknown): string | undefined =>
   typeof v === "string" && /^[A-Z_]{1,64}$/.test(v) ? v : undefined;
 
 /** The status, the FcmError code and the bad request fields of an FCM error answer. */
-function readError(body: unknown): FcmErrorBody {
+export function readError(body: unknown): FcmErrorBody {
   const error = (body as { error?: unknown } | null)?.error as
     | { status?: unknown; details?: unknown }
     | undefined;
@@ -62,14 +63,6 @@ function readError(body: unknown): FcmErrorBody {
     }
   }
   return out;
-}
-
-/** `Retry-After` (seconds or an HTTP date) in milliseconds, when present and sensible. */
-export function retryAfterMs(header: string | null, now = Date.now()): number | undefined {
-  if (header === null || header.trim() === "") return undefined;
-  if (/^\d+$/.test(header.trim())) return Number(header.trim()) * 1000;
-  const at = Date.parse(header);
-  return Number.isNaN(at) ? undefined : Math.max(0, at - now);
 }
 
 const failed = (
@@ -107,6 +100,10 @@ export function mapResponse(
   }
   if (status === 401)
     return failed(registrationId, "auth", `FCM refused the credentials (${label})`);
+  if (status === 404) {
+    // NOT_FOUND without UNREGISTERED: a wrong project_id or a project without FCM (config)
+    return failed(registrationId, "auth", `FCM does not know the configured project (${label})`);
+  }
   if (status === 403) {
     return failed(registrationId, "auth", `FCM refused the sender for this device (${label})`);
   }
@@ -171,7 +168,8 @@ export function makeFcmProvider(opts: FcmProviderOptions): PushProvider {
     }
     return {
       result: mapResponse(r.id, res.status, body, res.headers.get("retry-after")),
-      unauthenticated: res.status === 401,
+      // the access token itself was refused (a third-party APNs auth error is not about it)
+      unauthenticated: res.status === 401 && readError(body).errorCode !== "THIRD_PARTY_AUTH_ERROR",
     };
   }
 

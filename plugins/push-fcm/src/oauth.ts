@@ -1,6 +1,7 @@
 import { createHash, createSign } from "node:crypto";
 import { PushError, type PushErrorKind } from "@capybara-hq/plugin-sdk";
 import type { ServiceAccount } from "./config.js";
+import { retryAfterMs } from "./retry-after.js";
 
 /** Where push-fcm sends: Google's OAuth token endpoint and the FCM HTTP v1 API. */
 export interface FcmEndpoints {
@@ -52,7 +53,7 @@ export function signAssertion(sa: ServiceAccount, aud: string, nowSeconds: numbe
 /** The outcome of one token exchange; `code` is the OAuth error code when Google sent one. */
 export type TokenExchange =
   | { ok: true; accessToken: string; expiresIn: number }
-  | { ok: false; kind: PushErrorKind; message: string; code?: string };
+  | { ok: false; kind: PushErrorKind; message: string; code?: string; retryAfterMs?: number };
 
 /** An OAuth error code as Google sends it, safe to show (lowercase letters and `_` only). */
 function oauthCode(body: unknown): string | undefined {
@@ -121,10 +122,12 @@ export async function exchangeToken(
     };
   }
   if (res.status === 429) {
+    const retry = retryAfterMs(res.headers.get("retry-after"));
     return {
       ok: false,
       kind: "rate_limited",
       message: "Google rate-limited the token request (429)",
+      ...(retry !== undefined && { retryAfterMs: retry }),
     };
   }
   return {
@@ -155,7 +158,12 @@ export async function accessToken(
   const cached = await kv.get(key);
   if (cached !== null && cached !== "") return cached;
   const r = await exchangeToken(sa, endpoints, signal);
-  if (!r.ok) throw new PushError(`push-fcm: ${r.message}`, { kind: r.kind });
+  if (!r.ok) {
+    throw new PushError(`push-fcm: ${r.message}`, {
+      kind: r.kind,
+      ...(r.retryAfterMs !== undefined && { retryAfterMs: r.retryAfterMs }),
+    });
+  }
   const ttlSeconds = Math.floor(r.expiresIn) - TOKEN_MARGIN_SECONDS;
   if (ttlSeconds > 0) await kv.set(key, r.accessToken, { ttlSeconds });
   return r.accessToken;

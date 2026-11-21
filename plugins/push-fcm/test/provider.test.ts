@@ -167,8 +167,8 @@ describe("the response mapping (one case per row)", () => {
     });
   });
 
-  it("a 404 that is not UNREGISTERED → transient", async () => {
-    expect(await sendOne("not_found")).toMatchObject({ status: "failed", kind: "transient" });
+  it("a 404 that is not UNREGISTERED (a wrong project_id) → auth", async () => {
+    expect(await sendOne("not_found")).toMatchObject({ status: "failed", kind: "auth" });
   });
 
   it.each(["transient", "server_error"] as const)("5xx (%s) → transient", async (o) => {
@@ -239,6 +239,38 @@ describe("the response mapping (one case per row)", () => {
   });
 });
 
+describe("retry hints", () => {
+  it("token endpoint 429 carries Retry-After into the thrown PushError", async () => {
+    fake.arrangeToken("rate_limited");
+    const e = await sendOne("delivered");
+    expect(e).toBeInstanceOf(PushError);
+    expect(e).toMatchObject({ kind: "rate_limited", retryAfterMs: 30_000 });
+  });
+
+  it("a Retry-After above one hour is capped at one hour", async () => {
+    const r = await sendOne({ status: 429, headers: { "retry-after": "86400" }, body: {} });
+    expect(r).toMatchObject({ kind: "rate_limited", retryAfterMs: 3_600_000 });
+  });
+
+  it.each(["-5", "soon", "1e999", "Wed, 01 Jan 2020 00:00:00 GMT"])(
+    "an unusable Retry-After (%s) gives no hint",
+    async (header) => {
+      const r = await sendOne({ status: 429, headers: { "retry-after": header }, body: {} });
+      expect(r).toMatchObject({ kind: "rate_limited" });
+      expect(r).not.toHaveProperty("retryAfterMs");
+    },
+  );
+
+  it("an HTTP-date Retry-After becomes the time until then", async () => {
+    const at = new Date(Date.now() + 120_000).toUTCString();
+    const r = (await sendOne({ status: 429, headers: { "retry-after": at }, body: {} })) as {
+      retryAfterMs?: number;
+    };
+    expect(r.retryAfterMs).toBeGreaterThan(100_000);
+    expect(r.retryAfterMs).toBeLessThanOrEqual(120_000);
+  });
+});
+
 describe("several registrations", () => {
   it("answers each registration in order with its own outcome, one token exchange", async () => {
     fake.arrange("t-ok", "delivered");
@@ -282,6 +314,16 @@ describe("the access token cache", () => {
     fake.arrangeToken("ok", { expiresIn: 300 });
     await sendOne("delivered");
     expect(kv.writes).toEqual([]);
+  });
+
+  it("keeps the cached token on a 401 THIRD_PARTY_AUTH_ERROR (not about the access token)", async () => {
+    const signal = new AbortController().signal;
+    await provider().send({ registrations: [target("r1")], message: MESSAGE, signal });
+    fake.arrange(TOKEN, "third_party_auth");
+    const [r] = await provider().send({ registrations: [target("r1")], message: MESSAGE, signal });
+    expect(r).toMatchObject({ status: "failed", kind: "auth" });
+    expect(kv.deletes).toEqual([]);
+    expect(fake.tokens).toHaveLength(1);
   });
 
   it("drops the cached token when FCM answers 401, so the next send exchanges again", async () => {

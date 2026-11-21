@@ -225,7 +225,11 @@ export async function startFakeFcm(opts: { projectId?: string } = {}): Promise<F
       }
       if (tokenOutcome === "server_error") return send(res, { status: 500, body: "oops" });
       if (tokenOutcome === "rate_limited") {
-        return send(res, { status: 429, body: { error: "rate_limit_exceeded" } });
+        return send(res, {
+          status: 429,
+          headers: { "retry-after": "30" },
+          body: { error: "rate_limit_exceeded" },
+        });
       }
       if (tokenOutcome === "invalid_client") {
         return send(res, { status: 401, body: { error: "invalid_client" } });
