@@ -6,8 +6,15 @@ import { loginConfig } from "./config.js";
 
 /** The scopes login requests: non-sensitive, no app verification needed. */
 export const GOOGLE_OIDC_SCOPES = "openid email profile";
-/** One request's timeout (token exchange, JWKS); the kernel's 15-second signal also applies. */
+/** The token exchange's timeout; the kernel's 15-second signal also applies. */
 const REQUEST_TIMEOUT_MS = 10_000;
+/**
+ * The JWKS fetch's timeout. jose's remote key set takes no signal, so this keeps exchange plus
+ * key fetch inside the kernel's 15-second callback budget.
+ */
+const JWKS_TIMEOUT_MS = 5_000;
+/** Google's ID tokens live one hour; an older `iat`, or one ahead of the clock tolerance, is refused. */
+const MAX_TOKEN_AGE_S = 3600;
 /** An OAuth error code as Google sends it; anything else is reported as the HTTP status. */
 const OAUTH_ERROR = /^[a-z_]{1,64}$/;
 
@@ -95,7 +102,7 @@ export function createGoogleIdentitySource(): IdentitySource {
   const keySet = (url: string) => {
     let set = jwks.get(url);
     if (set === undefined) {
-      set = createRemoteJWKSet(new URL(url), { timeoutDuration: REQUEST_TIMEOUT_MS });
+      set = createRemoteJWKSet(new URL(url), { timeoutDuration: JWKS_TIMEOUT_MS });
       jwks.set(url, set);
     }
     return set;
@@ -133,7 +140,8 @@ export function createGoogleIdentitySource(): IdentitySource {
     }): Promise<ExternalIdentity> {
       const c = loginConfig(config);
       if (query.error !== undefined) {
-        throw new Error(`Google authorization failed: ${query.error.slice(0, 100)}`);
+        const shown = OAUTH_ERROR.test(query.error) ? query.error : "invalid error parameter";
+        throw new Error(`Google authorization failed: ${shown}`);
       }
       const code = query.code;
       if (code === undefined || code === "") throw new Error("Google authorization code missing");
@@ -160,6 +168,7 @@ export function createGoogleIdentitySource(): IdentitySource {
             audience: c.clientId,
             requiredClaims: ["exp", "iat", "sub", "nonce"],
             clockTolerance: 60,
+            maxTokenAge: MAX_TOKEN_AGE_S,
           })
         ).payload;
       } catch (e) {

@@ -232,6 +232,9 @@ describe("callback", () => {
     expect((await rejection(login({ query: { error: "access_denied" } }))).message).toBe(
       "Google authorization failed: access_denied",
     );
+    expect((await rejection(login({ query: { error: "Evil\nlog line <script>" } }))).message).toBe(
+      "Google authorization failed: invalid error parameter",
+    );
     expect((await rejection(login({ query: { state: "s" } }))).message).toContain("code missing");
     expect(tokenRequests).toHaveLength(0);
   });
@@ -257,6 +260,9 @@ describe("callback", () => {
     ],
     ["a missing sub", { omit: ["sub"] }, "sub"],
     ["a missing iat", { omit: ["iat"] }, "iat"],
+    ["an iat 5 minutes ahead", { iat: Math.floor(Date.now() / 1000) + 300 }, "iat"],
+    ["an iat over an hour old", { iat: Math.floor(Date.now() / 1000) - 3800 }, "ERR_JWT_EXPIRED"],
+    ["an nbf in the future", { claims: { nbf: Math.floor(Date.now() / 1000) + 300 } }, "nbf"],
   ] as const)("refuses %s", async (_name, opts, reason) => {
     serve(await idToken(opts as TokenOpts));
     const err = await rejection(login());
