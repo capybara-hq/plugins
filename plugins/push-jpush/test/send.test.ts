@@ -60,9 +60,14 @@ async function sendOne(token: string, answer?: FakeAnswer, over = {}): Promise<P
   return r;
 }
 
-const jpushError = (status: number, code: number, headers?: Record<string, string>) => ({
+const jpushError = (
+  status: number,
+  code: number,
+  headers?: Record<string, string>,
+  message = "scripted",
+) => ({
   status,
-  body: { error: { code, message: "scripted" } },
+  body: { error: { code, message } },
   ...(headers && { headers }),
 });
 
@@ -173,13 +178,25 @@ describe("the JPush request", () => {
 
 describe("JPush answers", () => {
   it.each([
-    [1003, 400],
-    [1011, 400],
-  ])("code %i on the sole well-formed id is unregistered", async (code, status) => {
-    expect(await sendOne("1a0018970af5e4a8a8b", jpushError(status, code))).toEqual({
-      registrationId: "r1",
-      status: "unregistered",
-    });
+    [1011, "cannot find user by this audience"],
+    [1003, "Invalid registration_id"],
+    [1003, "audience value must be JSON Array format!"],
+  ])("code %i (%s) is unregistered", async (code, message) => {
+    expect(await sendOne("1a0018970af5e4a8a8b", jpushError(400, code, undefined, message))).toEqual(
+      { registrationId: "r1", status: "unregistered" },
+    );
+  });
+
+  it.each([
+    "third_party_channel.oppo.category is invalid",
+    "mi_template_param must be json string",
+    "",
+  ])("1003 for another parameter (%j) keeps the registration: transient", async (message) => {
+    const r = await sendOne("1a0018970af5e4a8a8b", jpushError(400, 1003, undefined, message));
+    expect(r).toMatchObject({ status: "failed", kind: "transient" });
+    const text = r.status === "failed" ? r.message : "";
+    expect(text).toContain("vendor channel fields");
+    if (message !== "") expect(text).not.toContain(message);
   });
 
   it("an id that can never be a JPush registration id is unregistered without a request", async () => {
@@ -233,8 +250,6 @@ describe("JPush answers", () => {
     [1012, 400],
     [2005, 403],
     [2008, 400],
-    [2009, 400],
-    [2010, 400],
   ])("code %i is rate_limited", async (code, status) => {
     const r = await sendOne("1a0018970af5e4a8a8b", jpushError(status, code));
     expect(r).toMatchObject({ status: "failed", kind: "rate_limited" });
@@ -251,6 +266,8 @@ describe("JPush answers", () => {
     [1030, 503],
     [1005, 400],
     [1002, 400],
+    [2009, 400],
+    [2010, 400],
   ])("code %i is transient", async (code, status) => {
     const r = await sendOne("1a0018970af5e4a8a8b", jpushError(status, code));
     expect(r).toMatchObject({ status: "failed", kind: "transient" });
@@ -285,6 +302,22 @@ describe("several registrations", () => {
     expect(checkPushResults(regs, results)).toBeNull();
     expect(results.map((r) => r.status === "failed" && r.kind)).toEqual([kind, kind, kind]);
     expect(pushBodies()).toHaveLength(1);
+    fake.arrange("1a01aaaa", "delivered");
+  });
+
+  it("a vendor quota (1012) does not stop the others", async () => {
+    fake.arrange("1a01aaaa", jpushError(400, 1012));
+    const results = await provider().send({
+      registrations: regs,
+      message: MESSAGE,
+      signal: new AbortController().signal,
+    });
+    expect(results.map((r) => (r.status === "failed" ? r.kind : r.status))).toEqual([
+      "rate_limited",
+      "delivered",
+      "delivered",
+    ]);
+    expect(pushBodies()).toHaveLength(3);
     fake.arrange("1a01aaaa", "delivered");
   });
 

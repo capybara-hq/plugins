@@ -13,6 +13,8 @@ Xiaomi, OPPO and vivo vendor channels. Every notification is sent as a service m
 
 ::check jpush-credentials JPush accepts the AppKey and Master Secret
 
+The check asks JPush for an unused message id; it sends no notification.
+
 ## Vendor channels
 
 Each vendor decides on its own whether a notification counts as a service message. Apply for the

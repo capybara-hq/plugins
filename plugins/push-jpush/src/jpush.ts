@@ -22,18 +22,25 @@ export interface JPushOptions {
   baseUrl?: string;
 }
 
+/**
+ * Grouping: JPush offers no thread / group field for Android or any vendor channel (only iOS
+ * `thread-id`, rest_api_v3_push read 2026-11-21), so `threadId` travels only in `extras`.
+ */
+
 /** Opens the app's launcher activity; the app routes to `extras.path` itself. */
 const HOME_INTENT = "intent:#Intent;action=android.intent.action.MAIN;end";
 
 /**
- * The class of a JPush error code: `dead` (1003 invalid value, 1011 no matching target), `auth`
- * (1004 verification failed, 1008 bad app_key, 2003 app blocked, 2004 source IP not allowed),
- * `rate` (2002 API rate / HTTP 429, 1012 vendor quota or push limit, 2005 volume, 2008 broadcast,
- * 2009 / 2010 restricted), else undefined.
+ * The class of a JPush error code: `invalid` (1003 parameter value invalid: a dead registration id
+ * only when JPush's message names the target, see `outcomeOf`), `dead` (1011 no matching target),
+ * `auth` (1004 verification failed, 1008 bad app_key, 2003 app blocked, 2004 source IP not
+ * allowed), `rate` (2002 API rate / HTTP 429, 1012 vendor quota or push limit, 2005 volume, 2008
+ * broadcast), else undefined (2009 / 2010 content or VIP restrictions are transient).
  */
-function classOf(code: number | undefined): "dead" | "auth" | "rate" | undefined {
+function classOf(code: number | undefined): "invalid" | "dead" | "auth" | "rate" | undefined {
   switch (code) {
     case 1003:
+      return "invalid";
     case 1011:
       return "dead";
     case 1004:
@@ -45,8 +52,6 @@ function classOf(code: number | undefined): "dead" | "auth" | "rate" | undefined
     case 2002:
     case 2005:
     case 2008:
-    case 2009:
-    case 2010:
       return "rate";
     default:
       return undefined;
@@ -58,6 +63,9 @@ function classOf(code: number | undefined): "dead" | "auth" | "rate" | undefined
  * answered `unregistered` without a request; a well-formed sole target answered 1003 is dead too.
  */
 const WELL_FORMED_ID = /^[\x21-\x7e]{1,4096}$/;
+
+/** A 1003 message about the target (inspected only, never echoed). */
+const NAMES_TARGET = /registration|audience/i;
 
 /**
  * The vendor notification id for a collapse id: the same positive 31-bit integer for every resend
@@ -130,15 +138,19 @@ export function pushBody(
   };
 }
 
-/** The JPush error code of an answer body, when there is one. */
-function errorCodeOf(text: string): number | undefined {
+/** The JPush error code and message of an answer body, when there is one. */
+function errorOf(text: string): { code?: number; message: string } {
   try {
-    const code = (JSON.parse(text) as { error?: { code?: unknown } } | null)?.error?.code;
-    return typeof code === "number" ? code : undefined;
+    const e = (JSON.parse(text) as { error?: { code?: unknown; message?: unknown } } | null)?.error;
+    return {
+      ...(typeof e?.code === "number" && { code: e.code }),
+      message: typeof e?.message === "string" ? e.message : "",
+    };
   } catch {
-    return undefined;
+    return { message: "" };
   }
 }
+const errorCodeOf = (text: string) => errorOf(text).code;
 
 /** Retry-After (seconds), else JPush's X-Rate-Limit-Reset (seconds to the window reset). */
 function retryAfterMsOf(h: Headers): number | undefined {
@@ -160,19 +172,44 @@ const failed = (kind: PushErrorKind, message: string, retryAfterMs?: number): Ou
   ...(retryAfterMs !== undefined && { retryAfterMs }),
 });
 
-/** Maps one JPush answer (never quoting JPush's message text, which may name the target). */
-export function outcomeOf(status: number, headers: Headers, text: string): Outcome {
-  const code = errorCodeOf(text);
-  if (status >= 200 && status < 300 && code === undefined) return { status: "delivered" };
+/** An outcome plus whether it concerns the whole app key (the rest of the call is skipped). */
+type Mapped = { outcome: Outcome; appWide: boolean };
+
+/**
+ * Maps one JPush answer (never quoting JPush's message text, which may name the target). 1003
+ * also answers a refused parameter, which may be a deployer's vendor field: it is a dead id only
+ * when JPush's message names the registration id or the audience, else transient, so a bad vendor
+ * field never deletes registrations. App-wide: auth and the API rate limit (2002 / a bare 429);
+ * a vendor quota (1012) concerns one vendor, so the other registrations are still tried.
+ */
+export function outcomeOf(status: number, headers: Headers, text: string): Mapped {
+  const { code, message } = errorOf(text);
+  const one = (outcome: Outcome, appWide = false): Mapped => ({ outcome, appWide });
+  if (status >= 200 && status < 300 && code === undefined) return one({ status: "delivered" });
   const what = code === undefined ? `HTTP ${status}` : `code ${code}, HTTP ${status}`;
-  if (classOf(code) === "dead") return { status: "unregistered" };
-  if (classOf(code) === "auth" || (code === undefined && (status === 401 || status === 403))) {
-    return failed("auth", `JPush rejected the app key or master secret (${what})`);
+  const cls = classOf(code);
+  if (cls === "dead") return one({ status: "unregistered" });
+  if (cls === "invalid") {
+    return NAMES_TARGET.test(message)
+      ? one({ status: "unregistered" })
+      : one(
+          failed(
+            "transient",
+            `a JPush parameter was refused (${what}); check the vendor channel fields in the deployment config`,
+          ),
+        );
   }
-  if (classOf(code) === "rate" || (code === undefined && status === 429)) {
-    return failed("rate_limited", `JPush limited the push (${what})`, retryAfterMsOf(headers));
+  if (cls === "auth" || (code === undefined && (status === 401 || status === 403))) {
+    return one(failed("auth", `JPush rejected the app key or master secret (${what})`), true);
   }
-  return failed("transient", `JPush could not take the push (${what})`);
+  if (cls === "rate" || (code === undefined && status === 429)) {
+    const appWide = code === 2002 || (code === undefined && status === 429);
+    return one(
+      failed("rate_limited", `JPush limited the push (${what})`, retryAfterMsOf(headers)),
+      appWide,
+    );
+  }
+  return one(failed("transient", `JPush could not take the push (${what})`));
 }
 
 async function postOne(
@@ -180,7 +217,7 @@ async function postOne(
   auth: string,
   body: Record<string, unknown>,
   signal: AbortSignal,
-): Promise<Outcome> {
+): Promise<Mapped> {
   let res: Response;
   let text: string;
   try {
@@ -188,22 +225,26 @@ async function postOne(
       method: "POST",
       headers: { authorization: auth, "content-type": "application/json" },
       body: JSON.stringify(body),
+      redirect: "error",
       signal,
     });
     text = await res.text();
   } catch {
-    return failed(
-      "transient",
-      signal.aborted ? "the JPush request was aborted" : "JPush could not be reached",
-    );
+    return {
+      outcome: failed(
+        "transient",
+        signal.aborted ? "the JPush request was aborted" : "JPush could not be reached",
+      ),
+      appWide: signal.aborted,
+    };
   }
   return outcomeOf(res.status, res.headers, text);
 }
 
 /**
  * The `push-provider@1` implementation for JPush: one request per registration, in order. After
- * an auth or rate_limited answer (which concern the whole app key) and after an abort, the
- * remaining registrations get the same failure without a request.
+ * an app-wide answer (auth, the API rate limit) and after an abort, the remaining registrations
+ * get the same failure without a request.
  */
 export function createJPushProvider(
   cfg: JPushDeploymentConfig,
@@ -218,15 +259,19 @@ export function createJPushProvider(
       const results: PushResult[] = [];
       let stop: Outcome | undefined;
       for (const r of registrations) {
-        const outcome = stop ?? (await one(r));
-        if (outcome.status === "failed" && outcome.kind !== "transient") stop = outcome;
-        results.push({ registrationId: r.id, ...outcome } as PushResult);
+        const mapped = stop ? { outcome: stop, appWide: true } : await one(r);
+        if (mapped.appWide) stop = mapped.outcome;
+        results.push({ registrationId: r.id, ...mapped.outcome } as PushResult);
       }
       return results;
 
-      async function one(r: PushTarget): Promise<Outcome> {
-        if (signal.aborted) return failed("transient", "the JPush request was aborted");
-        if (!WELL_FORMED_ID.test(r.token)) return { status: "unregistered" };
+      async function one(r: PushTarget): Promise<Mapped> {
+        if (signal.aborted) {
+          return { outcome: failed("transient", "the JPush request was aborted"), appWide: true };
+        }
+        if (!WELL_FORMED_ID.test(r.token)) {
+          return { outcome: { status: "unregistered" }, appWide: false };
+        }
         return postOne(url, auth, pushBody(cfg, r.token, message), signal);
       }
     },
@@ -288,6 +333,7 @@ export function createCredentialsCheck(opts: JPushOptions = {}): SetupCheckDefin
       try {
         res = await fetch(`${base}/v3/push/cid?count=1`, {
           headers: { authorization: basicAuth(appKey, masterSecret) },
+          redirect: "error",
           signal: args.signal,
         });
         body = await res.text();

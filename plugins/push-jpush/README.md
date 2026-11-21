@@ -37,13 +37,19 @@ On JPush's own connection the app can use `extras.collapseId`.
 
 **Badges** are not sent.
 
-**Answers:** 1003 / 1011 for the sole target mark the registration unregistered; 1004 / 1008 /
-2003 / 2004 (and a 401 / 403 without a code) are `auth`; 2002 (HTTP 429) / 1012 / 2005 / 2008 /
-2009 / 2010 (and a 429 without a code) are `rate_limited`, with `Retry-After` or JPush's
-`X-Rate-Limit-Reset` as the wait; everything else, 5xx and network errors are `transient`. After
-an `auth` or `rate_limited` answer, the other registrations of the same call fail the same way
-without a request. No retries inside: the kernel's queue retries. Error messages carry only
-JPush's code and the HTTP status, never a registration id or JPush's own message text.
+**Grouping:** JPush offers no thread or group field for Android or the vendor channels (only
+iOS `thread-id`); `threadId` travels in `extras`.
+
+**Answers:** 1011 marks the registration unregistered; 1003 does too only when JPush's message
+names the registration id or the audience, else it is `transient` (a refused parameter, likely a
+vendor field in the deployment config, never deletes registrations). 1004 / 1008 / 2003 / 2004
+(and a 401 / 403 without a code) are `auth`; 2002 (HTTP 429) / 1012 / 2005 / 2008 (and a 429
+without a code) are `rate_limited`, with `Retry-After` or JPush's `X-Rate-Limit-Reset` as the wait;
+2009 / 2010, everything else, 5xx and network errors are `transient`. After an `auth` answer or the
+API rate limit (2002 / 429), the other registrations of the same call fail the same way without a
+request; a vendor quota (1012) does not stop them. No retries inside: the kernel's queue retries.
+Error messages carry only JPush's code and the HTTP status, never a registration id or JPush's own
+message text. Requests never follow redirects.
 
 ## Live tests
 
