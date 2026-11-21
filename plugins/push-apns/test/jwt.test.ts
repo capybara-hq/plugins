@@ -99,6 +99,15 @@ describe("providerToken", () => {
     expect(kv.writes).toHaveLength(3);
   });
 
+  it("the same key pasted differently reuses the cached token (fingerprint of the canonical PEM)", async () => {
+    const { pem } = testSigningKey();
+    const kv = memoryKv();
+    const first = await providerToken(kv, testConfig(pem), NOW);
+    const second = await providerToken(kv, testConfig(pem.replaceAll("\n", "")), NOW + 1000);
+    expect(second).toBe(first);
+    expect(kv.writes).toHaveLength(1);
+  });
+
   it("signs anew once the cached entry is gone", async () => {
     const { pem } = testSigningKey();
     const kv = memoryKv();

@@ -29,6 +29,10 @@ bundles:
 List every app build that should receive notifications. A build signed for development registers
 sandbox tokens, which only `environment: sandbox` reaches.
 
+Each delivery opens its own connection to APNs and closes it afterwards (no shared connection pool
+across replicas). That suits notifications people trigger; a very high push volume pays a TLS
+handshake per delivery.
+
 ## 3. Check the key
 
 The check signs a provider token with the key and asks APNs about an all-zero device token: APNs

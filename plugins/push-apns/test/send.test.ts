@@ -276,6 +276,8 @@ describe("mapApnsAnswer: one case per row", () => {
     [403, "InvalidProviderToken", { status: "failed", kind: "auth" }, false],
     [400, "DeviceTokenNotForTopic", { status: "failed", kind: "auth" }, false],
     [400, "TopicDisallowed", { status: "failed", kind: "auth" }, false],
+    [400, "BadTopic", { status: "failed", kind: "auth" }, false],
+    [400, "MissingTopic", { status: "failed", kind: "auth" }, false],
     [403, "ExpiredProviderToken", { status: "failed", kind: "transient" }, true],
     [429, "TooManyRequests", { status: "failed", kind: "rate_limited" }, false],
     [429, "TooManyProviderTokenUpdates", { status: "failed", kind: "rate_limited" }, false],
@@ -288,6 +290,15 @@ describe("mapApnsAnswer: one case per row", () => {
     if (mapped.result.status === "failed") {
       expect(mapped.result.message).toContain(String(status));
     }
+  });
+
+  it("ExpiredProviderToken says to check the server clock", () => {
+    const mapped = mapApnsAnswer({
+      status: 403,
+      reason: "ExpiredProviderToken",
+      retryAfter: undefined,
+    });
+    expect(mapped.result.status === "failed" && mapped.result.message).toMatch(/clock/);
   });
 
   it("names only a well-formed reason code in the message", () => {

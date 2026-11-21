@@ -75,10 +75,19 @@ export function mapApnsAnswer(a: ApnsAnswer): { result: ResultBody; dropToken: b
     return { result: { status: "unregistered" }, dropToken: false };
   }
   if (a.status === 403 && code === "ExpiredProviderToken") {
-    return { result: failed("transient", message), dropToken: true };
+    // a token signed seconds ago that APNs calls expired means this server's clock is off; every
+    // re-sign then fails the same way, so the message says where to look
+    const hint = `${message}: the provider token is re-signed; if this repeats, check the server clock (NTP)`;
+    return { result: failed("transient", hint), dropToken: true };
   }
   if (a.status === 403) return { result: failed("auth", message), dropToken: false };
-  if (a.status === 400 && (code === "DeviceTokenNotForTopic" || code === "TopicDisallowed")) {
+  if (
+    a.status === 400 &&
+    (code === "DeviceTokenNotForTopic" ||
+      code === "TopicDisallowed" ||
+      code === "BadTopic" ||
+      code === "MissingTopic")
+  ) {
     return { result: failed("auth", message), dropToken: false };
   }
   if (a.status === 429) {

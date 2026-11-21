@@ -28,10 +28,22 @@ all-zero device token (APNs verifies the key, then refuses the device; nothing i
   one more often than every 20 minutes and an old one after an hour) and dropped on
   `ExpiredProviderToken`. The private key is never written anywhere.
 - Answers: 200 delivered; 410, 400 `BadDeviceToken` / `Unregistered` unregistered; 403
-  (`InvalidProviderToken` and others), 400 `DeviceTokenNotForTopic` / `TopicDisallowed` auth;
+  (`InvalidProviderToken` and others), 400 `DeviceTokenNotForTopic` / `TopicDisallowed` /
+  `BadTopic` / `MissingTopic` auth;
   403 `ExpiredProviderToken` transient; 429 rate limited; 5xx and connection errors transient.
   No retries inside the extension: the kernel's queue retries. Messages carry the status and the
   APNs reason code, never a device token or the key.
+
+## Known limitations
+
+- **One HTTP/2 connection per send call.** Apple recommends keeping connections open, but the
+  extension holds no in-process pool (production runs several replicas; extensions keep no
+  process-local shared objects), so each delivery job opens a TLS connection, sends its
+  registrations and closes it. That is fine for notifications people trigger (approvals, finished
+  runs); a deployment pushing at very high volume pays a TLS handshake per job and may see APNs
+  throttle connection churn.
+- `ExpiredProviderToken` right after signing means the server clock is off: the token is dropped
+  and re-signed on the next try, which keeps failing until the clock is fixed (NTP).
 
 ## Tests
 

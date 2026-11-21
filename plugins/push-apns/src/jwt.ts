@@ -75,10 +75,20 @@ export interface ApnsKv {
   del(key: string): Promise<void>;
 }
 
-/** Identifies the config a token was signed with, so a changed key or team signs anew. */
+/**
+ * Identifies the config a token was signed with, so a changed key or team signs anew. Over the
+ * canonical PEM, so the same key pasted another way keeps the shared token (an unreadable key
+ * falls back to the raw text; signing then fails anyway).
+ */
 function fingerprint(cfg: Pick<ApnsDeployment, "key" | "keyId" | "teamId">): string {
+  let key = cfg.key;
+  try {
+    key = canonicalPem(cfg.key);
+  } catch {
+    // keep the raw text
+  }
   return createHash("sha256")
-    .update(`${cfg.teamId}\0${cfg.keyId}\0${cfg.key}`)
+    .update(`${cfg.teamId}\0${cfg.keyId}\0${key}`)
     .digest("hex")
     .slice(0, 32);
 }
