@@ -237,6 +237,8 @@ class NativeFiles:
         for root in roots["read"] + roots["write"]:
             if not valid_path(root["path"]) or os.path.normpath(root["path"]) != root["path"]:
                 raise ValueError("Supply canonical absolute root paths")
+            if root.get("file") is True and (root in roots["write"] or root["path"] == "/"):
+                raise ValueError("Only a read root may be a single file")
             if not stat.S_ISDIR(os.fstat(root["fd"]).st_mode):
                 raise ValueError("Supply pinned directory descriptors")
 
@@ -258,6 +260,11 @@ class NativeFiles:
         fd = os.dup(root["fd"])
         current = root["path"]
         parts = os.path.relpath(path, current).split("/")
+        if root.get("file") is True:
+            # a single-file root: walked from its parent directory, so the file's own name is
+            # the first component (anything below it is no directory, so missing for a reader)
+            current = os.path.dirname(root["path"])
+            parts = [os.path.basename(root["path"])] + ([] if path == root["path"] else parts)
         result = self.walk(fd, current, parts, write, create, links, must_exist)
         if write and self.deny_writes and write_denied(result[2]):
             os.close(result[0])
@@ -349,6 +356,8 @@ class NativeFiles:
             return None
         best = None
         for root in self.roots["read"] + self.roots["write"]:
+            if root.get("file") is True:
+                continue  # its descriptor is the parent directory, not the root's path
             try:
                 now = os.readlink("/proc/self/fd/%d" % root["fd"]).rstrip("/")
             except OSError:

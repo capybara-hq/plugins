@@ -53,7 +53,7 @@ describe("sandbox-docker manifest", () => {
     // the kernel checks this range against the installed SDK version; support v2 (the instance
     // boundary), limits without mode and the staged runtime bytes need the R3 SDK (the release
     // PR sets the published R3 rc here and in src/index.ts)
-    expect(plugin.sdk).toBe("^0.1.0-rc.39");
+    expect(plugin.sdk).toBe("^0.1.0-rc.47");
   });
 
   it("deployment config: defaults, endpoint schemes", () => {
