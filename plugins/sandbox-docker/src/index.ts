@@ -130,7 +130,7 @@ export function providerConfig(
  */
 const plugin = defineExtension({
   name: "sandbox-docker",
-  version: "0.1.0-rc.20",
+  version: "0.1.0-rc.21",
   // Support v2 (the instance boundary), limits without `mode`, list / scan without limits and the
   // staged runtime bytes are the R3 SDK's (approval-only profiles). The release PR sets the
   // published R3 rc here and in package.json.
