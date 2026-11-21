@@ -22,10 +22,8 @@ export interface JPushOptions {
   baseUrl?: string;
 }
 
-/**
- * Grouping: JPush offers no thread / group field for Android or any vendor channel (only iOS
- * `thread-id`, rest_api_v3_push read 2026-11-21), so `threadId` travels only in `extras`.
- */
+// Grouping: JPush offers no thread / group field for Android or any vendor channel (only iOS
+// `thread-id`, rest_api_v3_push read 2026-11-21), so `threadId` travels only in `extras`.
 
 /** Opens the app's launcher activity; the app routes to `extras.path` itself. */
 const HOME_INTENT = "intent:#Intent;action=android.intent.action.MAIN;end";
@@ -60,7 +58,7 @@ function classOf(code: number | undefined): "invalid" | "dead" | "auth" | "rate"
 
 /**
  * A string that can be a JPush registration id: printable ASCII without spaces. Anything else is
- * answered `unregistered` without a request; a well-formed sole target answered 1003 is dead too.
+ * answered `unregistered` without a request; a 1003 counts as dead only when JPush names the target.
  */
 const WELL_FORMED_ID = /^[\x21-\x7e]{1,4096}$/;
 
