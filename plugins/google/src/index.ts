@@ -24,7 +24,7 @@ export { clientCheck, discoveryCheck } from "./setup-checks.js";
 const MANIFEST = Object.freeze({
   name: "google",
   version: "0.1.0-rc.0",
-  sdk: "^0.1.0-rc.50",
+  sdk: "^0.1.0-rc.52",
 } as const);
 
 /**
