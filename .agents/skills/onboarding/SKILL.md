@@ -4,8 +4,8 @@ description: "Gets a person ready to contribute to a capybara-hq repository: run
 # Synced from capybara-hq/.github. Edit the source there, then run sync.
 metadata:
   source: capybara-hq/.github
-  version: v2.1.0
-  sha256: bf24960f8535e1fdd674a7af6f21a9f9728a2344eeaad71e70cd196d7a50d5ee
+  version: v2.1.1
+  sha256: 7371534728a18055aa566580e81403d45ebc8d148f299951f623961833da034a
 ---
 
 # Onboarding
