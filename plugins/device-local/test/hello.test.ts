@@ -125,8 +125,27 @@ function setup() {
     const s = await store.state(DEVICE);
     return revisionOf(s.connection, s.binding);
   };
-  const say = (body: unknown) => handler.onHello(DEVICE, body, signal());
-  return { store, rows, connections, changed, warnings, handler, install, handle, revision, say };
+  /** The connection hellos, frames and closes arrive on (the kernel's machine and connection). */
+  const conn = { machineId: "machine-1", connectionId: "connection-1" };
+  const say = (body: unknown) => handler.onHello(DEVICE, body, signal(), { ...conn });
+  const frame = (body: unknown) => handler.onFrame?.(DEVICE, body, { ...conn });
+  const close = (reason: "offline" | "replaced" | "revoked" | "deleted") =>
+    handler.onClose?.(DEVICE, reason, { ...conn });
+  return {
+    store,
+    rows,
+    connections,
+    changed,
+    warnings,
+    handler,
+    install,
+    handle,
+    revision,
+    say,
+    frame,
+    close,
+    conn,
+  };
 }
 
 describe("hello validation", () => {
@@ -170,8 +189,17 @@ describe("hello validation", () => {
 
   it("a device id that is not one of the kernel's is refused", async () => {
     const s = setup();
-    const r = await s.handler.onHello("../etc", hello(null), signal());
+    const r = await s.handler.onHello("../etc", hello(null), signal(), s.conn);
     expect(r).toMatchObject({ ok: false, code: "local.invalid_hello" });
+    expect(s.connections.size).toBe(0);
+  });
+
+  it("a hello the kernel names no machine or connection for is refused", async () => {
+    const s = setup();
+    for (const conn of [undefined, { machineId: "", connectionId: "c" }, { machineId: "m" }]) {
+      const r = await s.handler.onHello(DEVICE, hello(null), signal(), conn as never);
+      expect(r).toMatchObject({ ok: false, code: "local.invalid_hello" });
+    }
     expect(s.connections.size).toBe(0);
   });
 
@@ -185,6 +213,8 @@ describe("hello validation", () => {
       home: "/home/me",
       features: ["networkReport", "projects"],
       instanceGeneration: null,
+      machineId: "machine-1",
+      connectionId: "connection-1",
       machineEpoch: 0,
       ownerReport: { report: ceiling(), via: "hello" },
     });
@@ -281,11 +311,11 @@ describe("owner policy events", () => {
     expect((await supportFor(s.store, s.handle("100"))).outsideSandbox).toBe(true);
     const revision = await s.revision();
     const off = ceiling({ sequence: 2, revision: "owner-2", outsideSandbox: false });
-    await s.handler.onFrame?.(DEVICE, policy(off));
+    await s.frame(policy(off));
     expect(await s.revision()).not.toBe(revision);
     expect(s.changed).toEqual([DEVICE, DEVICE]);
     // the same event again is no change
-    await s.handler.onFrame?.(DEVICE, policy(off));
+    await s.frame(policy(off));
     expect(s.changed).toEqual([DEVICE, DEVICE]);
     // the support narrows to what the owner allows now
     expect((await supportFor(s.store, s.handle("100"))).outsideSandbox).toBe(false);
@@ -297,16 +327,16 @@ describe("owner policy events", () => {
     const s = setup();
     await s.install("100");
     await s.say(hello("100", { ownerCeiling: ceiling({ sequence: 3 }) }));
-    await s.handler.onFrame?.(DEVICE, policy(ceiling({ sequence: 2, outsideSandbox: false })));
+    await s.frame(policy(ceiling({ sequence: 2, outsideSandbox: false })));
     expect(s.changed).toEqual([DEVICE]);
     expect((await supportFor(s.store, s.handle("100"))).outsideSandbox).toBe(true);
-    await s.handler.onFrame?.(DEVICE, policy(ceiling({ sequence: 3, revision: "other" })));
+    await s.frame(policy(ceiling({ sequence: 3, revision: "other" })));
     expect(s.changed).toEqual([DEVICE, DEVICE]);
     expect((await supportFor(s.store, s.handle("100"))).outsideSandbox).toBe(false);
     const report = await reportFor(s.store, { deviceId: DEVICE, orgId: ORG });
     expect(report.description.en).toContain("as narrowly as possible");
     // a valid current report unblocks
-    await s.handler.onFrame?.(DEVICE, policy(ceiling({ sequence: 4, revision: "owner-4" })));
+    await s.frame(policy(ceiling({ sequence: 4, revision: "owner-4" })));
     expect((await supportFor(s.store, s.handle("100"))).outsideSandbox).toBe(true);
   });
 
@@ -319,40 +349,126 @@ describe("owner policy events", () => {
       { type: "policy", ownerCeiling: { ...ceiling(), sequence: -1 } },
       { ...policy(ceiling()), extra: 1 },
     ])
-      await s.handler.onFrame?.(DEVICE, frame);
+      await s.frame(frame);
     expect(s.warnings).toHaveLength(4);
     expect(s.changed).toEqual([DEVICE]);
   });
 });
 
 describe("machine replacement", () => {
-  it("an unbound hello whose sequence starts again is a new machine: recorded, revision moved", async () => {
-    const s = setup();
-    await s.install("100");
-    await s.say(hello("100", { ownerCeiling: ceiling({ sequence: 7 }) }));
-    const revision = await s.revision();
-    // `capybara-device login` on another computer: a new credential, its sequence starts at 0
-    const fresh = ceiling({ sequence: 0, revision: "fresh", outsideSandbox: false });
-    expect(await s.say(hello(null, { ownerCeiling: fresh }))).toEqual({ ok: true });
-    expect(s.connections.get(DEVICE)).toMatchObject({
-      machineEpoch: 1,
-      ownerReport: { report: fresh },
-    });
-    expect(await s.revision()).not.toBe(revision);
-    expect(s.changed.at(-1)).toBe(DEVICE);
+  it("a hello from another machine gets a fresh record and moves the epoch, whatever its sequence", async () => {
+    for (const sequence of [0, 9]) {
+      const s = setup();
+      await s.install("100");
+      await s.say(hello("100", { ownerCeiling: ceiling({ sequence: 7 }) }));
+      const revision = await s.revision();
+      // `capybara-device login` again, on this computer or another: a new machine id
+      s.conn.machineId = "machine-2";
+      s.conn.connectionId = "connection-2";
+      const fresh = ceiling({ sequence, revision: "fresh", outsideSandbox: false });
+      expect(await s.say(hello(null, { ownerCeiling: fresh }))).toEqual({ ok: true });
+      expect(s.connections.get(DEVICE)).toMatchObject({
+        machineId: "machine-2",
+        connectionId: "connection-2",
+        machineEpoch: 1,
+        ownerReport: { report: fresh, via: "hello" },
+      });
+      // the old credential's generation is gone
+      expect(s.rows.get(DEVICE)?.unattested).toBe(true);
+      expect(await s.revision()).not.toBe(revision);
+      expect(s.changed.at(-1)).toBe(DEVICE);
+    }
   });
 
-  it("a revoked machine moves the revision; a replaced connection of the same machine does not", async () => {
+  it("another machine never attests the installed binding, even naming its generation", async () => {
+    const s = setup();
+    await s.install("100");
+    await s.say(hello("100"));
+    s.conn.machineId = "machine-2";
+    expect(await s.say(hello("100", { runtime: { runtimeHash: HASH("f") } }))).toEqual({
+      ok: true,
+    });
+    expect(s.rows.get(DEVICE)?.unattested).toBe(true);
+    expect(isSandboxGoneError(await rejection(supportFor(s.store, s.handle("100"))))).toBe(true);
+  });
+
+  it("the same machine's stale or conflicting report is refused, bound or not, and not recorded", async () => {
+    const s = setup();
+    await s.install("100");
+    await s.say(hello("100", { ownerCeiling: ceiling({ sequence: 5 }) }));
+    const before = structuredClone(s.connections.get(DEVICE));
+    const binding = structuredClone(s.rows.get(DEVICE));
+    const revision = await s.revision();
+    for (const generation of [null, "100"]) {
+      expect(
+        await s.say(hello(generation, { ownerCeiling: ceiling({ sequence: 4, revision: "old" }) })),
+      ).toMatchObject({ ok: false, code: "local.stale_owner_report" });
+      expect(
+        await s.say(
+          hello(generation, { ownerCeiling: ceiling({ sequence: 5, outsideSandbox: false }) }),
+        ),
+      ).toMatchObject({ ok: false, code: "local.owner_report_conflict" });
+    }
+    expect(s.connections.get(DEVICE)).toEqual(before);
+    expect(s.rows.get(DEVICE)).toEqual(binding);
+    expect(await s.revision()).toBe(revision);
+  });
+
+  it("replaced: a takeover by the same machine keeps the revision, another machine's hello moves it", async () => {
+    const s = setup();
+    await s.install("100");
+    await s.say(hello("100"));
+    const revision = await s.revision();
+    // the same machine reconnects: the old connection closes as replaced, the new one says hello
+    await s.close("replaced");
+    s.conn.connectionId = "connection-2";
+    expect(await s.say(hello("100"))).toEqual({ ok: true });
+    expect(await s.revision()).toBe(revision);
+    expect(s.connections.get(DEVICE)).toMatchObject({
+      machineEpoch: 0,
+      connectionId: "connection-2",
+    });
+    expect(s.changed).toEqual([DEVICE]);
+    // the device signs in from another machine: the close names the old machine, then the new hello
+    await s.close("replaced");
+    expect(await s.revision()).toBe(revision);
+    s.conn.machineId = "machine-2";
+    s.conn.connectionId = "connection-3";
+    expect(await s.say(hello(null))).toEqual({ ok: true });
+    expect(s.connections.get(DEVICE)?.machineEpoch).toBe(1);
+    expect(await s.revision()).not.toBe(revision);
+  });
+
+  it("revoked moves the revision only for the recorded machine; offline changes nothing", async () => {
     const s = setup();
     await s.say(hello(null));
     const revision = await s.revision();
-    await s.handler.onClose?.(DEVICE, "replaced");
-    await s.handler.onClose?.(DEVICE, "offline");
+    await s.close("offline");
+    // a late close of an older machine
+    await s.handler.onClose?.(DEVICE, "revoked", {
+      machineId: "machine-0",
+      connectionId: "connection-0",
+    });
     expect(await s.revision()).toBe(revision);
     expect(s.changed).toEqual([DEVICE]);
-    await s.handler.onClose?.(DEVICE, "revoked");
+    await s.close("revoked");
     expect(await s.revision()).not.toBe(revision);
     expect(s.changed).toEqual([DEVICE, DEVICE]);
+  });
+
+  it("a policy event from any connection but the recorded one is dropped", async () => {
+    const s = setup();
+    await s.say(hello(null, { ownerCeiling: ceiling({ sequence: 1 }) }));
+    const revision = await s.revision();
+    const off = policy(ceiling({ sequence: 2, revision: "owner-2", outsideSandbox: false }));
+    await s.handler.onFrame?.(DEVICE, off, { machineId: "machine-1", connectionId: "old" });
+    await s.handler.onFrame?.(DEVICE, off, {
+      machineId: "machine-0",
+      connectionId: "connection-1",
+    });
+    expect(await s.revision()).toBe(revision);
+    await s.frame(off);
+    expect(await s.revision()).not.toBe(revision);
   });
 });
 
@@ -452,7 +568,17 @@ describe("report and permission support", () => {
     // no hello stored yet: closed
     expect((await supportFor(s.store, s.handle("101"))).unavailableReason).toBeDefined();
     await s.say(hello("101"));
+    // the owner's network is an allowlist: no open public internet
+    expect(await supportFor(s.store, s.handle("101"))).toEqual({
+      ...OUTSIDE,
+      network: { ...OUTSIDE.network, openPublic: false },
+    });
+    // an open owner network keeps it
+    await s.frame(policy(ceiling({ sequence: 2, revision: "owner-2", network: "open" })));
     expect(await supportFor(s.store, s.handle("101"))).toEqual(OUTSIDE);
+    // blocked owner facts close it again
+    await s.frame(policy(ceiling({ sequence: 2, revision: "other", network: "open" })));
+    expect((await supportFor(s.store, s.handle("101"))).network.openPublic).toBe(false);
     // an older handle: the machine holds the newer generation
     expect(isSandboxGoneError(await rejection(supportFor(s.store, s.handle("100"))))).toBe(true);
   });

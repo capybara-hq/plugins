@@ -30,8 +30,8 @@ export {
   deviceIdOfName,
   EXEC_DEADLINE_MARGIN_MS,
   FRAME_ENVELOPE_BYTES,
+  frameCapacity,
   type LocalDeviceHandle,
-  MAX_FRAME_BYTES,
   maxReadBytes,
   OP_DEADLINE_MS,
   relayer,
@@ -62,8 +62,8 @@ export {
 const plugin = defineExtension({
   name: "device-local",
   version: "0.1.0-rc.0",
-  // ctx.dialIn, ctx.devices and the protocol 5 bodies are the rc.54 SDK's
-  sdk: "^0.1.0-rc.54",
+  // ctx.dialIn.capacity and the handlers' connection argument are the rc.56 SDK's
+  sdk: "^0.1.0-rc.56",
   provides: [DEVICE_PROVIDER_EXTENSION_POINT],
   permissions: { dialIn: { protocol: DEVICE_DIAL_IN_PROTOCOL } },
   migrations: "../migrations",

@@ -3,10 +3,13 @@
 
 -- What the device's machine said in its last accepted hello, and the owner report every carrier
 -- (hello, policy event, binding answer) keeps current. org_id is learned from the kernel's first
--- report call (a hello names no org) and never moves.
+-- report call (a hello names no org) and never moves. machine_id is the kernel's id of the signed-in
+-- machine (its credential) whose hello was accepted, connection_id that hello's connection.
 CREATE TABLE IF NOT EXISTS connections (
   device_id text PRIMARY KEY,
   org_id text,
+  machine_id text NOT NULL,
+  connection_id text NOT NULL,
   machine_epoch integer NOT NULL DEFAULT 0,
   mode text NOT NULL CHECK (mode IN ('os', 'docker')),
   roots jsonb NOT NULL,

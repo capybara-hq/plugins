@@ -218,6 +218,13 @@ export function supportOf(
     ...attested,
     // never wider than the owner allows now (a ceiling change since the binding narrows it)
     outsideSandbox: attested.outsideSandbox && owner.outsideSandbox,
+    // the open public internet only while the owner's sandbox network is open (an allowlist, or
+    // blocked or missing facts, narrow every command's egress on the machine)
+    network: {
+      ...attested.network,
+      openPublic:
+        attested.network.openPublic && owner.state === "report" && owner.network === "open",
+    },
   });
 }
 

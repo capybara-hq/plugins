@@ -24,9 +24,11 @@ machine's report of refused hosts is passed on as given, except that a host it c
 is a wildcard or no valid host name is reported as an address; whether a refused host can be
 granted for a call, and by whom, is the kernel's decision.
 
-Reads are sized for the kernel's default frame limit (16 MiB,
-`CAPYBARA_DEVICES__DIAL_IN__MAX_FRAME_BYTES`); a deployment that lowers it gets the machine's
-"exceeds negotiated capacity" refusal for larger reads.
+Reads, output reads and tails are sized by the connection's negotiated frame capacity
+(`ctx.dialIn.capacity`: the smaller of the machine's and the deployment's
+`CAPYBARA_DEVICES__DIAL_IN__MAX_FRAME_BYTES`), read before each request; a write that cannot fit
+one frame is refused with a hint to write smaller parts. No capacity (no machine holds the device)
+is the device being offline.
 
 ## Hello, owner report and device report
 
@@ -40,9 +42,16 @@ generation under another runtime identity is refused (`local.invalid_hello`,
 - **Owner report.** The owner's ceiling arrives with the hello, a `policy` event and each binding
   answer, under one rule: a higher sequence is recorded, the same report again changes nothing, a
   stale one is ignored, a conflicting one blocks the facts (run as narrowly as possible) until a
-  valid one arrives. A bound program whose hello is stale or conflicting is refused
-  (`local.stale_owner_report`, `local.owner_report_conflict`); an unbound one whose sequence is not
-  above the stored one is a new machine credential (a login restarts the sequence) and is recorded.
+  valid one arrives. The same machine's hello whose report is stale or conflicting is refused
+  (`local.stale_owner_report`, `local.owner_report_conflict`) and nothing is recorded.
+- **Machine.** Every hello, event and close names the kernel's machine id (the signed-in
+  credential) and connection id. A hello from another machine than the recorded one (another
+  `capybara-device login`, on this computer or another) gets a fresh record: its owner report is
+  recorded as is, the machine epoch moves on and it never attests the installed binding. A
+  `replaced` close changes nothing by itself (it names the old machine both for a takeover by the
+  same machine and for another machine's sign-in): the next hello tells them apart. A `revoked`
+  close of the recorded machine moves the epoch. Events of any connection other than the recorded
+  one are dropped.
 - **Attestation.** An unbound hello (the program restarted, typically under a new runtime after an
   upgrade) marks the installed binding unattested: the instance is gone and the kernel recreates
   it, which binds a new generation.
@@ -55,8 +64,9 @@ generation under another runtime identity is refused (`local.invalid_hello`,
   provider calls `ctx.devices.reportChanged`; after a create or resume the kernel reads the report
   again itself.
 - **`permissionSupport()`** answers from the rows only, never a machine round trip: the support the
-  machine attested for the handle's generation, with outside-the-sandbox narrowed to what the
-  owner allows now; closed when the binding is not installed, gone when the device holds another
+  machine attested for the handle's generation, with outside-the-sandbox and the open public
+  internet narrowed to what the owner allows now (no open public internet while the owner's
+  network is an allowlist or the owner facts are blocked or missing); closed when the binding is not installed, gone when the device holds another
   generation or the binding is unattested.
 
 ## Existing local devices

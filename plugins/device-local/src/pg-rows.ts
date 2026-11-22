@@ -88,7 +88,9 @@ function connectionOf(r: Row | undefined): Connection | null {
     typeof roots.workspace !== "string" ||
     typeof roots.skills !== "string" ||
     typeof roots.tmp !== "string" ||
-    (r.mode !== "os" && r.mode !== "docker")
+    (r.mode !== "os" && r.mode !== "docker") ||
+    typeof r.machine_id !== "string" ||
+    typeof r.connection_id !== "string"
   )
     return null;
   let permissionSupport = UNREADABLE_SUPPORT;
@@ -101,6 +103,8 @@ function connectionOf(r: Row | undefined): Connection | null {
   return {
     deviceId: String(r.device_id),
     orgId: typeof r.org_id === "string" ? r.org_id : null,
+    machineId: r.machine_id,
+    connectionId: r.connection_id,
     machineEpoch: Number(r.machine_epoch),
     mode: r.mode,
     roots: { workspace: roots.workspace, skills: roots.skills, tmp: roots.tmp },
@@ -126,6 +130,8 @@ async function writeConnection(db: Db, c: Connection): Promise<void> {
   const values = {
     device_id: c.deviceId,
     org_id: c.orgId,
+    machine_id: c.machineId,
+    connection_id: c.connectionId,
     machine_epoch: c.machineEpoch,
     mode: c.mode,
     roots: JSON.stringify(c.roots),

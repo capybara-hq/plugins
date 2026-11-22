@@ -299,6 +299,8 @@ describe("the PG store (the plugin's migrated schema)", () => {
       connection: {
         deviceId: "pg-dev",
         orgId: null,
+        machineId: "machine-1",
+        connectionId: "connection-1",
         machineEpoch: 0,
         mode: "os",
         roots: ROOTS,
@@ -318,7 +320,13 @@ describe("the PG store (the plugin's migrated schema)", () => {
     }));
     const before = await store.state("pg-dev");
     expect(before.binding?.unattested).toBe(true);
-    expect(before.connection).toMatchObject({ mode: "os", roots: ROOTS, features: ["projects"] });
+    expect(before.connection).toMatchObject({
+      machineId: "machine-1",
+      connectionId: "connection-1",
+      mode: "os",
+      roots: ROOTS,
+      features: ["projects"],
+    });
     // a stale bind answer (sequence 1 < 2) leaves the owner report, and attests the binding again
     await store.installBinding("pg-dev", "100", String(committed?.bindingId), installed("100", 1));
     const after = await store.state("pg-dev");

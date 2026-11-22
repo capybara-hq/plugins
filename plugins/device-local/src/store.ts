@@ -52,9 +52,13 @@ export interface Connection {
    * until then. Reads for another org find nothing.
    */
   orgId: string | null;
+  /** The kernel's id of the signed-in machine (its credential) whose hello was accepted. */
+  machineId: string;
+  /** The connection that hello arrived on (frames of any other connection are dropped). */
+  connectionId: string;
   /**
-   * Moves on when the device's machine is replaced or revoked: part of the report revision, so
-   * what was approved against the old machine no longer stands.
+   * Moves on when another machine's hello is accepted or the machine is revoked: part of the
+   * report revision, so what was approved against the old machine no longer stands.
    */
   machineEpoch: number;
   mode: "os" | "docker";

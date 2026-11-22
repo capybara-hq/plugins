@@ -1,4 +1,9 @@
-import type { DevicesCtx, DialInHandler, ExtensionContext } from "@capybara-hq/plugin-sdk";
+import type {
+  DevicesCtx,
+  DialInConnectionInfo,
+  DialInHandler,
+  ExtensionContext,
+} from "@capybara-hq/plugin-sdk";
 import {
   type DeviceHello,
   type DeviceRuntimeIdentity,
@@ -52,15 +57,19 @@ const sameRuntime = (a: DeviceRuntimeIdentity, b: DeviceRuntimeIdentity): boolea
  *   unattested: the machine will never serve that generation again, so the instance is gone and
  *   the kernel recreates it (which binds a new generation under the new runtime). One that attests
  *   it refreshes the binding's support with the hello's.
- * - **Owner report.** The hello's owner ceiling goes through the owner-report rule. A bound
- *   program (same credential) whose report is stale or conflicting is refused. An unbound one
- *   whose sequence is not above the stored one is another machine credential (a login restarts
- *   the sequence): its report is recorded and the machine epoch moves on.
+ * - **Machine.** `conn.machineId` is the kernel's id of the signed-in machine (its credential). A
+ *   hello from another machine than the stored one (another login, on this computer or another)
+ *   gets a fresh connection record: its owner report is recorded as is (a login restarts the
+ *   sequence), the machine epoch moves on (so the report revision changes) and it never attests
+ *   the installed binding (the old credential's generation is gone).
+ * - **Owner report.** The same machine's hello goes through the owner-report rule: a stale or
+ *   conflicting report is refused and nothing is recorded (restart the program or sign in again).
  */
 export function decideHello(
   s: DeviceState,
   deviceId: string,
   hello: DeviceHello,
+  conn: DialInConnectionInfo,
   now: string,
 ): HelloRefusal | DeviceChange<OwnerReportOutcome> {
   const gen = hello.instanceGeneration;
@@ -77,8 +86,12 @@ export function decideHello(
       "local.identity_mismatch",
       "The machine names an instance generation this deployment never bound; sign in again",
     );
+  const stored = s.connection;
+  const sameMachine = stored !== null && stored.machineId === conn.machineId;
   const installed = b?.status === "installed" ? b.installed : undefined;
-  const namesInstalled = installed !== undefined && gen === b?.generation;
+  // no stored record (an unreadable one) cannot tell another machine apart: only the runtime check
+  const namesInstalled =
+    (stored === null || sameMachine) && installed !== undefined && gen === b?.generation;
   if (
     namesInstalled &&
     hello.runtimeIdentity &&
@@ -89,22 +102,24 @@ export function decideHello(
       "The machine's runtime identity differs from the one its instance was bound under",
     );
 
-  const stored = s.connection;
-  let epoch = stored?.machineEpoch ?? 0;
-  let applied = applyOwnerReport(stored?.ownerReport ?? null, hello.ownerCeiling, "hello", now);
-  if (applied.outcome === "stale" || applied.outcome === "conflict") {
-    if (gen !== null)
-      return applied.outcome === "stale"
-        ? refuse(
-            "local.stale_owner_report",
-            "The machine's owner report is older than the one recorded; restart capybara-device or sign in again",
-          )
-        : refuse(
-            "local.owner_report_conflict",
-            "The machine's owner report conflicts with the one recorded under the same sequence; sign in again",
-          );
-    // another machine credential: its sequence starts again
-    epoch += 1;
+  let epoch: number;
+  let applied: ReturnType<typeof applyOwnerReport>;
+  if (sameMachine) {
+    epoch = stored.machineEpoch;
+    applied = applyOwnerReport(stored.ownerReport, hello.ownerCeiling, "hello", now);
+    if (applied.outcome === "stale")
+      return refuse(
+        "local.stale_owner_report",
+        "The machine's owner report is older than the one recorded; restart capybara-device or sign in again",
+      );
+    if (applied.outcome === "conflict")
+      return refuse(
+        "local.owner_report_conflict",
+        "The machine's owner report conflicts with the one recorded under the same sequence; sign in again",
+      );
+  } else {
+    // a fresh connection record: the first machine, or another one replacing it
+    epoch = stored ? stored.machineEpoch + 1 : 0;
     applied = {
       outcome: "recorded",
       next: { report: hello.ownerCeiling, observedAt: now, via: "hello" },
@@ -114,6 +129,8 @@ export function decideHello(
   const connection: Connection = {
     deviceId,
     orgId: stored?.orgId ?? null,
+    machineId: conn.machineId,
+    connectionId: conn.connectionId,
     machineEpoch: epoch,
     mode: hello.mode,
     roots: { workspace: hello.roots.workspace, skills: hello.roots.skills, tmp: hello.roots.tmp },
@@ -140,6 +157,21 @@ export function decideHello(
   }
   return { result: applied.outcome, connection, ...(binding && { binding }) };
 }
+
+/** A connection the kernel named: a machine id and a connection id. */
+const validConnection = (conn: unknown): conn is DialInConnectionInfo => {
+  const c = conn as Partial<DialInConnectionInfo> | null | undefined;
+  return (
+    typeof c?.machineId === "string" &&
+    c.machineId.length > 0 &&
+    typeof c.connectionId === "string" &&
+    c.connectionId.length > 0
+  );
+};
+
+/** Whether `conn` is the connection whose hello the stored record holds. */
+const isRecorded = (c: Connection, conn: DialInConnectionInfo | undefined): boolean =>
+  c.machineId === conn?.machineId && c.connectionId === conn?.connectionId;
 
 /**
  * The provider's dial-in handler for `capybara-device/5`. The machine is not trusted: every hello
@@ -184,17 +216,19 @@ export function createDialInHandler(
   };
 
   return {
-    async onHello(deviceId, body, signal) {
+    async onHello(deviceId, body, signal, conn) {
       signal.throwIfAborted();
       if (typeof deviceId !== "string" || !DEVICE_ID.test(deviceId))
         return refuse("local.invalid_hello", "The device id is not one this provider serves");
+      if (!validConnection(conn))
+        return refuse("local.invalid_hello", "The connection names no machine");
       let hello: DeviceHello;
       try {
         hello = parseDeviceFrame(body, "hello");
       } catch (e) {
         return refuse("local.invalid_hello", `Invalid hello: ${errMsg(e)}`);
       }
-      const out = await change(deviceId, (s) => decideHello(s, deviceId, hello, now()));
+      const out = await change(deviceId, (s) => decideHello(s, deviceId, hello, conn, now()));
       if (typeof out === "object" && out !== null && "ok" in out) {
         ctx.log.info("refused a machine's hello", { deviceId, code: out.code });
         return out;
@@ -205,9 +239,10 @@ export function createDialInHandler(
     /**
      * A `policy` event: the owner changed the machine's ceiling while connected. Recorded through
      * the owner-report rule (stale ignored, conflicting blocks); an invalid body is logged and
-     * dropped (the kernel keeps the connection; the machine's own enforcement stands).
+     * dropped (the kernel keeps the connection; the machine's own enforcement stands), and so is a
+     * frame of any connection other than the one whose hello was recorded last.
      */
-    async onFrame(deviceId, frame) {
+    async onFrame(deviceId, frame, conn) {
       let event: ReturnType<typeof parseDeviceFrame<"event">>;
       try {
         event = parseDeviceFrame(frame, "event");
@@ -216,7 +251,7 @@ export function createDialInHandler(
         return;
       }
       await change(deviceId, (s) => {
-        if (!s.connection) return { result: "none" };
+        if (!s.connection || !isRecorded(s.connection, conn)) return { result: "none" };
         const applied = applyOwnerReport(
           s.connection.ownerReport,
           event.ownerCeiling,
@@ -232,15 +267,19 @@ export function createDialInHandler(
     },
 
     /**
-     * A revoked machine: the epoch moves on, so what was approved against it no longer stands. A
-     * replacement by a newer connection of the same machine changes nothing (its hello is checked
-     * like every hello); a deleted device's rows go with its file system (`destroyFileSystem`).
+     * A revoked machine: when it is the recorded one, the epoch moves on, so what was approved
+     * against it no longer stands (a close of an older machine changes nothing). `replaced` names
+     * the closing connection's machine, which is the recorded one both when the same machine took
+     * the device over with a newer connection and when the device signed in from another machine:
+     * the close changes nothing, and the next hello tells the two apart by its machine id (another
+     * machine moves the epoch, {@link decideHello}). A deleted device's rows go with its file
+     * system (`destroyFileSystem`).
      */
-    onClose(deviceId, reason) {
+    onClose(deviceId, reason, conn) {
       if (reason !== "revoked") return;
       // the kernel awaits a returned promise only to log its failure; it never throws here
       return change(deviceId, (s) =>
-        s.connection
+        s.connection && s.connection.machineId === conn?.machineId
           ? {
               result: undefined,
               connection: { ...s.connection, machineEpoch: s.connection.machineEpoch + 1 },

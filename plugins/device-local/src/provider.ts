@@ -19,6 +19,7 @@ import {
   SandboxPermissionUnsupportedError,
   type SandboxPreparation,
   type SandboxRoots,
+  ToolError,
   validateAllowHost,
 } from "@capybara-hq/plugin-sdk";
 import type { BackgroundReadOutputResult } from "@capybara-hq/plugin-sdk/device-protocol";
@@ -34,17 +35,30 @@ export { EXEC_DEADLINE_MARGIN_MS, OP_DEADLINE_MS } from "./frames.js";
  */
 export const FRAME_ENVELOPE_BYTES = 64 * 1024;
 
-/**
- * The frame capacity reads are sized for: the kernel's default `devices.dialIn.maxFrameBytes`
- * (`CAPYBARA_DEVICES__DIAL_IN__MAX_FRAME_BYTES`). The channel does not tell an extension the
- * capacity it negotiated with the machine; a deployment that lowers the limit gets the machine's
- * actionable "exceeds negotiated capacity" refusal for a read above it, never a silent cut.
- */
-export const MAX_FRAME_BYTES = 16 * 1024 * 1024;
-
 /** The most raw bytes whose base64 plus {@link FRAME_ENVELOPE_BYTES} fit in `maxFrameBytes`. */
 export const maxReadBytes = (maxFrameBytes: number): number =>
   Math.max(0, Math.floor((maxFrameBytes - FRAME_ENVELOPE_BYTES) / 4) * 3);
+
+/**
+ * The negotiated frame capacity of the machine's current connection (`ctx.dialIn.capacity`, the
+ * smaller of the machine's and the deployment's `CAPYBARA_DEVICES__DIAL_IN__MAX_FRAME_BYTES`),
+ * read before every sized request. No machine holding the device (null), or a capacity that
+ * cannot be read, is the device being offline.
+ */
+export async function frameCapacity(
+  dialIn: Pick<ExtensionContext["dialIn"], "capacity">,
+  deviceId: string,
+): Promise<number> {
+  let cap: { maxFrameBytes: number } | null;
+  try {
+    cap = await dialIn.capacity(deviceId);
+  } catch (e) {
+    if (isDeviceOfflineError(e)) throw e;
+    throw new DeviceOfflineError(deviceId, { cause: e });
+  }
+  if (cap === null) throw new DeviceOfflineError(deviceId);
+  return cap.maxFrameBytes;
+}
 
 /** The most bytes one managed-output read or tail carries (the background contract's bound). */
 const OUTPUT_READ_BYTES = 65_536;
@@ -222,7 +236,8 @@ export function createDeviceLocalProvider(
       );
     return {
       readFile: async (path, o) => {
-        const maxBytes = Math.min(o.maxBytes, maxReadBytes(MAX_FRAME_BYTES));
+        const cap = await frameCapacity(ctx.dialIn, h.id);
+        const maxBytes = Math.min(o.maxBytes, maxReadBytes(cap));
         const r = (await send("readFile", { path, maxBytes }, o.signal)) as {
           dataB64: string;
           truncated: boolean;
@@ -230,6 +245,11 @@ export function createDeviceLocalProvider(
         return r === null ? null : { data: bytesOf(r.dataB64), truncated: r.truncated };
       },
       writeFile: async (path, data, signal) => {
+        const cap = await frameCapacity(ctx.dialIn, h.id);
+        if (data.byteLength > maxReadBytes(cap))
+          throw new ToolError(
+            `The file is too large to send to the connected machine in one piece (${data.byteLength} bytes, at most ${maxReadBytes(cap)}); use smaller writes, or ask a platform admin to raise the dial-in frame limit`,
+          );
         await send("writeFile", { path, dataB64: b64Of(data) }, signal);
       },
       stat: async (path, signal) =>
@@ -268,7 +288,8 @@ export function createDeviceLocalProvider(
       )) as Awaited<ReturnType<SandboxBackground["status"]>>,
     readOutput: async (h, ref, o) => {
       o.signal.throwIfAborted();
-      const maxBytes = Math.min(o.maxBytes, OUTPUT_READ_BYTES, maxReadBytes(MAX_FRAME_BYTES));
+      const cap = await frameCapacity(ctx.dialIn, h.id);
+      const maxBytes = Math.min(o.maxBytes, OUTPUT_READ_BYTES, maxReadBytes(cap));
       const r = (await call(
         h.id,
         "backgroundReadOutput",
@@ -284,10 +305,11 @@ export function createDeviceLocalProvider(
       };
     },
     tail: async (h, ref, o) => {
+      const cap = await frameCapacity(ctx.dialIn, h.id);
       const r = (await call(
         h.id,
         "backgroundTail",
-        { ref, maxBytes: Math.min(o.maxBytes, OUTPUT_READ_BYTES) },
+        { ref, maxBytes: Math.min(o.maxBytes, OUTPUT_READ_BYTES, maxReadBytes(cap)) },
         { deadlineMs: OP_DEADLINE_MS, signal: o.signal },
       )) as { dataB64: string; truncated: boolean } | { unavailable: "lost" | "expired" };
       return "unavailable" in r ? r : { data: bytesOf(r.dataB64), truncated: r.truncated };

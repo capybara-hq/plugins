@@ -31,13 +31,18 @@ export interface SentRequest {
 
 /**
  * A fake `ctx.dialIn`: records every request body and answers it with `answer` (a response body;
- * a throw is the channel's own error). `online` is what `ctx.dialIn.online` answers.
+ * a throw is the channel's own error). `online` is what `ctx.dialIn.online` answers, `capacity`
+ * the negotiated frame capacity `ctx.dialIn.capacity` answers (null: no machine holds the device).
  */
 export function fakeDialIn(
   answer: (req: SentRequest) => Answer | Promise<Answer> = () => ({ ok: true, result: null }),
 ) {
   const sent: SentRequest[] = [];
-  const state = { online: true, answer };
+  const state: {
+    online: boolean;
+    answer: typeof answer;
+    capacity: number | null | (() => never);
+  } = { online: true, answer, capacity: 16 * 1024 * 1024 };
   const channel: DialInChannel = {
     async request(deviceId, frame, opts) {
       const body = frame as { op: DeviceOperation; args: Record<string, unknown> };
@@ -53,6 +58,11 @@ export function fakeDialIn(
     },
     async online() {
       return state.online;
+    },
+    async capacity() {
+      const c = state.capacity;
+      if (typeof c === "function") return c();
+      return c === null ? null : { maxFrameBytes: c };
     },
     async stop() {},
   };

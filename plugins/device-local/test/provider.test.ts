@@ -22,7 +22,6 @@ import plugin, {
   EXEC_DEADLINE_MARGIN_MS,
   FRAME_ENVELOPE_BYTES,
   type LocalDeviceHandle,
-  MAX_FRAME_BYTES,
   maxReadBytes,
   ON_MACHINE_PREFIX,
   OP_DEADLINE_MS,
@@ -163,9 +162,71 @@ describe("the protocol 5 codec", () => {
     const op = await s.provider.operation?.(h, scopeOf(), signal());
     await op?.readFile(`${ROOTS.workspace}/big`, { maxBytes: 64 * 1024 * 1024, signal: signal() });
     await op?.readFile(`${ROOTS.workspace}/small`, { maxBytes: 10, signal: signal() });
-    expect(s.dial.sent.map((r) => r.args.maxBytes)).toEqual([maxReadBytes(MAX_FRAME_BYTES), 10]);
+    expect(s.dial.sent.map((r) => r.args.maxBytes)).toEqual([maxReadBytes(16 * 1024 * 1024), 10]);
     expect(maxReadBytes(FRAME_ENVELOPE_BYTES + 4000)).toBe(3000);
     expect(maxReadBytes(FRAME_ENVELOPE_BYTES)).toBe(0);
+  });
+
+  it("reads, output reads and tails are sized by the connection's negotiated capacity", async () => {
+    const s = setup(
+      machine({
+        readFile: () => ({ ok: true, result: null }),
+        backgroundReadOutput: () => ({ ok: true, result: { unavailable: "lost" } }),
+        backgroundTail: () => ({ ok: true, result: { unavailable: "lost" } }),
+      }),
+    );
+    const h = await created(s);
+    s.dial.state.capacity = FRAME_ENVELOPE_BYTES + 4000;
+    const op = await s.provider.operation?.(h, scopeOf(), signal());
+    await op?.readFile(`${ROOTS.workspace}/big`, { maxBytes: 1_000_000, signal: signal() });
+    const ref: SandboxExecutionRef = {
+      executionId: "exec-1",
+      operationId: "operation-1",
+      instanceId: DEVICE,
+      instanceGeneration: h.generation,
+    };
+    await s.provider.background?.readOutput(h, ref, {
+      offset: 0,
+      maxBytes: 65_536,
+      signal: signal(),
+    });
+    await s.provider.background?.tail(h, ref, { maxBytes: 65_536, signal: signal() });
+    expect(s.dial.sent.slice(-3).map((r) => r.args.maxBytes)).toEqual([3000, 3000, 3000]);
+  });
+
+  it("a write that cannot fit one frame is refused before anything is sent", async () => {
+    const s = setup();
+    const h = await created(s);
+    s.dial.state.capacity = FRAME_ENVELOPE_BYTES + 4000;
+    const before = s.dial.sent.length;
+    const op = await s.provider.operation?.(h, scopeOf(), signal());
+    const e = await rejection(
+      op?.writeFile(`${ROOTS.workspace}/big`, new Uint8Array(3001), signal()) ?? Promise.resolve(),
+    );
+    expect(e).toBeInstanceOf(ToolError);
+    expect((e as Error).message).toMatch(/too large .* at most 3000/);
+    expect(s.dial.sent.length).toBe(before);
+  });
+
+  it("no capacity (no machine now) or an unreadable one is the device being offline", async () => {
+    const s = setup(machine({ readFile: () => ({ ok: true, result: null }) }));
+    const h = await created(s);
+    const before = s.dial.sent.length;
+    const op = await s.provider.operation?.(h, scopeOf(), signal());
+    s.dial.state.capacity = null;
+    const a = await rejection(
+      op?.readFile(`${ROOTS.workspace}/f`, { maxBytes: 10, signal: signal() }) ?? Promise.resolve(),
+    );
+    expect(isDeviceOfflineError(a)).toBe(true);
+    s.dial.state.capacity = () => {
+      throw new Error("redis down");
+    };
+    const b = await rejection(
+      op?.readFile(`${ROOTS.workspace}/f`, { maxBytes: 10, signal: signal() }) ?? Promise.resolve(),
+    );
+    expect(isDeviceOfflineError(b)).toBe(true);
+    expect(((b as Error).cause as Error).message).toBe("redis down");
+    expect(s.dial.sent.length).toBe(before);
   });
 
   it("a request body that is not valid protocol 5 is never sent", async () => {
