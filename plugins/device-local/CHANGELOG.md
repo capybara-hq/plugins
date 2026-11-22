@@ -1,5 +1,14 @@
 # @capybara-hq/plugin-device-local
 
+## 0.1.0-rc.2
+
+### Minor Changes
+
+- 08f8fab: Project reach machine|paths|workspace and refusals; device protocol 6: the report describes and
+  lists the connection's project reach, and a machine's `project_refused` outcome becomes
+  `ProjectPathRefusedError` with fixed English and Chinese text for its code, never the machine's
+  message.
+
 ## 0.1.0-rc.1
 
 ### Minor Changes
