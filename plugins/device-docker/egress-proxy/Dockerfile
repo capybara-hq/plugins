@@ -1,0 +1,12 @@
+# Capybara sandbox egress proxy image (deployment config egressProxyImage, default tag
+# capybara-sandbox-egress:latest). Env: MODE open-public | allowlist, ALLOW_HOSTS (allowlist),
+# PORT (3128), SOCKS_PORT (1080).
+#   docker build -t capybara-sandbox-egress:latest plugins/device-docker/egress-proxy
+# Multi-arch: docker buildx build --platform linux/amd64,linux/arm64 -t <registry>/capybara-sandbox-egress:<tag> \
+#   --push plugins/device-docker/egress-proxy
+FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f
+
+COPY proxy.mjs /app/proxy.mjs
+USER node
+EXPOSE 3128 1080
+CMD ["node", "/app/proxy.mjs"]

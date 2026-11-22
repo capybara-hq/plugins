@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-sandbox-e2b": minor
+"@capybara-hq/plugin-device-e2b": minor
 ---
 
 Provide `sandbox@2`. BREAKING: needs a kernel with environments and `@capybara-hq/plugin-sdk` `^0.1.0-rc.3`.

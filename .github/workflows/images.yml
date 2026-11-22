@@ -1,5 +1,5 @@
 # Sandbox images: ghcr.io/capybara-hq/capybara-sandbox and capybara-sandbox-egress, linux/amd64 +
-# arm64, tagged with the version of plugins/sandbox-docker (the plugin reads its default image tags
+# arm64, tagged with the version of plugins/device-docker (the plugin reads its default image tags
 # from its own version, so a deployment pulls them instead of building). Spec §5.4 of the
 # environments design in capybara-hq/core.
 #
@@ -24,7 +24,7 @@ on:
   push:
     branches: [main]
     paths:
-      - plugins/sandbox-docker/package.json
+      - plugins/device-docker/package.json
   workflow_dispatch:
 
 concurrency:
@@ -59,7 +59,7 @@ jobs:
       - name: Read the version and look for its tag
         id: plan
         run: |
-          version="$(jq -r .version plugins/sandbox-docker/package.json)"
+          version="$(jq -r .version plugins/device-docker/package.json)"
           case "$version" in
             [0-9]*) ;;
             *) echo "::error::unexpected version '$version'"; exit 1 ;;
@@ -69,10 +69,10 @@ jobs:
           matrix='[]'
           add() { matrix="$(jq -c --arg i "$1" --arg c "$2" '. + [{image: $i, context: $c}]' <<<"$matrix")"; }
           if ! docker buildx imagetools inspect "ghcr.io/capybara-hq/capybara-sandbox:$version" >/dev/null 2>&1; then
-            add capybara-sandbox plugins/sandbox-docker/image
+            add capybara-sandbox plugins/device-docker/image
           fi
           if ! docker buildx imagetools inspect "ghcr.io/capybara-hq/capybara-sandbox-egress:$version" >/dev/null 2>&1; then
-            add capybara-sandbox-egress plugins/sandbox-docker/egress-proxy
+            add capybara-sandbox-egress plugins/device-docker/egress-proxy
           fi
           if [ "$matrix" = "[]" ]; then
             echo "::notice::both images already have the tag $version, nothing to build"

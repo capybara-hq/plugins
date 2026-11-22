@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "name": "device-docker",
+  "displayName": {
+    "zh": "Docker 设备",
+    "en": "Docker devices"
+  },
+  "version": "0.1.0-rc.21",
+  "publisher": "Capybara",
+  "icon": "./icon.svg",
+  "description": {
+    "en": "Devices as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with their files on volumes kept until the device is deleted: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist",
+    "zh": "以 Docker 容器（runc 或 gVisor runsc）承载设备，经 Docker socket 代理访问；文件保存在卷上，直到设备被删除。网络默认开放公网（拒绝回环、私有、链路本地与元数据地址），也可用主机白名单"
+  },
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/device-docker#readme",
+  "setupGuides": [
+    {
+      "id": "connect",
+      "place": "device-connection"
+    }
+  ]
+}

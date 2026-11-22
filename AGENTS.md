@@ -79,8 +79,8 @@ Package names are always `@capybara-hq/plugin-<name>`; `repository.url` is
 - Connectors (`connector@1`; no stdio MCP):
   [writing-connectors](.agents/skills/writing-connectors/SKILL.md); references `plugins/connector-mcp`,
   `plugins/connector-openapi`.
-- Sandboxes (`sandbox@1`): [writing-sandbox-providers](.agents/skills/writing-sandbox-providers/SKILL.md);
-  references `plugins/sandbox-docker`, `plugins/sandbox-e2b`. `plugins/sandbox-docker/test/sandbox-proxy/haproxy.cfg`
+- Devices (`device-provider@1`): [writing-device-providers](.agents/skills/writing-device-providers/SKILL.md);
+  references `plugins/device-docker`, `plugins/device-e2b`. `plugins/device-docker/test/sandbox-proxy/haproxy.cfg`
   must stay byte-identical to core's `docker/sandbox-proxy/haproxy.cfg` (core checks it against the
   commit it pins).
 - Object storage (`object-store@1`):
@@ -109,7 +109,7 @@ pnpm lint        # biome check
 pnpm typecheck   # tsc -b, plus the tests' tsconfig
 pnpm check       # capybara-plugin check (every plugin check) + the icon and skill checks
 pnpm check:marketplace   # capybara-plugin marketplace --check
-pnpm test        # vitest run (needs Docker: Testcontainers PostgreSQL / Valkey, sandbox-docker)
+pnpm test        # vitest run (needs Docker: Testcontainers PostgreSQL / Valkey, device-docker)
 pnpm exec vitest run plugins/<name>   # one plugin's tests, from the repo root
 pnpm pack-plugins        # every plugin into artifacts/plugins
 pnpm wt:new <branch>     # start a task worktree

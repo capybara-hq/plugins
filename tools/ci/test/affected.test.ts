@@ -163,7 +163,7 @@ describe("the real workspace", () => {
   it("reads every plugin and tool with its plugin name", () => {
     const dirs = real.packages.map((p) => p.dir);
     expect(dirs).toEqual(
-      expect.arrayContaining(["plugins/slack", "plugins/sandbox-docker", "tools/ci", "tools/dev"]),
+      expect.arrayContaining(["plugins/slack", "plugins/device-docker", "tools/ci", "tools/dev"]),
     );
     expect(dirs).not.toContain("plugins/model-fake");
     const slack = real.packages.find((p) => p.dir === "plugins/slack");

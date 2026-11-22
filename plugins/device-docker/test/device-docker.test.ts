@@ -1,0 +1,1380 @@
+import { randomUUID } from "node:crypto";
+import {
+  type DeviceProvider,
+  isFileSystemGoneError,
+  isSandboxGoneError,
+  type SandboxActor,
+  type SandboxLimits,
+} from "@capybara-hq/plugin-sdk";
+import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  createDockerSandbox,
+  type DockerSandboxConfig,
+  type DockerSandboxProvider,
+  execArgv,
+  IN_SANDBOX_GRACE_SECONDS,
+} from "../src/index.js";
+import { hostDeniedCidrs } from "../src/provider.js";
+import {
+  buildTestImages,
+  cleanupTestResources,
+  docker,
+  dockerAvailable,
+  runscAvailable,
+  type SocketProxy,
+  startSocketProxy,
+  TEST_LABEL,
+  type TestImages,
+} from "./docker-env.js";
+
+/**
+ * device-provider@1 on real Docker (through the socket proxy of capybara-hq/core's docker/sandbox-proxy):
+ * file systems (volumes) that outlive instances (containers), lifecycle, exec timeout and abort,
+ * file reads and writes, read-only /skills, same-name rebuild, gone semantics, the two egress
+ * proxy modes (`open-public` and `allowlist`, plus the empty allowlist), update, and the security
+ * settings; the runsc cases run only when runsc is installed. Skipped as a whole without Docker.
+ */
+
+const RUN = randomUUID().slice(0, 8);
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+const sig = () => AbortSignal.timeout(120_000);
+const sbxName = () => `cap-${randomUUID()}`;
+const ACTOR: SandboxActor = { accountId: "acc-1", conversationId: "conv-1" };
+/** The `tag` and `actor` every `exec` carries in device-provider@1. */
+const who = () => ({ tag: randomUUID(), actor: ACTOR });
+const OPEN: SandboxLimits["network"] = { kind: "open-public", hosts: [] };
+const allow = (hosts: string[] = []): SandboxLimits["network"] => ({ kind: "allowlist", hosts });
+const limits = (network: SandboxLimits["network"]): SandboxLimits => ({
+  cpu: 1,
+  memoryMb: 512,
+  diskMb: 1024,
+  network,
+});
+
+describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
+  let images: TestImages;
+  let proxy: SocketProxy;
+  // 共用沙箱网络（socket 代理只放行 cap 开头的网络名）；放行目标也接在上面
+  const netName = `capybara-sandbox-test-${RUN}`;
+  let target: StartedTestContainer;
+  let targetIp: string;
+  let cfg: DockerSandboxConfig;
+  let sbx: DockerSandboxProvider;
+
+  beforeAll(async () => {
+    [images, proxy] = await Promise.all([
+      buildTestImages(),
+      startSocketProxy(),
+      docker("network", "create", "--label", `${TEST_LABEL}=${RUN}`, netName),
+    ]);
+    // 放行目标：与沙箱网络同一个网络上的本地 HTTP 服务（复用出站代理镜像里的 node）
+    target = await new GenericContainer(images.egressImage)
+      .withNetworkMode(netName)
+      .withUser("root")
+      .withCommand([
+        "node",
+        "-e",
+        "require('http').createServer((q,s)=>s.end('hello-egress')).listen(80,()=>console.log('ready'))",
+      ])
+      .withWaitStrategy(Wait.forLogMessage("ready"))
+      .start();
+    targetIp = target.getIpAddress(netName);
+    cfg = {
+      endpoint: proxy.endpoint,
+      runtime: "runc",
+      network: netName,
+      egressProxyImage: images.egressImage,
+    };
+    sbx = createDockerSandbox(cfg, {
+      labels: { [TEST_LABEL]: RUN },
+      // 仅测试：allowed.example.com / denied.example.com 都固定到本地目标（后者不在白名单里，照样被拒）
+      egressTestHosts: { "allowed.example.com": targetIp, "denied.example.com": targetIp },
+    });
+    // a cold run builds the sandbox image (about 1.5 GB) once, shared by the files
+  }, 1_200_000);
+
+  afterAll(async () => {
+    await target?.stop();
+    await cleanupTestResources(RUN);
+    await proxy?.stop();
+    await images?.remove();
+  }, 120_000);
+
+  /** A file system and an instance on it, both under `name` (as the kernel names them). */
+  const newSandbox = async (
+    p: DeviceProvider,
+    o: { name: string; image?: string; limits: SandboxLimits; signal: AbortSignal },
+  ) => {
+    const fileSystem = await p.createFileSystem({
+      name: o.name,
+      limits: o.limits,
+      signal: o.signal,
+    });
+    return p.create({ ...o, fileSystem });
+  };
+
+  const sh = async (id: string, command: string, timeoutMs = 30_000) =>
+    sbx.exec({ id }, { ...who(), command, timeoutMs, maxOutputBytes: 1_000_000, signal: sig() });
+
+  const inspect = async (name: string) =>
+    JSON.parse(await docker("inspect", name))[0] as {
+      Id: string;
+      State: { Running: boolean };
+      Config: { User: string; Env: string[]; Labels: Record<string, string> };
+      HostConfig: {
+        ShmSize: number;
+        ReadonlyRootfs: boolean;
+        CapDrop: string[];
+        SecurityOpt: string[];
+        NanoCpus: number;
+        Memory: number;
+        PidsLimit: number;
+        Runtime: string;
+        NetworkMode: string;
+      };
+    };
+
+  const exists = async (kind: "container" | "volume" | "network", name: string) =>
+    docker(kind, "inspect", name).then(
+      () => true,
+      () => false,
+    );
+
+  it("full lifecycle: create → exec → write / read → suspend → resume (files kept) → destroy", async () => {
+    const name = sbxName();
+    const h = await newSandbox(sbx, {
+      name,
+      image: images.sandboxImage,
+      limits: limits(allow()),
+      signal: sig(),
+    });
+    const r = await sh(h.id, "echo hi; id -un; pwd");
+    expect(r).toEqual({
+      exitCode: 0,
+      stdout: "hi\nsandbox\n/workspace\n",
+      stderr: "",
+      truncated: false,
+      timedOut: false,
+    });
+
+    await sbx.writeFile(h, "/workspace/deep/dir/a.txt", enc.encode("hello file"), sig());
+    const f = await sbx.readFile(h, "/workspace/deep/dir/a.txt", { maxBytes: 100, signal: sig() });
+    expect(f && dec.decode(f.data)).toBe("hello file");
+    expect(f?.truncated).toBe(false);
+    const part = await sbx.readFile(h, "/workspace/deep/dir/a.txt", { maxBytes: 5, signal: sig() });
+    expect(part && dec.decode(part.data)).toBe("hello");
+    expect(part?.truncated).toBe(true);
+    expect(
+      await sbx.readFile(h, "/workspace/missing.txt", { maxBytes: 5, signal: sig() }),
+    ).toBeNull();
+    expect(await sbx.stat(h, "/workspace/deep/dir/a.txt", sig())).toEqual({
+      size: 10,
+      isDir: false,
+    });
+    expect(await sbx.stat(h, "/workspace/deep", sig())).toEqual({
+      size: expect.any(Number),
+      isDir: true,
+    });
+    expect(await sbx.stat(h, "/workspace/nope", sig())).toBeNull();
+    // 命令写的文件归沙箱用户，writeFile 写的也是
+    expect((await sh(h.id, "stat -c %U /workspace/deep/dir/a.txt")).stdout).toBe("sandbox\n");
+
+    await sbx.suspend(h, sig());
+    expect((await inspect(name)).State.Running).toBe(false);
+    expect(await sbx.resume(h, sig())).toBe("resumed");
+    expect((await inspect(name)).State.Running).toBe(true);
+    const kept = await sbx.readFile(h, "/workspace/deep/dir/a.txt", {
+      maxBytes: 100,
+      signal: sig(),
+    });
+    expect(kept && dec.decode(kept.data)).toBe("hello file");
+    // resume 已在运行的实例也算成功
+    expect(await sbx.resume(h, sig())).toBe("resumed");
+
+    await sbx.destroy(h, sig());
+    expect(await exists("container", name)).toBe(false);
+    // destroy drops the instance only: the file system stays until destroyFileSystem
+    expect(await exists("volume", `${name}-workspace`)).toBe(true);
+    expect(await exists("volume", `${name}-skills`)).toBe(true);
+    await sbx.destroyFileSystem({ id: name }, sig());
+    expect(await exists("volume", `${name}-workspace`)).toBe(false);
+    expect(await exists("volume", `${name}-skills`)).toBe(false);
+    // not being there counts as success
+    await sbx.destroyFileSystem({ id: name }, sig());
+  });
+
+  it("destroy keeps the volumes and a new instance sees the files", async () => {
+    const name = sbxName();
+    const fileSystem = await sbx.createFileSystem({ name, limits: limits(allow()), signal: sig() });
+    expect(fileSystem).toEqual({ id: name });
+    const vol = await docker("volume", "inspect", `${name}-workspace`, `${name}-skills`);
+    const labels = (JSON.parse(vol) as { Labels: Record<string, string> }[]).map(
+      (v) => v.Labels["dev.capybara.sandbox.role"],
+    );
+    expect(labels).toEqual(["workspace", "skills"]);
+    const h1 = await sbx.create({
+      name,
+      image: images.sandboxImage,
+      limits: limits(allow(["allowed.example.com"])),
+      fileSystem,
+      signal: sig(),
+    });
+    await sbx.writeFile(h1, "/workspace/keep.txt", enc.encode("kept"), sig());
+    await sbx.writeFile(h1, "/skills/s/SKILL.md", enc.encode("skill"), sig());
+    await sbx.destroy(h1, sig());
+    expect(await exists("container", name)).toBe(false);
+    expect(await exists("container", `${name}-egress`)).toBe(false);
+    expect(await exists("network", `${name}-net`)).toBe(false);
+    // createFileSystem on an existing name returns it, files untouched
+    expect(await sbx.createFileSystem({ name, limits: limits(allow()), signal: sig() })).toEqual({
+      id: name,
+    });
+    const h2 = await sbx.create({
+      name,
+      image: images.sandboxImage,
+      limits: limits(allow()),
+      fileSystem,
+      signal: sig(),
+    });
+    try {
+      expect((await sh(h2.id, "cat /workspace/keep.txt /skills/s/SKILL.md")).stdout).toBe(
+        "keptskill",
+      );
+    } finally {
+      await sbx.destroyFileSystem(fileSystem, sig());
+    }
+    // destroyFileSystem force-removed the instance still using the volumes
+    expect(await exists("container", name)).toBe(false);
+    expect(await exists("volume", `${name}-workspace`)).toBe(false);
+  });
+
+  it("create on removed volumes throws FileSystemGoneError and makes no empty volume", async () => {
+    const name = sbxName();
+    const fileSystem = await sbx.createFileSystem({ name, limits: limits(allow()), signal: sig() });
+    await sbx.destroyFileSystem(fileSystem, sig());
+    const attempt = () =>
+      sbx.create({
+        name,
+        image: images.sandboxImage,
+        limits: limits(allow()),
+        fileSystem,
+        signal: sig(),
+      });
+    await expect(attempt()).rejects.toSatisfy(isFileSystemGoneError);
+    expect(await exists("volume", `${name}-workspace`)).toBe(false);
+    expect(await exists("volume", `${name}-skills`)).toBe(false);
+    expect(await exists("container", name)).toBe(false);
+
+    // only one of the two volumes gone counts as gone too
+    await sbx.createFileSystem({ name, limits: limits(allow()), signal: sig() });
+    await docker("volume", "rm", `${name}-skills`);
+    await expect(attempt()).rejects.toSatisfy(isFileSystemGoneError);
+    expect(await exists("volume", `${name}-skills`)).toBe(false);
+    expect(await exists("container", name)).toBe(false);
+  });
+
+  it("destroyFileSystemByName removes legacy cap-<id> volumes", async () => {
+    // a sandbox@1 instance: one container `cap-<conversationId>` that mounts its two volumes
+    const name = sbxName();
+    for (const v of [`${name}-workspace`, `${name}-skills`]) {
+      await docker("volume", "create", "--label", `${TEST_LABEL}=${RUN}`, v);
+    }
+    await docker(
+      "create",
+      "--name",
+      name,
+      "--label",
+      `${TEST_LABEL}=${RUN}`,
+      "-v",
+      `${name}-workspace:/workspace`,
+      "-v",
+      `${name}-skills:/skills`,
+      images.sandboxImage,
+      "sleep",
+      "infinity",
+    );
+    await docker("start", name);
+    await sbx.destroyFileSystemByName(name, sig());
+    expect(await exists("container", name)).toBe(false);
+    expect(await exists("volume", `${name}-workspace`)).toBe(false);
+    expect(await exists("volume", `${name}-skills`)).toBe(false);
+    // none left: still succeeds
+    await sbx.destroyFileSystemByName(name, sig());
+  });
+
+  it("a missing instance: resume is gone, file and exec calls throw SandboxGoneError, cleanup succeeds", async () => {
+    const h = { id: sbxName() };
+    expect(await sbx.resume(h, sig())).toBe("gone");
+    const gone = async (p: Promise<unknown>) => {
+      const e = await p.then(
+        () => null,
+        (err: unknown) => err,
+      );
+      expect(isSandboxGoneError(e), String(e)).toBe(true);
+    };
+    await gone(sh(h.id, "true"));
+    await gone(sbx.readFile(h, "/workspace/a", { maxBytes: 1, signal: sig() }));
+    await gone(sbx.writeFile(h, "/workspace/a", enc.encode("x"), sig()));
+    await gone(sbx.stat(h, "/workspace/a", sig()));
+    await sbx.suspend(h, sig());
+    await sbx.destroy(h, sig());
+    await sbx.destroyByName?.(h.id, sig());
+  });
+
+  it("exec: exit code, stderr, env, cwd and the output cap", async () => {
+    const h = await newSandbox(sbx, {
+      name: sbxName(),
+      image: images.sandboxImage,
+      limits: limits(allow()),
+      signal: sig(),
+    });
+    try {
+      const r = await sh(h.id, "echo out; echo err >&2; exit 3");
+      expect(r.exitCode).toBe(3);
+      expect(r.stdout).toBe("out\n");
+      expect(r.stderr).toBe("err\n");
+      // 命令与输出里的中文照常通过（exec 只拒绝键名里的非 ASCII）
+      expect(
+        (await sh(h.id, "echo \u4e2d\u6587 > /tmp/\u6587.txt; cat /tmp/\u6587.txt")).stdout,
+      ).toBe("\u4e2d\u6587\n");
+      // 建容器的值里有非 ASCII：插件自己先拒绝（不转义）
+      await expect(
+        newSandbox(sbx, {
+          name: sbxName(),
+          image: "capybara-sandbox:\u955c\u50cf",
+          limits: limits(allow()),
+          signal: sig(),
+        }),
+      ).rejects.toThrow(/non-ASCII/);
+      const e = await sbx.exec(h, {
+        ...who(),
+        command: 'echo "$FOO"; pwd',
+        cwd: "/tmp",
+        env: { FOO: "bar baz" },
+        timeoutMs: 10_000,
+        maxOutputBytes: 1000,
+        signal: sig(),
+      });
+      expect(e.stdout).toBe("bar baz\n/tmp\n");
+      const big = await sbx.exec(h, {
+        ...who(),
+        command: "head -c 100000 /dev/zero | tr '\\0' a; echo done >&2",
+        timeoutMs: 10_000,
+        maxOutputBytes: 100,
+        signal: sig(),
+      });
+      // 上限是 stdout + stderr 合计；Docker 分别转发两路，stderr 的 "done" 可能先到
+      expect(big.stdout).toMatch(/^a+$/);
+      expect(big.stdout.length + big.stderr.length).toBe(100);
+      expect(big.truncated).toBe(true);
+      expect(big.exitCode).toBe(0);
+      // bash 语法可用
+      expect((await sh(h.id, "a=(x y); [[ $a == x ]] && echo bash")).stdout).toBe("bash\n");
+    } finally {
+      await sbx.destroy(h, sig());
+    }
+  });
+
+  it("exec: timeout and abort kill the command with its children; the sandbox stays usable", async () => {
+    const h = await newSandbox(sbx, {
+      name: sbxName(),
+      image: images.sandboxImage,
+      limits: limits(allow()),
+      signal: sig(),
+    });
+    try {
+      const t0 = Date.now();
+      const r = await sbx.exec(h, {
+        ...who(),
+        command: "echo started; sleep 301 & (sleep 302 &); sleep 303; echo never",
+        timeoutMs: 1500,
+        maxOutputBytes: 1000,
+        signal: sig(),
+      });
+      expect(Date.now() - t0).toBeLessThan(10_000);
+      expect(r).toMatchObject({ exitCode: null, timedOut: true, stdout: "started\n" });
+      expect((await sh(h.id, "ps -eo args")).stdout).not.toMatch(/sleep 30[123]/);
+
+      const ac = new AbortController();
+      setTimeout(() => ac.abort(new Error("stop")), 1500);
+      const t1 = Date.now();
+      const a = await sbx.exec(h, {
+        ...who(),
+        command: "echo begun; sleep 304 & sleep 305",
+        timeoutMs: 60_000,
+        maxOutputBytes: 1000,
+        signal: ac.signal,
+      });
+      expect(Date.now() - t1).toBeLessThan(10_000);
+      expect(a).toMatchObject({ exitCode: null, timedOut: false, stdout: "begun\n" });
+      expect((await sh(h.id, "ps -eo args")).stdout).not.toMatch(/sleep 30[45]/);
+
+      // 调用时已中止：立即 reject
+      const dead = AbortSignal.abort(new Error("already"));
+      await expect(
+        sbx.exec(h, {
+          ...who(),
+          command: "true",
+          timeoutMs: 1000,
+          maxOutputBytes: 10,
+          signal: dead,
+        }),
+      ).rejects.toThrow("already");
+      await expect(
+        sbx.readFile(h, "/workspace/x", { maxBytes: 1, signal: dead }),
+      ).rejects.toThrow();
+      await expect(sbx.resume(h, dead)).rejects.toThrow();
+
+      expect((await sh(h.id, "echo alive")).stdout).toBe("alive\n");
+      // 杀掉命令后 /tmp 里不留 .kill 标记
+      expect((await sh(h.id, "ls -a /tmp | grep -c 'kill$' || true")).stdout).toBe("0\n");
+    } finally {
+      await sbx.destroy(h, sig());
+    }
+  });
+
+  it("binary files round-trip, including empty files", async () => {
+    const h = await newSandbox(sbx, {
+      name: sbxName(),
+      image: images.sandboxImage,
+      limits: limits(allow()),
+      signal: sig(),
+    });
+    try {
+      const bytes = new Uint8Array(300_000).map((_, i) => (i * 7) % 256);
+      await sbx.writeFile(h, "/workspace/bin.dat", bytes, sig());
+      const back = await sbx.readFile(h, "/workspace/bin.dat", {
+        maxBytes: 1_000_000,
+        signal: sig(),
+      });
+      expect(back?.data).toEqual(bytes);
+      expect((await sh(h.id, "wc -c < /workspace/bin.dat")).stdout.trim()).toBe("300000");
+      await sbx.writeFile(h, "/tmp/empty", new Uint8Array(0), sig());
+      expect(await sbx.stat(h, "/tmp/empty", sig())).toEqual({ size: 0, isDir: false });
+      // 覆盖写
+      await sbx.writeFile(h, "/workspace/bin.dat", enc.encode("short"), sig());
+      const over = await sbx.readFile(h, "/workspace/bin.dat", { maxBytes: 100, signal: sig() });
+      expect(over && dec.decode(over.data)).toBe("short");
+    } finally {
+      await sbx.destroy(h, sig());
+    }
+  });
+
+  it("file calls reach a clean absolute path outside the roots; malformed paths are refused", async () => {
+    // the roots are the kernel's: a cloud device's scope is the whole instance (the container is
+    // the sandbox)
+    const h = await newSandbox(sbx, {
+      name: sbxName(),
+      image: images.sandboxImage,
+      limits: limits(allow()),
+      signal: sig(),
+    });
+    try {
+      const passwd = await sbx.readFile(h, "/etc/passwd", { maxBytes: 100_000, signal: sig() });
+      expect(passwd && dec.decode(passwd.data)).toContain("root:");
+      expect((await sbx.stat(h, "/etc/passwd", sig()))?.isDir).toBe(false);
+      await expect(
+        sbx.readFile(h, "/workspace/../etc/passwd", { maxBytes: 1, signal: sig() }),
+      ).rejects.toThrow(/path/);
+      await expect(sbx.stat(h, "relative", sig())).rejects.toThrow(/path/);
+    } finally {
+      await sbx.destroy(h, sig());
+    }
+  });
+
+  it("/skills is read-only inside the sandbox but writable through writeFile; no symlink bypass", async () => {
+    const h = await newSandbox(sbx, {
+      name: sbxName(),
+      image: images.sandboxImage,
+      limits: limits(allow()),
+      signal: sig(),
+    });
+    try {
+      await sbx.writeFile(h, "/skills/demo/run.sh", enc.encode("echo from-skill\n"), sig());
+      expect((await sh(h.id, "sh /skills/demo/run.sh")).stdout).toBe("from-skill\n");
+      const f = await sbx.readFile(h, "/skills/demo/run.sh", { maxBytes: 100, signal: sig() });
+      expect(f && dec.decode(f.data)).toBe("echo from-skill\n");
+      const w = await sh(
+        h.id,
+        "touch /skills/demo/x; rm -f /skills/demo/run.sh; echo; ls /skills/demo",
+      );
+      expect(w.stderr).toMatch(/Read-only file system/);
+      expect(w.stdout).toBe("\nrun.sh\n");
+      // 经符号链接绕到可写挂载也不行：沙箱用户进不了 /opt/capybara
+      const l = await sh(h.id, "ln -s /opt/capybara/skills /workspace/l && ls /workspace/l/");
+      expect(l.exitCode).not.toBe(0);
+      await expect(
+        sbx.writeFile(h, "/workspace/l/demo/run.sh", enc.encode("evil"), sig()),
+      ).rejects.toThrow();
+      const still = await sbx.readFile(h, "/skills/demo/run.sh", { maxBytes: 100, signal: sig() });
+      expect(still && dec.decode(still.data)).toBe("echo from-skill\n");
+      // 根文件系统只读
+      expect((await sh(h.id, "touch /etc/x")).exitCode).not.toBe(0);
+    } finally {
+      await sbx.destroy(h, sig());
+    }
+  });
+
+  it("applies resource limits and hardening", async () => {
+    const name = sbxName();
+    const h = await newSandbox(sbx, {
+      name,
+      image: images.sandboxImage,
+      limits: limits(allow()),
+      signal: sig(),
+    });
+    try {
+      const c = await inspect(name);
+      expect(c.HostConfig.ReadonlyRootfs).toBe(true);
+      expect(c.HostConfig.CapDrop).toEqual(["ALL"]);
+      expect(c.HostConfig.SecurityOpt).toContain("no-new-privileges:true");
+      expect(c.HostConfig.NanoCpus).toBe(1_000_000_000);
+      expect(c.HostConfig.Memory).toBe(512 * 1024 * 1024);
+      expect(c.HostConfig.PidsLimit).toBeGreaterThan(0);
+      expect(c.HostConfig.Runtime).toBe("runc");
+      expect(c.HostConfig.NetworkMode).toBe("none");
+      // 容器主进程（init 与 sleep）以 root 运行（能力全部去掉）：沙箱用户发不了信号给它们
+      expect(c.Config.User).toBe("0:0");
+      expect((await sh(h.id, "id -u")).stdout).toBe("1000\n");
+      expect((await sh(h.id, "ps -o user= -p 1")).stdout.trim()).toBe("root");
+      // 内核工具依赖 GNU find / grep
+      expect((await sh(h.id, "find --version | head -1; grep --version | head -1")).stdout).toMatch(
+        /GNU findutils[\s\S]*GNU grep/,
+      );
+    } finally {
+      await sbx.destroy(h, sig());
+    }
+  });
+
+  it("create with an existing name replaces the old instance instead of failing", async () => {
+    const name = sbxName();
+    const h1 = await newSandbox(sbx, {
+      name,
+      image: images.sandboxImage,
+      limits: limits(allow(["allowed.example.com"])),
+      signal: sig(),
+    });
+    await sbx.writeFile(h1, "/workspace/old.txt", enc.encode("old"), sig());
+    const h2 = await newSandbox(sbx, {
+      name,
+      image: images.sandboxImage,
+      limits: limits(allow()),
+      signal: sig(),
+    });
+    try {
+      expect(h2.id).toBe(h1.id);
+      // the instance is replaced, the file system is not
+      expect(await sbx.stat(h2, "/workspace/old.txt", sig())).toEqual({ size: 3, isDir: false });
+      expect((await inspect(name)).HostConfig.NetworkMode).toBe("none");
+      // 旧的出站代理与内部网络也清掉了
+      expect(await exists("container", `${name}-egress`)).toBe(false);
+      expect(await exists("network", `${name}-net`)).toBe(false);
+    } finally {
+      await sbx.destroy(h2, sig());
+    }
+  });
+
+  it("destroyByName removes the container, egress proxy and internal network, not the volumes", async () => {
+    const name = sbxName();
+    await newSandbox(sbx, {
+      name,
+      image: images.sandboxImage,
+      limits: limits(allow(["allowed.example.com"])),
+      signal: sig(),
+    });
+    expect(await exists("container", `${name}-egress`)).toBe(true);
+    expect(await exists("network", `${name}-net`)).toBe(true);
+    await sbx.destroyByName?.(name, sig());
+    for (const [kind, n] of [
+      ["container", name],
+      ["container", `${name}-egress`],
+      ["network", `${name}-net`],
+    ] as const) {
+      expect(await exists(kind, n), `${kind} ${n}`).toBe(false);
+    }
+    expect(await exists("volume", `${name}-workspace`)).toBe(true);
+    expect(await exists("volume", `${name}-skills`)).toBe(true);
+    // 共用的沙箱网络不删
+    expect(await exists("network", netName)).toBe(true);
+  });
+
+  it("an empty allowlist is the kill switch: no network at all", async () => {
+    const name = sbxName();
+    const h = await newSandbox(sbx, {
+      name,
+      image: images.sandboxImage,
+      limits: limits(allow()),
+      signal: sig(),
+    });
+    try {
+      const c = await inspect(name);
+      expect(c.HostConfig.NetworkMode).toBe("none");
+      expect(c.Config.Env.some((e) => /^(HTTP_PROXY|HTTPS_PROXY|ALL_PROXY)=/.test(e))).toBe(false);
+      expect(await exists("container", `${name}-egress`)).toBe(false);
+      // no route (loopback only), and no proxy to reach the network through
+      expect((await sh(h.id, "tail -n +2 /proc/net/route | wc -l")).stdout).toBe("0\n");
+      const r = await sh(h.id, `curl -sS --max-time 3 http://${targetIp}/`);
+      expect(r.exitCode).not.toBe(0);
+    } finally {
+      await sbx.destroy(h, sig());
+    }
+  });
+
+  it("allowlist: allowed hosts through the proxy (HTTP and CONNECT), others refused, no direct route", async () => {
+    const name = sbxName();
+    const h = await newSandbox(sbx, {
+      name,
+      image: images.sandboxImage,
+      limits: limits(allow(["allowed.example.com"])),
+      signal: sig(),
+    });
+    try {
+      const env = (await sh(h.id, "echo $HTTP_PROXY $HTTPS_PROXY")).stdout;
+      expect(env).toMatch(/^http:\/\/\S+:3128 http:\/\/\S+:3128\n$/);
+      expect((await sh(h.id, "curl -sS --max-time 10 http://allowed.example.com/")).stdout).toBe(
+        "hello-egress",
+      );
+      // CONNECT 隧道（-p）
+      expect((await sh(h.id, "curl -sS -p --max-time 10 http://allowed.example.com/")).stdout).toBe(
+        "hello-egress",
+      );
+      const denied = await sh(
+        h.id,
+        "curl -sS -o /dev/null -w '%{http_code}' --max-time 10 http://denied.example.com/",
+      );
+      expect(denied.stdout).toBe("403");
+      const deniedTunnel = await sh(h.id, "curl -sS -p --max-time 10 http://denied.example.com/");
+      expect(deniedTunnel.exitCode).not.toBe(0);
+      // 绕过代理直连不通（内部网络）
+      const direct = await sh(h.id, `curl -sS --noproxy '*' --max-time 3 http://${targetIp}/`);
+      expect(direct.exitCode).not.toBe(0);
+
+      // 出站代理容器丢了：resume 时按记下的白名单重建
+      await sbx.suspend(h, sig());
+      await docker("rm", "-f", `${name}-egress`);
+      expect(await sbx.resume(h, sig())).toBe("resumed");
+      expect((await sh(h.id, "curl -sS --max-time 10 http://allowed.example.com/")).stdout).toBe(
+        "hello-egress",
+      );
+    } finally {
+      await sbx.destroy(h, sig());
+    }
+  });
+
+  describe("network modes", () => {
+    const envOf = async (container: string) => (await inspect(container)).Config.Env;
+
+    it("allowlist: one container profile, the host list on any port, HTTP / CONNECT / SOCKS5", async () => {
+      const name = sbxName();
+      const h = await newSandbox(sbx, {
+        name,
+        image: images.sandboxImage,
+        limits: limits(allow(["allowed.example.com"])),
+        signal: sig(),
+      });
+      try {
+        const c = await inspect(name);
+        // memoryMb 512 -> 128 MiB, the same profile in both modes
+        expect(c.HostConfig.ShmSize).toBe(128 * 1024 * 1024);
+        expect((await sh(h.id, "df -k --output=size /dev/shm | tail -1")).stdout.trim()).toBe(
+          "131072",
+        );
+        expect(c.HostConfig.NetworkMode).toBe(`${name}-net`);
+        const proxy = `http://${name}-egress:3128`;
+        expect(c.Config.Env).toEqual(
+          expect.arrayContaining([
+            `HTTPS_PROXY=${proxy}`,
+            `ALL_PROXY=${proxy}`,
+            `GRPC_PROXY=${proxy}`,
+            `GIT_SSH_COMMAND=ssh -o ProxyCommand='nc -X 5 -x ${name}-egress:1080 %h %p'`,
+          ]),
+        );
+        expect(c.Config.Labels).toMatchObject({
+          "dev.capybara.sandbox.network": "allowlist",
+          "dev.capybara.sandbox.allow-hosts": '["allowed.example.com"]',
+        });
+        const pe = await envOf(`${name}-egress`);
+        expect(pe).toEqual(
+          expect.arrayContaining([
+            "MODE=allowlist",
+            "SOCKS_PORT=1080",
+            'ALLOW_HOSTS=["allowed.example.com"]',
+          ]),
+        );
+        expect((await sh(h.id, "curl -sS --max-time 10 http://allowed.example.com/")).stdout).toBe(
+          "hello-egress",
+        );
+        // SOCKS5 on 1080 with the same host list
+        const socks = `--socks5-hostname ${name}-egress:1080 --noproxy '' --max-time 10`;
+        expect((await sh(h.id, `curl -sS ${socks} http://allowed.example.com/`)).stdout).toBe(
+          "hello-egress",
+        );
+        expect((await sh(h.id, `curl -sS ${socks} http://denied.example.com/`)).exitCode).not.toBe(
+          0,
+        );
+        const direct = await sh(h.id, `curl -sS --noproxy '*' --max-time 3 http://${targetIp}/`);
+        expect(direct.exitCode).not.toBe(0);
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+    });
+
+    it("open-public: the internal network and a proxy with no host list; private addresses refused", async () => {
+      const name = sbxName();
+      const h = await newSandbox(sbx, {
+        name,
+        image: images.sandboxImage,
+        limits: limits(OPEN),
+        signal: sig(),
+      });
+      try {
+        const c = await inspect(name);
+        expect(c.HostConfig.NetworkMode).toBe(`${name}-net`);
+        expect(c.HostConfig.ShmSize).toBe(128 * 1024 * 1024);
+        expect(c.Config.Labels).toMatchObject({
+          "dev.capybara.sandbox.network": "open-public",
+        });
+        // the instance network is the whole contract: no device mode is recorded
+        expect(c.Config.Labels).not.toHaveProperty("dev.capybara.sandbox.mode");
+        expect(c.Config.Env).toContain(`ALL_PROXY=http://${name}-egress:3128`);
+        const pe = await envOf(`${name}-egress`);
+        expect(pe).toEqual(expect.arrayContaining(["MODE=open-public", "SOCKS_PORT=1080"]));
+        expect(pe.some((e) => e.startsWith("ALLOW_HOSTS="))).toBe(false);
+        // any public host (here a pinned test name, as a public one would resolve) over HTTP,
+        // CONNECT and SOCKS5, with no host list
+        expect((await sh(h.id, "curl -sS --max-time 10 http://denied.example.com/")).stdout).toBe(
+          "hello-egress",
+        );
+        expect(
+          (await sh(h.id, "curl -sS -p --max-time 10 http://allowed.example.com/")).stdout,
+        ).toBe("hello-egress");
+        expect(
+          (
+            await sh(
+              h.id,
+              `curl -sS --socks5-hostname ${name}-egress:1080 --noproxy '' --max-time 10 http://allowed.example.com/`,
+            )
+          ).stdout,
+        ).toBe("hello-egress");
+        // private addresses stay refused
+        const priv = await sh(
+          h.id,
+          `curl -sS -o /dev/null -w '%{http_code}' --max-time 10 http://${targetIp}/`,
+        );
+        expect(priv.stdout).toBe("403");
+        // no route around the proxy
+        const direct = await sh(h.id, `curl -sS --noproxy '*' --max-time 3 http://${targetIp}/`);
+        expect(direct.exitCode).not.toBe(0);
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+    });
+
+    it("update: a wider allowlist swaps only the proxy; open-public, narrowing and a gone container recreate", async () => {
+      const name = sbxName();
+      const allowlisted = limits(allow(["allowed.example.com"]));
+      const wider = limits(allow(["allowed.example.com", "pypi.org"]));
+      const h = await newSandbox(sbx, {
+        name,
+        image: images.sandboxImage,
+        limits: allowlisted,
+        signal: sig(),
+      });
+      try {
+        await sbx.writeFile(h, "/workspace/keep.txt", enc.encode("kept"), sig());
+        const id = (await inspect(name)).Id;
+
+        // allowlist to open-public recreates, so the labels stay truthful
+        expect(await sbx.update(h, limits(OPEN), sig())).toBe("recreate");
+        expect(await sbx.update(h, wider, sig())).toBe("updated");
+        expect((await inspect(name)).Id).toBe(id);
+        const pe = await envOf(`${name}-egress`);
+        expect(pe).toContain("MODE=allowlist");
+        expect(pe).toContain(`ALLOW_HOSTS=${JSON.stringify(["allowed.example.com", "pypi.org"])}`);
+        expect((await inspect(`${name}-egress`)).State.Running).toBe(true);
+        const r = await sbx.exec(h, {
+          ...who(),
+          command: "cat /workspace/keep.txt; echo; echo $ALL_PROXY",
+          timeoutMs: 30_000,
+          maxOutputBytes: 10_000,
+          signal: sig(),
+        });
+        expect(r.stdout).toBe(`kept\nhttp://${name}-egress:3128\n`);
+
+        // a suspended instance keeps its new proxy stopped
+        await sbx.suspend(h, sig());
+        expect(await sbx.update(h, wider, sig())).toBe("updated");
+        expect((await inspect(`${name}-egress`)).State.Running).toBe(false);
+
+        // a lost proxy is rebuilt from the labels: the create-time allowlist, never wider
+        await docker("rm", "-f", `${name}-egress`);
+        expect(await sbx.resume(h, sig())).toBe("resumed");
+        expect(await envOf(`${name}-egress`)).toContain("MODE=allowlist");
+        expect((await sh(h.id, "curl -sS --max-time 10 http://allowed.example.com/")).stdout).toBe(
+          "hello-egress",
+        );
+
+        // the create-time hosts (the labels' lower bound) stay in place; a narrower list or a
+        // provider without the labels recreates
+        expect(await sbx.update(h, allowlisted, sig())).toBe("updated");
+        expect(await sbx.update(h, limits(allow(["other.example.com"])), sig())).toBe("recreate");
+        expect(
+          await sbx.update(h, limits(allow(["allowed.example.com", "other.example.com"])), sig()),
+        ).toBe("updated");
+        expect((await inspect(name)).Id).toBe(id);
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+      expect(await sbx.update(h, limits(OPEN), sig())).toBe("recreate");
+    });
+
+    it("update: a new proxy that never becomes ready is removed, and resume rebuilds it from the labels", async () => {
+      // an "egress proxy" image that never serves /healthz: the sandbox image
+      const broken = createDockerSandbox(
+        { ...cfg, egressProxyImage: images.sandboxImage },
+        { labels: { [TEST_LABEL]: RUN } },
+      );
+      const name = sbxName();
+      const h = await newSandbox(sbx, {
+        name,
+        image: images.sandboxImage,
+        limits: limits(allow(["allowed.example.com"])),
+        signal: sig(),
+      });
+      try {
+        // a wider allowlist is applied in place (allowlist to open-public would recreate instead)
+        await expect(
+          broken.update(h, limits(allow(["allowed.example.com", "pypi.org"])), sig()),
+        ).rejects.toThrow(/did not become ready/);
+        // the half-made wider proxy is gone, not left for resume to start
+        expect(await exists("container", `${name}-egress`)).toBe(false);
+        expect(await sbx.resume(h, sig())).toBe("resumed");
+        expect(await envOf(`${name}-egress`)).toContain("MODE=allowlist");
+        expect((await sh(h.id, "curl -sS --max-time 10 http://allowed.example.com/")).stdout).toBe(
+          "hello-egress",
+        );
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+    });
+  });
+
+  it("the socket proxy refuses Engine API calls the plugin does not need", async () => {
+    const base = proxy.endpoint.replace(/^tcp:/, "http:");
+    expect((await fetch(`${base}/_ping`)).status).toBe(200);
+    expect((await fetch(`${base}/v1.44/info`)).status).toBe(403);
+    expect((await fetch(`${base}/v1.44/containers/json`)).status).toBe(403);
+    expect((await fetch(`${base}/v1.44/images/json`)).status).toBe(403);
+    expect(
+      (await fetch(`${base}/v1.44/containers/x/archive?path=/`, { method: "PUT" })).status,
+    ).toBe(403);
+  });
+
+  describe("socket proxy body and name checks (real HAProxy)", () => {
+    const post = async (path: string, body: unknown) => {
+      const base = proxy.endpoint.replace(/^tcp:/, "http:");
+      const r = await fetch(`${base}/v1.44${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: typeof body === "string" ? body : JSON.stringify(body),
+      });
+      return r.status;
+    };
+    // 镜像不存在：通过代理检查的请求由 Docker 返回 404，不会真的建出容器
+    const NO_IMAGE = "capybara-no-such-image:none";
+    const base = { Image: NO_IMAGE, HostConfig: { NetworkMode: "none" } };
+    const create = (body: unknown, name = `cap-${RUN}-probe`) =>
+      post(`/containers/create?name=${encodeURIComponent(name)}`, body);
+
+    it("lets an ordinary cap- container create through (Docker answers)", async () => {
+      expect(await create(base)).toBe(404);
+    });
+
+    it.each([
+      ["privileged", { ...base, HostConfig: { NetworkMode: "none", Privileged: true } }],
+      [
+        "privileged (other case)",
+        { ...base, hostconfig: { networkmode: "none", PRIVILEGED: true } },
+      ],
+      [
+        "bind mount via Binds",
+        { ...base, HostConfig: { NetworkMode: "none", Binds: ["/:/host"] } },
+      ],
+      [
+        "bind mount via Mounts",
+        {
+          ...base,
+          HostConfig: {
+            NetworkMode: "none",
+            Mounts: [{ Type: "bind", Source: "/", Target: "/h" }],
+          },
+        },
+      ],
+      [
+        "a volume mount of a non-cap volume",
+        {
+          ...base,
+          HostConfig: {
+            NetworkMode: "none",
+            Mounts: [{ Type: "volume", Source: "kernel-data", Target: "/h" }],
+          },
+        },
+      ],
+      [
+        "a volume mount with a cap- source and a foreign one",
+        {
+          ...base,
+          HostConfig: {
+            NetworkMode: "none",
+            Mounts: [
+              { Type: "volume", Source: `cap-${RUN}-w`, Target: "/w" },
+              { Type: "volume", source: "pgdata", Target: "/h" },
+            ],
+          },
+        },
+      ],
+      ["CapAdd", { ...base, HostConfig: { NetworkMode: "none", CapAdd: ["SYS_ADMIN"] } }],
+      ["Devices", { ...base, HostConfig: { NetworkMode: "none", Devices: [] } }],
+      ["host pid namespace", { ...base, HostConfig: { NetworkMode: "none", PidMode: "host" } }],
+      ["host network", { ...base, HostConfig: { NetworkMode: "host" } }],
+      ["foreign network", { ...base, HostConfig: { NetworkMode: "bridge" } }],
+      ["no network mode", { Image: NO_IMAGE, HostConfig: {} }],
+      [
+        "seccomp unconfined",
+        { ...base, HostConfig: { NetworkMode: "none", SecurityOpt: ["seccomp=unconfined"] } },
+      ],
+      [
+        "extra security opt",
+        {
+          ...base,
+          HostConfig: {
+            NetworkMode: "none",
+            SecurityOpt: ["no-new-privileges:true", "label=disable"],
+          },
+        },
+      ],
+      ["unknown runtime", { ...base, HostConfig: { NetworkMode: "none", Runtime: "evil" } }],
+      [
+        "foreign network endpoint",
+        { ...base, NetworkingConfig: { EndpointsConfig: { "kernel-net": {} } } },
+      ],
+    ])("refuses container create with %s", async (_label, body) => {
+      expect(await create(body)).toBe(403);
+    });
+
+    it("refuses unicode escapes, duplicate keys, oversized bodies and non-cap names", async () => {
+      expect(
+        await create('{"Image":"x","HostConfig":{"NetworkMode":"none","Privil\\u0065ged":true}}'),
+      ).toBe(403);
+      expect(
+        await create('{"Image":"x","HostConfig":{"NetworkMode":"none","NetworkMode":"host"}}'),
+      ).toBe(403);
+      expect(await create({ ...base, Env: [`X=${"a".repeat(40_000)}`] })).toBe(403);
+      expect(await create(base, "kernel")).toBe(403);
+      expect(await post("/containers/create", base)).toBe(403);
+    });
+
+    it("refuses exec and lifecycle calls on containers outside the cap- prefix", async () => {
+      expect(await post("/containers/some-kernel/exec", { Cmd: ["id"] })).toBe(403);
+      expect(await post("/containers/0123456789ab/start", {})).toBe(403);
+      // cap- 容器上的特权 exec 也不行
+      expect(
+        await post(`/containers/cap-${RUN}-none/exec`, { Cmd: ["id"], Privileged: true }),
+      ).toBe(403);
+    });
+
+    it("refuses non-ASCII keys that Go case-folds onto forbidden ones (ſ U+017F, K U+212A)", async () => {
+      // Go 的 encoding/json 按 Unicode 简单大小写折叠匹配键名："Bindſ" → Binds，"Mas\u212AedPaths" → MaskedPaths
+      expect(
+        await create('{"Image":"x","HostConfig":{"NetworkMode":"none","Bind\u017f":["/:/host"]}}'),
+      ).toBe(403);
+      expect(
+        await create('{"Image":"x","HostConfig":{"NetworkMode":"none","Mas\u212aedPaths":[]}}'),
+      ).toBe(403);
+      expect(
+        await create('{"Image":"x","HostConfig":{"NetworkMode":"none","Device\u017f":[]}}'),
+      ).toBe(403);
+    });
+
+    it("refuses non-ASCII values in create bodies", async () => {
+      expect(await create({ ...base, Env: ["X=\u4e2d\u6587"] })).toBe(403);
+      expect(await post("/volumes/create", { Name: `cap-${RUN}-v`, Labels: { a: "\u00e9" } })).toBe(
+        403,
+      );
+      expect(
+        await post("/networks/create", { Name: `cap-${RUN}-n`, Labels: { a: "\u00e9" } }),
+      ).toBe(403);
+    });
+
+    it("exec: refuses non-ASCII keys but lets a command with Chinese text through", async () => {
+      expect(await post(`/containers/cap-${RUN}-none/exec`, '{"Cmd":["id"],"U\u017fer":"0"}')).toBe(
+        403,
+      );
+      // 通过代理检查，由 Docker 回答（容器不存在 → 404）
+      expect(
+        await post(`/containers/cap-${RUN}-none/exec`, { Cmd: ["echo", "\u4e2d\u6587.txt"] }),
+      ).toBe(404);
+    });
+
+    it("lets a create with cap- volume mounts through (Docker answers)", async () => {
+      expect(
+        await create({
+          ...base,
+          HostConfig: {
+            NetworkMode: "none",
+            Mounts: [{ Type: "volume", Source: `cap-${RUN}-w`, Target: "/w" }],
+          },
+        }),
+      ).toBe(404);
+    });
+
+    it("image pull: only fromImage is allowed (no import from a URL or stdin, no tagging)", async () => {
+      const pull = async (query: string) => {
+        const b = proxy.endpoint.replace(/^tcp:/, "http:");
+        return (await fetch(`${b}/v1.44/images/create?${query}`, { method: "POST" })).status;
+      };
+      // 通过代理检查，由 Docker 回答（拉一个连不上的仓库：失败但不是 403）
+      expect(await pull("fromImage=127.0.0.1%3A1%2Fnone%3Alatest")).not.toBe(403);
+      for (const q of [
+        "fromSrc=-",
+        "fromSrc=http%3A%2F%2F127.0.0.1%2Fx.tar",
+        "fromImage=x&fromSrc=-",
+        "fromImage=x&repo=cap-evil",
+        "fromImage=x&message=m",
+        "fromImage=x&changes=CMD%20id",
+        "fromImage=x&fromImage=y",
+        "",
+      ]) {
+        expect(await pull(q), q).toBe(403);
+      }
+    });
+
+    it("refuses bind-like volumes and non-bridge or non-cap networks", async () => {
+      expect(
+        await post("/volumes/create", {
+          Name: `cap-${RUN}-v`,
+          DriverOpts: { type: "none", o: "bind", device: "/" },
+        }),
+      ).toBe(403);
+      expect(await post("/volumes/create", { Name: "kernel-data" })).toBe(403);
+      expect(await post("/networks/create", { Name: `cap-${RUN}-n`, Driver: "macvlan" })).toBe(403);
+      expect(await post("/networks/create", { Name: "kernel-net", Driver: "bridge" })).toBe(403);
+    });
+  });
+
+  it("open-public is refused when refuseOpenNetwork is on; the allowlist still works", async () => {
+    const locked = createDockerSandbox(
+      { ...cfg, refuseOpenNetwork: true },
+      { labels: { [TEST_LABEL]: RUN } },
+    );
+    await expect(
+      locked.create({
+        name: sbxName(),
+        image: images.sandboxImage,
+        limits: limits(OPEN),
+        fileSystem: { id: sbxName() },
+        signal: sig(),
+      }),
+    ).rejects.toThrow(/refuseOpenNetwork is true/);
+    const name = sbxName();
+    const h = await newSandbox(locked, {
+      name,
+      image: images.sandboxImage,
+      limits: limits(allow(["allowed.example.com"])),
+      signal: sig(),
+    });
+    await locked.destroy(h, sig());
+    // a live update to open-public is refused too
+    const h2 = await newSandbox(locked, {
+      name: sbxName(),
+      image: images.sandboxImage,
+      limits: limits(allow(["allowed.example.com"])),
+      signal: sig(),
+    });
+    try {
+      await expect(locked.update(h2, limits(OPEN), sig())).rejects.toThrow(
+        /refuseOpenNetwork is true/,
+      );
+    } finally {
+      await locked.destroy(h2, sig());
+    }
+  });
+
+  it("an open-public instance made before refuseOpenNetwork resumes as gone; deniedCidrs reach the proxy", async () => {
+    const open = createDockerSandbox(
+      { ...cfg, deniedCidrs: ["203.0.113.0/24"] },
+      { labels: { [TEST_LABEL]: RUN } },
+    );
+    const locked = createDockerSandbox(
+      { ...cfg, refuseOpenNetwork: true },
+      { labels: { [TEST_LABEL]: RUN } },
+    );
+    const name = sbxName();
+    // The host's interfaces change while other test files create and remove Docker networks
+    // (veth link-local addresses): bracket the create with two snapshots.
+    const hostBefore = hostDeniedCidrs("http://127.0.0.1:2375");
+    const h = await newSandbox(open, {
+      name,
+      image: images.sandboxImage,
+      limits: limits(OPEN),
+      signal: sig(),
+    });
+    const hostAfter = hostDeniedCidrs("http://127.0.0.1:2375");
+    try {
+      // the deployment's ranges, then (a local Docker endpoint) this machine's own addresses
+      const deniedEnv = (await inspect(`${name}-egress`)).Config.Env.find((e: string) =>
+        e.startsWith("DENIED_CIDRS="),
+      );
+      const denied = JSON.parse(String(deniedEnv).slice("DENIED_CIDRS=".length)) as string[];
+      expect(denied[0]).toBe("203.0.113.0/24");
+      const host = denied.slice(1);
+      // every address present throughout is denied; nothing but this machine's addresses is added
+      expect(host).toEqual(expect.arrayContaining(hostBefore.filter((c) => hostAfter.includes(c))));
+      expect(host.filter((c) => !hostBefore.includes(c) && !hostAfter.includes(c))).toEqual([]);
+      await open.suspend(h, sig());
+      expect(await locked.resume(h, sig())).toBe("gone");
+      expect((await inspect(name)).State.Running).toBe(false);
+      expect(await open.resume(h, sig())).toBe("resumed");
+    } finally {
+      await open.destroy(h, sig());
+    }
+  });
+
+  it("when the kill exec itself cannot start (pid limit), the container is restarted with a warn", async () => {
+    const warns: string[] = [];
+    const logged = createDockerSandbox(
+      cfg,
+      { labels: { [TEST_LABEL]: RUN } },
+      { warn: (m: string) => void warns.push(m) },
+    );
+    const h = await newSandbox(logged, {
+      name: sbxName(),
+      image: images.sandboxImage,
+      limits: limits(allow()),
+      signal: sig(),
+    });
+    try {
+      await sbx.writeFile(h, "/workspace/keep.txt", enc.encode("kept"), sig());
+      const r = await logged.exec(h, {
+        ...who(),
+        command: "for i in $(seq 1100); do sleep 1000 & done 2>/dev/null; wait",
+        timeoutMs: 4000,
+        maxOutputBytes: 10_000,
+        signal: sig(),
+      });
+      expect(r).toMatchObject({ exitCode: null, timedOut: true });
+      expect((await sh(h.id, "ps -eo args | grep -c '^sleep 1000' || true")).stdout).toBe("0\n");
+      const kept = await sbx.readFile(h, "/workspace/keep.txt", { maxBytes: 10, signal: sig() });
+      expect(kept && dec.decode(kept.data)).toBe("kept");
+      // the restart also ends every other command in the container: the operator is told
+      expect(warns).toContainEqual(expect.stringMatching(/restart/));
+    } finally {
+      await sbx.destroy(h, sig());
+    }
+  });
+
+  it("truncated output is cut at a UTF-8 character boundary", async () => {
+    const h = await newSandbox(sbx, {
+      name: sbxName(),
+      image: images.sandboxImage,
+      limits: limits(allow()),
+      signal: sig(),
+    });
+    try {
+      const r = await sbx.exec(h, {
+        ...who(),
+        command: "printf 'a\\344\\270\\255b'",
+        timeoutMs: 10_000,
+        maxOutputBytes: 3,
+        signal: sig(),
+      });
+      expect(r.truncated).toBe(true);
+      expect(r.stdout).toBe("a");
+    } finally {
+      await sbx.destroy(h, sig());
+    }
+  });
+
+  describe("stopped behind the kernel's back (fix wave S2 I1)", () => {
+    it("exec / readFile / writeFile / stat start a stopped container again, files and egress intact", async () => {
+      const name = sbxName();
+      const h = await newSandbox(sbx, {
+        name,
+        image: images.sandboxImage,
+        limits: limits(allow(["allowed.example.com"])),
+        signal: sig(),
+      });
+      try {
+        await sbx.writeFile(h, "/workspace/keep.txt", enc.encode("kept"), sig());
+        // 守护进程重启 / 宿主机重启 / 休眠扫描停了容器却没记下 suspended：内核仍以为它在运行
+        await docker("stop", "-t", "1", name, `${name}-egress`);
+        const r = await sh(h.id, "cat /workspace/keep.txt");
+        expect(r).toMatchObject({ exitCode: 0, stdout: "kept" });
+        expect((await inspect(name)).State.Running).toBe(true);
+        // 出站代理也一起起来了
+        expect((await sh(h.id, "curl -sS --max-time 10 http://allowed.example.com/")).stdout).toBe(
+          "hello-egress",
+        );
+
+        await docker("stop", "-t", "1", name);
+        const f = await sbx.readFile(h, "/workspace/keep.txt", { maxBytes: 10, signal: sig() });
+        expect(f && dec.decode(f.data)).toBe("kept");
+        await docker("stop", "-t", "1", name);
+        await sbx.writeFile(h, "/workspace/b.txt", enc.encode("b"), sig());
+        await docker("stop", "-t", "1", name);
+        expect(await sbx.stat(h, "/workspace/b.txt", sig())).toEqual({ size: 1, isDir: false });
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+    });
+
+    it("a docker-paused container (Running but frozen) is unpaused by resume and by exec / file calls", async () => {
+      const name = sbxName();
+      const h = await newSandbox(sbx, {
+        name,
+        image: images.sandboxImage,
+        limits: limits(allow(["allowed.example.com"])),
+        signal: sig(),
+      });
+      try {
+        await sbx.writeFile(h, "/workspace/keep.txt", enc.encode("kept"), sig());
+        await docker("pause", name, `${name}-egress`);
+        expect((await sh(h.id, "cat /workspace/keep.txt")).stdout).toBe("kept");
+        const st = JSON.parse(await docker("inspect", name, `${name}-egress`)) as {
+          State: { Paused: boolean };
+        }[];
+        expect(st.map((c) => c.State.Paused)).toEqual([false, false]);
+        expect((await sh(h.id, "curl -sS --max-time 10 http://allowed.example.com/")).stdout).toBe(
+          "hello-egress",
+        );
+        await docker("pause", name);
+        expect(await sbx.stat(h, "/workspace/keep.txt", sig())).toEqual({ size: 4, isDir: false });
+        await docker("pause", name);
+        expect(await sbx.resume(h, sig())).toBe("resumed");
+        expect((await sh(h.id, "echo ok")).stdout).toBe("ok\n");
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+    });
+
+    it("the sandbox user cannot stop the container (kill 1, pkill sleep, kill -9 -1)", async () => {
+      const name = sbxName();
+      const h = await newSandbox(sbx, {
+        name,
+        image: images.sandboxImage,
+        limits: limits(allow()),
+        signal: sig(),
+      });
+      try {
+        await sh(h.id, "kill 1; kill -TERM 1; pkill sleep; pkill -9 sleep; true");
+        await sh(h.id, "kill -9 -1; true");
+        // 给 init 一点时间：若它被停掉，容器会在这期间退出
+        await new Promise((r) => setTimeout(r, 1000));
+        expect((await inspect(name)).State.Running).toBe(true);
+        expect((await sh(h.id, "echo alive")).stdout).toBe("alive\n");
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+    });
+  });
+
+  describe("commands left behind by a crashed kernel replica (fix wave S2 I2)", () => {
+    /** 以 exec 的命令行在容器里启动一条命令、不等它（模拟发起它的内核副本崩溃：没有人再按 timeoutMs 杀它）。 */
+    const orphan = async (id: string, command: string, timeoutMs: number) => {
+      const ctl = `/tmp/.capybara-exec-${randomUUID()}`;
+      await docker("exec", "-d", "-u", "1000:1000", id, ...execArgv(ctl, command, timeoutMs));
+    };
+    const count = async (id: string, pattern: string) =>
+      Number((await sh(id, `pgrep -fc -- ${JSON.stringify(pattern)} || true`)).stdout.trim());
+    const waitUntil = async (cond: () => Promise<boolean>, ms: number) => {
+      const end = Date.now() + ms;
+      while (!(await cond())) {
+        if (Date.now() > end) throw new Error("condition not met in time");
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    };
+
+    it("the command is killed inside the sandbox at its deadline even with nobody watching", async () => {
+      const h = await newSandbox(sbx, {
+        name: sbxName(),
+        image: images.sandboxImage,
+        limits: limits(allow()),
+        signal: sig(),
+      });
+      try {
+        const started = Date.now();
+        await orphan(h.id, "sleep 101 & sleep 102; echo never > /workspace/never", 1000);
+        await waitUntil(async () => (await count(h.id, "^sleep 10[12]")) === 2, 10_000);
+        await waitUntil(async () => (await count(h.id, "^sleep 10[12]")) === 0, 20_000);
+        const elapsed = Date.now() - started;
+        expect(elapsed).toBeGreaterThanOrEqual(1000);
+        expect(elapsed).toBeLessThan((1 + IN_SANDBOX_GRACE_SECONDS + 5) * 1000);
+        expect(await sbx.stat(h, "/workspace/never", sig())).toBeNull();
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+    });
+
+    it("killAll stops every leftover exec command; the sandbox stays usable", async () => {
+      const h = await newSandbox(sbx, {
+        name: sbxName(),
+        image: images.sandboxImage,
+        limits: limits(allow()),
+        signal: sig(),
+      });
+      try {
+        await sbx.writeFile(h, "/workspace/keep.txt", enc.encode("kept"), sig());
+        await orphan(h.id, "sleep 201 & sleep 202", 600_000);
+        await orphan(h.id, "sleep 203", 600_000);
+        await waitUntil(async () => (await count(h.id, "^sleep 20[123]")) === 3, 10_000);
+        await sbx.killAll?.(h, sig());
+        expect(await count(h.id, "^sleep 20[123]")).toBe(0);
+        expect((await sh(h.id, "cat /workspace/keep.txt")).stdout).toBe("kept");
+        // 停着的容器：killAll 先把它启动
+        await docker("stop", "-t", "1", h.id);
+        await sbx.killAll?.(h, sig());
+        expect((await inspect(h.id)).State.Running).toBe(true);
+        // 持锁方的 signal 已中止（锁丢失）：不再杀、也不重启
+        const lost = new AbortController();
+        lost.abort(new Error("lock lost"));
+        await expect(sbx.killAll?.(h, lost.signal)).rejects.toThrow("lock lost");
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+      await expect(sbx.killAll?.(h, sig())).rejects.toSatisfy(isSandboxGoneError);
+    });
+  });
+
+  it.skipIf(!runscAvailable)("runsc: lifecycle under gVisor", async () => {
+    const runsc = createDockerSandbox(
+      { ...cfg, runtime: "runsc" },
+      { labels: { [TEST_LABEL]: RUN } },
+    );
+    const name = sbxName();
+    const h = await newSandbox(runsc, {
+      name,
+      image: images.sandboxImage,
+      limits: limits(allow()),
+      signal: sig(),
+    });
+    try {
+      expect((await inspect(name)).HostConfig.Runtime).toBe("runsc");
+      await runsc.writeFile(h, "/workspace/a.txt", enc.encode("gvisor"), sig());
+      const r = await runsc.exec(h, {
+        ...who(),
+        command: "cat /workspace/a.txt; sleep 300",
+        timeoutMs: 2000,
+        maxOutputBytes: 100,
+        signal: sig(),
+      });
+      expect(r).toMatchObject({ stdout: "gvisor", timedOut: true });
+      await runsc.suspend(h, sig());
+      expect(await runsc.resume(h, sig())).toBe("resumed");
+      expect(await runsc.stat(h, "/workspace/a.txt", sig())).toEqual({ size: 6, isDir: false });
+    } finally {
+      await runsc.destroy(h, sig());
+    }
+  });
+});

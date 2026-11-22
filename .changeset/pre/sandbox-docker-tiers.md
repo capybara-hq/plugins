@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-sandbox-docker": patch
+"@capybara-hq/plugin-device-docker": patch
 ---
 
 Sandbox tiers (capybara-hq/core#190): `limits.tier` picks the egress proxy mode (`strict`: allowlist on

@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-sandbox-docker": patch
+"@capybara-hq/plugin-device-docker": patch
 ---
 
 The image stages the runtime bytes of `@capybara-hq/plugin-sdk` 0.1.0-rc.43 (`native-files.py` now

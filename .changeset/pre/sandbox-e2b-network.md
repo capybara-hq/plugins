@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-sandbox-e2b": patch
+"@capybara-hq/plugin-device-e2b": patch
 ---
 
 Map `limits.network` to E2B's network policy (an allowlist, or no network) and refuse `open-public`:

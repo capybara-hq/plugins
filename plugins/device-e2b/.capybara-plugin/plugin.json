@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "name": "device-e2b",
+  "displayName": {
+    "zh": "E2B 设备",
+    "en": "E2B devices"
+  },
+  "version": "0.1.0-rc.21",
+  "publisher": "Capybara",
+  "icon": "./icon.svg",
+  "description": {
+    "en": "Devices as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, an allowlist or the open internet with local ranges denied (E2B's metadata service stays reachable)",
+    "zh": "以 E2B 沙箱承载设备（E2B 云或自托管）：暂停沙箱保留文件，从已发布镜像构建模板，网络为出站白名单或开放公网（拒绝私有、回环与链路本地地址；E2B 元数据端点仍可达，见 README）"
+  },
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/device-e2b#readme",
+  "setupGuides": [
+    {
+      "id": "connect",
+      "place": "device-connection"
+    }
+  ]
+}

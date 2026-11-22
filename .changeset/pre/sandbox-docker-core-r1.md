@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-sandbox-docker": patch
+"@capybara-hq/plugin-device-docker": patch
 ---
 
 Moves to core R1 (`@capybara-hq/plugin-sdk` 0.1.0-rc.31, `@capybara-hq/testing` 0.1.0-rc.24). The

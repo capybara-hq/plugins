@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-sandbox-docker": patch
+"@capybara-hq/plugin-device-docker": patch
 ---
 
 The egress proxy also refuses the Azure WireServer address `168.63.129.16`, and a new deployment

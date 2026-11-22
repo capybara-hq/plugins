@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-sandbox-docker": minor
+"@capybara-hq/plugin-device-docker": minor
 ---
 
 Provide `sandbox@2`. BREAKING: needs a kernel with environments and `@capybara-hq/plugin-sdk` `^0.1.0-rc.3`.

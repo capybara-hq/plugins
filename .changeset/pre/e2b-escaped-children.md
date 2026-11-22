@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-sandbox-e2b": patch
+"@capybara-hq/plugin-device-e2b": patch
 ---
 
 Kill a command's children that left its session. Every exec carries `CAPYBARA_EXEC=<control file>`, and the kill
