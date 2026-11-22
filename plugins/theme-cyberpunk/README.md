@@ -8,7 +8,8 @@ wordmark. It is our own design and uses no third-party game assets, names or fon
 It uses every layer of Capybara's plugin UI (core specs `2026-11-08-themes-design.md`,
 `2026-11-09-client-extensions-design.md`):
 
-- **L0 theme**: [`themes/cyberpunk.json`](./themes/cyberpunk.json) with its fonts, logo, app icons and avatar preset (below).
+- **L0 theme**: [`themes/cyberpunk.json`](./themes/cyberpunk.json) with its fonts, logo, app icons
+  and avatar preset (below).
 - **L1-L2 components** (`src/client.tsx`, a browser bundle built by `capybara-plugin pack`): five
   `component` contributions of the extension (`src/index.ts`).
 - **L3 decoration**: [`client/styles/cyberpunk.css`](./client/styles/cyberpunk.css), selecting
@@ -176,8 +177,8 @@ in jsdom and are type-checked by `test/tsconfig.json` (DOM and JSX).
   icon was uploaded.
 - **Avatar**: the agent avatar preset `cyberbara` ([`avatars/cyberbara.svg`](./avatars/cyberbara.svg),
   zh 赛博水豚: the neon mark on the `panel` ground) replaces the built-in `capybara` preset in the
-  picker (`hideAvatarPresets`) of an org whose default theme is cyberpunk; agents that already use
-  the built-in one keep it.
+  picker (`hideAvatarPresets`) of an org whose effective default theme (the org's, else the
+  platform's) is cyberpunk; agents that already use the built-in one keep it.
 
 ## Fonts and licenses
 
