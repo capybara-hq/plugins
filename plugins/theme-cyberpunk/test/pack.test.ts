@@ -10,7 +10,8 @@ import { afterAll, describe, expect, it } from "vitest";
 /**
  * The plugin through the published toolchain (`capybara-plugin` from the workspace root, where
  * vitest runs): `check` is clean (no warning either, so no client-css-selector or ui-part-unknown)
- * and `pack` ships the theme, its fonts, the logo, the font licenses and the client build.
+ * and `pack` ships the theme, its fonts, the logo, the app icons, the avatar preset, the font
+ * licenses and the client build.
  */
 const pluginDir = fileURLToPath(new URL("../", import.meta.url));
 const out = mkdtempSync(join(tmpdir(), "theme-cyberpunk-pack-"));
@@ -56,7 +57,7 @@ describe("theme-cyberpunk package", () => {
     expect(report).not.toMatch(/warning/);
   }, 60_000);
 
-  it("packs the theme, fonts, logo, favicon, font licenses and the client build", () => {
+  it("packs the theme, fonts, logo, favicon, app icons, avatar, font licenses and the client build", () => {
     cli("pack", pluginDir, "--out", out);
     const tgzs = readdirSync(out).filter((f) => f.endsWith(".tgz"));
     expect(tgzs).toEqual([expect.stringMatching(/^capybara-hq-plugin-theme-cyberpunk-.*\.tgz$/)]);
@@ -68,6 +69,9 @@ describe("theme-cyberpunk package", () => {
         "package/themes/cyberpunk.json",
         "package/logo.svg",
         "package/favicon.svg",
+        "package/app-icon.png",
+        "package/app-icon-maskable.png",
+        "package/avatars/cyberbara.svg",
         "package/fonts/JetBrainsMono-400.woff2",
         "package/fonts/JetBrainsMono-500.woff2",
         "package/fonts/JetBrainsMono-600.woff2",

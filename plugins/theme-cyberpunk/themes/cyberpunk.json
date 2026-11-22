@@ -90,5 +90,19 @@
       "role": "prose"
     }
   ],
-  "logo": { "mark": "./logo.svg", "wordmark": "CYBERBARA", "favicon": "./favicon.svg" }
+  "logo": {
+    "mark": "./logo.svg",
+    "wordmark": "CYBERBARA",
+    "favicon": "./favicon.svg",
+    "appIcon": "./app-icon.png",
+    "appIconMaskable": "./app-icon-maskable.png"
+  },
+  "avatars": [
+    {
+      "id": "cyberbara",
+      "name": { "en": "Cyberbara", "zh": "赛博水豚" },
+      "file": "./avatars/cyberbara.svg"
+    }
+  ],
+  "hideAvatarPresets": ["capybara"]
 }
