@@ -890,6 +890,31 @@
           "integrity": "sha512-84w8V+adngMmCLYax05Kftf78S//ZITLPdQ2NLwJOPsAgWRz/vgJUos6mAt/TPb6gszneDRQtB10IYWKo0XjTg=="
         }
       }
+    },
+    {
+      "name": "device-local",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Devices on people's own computers: a machine connected with capybara-device serves the device over the dial-in channel, and its owner limits it there",
+        "zh": "在自己的电脑上使用设备：用 capybara-device 连接的电脑通过拨入通道为设备服务，由电脑的主人在本机限制它"
+      },
+      "displayName": {
+        "zh": "本机",
+        "en": "This machine"
+      },
+      "icon": "./plugins/device-local/icon.svg",
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/device-local#readme",
+      "permissions": {
+        "keys": ["permissions.dialin:capybara-device/5", "provides:device-provider@1"],
+        "sensitive": ["provides:device-provider@1"]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-device-local",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-ZYkNvBbupY9Lw8oHdcdz7bod3TLGYQkC1SY4Jorw3Mpu2UzRWe/MzhAmiJyi33v8mMUFyxkHFNlrketk+Z5f7g=="
+        }
+      }
     }
   ]
 }

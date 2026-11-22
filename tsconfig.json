@@ -77,6 +77,9 @@
       "path": "plugins/device-docker"
     },
     {
+      "path": "plugins/device-local"
+    },
+    {
       "path": "plugins/device-e2b"
     },
     {
