@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-sandbox-e2b": patch
+"@capybara-hq/plugin-device-e2b": patch
 ---
 
 Approval-only profiles (core R3): the microVM is the sandbox. `permissionSupport` reports support v2

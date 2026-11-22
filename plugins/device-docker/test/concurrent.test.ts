@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type {
+  DeviceProvider,
   SandboxActor,
   SandboxHandle,
   SandboxLimits,
-  SandboxProvider,
 } from "@capybara-hq/plugin-sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDockerSandbox } from "../src/index.js";
@@ -36,11 +36,11 @@ const limits = (hosts: string[] = []): SandboxLimits => ({
   network: { kind: "allowlist", hosts },
 });
 
-describe.skipIf(!dockerAvailable)("sandbox-docker concurrent exec", { timeout: 120_000 }, () => {
+describe.skipIf(!dockerAvailable)("device-docker concurrent exec", { timeout: 120_000 }, () => {
   let images: TestImages;
   let proxy: SocketProxy;
   const netName = `capybara-sandbox-test-${RUN}`;
-  let sbx: SandboxProvider;
+  let sbx: DeviceProvider;
 
   beforeAll(async () => {
     [images, proxy] = await Promise.all([

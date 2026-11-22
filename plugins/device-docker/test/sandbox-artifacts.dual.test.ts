@@ -151,7 +151,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
           secretAccessKey: s3.secretKey,
           forcePathStyle: true,
         },
-        "sandbox-docker": {
+        "device-docker": {
           endpoint: proxy.endpoint,
           network,
           egressProxyImage: images.egressImage,
@@ -165,6 +165,8 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
           image: images.sandboxImage,
           limits: { memoryMb: 512, egress: "none", suspendAfterIdleMinutes: 1 },
         },
+        // the provider that makes a person's default device (no default without it)
+        devices: { defaultProvider: "device-docker" },
       },
     });
     raw = createDb(h.dbUrl, 3);
@@ -179,6 +181,9 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     base = `/api/v1/orgs/${(org.json.org as { id: string }).id}`;
     const mf = await at(1, "PUT", `${base}/extensions/model-fake`, { enabled: true });
     expect(mf.status, JSON.stringify(mf.json)).toBe(200);
+    // device-provider@1 is org-scoped: the provider makes devices only where it is on
+    const dd = await at(1, "PUT", `${base}/extensions/device-docker`, { enabled: true });
+    expect(dd.status, JSON.stringify(dd.json)).toBe(200);
     // a cold run builds the sandbox image (about 1.5 GB) once, shared by the files
   }, 1_200_000);
 

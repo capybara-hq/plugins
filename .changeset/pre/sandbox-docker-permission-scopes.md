@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-sandbox-docker": minor
+"@capybara-hq/plugin-device-docker": minor
 ---
 
 Implements the permission operation contract of `sandbox@2` (plugin SDK 0.1.0-rc.28): runtime

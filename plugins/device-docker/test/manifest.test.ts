@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
+  DEVICE_PROVIDER_EXTENSION_POINT,
   isSandboxGoneError,
-  SANDBOX_EXTENSION_POINT,
   type SandboxLimits,
 } from "@capybara-hq/plugin-sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -13,6 +13,7 @@ import plugin, {
   decodeOutput,
   providerConfig,
 } from "../src/index.js";
+import { parseSizeMb, reportLimitLines } from "../src/provider.js";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
   version: string;
@@ -43,17 +44,32 @@ describe("decodeOutput", () => {
   });
 });
 
-/** 清单与部署配置（不需要 Docker）。 */
-describe("sandbox-docker manifest", () => {
-  it("provides sandbox@2 and declares no platform permissions", () => {
-    expect(plugin.name).toBe("sandbox-docker");
-    expect(SANDBOX_EXTENSION_POINT).toBe("sandbox@2");
-    expect(plugin.provides).toEqual(["sandbox@2"]);
+/** The manifest and the deployment config (no Docker needed). */
+describe("device-docker manifest", () => {
+  it("provides device-provider@1 and declares no platform permissions", () => {
+    expect(plugin.name).toBe("device-docker");
+    expect(DEVICE_PROVIDER_EXTENSION_POINT).toBe("device-provider@1");
+    expect(plugin.provides).toEqual([DEVICE_PROVIDER_EXTENSION_POINT]);
     expect(plugin.permissions).toEqual({});
-    // the kernel checks this range against the installed SDK version; support v2 (the instance
-    // boundary), limits without mode and the staged runtime bytes need the R3 SDK (the release
-    // PR sets the published R3 rc here and in src/index.ts)
-    expect(plugin.sdk).toBe("^0.1.0-rc.39");
+    // the kernel checks this range against the installed SDK version; device-provider@1 is the
+    // rc.51 SDK's
+    expect(plugin.sdk).toBe("^0.1.0-rc.51");
+  });
+
+  it("declares networkAllowlist and ships the device-connection guide in both languages", () => {
+    const sbx = createDockerSandbox(
+      providerConfig(DeploymentConfig.parse({ endpoint: "tcp://x:1" })),
+    );
+    expect(sbx.networkAllowlist).toBe(true);
+    const manifest = JSON.parse(
+      readFileSync(new URL("../.capybara-plugin/plugin.json", import.meta.url), "utf8"),
+    ) as { name: string; setupGuides?: unknown };
+    expect(manifest.name).toBe("device-docker");
+    expect(manifest.setupGuides).toEqual([{ id: "connect", place: "device-connection" }]);
+    for (const file of ["connect.md", "connect.zh.md"]) {
+      const text = readFileSync(new URL(`../guides/${file}`, import.meta.url), "utf8");
+      expect(text.startsWith("# ")).toBe(true);
+    }
   });
 
   it("deployment config: defaults, endpoint schemes", () => {
@@ -159,7 +175,7 @@ describe("open-public with refuseOpenNetwork (no Docker needed)", () => {
         fileSystem: { id: "cap-00000000-0000-4000-8000-000000000001" },
         signal: AbortSignal.timeout(5000),
       }),
-    ).rejects.toThrow(/extensionConfig\."sandbox-docker"\.refuseOpenNetwork/);
+    ).rejects.toThrow(/extensionConfig\."device-docker"\.refuseOpenNetwork/);
     await expect(
       sbx.update(
         { id: "cap-00000000-0000-4000-8000-000000000001" },
@@ -291,5 +307,78 @@ describe("refuseOpenNetwork on resume and auto-start (stub Docker API, no Docker
       await expect(sbxWith(refuse).resume({ id: ID }, sig())).rejects.toThrow();
       expect(seen.length).toBeGreaterThan(1);
     }
+  });
+});
+
+describe("device report (stub Docker API, no Docker needed)", () => {
+  const ID = "cap-device-00000000-0000-4000-8000-000000000003";
+  let server: Server;
+  let endpoint = "";
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      const path = (req.url ?? "").replace(/^\/v[\d.]+/, "").split("?")[0] ?? "";
+      req.resume();
+      res.setHeader("content-type", "application/json");
+      if (req.method === "GET" && path === `/containers/${ID}/json`) {
+        res.end(
+          JSON.stringify({ HostConfig: { NanoCpus: 1_500_000_000, Memory: 2048 * 1024 ** 2 } }),
+        );
+        return;
+      }
+      if (req.method === "GET" && path === `/volumes/${ID}-workspace`) {
+        res.end(JSON.stringify({ Name: `${ID}-workspace`, Options: { size: "4096M" } }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ message: "no such object" }));
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    endpoint = `tcp://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+  afterAll(async () => {
+    await new Promise((r) => server.close(r));
+  });
+  const sig = () => AbortSignal.timeout(5000);
+  const ref = (handle: { id: string } | null) => ({ deviceId: "d1", orgId: "o1", handle });
+
+  it("describes the container and offers reset; no limits without an instance", async () => {
+    const sbx = createDockerSandbox(providerConfig(DeploymentConfig.parse({ endpoint })));
+    const r = await sbx.report(ref(null), sig());
+    expect(r).toMatchObject({ reset: true, home: null, limits: [] });
+    expect(r.description.en).toMatch(/Docker container/);
+    expect(r.description.zh).toMatch(/Docker 容器/);
+    expect(r.revision).toBe(`${plugin.version}:runc:none`);
+  });
+
+  it("reads cpu and memory from the container, disk only from a sized volume driver", async () => {
+    const plain = createDockerSandbox(providerConfig(DeploymentConfig.parse({ endpoint })));
+    const r = await plain.report(ref({ id: ID }), sig());
+    expect(r.limits).toEqual([
+      { label: { en: "CPU", zh: "CPU" }, value: "1.5" },
+      { label: { en: "Memory", zh: "内存" }, value: "2048 MB" },
+    ]);
+    expect(r.revision).toBe(`${plugin.version}:runc:${ID}:1.5-2048--`);
+    const sized = createDockerSandbox(
+      providerConfig(DeploymentConfig.parse({ endpoint, volumeDriver: "sized", runtime: "runsc" })),
+    );
+    const s = await sized.report(ref({ id: ID }), sig());
+    expect(s.limits.map((l) => l.value)).toEqual(["1.5", "2048 MB", "4096 MB"]);
+    expect(s.revision).toBe(`${plugin.version}:runsc:${ID}:1.5-2048-4096`);
+  });
+
+  it("a gone container reports no limits", async () => {
+    const sbx = createDockerSandbox(providerConfig(DeploymentConfig.parse({ endpoint })));
+    const r = await sbx.report(ref({ id: "cap-device-gone" }), sig());
+    expect(r.limits).toEqual([]);
+    expect(r.revision).toBe(`${plugin.version}:runc:cap-device-gone`);
+  });
+
+  it("parses volume sizes and formats limit lines", () => {
+    expect(parseSizeMb("4096M")).toBe(4096);
+    expect(parseSizeMb("2G")).toBe(2048);
+    expect(parseSizeMb("512mb")).toBe(512);
+    expect(parseSizeMb(undefined)).toBeNull();
+    expect(parseSizeMb("lots")).toBeNull();
+    expect(reportLimitLines({ cpu: null, memoryMb: null, diskMb: null })).toEqual([]);
   });
 });

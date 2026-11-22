@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-sandbox-e2b": patch
+"@capybara-hq/plugin-device-e2b": patch
 ---
 
 File calls (`readFile`, `writeFile`, `stat`) check only the path's shape; which roots they may reach

@@ -22,8 +22,8 @@ npm; the kernel verifies each download against that integrity.
 | [`push-fcm`](plugins/push-fcm) | Firebase Cloud Messaging HTTP v1 (`push-provider@1`) for self-built Android apps |
 | [`push-jpush`](plugins/push-jpush) | JPush (`push-provider@1`): Huawei, Honor, Xiaomi, OPPO and vivo phones without Google Play services |
 | [`jina`](plugins/jina) | Web search and page reading through Jina (`web-search@1`, `web-fetch@1`) |
-| [`sandbox-docker`](plugins/sandbox-docker) | Conversation sandboxes as Docker containers (`sandbox@1`) |
-| [`sandbox-e2b`](plugins/sandbox-e2b) | Conversation sandboxes on E2B (`sandbox@1`) |
+| [`device-docker`](plugins/device-docker) | Devices as Docker containers (`device-provider@1`) |
+| [`device-e2b`](plugins/device-e2b) | Devices as E2B sandboxes (`device-provider@1`) |
 | [`object-store-s3`](plugins/object-store-s3) | Object storage on S3-compatible services (`object-store@1`) |
 | [`todo`](plugins/todo) | A per-conversation todo list tool for agents |
 | [`memory`](plugins/memory) | Memory for agents per (agent, member): an index at run start (`context@1`), memory tools, hybrid keyword and semantic search, and a memory page with the directory neural tree (client code) |
@@ -39,7 +39,7 @@ pinned in core's `packages/kernel/bootstrap.json` and install them offline.
 ## Development
 
 Node 24, pnpm 10 and Docker (the tests start PostgreSQL and Valkey with Testcontainers;
-`sandbox-docker` builds its images).
+`device-docker` builds its images).
 
 ```bash
 pnpm install

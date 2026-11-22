@@ -1,4 +1,4 @@
-import { defineExtension, SANDBOX_EXTENSION_POINT, ui } from "@capybara-hq/plugin-sdk";
+import { DEVICE_PROVIDER_EXTENSION_POINT, defineExtension, ui } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 import { createDockerSandbox, type DockerSandboxConfig, publishedImages } from "./provider.js";
 
@@ -52,7 +52,7 @@ export const DeploymentConfig = z
       { label: { zh: "沙箱网络", en: "Sandbox network" } },
     ),
     /**
-     * Egress proxy image (plugins/sandbox-docker/egress-proxy/Dockerfile). Unset: the image
+     * Egress proxy image (plugins/device-docker/egress-proxy/Dockerfile). Unset: the image
      * published with this plugin's version, `ghcr.io/capybara-hq/capybara-sandbox-egress:<version>`.
      */
     egressProxyImage: ui(z.string().min(1).optional(), {
@@ -120,28 +120,28 @@ export function providerConfig(
     ...c,
     egressProxyImage: c.egressProxyImage ?? images.egress,
     defaultImage: images.sandbox,
+    version,
   };
 }
 
 /**
- * `sandbox@2`: per device, a file system of two Docker volumes and an instance (container +
+ * `device-provider@1`: per device, a file system of two Docker volumes and an instance (container +
  * egress proxy + network) attached to it; Docker only through the socket proxy, the plugin never
  * mounts docker.sock.
  */
 const plugin = defineExtension({
-  name: "sandbox-docker",
+  name: "device-docker",
   version: "0.1.0-rc.21",
-  // Support v2 (the instance boundary), limits without `mode`, list / scan without limits and the
-  // staged runtime bytes are the R3 SDK's (approval-only profiles). The release PR sets the
-  // published R3 rc here and in package.json.
-  sdk: "^0.1.0-rc.39",
-  provides: [SANDBOX_EXTENSION_POINT],
-  // 只用部署配置与 Docker endpoint，不用任何需要声明的平台能力
+  // device-provider@1 (report, networkAllowlist, scopes with projectRoot / writeRoots) is the
+  // rc.51 SDK's.
+  sdk: "^0.1.0-rc.51",
+  provides: [DEVICE_PROVIDER_EXTENSION_POINT],
+  // Only the deployment config and the Docker endpoint: no platform capability to declare
   permissions: {},
   config: { deployment: DeploymentConfig },
   setup(ctx) {
     ctx.provide(
-      SANDBOX_EXTENSION_POINT,
+      DEVICE_PROVIDER_EXTENSION_POINT,
       createDockerSandbox(
         providerConfig(ctx.config as z.output<typeof DeploymentConfig>),
         {},

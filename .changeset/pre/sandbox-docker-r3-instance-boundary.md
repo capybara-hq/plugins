@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-sandbox-docker": patch
+"@capybara-hq/plugin-device-docker": patch
 ---
 
 Approval-only profiles (core R3): the container is the sandbox. `permissionSupport` reports support v2

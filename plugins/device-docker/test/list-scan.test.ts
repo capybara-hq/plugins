@@ -3,13 +3,13 @@ import { connect, createServer, type Socket } from "node:net";
 import {
   DEVICE_SCAN_SKIPPED_BASE_DIRS,
   DEVICE_SCAN_SKIPPED_DIRS,
+  type DeviceProvider,
   isSandboxGoneError,
   MAX_DEVICE_SCAN_DIRS,
   MAX_DEVICE_SCAN_RESULTS,
   type SandboxActor,
   type SandboxHandle,
   type SandboxLimits,
-  type SandboxProvider,
 } from "@capybara-hq/plugin-sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDockerSandbox } from "../src/index.js";
@@ -50,11 +50,11 @@ const limits = (): SandboxLimits => ({
   network: { kind: "allowlist", hosts: [] },
 });
 
-describe.skipIf(!dockerAvailable)("sandbox-docker list and scan", { timeout: 120_000 }, () => {
+describe.skipIf(!dockerAvailable)("device-docker list and scan", { timeout: 120_000 }, () => {
   let images: TestImages;
   let proxy: SocketProxy;
   const netName = `capybara-sandbox-test-${RUN}`;
-  let sbx: SandboxProvider;
+  let sbx: DeviceProvider;
   let h: SandboxHandle;
 
   const create = async () => {
@@ -109,11 +109,11 @@ describe.skipIf(!dockerAvailable)("sandbox-docker list and scan", { timeout: 120
     return dir;
   };
   const list = (path: string, limit = 100, signal = sig(), on = h) => {
-    if (sbx.list === undefined) throw new Error("sandbox-docker offers no list");
+    if (sbx.list === undefined) throw new Error("device-docker offers no list");
     return sbx.list(on, path, { limit, signal });
   };
   const scan = (base: string, signal = sig(), on = h) => {
-    if (sbx.scan === undefined) throw new Error("sandbox-docker offers no scan");
+    if (sbx.scan === undefined) throw new Error("device-docker offers no scan");
     return sbx.scan(on, base, { signal });
   };
   const names = async (base: string) => (await scan(base)).map((c) => c.path.slice(base.length));

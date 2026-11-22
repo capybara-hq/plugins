@@ -98,8 +98,8 @@ const scope = (over: Partial<SandboxOperationScope> = {}): SandboxOperationScope
   profile: "full-access",
   actor: { accountId: "acc-1", conversationId: "conv-1" },
   tag: "t-1",
-  // the kernel's instance scope: the whole filesystem plus the working root
-  filesystem: { kind: "scoped", readRoots: ["/", "/workspace"], writeRoots: ["/", "/workspace"] },
+  // the kernel's instance scope: the whole filesystem plus the working root, writable
+  filesystem: { kind: "scoped", projectRoot: "/workspace", writeRoots: ["/", "/workspace"] },
   network: { kind: "open-public" },
   ...over,
 });
@@ -182,9 +182,9 @@ describe("operation scopes", () => {
   it("refuses a narrower filesystem grant before any effect: no restricted filters here", async () => {
     const { ops: o, calls } = ops();
     for (const filesystem of [
-      { kind: "scoped" as const, readRoots: [], writeRoots: ["/workspace"] },
-      { kind: "scoped" as const, readRoots: ["/workspace"], writeRoots: [] },
-      { kind: "scoped" as const, readRoots: ["/"], writeRoots: ["/workspace"] },
+      { kind: "scoped" as const, projectRoot: "/workspace", writeRoots: ["/workspace"] },
+      { kind: "scoped" as const, projectRoot: null, writeRoots: [] },
+      { kind: "scoped" as const, projectRoot: "/workspace", writeRoots: ["/workspace", "/tmp"] },
     ]) {
       const e = await o
         .operation(h, scope({ profile: "approve-for-me", filesystem }), sig())
@@ -196,7 +196,7 @@ describe("operation scopes", () => {
 
   it("takes a writable / as the whole instance: writable roots are also readable", async () => {
     const { ops: o } = ops();
-    const filesystem = { kind: "scoped" as const, readRoots: [], writeRoots: ["/"] };
+    const filesystem = { kind: "scoped" as const, projectRoot: null, writeRoots: ["/"] };
     await expect(
       o.operation(h, scope({ profile: "approve-for-me", filesystem }), sig()),
     ).resolves.toBeDefined();

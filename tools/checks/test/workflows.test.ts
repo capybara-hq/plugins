@@ -155,7 +155,7 @@ describe("images.yml", () => {
     expect((wf.on.push as { branches: string[] }).branches).toEqual(["main"]);
     // Only a version change publishes; editing the workflow itself must not tag an image.
     expect((wf.on.push as { paths: string[] }).paths).toEqual([
-      "plugins/sandbox-docker/package.json",
+      "plugins/device-docker/package.json",
     ]);
     expect(wf.permissions).toEqual({});
     expect(Object.keys(wf.jobs).sort()).toEqual(["build", "plan", "publish"]);
@@ -215,10 +215,10 @@ describe("images.yml", () => {
     }
   });
 
-  it("tags both images with the sandbox-docker version and skips an existing tag", () => {
-    expect(text).toContain("plugins/sandbox-docker/package.json");
-    expect(text).toContain("plugins/sandbox-docker/image");
-    expect(text).toContain("plugins/sandbox-docker/egress-proxy");
+  it("tags both images with the device-docker version and skips an existing tag", () => {
+    expect(text).toContain("plugins/device-docker/package.json");
+    expect(text).toContain("plugins/device-docker/image");
+    expect(text).toContain("plugins/device-docker/egress-proxy");
     expect(text).toContain("imagetools inspect");
     // publish re-checks the tag right before creating it and leaves an existing one alone.
     const tag = wf.jobs.publish?.steps.find((s) => s.name === "Tag the multi-arch image");

@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-sandbox-e2b": patch
+"@capybara-hq/plugin-device-e2b": patch
 ---
 
 Sandbox tiers: the setting `openEgress: "off" | "proxy" | "direct"` (default `"proxy"`) replaces

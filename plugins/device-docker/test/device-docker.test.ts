@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
+  type DeviceProvider,
   isFileSystemGoneError,
   isSandboxGoneError,
   type SandboxActor,
   type SandboxLimits,
-  type SandboxProvider,
 } from "@capybara-hq/plugin-sdk";
 import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -29,7 +29,7 @@ import {
 } from "./docker-env.js";
 
 /**
- * sandbox@2 on real Docker (through the socket proxy of capybara-hq/core's docker/sandbox-proxy):
+ * device-provider@1 on real Docker (through the socket proxy of capybara-hq/core's docker/sandbox-proxy):
  * file systems (volumes) that outlive instances (containers), lifecycle, exec timeout and abort,
  * file reads and writes, read-only /skills, same-name rebuild, gone semantics, the two egress
  * proxy modes (`open-public` and `allowlist`, plus the empty allowlist), update, and the security
@@ -42,7 +42,7 @@ const dec = new TextDecoder();
 const sig = () => AbortSignal.timeout(120_000);
 const sbxName = () => `cap-${randomUUID()}`;
 const ACTOR: SandboxActor = { accountId: "acc-1", conversationId: "conv-1" };
-/** The `tag` and `actor` every `exec` carries in sandbox@2. */
+/** The `tag` and `actor` every `exec` carries in device-provider@1. */
 const who = () => ({ tag: randomUUID(), actor: ACTOR });
 const OPEN: SandboxLimits["network"] = { kind: "open-public", hosts: [] };
 const allow = (hosts: string[] = []): SandboxLimits["network"] => ({ kind: "allowlist", hosts });
@@ -53,7 +53,7 @@ const limits = (network: SandboxLimits["network"]): SandboxLimits => ({
   network,
 });
 
-describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => {
+describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
   let images: TestImages;
   let proxy: SocketProxy;
   // 共用沙箱网络（socket 代理只放行 cap 开头的网络名）；放行目标也接在上面
@@ -104,7 +104,7 @@ describe.skipIf(!dockerAvailable)("sandbox-docker", { timeout: 120_000 }, () => 
 
   /** A file system and an instance on it, both under `name` (as the kernel names them). */
   const newSandbox = async (
-    p: SandboxProvider,
+    p: DeviceProvider,
     o: { name: string; image?: string; limits: SandboxLimits; signal: AbortSignal },
   ) => {
     const fileSystem = await p.createFileSystem({

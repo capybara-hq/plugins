@@ -3,12 +3,12 @@
 # Images are published by .github/workflows/images.yml as
 #   ghcr.io/capybara-hq/capybara-sandbox:<plugin version>
 # A local build is the offline route (then set the kernel's sandbox.image to the tag):
-#   docker build -t capybara-sandbox:latest plugins/sandbox-docker/image
+#   docker build -t capybara-sandbox:latest plugins/device-docker/image
 # 多架构（amd64 + arm64）推到镜像仓库：
 #   docker buildx build --platform linux/amd64,linux/arm64 \
-#     -t <registry>/capybara-sandbox:<tag> --push plugins/sandbox-docker/image
+#     -t <registry>/capybara-sandbox:<tag> --push plugins/device-docker/image
 # Published: .github/workflows/images.yml builds and pushes
-#   ghcr.io/capybara-hq/capybara-sandbox:<plugin version> once a plugins/sandbox-docker version change
+#   ghcr.io/capybara-hq/capybara-sandbox:<plugin version> once a plugins/device-docker version change
 #   reaches main (the egress proxy image capybara-sandbox-egress likewise).
 #
 # 约定（插件依赖这些，改动时一并改插件）：

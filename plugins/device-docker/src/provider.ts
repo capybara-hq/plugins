@@ -3,6 +3,10 @@ import { isIP } from "node:net";
 import { type NetworkInterfaceInfo, networkInterfaces } from "node:os";
 import type { Duplex } from "node:stream";
 import {
+  type DeviceProvider,
+  type DeviceRef,
+  type DeviceReport,
+  type DeviceReportLimit,
   type ExecResult,
   FileSystemGoneError,
   type Logger,
@@ -10,7 +14,6 @@ import {
   SandboxGoneError,
   type SandboxHandle,
   type SandboxLimits,
-  type SandboxProvider,
   validateAllowHost,
   validateSandboxPathShape,
 } from "@capybara-hq/plugin-sdk";
@@ -35,7 +38,7 @@ import {
 import { createOperations, type OperationTransport, refusedFrame } from "./operations.js";
 import { OPERATION_AGENT } from "./runtime-source.js";
 
-/** The images published with a given sandbox-docker version (the plugins repo's image workflow). */
+/** The images published with a given device-docker version (the plugins repo's image workflow). */
 export function publishedImages(version: string): { sandbox: string; egress: string } {
   return {
     sandbox: `ghcr.io/capybara-hq/capybara-sandbox:${version}`,
@@ -50,10 +53,10 @@ export function publishedImages(version: string): { sandbox: string; egress: str
  * environment differ, or the container is gone). Limits are fixed when the instance (container) is
  * created.
  */
-export type DockerSandboxProvider = SandboxProvider &
+export type DockerSandboxProvider = DeviceProvider &
   Required<
     Pick<
-      SandboxProvider,
+      DeviceProvider,
       | "update"
       | "list"
       | "scan"
@@ -105,6 +108,11 @@ export interface DockerSandboxConfig {
   defaultImage?: string | undefined;
   /** Driver of the workspace volume; when set, `DriverOpts.size` limits its size. */
   volumeDriver?: string | undefined;
+  /**
+   * The plugin version (the extension manifest's), the first part of the device report's
+   * revision; unset in tests that build the provider directly.
+   */
+  version?: string | undefined;
   /**
    * Refuse `limits.network.kind === "open-public"` in `create` / `update` (default `false`): for
    * locked-down deployments. The error names this setting so an operator can find it.
@@ -255,7 +263,7 @@ export function planInstance(limits: SandboxLimits, refuseOpenNetwork = false): 
   if (network.kind === "open-public") {
     if (refuseOpenNetwork) {
       throw new Error(
-        'Sandbox network "open-public" is refused: the sandbox-docker plugin setting refuseOpenNetwork is true. Set extensionConfig."sandbox-docker".refuseOpenNetwork to false, or have the org switch its cloud network to the allowlist.',
+        'Sandbox network "open-public" is refused: the device-docker plugin setting refuseOpenNetwork is true. Set extensionConfig."device-docker".refuseOpenNetwork to false, or have the org switch its cloud network to the allowlist.',
       );
     }
     return { mode: "open-public", allowHosts: [], shmBytes };
@@ -625,7 +633,7 @@ interface RunResult {
 }
 
 /**
- * Builds the Docker `sandbox@2` provider (shared by the plugin's setup and the tests). `log` (the
+ * Builds the Docker `device-provider@1` provider (shared by the plugin's setup and the tests). `log` (the
  * extension's `ctx.log`) gets a warn when a kill falls back to restarting the container, which ends
  * every command in it.
  */
@@ -654,7 +662,7 @@ export function createDockerSandbox(
     // biome-ignore lint/suspicious/noControlCharactersInRegex: 正是要按 ASCII 范围判断
     if (/[^\x00-\x7f]/.test(text)) {
       throw new Error(
-        `sandbox-docker: ${path} request contains non-ASCII characters (image, names, labels, environment and allowHosts must be ASCII; use punycode for hostnames)`,
+        `device-docker: ${path} request contains non-ASCII characters (image, names, labels, environment and allowHosts must be ASCII; use punycode for hostnames)`,
       );
     }
     return api.json("POST", path, opts);
@@ -814,7 +822,7 @@ export function createDockerSandbox(
       .then((v) => {
         if (!engineSupported(String(v.Version ?? ""))) {
           throw new Error(
-            `sandbox-docker needs Docker Engine ${MIN_ENGINE_MAJOR} or newer (found ${String(v.Version)}): older bridge drivers keep a host gateway on the sandbox's internal network. Upgrade Docker.`,
+            `device-docker needs Docker Engine ${MIN_ENGINE_MAJOR} or newer (found ${String(v.Version)}): older bridge drivers keep a host gateway on the sandbox's internal network. Upgrade Docker.`,
           );
         }
       })
@@ -1131,7 +1139,7 @@ export function createDockerSandbox(
     if (ok) return;
     signal?.throwIfAborted();
     log?.warn(
-      "sandbox-docker: the kill command could not run; restarting the container, which also ends other commands in it",
+      "device-docker: the kill command could not run; restarting the container, which also ends other commands in it",
       { container },
     );
     await api.json("POST", `/containers/${enc(container)}/restart`, {
@@ -1263,7 +1271,7 @@ export function createDockerSandbox(
    */
   const execWith = async (
     h: SandboxHandle,
-    args: Omit<Parameters<SandboxProvider["exec"]>[1], "actor">,
+    args: Omit<Parameters<DeviceProvider["exec"]>[1], "actor">,
     ctl: string,
     prefix: string[] = [],
     nonce?: string,
@@ -1360,12 +1368,79 @@ export function createDockerSandbox(
     network: { openPublic: !cfg.refuseOpenNetwork },
   });
 
+  /**
+   * The device report: what the container is, no home, the cpu / memory / disk the instance was
+   * created with (read from the container and its workspace volume; none without an instance),
+   * and files can be reset. The revision names the plugin version, the runtime, the instance and
+   * its limits, so it changes whenever the rest does.
+   */
+  const report = async (device: DeviceRef, signal: AbortSignal): Promise<DeviceReport> => {
+    signal.throwIfAborted();
+    const limits = device.handle === null ? null : await instanceLimits(device.handle, signal);
+    const lines = limits === null ? [] : reportLimitLines(limits);
+    const revision = [
+      cfg.version ?? "unversioned",
+      cfg.runtime,
+      device.handle?.id ?? "none",
+      ...(limits === null ? [] : [limitsRevision(limits)]),
+    ].join(":");
+    return {
+      revision,
+      description: {
+        en: "A Docker container (runc or gVisor) with its files on a volume; the container is the sandbox.",
+        zh: "Docker 容器（runc 或 gVisor），文件保存在卷上；容器本身就是沙箱。",
+      },
+      home: null,
+      limits: lines,
+      reset: true,
+    };
+  };
+
+  /** The limits an instance was created with; null when its container is gone. */
+  const instanceLimits = async (
+    h: SandboxHandle,
+    signal: AbortSignal,
+  ): Promise<InstanceLimits | null> => {
+    let c: { HostConfig?: { NanoCpus?: number; Memory?: number } };
+    try {
+      c = await api.json("GET", `/containers/${enc(h.id)}/json`, { signal });
+    } catch (e) {
+      if (isStatus(e, 404)) return null;
+      throw e;
+    }
+    // only a volume driver with a `size` option limits disk (the local driver does not)
+    let diskMb: number | null = null;
+    if (cfg.volumeDriver !== undefined) {
+      try {
+        const v = await api.json<{ Options?: Record<string, string> | null }>(
+          "GET",
+          `/volumes/${enc(sandboxResourceNames(h.id).workspace)}`,
+          { signal },
+        );
+        diskMb = parseSizeMb(v.Options?.size);
+      } catch (e) {
+        if (!isStatus(e, 404)) throw e;
+      }
+    }
+    const nanoCpus = c.HostConfig?.NanoCpus ?? 0;
+    const memory = c.HostConfig?.Memory ?? 0;
+    return {
+      cpu: nanoCpus > 0 ? nanoCpus / 1e9 : null,
+      memoryMb: memory > 0 ? Math.round(memory / MIB) : null,
+      diskMb,
+    };
+  };
+
   // ---------- 契约 ----------
 
   return {
     // docker exec instances are independent; auto-start tolerates concurrent starts (304 / 409)
     concurrentExec: true,
     limitsApplyAt: "instance",
+    // the egress proxy enforces a host allowlist (an empty one is NetworkMode none)
+    networkAllowlist: true,
+
+    report,
 
     async createFileSystem({ name, limits, signal }) {
       signal.throwIfAborted();
@@ -1403,9 +1478,7 @@ export function createDockerSandbox(
       checkLimits(limits);
       const sandboxImage = image ?? cfg.defaultImage;
       if (sandboxImage === undefined) {
-        throw new Error(
-          "sandbox-docker: create got no image and the provider has no default image",
-        );
+        throw new Error("device-docker: create got no image and the provider has no default image");
       }
       // refuses the open public network under refuseOpenNetwork before Docker is touched
       const plan = planInstance(limits, cfg.refuseOpenNetwork);
@@ -1684,7 +1757,7 @@ export function createDockerSandbox(
 }
 
 const NO_PYTHON =
-  "sandbox-docker: the sandbox image has no python3 or no timeout (looked up in /usr/local/bin, /usr/bin, /bin), which list and scan need; use the published image or add them to your own";
+  "device-docker: the sandbox image has no python3 or no timeout (looked up in /usr/local/bin, /usr/bin, /bin), which list and scan need; use the published image or add them to your own";
 
 /**
  * 解码命令输出。被截断时先退回到完整的 UTF-8 字符边界（截断点落在多字节字符中间时丢掉残缺的尾巴），
@@ -1714,4 +1787,50 @@ function checkLimits(l: SandboxLimits): void {
     if (errors.length > 0)
       throw new Error(`invalid network.hosts entry ${host}: ${errors.join("; ")}`);
   }
+}
+
+/** The limits an instance was created with, as far as Docker records them (null = not limited). */
+export interface InstanceLimits {
+  cpu: number | null;
+  memoryMb: number | null;
+  diskMb: number | null;
+}
+
+/** A volume `size` option (`2048M`, `2G`, `512m`) in MiB; null when absent or unreadable (pure). */
+export function parseSizeMb(size: string | undefined): number | null {
+  const m = /^(\d+(?:\.\d+)?)([kKmMgGtT]?)[bB]?$/.exec(size?.trim() ?? "");
+  if (!m) return null;
+  const n = Number(m[1]);
+  const unit = (m[2] ?? "").toLowerCase();
+  const mb =
+    unit === "t"
+      ? n * 1024 * 1024
+      : unit === "g"
+        ? n * 1024
+        : unit === "m"
+          ? n
+          : unit === "k"
+            ? n / 1024
+            : n / MIB;
+  return mb > 0 ? Math.round(mb) : null;
+}
+
+/** The report's limit lines for an instance's limits (pure). */
+export function reportLimitLines(l: InstanceLimits): DeviceReportLimit[] {
+  const out: DeviceReportLimit[] = [];
+  if (l.cpu !== null) {
+    out.push({ label: { en: "CPU", zh: "CPU" }, value: `${Number(l.cpu.toFixed(2))}` });
+  }
+  if (l.memoryMb !== null) {
+    out.push({ label: { en: "Memory", zh: "内存" }, value: `${l.memoryMb} MB` });
+  }
+  if (l.diskMb !== null) {
+    out.push({ label: { en: "Disk", zh: "磁盘" }, value: `${l.diskMb} MB` });
+  }
+  return out;
+}
+
+/** The limits' part of the report revision (pure). */
+export function limitsRevision(l: InstanceLimits): string {
+  return [l.cpu, l.memoryMb, l.diskMb].map((v) => (v === null ? "-" : String(v))).join("-");
 }

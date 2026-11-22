@@ -1,9 +1,17 @@
-# @capybara-hq/plugin-sandbox-docker
+# @capybara-hq/plugin-device-docker
 
-The Docker implementation of the device sandbox (`sandbox@2`), with a runtime of either runc or gVisor's runsc. Each device
+The Docker implementation of the device sandbox (`device-provider@1`), with a runtime of either runc or gVisor's runsc. Each device
 (`cap-device-<device id>`) has a **file system**, its two Docker volumes, which lives until the device is deleted, and an **instance**, the container
 (with its egress proxy and internal network), which is suspended when idle, destroyed after long disuse and recreated on the next use with the same files.
 The plugin **reaches Docker only through the endpoint** (the socket proxy in capybara-hq/core's [`docker/sandbox-proxy`](https://github.com/capybara-hq/core/tree/main/docker/sandbox-proxy)) and does not mount `docker.sock` itself.
+
+Renamed from `@capybara-hq/plugin-sandbox-docker` (no alias: devices made by the old plugin read as unavailable and are recreated); the image names
+(`ghcr.io/capybara-hq/capybara-sandbox` and `capybara-sandbox-egress`) stay, tagged with this plugin's version. `device-provider@1` is a multi point,
+so it can run alongside other device providers; each device stays bound to the provider that made it.
+
+**Device page**: `report` describes the device as a Docker container (runc or gVisor) with its files on a volume, lists the cpu and memory the
+container was created with (and the disk when a volume driver sizes the workspace volume), and offers a files reset. New devices are made from the
+short `device-connection` guide (`guides/connect.md`): name it and create it.
 
 ## Deployment config
 
@@ -15,10 +23,10 @@ The plugin **reaches Docker only through the endpoint** (the socket proxy in cap
 | `egressProxyImage` | `ghcr.io/capybara-hq/capybara-sandbox-egress:<plugin version>` | Egress proxy image (`egress-proxy/Dockerfile`); set it to use your own build (the offline route below) |
 | `volumeDriver` | (unset, uses local) | Driver for the workspace volume; when set, `DriverOpts.size=<diskMb>M` is passed (at `createFileSystem`) |
 | `deniedCidrs` | (unset) | The deployment's own public or corporate ranges (IPv4 / IPv6 CIDRs such as `203.0.113.0/24`, at most 256; a single address is `/32` or `/128`) that every egress proxy refuses in both modes, on top of its built-in list; invalid entries fail the config. Passed to the proxy as `DENIED_CIDRS`; applies to proxies created afterwards (a new instance, or an `update` that replaces the proxy). See [Network and egress](#network-and-egress) |
-| `refuseOpenNetwork` | `false` | Locked-down deployments: when on, a `create` / `update` whose effective network is `open-public` fails with an English error naming `extensionConfig."sandbox-docker".refuseOpenNetwork`, and an existing open-public instance answers `gone` on `resume` / auto-start so the kernel recreates it under the rule; the device network then has to be the allowlist (the platform or org ceiling, or the device itself). See [Network and egress](#network-and-egress) |
+| `refuseOpenNetwork` | `false` | Locked-down deployments: when on, a `create` / `update` whose effective network is `open-public` fails with an English error naming `extensionConfig."device-docker".refuseOpenNetwork`, and an existing open-public instance answers `gone` on `resume` / auto-start so the kernel recreates it under the rule; the device network then has to be the allowlist (the platform or org ceiling, or the device itself). See [Network and egress](#network-and-egress) |
 
 ```bash
-export CAPYBARA_EXTENSION_CONFIG='{"sandbox-docker":{"endpoint":"tcp://127.0.0.1:2375"}}'
+export CAPYBARA_EXTENSION_CONFIG='{"device-docker":{"endpoint":"tcp://127.0.0.1:2375"}}'
 ```
 
 The deployment config schema is strict: extra keys are errors, including the former `openEgress` and
@@ -61,8 +69,8 @@ plugin upgrade moves both images with it and the kernel never needs to know the 
     `PLAYWRIGHT_BROWSERS_PATH`, all under `/workspace/.cache/`. The root file system stays read-only.
 - The egress proxy image `egress-proxy/Dockerfile`.
 - **Offline route** (a deployment without access to ghcr.io): build both images yourself
-  (`docker build -t capybara-sandbox:local plugins/sandbox-docker/image`,
-  `docker build -t capybara-sandbox-egress:local plugins/sandbox-docker/egress-proxy`, or
+  (`docker build -t capybara-sandbox:local plugins/device-docker/image`,
+  `docker build -t capybara-sandbox-egress:local plugins/device-docker/egress-proxy`, or
   `docker buildx build --platform linux/amd64,linux/arm64 -t <registry>/<name>:<tag> --push <directory>` for a private registry), then set the kernel config
   `sandbox.image` to the sandbox image and this plugin's `egressProxyImage` to the egress image.
 - Local development: in a [capybara-hq/core](https://github.com/capybara-hq/core) checkout, `docker compose -f docker/compose.dev.yaml --profile sandbox up -d` ([`docker/compose.dev.yaml`](https://github.com/capybara-hq/core/blob/main/docker/compose.dev.yaml)) builds both images and starts the socket proxy
@@ -111,7 +119,7 @@ Every sandbox reaches Docker through the proxy only and its egress proxy refuses
 | `suspend` | Stops the sandbox container and the egress proxy (files stay on the volumes). **Processes are not preserved**: all background processes in the sandbox end and `/tmp` (tmpfs) is cleared; E2B's pause, in contrast, keeps memory too |
 | `resume` | Starts (or unpauses one that was `docker pause`d); if the container does not exist it returns `gone`. With `refuseOpenNetwork` on, a container whose labels say `open-public` (made before the setting was turned on) is not started and answers `gone` too, so the kernel recreates it under the current rule. If the egress proxy or internal network is gone, it is rebuilt from the network and host list recorded in the container labels (the ones of `create`: see `update` for why they never allow more than the proxy in force) |
 | `update` | Called by the kernel under the exclusive lease when the network of an existing instance changed (`limitsApplyAt: "instance"`). Answers `"updated"` after replacing only the egress proxy (new proxy mode and host list; a suspended instance gets its new proxy stopped) when the container can stay: both proxy modes use the same container environment and the same shm profile, and the new proxy allows at least what the container labels record (a host list that keeps every recorded host, or open-public to open-public). Everything else (a change of network kind in either direction, so the labels always name the kind in force; fewer hosts; a container without this contract's labels; a missing container) answers `"recreate"`, and the kernel destroys and recreates the instance on the same files. Open connections through the old proxy end. With `refuseOpenNetwork` on, an update to open-public throws like `create` |
-| Auto-start | When `exec` / `readFile` / `writeFile` / `stat` / `killAll` find the container still exists but is not running (Docker returns 409: the host or daemon restarted, the idle sweep stopped the container before it could record `suspended`, someone ran `docker pause` on it…), they recover it the way `resume` does (egress proxy and network in place; unpause a paused one, start a stopped one; an open-public container under `refuseOpenNetwork` throws `SandboxGoneError` instead) and retry once (the `sandbox@2` contract: the kernel trusts only the `running` it recorded itself) |
+| Auto-start | When `exec` / `readFile` / `writeFile` / `stat` / `killAll` find the container still exists but is not running (Docker returns 409: the host or daemon restarted, the idle sweep stopped the container before it could record `suspended`, someone ran `docker pause` on it…), they recover it the way `resume` does (egress proxy and network in place; unpause a paused one, start a stopped one; an open-public container under `refuseOpenNetwork` throws `SandboxGoneError` instead) and retry once (the `device-provider@1` contract: the kernel trusts only the `running` it recorded itself) |
 | `killAll` | Kills every command started through `exec` that is still running (finds the wrapper by command line and sends SIGKILL by process group and session); called when the kernel takes over from a crashed previous lock holder. A process that a command puts in the background in a session of its own (`setsid`) is not guaranteed to be killed |
 | Concurrent use (`concurrentExec`, `killTagged`) | Declares `concurrentExec: true`: the sessions of one device (and their sub-agents) run commands and file operations in its sandbox at the same time (independent `docker exec` instances; the socket proxy rules are unchanged). Each exec's control file carries the holder's tag (`/tmp/.capybara-exec-<tag>-<uuid>`, tags checked against `SANDBOX_TAG_RE`); `killTagged` kills only the commands of the given tags (a variant of the `killAll` script), used when the kernel takes over from a crashed holder while others keep running. Concurrent auto-starts of a stopped container are idempotent (`start` answers 304; a concurrent egress proxy create answers 409, tolerated). Concurrent commands share the container's `PidsLimit` (1024) and memory. When the kill exec itself cannot start, the container restarts, which also ends live siblings' commands (a last resort) |
 | `destroy` / `destroyByName` | Deletes the instance: the container, egress proxy and internal network, **never the volumes**; a missing one also counts as success |
@@ -229,7 +237,7 @@ deployment refuse the open network outright (support then reports `openPublic: f
 
 ## Permission profiles (operation contract)
 
-The provider implements the optional operation half of `sandbox@2` (core spec
+The provider implements the optional operation half of `device-provider@1` (core spec
 `2026-11-16-permission-operation-contract.md`): `permissionSupport`, `operation`, `browse`,
 `prepare`, `revokeOperation` and `background`. Every call carries an immutable scope the kernel
 resolved; the provider copies and freezes it (`parseSandboxOperationScope`) and decides nothing
@@ -351,7 +359,7 @@ The second parameter of `createDockerSandbox(config, testOptions)` can be passed
 
 `test/egress-proxy.test.ts`, `test/egress-proxy-modes.test.ts` (including `168.63.129.16` and `deniedCidrs` / `DENIED_CIDRS`),
 `test/manifest.test.ts` (including `refuseOpenNetwork` on resume and auto-start against a stub Docker API) and `test/network.test.ts`
-(what each network builds, and when `update` may keep the container) do not need Docker; `test/sandbox-docker.test.ts` and `test/concurrent.test.ts` need Docker (the whole group is skipped without it),
+(what each network builds, and when `update` may keep the container) do not need Docker; `test/device-docker.test.ts` and `test/concurrent.test.ts` need Docker (the whole group is skipped without it),
 builds the test images once (tagged by the content of their build context, shared by the test files and kept for later runs; remove old `capybara-sandbox*:test-*` tags with `docker rmi`), starts the socket proxy, and cleans up by label at the end; the runsc cases run only when the daemon has runsc registered.
 `test/permission-scopes.test.ts` runs `runSandboxPermissionConformance` (from `@capybara-hq/testing`) against the actual provider, image and socket proxy, plus the provider's own cases: support v2, the escalated pair and narrower grants refused, every profile on the whole instance, the egress proxy as every operation's network (allowlist and open-public with the closed classes), admission, revocation, background, preparation, browsing and fail-closed images; it logs the kernel, Docker version and image it ran on. `test/instance-boundary.test.ts` (no Docker) checks the support report and the scope rules against a fake transport, and `test/egress-proxy-classes.test.ts` (no Docker) the closed classes against the SDK and the fake-IP DNS-over-HTTPS path (a local HTTPS endpoint with an IP certificate in `test/fixtures`).
 Through a real kernel: `test/sandbox-tools.smoke.test.ts` (the kernel's sandbox tools in one process) and `test/sandbox-artifacts.dual.test.ts` (the M5 segment 2 flow across two replicas: attachments, delivery, takeover after a killed replica, idle suspend and resume). The socket proxy starts from `test/sandbox-proxy/haproxy.cfg`, an exact copy of capybara-hq/core's [`docker/sandbox-proxy/haproxy.cfg`](https://github.com/capybara-hq/core/tree/main/docker/sandbox-proxy/haproxy.cfg). Nothing in this repository compares them; core's `check:bootstrap --network` (rule `bootstrap-haproxy`) will check the copy against the commit core pins.

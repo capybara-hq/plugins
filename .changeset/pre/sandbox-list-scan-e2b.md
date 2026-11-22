@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-sandbox-e2b": minor
+"@capybara-hq/plugin-device-e2b": minor
 ---
 
 Implements the optional `list` and `scan` calls of `sandbox@2` (plugin SDK 0.1.0-rc.24), so cloud

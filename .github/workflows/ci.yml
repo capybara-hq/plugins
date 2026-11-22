@@ -37,7 +37,7 @@ permissions: {}
 #   workflow_dispatch only, never on PRs.
 # - test: by diff on PRs (the changed plugins and the plugins that depend on them, by plugin.json
 #   dependencies or package.json dependencies); everything on main. Docker is available on the
-#   runner for sandbox-docker and the Testcontainers PostgreSQL / Valkey; live API tests skip
+#   runner for device-docker and the Testcontainers PostgreSQL / Valkey; live API tests skip
 #   without their CAPYBARA_TEST_* variables.
 # - Docs-only diffs skip test; root config, the lockfile (core package upgrades), .github/**,
 #   tools/**, unknown files, or a diff that can't be computed run everything.

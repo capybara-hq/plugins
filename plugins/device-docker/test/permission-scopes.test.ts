@@ -230,7 +230,7 @@ describe.skipIf(!dockerAvailable)(
       profile: SandboxPermissionGrant["profile"] = "full-access",
     ): SandboxPermissionGrant => ({
       profile,
-      filesystem: { kind: "scoped", readRoots: INSTANCE_ROOTS, writeRoots: INSTANCE_ROOTS },
+      filesystem: { kind: "scoped", projectRoot: "/workspace", writeRoots: INSTANCE_ROOTS },
       network,
     });
     /** Running outside the sandbox: an instance has no outside. */
@@ -242,7 +242,7 @@ describe.skipIf(!dockerAvailable)(
     /** A grant narrower than the instance would need restricted filters. */
     const narrower = (writeRoots: string[]): SandboxPermissionGrant => ({
       profile: "approve-for-me",
-      filesystem: { kind: "scoped", readRoots: [], writeRoots },
+      filesystem: { kind: "scoped", projectRoot: null, writeRoots },
       network: { kind: "none" },
     });
 
@@ -351,7 +351,7 @@ describe.skipIf(!dockerAvailable)(
         spawnSync(args[0] as string, args.slice(1), { encoding: "utf8" }).stdout?.trim() ?? "";
       // The real runtime this evidence ran on.
       console.info(
-        `[sandbox-docker permission] ${JSON.stringify({
+        `[device-docker permission] ${JSON.stringify({
           support,
           kernel: (await dexec(device.id, "1000", ["uname", "-srm"])).trim(),
           docker: host(
@@ -572,7 +572,7 @@ describe.skipIf(!dockerAvailable)(
       }
       // the same sandbox under every profile: only the container's own seccomp filter applies
       expect(new Set(seen).size).toBe(1);
-      console.info(`[sandbox-docker permission] whole instance: ${seen[0]?.trim()}`);
+      console.info(`[device-docker permission] whole instance: ${seen[0]?.trim()}`);
     });
 
     it("the instance's egress proxy is the sandbox network of every operation", async () => {
@@ -713,7 +713,7 @@ describe.skipIf(!dockerAvailable)(
         expect(r.exitCode, r.stderr).toBe(0);
         expect(r.stdout).toContain(`tcp-failed ${hostIp}`);
         console.info(
-          `[sandbox-docker permission] direct host probe: ${r.stdout.trim().replaceAll("\n", "; ")}`,
+          `[device-docker permission] direct host probe: ${r.stdout.trim().replaceAll("\n", "; ")}`,
         );
         expect(r.stdout).not.toContain("tcp-reached");
         // a datagram may leave the socket, but it never arrives at the host's service: control
@@ -767,7 +767,7 @@ describe.skipIf(!dockerAvailable)(
       expect(r.exitCode, r.stderr).toBe(0);
       expect(r.stdout).toMatch(/^unresolved example\.com$/m);
       console.info(
-        `[sandbox-docker permission] DNS probe: ${r.stdout.trim().replaceAll("\n", "; ")}`,
+        `[device-docker permission] DNS probe: ${r.stdout.trim().replaceAll("\n", "; ")}`,
       );
       expect(r.stdout).not.toMatch(/^resolved /m);
       // a reply from Docker's embedded resolver may come back, but never with an answer record

@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-sandbox-e2b": minor
+"@capybara-hq/plugin-device-e2b": minor
 ---
 
 Implements the permission operation contract of `sandbox@2` (plugin SDK 0.1.0-rc.28):

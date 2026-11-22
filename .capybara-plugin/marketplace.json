@@ -229,72 +229,6 @@
       }
     },
     {
-      "name": "sandbox-docker",
-      "version": "0.1.0-rc.21",
-      "summary": {
-        "en": "Conversation sandboxes (sandbox@2) as Docker containers (runc or gVisor runsc) behind a Docker socket proxy: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist per org"
-      },
-      "displayName": {
-        "zh": "Docker 沙箱",
-        "en": "Docker sandbox"
-      },
-      "icon": "./plugins/sandbox-docker/icon.svg",
-      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-docker#readme",
-      "permissions": {
-        "keys": [
-          "config.deployment:deniedCidrs",
-          "config.deployment:egressProxyImage",
-          "config.deployment:endpoint",
-          "config.deployment:network",
-          "config.deployment:refuseOpenNetwork",
-          "config.deployment:runtime",
-          "config.deployment:volumeDriver",
-          "provides:sandbox@2"
-        ],
-        "sensitive": ["provides:sandbox@2"]
-      },
-      "source": {
-        "npm": {
-          "package": "@capybara-hq/plugin-sandbox-docker",
-          "version": "0.1.0-rc.21",
-          "integrity": "sha512-os0kmtDtTPUyBEJUNQdxfuYCwet6X7lZrIq6Dyo2hXLCV0ZkPPfONY8ctRh6+qzD52PjHC1YWKAZQesYW5I6ww=="
-        }
-      }
-    },
-    {
-      "name": "sandbox-e2b",
-      "version": "0.1.0-rc.21",
-      "summary": {
-        "en": "Devices (sandbox@2) as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, an allowlist or the open internet with local ranges denied (E2B's metadata service stays reachable)",
-        "zh": "E2B 沙箱承载设备（sandbox@2，E2B 云或自托管）：暂停沙箱保留文件，从已发布镜像构建模板，网络为出站白名单或开放公网（拒绝私有、回环与链路本地地址；E2B 元数据端点仍可达，见 README）"
-      },
-      "displayName": {
-        "zh": "E2B 沙箱",
-        "en": "E2B sandbox"
-      },
-      "icon": "./plugins/sandbox-e2b/icon.svg",
-      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-e2b#readme",
-      "permissions": {
-        "keys": [
-          "config.deployment.secret:apiKey",
-          "config.deployment:apiUrl",
-          "config.deployment:domain",
-          "config.deployment:domainAllowlist",
-          "config.deployment:template",
-          "config.deployment:timeoutSeconds",
-          "provides:sandbox@2"
-        ],
-        "sensitive": ["config.deployment.secret:apiKey", "provides:sandbox@2"]
-      },
-      "source": {
-        "npm": {
-          "package": "@capybara-hq/plugin-sandbox-e2b",
-          "version": "0.1.0-rc.21",
-          "integrity": "sha512-xRECQWm75fUX/RLoeTmGRdNffPX6M/PZ+Z5ZwXzsXfwK4FB7Q8sX1wctxTNYzyhJXPkxHzSNvDGQEYlSNnxLSg=="
-        }
-      }
-    },
-    {
       "name": "slack",
       "version": "0.1.0-rc.13",
       "summary": {
@@ -887,6 +821,73 @@
           "package": "@capybara-hq/plugin-google",
           "version": "0.1.0-rc.0",
           "integrity": "sha512-T+RMnzZslrU55CrLBEoy7hdyajTvjadvBC5Jv8MeFJICFz3J8r/FCwlItf09wwbYyalRBt/Pas6ghfm9yo8SqA=="
+        }
+      }
+    },
+    {
+      "name": "device-docker",
+      "version": "0.1.0-rc.21",
+      "summary": {
+        "en": "Devices as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with their files on volumes kept until the device is deleted: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist",
+        "zh": "以 Docker 容器（runc 或 gVisor runsc）承载设备，经 Docker socket 代理访问；文件保存在卷上，直到设备被删除。网络默认开放公网（拒绝回环、私有、链路本地与元数据地址），也可用主机白名单"
+      },
+      "displayName": {
+        "zh": "Docker 设备",
+        "en": "Docker devices"
+      },
+      "icon": "./plugins/device-docker/icon.svg",
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/device-docker#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment:deniedCidrs",
+          "config.deployment:egressProxyImage",
+          "config.deployment:endpoint",
+          "config.deployment:network",
+          "config.deployment:refuseOpenNetwork",
+          "config.deployment:runtime",
+          "config.deployment:volumeDriver",
+          "provides:device-provider@1"
+        ],
+        "sensitive": ["provides:device-provider@1"]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-device-docker",
+          "version": "0.1.0-rc.21",
+          "integrity": "sha512-ZMlDQkCWA+/GSeNJ7bdQ9O40/J7eEZbMkkc9yChtxFtQXtS9f6dLC0ScMfOWNZanAXWdW/soOoRWZURXYMPTZA=="
+        }
+      }
+    },
+    {
+      "name": "device-e2b",
+      "version": "0.1.0-rc.21",
+      "summary": {
+        "en": "Devices as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, an allowlist or the open internet with local ranges denied (E2B's metadata service stays reachable)",
+        "zh": "以 E2B 沙箱承载设备（E2B 云或自托管）：暂停沙箱保留文件，从已发布镜像构建模板，网络为出站白名单或开放公网（拒绝私有、回环与链路本地地址；E2B 元数据端点仍可达，见 README）"
+      },
+      "displayName": {
+        "zh": "E2B 设备",
+        "en": "E2B devices"
+      },
+      "icon": "./plugins/device-e2b/icon.svg",
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/device-e2b#readme",
+      "permissions": {
+        "keys": [
+          "config.deployment.secret:apiKey",
+          "config.deployment:apiUrl",
+          "config.deployment:domain",
+          "config.deployment:domainAllowlist",
+          "config.deployment:template",
+          "config.deployment:timeoutSeconds",
+          "provides:device-provider@1"
+        ],
+        "sensitive": ["config.deployment.secret:apiKey", "provides:device-provider@1"]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-device-e2b",
+          "version": "0.1.0-rc.21",
+          "integrity": "sha512-Eq5sQ0pipV+hT7OpA+QidVsr6Gt9DhTwzYXtt/D3rp9opNYcsh8/x7kKcgKxFBIWJq/FR6L5hlledGoZrT79hw=="
         }
       }
     }

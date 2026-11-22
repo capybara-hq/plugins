@@ -69,7 +69,7 @@ describe("planInstance", () => {
 
   it("refuseOpenNetwork: open-public throws before Docker is touched, the allowlist works", () => {
     expect(() => planInstance(limits(OPEN), true)).toThrow(
-      /refuseOpenNetwork.*extensionConfig\."sandbox-docker"\.refuseOpenNetwork/,
+      /refuseOpenNetwork.*extensionConfig\."device-docker"\.refuseOpenNetwork/,
     );
     expect(planInstance(limits(allow()), true).mode).toBe("allowlist");
     // and it is off by default

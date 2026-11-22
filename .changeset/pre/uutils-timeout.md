@@ -1,6 +1,6 @@
 ---
-"@capybara-hq/plugin-sandbox-e2b": patch
-"@capybara-hq/plugin-sandbox-docker": patch
+"@capybara-hq/plugin-device-e2b": patch
+"@capybara-hq/plugin-device-docker": patch
 ---
 
 Kill a command's leftover processes at the in-sandbox deadline also where `timeout` is uutils

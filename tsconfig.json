@@ -74,10 +74,10 @@
       "path": "plugins/push-jpush"
     },
     {
-      "path": "plugins/sandbox-docker"
+      "path": "plugins/device-docker"
     },
     {
-      "path": "plugins/sandbox-e2b"
+      "path": "plugins/device-e2b"
     },
     {
       "path": "plugins/slack"

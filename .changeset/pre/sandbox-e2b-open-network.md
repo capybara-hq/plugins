@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-sandbox-e2b": patch
+"@capybara-hq/plugin-device-e2b": patch
 ---
 
 Map `open-public` instead of refusing it: internet access (`allow_internet_access: true`) with

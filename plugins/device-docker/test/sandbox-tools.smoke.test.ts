@@ -89,13 +89,15 @@ describe.skipIf(!dockerAvailable)(
             roles: ["api", "worker"],
             extensions: [MODEL_FAKE, SANDBOX_DOCKER],
             extensionConfig: {
-              "sandbox-docker": {
+              "device-docker": {
                 endpoint: proxy.endpoint,
                 network,
                 egressProxyImage: images.egressImage,
               },
             },
             sandbox: { image: images.sandboxImage, limits: { memoryMb: 512 } },
+            // the provider that makes a person's default device (no default without it)
+            devices: { defaultProvider: "device-docker" },
           },
         ),
         // this file wants the warnings
@@ -134,6 +136,13 @@ describe.skipIf(!dockerAvailable)(
       owner = await session(k, "owner");
       orgId = await createOrg(owner);
       await enableModelProviders(owner, orgId, ["model-fake"]);
+      // device-provider@1 is org-scoped: the provider makes devices only where it is on
+      const dd = await owner({
+        method: "PUT",
+        url: `/api/v1/orgs/${orgId}/extensions/device-docker`,
+        payload: { enabled: true },
+      });
+      expect(dd.statusCode, dd.body).toBe(200);
     });
 
     async function sandboxConversation(): Promise<{ id: string; device: string }> {

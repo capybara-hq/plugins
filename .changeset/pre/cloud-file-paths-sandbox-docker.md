@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-sandbox-docker": patch
+"@capybara-hq/plugin-device-docker": patch
 ---
 
 File calls (`readFile`, `writeFile`, `stat`) check only the path's shape; which roots they may reach

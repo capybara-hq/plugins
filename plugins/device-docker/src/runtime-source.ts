@@ -37,7 +37,7 @@ export const SDK_RUNTIME_FILES = Object.freeze(["native-files.py", "linux-sandbo
 export function sdkRuntimeDigests(): Record<(typeof SDK_RUNTIME_FILES)[number], string> {
   if (SANDBOX_RUNTIME_SOURCE.version !== RUNTIME_BUNDLE_VERSION) {
     throw new Error(
-      `sandbox-docker stages runtime bundle v${RUNTIME_BUNDLE_VERSION}, the SDK has v${SANDBOX_RUNTIME_SOURCE.version}`,
+      `device-docker stages runtime bundle v${RUNTIME_BUNDLE_VERSION}, the SDK has v${SANDBOX_RUNTIME_SOURCE.version}`,
     );
   }
   const out: Partial<Record<(typeof SDK_RUNTIME_FILES)[number], string>> = {};

@@ -1,4 +1,4 @@
-# @capybara-hq/plugin-sandbox-docker
+# @capybara-hq/plugin-device-docker
 
 ## 0.1.0-rc.21
 

@@ -312,9 +312,9 @@ function nativeResult(method: NativeMethod, value: unknown): unknown {
 }
 
 const OUTSIDE_UNSUPPORTED =
-  "sandbox-docker has no outside of its instance: the container is the sandbox, so an escalated (device) operation cannot run here";
+  "device-docker has no outside of its instance: the container is the sandbox, so an escalated (device) operation cannot run here";
 const NARROWER_UNSUPPORTED =
-  "sandbox-docker runs operations on the whole instance only (the container is the sandbox): a narrower filesystem grant needs restricted filters this provider does not offer";
+  "device-docker runs operations on the whole instance only (the container is the sandbox): a narrower filesystem grant needs restricted filters this provider does not offer";
 
 export interface OperationDeps {
   transport: OperationTransport;
@@ -425,7 +425,7 @@ export function createOperations(deps: OperationDeps) {
   ) => {
     if (!appliedWithin(scope.network, await t.appliedNetwork(h, signal))) {
       throw new SandboxScopeDeniedError(
-        "The instance's network allows more than this operation's network; sandbox-docker cannot narrow it per operation, so the operation is refused",
+        "The instance's network allows more than this operation's network; device-docker cannot narrow it per operation, so the operation is refused",
       );
     }
   };
