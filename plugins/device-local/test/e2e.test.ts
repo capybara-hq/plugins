@@ -49,7 +49,7 @@ const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
  * The published program under test: `@capybara-hq/device` at this version (a plugin may not depend
  * on it, so the test installs it from npm into a temporary directory).
  */
-const DEVICE_VERSION = process.env.CAPYBARA_TEST_DEVICE_LOCAL_E2E_VERSION ?? "0.1.0-rc.28";
+const DEVICE_VERSION = process.env.CAPYBARA_TEST_DEVICE_LOCAL_E2E_VERSION ?? "0.1.0-rc.29";
 let program: string;
 let programDir: string;
 
