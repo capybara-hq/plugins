@@ -13,6 +13,35 @@
     "zh": "使用 Google 登录：Google Workspace 账号通过 OpenID Connect 登录，托管域在校验过的 ID token 上强制检查"
   },
   "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/google#readme",
+  "dependencies": [
+    {
+      "name": "connector-mcp",
+      "version": "^0.1.0-rc.1"
+    }
+  ],
+  "connectorTemplates": [
+    {
+      "path": "./connectors/gmail.json"
+    },
+    {
+      "path": "./connectors/google-drive.json"
+    },
+    {
+      "path": "./connectors/google-calendar.json"
+    },
+    {
+      "path": "./connectors/google-sheets.json"
+    },
+    {
+      "path": "./connectors/google-docs.json"
+    },
+    {
+      "path": "./connectors/google-slides.json"
+    },
+    {
+      "path": "./connectors/bigquery.json"
+    }
+  ],
   "setupGuides": [
     {
       "id": "google-sign-in",

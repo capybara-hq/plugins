@@ -1,0 +1,69 @@
+{
+  "endpoint": "https://sheetsmcp.googleapis.com/mcp/v1",
+  "recordedAt": "2026-11-22",
+  "tools": [
+    {
+      "name": "get_values",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/spreadsheets"
+      ]
+    },
+    {
+      "name": "get_spreadsheet",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/spreadsheets"
+      ]
+    },
+    {
+      "name": "update_spreadsheet",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/spreadsheets"
+      ]
+    },
+    {
+      "name": "update_values",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/spreadsheets"
+      ]
+    },
+    {
+      "name": "update_formulas",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/spreadsheets"
+      ]
+    },
+    {
+      "name": "insert_dimension",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/spreadsheets"
+      ]
+    }
+  ]
+}

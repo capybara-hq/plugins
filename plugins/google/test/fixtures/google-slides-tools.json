@@ -1,0 +1,52 @@
+{
+  "endpoint": "https://slidesmcp.googleapis.com/mcp/v1",
+  "recordedAt": "2026-11-22",
+  "tools": [
+    {
+      "name": "read_presentation",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/presentations.readonly",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/presentations"
+      ]
+    },
+    {
+      "name": "read_slide_page",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/presentations.readonly",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/presentations"
+      ]
+    },
+    {
+      "name": "read_slide_page_thumbnail",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/presentations.readonly",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/presentations"
+      ]
+    },
+    {
+      "name": "update_presentation",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/presentations"
+      ]
+    }
+  ]
+}

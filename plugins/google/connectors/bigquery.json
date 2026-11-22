@@ -1,0 +1,42 @@
+{
+  "displayName": {
+    "zh": "BigQuery",
+    "en": "BigQuery"
+  },
+  "description": "Explore datasets and tables and run SQL in the projects the connected person can use, through Google's BigQuery MCP server; read-only queries run directly, other SQL asks first. Each member connects their own Google account; an org admin enters the OAuth client of the company's Google Cloud project; members need BigQuery roles in the projects they query.",
+  "icon": "./icons/bigquery.svg",
+  "defaultEnabled": false,
+  "template": {
+    "plugin": "connector-mcp",
+    "pluginVersion": "^0.1.0-rc.1",
+    "connector": "mcp",
+    "endpoint": {
+      "url": "https://bigquery.googleapis.com/mcp"
+    },
+    "auth": {
+      "type": "oauth_code",
+      "ownership": "personal",
+      "discovery": "manual",
+      "authorizationUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+      "tokenUrl": "https://oauth2.googleapis.com/token",
+      "client": "manual",
+      "tokenAuthMethod": "client_secret_post",
+      "scopes": ["https://www.googleapis.com/auth/bigquery"],
+      "authorizationParams": {
+        "access_type": "offline",
+        "prompt": "consent"
+      }
+    },
+    "defaultToolPolicies": {
+      "list_dataset_ids": "allow",
+      "get_dataset_info": "allow",
+      "list_table_ids": "allow",
+      "get_table_info": "allow",
+      "execute_sql_readonly": "allow",
+      "execute_sql": "ask",
+      "get_query_results": "allow",
+      "cancel_job": "ask",
+      "get_job": "allow"
+    }
+  }
+}

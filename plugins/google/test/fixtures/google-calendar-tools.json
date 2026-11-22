@@ -1,0 +1,98 @@
+{
+  "endpoint": "https://calendarmcp.googleapis.com/mcp/v1",
+  "recordedAt": "2026-11-22",
+  "tools": [
+    {
+      "name": "list_events",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar.events.readonly",
+        "https://www.googleapis.com/auth/calendar.readonly"
+      ]
+    },
+    {
+      "name": "get_event",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar.events.readonly",
+        "https://www.googleapis.com/auth/calendar.readonly"
+      ]
+    },
+    {
+      "name": "list_calendars",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/calendar.readonly",
+        "https://www.googleapis.com/auth/calendar.calendarlist",
+        "https://www.googleapis.com/auth/calendar.calendarlist.readonly"
+      ]
+    },
+    {
+      "name": "suggest_time",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/calendar.readonly",
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar.events.freebusy",
+        "https://www.googleapis.com/auth/calendar.freebusy"
+      ]
+    },
+    {
+      "name": "create_event",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/calendar.events"
+      ]
+    },
+    {
+      "name": "update_event",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/calendar.events"
+      ]
+    },
+    {
+      "name": "delete_event",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/calendar.events"
+      ]
+    },
+    {
+      "name": "respond_to_event",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/calendar.events"
+      ]
+    },
+    {
+      "name": "search_events",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar.events.readonly",
+        "https://www.googleapis.com/auth/calendar.readonly"
+      ]
+    }
+  ]
+}

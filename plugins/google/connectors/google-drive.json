@@ -1,0 +1,45 @@
+{
+  "displayName": {
+    "zh": "Google 云端硬盘",
+    "en": "Google Drive"
+  },
+  "description": "Search, read and download files, create and copy files and upload new revisions as the connected person, through Google's Drive MCP server (Google Workspace Developer Preview). Each member connects their own Google account; an org admin enters the OAuth client of the company's Google Cloud project.",
+  "icon": "./icons/google-drive.svg",
+  "defaultEnabled": false,
+  "template": {
+    "plugin": "connector-mcp",
+    "pluginVersion": "^0.1.0-rc.1",
+    "connector": "mcp",
+    "endpoint": {
+      "url": "https://drivemcp.googleapis.com/mcp/v1"
+    },
+    "auth": {
+      "type": "oauth_code",
+      "ownership": "personal",
+      "discovery": "manual",
+      "authorizationUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+      "tokenUrl": "https://oauth2.googleapis.com/token",
+      "client": "manual",
+      "tokenAuthMethod": "client_secret_post",
+      "scopes": [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/drive.file"
+      ],
+      "authorizationParams": {
+        "access_type": "offline",
+        "prompt": "consent"
+      }
+    },
+    "defaultToolPolicies": {
+      "copy_file": "ask",
+      "create_file": "ask",
+      "download_file_content": "allow",
+      "get_file_metadata": "allow",
+      "get_file_permissions": "allow",
+      "list_recent_files": "allow",
+      "read_file_content": "allow",
+      "search_files": "allow",
+      "upload_file_revision": "ask"
+    }
+  }
+}

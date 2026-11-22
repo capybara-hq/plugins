@@ -1,0 +1,28 @@
+{
+  "endpoint": "https://docsmcp.googleapis.com/mcp/v1",
+  "recordedAt": "2026-11-22",
+  "tools": [
+    {
+      "name": "read_doc",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/documents.readonly",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/documents"
+      ]
+    },
+    {
+      "name": "update_doc",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/documents"
+      ]
+    }
+  ]
+}
