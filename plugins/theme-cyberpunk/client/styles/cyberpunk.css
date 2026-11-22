@@ -54,6 +54,13 @@
       border-radius: 4px 0;
       corner-shape: bevel;
     }
+    /* The composer's text box (the pill of the mobile form; above 600 it draws no box): a text
+       field's corners at the composer's cut. The send button inside keeps a button's corners,
+       the same diagonal. */
+    & [data-cap-part~="composer.box"] {
+      border-radius: var(--cx-theme-cyberpunk-cut) 0;
+      corner-shape: bevel;
+    }
   }
 
   /*
@@ -120,6 +127,7 @@
     & [data-cap-part~="agent-chip"],
     & [data-cap-part~="switch"],
     & [data-cap-part~="org-avatar"],
+    & [data-cap-part~="composer.box"],
     & .cx-theme-cyberpunk-boot-skip {
       --cx-theme-cyberpunk-c: var(--cx-theme-cyberpunk-cut-sm);
       --cx-theme-cyberpunk-notch: calc(
@@ -149,6 +157,20 @@
     & [data-cap-part~="switch"],
     & [data-cap-part~="org-avatar"] {
       --cx-theme-cyberpunk-c: 4px;
+    }
+    /* the pill's round ends give way to the two cuts (its other corners square, as a field's) */
+    & [data-cap-part~="composer.box"] {
+      --cx-theme-cyberpunk-c: var(--cx-theme-cyberpunk-cut);
+      border-radius: 0;
+    }
+    /* In the mobile form send and the settings chip are round in the design: square corners
+       beside the two cuts, as the pill's and every button's here. */
+    @media (max-width: 599px), (pointer: coarse),
+      (any-pointer: coarse) and (not (any-pointer: fine)) {
+      & [data-cap-part~="composer.send"],
+      & [data-cap-part~="composer.options"] {
+        border-radius: 0;
+      }
     }
 
     /* The diagonal from the part's own border (see above): skewed -45deg (top-left and
@@ -256,6 +278,7 @@
     & [data-cap-part~="input"],
     & [data-cap-part~="switch"],
     & [data-cap-part~="org-avatar"],
+    & [data-cap-part~="composer.box"],
     & .cx-theme-cyberpunk-boot-skip {
       background-image:
         linear-gradient(
@@ -283,6 +306,7 @@
     & [data-cap-part~="input"],
     & [data-cap-part~="switch"],
     & [data-cap-part~="org-avatar"],
+    & [data-cap-part~="composer.box"],
     & .cx-theme-cyberpunk-boot-screen,
     & .cx-theme-cyberpunk-boot-skip {
       background-size: var(--cx-theme-cyberpunk-c) var(--cx-theme-cyberpunk-c);
@@ -298,7 +322,13 @@
     & [data-cap-part~="composer"] {
       --cx-theme-cyberpunk-bevel: var(--cb-line);
     }
-    & [data-cap-part~="composer"]:focus-within {
+    & [data-cap-part~="composer"]:has([data-cap-part~="composer.box"]:focus-within) {
+      --cx-theme-cyberpunk-bevel: var(--cb-accent);
+    }
+    & [data-cap-part~="composer.box"] {
+      --cx-theme-cyberpunk-bevel: var(--cb-float-line);
+    }
+    & [data-cap-part~="composer.box"]:focus-within {
       --cx-theme-cyberpunk-bevel: var(--cb-accent);
     }
     & [data-cap-part~="dialog"],
@@ -386,11 +416,34 @@
     box-shadow: 0 0 10px rgba(255, 230, 0, 0.16);
   }
 
-  /* The composer shows focus as a soft inner line in the one focus colour. */
-  & [data-cap-part~="composer"]:focus-within {
+  /*
+   * The composer shows focus as a soft inner line in the one focus colour, while its text box
+   * (the text, attach or send) has focus, never for the control row. In the mobile form the text
+   * box is the pill and draws the line itself; the composer around it (the settings chip row,
+   * the quick actions) draws nothing, no frame and no cut.
+   */
+  & [data-cap-part~="composer"]:has([data-cap-part~="composer.box"]:focus-within) {
     box-shadow:
       var(--cb-shadow-float),
       inset 0 0 0 1px rgba(255, 230, 0, 0.45);
+  }
+  & [data-cap-part~="composer.box"]:focus-within {
+    box-shadow:
+      var(--cb-shadow-float-touch),
+      inset 0 0 0 1px rgba(255, 230, 0, 0.45);
+  }
+  @media (max-width: 599px), (pointer: coarse), (any-pointer: coarse) and (not (any-pointer: fine)) {
+    & [data-cap-part~="composer"],
+    & [data-cap-part~="composer"]:has([data-cap-part~="composer.box"]:focus-within) {
+      box-shadow: none;
+    }
+    /* without corner-shape: no cut through the chip row or the pill's edge, no diagonals */
+    @supports not (corner-shape: bevel) {
+      & [data-cap-part~="composer"] {
+        clip-path: none;
+        background-image: none;
+      }
+    }
   }
 
   /* ---------- Shell touches ---------- */
@@ -831,6 +884,40 @@
     bottom: 0;
     animation: cx-theme-cyberpunk-comet 2.8s linear -1.4s infinite reverse;
   }
+  /* The mobile form: the lights run along the pill (the composer around it draws nothing). Its
+     controls sit a space.2 inside, so a plain clip keeps their focus rings. */
+  @media (max-width: 599px), (pointer: coarse), (any-pointer: coarse) and (not (any-pointer: fine)) {
+    & [data-cap-part~="composer"] {
+      overflow: visible;
+    }
+    & [data-cap-part~="composer"]::before,
+    & [data-cap-part~="composer"]::after {
+      content: none;
+    }
+    & [data-cap-part~="composer.box"] {
+      position: relative;
+      overflow: clip;
+    }
+    & [data-cap-part~="composer.box"]::before,
+    & [data-cap-part~="composer.box"]::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      width: 22%;
+      height: 1px;
+      pointer-events: none;
+      background: linear-gradient(90deg, transparent, var(--cb-accent), transparent);
+      box-shadow: 0 0 8px var(--cb-accent);
+    }
+    & [data-cap-part~="composer.box"]::before {
+      top: 0;
+      animation: cx-theme-cyberpunk-comet 2.8s linear infinite;
+    }
+    & [data-cap-part~="composer.box"]::after {
+      bottom: 0;
+      animation: cx-theme-cyberpunk-comet 2.8s linear -1.4s infinite reverse;
+    }
+  }
 }
 
 /* Waiting for input: everything holds, in cyan, breathing slowly. */
@@ -883,6 +970,48 @@
       background-origin: border-box;
     }
   }
+  /* The mobile form: the pill's outline breathes (its cuts top-left and bottom-right). */
+  @media (max-width: 599px), (pointer: coarse), (any-pointer: coarse) and (not (any-pointer: fine)) {
+    & [data-cap-part~="composer"]::after {
+      content: none;
+    }
+    & [data-cap-part~="composer.box"] {
+      position: relative;
+    }
+    & [data-cap-part~="composer.box"]::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      border: 1px solid var(--cx-theme-cyberpunk-cyan);
+      border-radius: inherit;
+      corner-shape: bevel;
+      box-shadow: inset 0 0 12px rgba(0, 229, 255, 0.3);
+      animation: cx-theme-cyberpunk-breathe 1.8s ease-in-out infinite;
+    }
+    @supports not (corner-shape: bevel) {
+      & [data-cap-part~="composer.box"]::after {
+        --cx-theme-cyberpunk-c: calc(var(--cx-theme-cyberpunk-cut) - 2px);
+        background-image:
+          linear-gradient(
+            to bottom right,
+            var(--cx-theme-cyberpunk-cyan) 0 calc(50% + 1px),
+            transparent 0
+          ),
+          linear-gradient(
+            to top left,
+            var(--cx-theme-cyberpunk-cyan) 0 calc(50% + 1px),
+            transparent 0
+          );
+        background-position:
+          left top,
+          right bottom;
+        background-size: var(--cx-theme-cyberpunk-c) var(--cx-theme-cyberpunk-c);
+        background-repeat: no-repeat;
+        background-origin: border-box;
+      }
+    }
+  }
 }
 
 /* Failed: one red glitch, then a steady red line and a flat meter. */
@@ -927,7 +1056,9 @@
     & [data-cap-part~="shell"]::after,
     & [data-cap-part~="message.assistant"][aria-busy="true"]::before,
     & [data-cap-part~="composer"]::before,
-    & [data-cap-part~="composer"]::after {
+    & [data-cap-part~="composer"]::after,
+    & [data-cap-part~="composer.box"]::before,
+    & [data-cap-part~="composer.box"]::after {
       display: none;
     }
   }
@@ -947,7 +1078,9 @@
   & [data-cap-part~="shell"]::after,
   & [data-cap-part~="message.assistant"][aria-busy="true"]::before,
   & [data-cap-part~="composer"]::before,
-  & [data-cap-part~="composer"]::after {
+  & [data-cap-part~="composer"]::after,
+  & [data-cap-part~="composer.box"]::before,
+  & [data-cap-part~="composer.box"]::after {
     display: none;
   }
 }
