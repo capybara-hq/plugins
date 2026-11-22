@@ -905,14 +905,19 @@
       "icon": "./plugins/device-local/icon.svg",
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/device-local#readme",
       "permissions": {
-        "keys": ["permissions.dialin:capybara-device/5", "provides:device-provider@1"],
+        "keys": [
+          "permissions.dialin:capybara-device/5",
+          "provides:device-provider@1",
+          "table:bindings",
+          "table:connections"
+        ],
         "sensitive": ["provides:device-provider@1"]
       },
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-local",
           "version": "0.1.0-rc.0",
-          "integrity": "sha512-ZYkNvBbupY9Lw8oHdcdz7bod3TLGYQkC1SY4Jorw3Mpu2UzRWe/MzhAmiJyi33v8mMUFyxkHFNlrketk+Z5f7g=="
+          "integrity": "sha512-aoPyB667ysNTahBr4bEjd2b5UNI7u+pxBG7BcBz6vMaYG4ai71Bx4ANt3yHH8cwPAz/HegP/zwMb98eFyvzyhA=="
         }
       }
     }
