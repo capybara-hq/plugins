@@ -44,7 +44,7 @@ const ceiling = (over: Partial<DeviceOwnerCeiling> = {}): DeviceOwnerCeiling => 
   outsideSandbox: true,
   network: "allowlist",
   allowedDomains: ["example.com", "registry.npmjs.org"],
-  restrictedProjectReach: "os-user",
+  projectReach: "machine",
   ...over,
 });
 
@@ -502,8 +502,8 @@ describe("report and permission support", () => {
     await s.say(hello(null, { ownerCeiling: ceiling({ outsideSandbox: false }) }));
     const r = await reportFor(s.store, { deviceId: DEVICE, orgId: ORG });
     expect(r.description).toEqual({
-      en: "Reads the whole computer except secrets; writes only in the project; never runs outside the sandbox; network: 2 allowed hosts.",
-      zh: "读取整台电脑（密钥除外），只在项目中写入；从不在沙箱外运行；网络：允许 2 个主机。",
+      en: "Reads the whole machine except secrets and other connections; writes only in the project and workspace; never runs outside the sandbox; network: 2 allowed hosts.",
+      zh: "读取本机全部文件（密钥和其他连接除外）；只在项目和工作区写入；从不在沙箱外运行；网络：允许 2 个主机。",
     });
     expect(r.home).toBe("/home/me");
     expect(r.reset).toBe(false);
@@ -521,14 +521,14 @@ describe("report and permission support", () => {
     await s.say(
       hello(null, {
         mode: "docker",
-        ownerCeiling: ceiling({ network: "open", restrictedProjectReach: "workspace" }),
+        ownerCeiling: ceiling({ network: "open", projectReach: "workspace" }),
       }),
     );
     const r = await reportFor(s.store, { deviceId: DEVICE, orgId: ORG });
     expect(r.description.en).toBe(
-      "In a Docker container: Reads and writes only in its workspace; runs outside the sandbox only per approved call; network: the open internet.",
+      "In a Docker container: Reads and writes only the device's workspace; runs outside the sandbox only per approved call; network: the open internet.",
     );
-    expect(r.description.zh).toContain("仅对批准的单次调用在沙箱外运行");
+    expect(r.description.zh).toContain("仅在获批的单次调用中在沙箱外运行");
     expect(r.home).toBeNull();
   });
 

@@ -1,7 +1,6 @@
 import {
   type DialInChannel,
   FileSystemGoneError,
-  ProjectPathRefusedError,
   SandboxGoneError,
   SandboxOperationOutcomeUnknownError,
   SandboxPermissionUnsupportedError,
@@ -18,9 +17,10 @@ import {
   parseDeviceFrame,
   parseOperationResult,
 } from "@capybara-hq/plugin-sdk/device-protocol";
+import { projectRefusalError } from "./project-refusal.js";
 
 /**
- * The `capybara-device` bodies (protocol 5, `@capybara-hq/plugin-sdk/device-protocol`) over the
+ * The `capybara-device` bodies (protocol 6, `@capybara-hq/plugin-sdk/device-protocol`) over the
  * kernel's dial-in channel: a request body is `{ op, args }`, a response body the operation's
  * result or its typed failure. The kernel relays both without reading them, and the machine is
  * not trusted: every request is checked before it is sent and every answer is parsed strictly
@@ -39,7 +39,7 @@ export const EXEC_DEADLINE_MARGIN_MS = 5000;
 /** How long the machine may take for one operation other than a command. */
 export const OP_DEADLINE_MS = 30_000;
 
-/** One protocol 5 operation on the device's machine, resolving its validated result. */
+/** One protocol 6 operation on the device's machine, resolving its validated result. */
 export type MachineCall = (
   deviceId: string,
   op: DeviceOperation,
@@ -49,7 +49,7 @@ export type MachineCall = (
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-/** An answer the machine sent that is not valid protocol 5: never passed on. */
+/** An answer the machine sent that is not valid protocol 6: never passed on. */
 const invalidAnswer = (op: string, e: unknown): ToolError =>
   new ToolError(
     `The connected machine sent an invalid answer to ${op} (${errMsg(e)}); update capybara-device on that machine and retry`,
@@ -96,20 +96,21 @@ function requestOf(
   return undefined;
 }
 
-/** The operations that list a project directory (a `policy` refusal there refuses the path). */
-const isProjectListing = (op: string): boolean =>
-  op === "list" || op === "scan" || op === "browseList" || op === "browseScan";
-
 /**
- * A machine's typed failure as the SDK error the kernel knows. A `policy` refusal of a project
- * listing is the provider refusing that directory (`ProjectPathRefusedError`, the machine's text as
- * its reason).
+ * A machine's typed failure as the SDK error the kernel knows. A `project_refused` outcome is the
+ * provider refusing a project directory (`ProjectPathRefusedError`): its reason is the fixed text
+ * of the refusal code ({@link projectRefusalError}), never the machine's message.
  */
 export function failureOf(
   error: Extract<DeviceResponseBody, { ok: false }>["error"],
   op: string,
 ): Error {
   const { kind, message } = error;
+  if (kind === "project_refused") {
+    // the parser requires the code on this kind; without it the answer is not valid protocol 6
+    if (error.refusal === undefined) return invalidAnswer(op, "a project refusal without a code");
+    return projectRefusalError(error.refusal);
+  }
   switch (kind) {
     case "denied":
       return new SandboxScopeDeniedError(message);
@@ -126,8 +127,6 @@ export function failureOf(
     case "fs_gone":
       return new FileSystemGoneError(message);
     case "policy":
-      if (isProjectListing(op))
-        return new ProjectPathRefusedError({ en: `${POLICY_REFUSAL_PREFIX}${message}` });
       return new ToolError(
         `${POLICY_REFUSAL_PREFIX}${message} (ask the machine's owner to allow it, or use another way)`,
       );

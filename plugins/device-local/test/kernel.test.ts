@@ -26,7 +26,7 @@ import { OWNER_CEILING, ROOTS, SUPPORT } from "./fakes.js";
 
 /**
  * device-local in one in-process kernel (api, worker and gateway roles): a fake machine speaking
- * `capybara-device/5` signs in to a device of this provider, says hello and changes its owner
+ * `capybara-device/6` signs in to a device of this provider, says hello and changes its owner
  * ceiling; the kernel stores the provider's report and its revision. Operations against a real
  * capybara-device are the end-to-end test's.
  */
@@ -133,7 +133,7 @@ describe("device-local in a kernel", () => {
     return { status: r.statusCode, body: (r.json() as { device: DeviceViewJson }).device };
   };
 
-  it("a device signed in with capybara-device/5 reads online and its report revision reaches devices.report_revision", async () => {
+  it("a device signed in with capybara-device/6 reads online and its report revision reaches devices.report_revision", async () => {
     const signedIn = await signInFakeMachine(k, {
       orgId,
       session: cookie,

@@ -11,6 +11,7 @@ import {
   isSandboxScopeDeniedError,
   isSandboxScopeValidationError,
   isSandboxWorkUnsettledError,
+  type ProjectPathRefusedError,
   type SandboxExecutionRef,
   SandboxPermissionUnsupportedError,
   ToolError,
@@ -26,6 +27,7 @@ import plugin, {
   ON_MACHINE_PREFIX,
   OP_DEADLINE_MS,
   POLICY_REFUSAL_PREFIX,
+  PROJECT_REFUSAL_TEXT,
   relayer,
 } from "../src/index.js";
 import {
@@ -46,7 +48,7 @@ const DEVICE = "dev-1";
 const EXEC_RESULT = { exitCode: 0, stdout: "ok", stderr: "", truncated: false, timedOut: false };
 
 /**
- * A machine that answers every protocol 5 operation: `create` with its roots, `bindInstance` by the
+ * A machine that answers every protocol 6 operation: `create` with its roots, `bindInstance` by the
  * binder's chain rules, everything else with `answers[op]` (default a null result).
  */
 function machine(answers: Partial<Record<string, (req: SentRequest) => Answer>> = {}) {
@@ -88,10 +90,10 @@ async function created(s: ReturnType<typeof setup>): Promise<LocalDeviceHandle> 
 }
 
 describe("device-local manifest", () => {
-  it("provides device-provider@1 over the capybara-device/5 dial-in protocol", () => {
+  it("provides device-provider@1 over the capybara-device/6 dial-in protocol", () => {
     expect(plugin.name).toBe("device-local");
     expect(plugin.provides).toEqual(["device-provider@1"]);
-    expect(plugin.permissions).toEqual({ dialIn: { protocol: "capybara-device/5" } });
+    expect(plugin.permissions).toEqual({ dialIn: { protocol: "capybara-device/6" } });
   });
 
   it("declares concurrent exec, the network allowlist and no session isolation", () => {
@@ -102,8 +104,8 @@ describe("device-local manifest", () => {
   });
 });
 
-describe("the protocol 5 codec", () => {
-  it("exec relays a protocol 5 exec body and parses the result strictly", async () => {
+describe("the protocol 6 codec", () => {
+  it("exec relays a protocol 6 exec body and parses the result strictly", async () => {
     const s = setup(
       machine({
         exec: () => ({ ok: true, result: { ...EXEC_RESULT, extra: "dropped" } }),
@@ -229,7 +231,7 @@ describe("the protocol 5 codec", () => {
     expect(s.dial.sent.length).toBe(before);
   });
 
-  it("a request body that is not valid protocol 5 is never sent", async () => {
+  it("a request body that is not valid protocol 6 is never sent", async () => {
     const s = setup();
     const h = await created(s);
     const op = await s.provider.operation?.(h, scopeOf(), signal());
@@ -288,7 +290,7 @@ describe("the protocol 5 codec", () => {
   });
 
   it("maps each typed machine failure to the SDK error the kernel knows", async () => {
-    let failure = { kind: "error", message: "boom" };
+    let failure: Record<string, unknown> = { kind: "error", message: "boom" };
     const s = setup(
       machine({
         stat: () => ({ ok: false, error: failure }),
@@ -318,12 +320,22 @@ describe("the protocol 5 codec", () => {
     expect((error as Error).message).toBe(
       `${ON_MACHINE_PREFIX}boom (check the path or command and retry)`,
     );
-    // a policy refusal of a project listing refuses that directory
+    // a policy refusal of a project listing is no longer a refused path: only a code is
     failure = { kind: "policy", message: "another connection's directory" };
+    const listPolicy = await rejection(
+      op?.list?.(ROOTS.workspace, { limit: 1, signal: signal() }) ?? Promise.resolve(),
+    );
+    expect(isProjectPathRefusedError(listPolicy)).toBe(false);
+    expect(listPolicy).toBeInstanceOf(ToolError);
+    // a project_refused outcome refuses that directory with the code's fixed text
+    failure = { kind: "project_refused", message: "<b>evil</b>", refusal: "other-connection" };
     const listed = await rejection(
       op?.list?.(ROOTS.workspace, { limit: 1, signal: signal() }) ?? Promise.resolve(),
     );
     expect(isProjectPathRefusedError(listed)).toBe(true);
+    expect((listed as ProjectPathRefusedError).reason).toEqual(
+      PROJECT_REFUSAL_TEXT["other-connection"],
+    );
     const browse = await s.provider.browse?.(
       h,
       {
