@@ -284,4 +284,78 @@ describe("cyberpunk.css", () => {
       }
     }
   });
+
+  describe("the composer's mobile form (the pill: part composer.box)", () => {
+    // core's MOBILE_SIZE_QUERY: the composer turns into the pill below 600 or on a touch device
+    const MOBILE =
+      "@media (max-width: 599px), (pointer: coarse), (any-pointer: coarse) and (not (any-pointer: fine))";
+    const BOX = '[data-cap-part~="composer.box"]';
+    const target = (r: Rule) => r.chain[r.chain.length - 1] ?? "";
+    const mobile = styleRules.filter((r) => r.chain.includes(MOBILE));
+
+    it("gives the pill a text field's corners at the composer's cut, in both engines", () => {
+      const bevel = styleRules.find(
+        (r) => r.chain.includes("@supports (corner-shape: bevel)") && target(r) === `& ${BOX}`,
+      );
+      expect(bevel?.body).toContain("border-radius: var(--cx-theme-cyberpunk-cut) 0");
+      expect(bevel?.body).toContain("corner-shape: bevel");
+      const fallback = styleRules.filter((r) =>
+        r.chain.includes("@supports not (corner-shape: bevel)"),
+      );
+      // the field's polygon (top-left and bottom-right) and its diagonals, at the composer's cut
+      const clip = fallback.find((r) => target(r).includes(BOX) && r.body.includes("polygon("));
+      expect(target(clip as Rule)).toContain('[data-cap-part~="input"]');
+      const diagonals = fallback.find(
+        (r) => target(r).includes(BOX) && r.body.includes("to bottom right"),
+      );
+      expect(target(diagonals as Rule)).toContain('[data-cap-part~="input"]');
+      const own = fallback.find(
+        (r) => target(r) === `& ${BOX}` && r.body.includes("border-radius"),
+      );
+      expect(own?.body).toContain("--cx-theme-cyberpunk-c: var(--cx-theme-cyberpunk-cut)");
+      expect(own?.body).toContain("border-radius: 0");
+      // send and the chip square their round corners beside a button's two cuts (Safari)
+      const round = fallback.find(
+        (r) => r.chain.includes(MOBILE) && target(r).includes('[data-cap-part~="composer.send"]'),
+      );
+      expect(target(round as Rule)).toContain('[data-cap-part~="composer.options"]');
+      expect(round?.body).toContain("border-radius: 0");
+    });
+
+    it("draws the focus line on the text box only, never around the control row", () => {
+      expect(css).not.toMatch(/\[data-cap-part~="composer"\]:focus-within/);
+      const line = styleRules.find(
+        (r) => target(r) === `& ${BOX}:focus-within` && r.body.includes("box-shadow"),
+      );
+      expect(line?.body).toContain("inset 0 0 0 1px rgba(255, 230, 0, 0.45)");
+      // in the mobile form the composer around the pill draws nothing: no shadow, cut or diagonal
+      const frame = mobile.filter((r) => target(r).includes('& [data-cap-part~="composer"]'));
+      expect(frame.some((r) => r.body.includes("box-shadow: none"))).toBe(true);
+      const safari = frame.find((r) => r.chain.includes("@supports not (corner-shape: bevel)"));
+      expect(safari?.body).toContain("clip-path: none");
+      expect(safari?.body).toContain("background-image: none");
+    });
+
+    it("runs the run effects along the pill, not the composer, and stops them under reduced motion", () => {
+      for (const run of ["running", "waiting"]) {
+        const inRun = mobile.filter((r) => r.chain[0]?.includes(`run=${run}`));
+        expect(
+          inRun.some(
+            (r) =>
+              target(r).includes('[data-cap-part~="composer"]::after') &&
+              r.body.includes("content: none"),
+          ),
+          run,
+        ).toBe(true);
+        expect(
+          inRun.some((r) => target(r).includes(`${BOX}::after`) && r.body.includes('content: ""')),
+          run,
+        ).toBe(true);
+      }
+      const hidden = styleRules.filter(
+        (r) => r.body.includes("display: none") && target(r).includes(`${BOX}::before`),
+      );
+      expect(hidden).toHaveLength(2);
+    });
+  });
 });
