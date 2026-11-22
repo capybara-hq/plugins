@@ -5,12 +5,12 @@
     "zh": "Google",
     "en": "Google"
   },
-  "version": "0.1.0-rc.0",
+  "version": "0.1.0-rc.1",
   "publisher": "Capybara",
   "icon": "./icon.svg",
   "description": {
-    "en": "Sign in with Google: OpenID Connect login for Google Workspace accounts, with the hosted domain enforced on the verified ID token",
-    "zh": "使用 Google 登录：Google Workspace 账号通过 OpenID Connect 登录，托管域在校验过的 ID token 上强制检查"
+    "en": "Sign in with Google (OpenID Connect for Google Workspace accounts, hosted domain enforced on the verified ID token), plus connector templates for Gmail, Google Drive, Calendar, Sheets, Docs, Slides and BigQuery, each member connecting their own Google account",
+    "zh": "使用 Google 登录（Google Workspace 账号通过 OpenID Connect 登录，托管域在校验过的 ID token 上强制检查），并提供 Gmail、Google Drive、Calendar、Sheets、Docs、Slides 和 BigQuery 的 connector 模板，每个成员连接自己的 Google 账号"
   },
   "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/google#readme",
   "dependencies": [
