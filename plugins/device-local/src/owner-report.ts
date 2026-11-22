@@ -1,5 +1,6 @@
 import {
   type DeviceOwnerCeiling,
+  type DeviceProjectReach,
   parseOwnerCeilingReport,
 } from "@capybara-hq/plugin-sdk/device-protocol";
 
@@ -51,7 +52,7 @@ const canonicalReport = (r: DeviceOwnerCeiling) => ({
   outsideSandbox: r.outsideSandbox,
   network: r.network,
   allowedDomains: [...r.allowedDomains],
-  restrictedProjectReach: r.restrictedProjectReach,
+  projectReach: r.projectReach,
 });
 
 /** Whether two reports are the same bytes (same sequence, revision and facts). */
@@ -85,7 +86,8 @@ export interface OwnerFacts {
   state: "report" | "blocked" | "missing";
   /** The owner allows running outside the sandbox (an escalated call). */
   outsideSandbox: boolean;
-  restrictedProjectReach: "workspace" | "os-user";
+  /** How far the connection's project paths reach (`workspace` when failing closed). */
+  projectReach: DeviceProjectReach;
   /** The owner's sandbox allowlist: the machine's host ceiling while its network is `allowlist`. */
   allowedDomains: string[];
   /** The owner's sandbox network (`allowlist` when failing closed). */
@@ -96,7 +98,7 @@ export interface OwnerFacts {
 
 const FAIL_CLOSED = {
   outsideSandbox: false,
-  restrictedProjectReach: "workspace" as const,
+  projectReach: "workspace" as const,
   allowedDomains: [],
   network: "allowlist" as const,
 };
@@ -114,7 +116,7 @@ export function ownerFactsOf(stored: StoredOwnerReport | null): OwnerFacts {
   return {
     state: "report",
     outsideSandbox: stored.report.outsideSandbox,
-    restrictedProjectReach: stored.report.restrictedProjectReach,
+    projectReach: stored.report.projectReach,
     allowedDomains: [...stored.report.allowedDomains],
     network: stored.report.network,
     revision: stored.report.revision,

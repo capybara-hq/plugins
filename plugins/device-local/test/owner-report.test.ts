@@ -14,7 +14,7 @@ const report = (sequence: number, over: Record<string, unknown> = {}) =>
     sequence,
     outsideSandbox: true,
     network: "open",
-    restrictedProjectReach: "os-user",
+    projectReach: "machine",
     allowedDomains: ["a.test"],
     ...over,
   }) as StoredOwnerReport["report"];
@@ -62,14 +62,14 @@ describe("owner facts", () => {
     expect(ownerFactsOf(stored(report(1, { outsideSandbox: false })))).toMatchObject({
       state: "report",
       outsideSandbox: false,
-      restrictedProjectReach: "os-user",
+      projectReach: "machine",
       allowedDomains: ["a.test"],
       network: "open",
     });
     expect(ownerFactsOf(null)).toMatchObject({
       state: "missing",
       outsideSandbox: false,
-      restrictedProjectReach: "workspace",
+      projectReach: "workspace",
       network: "allowlist",
       allowedDomains: [],
     });
@@ -78,7 +78,7 @@ describe("owner facts", () => {
     ).toMatchObject({
       state: "blocked",
       outsideSandbox: false,
-      restrictedProjectReach: "workspace",
+      projectReach: "workspace",
       network: "allowlist",
     });
   });
@@ -102,6 +102,10 @@ describe("owner facts", () => {
     };
     expect(storedOwnerReportOf(v2)).toBeNull();
     expect(ownerFactsOf(storedOwnerReportOf(v2)).state).toBe("missing");
+    // a protocol 5 report (restrictedProjectReach, no projectReach) is unreadable too
+    const { projectReach: _reach, ...v5 } = report(1);
+    const p5 = { ...stored(report(1)), report: { ...v5, restrictedProjectReach: "os-user" } };
+    expect(storedOwnerReportOf(p5)).toBeNull();
     // an unknown block reason is dropped, not trusted as a block of another kind
     expect(
       storedOwnerReportOf({

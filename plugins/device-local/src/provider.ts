@@ -96,7 +96,7 @@ const sameRoots = (a: SandboxRoots, b: SandboxRoots): boolean =>
 const bytesOf = (b64: string): Uint8Array => new Uint8Array(Buffer.from(b64, "base64"));
 const b64Of = (data: Uint8Array): string => Buffer.from(data).toString("base64");
 
-/** A raw method: a protocol 5 machine runs work only under an admitted operation scope. */
+/** A raw method: a protocol 6 machine runs work only under an admitted operation scope. */
 const refuseRaw =
   (method: string) =>
   async (..._args: unknown[]): Promise<never> => {
@@ -157,7 +157,7 @@ export type DeviceLocalLifecycle = Omit<DeviceProvider, "report" | "permissionSu
 
 /**
  * `device-provider@1` for devices served by a machine connected with `capybara-device`: every
- * operation runs on the device's machine through `ctx.dialIn` (protocol 5). The file system is the
+ * operation runs on the device's machine through `ctx.dialIn` (protocol 6). The file system is the
  * machine's device directory, which belongs to the machine's owner: `createFileSystem` touches
  * nothing and `destroyFileSystem` only forgets the device's rows (deleting the device revokes the
  * machine's credential in the kernel; the files stay on the machine).
@@ -178,7 +178,7 @@ export function createDeviceLocalProvider(
 
   /**
    * The machine's `create`: it drops the bound generation's tracked background work (exact stops
-   * by reference, files kept) and answers the device directory's roots. The only protocol 5
+   * by reference, files kept) and answers the device directory's roots. The only protocol 6
    * operation that ends a generation's work without stopping the program.
    */
   const machineCreate = async (
@@ -458,7 +458,7 @@ export function createDeviceLocalProvider(
       signal.throwIfAborted();
     },
 
-    /** A protocol 5 machine has no broad kill: the kernel revokes exact operations instead. */
+    /** A protocol 6 machine has no broad kill: the kernel revokes exact operations instead. */
     async killAll(_h, signal) {
       signal.throwIfAborted();
     },

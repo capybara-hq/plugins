@@ -7,7 +7,10 @@ import type {
   SandboxHandle,
   SandboxPermissionSupport,
 } from "@capybara-hq/plugin-sdk";
-import { parseSandboxPermissionSupport } from "@capybara-hq/plugin-sdk/device-protocol";
+import {
+  type DeviceProjectReach,
+  parseSandboxPermissionSupport,
+} from "@capybara-hq/plugin-sdk/device-protocol";
 import { type OwnerFacts, ownerFactsOf } from "./owner-report.js";
 import type { Binding, Connection, DeviceLocalStore } from "./store.js";
 
@@ -50,7 +53,8 @@ const canonicalSupport = (s: SandboxPermissionSupport) => {
 /**
  * Everything a report and the bound generation's support are made of, in a fixed shape: the
  * revision is its hash, so it moves whenever any of it moves:
- * - the owner ceiling (its sequence and revision, and the facts it gives, blocked or not);
+ * - the owner ceiling (its sequence and revision, and the facts it gives, blocked or not: the
+ *   project reach among them);
  * - the machine (its epoch moves when it is revoked or a new login's machine says hello);
  * - the device directory (mode, roots, home);
  * - the instance generation, its binding state, the runtime identity it was installed under (the
@@ -72,7 +76,7 @@ function revisionFacts(c: Connection | null, b: Binding | null) {
         sequence: owner.sequence,
         revision: owner.revision,
         outsideSandbox: owner.outsideSandbox,
-        reach: owner.restrictedProjectReach,
+        projectReach: owner.projectReach,
         network: owner.network,
         allowedDomains: [...owner.allowedDomains].sort(),
       },
@@ -102,6 +106,41 @@ const hosts = (n: number): DeviceText =>
     ? { en: "1 allowed host", zh: "允许 1 个主机" }
     : { en: `${n} allowed hosts`, zh: `允许 ${n} 个主机` };
 
+/**
+ * The reach the device's work has on the machine: a Docker container sees only the device's
+ * workspace whatever the owner set.
+ */
+const effectiveReach = (mode: "os" | "docker", reach: DeviceProjectReach): DeviceProjectReach =>
+  mode === "docker" ? "workspace" : reach;
+
+const READS: Record<DeviceProjectReach, DeviceText> = {
+  machine: {
+    en: "Reads the whole machine except secrets and other connections; writes only in the project and workspace",
+    zh: "读取本机全部文件（密钥和其他连接除外）；只在项目和工作区写入",
+  },
+  paths: {
+    en: "Reads only the project directories the machine's owner listed; writes only in the project and workspace",
+    zh: "只读取本机所有者列出的项目目录；只在项目和工作区写入",
+  },
+  workspace: { en: "Reads and writes only the device's workspace", zh: "只读写设备的工作区" },
+};
+
+/** What the device may do on the machine: its project reach and running outside the sandbox. */
+export function describeLocalDevice(c: {
+  projectReach: DeviceProjectReach;
+  outsideSandbox: boolean;
+  mode: "os" | "docker";
+}): { en: string; zh: string } {
+  const reads = READS[effectiveReach(c.mode, c.projectReach)];
+  const outside = c.outsideSandbox
+    ? {
+        en: "runs outside the sandbox only per approved call",
+        zh: "仅在获批的单次调用中在沙箱外运行",
+      }
+    : { en: "never runs outside the sandbox", zh: "从不在沙箱外运行" };
+  return { en: `${reads.en}; ${outside.en}`, zh: `${reads.zh}；${outside.zh}` };
+}
+
 /** The description line: what the owner's ceiling lets the device do on the computer. */
 function describe(c: Connection, owner: OwnerFacts): DeviceText {
   const docker = c.mode === "docker";
@@ -110,28 +149,26 @@ function describe(c: Connection, owner: OwnerFacts): DeviceText {
       en: "The computer's owner settings are unreadable or arrived out of order, so it runs as narrowly as possible (workspace only, never outside the sandbox) until it reports them again.",
       zh: "电脑所有者的设置无法读取或报告顺序异常，在重新报告前按最窄的方式运行（只用工作区，从不在沙箱外运行）。",
     };
-  const reach =
-    owner.restrictedProjectReach === "os-user"
-      ? {
-          en: "Reads the whole computer except secrets; writes only in the project",
-          zh: "读取整台电脑（密钥除外），只在项目中写入",
-        }
-      : { en: "Reads and writes only in its workspace", zh: "只在工作区内读写" };
-  const outside = owner.outsideSandbox
-    ? {
-        en: "runs outside the sandbox only per approved call",
-        zh: "仅对批准的单次调用在沙箱外运行",
-      }
-    : { en: "never runs outside the sandbox", zh: "从不在沙箱外运行" };
+  const what = describeLocalDevice({
+    projectReach: owner.projectReach,
+    outsideSandbox: owner.outsideSandbox,
+    mode: c.mode,
+  });
   const net =
     owner.network === "open"
       ? { en: "the open internet", zh: "开放的互联网" }
       : hosts(owner.allowedDomains.length);
   return {
-    en: `${docker ? "In a Docker container: " : ""}${reach.en}; ${outside.en}; network: ${net.en}.`,
-    zh: `${docker ? "在 Docker 容器中：" : ""}${reach.zh}；${outside.zh}；网络：${net.zh}。`,
+    en: `${docker ? "In a Docker container: " : ""}${what.en}; network: ${net.en}.`,
+    zh: `${docker ? "在 Docker 容器中：" : ""}${what.zh}；网络：${net.zh}。`,
   };
 }
+
+const REACH_VALUE: Record<DeviceProjectReach, string> = {
+  machine: "machine",
+  paths: "listed directories",
+  workspace: "workspace",
+};
 
 /** The machine's own narrowing, read only (set with `capybara-device ceiling set` there). */
 function limitsOf(c: Connection, owner: OwnerFacts): DeviceReportLimit[] {
@@ -143,7 +180,7 @@ function limitsOf(c: Connection, owner: OwnerFacts): DeviceReportLimit[] {
     },
     {
       label: { en: "Project reach", zh: "项目范围" },
-      value: owner.restrictedProjectReach === "os-user" ? "machine" : "workspace",
+      value: REACH_VALUE[effectiveReach(c.mode, owner.projectReach)],
     },
     { label: { en: "Network", zh: "网络" }, value: owner.network },
   ];

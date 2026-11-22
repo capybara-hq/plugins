@@ -174,7 +174,7 @@ const isRecorded = (c: Connection, conn: DialInConnectionInfo | undefined): bool
   c.machineId === conn?.machineId && c.connectionId === conn?.connectionId;
 
 /**
- * The provider's dial-in handler for `capybara-device/5`. The machine is not trusted: every hello
+ * The provider's dial-in handler for `capybara-device/6`. The machine is not trusted: every hello
  * and event body is parsed strictly (`parseDeviceFrame`) and checked against the stored binding
  * before anything is stored. When the device's report revision moved, the kernel is told
  * (`ctx.devices.reportChanged`) after the write committed; it reads the report and the permission

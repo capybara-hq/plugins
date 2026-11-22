@@ -23,6 +23,7 @@ export {
   storedOwnerReportOf,
 } from "./owner-report.js";
 export { pgRows } from "./pg-rows.js";
+export { PROJECT_REFUSAL_TEXT, projectRefusalError } from "./project-refusal.js";
 export {
   commandLimits,
   createDeviceLocalProvider,
@@ -38,6 +39,7 @@ export {
 } from "./provider.js";
 export {
   closedSupport,
+  describeLocalDevice,
   deviceReportOf,
   reportFor,
   revisionOf,
@@ -59,7 +61,7 @@ export {
 
 /**
  * `device-provider@1` over the kernel's dial-in channel: a machine signs in with `capybara-device`
- * (protocol `capybara-device/5`) and serves one device; every operation is relayed to it.
+ * (protocol `capybara-device/6`) and serves one device; every operation is relayed to it.
  */
 const plugin = defineExtension({
   name: "device-local",

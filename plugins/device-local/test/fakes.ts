@@ -17,7 +17,7 @@ import {
   storeOver,
 } from "../src/index.js";
 
-/** What a fake machine answers one request with: the protocol 5 response body, or a throw. */
+/** What a fake machine answers one request with: the protocol 6 response body, or a throw. */
 export type Answer = { ok: true; result: unknown } | { ok: false; error: unknown } | unknown;
 
 /** One request the fake channel relayed: the body, the device and the options it was sent with. */
@@ -158,7 +158,7 @@ export const OWNER_CEILING: DeviceOwnerCeiling = {
   outsideSandbox: false,
   network: "open",
   allowedDomains: [],
-  restrictedProjectReach: "workspace",
+  projectReach: "workspace",
 };
 
 /** A scope as the kernel admits it (overrides replace top-level fields). */
