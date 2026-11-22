@@ -74,6 +74,26 @@ export interface Connection {
   runtimeIdentity: DeviceRuntimeIdentity | null;
 }
 
+/**
+ * The machine and connection a binding request was sent through: the stored connection record when
+ * the request left (null: no record). A binding answer is installed only while the record still
+ * names them, so a late answer of a replaced machine never re-attests or reports for the new one.
+ */
+export interface BindVia {
+  machineId: string;
+  connectionId: string;
+}
+
+/** The {@link BindVia} of a stored connection record (null without one). */
+export const viaOf = (c: Connection | null): BindVia | null =>
+  c ? { machineId: c.machineId, connectionId: c.connectionId } : null;
+
+/** Whether the stored record still names `via` (both absent counts as the same). */
+const sameVia = (c: Connection | null, via: BindVia | null): boolean =>
+  c === null || via === null
+    ? c === null && via === null
+    : c.machineId === via.machineId && c.connectionId === via.connectionId;
+
 /** A device's two rows. */
 export interface DeviceState {
   connection: Connection | null;
@@ -121,13 +141,15 @@ export interface DeviceLocalStore {
    * Marks the binding of exactly `generation` and `bindingId` installed with what the machine
    * attested (again, on a resume that re-verified it), and applies the owner ceiling the answer
    * carried to the stored owner report. Returns false, and writes nothing, when the device's
-   * binding is no longer that one.
+   * binding is no longer that one, or the stored connection record no longer names `via`, the
+   * machine and connection the request was sent through (another machine's hello came first).
    */
   installBinding(
     deviceId: string,
     generation: string,
     bindingId: string,
     installed: InstalledBinding,
+    via: BindVia | null,
   ): Promise<boolean>;
   /** Both rows of the device, without a lock. */
   state(deviceId: string): Promise<DeviceState>;
@@ -152,10 +174,12 @@ export function storeOver(
           ? { result: true, binding }
           : { result: false },
       ),
-    installBinding: (deviceId, generation, bindingId, installed) =>
+    installBinding: (deviceId, generation, bindingId, installed, via) =>
       rows.change(deviceId, (s) => {
         const b = s.binding;
         if (b?.generation !== generation || b.bindingId !== bindingId) return { result: false };
+        // the answer came from the machine the request was sent to: never another one's record
+        if (!sameVia(s.connection, via)) return { result: false };
         const { unattested: _attestedAgain, ...kept } = b;
         const binding: Binding = { ...kept, status: "installed", installed };
         // the answer is one more owner-report carrier: a newer ceiling is recorded, a stale one

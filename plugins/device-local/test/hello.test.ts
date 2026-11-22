@@ -8,6 +8,7 @@ import {
   reportFor,
   revisionOf,
   supportFor,
+  viaOf,
 } from "../src/index.js";
 import {
   fakeDialIn,
@@ -109,11 +110,17 @@ function setup() {
       ),
     ).toBe(true);
     expect(
-      await store.installBinding(DEVICE, generation, bindingId, {
-        runtimeIdentity: { ...RUNTIME, ...over.runtime, instanceGeneration: generation },
-        permissionSupport: over.support ?? OUTSIDE,
-        ownerCeiling: ceiling(),
-      }),
+      await store.installBinding(
+        DEVICE,
+        generation,
+        bindingId,
+        {
+          runtimeIdentity: { ...RUNTIME, ...over.runtime, instanceGeneration: generation },
+          permissionSupport: over.support ?? OUTSIDE,
+          ownerCeiling: ceiling(),
+        },
+        viaOf((await store.state(DEVICE)).connection),
+      ),
     ).toBe(true);
   };
   const handle = (generation: string): LocalDeviceHandle => ({
@@ -554,11 +561,17 @@ describe("report and permission support", () => {
     const third = await s.revision();
     expect(third).not.toBe(second);
     // a resume re-verifying the same generation with another support
-    await s.store.installBinding(DEVICE, "102", "binding-102", {
-      runtimeIdentity: { ...RUNTIME, imageFingerprint: HASH("e"), instanceGeneration: "102" },
-      permissionSupport: SUPPORT,
-      ownerCeiling: ceiling(),
-    });
+    await s.store.installBinding(
+      DEVICE,
+      "102",
+      "binding-102",
+      {
+        runtimeIdentity: { ...RUNTIME, imageFingerprint: HASH("e"), instanceGeneration: "102" },
+        permissionSupport: SUPPORT,
+        ownerCeiling: ceiling(),
+      },
+      viaOf((await s.store.state(DEVICE)).connection),
+    );
     expect(await s.revision()).not.toBe(third);
   });
 

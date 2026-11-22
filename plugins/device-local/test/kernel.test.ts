@@ -277,13 +277,16 @@ describe("the PG store (the plugin's migrated schema)", () => {
     const committed = await store.binding("pg-dev");
     expect(committed?.status).toBe("awaiting-device");
     // an answer for another binding id never installs
-    expect(await store.installBinding("pg-dev", "100", "nope", installed("100", 1))).toBe(false);
+    expect(await store.installBinding("pg-dev", "100", "nope", installed("100", 1), null)).toBe(
+      false,
+    );
     expect(
       await store.installBinding(
         "pg-dev",
         "100",
         String(committed?.bindingId),
         installed("100", 1),
+        null,
       ),
     ).toBe(true);
     expect(await store.binding("pg-dev")).toMatchObject({
@@ -327,8 +330,25 @@ describe("the PG store (the plugin's migrated schema)", () => {
       roots: ROOTS,
       features: ["projects"],
     });
+    // an answer sent through another machine than the recorded one is never installed
+    expect(
+      await store.installBinding(
+        "pg-dev",
+        "100",
+        String(committed?.bindingId),
+        installed("100", 1),
+        {
+          machineId: "machine-0",
+          connectionId: "connection-0",
+        },
+      ),
+    ).toBe(false);
+    expect((await store.state("pg-dev")).binding?.unattested).toBe(true);
     // a stale bind answer (sequence 1 < 2) leaves the owner report, and attests the binding again
-    await store.installBinding("pg-dev", "100", String(committed?.bindingId), installed("100", 1));
+    await store.installBinding("pg-dev", "100", String(committed?.bindingId), installed("100", 1), {
+      machineId: "machine-1",
+      connectionId: "connection-1",
+    });
     const after = await store.state("pg-dev");
     expect(after.connection?.ownerReport?.report.sequence).toBe(2);
     expect(after.binding?.unattested).toBeUndefined();

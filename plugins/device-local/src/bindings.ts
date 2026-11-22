@@ -11,7 +11,7 @@ import type {
   DeviceRuntimeIdentity,
 } from "@capybara-hq/plugin-sdk/device-protocol";
 import { type MachineCall, OP_DEADLINE_MS } from "./frames.js";
-import type { Binding, DeviceLocalStore, InstalledBinding } from "./store.js";
+import { type Binding, type DeviceLocalStore, type InstalledBinding, viaOf } from "./store.js";
 
 /** The binding cannot be completed; the instance is not handed out and admits nothing. */
 export class InstanceBindingError extends Error {
@@ -78,6 +78,8 @@ export function createInstanceBindings(
   /** Sends the binding and installs the verified answer; `gone` when the identity changed. */
   const send = async (b: Binding, signal: AbortSignal): Promise<Binding | "gone"> => {
     const request = requestOf(b);
+    // the machine and connection the request goes to: the answer is installed only for them
+    const via = viaOf((await store.state(b.deviceId)).connection);
     // the codec checks the answer against this exact request (ids and the identity's generation)
     const answer = (await call(
       b.deviceId,
@@ -100,9 +102,9 @@ export function createInstanceBindings(
       permissionSupport: answer.permissionSupport,
       ownerCeiling: answer.ownerCeiling,
     };
-    if (!(await store.installBinding(b.deviceId, b.generation, b.bindingId, installed)))
+    if (!(await store.installBinding(b.deviceId, b.generation, b.bindingId, installed, via)))
       throw new InstanceBindingError(
-        "The instance was replaced before its binding completed; retry",
+        "The instance or the device's machine was replaced before its binding completed; retry",
       );
     const { unattested: _attestedAgain, ...kept } = b;
     return { ...kept, status: "installed", installed };

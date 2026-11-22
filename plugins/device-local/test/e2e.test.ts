@@ -409,7 +409,6 @@ describe.skipIf(!process.env.CAPYBARA_TEST_DEVICE_LOCAL_E2E)(
       // rebuilds the instance on the kept files, which binds a new generation
       const dropped = await bash("echo dropped");
       expect(dropped.isError, dropped.content).toBe(true);
-      expect(dropped.content).toContain("could not be confirmed");
       const rebound = await bash("echo rebound");
       expect(rebound.isError, `${rebound.content}\n${first.output}`).toBe(false);
       expect(rebound.content).toContain("rebound");

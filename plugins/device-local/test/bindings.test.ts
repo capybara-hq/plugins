@@ -6,6 +6,7 @@ import {
 import type { BindInstanceRequest } from "@capybara-hq/plugin-sdk/device-protocol";
 import { describe, expect, it } from "vitest";
 import {
+  createDialInHandler,
   createInstanceBindings,
   InstanceBindingError,
   machineCall,
@@ -15,7 +16,10 @@ import {
   type Answer,
   fakeBinder,
   fakeDialIn,
+  fakeLog,
   memoryStore,
+  OWNER_CEILING,
+  ROOTS,
   rejection,
   type SentRequest,
   signal,
@@ -195,6 +199,65 @@ describe("binding a new generation", () => {
     };
     await expect(s.bindings.bindNew(DEVICE, signal())).rejects.toThrow("older generation");
     expect(s.rows.get(DEVICE)?.status).toBe("awaiting-device");
+  });
+});
+
+/** An unbound program's hello (it just signed in or restarted under a new runtime). */
+const unboundHello = (sequence: number, revision: string) => ({
+  mode: "os",
+  roots: ROOTS,
+  sessionIsolation: false,
+  features: ["networkReport", "projects"],
+  permissionSupport: {
+    version: 2,
+    boundary: "operation",
+    restricted: null,
+    network: { openPublic: false, allowlist: false, perOperationHosts: false },
+    outsideSandbox: false,
+    background: false,
+    unavailableReason: "The instance is not bound yet",
+  },
+  ownerCeiling: { ...OWNER_CEILING, sequence, revision },
+  instanceGeneration: null,
+});
+
+describe("a binding answer of a replaced machine", () => {
+  it("a late answer from the replaced machine neither re-attests nor reports for the new one", async () => {
+    let replaceMidway = false;
+    let handler: ReturnType<typeof createDialInHandler> | undefined;
+    const m2 = { machineId: "machine-2", connectionId: "connection-2" };
+    const s = setup(async (_req, bind) => {
+      const answer = bind();
+      // machine-1 answered; machine-2's hello is accepted before the answer is installed
+      if (replaceMidway)
+        expect(await handler?.onHello(DEVICE, unboundHello(0, "m2"), signal(), m2)).toEqual({
+          ok: true,
+        });
+      return answer;
+    });
+    handler = createDialInHandler(
+      { devices: { reportChanged: async () => {} }, log: fakeLog().log },
+      s.store,
+    );
+    const m1 = { machineId: "machine-1", connectionId: "connection-1" };
+    await handler.onHello(DEVICE, unboundHello(7, "m1"), signal(), m1);
+    await s.bindings.bindNew(DEVICE, signal());
+    replaceMidway = true;
+    const e = await rejection(s.bindings.rebind(DEVICE, "5000", signal()));
+    expect(e).toBeInstanceOf(InstanceBindingError);
+    expect((e as Error).message).toMatch(/machine was replaced/);
+    // the old generation stays unattested, machine-2's own report stands
+    const state = await s.store.state(DEVICE);
+    expect(state.binding?.unattested).toBe(true);
+    expect(state.connection).toMatchObject({
+      machineId: "machine-2",
+      ownerReport: { report: { sequence: 0, revision: "m2" } },
+    });
+    // machine-2's next hello is not refused as stale
+    replaceMidway = false;
+    expect(await handler.onHello(DEVICE, unboundHello(0, "m2"), signal(), m2)).toEqual({
+      ok: true,
+    });
   });
 });
 

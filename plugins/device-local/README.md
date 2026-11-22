@@ -72,7 +72,12 @@ generation under another runtime identity is refused (`local.invalid_hello`,
 A handle the machine will never serve again (the device's binding is a newer generation, or the
 machine's last hello did not attest it) still reads its installed support, because the kernel
 records support as evidence before a use and never treats a failed read as gone; its operations
-answer `SandboxGoneError` before anything reaches the machine. The kernel keeps such a dispatched
+answer `SandboxGoneError` before anything reaches the machine. That check runs in the calls that
+start work (`operation`, `prepare`, `browse`, `background.start`); the calls about existing work
+(`background` status, output reads, tails, stops, `revokeOperation`) go to the machine, which
+refuses a generation it does not hold. A binding answer is installed only while the stored
+connection record still names the machine and connection the request was sent through, so a late
+answer of a replaced machine never re-attests the old generation or records its owner report. The kernel keeps such a dispatched
 call's outcome unknown and rebuilds the instance, which binds a new generation; the next call runs
 on it.
 

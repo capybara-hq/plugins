@@ -46,6 +46,7 @@ export {
 } from "./report.js";
 export {
   type Binding,
+  type BindVia,
   type Connection,
   type DeviceChange,
   type DeviceLocalStore,
@@ -53,6 +54,7 @@ export {
   type DeviceState,
   type InstalledBinding,
   storeOver,
+  viaOf,
 } from "./store.js";
 
 /**

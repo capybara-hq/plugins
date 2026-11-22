@@ -108,7 +108,7 @@ function describe(c: Connection, owner: OwnerFacts): DeviceText {
   if (owner.state !== "report")
     return {
       en: "The computer's owner settings are unreadable or arrived out of order, so it runs as narrowly as possible (workspace only, never outside the sandbox) until it reports them again.",
-      zh: "电脑主人的设置无法读取或报告顺序异常，在重新报告前按最窄的方式运行（只用工作区，从不在沙箱外运行）。",
+      zh: "电脑所有者的设置无法读取或报告顺序异常，在重新报告前按最窄的方式运行（只用工作区，从不在沙箱外运行）。",
     };
   const reach =
     owner.restrictedProjectReach === "os-user"

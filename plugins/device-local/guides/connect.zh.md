@@ -29,7 +29,7 @@ capybara-device service start
 
 ## 它能做什么
 
-命令在你电脑上的沙箱里运行，位于设备目录（`~/capybara-device/<设备 id>`）内。你在本机设置主人上限：`capybara-device ceiling show` 查看，`capybara-device ceiling set` 修改（是否允许在沙箱外运行、网络、项目范围）。组织和平台的设置同样生效，以最严格的为准。OS 模式下命令以你的用户身份运行，没有 CPU 和内存限制。
+命令在你电脑上的沙箱里运行，位于设备目录（`~/capybara-device/<设备 id>`）内。你在本机设置所有者上限：`capybara-device ceiling show` 查看，`capybara-device ceiling set` 修改（是否允许在沙箱外运行、网络、项目范围）。组织和平台的设置同样生效，以最严格的为准。OS 模式下命令以你的用户身份运行，没有 CPU 和内存限制。
 
 删除设备会撤销这台电脑的登录并停止程序，文件仍保留在你的电脑上。
 
