@@ -24,6 +24,7 @@ export const PLUGIN_GLYPHS: Readonly<Record<string, GlyphKey>> = {
   "push-jpush": "channel",
   "device-docker": "storage",
   "device-e2b": "storage",
+  "device-local": "storage",
   "skills-core": "skills",
   "theme-cyberpunk": "skills",
   todo: "todo",

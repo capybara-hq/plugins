@@ -24,6 +24,7 @@ npm; the kernel verifies each download against that integrity.
 | [`jina`](plugins/jina) | Web search and page reading through Jina (`web-search@1`, `web-fetch@1`) |
 | [`device-docker`](plugins/device-docker) | Devices as Docker containers (`device-provider@1`) |
 | [`device-e2b`](plugins/device-e2b) | Devices as E2B sandboxes (`device-provider@1`) |
+| [`device-local`](plugins/device-local) | Devices on people's own computers, connected with `capybara-device` (`device-provider@1` over the dial-in channel) |
 | [`object-store-s3`](plugins/object-store-s3) | Object storage on S3-compatible services (`object-store@1`) |
 | [`todo`](plugins/todo) | A per-conversation todo list tool for agents |
 | [`memory`](plugins/memory) | Memory for agents per (agent, member): an index at run start (`context@1`), memory tools, hybrid keyword and semantic search, and a memory page with the directory neural tree (client code) |
