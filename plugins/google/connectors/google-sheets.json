@@ -1,0 +1,44 @@
+{
+  "displayName": {
+    "zh": "Google 表格",
+    "en": "Google Sheets"
+  },
+  "description": "Read spreadsheets and values, update values, formulas and sheet structure as the connected person, through Google's Sheets MCP server (Google Workspace Developer Preview). Each member connects their own Google account; an org admin enters the OAuth client of the company's Google Cloud project.",
+  "icon": "./icons/google-sheets.svg",
+  "defaultEnabled": false,
+  "template": {
+    "plugin": "connector-mcp",
+    "pluginVersion": "^0.1.0-rc.1",
+    "connector": "mcp",
+    "endpoint": {
+      "url": "https://sheetsmcp.googleapis.com/mcp/v1"
+    },
+    "auth": {
+      "type": "oauth_code",
+      "ownership": "personal",
+      "discovery": "manual",
+      "authorizationUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+      "tokenUrl": "https://oauth2.googleapis.com/token",
+      "client": "manual",
+      "tokenAuthMethod": "client_secret_post",
+      "scopes": [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        "https://www.googleapis.com/auth/spreadsheets"
+      ],
+      "authorizationParams": {
+        "access_type": "offline",
+        "prompt": "consent"
+      }
+    },
+    "defaultToolPolicies": {
+      "get_values": "allow",
+      "get_spreadsheet": "allow",
+      "update_spreadsheet": "ask",
+      "update_values": "ask",
+      "update_formulas": "ask",
+      "insert_dimension": "ask"
+    }
+  }
+}

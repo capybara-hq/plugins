@@ -1,0 +1,263 @@
+{
+  "endpoint": "https://gmailmcp.googleapis.com/mcp/v1",
+  "recordedAt": "2026-11-22",
+  "tools": [
+    {
+      "name": "create_draft",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.compose",
+        "https://www.googleapis.com/auth/gmail.drafts",
+        "https://www.googleapis.com/auth/gmail.drafts.create",
+        "https://www.googleapis.com/auth/gmail.modify"
+      ]
+    },
+    {
+      "name": "list_drafts",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.compose",
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.drafts",
+        "https://www.googleapis.com/auth/gmail.drafts.readonly"
+      ]
+    },
+    {
+      "name": "get_draft",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.compose",
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.drafts",
+        "https://www.googleapis.com/auth/gmail.drafts.readonly"
+      ]
+    },
+    {
+      "name": "get_thread",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.messages.readonly",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.readonly"
+      ]
+    },
+    {
+      "name": "get_message",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.messages.readonly",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.readonly"
+      ]
+    },
+    {
+      "name": "search_threads",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.messages.readonly",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.readonly"
+      ]
+    },
+    {
+      "name": "label_thread",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.messages.modify",
+        "https://www.googleapis.com/auth/gmail.modify"
+      ]
+    },
+    {
+      "name": "unlabel_thread",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.messages.modify",
+        "https://www.googleapis.com/auth/gmail.modify"
+      ]
+    },
+    {
+      "name": "apply_sensitive_thread_label",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.modify"
+      ]
+    },
+    {
+      "name": "trash_thread",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.messages.delete",
+        "https://www.googleapis.com/auth/gmail.modify"
+      ]
+    },
+    {
+      "name": "untrash_thread",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.messages.delete",
+        "https://www.googleapis.com/auth/gmail.modify"
+      ]
+    },
+    {
+      "name": "mark_thread_spam",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.modify"
+      ]
+    },
+    {
+      "name": "unmark_thread_spam",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.modify"
+      ]
+    },
+    {
+      "name": "list_labels",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.labels",
+        "https://www.googleapis.com/auth/gmail.labels.readonly",
+        "https://www.googleapis.com/auth/gmail.metadata",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.readonly"
+      ]
+    },
+    {
+      "name": "label_message",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.messages.modify",
+        "https://www.googleapis.com/auth/gmail.modify"
+      ]
+    },
+    {
+      "name": "update_message_labels",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.messages.modify",
+        "https://www.googleapis.com/auth/gmail.modify"
+      ]
+    },
+    {
+      "name": "unlabel_message",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.messages.modify",
+        "https://www.googleapis.com/auth/gmail.modify"
+      ]
+    },
+    {
+      "name": "apply_sensitive_message_label",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.modify"
+      ]
+    },
+    {
+      "name": "trash_message",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.messages.delete",
+        "https://www.googleapis.com/auth/gmail.modify"
+      ]
+    },
+    {
+      "name": "untrash_message",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.messages.delete",
+        "https://www.googleapis.com/auth/gmail.modify"
+      ]
+    },
+    {
+      "name": "mark_message_spam",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.modify"
+      ]
+    },
+    {
+      "name": "unmark_message_spam",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.messages",
+        "https://www.googleapis.com/auth/gmail.modify"
+      ]
+    },
+    {
+      "name": "create_label",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.labels",
+        "https://www.googleapis.com/auth/gmail.labels.create",
+        "https://www.googleapis.com/auth/gmail.modify"
+      ]
+    }
+  ]
+}

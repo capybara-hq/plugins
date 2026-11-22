@@ -1,7 +1,7 @@
 {
   "name": "@capybara-hq/plugin-google",
   "version": "0.1.0-rc.0",
-  "description": "Sign in with Google (identity-source@1 over OpenID Connect with PKCE, the hosted domain enforced on the verified ID token)",
+  "description": "Sign in with Google (identity-source@1 over OpenID Connect with PKCE, the hosted domain enforced on the verified ID token) and connector templates for Google Workspace (Gmail, Drive, Calendar, Sheets, Docs, Slides) and BigQuery",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -27,12 +27,13 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.50",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.52",
     "jose": "^6.2.12",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@capybara-hq/plugin-model-fake": "^0.1.0-rc.47",
-    "@capybara-hq/testing": "^0.1.0-rc.32"
+    "@capybara-hq/testing": "^0.1.0-rc.34",
+    "yaml": "^2.9.1"
   }
 }

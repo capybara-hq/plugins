@@ -1,0 +1,40 @@
+{
+  "displayName": {
+    "zh": "Google 文档",
+    "en": "Google Docs"
+  },
+  "description": "Read and edit Google Docs as the connected person, through Google's Docs MCP server (Google Workspace Developer Preview). Each member connects their own Google account; an org admin enters the OAuth client of the company's Google Cloud project.",
+  "icon": "./icons/google-docs.svg",
+  "defaultEnabled": false,
+  "template": {
+    "plugin": "connector-mcp",
+    "pluginVersion": "^0.1.0-rc.1",
+    "connector": "mcp",
+    "endpoint": {
+      "url": "https://docsmcp.googleapis.com/mcp/v1"
+    },
+    "auth": {
+      "type": "oauth_code",
+      "ownership": "personal",
+      "discovery": "manual",
+      "authorizationUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+      "tokenUrl": "https://oauth2.googleapis.com/token",
+      "client": "manual",
+      "tokenAuthMethod": "client_secret_post",
+      "scopes": [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/documents.readonly",
+        "https://www.googleapis.com/auth/documents"
+      ],
+      "authorizationParams": {
+        "access_type": "offline",
+        "prompt": "consent"
+      }
+    },
+    "defaultToolPolicies": {
+      "read_doc": "allow",
+      "update_doc": "ask"
+    }
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "endpoint": "https://bigquery.googleapis.com/mcp",
+  "recordedAt": "2026-11-22",
+  "tools": [
+    {
+      "name": "list_dataset_ids",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": ["https://www.googleapis.com/auth/bigquery"]
+    },
+    {
+      "name": "get_dataset_info",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": ["https://www.googleapis.com/auth/bigquery"]
+    },
+    {
+      "name": "list_table_ids",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": ["https://www.googleapis.com/auth/bigquery"]
+    },
+    {
+      "name": "get_table_info",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": ["https://www.googleapis.com/auth/bigquery"]
+    },
+    {
+      "name": "execute_sql_readonly",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": ["https://www.googleapis.com/auth/bigquery"]
+    },
+    {
+      "name": "execute_sql",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "scopes": ["https://www.googleapis.com/auth/bigquery"]
+    },
+    {
+      "name": "get_query_results",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": ["https://www.googleapis.com/auth/bigquery"]
+    },
+    {
+      "name": "cancel_job",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "scopes": ["https://www.googleapis.com/auth/bigquery"]
+    },
+    {
+      "name": "get_job",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": ["https://www.googleapis.com/auth/bigquery"]
+    }
+  ]
+}

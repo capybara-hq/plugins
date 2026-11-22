@@ -1,0 +1,116 @@
+{
+  "endpoint": "https://drivemcp.googleapis.com/mcp/v1",
+  "recordedAt": "2026-11-22",
+  "tools": [
+    {
+      "name": "copy_file",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.appdata",
+        "https://www.googleapis.com/auth/drive.file"
+      ]
+    },
+    {
+      "name": "create_file",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.appdata",
+        "https://www.googleapis.com/auth/drive.file"
+      ]
+    },
+    {
+      "name": "download_file_content",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/drive.readonly"
+      ]
+    },
+    {
+      "name": "get_file_metadata",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.appdata",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/drive.meet.readonly",
+        "https://www.googleapis.com/auth/drive.metadata",
+        "https://www.googleapis.com/auth/drive.metadata.readonly",
+        "https://www.googleapis.com/auth/drive.photos.readonly",
+        "https://www.googleapis.com/auth/drive.readonly"
+      ]
+    },
+    {
+      "name": "get_file_permissions",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.appdata",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/drive.meet.readonly",
+        "https://www.googleapis.com/auth/drive.metadata",
+        "https://www.googleapis.com/auth/drive.metadata.readonly",
+        "https://www.googleapis.com/auth/drive.photos.readonly",
+        "https://www.googleapis.com/auth/drive.readonly"
+      ]
+    },
+    {
+      "name": "list_recent_files",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.appdata",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/drive.meet.readonly",
+        "https://www.googleapis.com/auth/drive.metadata",
+        "https://www.googleapis.com/auth/drive.metadata.readonly",
+        "https://www.googleapis.com/auth/drive.photos.readonly",
+        "https://www.googleapis.com/auth/drive.readonly"
+      ]
+    },
+    {
+      "name": "read_file_content",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/drive.readonly"
+      ]
+    },
+    {
+      "name": "search_files",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.appdata",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/drive.meet.readonly",
+        "https://www.googleapis.com/auth/drive.metadata",
+        "https://www.googleapis.com/auth/drive.metadata.readonly",
+        "https://www.googleapis.com/auth/drive.photos.readonly",
+        "https://www.googleapis.com/auth/drive.readonly"
+      ]
+    },
+    {
+      "name": "upload_file_revision",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "scopes": [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.appdata",
+        "https://www.googleapis.com/auth/drive.file"
+      ]
+    }
+  ]
+}
