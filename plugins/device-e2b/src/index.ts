@@ -1,4 +1,9 @@
-import { defineExtension, SANDBOX_EXTENSION_POINT, secret, ui } from "@capybara-hq/plugin-sdk";
+import {
+  DEVICE_PROVIDER_EXTENSION_POINT,
+  defineExtension,
+  secret,
+  ui,
+} from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 import {
   createE2BSandbox,
@@ -73,7 +78,7 @@ export const DeploymentConfig = z.strictObject(
     error: (iss) =>
       iss.code === "unrecognized_keys" &&
       (iss.keys.includes("openEgress") || iss.keys.includes("allowOpenEgress"))
-        ? 'openEgress / allowOpenEgress were removed: the org cloud network decides (open-public or an allowlist, sent as limits.network); see the sandbox-e2b README "Network policy".'
+        ? 'openEgress / allowOpenEgress were removed: the org cloud network decides (open-public or an allowlist, sent as limits.network); see the device-e2b README "Network policy".'
         : undefined,
   },
 );
@@ -81,33 +86,32 @@ export const DeploymentConfig = z.strictObject(
 /**
  * The provider config from the deployment config: the template, when not set, is built from the
  * image published with `version` (the extension manifest's version, kept equal to package.json by
- * `capybara-plugin sync-versions`; sandbox-docker shares it, a changesets `fixed` group).
+ * `capybara-plugin sync-versions`; device-docker shares it, a changesets `fixed` group).
  */
 export function providerConfig(
   c: z.output<typeof DeploymentConfig>,
   version: string = plugin.version,
 ): E2BSandboxConfig {
-  return { ...c, defaultImage: publishedImage(version) };
+  return { ...c, defaultImage: publishedImage(version), version };
 }
 
 /**
- * `sandbox@2`: one E2B sandbox per device. The file system is the sandbox kept paused
+ * `device-provider@1`: one E2B sandbox per device. The file system is the sandbox kept paused
  * without memory; an instance is the same sandbox resumed (connect), dropped again by pausing.
  */
 const plugin = defineExtension({
-  name: "sandbox-e2b",
+  name: "device-e2b",
   version: "0.1.0-rc.21",
-  // Support v2 (the instance boundary), limits without `mode`, list / scan without limits and the
-  // closed address classes are the R3 SDK's (approval-only profiles). The release PR sets the
-  // published R3 rc here and in package.json.
-  sdk: "^0.1.0-rc.39",
-  provides: [SANDBOX_EXTENSION_POINT],
-  // 只用部署配置与 E2B 的 API，不用任何需要声明的平台能力
+  // device-provider@1 (report, networkAllowlist, scopes with projectRoot / writeRoots) is the
+  // rc.51 SDK's.
+  sdk: "^0.1.0-rc.51",
+  provides: [DEVICE_PROVIDER_EXTENSION_POINT],
+  // Only the deployment config and E2B's API: no platform capability to declare
   permissions: {},
   config: { deployment: DeploymentConfig },
   setup(ctx) {
     ctx.provide(
-      SANDBOX_EXTENSION_POINT,
+      DEVICE_PROVIDER_EXTENSION_POINT,
       createE2BSandbox(providerConfig(ctx.config as z.output<typeof DeploymentConfig>), {
         log: ctx.log,
         signal: ctx.signal,

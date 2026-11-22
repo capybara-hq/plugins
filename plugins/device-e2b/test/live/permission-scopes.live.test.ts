@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  type DeviceProvider,
   isSandboxOperationOutcomeUnknownError,
   isSandboxPermissionUnsupportedError,
   isSandboxScopeDeniedError,
@@ -10,7 +11,6 @@ import {
   type SandboxNetworkScope,
   type SandboxOperationScope,
   type SandboxPermissionSupport,
-  type SandboxProvider,
 } from "@capybara-hq/plugin-sdk";
 import {
   type NativeFixtureEntry,
@@ -35,7 +35,7 @@ import {
 
 /**
  * Permission profiles on a real E2B template: `pnpm exec vitest run
- * plugins/sandbox-e2b/test/live/permission-scopes.live.test.ts`
+ * plugins/device-e2b/test/live/permission-scopes.live.test.ts`
  *
  * - Runs only when `CAPYBARA_TEST_E2B_API_KEY` is set (from the outer environment; nothing here
  *   reads a credential file or prints the key). `CAPYBARA_TEST_E2B_TEMPLATE` picks the template
@@ -77,8 +77,8 @@ const limits: SandboxLimits = {
 };
 const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
 
-describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_000 }, () => {
-  let sbx: SandboxProvider;
+describe.skipIf(!READY)("device-e2b permission scopes (live)", { timeout: 300_000 }, () => {
+  let sbx: DeviceProvider;
   let api: E2BApi;
   let h: SandboxHandle;
   /** The owned VM: its name is fixed before anything is created, its id recorded on creation. */
@@ -94,7 +94,7 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
   /** The kernel's scope on an instance-boundary device: the whole filesystem plus the root. */
   const INSTANCE: SandboxFileScope = {
     kind: "scoped",
-    readRoots: ["/", "/workspace"],
+    projectRoot: "/workspace",
     writeRoots: ["/", "/workspace"],
   };
   const scope = (
@@ -118,7 +118,7 @@ describe.skipIf(!READY)("sandbox-e2b permission scopes (live)", { timeout: 300_0
   });
   const restricted = (writeRoots = ["/workspace/perm-root"]): SandboxFileScope => ({
     kind: "scoped",
-    readRoots: [],
+    projectRoot: null,
     writeRoots,
   });
   /** Trusted out-of-band inspection: the provider's ordinary exec, never an operation. */

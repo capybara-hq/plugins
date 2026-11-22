@@ -1,11 +1,12 @@
 import { readFileSync } from "node:fs";
-import { SANDBOX_EXTENSION_POINT } from "@capybara-hq/plugin-sdk";
+import { DEVICE_PROVIDER_EXTENSION_POINT } from "@capybara-hq/plugin-sdk";
 import {
   assertExtensionSecretsReachable,
   extensionDeploymentSecretValues,
 } from "@capybara-hq/testing";
 import { describe, expect, it } from "vitest";
 import plugin, {
+  createE2BSandbox,
   DeploymentConfig,
   decodeOutput,
   exitCodeOf,
@@ -13,6 +14,10 @@ import plugin, {
   publishedImage,
   templateAlias,
 } from "../src/index.js";
+
+const silent = { debug() {}, info() {}, warn() {}, error() {} } as unknown as Parameters<
+  typeof createE2BSandbox
+>[1]["log"];
 
 describe("decodeOutput", () => {
   const zh = Buffer.from("a中", "utf8"); // 61 e4 b8 ad
@@ -40,14 +45,56 @@ describe("exitCodeOf", () => {
 });
 
 /** The manifest and the deployment config. */
-describe("sandbox-e2b manifest", () => {
-  it("provides sandbox@2 and declares no platform permissions", () => {
-    expect(plugin.name).toBe("sandbox-e2b");
-    expect(SANDBOX_EXTENSION_POINT).toBe("sandbox@2");
-    expect(plugin.provides).toEqual([SANDBOX_EXTENSION_POINT]);
+describe("device-e2b manifest", () => {
+  it("provides device-provider@1 and declares no platform permissions", () => {
+    expect(plugin.name).toBe("device-e2b");
+    expect(DEVICE_PROVIDER_EXTENSION_POINT).toBe("device-provider@1");
+    expect(plugin.provides).toEqual([DEVICE_PROVIDER_EXTENSION_POINT]);
     expect(plugin.permissions).toEqual({});
-    // the kernel checks this range against the installed SDK version
-    expect(plugin.sdk).toBe("^0.1.0-rc.39");
+    // the kernel checks this range against the installed SDK version; device-provider@1 is the
+    // rc.51 SDK's
+    expect(plugin.sdk).toBe("^0.1.0-rc.51");
+  });
+
+  it("declares networkAllowlist (also without domainAllowlist) and ships the device-connection guide", () => {
+    for (const domainAllowlist of [true, false]) {
+      const sbx = createE2BSandbox(
+        providerConfig(DeploymentConfig.parse({ apiKey: "k", domainAllowlist })),
+        { log: silent },
+      );
+      expect(sbx.networkAllowlist).toBe(true);
+    }
+    const manifest = JSON.parse(
+      readFileSync(new URL("../.capybara-plugin/plugin.json", import.meta.url), "utf8"),
+    ) as { name: string; setupGuides?: unknown };
+    expect(manifest.name).toBe("device-e2b");
+    expect(manifest.setupGuides).toEqual([{ id: "connect", place: "device-connection" }]);
+    for (const file of ["connect.md", "connect.zh.md"]) {
+      const text = readFileSync(new URL(`../guides/${file}`, import.meta.url), "utf8");
+      expect(text.startsWith("# ")).toBe(true);
+    }
+  });
+
+  it("report describes the microVM, names the metadata residual and offers reset", async () => {
+    const sig = AbortSignal.timeout(5000);
+    const sbx = createE2BSandbox(providerConfig(DeploymentConfig.parse({ apiKey: "k" })), {
+      log: silent,
+    });
+    const alias = templateAlias(publishedImage(plugin.version));
+    const none = await sbx.report({ deviceId: "d1", orgId: "o1", handle: null }, sig);
+    expect(none).toMatchObject({ reset: true, home: null, limits: [] });
+    expect(none.revision).toBe(`${plugin.version}:${alias}:none`);
+    expect(none.description.en).toMatch(/E2B sandbox \(microVM\).*metadata service/);
+    expect(none.description.zh).toMatch(/元数据端点/);
+    const own = createE2BSandbox(
+      providerConfig(DeploymentConfig.parse({ apiKey: "k", template: "my-template" })),
+      { log: silent },
+    );
+    const withHandle = await own.report(
+      { deviceId: "d1", orgId: "o1", handle: { id: "sbx1" } },
+      sig,
+    );
+    expect(withHandle.revision).toBe(`${plugin.version}:my-template:sbx1`);
   });
 
   it("the default template comes from the image published with this plugin's version", () => {

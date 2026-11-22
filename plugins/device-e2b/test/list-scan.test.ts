@@ -5,13 +5,13 @@ import { fileURLToPath } from "node:url";
 import {
   DEVICE_SCAN_SKIPPED_BASE_DIRS,
   DEVICE_SCAN_SKIPPED_DIRS,
+  type DeviceProvider,
   isSandboxGoneError,
   type Logger,
   MAX_DEVICE_SCAN_DIRS,
   MAX_DEVICE_SCAN_RESULTS,
   type SandboxHandle,
   type SandboxLimits,
-  type SandboxProvider,
 } from "@capybara-hq/plugin-sdk";
 import { type FakeE2BServer, startFakeE2B } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -82,9 +82,9 @@ describe("list / scan answers", () => {
   });
 });
 
-describe("sandbox-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
+describe("device-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
   let fake: FakeE2BServer;
-  let sbx: SandboxProvider;
+  let sbx: DeviceProvider;
   let h: SandboxHandle;
   let cfg: E2BSandboxConfig;
   /** python3 and timeout of this machine, the PATH list / scan get here (the sandbox has them in /usr/bin). */
@@ -154,11 +154,11 @@ describe("sandbox-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
     return dir;
   };
   const list = (path: string, limit = 100, signal = sig(), on = h) => {
-    if (sbx.list === undefined) throw new Error("sandbox-e2b offers no list");
+    if (sbx.list === undefined) throw new Error("device-e2b offers no list");
     return sbx.list(on, path, { limit, signal });
   };
   const scan = (base: string, signal = sig(), on = h) => {
-    if (sbx.scan === undefined) throw new Error("sandbox-e2b offers no scan");
+    if (sbx.scan === undefined) throw new Error("device-e2b offers no scan");
     return sbx.scan(on, base, { signal });
   };
   const names = async (base: string) => (await scan(base)).map((c) => c.path.slice(base.length));

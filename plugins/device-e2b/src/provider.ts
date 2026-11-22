@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
+  type DeviceProvider,
+  type DeviceReport,
   type ExecResult,
   FileSystemGoneError,
   type Logger,
@@ -8,7 +10,6 @@ import {
   type SandboxHandle,
   type SandboxLimits,
   SandboxOperationOutcomeUnknownError,
-  type SandboxProvider,
   validateAllowHost,
   validateSandboxPathShape,
 } from "@capybara-hq/plugin-sdk";
@@ -78,6 +79,11 @@ export interface E2BSandboxConfig {
   timeoutSeconds: number;
   /** E2B 支持按域名的出站白名单；false 时 allowlist 退化为 none 并打告警。 */
   domainAllowlist: boolean;
+  /**
+   * The plugin version (the extension manifest's), the first part of the device report's
+   * revision; unset in tests that build the provider directly.
+   */
+  version?: string | undefined;
 }
 
 /**
@@ -105,8 +111,8 @@ export interface E2BSandboxTestOptions {
 export const METADATA_NAME = "capybara-sandbox-name";
 
 /**
- * The sandbox image published with `version`: the images are tagged with sandbox-docker's version
- * (environments spec §5.4), and sandbox-docker and sandbox-e2b are one changesets `fixed` group,
+ * The sandbox image published with `version`: the images are tagged with device-docker's version
+ * (environments spec §5.4), and device-docker and device-e2b are one changesets `fixed` group,
  * so this plugin's own version is that tag.
  */
 export function publishedImage(version: string): string {
@@ -173,7 +179,7 @@ export const IN_SANDBOX_GRACE_SECONDS = 5;
  * 中止时按会话杀掉命令派生的全部进程。命令经 `timeout -s KILL` 运行：到沙箱里的时限即杀掉它所在的进程组。
  * After a timeout (124 or 137) the wrapper also kills what is left of its session: uutils `timeout`
  * (Ubuntu 26.04's default coreutils) kills only its child, not the child's process group (#7).
- * `$0` 是标记、`$1` 是 ctl、`$2` 是命令、`$3` 是沙箱里的时限（秒）。与 sandbox-docker 相同。
+ * `$0` 是标记、`$1` 是 ctl、`$2` 是命令、`$3` 是沙箱里的时限（秒）。与 device-docker 相同。
  */
 /**
  * The environment variable every exec command carries (value: its control file path). A process
@@ -229,7 +235,7 @@ const KILL_TREE =
 
 /**
  * 杀掉经 exec 启动、仍在运行的全部命令（接手崩溃的前任时）：按命令行找到每个包装（会话首进程），
- * 按进程组与会话 SIGKILL。模式里的 `[.]` 让它匹配不到这个脚本自己的命令行。与 sandbox-docker 相同。
+ * 按进程组与会话 SIGKILL。模式里的 `[.]` 让它匹配不到这个脚本自己的命令行。与 device-docker 相同。
  */
 const KILL_ALL_SCRIPT =
   `${KILL_TREE}${KILL_MARKED}for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-"); do ` +
@@ -239,7 +245,7 @@ const KILL_ALL_SCRIPT =
  * Kills the exec commands of the holders whose tags are the script's arguments (`killTagged`),
  * matching their control files `/tmp/.capybara-exec-<tag>-<uuid>` with the UUID's exact shape, so
  * a tag that is a prefix of another never matches the other's commands; other commands keep
- * running. Tags are checked against `SANDBOX_TAG_RE` first. Same as sandbox-docker.
+ * running. Tags are checked against `SANDBOX_TAG_RE` first. Same as device-docker.
  */
 const KILL_TAGGED_SCRIPT =
   `${KILL_TREE}${KILL_MARKED}u='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; ` +
@@ -323,7 +329,7 @@ const AGENT_PYTHON = "/usr/bin/python3";
  */
 export function rootAgentArgs(cmd: readonly string[]): string[] {
   if (cmd[0] !== AGENT_PYTHON || cmd[1] !== "-I" || cmd[2] !== OPERATION_AGENT || !cmd[3]) {
-    throw new Error("sandbox-e2b: root runs only the operation agent, through its verification");
+    throw new Error("device-e2b: root runs only the operation agent, through its verification");
   }
   return [
     "-I",
@@ -387,7 +393,7 @@ const LIST_WRAPPER =
   'exec timeout -s KILL "$1" python3 -I -c "$2" "$3" "$4" "$5"';
 
 const NO_PYTHON =
-  "sandbox-e2b: the sandbox template has no python3 or no timeout (looked up in /usr/local/bin, /usr/bin, /bin), which list and scan need; build the template from the published image or add them to your own";
+  "device-e2b: the sandbox template has no python3 or no timeout (looked up in /usr/local/bin, /usr/bin, /bin), which list and scan need; build the template from the published image or add them to your own";
 
 /** envd's "no such process" (Connect `not_found`): the process has exited already. */
 const processGone = (e: unknown) =>
@@ -554,13 +560,13 @@ function updateNetworkOf(policy: NetworkPolicy): NetworkUpdate {
   }
 }
 
-/** The `sandbox@2` provider on E2B (shared by the plugin setup and the tests). */
+/** The `device-provider@1` provider on E2B (shared by the plugin setup and the tests). */
 export function createE2BSandbox(
   cfg: E2BSandboxConfig,
   /** `signal`: the extension's lifetime (`ctx.signal`); a template build in flight stops with it. */
   deps: { log: Logger; signal?: AbortSignal },
   test: E2BSandboxTestOptions = {},
-): SandboxProvider {
+): DeviceProvider {
   const api = createE2BApi(cfg.apiUrl ?? `https://api.${cfg.domain}`, cfg.apiKey);
   const enc = encodeURIComponent;
 
@@ -681,7 +687,7 @@ export function createE2BSandbox(
   const alias = templateAlias(cfg.defaultImage);
   /** The way out when the plugin cannot provide the template itself. */
   const ownTemplateHint =
-    'set the sandbox-e2b setting `template` to a template of your own (README "Template")';
+    'set the device-e2b setting `template` to a template of your own (README "Template")';
   const foreignAlias = (cause?: unknown) =>
     new Error(
       `E2B template alias ${alias} is owned by another E2B team or is public; ${ownTemplateHint}`,
@@ -728,7 +734,7 @@ export function createE2BSandbox(
         return checkTemplateId(found.templateID, "id");
       }
     }
-    deps.log.info("sandbox-e2b: building the E2B template from the published image", {
+    deps.log.info("device-e2b: building the E2B template from the published image", {
       alias,
       image: cfg.defaultImage,
     });
@@ -785,7 +791,7 @@ export function createE2BSandbox(
       }
       await sleep(TEMPLATE_POLL_MS, signal);
     }
-    deps.log.info("sandbox-e2b: E2B template ready", { alias, templateId });
+    deps.log.info("device-e2b: E2B template ready", { alias, templateId });
     return templateId;
   };
 
@@ -984,7 +990,7 @@ export function createE2BSandbox(
    * bound to the caller's signal.
    */
   const reboot = async (id: string) => {
-    deps.log.warn("sandbox-e2b: could not stop a command cleanly; rebooting the sandbox", {
+    deps.log.warn("device-e2b: could not stop a command cleanly; rebooting the sandbox", {
       sandboxId: id,
     });
     const signal = AbortSignal.timeout(120_000);
@@ -1069,7 +1075,7 @@ export function createE2BSandbox(
     if (kind === "open-public") return { kind: "open-public" };
     if (kind !== "allowlist" || !Array.isArray(hosts) || hosts.some((h) => typeof h !== "string")) {
       throw new Error(
-        'sandbox-e2b: the sandbox limits carry no valid network (expected { kind: "allowlist", hosts } or { kind: "open-public", hosts }); this plugin implements the sandbox@2 limits of the approval-only profiles kernel (limits.network, no mode). An older kernel sent tier / egress / allowHosts instead; upgrade the kernel and the sandbox plugins together, and never open the network as a fallback.',
+        'device-e2b: the sandbox limits carry no valid network (expected { kind: "allowlist", hosts } or { kind: "open-public", hosts }); this plugin implements the device-provider@1 limits of the approval-only profiles kernel (limits.network, no mode). An older kernel sent tier / egress / allowHosts instead; upgrade the kernel and the sandbox plugins together, and never open the network as a fallback.',
       );
     }
     for (const host of hosts) {
@@ -1079,7 +1085,7 @@ export function createE2BSandbox(
     }
     if (!cfg.domainAllowlist) {
       deps.log.warn(
-        "sandbox-e2b: domain allowlists are disabled for this deployment (domainAllowlist is false); network allowlist degraded to none",
+        "device-e2b: domain allowlists are disabled for this deployment (domainAllowlist is false); network allowlist degraded to none",
         { name },
       );
       return { kind: "none" };
@@ -1121,11 +1127,11 @@ export function createE2BSandbox(
       if (isE2BNotFound(e))
         throw new SandboxGoneError(`sandbox ${id} no longer exists`, { cause: e });
       throw new Error(
-        "sandbox-e2b: the VM's open-public network predates this plugin version and re-applying the current policy failed; the next use retries it, and resetting the device's files applies it too",
+        "device-e2b: the VM's open-public network predates this plugin version and re-applying the current policy failed; the next use retries it, and resetting the device's files applies it too",
         { cause: e },
       );
     }
-    deps.log.info("sandbox-e2b: re-applied the current open-public network to an older VM", {
+    deps.log.info("device-e2b: re-applied the current open-public network to an older VM", {
       sandboxId: id,
     });
     return { mode: "open-public", allowHosts: [] };
@@ -1160,7 +1166,7 @@ export function createE2BSandbox(
    * moves them into `RUNTIME_DIR`.
    */
   const stageRuntime = async (t: EnvdTarget, signal: AbortSignal) => {
-    deps.log.info("sandbox-e2b: staging the operation runtime", {
+    deps.log.info("device-e2b: staging the operation runtime", {
       sandboxId: t.sandboxId,
       dir: RUNTIME_DIR,
     });
@@ -1178,7 +1184,7 @@ export function createE2BSandbox(
       signal,
     });
     if (r.exitCode !== 0) {
-      throw new Error(`sandbox-e2b: cannot stage the operation runtime: ${stderrOf(r)}`);
+      throw new Error(`device-e2b: cannot stage the operation runtime: ${stderrOf(r)}`);
     }
   };
 
@@ -1219,7 +1225,7 @@ export function createE2BSandbox(
       await reboot(id);
       return true;
     } catch (e) {
-      deps.log.warn("sandbox-e2b: sandbox reboot failed; an agent command may still be running", {
+      deps.log.warn("device-e2b: sandbox reboot failed; an agent command may still be running", {
         sandboxId: id,
         err: (e instanceof Error ? e.message : String(e)).slice(0, 500),
       });
@@ -1256,7 +1262,7 @@ export function createE2BSandbox(
       const r = await once();
       if (unconfirmed) {
         throw new SandboxOperationOutcomeUnknownError(
-          "sandbox-e2b: an interrupted agent command could not be confirmed stopped and the VM was not rebooted (it is not running); its outcome is unknown",
+          "device-e2b: an interrupted agent command could not be confirmed stopped and the VM was not rebooted (it is not running); its outcome is unknown",
         );
       }
       return r;
@@ -1280,7 +1286,7 @@ export function createE2BSandbox(
    */
   const execWith = async (
     h: SandboxHandle,
-    args: Omit<Parameters<SandboxProvider["exec"]>[1], "actor">,
+    args: Omit<Parameters<DeviceProvider["exec"]>[1], "actor">,
     ctl: string,
     prefix: string[] = [],
     nonce?: string,
@@ -1315,7 +1321,7 @@ export function createE2BSandbox(
       recover: () =>
         reboot(h.id).catch((e: unknown) => {
           deps.log.warn(
-            "sandbox-e2b: sandbox reboot failed; the stuck command may still be running",
+            "device-e2b: sandbox reboot failed; the stuck command may still be running",
             {
               sandboxId: h.id,
               err: (e instanceof Error ? e.message : String(e)).slice(0, 500),
@@ -1400,6 +1406,28 @@ export function createE2BSandbox(
     // the instance is the file system's sandbox resumed: create-time limits are those of
     // createFileSystem; `update` is the only way to change them without a file reset
     limitsApplyAt: "fileSystem",
+    // allowOut + denyOut 0.0.0.0/0; without domainAllowlist an allowlist degrades to no network
+    // (closed, never open), so an allowlist is always enforced
+    networkAllowlist: true,
+
+    // The device report: what the sandbox is, no home, no limits of its own (the template fixes
+    // cpu, memory and disk), and files can be reset. The revision names the plugin version, the
+    // template and the instance.
+    async report(device, signal): Promise<DeviceReport> {
+      signal.throwIfAborted();
+      const template = cfg.template || templateAlias(cfg.defaultImage);
+      return {
+        revision: `${cfg.version ?? "unversioned"}:${template}:${device.handle?.id ?? "none"}`,
+        description: {
+          en: "An E2B sandbox (microVM) whose files are kept by pausing it; the microVM is the sandbox. E2B's metadata service stays reachable (see README).",
+          zh: "E2B 沙箱（微型虚拟机），暂停时保留文件；虚拟机本身就是沙箱。E2B 元数据端点仍可达（见 README）。",
+        },
+        home: null,
+        limits: [],
+        reset: true,
+      };
+    },
+
     async createFileSystem({ name, limits, signal }) {
       signal.throwIfAborted();
       if (!NAME_RE.test(name)) throw new Error(`invalid sandbox name: ${name}`);
@@ -1469,13 +1497,13 @@ export function createE2BSandbox(
         if (signal.aborted || isStatus(e, 401) || isStatus(e, 403)) throw e;
         // the VM keeps its old policy: "recreate" lets the kernel record it unapplied and offer
         // a file reset, never a device left without a way forward
-        deps.log.warn("sandbox-e2b: network update failed; answering recreate", {
+        deps.log.warn("device-e2b: network update failed; answering recreate", {
           sandboxId: h.id,
           err: (e instanceof Error ? e.message : String(e)).slice(0, 300),
         });
         return "recreate";
       }
-      deps.log.info("sandbox-e2b: sandbox network updated", {
+      deps.log.info("device-e2b: sandbox network updated", {
         sandboxId: h.id,
         network: policy.kind,
       });
@@ -1518,7 +1546,7 @@ export function createE2BSandbox(
         // control plane, is logged and retried by the next operation's network check)
         await currentNetwork(h.id, signal, true).catch((e: unknown) => {
           if (signal.aborted) throw e;
-          deps.log.warn("sandbox-e2b: could not re-apply the current network on resume", {
+          deps.log.warn("device-e2b: could not re-apply the current network on resume", {
             sandboxId: h.id,
             err: (e instanceof Error ? e.message : String(e)).slice(0, 300),
           });

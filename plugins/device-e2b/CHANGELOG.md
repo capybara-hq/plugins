@@ -1,4 +1,4 @@
-# @capybara-hq/plugin-sandbox-e2b
+# @capybara-hq/plugin-device-e2b
 
 ## 0.1.0-rc.21
 

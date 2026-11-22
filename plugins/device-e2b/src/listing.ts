@@ -11,9 +11,9 @@ import {
 } from "@capybara-hq/plugin-sdk";
 
 /*
- * `SandboxProvider.list` / `scan` read inside the instance: one python3 script run as the sandbox
- * user. KEEP IN STEP: this file is duplicated, byte for byte, in plugins/sandbox-docker/src/listing.ts
- * and plugins/sandbox-e2b/src/listing.ts (the plugins share no code package;
+ * `DeviceProvider.list` / `scan` read inside the instance: one python3 script run as the sandbox
+ * user. KEEP IN STEP: this file is duplicated, byte for byte, in plugins/device-docker/src/listing.ts
+ * and plugins/device-e2b/src/listing.ts (the plugins share no code package;
  * tools/checks/test/sandbox-listing.test.ts asserts they are identical). It follows the rules of
  * core's local device in docker mode (`packages/device/src/exec/docker.ts`, `LIST_SCRIPT`, and
  * `exec/listing.ts`); it is not the same script.

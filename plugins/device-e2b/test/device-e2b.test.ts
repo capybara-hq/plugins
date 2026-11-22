@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { dirname } from "node:path";
 import {
+  type DeviceProvider,
   isFileSystemGoneError,
   isSandboxGoneError,
   isSandboxScopeDeniedError,
@@ -13,7 +14,6 @@ import {
   type SandboxActor,
   type SandboxLimits,
   type SandboxOperationScope,
-  type SandboxProvider,
 } from "@capybara-hq/plugin-sdk";
 import { type FakeE2BCall, type FakeE2BServer, startFakeE2B } from "@capybara-hq/testing";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -29,7 +29,7 @@ import {
 } from "../src/index.js";
 
 /**
- * sandbox@2 on E2B, against the fake E2B (startFakeE2B of @capybara-hq/testing: control plane API +
+ * device-provider@1 on E2B, against the fake E2B (startFakeE2B of @capybara-hq/testing: control plane API +
  * envd, commands run on this machine): one E2B sandbox per device, kept by pausing it without
  * memory; template auto-build; gone / plain errors; exec output / timeout / abort kills; file reads
  * and writes, /skills written as root; the network policy mapping (open-public = internet access
@@ -78,7 +78,7 @@ const alive = (pid: number) => {
 
 /** A file system plus an instance attached to it (what the kernel does before first use). */
 const provision = async (
-  s: SandboxProvider,
+  s: DeviceProvider,
   l: SandboxLimits = limits(),
   name: string = sbxName(),
 ) => {
@@ -149,11 +149,11 @@ const waitFor = async (cond: () => boolean, ms = 5000) => {
   }
 };
 
-describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
+describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
   let fake: FakeE2BServer;
   let warns: string[];
   const warnFields: (Record<string, unknown> | undefined)[] = [];
-  let sbx: SandboxProvider;
+  let sbx: DeviceProvider;
   let cfg: E2BSandboxConfig;
 
   const make = (over: Partial<E2BSandboxConfig> = {}, server: FakeE2BServer = fake) => {
@@ -641,7 +641,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
         await expect(
           s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() }),
         ).rejects.toThrow(
-          `E2B template alias ${ALIAS} is owned by another E2B team or is public; set the sandbox-e2b setting \`template\``,
+          `E2B template alias ${ALIAS} is owned by another E2B team or is public; set the device-e2b setting \`template\``,
         );
         expect(p.sandboxes.size).toBe(0);
         expect(builds()).toHaveLength(0);
@@ -688,7 +688,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
     beforeAll(() => {
       sbx = make();
     });
-    const fsWith = (s: SandboxProvider, l: SandboxLimits) =>
+    const fsWith = (s: DeviceProvider, l: SandboxLimits) =>
       s.createFileSystem({ name: sbxName(), limits: l, signal: sig() });
 
     it("an empty allowlist means no network", async () => {
@@ -864,7 +864,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       tag: randomUUID(),
       filesystem: {
         kind: "scoped",
-        readRoots: ["/", "/workspace"],
+        projectRoot: "/workspace",
         writeRoots: ["/", "/workspace"],
       },
       network,
@@ -1096,7 +1096,7 @@ describe("sandbox-e2b (fake E2B)", { timeout: 20_000 }, () => {
       h = await provision(sbx);
     });
 
-    const run = (command: string, over: Partial<Parameters<SandboxProvider["exec"]>[1]> = {}) =>
+    const run = (command: string, over: Partial<Parameters<DeviceProvider["exec"]>[1]> = {}) =>
       sbx.exec(h, {
         ...who(),
         command,

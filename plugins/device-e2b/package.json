@@ -1,14 +1,14 @@
 {
-  "name": "@capybara-hq/plugin-sandbox-e2b",
+  "name": "@capybara-hq/plugin-device-e2b",
   "version": "0.1.0-rc.21",
-  "description": "Devices (sandbox@2) as E2B sandboxes (E2B cloud or self-hosted), with pause / resume and an allowlist or the open internet with local ranges denied (the E2B metadata endpoint stays reachable)",
+  "description": "Devices as E2B sandboxes (E2B cloud or self-hosted), with pause / resume and an allowlist or the open internet with local ranges denied (the E2B metadata endpoint stays reachable)",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/capybara-hq/plugins.git",
-    "directory": "plugins/sandbox-e2b"
+    "directory": "plugins/device-e2b"
   },
-  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/sandbox-e2b#readme",
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/device-e2b#readme",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -28,10 +28,10 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.39",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.51",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@capybara-hq/testing": "^0.1.0-rc.29"
+    "@capybara-hq/testing": "^0.1.0-rc.33"
   }
 }

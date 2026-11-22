@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  type DeviceProvider,
   isSandboxOperationOutcomeUnknownError,
   isSandboxPermissionUnsupportedError,
   isSandboxScopeDeniedError,
@@ -15,7 +16,6 @@ import {
   type SandboxHandle,
   type SandboxLimits,
   type SandboxOperationScope,
-  type SandboxProvider,
 } from "@capybara-hq/plugin-sdk";
 import { type FakeE2BServer, startFakeE2B } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -54,7 +54,7 @@ const limits: SandboxLimits = {
 describe("staged runtime", () => {
   it("embeds runtime/capybara-operation.py unchanged, with its digest", () => {
     const file = readFileSync(new URL("../runtime/capybara-operation.py", import.meta.url), "utf8");
-    // regenerate with: node plugins/sandbox-e2b/scripts/gen-agent-source.mjs
+    // regenerate with: node plugins/device-e2b/scripts/gen-agent-source.mjs
     expect(OPERATION_AGENT_SOURCE).toBe(file);
     expect(OPERATION_AGENT_SHA256).toBe(sha256(file));
   });
@@ -166,7 +166,7 @@ describe("envd stdin", () => {
 describe("operation factory fails closed (fake E2B)", { timeout: 20_000 }, () => {
   let fake: FakeE2BServer;
   let api: { url: string; close(): Promise<void> };
-  let sbx: SandboxProvider;
+  let sbx: DeviceProvider;
   let h: SandboxHandle;
   const scope = (over: Partial<SandboxOperationScope> = {}): SandboxOperationScope => ({
     operationId: `op-${randomUUID()}`,
@@ -179,14 +179,14 @@ describe("operation factory fails closed (fake E2B)", { timeout: 20_000 }, () =>
     actor: { accountId: "acc-1", conversationId: "conv-1" },
     tag: randomUUID(),
     // the kernel's instance scope: the whole filesystem plus the working root
-    filesystem: { kind: "scoped", readRoots: ["/", "/workspace"], writeRoots: ["/", "/workspace"] },
+    filesystem: { kind: "scoped", projectRoot: "/workspace", writeRoots: ["/", "/workspace"] },
     network: { kind: "open-public" },
     ...over,
   });
   const restrictedScope = () =>
     scope({
       profile: "approve-for-me",
-      filesystem: { kind: "scoped", readRoots: [], writeRoots: ["/workspace"] },
+      filesystem: { kind: "scoped", projectRoot: "/workspace", writeRoots: ["/workspace"] },
       network: { kind: "none" },
     });
   /** Calls that reach a VM (connect resumes; envd runs commands). */
@@ -289,7 +289,7 @@ describe("operation factory fails closed (fake E2B)", { timeout: 20_000 }, () =>
     expect(isSandboxPermissionUnsupportedError(e2)).toBe(true);
     const readOnly = scope({
       profile: "request-approval",
-      filesystem: { kind: "scoped", readRoots: ["/workspace"], writeRoots: [] },
+      filesystem: { kind: "scoped", projectRoot: "/workspace", writeRoots: [] },
       network: { kind: "none" },
     });
     const e3 = await sbx.operation?.(h, readOnly, sig()).catch((x: unknown) => x);
@@ -327,7 +327,7 @@ describe("operation factory fails closed (fake E2B)", { timeout: 20_000 }, () =>
   });
 
   it("takes a writable / as the whole instance: writable roots are also readable", async () => {
-    const filesystem = { kind: "scoped" as const, readRoots: [], writeRoots: ["/"] };
+    const filesystem = { kind: "scoped" as const, projectRoot: null, writeRoots: ["/"] };
     const op = await sbx.operation?.(h, scope({ filesystem }), sig());
     expect(typeof op?.exec).toBe("function");
   });
@@ -605,7 +605,7 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
   }
   let fake: FakeE2BServer;
   let proxy: { url: string; close(): Promise<void> };
-  let sbx: SandboxProvider;
+  let sbx: DeviceProvider;
   let h: SandboxHandle;
   let hold: Hold | undefined;
   const signalled: number[] = [];
@@ -752,7 +752,7 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
         tag: randomUUID(),
         filesystem: {
           kind: "scoped",
-          readRoots: ["/", "/workspace"],
+          projectRoot: "/workspace",
           writeRoots: ["/", "/workspace"],
         },
         network: { kind: "none" },

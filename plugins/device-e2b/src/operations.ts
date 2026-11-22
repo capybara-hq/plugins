@@ -37,7 +37,7 @@ import {
 
 /*
  * The operation-capable half of the E2B provider (core spec 2026-11-16 permission operation
- * contract), adapted from sandbox-docker's operations.ts: runtime capabilities, the per-invocation
+ * contract), adapted from device-docker's operations.ts: runtime capabilities, the per-invocation
  * operation factory, owner browsing, trusted preparation, revocation and exact background
  * supervision, all through the provider's agent inside the one device VM.
  *
@@ -284,7 +284,7 @@ function checkedEnv(env: Record<string, string> | undefined): Record<string, str
 }
 
 const NO_RUNTIME =
-  "The device has no operation runtime (sandbox-e2b stages it as root on first use; check that the template provides /usr/bin/python3 and sha256sum)";
+  "The device has no operation runtime (device-e2b stages it as root on first use; check that the template provides /usr/bin/python3 and sha256sum)";
 
 function nativeReply(result: AgentResult | null, scoped: boolean): unknown {
   const error = refusalError(result);
@@ -314,9 +314,9 @@ function nativeResult(method: NativeMethod, value: unknown): unknown {
 }
 
 const OUTSIDE_UNSUPPORTED =
-  "sandbox-e2b has no outside of its instance: the microVM is the sandbox, so an escalated (device) operation cannot run here";
+  "device-e2b has no outside of its instance: the microVM is the sandbox, so an escalated (device) operation cannot run here";
 const NARROWER_UNSUPPORTED =
-  "sandbox-e2b runs operations on the whole instance only (the microVM is the sandbox): a narrower filesystem grant needs restricted filters, and the SDK launcher's Landlock ABI 6 is not available on this template";
+  "device-e2b runs operations on the whole instance only (the microVM is the sandbox): a narrower filesystem grant needs restricted filters, and the SDK launcher's Landlock ABI 6 is not available on this template";
 
 /** The network a VM applies: no network, an allowlist of hosts, or open-public. */
 export interface AppliedNetwork {
@@ -375,7 +375,7 @@ export function createOperations(deps: OperationDeps) {
   ) => {
     if (!appliedWithin(scope.network, await t.appliedNetwork(h, signal))) {
       throw new SandboxScopeDeniedError(
-        "The VM's network allows more than this operation's network (or is not this provider version's); sandbox-e2b cannot narrow it per operation, so the operation is refused. Changing the device's network or resetting its files applies the current policy",
+        "The VM's network allows more than this operation's network (or is not this provider version's); device-e2b cannot narrow it per operation, so the operation is refused. Changing the device's network or resetting its files applies the current policy",
       );
     }
   };

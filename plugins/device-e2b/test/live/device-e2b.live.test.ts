@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
+  type DeviceProvider,
   type FileSystemHandle,
   isFileSystemGoneError,
   type SandboxHandle,
   type SandboxLimits,
-  type SandboxProvider,
 } from "@capybara-hq/plugin-sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createE2BApi, type E2BApi } from "../../src/e2b-api.js";
@@ -16,14 +16,14 @@ import {
 } from "../../src/index.js";
 
 /**
- * 真实 E2B 验收：`pnpm vitest run plugins/sandbox-e2b/test/live`
+ * 真实 E2B 验收：`pnpm vitest run plugins/device-e2b/test/live`
  *
  * - Switch: runs only when `CAPYBARA_TEST_E2B_API_KEY` is filled, otherwise the whole group is
  *   skipped. `CAPYBARA_TEST_E2B_TEMPLATE` (a template built from
- *   plugins/sandbox-docker/image/Dockerfile, see README) is optional: unset, the first
+ *   plugins/device-docker/image/Dockerfile, see README) is optional: unset, the first
  *   `createFileSystem` builds the template `capybara-sandbox-<this plugin's version>` from the
  *   published image (that image
- *   must exist on ghcr.io, i.e. sandbox-docker's version must have been released). Optional
+ *   must exist on ghcr.io, i.e. device-docker's version must have been released). Optional
  *   `CAPYBARA_TEST_E2B_API_URL`, `CAPYBARA_TEST_E2B_DOMAIN` (self-hosted). Credentials come from
  *   the outer environment; the code reads no credential file and prints none.
  * - Covers: the template auto-build (template unset), a file system created paused and an instance
@@ -109,9 +109,9 @@ const allowlist: SandboxLimits = {
   network: { kind: "allowlist", hosts: ["pypi.org"] },
 };
 
-describe.skipIf(!READY)("sandbox-e2b live", { timeout: 180_000 }, () => {
+describe.skipIf(!READY)("device-e2b live", { timeout: 180_000 }, () => {
   // describe 体在跳过时也会执行：配置放到 beforeAll 里解析
-  let sbx: SandboxProvider;
+  let sbx: DeviceProvider;
   let api: E2BApi;
   let alias: string;
   beforeAll(() => {

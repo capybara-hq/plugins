@@ -1,9 +1,14 @@
-# @capybara-hq/plugin-sandbox-e2b
+# @capybara-hq/plugin-device-e2b
 
-The E2B implementation of devices (`sandbox@2`): one E2B sandbox per device (E2B cloud or self-hosted E2B). E2B has no volume
+The E2B implementation of devices (`device-provider@1`): one E2B sandbox per device (E2B cloud or self-hosted E2B). E2B has no volume
 separate from a micro-VM, so the device's file system **is** the E2B sandbox kept paused without memory, and an instance is the same sandbox
-resumed through connect. It is an either-or choice with `@capybara-hq/plugin-sandbox-docker` (`sandbox@2` is a single-select capability), and uses the
-same image.
+resumed through connect. It can run alongside `@capybara-hq/plugin-device-docker` and other device providers (`device-provider@1` is a multi
+point: each device stays bound to the provider that made it), and uses the same image. Renamed from `@capybara-hq/plugin-sandbox-e2b` (no alias:
+devices made by the old plugin read as unavailable and are recreated).
+
+**Device page**: `report` describes the device as an E2B sandbox (microVM) whose files are kept by pausing it, names the metadata-service residual
+(see "Network policy"), lists no limits (the template fixes cpu, memory and disk) and offers a files reset. New devices are made from the short
+`device-connection` guide (`guides/connect.md`): name it and create it.
 
 ## Deployment config
 
@@ -18,11 +23,11 @@ same image.
 | (removed) `openEgress` / `allowOpenEgress` | — | Both fail the strict schema with a pointer to the network policy: the org's cloud network (`limits.network`) decides (see "Network policy") |
 
 ```bash
-export CAPYBARA_EXTENSIONS='["@capybara-hq/plugin-sandbox-e2b"]'
-export CAPYBARA_EXTENSION_CONFIG='{"sandbox-e2b":{"apiKey":"e2b_…"}}'
+export CAPYBARA_EXTENSIONS='["@capybara-hq/plugin-device-e2b"]'
+export CAPYBARA_EXTENSION_CONFIG='{"device-e2b":{"apiKey":"e2b_…"}}'
 ```
 
-The deployment config schema is strict: extra keys are errors. The kernel config `sandbox.image` has no effect on this plugin: `sandbox@2` passes
+The deployment config schema is strict: extra keys are errors. The kernel config `sandbox.image` has no effect on this plugin: `device-provider@1` passes
 the image only to `create`, but on E2B the image is fixed when the file system (the E2B sandbox) is created, from the template.
 
 ## Template (the same image as the Docker plugin)
@@ -33,12 +38,12 @@ the image only to `create`, but on E2B the image is fixed when the file system (
 makes in `e2b@2.58.0` (`POST /v3/templates`, `POST /v2/templates/{templateID}/builds/{buildID}` with `{fromImage, steps: [], force: false}`,
 then `GET /templates/{templateID}/builds/{buildID}/status?logsOffset=` every second until `ready`, at most 30 minutes and never past the
 extension's lifetime (`ctx.signal`); `error` fails with E2B's reason and tells you to set `template`). E2B credentials alone are enough.
-`<tag>` is **this plugin's own version**: the images are published by this repository's images workflow tagged with sandbox-docker's version,
-and sandbox-docker and sandbox-e2b are one changesets `fixed` group, so both always share one version (= the image tag). The alias replaces
+`<tag>` is **this plugin's own version**: the images are published by this repository's images workflow tagged with device-docker's version,
+and device-docker and device-e2b are one changesets `fixed` group, so both always share one version (= the image tag). The alias replaces
 each `.` with `-` (`0.1.0-rc.3` → `capybara-sandbox-0-1-0-rc-3`), so a new version builds a new template and an existing one is reused.
 **Only a private template of your team is used:** the alias is a predictable name, so an alias lookup answering `public: true`, or 403 (an
 alias of another team), and a build request answered 403 / 409 or creating a public template fail with "template alias … is owned by another
-E2B team or is public; set the sandbox-e2b setting `template` to a template of your own"; the plugin never runs sandboxes from a template it
+E2B team or is public; set the device-e2b setting `template` to a template of your own"; the plugin never runs sandboxes from a template it
 did not build or you did not name. The result is memoised per provider instance (a failure is not); concurrent first uses share one build, and two replicas
 starting at once may both build (wasteful but correct). An alias that exists does not mean its build is ready (another replica's build in flight,
 or a failed build): when creating a sandbox from it answers E2B's 404, the plugin builds the alias itself, polls until ready and retries once.
@@ -49,7 +54,7 @@ all under `/workspace/.cache`) and `NODE_USE_ENV_PROXY=1` with `ENV`. Whether a 
 (`[e2b-live] image env: …`). Without them caches land in the tools' defaults under `HOME` (`/workspace`), so they still persist with the
 files. `NODE_USE_ENV_PROXY` has no effect on E2B (no proxy variables are set there).
 
-**Your own template.** Set `template` to a template name or id, for example one built from `plugins/sandbox-docker/image/Dockerfile`
+**Your own template.** Set `template` to a template name or id, for example one built from `plugins/device-docker/image/Dockerfile`
 (E2B's Template SDK parses the Dockerfile's FROM / RUN / COPY / ADD / WORKDIR / USER / ENV / ARG / CMD / ENTRYPOINT). From the repository root:
 
 ```bash
@@ -65,7 +70,7 @@ await Template.build(Template().fromDockerfile(dockerfile), "capybara-sandbox", 
   onBuildLogs: defaultBuildLogger(),
 });
 EOF
-node build.mjs <repo path>/plugins/sandbox-docker/image/Dockerfile
+node build.mjs <repo path>/plugins/device-docker/image/Dockerfile
 ```
 
 Then set `template` to `capybara-sandbox`. Image conventions (the plugin depends on them): the user `sandbox` (uid 1000), with HOME and the working directory at
@@ -74,7 +79,7 @@ Then set `template` to `capybara-sandbox`. Image conventions (the plugin depends
 
 ## Lifecycle
 
-| `sandbox@2` | E2B call |
+| `device-provider@1` | E2B call |
 |---|---|
 | `createFileSystem` | Lists by the metadata `capybara-sandbox-name=<name>` (`GET /v2/sandboxes?metadata=…&state=running,paused`, paginated) and returns an existing sandbox of that name (the kernel may have stopped before recording the handle); otherwise ensures the template (above), `POST /v2/sandboxes` (`templateID`, `metadata`, `timeout`, `autoPause: true`, `autoPauseMemory: false`, `secure: true`, network settings), then pauses it without memory (`POST /sandboxes/{id}/pause` `{memory: false}`); the file system handle is E2B's sandbox id. An older kernel's limits are refused before any E2B call |
 | `create` (instance) | `POST /v2/sandboxes/{id}/connect` `{timeout}` on the file system's sandbox (resumed; a 409 while another resume is in flight is retried); the instance handle carries the same id. E2B's 404 → `FileSystemGoneError` (the files are lost, never replaced by an empty sandbox); other failures, a bare 404 included, are ordinary errors. `image` and `limits` are ignored: they were fixed at `createFileSystem` |
@@ -241,7 +246,7 @@ default 900 seconds, Ruling M20); to run long commands, raise `runtime.maxRunSec
 
 ## Permission profiles (operation contract)
 
-The provider implements the permission operation contract of `sandbox@2`: `permissionSupport`, a
+The provider implements the permission operation contract of `device-provider@1`: `permissionSupport`, a
 fresh immutable `operation` per invocation, owner `browse`, trusted `prepare` (skills and
 attachments), `revokeOperation` and exact `background` supervision (`start`, `status`, `tail`,
 `readOutput`, `stop`). It changes nothing about the device: one VM, its OS user, files, installed
@@ -282,8 +287,8 @@ no per-call host grants. So:
 **Runtime staging.** Templates built before the runtime existed have none, so the provider stages
 it in the VM itself on first use: the SDK's `native-files.py` and `linux-sandbox.py` (unchanged
 bytes) and this provider's agent `runtime/capybara-operation.py` (an adapted copy of
-sandbox-docker's agent without the restricted launch path; embedded in
-`src/operation-agent-source.ts`, regenerate with `node plugins/sandbox-e2b/scripts/gen-agent-source.mjs`)
+device-docker's agent without the restricted launch path; embedded in
+`src/operation-agent-source.ts`, regenerate with `node plugins/device-e2b/scripts/gen-agent-source.mjs`)
 are uploaded as root to the root-only `/opt/capybara/upload`, checked by root against `SHA256SUMS`
 and moved with one rename into `/opt/capybara-e2b-runtime/<digest prefix of SHA256SUMS>/` (root, 0755 /
 0644). The directory is named after the digest of every staged file, so each provider version runs
@@ -318,7 +323,7 @@ grace period) reboots the VM, as for exec; on the paths that never resume a paus
 output, stop, revocation, support) a VM that is not running is left paused and the call reports
 an unknown outcome.
 
-**Background executions** (on the whole instance) use the same design as sandbox-docker: a detached
+**Background executions** (on the whole instance) use the same design as device-docker: a detached
 supervisor per operation, a root recorder that accepts the supervisor's frames only on the root
 UNIX socket connection whose `SO_PEERCRED` pid, start time, exact argv, stdin token and admitted
 request digest match, an acceptance byte before any launch, and an unacknowledged start kept for
@@ -369,7 +374,7 @@ The third parameter of `createE2BSandbox(config, { log }, testOptions)` can be p
 
 ## Tests
 
-- `test/sandbox-e2b.test.ts`: against `startFakeE2B` from `@capybara-hq/testing` (control plane API + envd, Connect stream protocol,
+- `test/device-e2b.test.ts`: against `startFakeE2B` from `@capybara-hq/testing` (control plane API + envd, Connect stream protocol,
   commands really run in a local temp directory), covering each method, error mapping (404 → gone, 401 / 5xx → ordinary errors), abort, kill on timeout,
   file reads and writes and the way `/skills` is written, the network policy mapping (an allowlist, an empty allowlist as no network,
   `open-public` as internet access with `OPEN_DENIED` covering the SDK's closed IPv4 classes, an older kernel's limits refused before any E2B call), `update` (against a stub of

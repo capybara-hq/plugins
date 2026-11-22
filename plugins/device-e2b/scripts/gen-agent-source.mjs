@@ -1,6 +1,6 @@
 // Regenerates src/operation-agent-source.ts from runtime/capybara-operation.py (the provider
 // stages the agent from that TypeScript string: the packed plugin bundles src, not runtime/).
-// Run from the repository root: node plugins/sandbox-e2b/scripts/gen-agent-source.mjs
+// Run from the repository root: node plugins/device-e2b/scripts/gen-agent-source.mjs
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 
