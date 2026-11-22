@@ -137,6 +137,15 @@ const MUST_ASK: Record<string, string[]> = {
 const WRITE_LIKE =
   /(^|_)(create|update|delete|trash|untrash|label|unlabel|spam|send|copy|upload|insert|cancel|respond|move|share|modify|clear|append|batch|apply|remove|execute|write|import|patch)(_|$)/;
 
+/** The kernel's `deriveSlug`: lower case, every run of other characters one `_`. */
+const defaultSlug = (name: string) =>
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^[^a-z]+/, "")
+    .slice(0, 24)
+    .replace(/_+$/, "");
+
 const load = (id: string) => JSON.parse(read(`connectors/${id}.json`)) as TemplateFile;
 const fixture = (id: string) => JSON.parse(read(`test/fixtures/${id}-tools.json`)) as Fixture;
 
@@ -233,9 +242,12 @@ describe.each(TEMPLATES)("connectors/%s.json", (id, endpoint, scopes, [zh, en]) 
   });
 
   it("every tool name makes a valid tool key (no dots; mcp__<slug>__<name> fits 64)", () => {
+    // the kernel derives a template connector's default slug from the English display name
+    const slug = defaultSlug(en);
+    expect(slug).toMatch(/^[a-z][a-z0-9_]{0,23}$/);
     for (const t of Object.keys(load(id).template.defaultToolPolicies)) {
       expect(t).toMatch(/^[a-z0-9_]+$/);
-      expect(`mcp__${id}__${t}`.length, t).toBeLessThanOrEqual(64);
+      expect(`mcp__${slug}__${t}`.length, t).toBeLessThanOrEqual(64);
     }
   });
 });
