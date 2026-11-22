@@ -156,6 +156,8 @@ workers and other tests' child processes run plain Node. This is temporary, unti
   runs the listener files from `main`, so changes to them take effect once merged; a first-time
   contributor's checks wait for "Approve and run". Details: the `capybara-hq/.github` README,
   "Issue gate and CLA".
+- **Draft PRs run no CI.** Open a PR as a draft while it is still changing; marking it ready for
+  review (`ready_for_review`) starts the run. The org's CI runners are shared by every repository.
 - **PRs run what the diff affects; pushes to `main` run everything.** The plan is computed by
   `tools/ci/src/affected.ts` (rules unit-tested in `tools/ci/test`); keep this table, that file and
   the comments in `ci.yml` in sync:

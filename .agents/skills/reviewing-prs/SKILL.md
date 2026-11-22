@@ -4,8 +4,8 @@ description: "Helps a maintainer review a pull request in a capybara-hq reposito
 # Synced from capybara-hq/.github. Edit the source there, then run sync.
 metadata:
   source: capybara-hq/.github
-  version: v1.0.0
-  sha256: 4be8bbe529a4bf22d7eac9b90c87de6a94189a79d13bd66e1ff4d365fdde2a40
+  version: v2.1.0
+  sha256: 7bc33464cd6bdacd30d4857939a600ea798d5e3412174dbeb45c9aecb899caed
 ---
 
 # Reviewing PRs
