@@ -57,6 +57,10 @@ Workspace MCP servers. Use a client **separate from your Sign in with Google cli
 Google asks for a separate client when one also serves features other than an agent's, such as
 sign-in. One such client can serve every Google connector of your org.
 
+The create form has no scopes field: the connector requests the scopes listed above when a member
+connects. You may also add them under **Google Auth Platform → Data Access** (required for an
+External app).
+
 ## 5. Enter the client
 
 Copy the client's **Client ID** and **Client secret** into the fields below. The secret is stored
@@ -92,7 +96,8 @@ insufficient-scope error. To fix that, disconnect, connect again and tick every 
 Agents then act in Gmail as you, and writes ask you first unless your admin changed that.
 
 **Disconnect** deletes the token in Capybara. To revoke it at Google too, open **Google Account →
-Security → Your connections to third-party apps & services** and remove the app.
+Security → Your connections to third-party apps & services** and remove the app. That removes access
+for every Google connector of yours that uses the same client: connect again the ones you still use.
 
 ::check capybara:connector-connected Your Google account is connected
 :::

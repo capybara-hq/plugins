@@ -158,7 +158,8 @@ mark (a brand plugin, added to the brand list in `tools/checks/src/plugin-icons.
 carries its product icon.
 
 Why one plugin: the issue's reasoning holds (an admin thinks "connect Google"; the same Google Cloud
-project and OAuth client serve sign-in and the connectors). The cost: a deployment that only wants
+project serves sign-in and the connectors; erratum 2026-11-22: the connectors use a separate
+agent-flagged OAuth client, §5.3). The cost: a deployment that only wants
 the connectors still loads a small extension it never enables as a login source; that extension does
 nothing until `google` is listed in `auth.loginSources`.
 

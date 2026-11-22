@@ -42,6 +42,8 @@ Scopes requested:
 
 务必打开上面列出的 AI 智能体客户端选项：没有打开这个选项的客户端会被 Google 拒绝访问 Workspace MCP 服务器。请使用一个**与 Sign in with Google 客户端分开**的客户端：如果一个客户端还用于登录等不属于智能体的功能，Google 要求另建一个。一个这样的客户端可以供组织里所有 Google 连接器使用。
 
+创建表单里没有 scope 字段：成员连接时由连接器申请上面列出的 scope。也可以在 **Google Auth Platform → Data Access** 里添加它们（External 应用必须添加）。
+
 ## 5. 填写客户端
 
 把客户端的 **Client ID** 和 **Client secret** 填到下面的字段里。secret 加密保存，读回时只显示“已设置”。
@@ -52,7 +54,7 @@ Scopes requested:
 
 ## 工具和审批
 
-读操作直接执行。写操作（`update_spreadsheet`、`update_values`、`update_formulas`、`insert_dimension`）会先询问成员。可以在连接器页面逐个工具修改。`drive.file` scope 只覆盖连接器创建或打开过的文件，所以写其他文件会失败并返回 Google 的权限错误。
+读操作直接执行。写操作（`update_spreadsheet`、`update_values`、`update_formulas`、`insert_dimension`）会先询问成员。可以在连接器页面逐个工具修改。写操作可以修改成员有编辑权限的任何表格。
 
 ## 调用被拒绝时
 
@@ -66,7 +68,7 @@ Workspace 管理员可能限制了第三方对 Google API 的访问（**Admin co
 
 之后智能体以你的身份操作 Google 表格，写操作会先询问你（除非管理员改了设置）。
 
-**断开连接**会删除 Capybara 里的令牌。如果还要在 Google 上撤销，打开 **Google 账号 → 安全 → 你与第三方应用和服务的关联**，移除这个应用。
+**断开连接**会删除 Capybara 里的令牌。如果还要在 Google 上撤销，打开 **Google 账号 → 安全 → 你与第三方应用和服务的关联**，移除这个应用。这会同时移除你所有使用同一客户端的 Google 连接器的访问权限：仍要使用的连接器请重新连接。
 
 ::check capybara:connector-connected 你的 Google 账号已连接
 :::
