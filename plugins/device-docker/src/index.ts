@@ -131,7 +131,7 @@ export function providerConfig(
  */
 const plugin = defineExtension({
   name: "device-docker",
-  version: "0.1.0-rc.21",
+  version: "0.1.0-rc.22",
   // device-provider@1 (report, networkAllowlist, scopes with projectRoot / writeRoots) is the
   // rc.51 SDK's.
   sdk: "^0.1.0-rc.51",

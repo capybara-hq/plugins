@@ -481,7 +481,7 @@
     },
     {
       "name": "theme-cyberpunk",
-      "version": "0.1.0-rc.12",
+      "version": "0.1.0-rc.13",
       "summary": {
         "en": "Cyberpunk theme and UI: neon yellow on deep blue-black, a run-state HUD, scanlines, a boot screen, a glitch CYBERBARA wordmark and opt-in synthesized sound",
         "zh": "赛博朋克主题与界面：深蓝黑底上的霓虹黄，运行状态 HUD、扫描线、启动画面、故障风 CYBERBARA 字标，以及可选的合成音效"
@@ -513,8 +513,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-theme-cyberpunk",
-          "version": "0.1.0-rc.12",
-          "integrity": "sha512-D1yfwRgGka7eoTOpc9d6GFWAwj2WqAYTW0EXydkhH9vw/336hmZLnCFrU4HCwpQPkhQrJOv71ALiEJAG7zahuw=="
+          "version": "0.1.0-rc.13",
+          "integrity": "sha512-7OC0RG8iBPMeoATBnOeuJw1bnvPVWEUqXVczqBk03zIUCelIo/kxJSYAVtJGy8DNIusSFC0ifcYvSwhVVK8WeA=="
         }
       }
     },
@@ -826,7 +826,7 @@
     },
     {
       "name": "device-docker",
-      "version": "0.1.0-rc.21",
+      "version": "0.1.0-rc.22",
       "summary": {
         "en": "Devices as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with their files on volumes kept until the device is deleted: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist",
         "zh": "以 Docker 容器（runc 或 gVisor runsc）承载设备，经 Docker socket 代理访问；文件保存在卷上，直到设备被删除。网络默认开放公网（拒绝回环、私有、链路本地与元数据地址），也可用主机白名单"
@@ -853,14 +853,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-docker",
-          "version": "0.1.0-rc.21",
-          "integrity": "sha512-ZMlDQkCWA+/GSeNJ7bdQ9O40/J7eEZbMkkc9yChtxFtQXtS9f6dLC0ScMfOWNZanAXWdW/soOoRWZURXYMPTZA=="
+          "version": "0.1.0-rc.22",
+          "integrity": "sha512-cbxrv0s9YfMT8rw4TygcRYxrb6x0JPVF2WwtdQtT13lHsQmyOSxIT1GJAHxs5GxUZeRIwrt38AaIGXL/NIqvJA=="
         }
       }
     },
     {
       "name": "device-e2b",
-      "version": "0.1.0-rc.21",
+      "version": "0.1.0-rc.22",
       "summary": {
         "en": "Devices as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, an allowlist or the open internet with local ranges denied (E2B's metadata service stays reachable)",
         "zh": "以 E2B 沙箱承载设备（E2B 云或自托管）：暂停沙箱保留文件，从已发布镜像构建模板，网络为出站白名单或开放公网（拒绝私有、回环与链路本地地址；E2B 元数据端点仍可达，见 README）"
@@ -886,8 +886,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-e2b",
-          "version": "0.1.0-rc.21",
-          "integrity": "sha512-Eq5sQ0pipV+hT7OpA+QidVsr6Gt9DhTwzYXtt/D3rp9opNYcsh8/x7kKcgKxFBIWJq/FR6L5hlledGoZrT79hw=="
+          "version": "0.1.0-rc.22",
+          "integrity": "sha512-84w8V+adngMmCLYax05Kftf78S//ZITLPdQ2NLwJOPsAgWRz/vgJUos6mAt/TPb6gszneDRQtB10IYWKo0XjTg=="
         }
       }
     }

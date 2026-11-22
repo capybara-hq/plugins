@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-theme-cyberpunk
 
+## 0.1.0-rc.13
+
+### Patch Changes
+
+- 4c87af2: App icons (512 px, plus a maskable one) for the home screen and the web manifest, and the
+  `cyberbara` agent avatar preset in place of the built-in `capybara` one (`hideAvatarPresets`).
+
 ## 0.1.0-rc.12
 
 ### Patch Changes
