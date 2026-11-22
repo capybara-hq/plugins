@@ -91,38 +91,23 @@ const refuseRaw =
     );
   };
 
-/** Whether the allowlist entry `pattern` admits `host` (`*.x.com`: subdomains, never the apex). */
-const coversHost = (pattern: string, host: string): boolean =>
-  pattern === host || (pattern.startsWith("*.") && host.endsWith(pattern.slice(1)));
-
 const normalizeHost = (host: string): string => {
   const h = host.toLowerCase();
   return h.endsWith(".") ? h.slice(0, -1) : h;
 };
 
-/** Whether the network a command was sent with lets it reach `host`. */
-const networkAllows = (host: string, limits: Pick<SandboxLimits, "network">): boolean => {
-  if (limits.network.kind === "open-public") return true;
-  const h = normalizeHost(host);
-  return limits.network.hosts.some((p) => coversHost(p.toLowerCase(), h));
-};
-
 /**
- * The provider's own layer over a machine's network report: it trusts the machine's word that a
- * host was refused, never its word that the org allows it. A host the machine calls `device` that
- * the network the command was sent with (`limits`) does not allow becomes `org` (only an admin can
- * lift it, never a question to the machine's owner); one that is no valid host name, or a
- * wildcard, becomes `address`. Other layers are kept.
+ * The provider's own layer over a machine's network report: a host the machine calls `device`
+ * that is no valid host name, or a wildcard, becomes `address` (nobody can allow it from a
+ * refusal). Every other report is kept as the machine gave it: whether a `device` host can be
+ * granted for a call, and by whom, is the kernel's network-ask planning (it checks the per-call
+ * ceiling itself), so a grantable host is never turned into an admin-only one here.
  */
-export function relayer(
-  blocked: NetworkBlockedHost[],
-  limits: Pick<SandboxLimits, "network">,
-): NetworkBlockedHost[] {
+export function relayer(blocked: NetworkBlockedHost[]): NetworkBlockedHost[] {
   return blocked.map((b) => {
     if (b.layer !== "device") return b;
     const h = normalizeHost(b.host);
-    if (validateAllowHost(h).length > 0 || h.startsWith("*.")) return { ...b, layer: "address" };
-    return networkAllows(b.host, limits) ? b : { ...b, layer: "org" };
+    return validateAllowHost(h).length > 0 || h.startsWith("*.") ? { ...b, layer: "address" } : b;
   });
 }
 
@@ -207,6 +192,8 @@ export function createDeviceLocalProvider(
     const l = localHandle(h);
     if (!l) return;
     try {
+      // an older handle never ends the live generation's work: only the device's bound one
+      if ((await store.binding(l.id))?.generation !== l.generation) return;
       if (!(await ctx.dialIn.online(l.id))) return;
       await machineCreate(l.id, l.limits, signal);
     } catch (e) {
@@ -337,7 +324,7 @@ export function createDeviceLocalProvider(
             { deadlineMs: args.timeoutMs + EXEC_DEADLINE_MARGIN_MS, signal: combined },
           )) as ExecResult;
           if (result.network?.blocked === undefined) return result;
-          return { ...result, network: { blocked: relayer(result.network.blocked, limits) } };
+          return { ...result, network: { blocked: relayer(result.network.blocked) } };
         },
       };
     },

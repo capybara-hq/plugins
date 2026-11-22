@@ -372,7 +372,7 @@ describe("operations", () => {
     expect((await run({ kind: "environment" }, true))?.limits).toEqual(LIMITS);
   });
 
-  it("exec re-layers the machine's refused hosts against the network it carried", async () => {
+  it("exec keeps the machine's own refusals for the kernel to plan; only bad names become addresses", async () => {
     const s = setup(
       machine({
         exec: () => ({
@@ -381,10 +381,12 @@ describe("operations", () => {
             ...EXEC_RESULT,
             network: {
               blocked: [
-                // the network allows it: the machine's word stands (its owner refused it)
+                // in the carried network: the machine's owner refused it
                 { host: "example.com", port: 443, layer: "device" },
-                // the machine calls it its own, the network does not allow it: only an admin can
-                { host: "evil.example.net", port: 443, layer: "device" },
+                // outside the carried network: still the machine's word; whether it can be
+                // granted for a call (and by whom) is the kernel's network-ask planning
+                { host: "grantable.example.net", port: 443, layer: "device" },
+                { host: "*.example.org", port: 443, layer: "device" },
                 { host: "other.org", port: 80, layer: "org" },
               ],
             },
@@ -402,37 +404,30 @@ describe("operations", () => {
     });
     expect(r?.network?.blocked).toEqual([
       { host: "example.com", port: 443, layer: "device" },
-      { host: "evil.example.net", port: 443, layer: "org" },
+      { host: "grantable.example.net", port: 443, layer: "device" },
+      { host: "*.example.org", port: 443, layer: "address" },
       { host: "other.org", port: 80, layer: "org" },
     ]);
   });
 
-  it("relayer: a wildcard or a bad name the machine calls its own is an address; open keeps device", () => {
-    const allowlist = { network: { kind: "allowlist" as const, hosts: ["*.example.com"] } };
+  it("relayer: a wildcard or a bad name the machine calls its own is an address; nothing becomes org", () => {
     expect(
-      relayer(
-        [
-          { host: "*.example.com", port: 443, layer: "device" },
-          { host: "bad_host!", port: 443, layer: "device" },
-          { host: "api.example.com.", port: 443, layer: "device" },
-          { host: "example.com", port: 443, layer: "device" },
-          { host: "bad_host!", port: 80, layer: "address" },
-        ],
-        allowlist,
-      ),
+      relayer([
+        { host: "*.example.com", port: 443, layer: "device" },
+        { host: "bad_host!", port: 443, layer: "device" },
+        { host: "api.example.com.", port: 443, layer: "device" },
+        { host: "anything.example.net", port: 443, layer: "device" },
+        { host: "bad_host!", port: 80, layer: "address" },
+        { host: "x.example", port: 80, layer: "unknown" },
+      ]),
     ).toEqual([
       { host: "*.example.com", port: 443, layer: "address" },
       { host: "bad_host!", port: 443, layer: "address" },
       { host: "api.example.com.", port: 443, layer: "device" },
-      // a wildcard covers subdomains, never the apex
-      { host: "example.com", port: 443, layer: "org" },
+      { host: "anything.example.net", port: 443, layer: "device" },
       { host: "bad_host!", port: 80, layer: "address" },
+      { host: "x.example", port: 80, layer: "unknown" },
     ]);
-    expect(
-      relayer([{ host: "any.example.net", port: 443, layer: "device" }], {
-        network: { kind: "open-public", hosts: [] },
-      }),
-    ).toEqual([{ host: "any.example.net", port: 443, layer: "device" }]);
   });
 
   it("an exec result without a network report gains none", async () => {
@@ -755,11 +750,31 @@ describe("lifecycle", () => {
     ]);
   });
 
+  it("an older handle's suspend or destroy leaves the live generation's work running", async () => {
+    const s = setup();
+    const old = await created(s);
+    const live = await created(s);
+    expect(live.generation).not.toBe(old.generation);
+    await s.provider.suspend(old, signal());
+    await s.provider.destroy(old, signal());
+    // a handle with no stored binding at all reaches nothing either
+    await s.provider.destroy({ ...live, id: "dev-other" }, signal());
+    expect(s.dial.sent).toEqual([]);
+    await s.provider.suspend(live, signal());
+    expect(s.dial.ops()).toEqual(["create"]);
+  });
+
   it("suspend, destroy and the file system cleanup never fail while offline or on a machine error", async () => {
-    const s = setup(
-      machine({ create: () => ({ ok: false, error: { kind: "error", message: "x" } }) }),
-    );
-    const h: LocalDeviceHandle = { id: DEVICE, roots: ROOTS, limits: LIMITS, generation: "1" };
+    let refuse = false;
+    const m = machine({
+      create: () =>
+        refuse
+          ? { ok: false, error: { kind: "error", message: "x" } }
+          : { ok: true, result: { roots: ROOTS } },
+    });
+    const s = setup(m);
+    const h = await created(s);
+    refuse = true;
     await s.provider.suspend(h, signal());
     await s.provider.destroy(h, signal());
     expect(s.warnings.map((w) => w.msg)).toEqual([

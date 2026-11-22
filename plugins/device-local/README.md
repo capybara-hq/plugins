@@ -19,9 +19,10 @@ answer strictly (the machine is not trusted).
 | raw `exec` / `readFile` / … , `killAll` / `killTagged` | Refused or nothing: a protocol 5 machine runs work only under an admitted operation scope |
 
 A command carries the instance's resources and, as its outer network, the network the kernel
-admitted for the operation (its scope); the machine intersects it with its owner's ceiling. A host
-the machine reports as refused by its own policy that the carried network does not allow is
-reported as refused by the org (only an admin can lift it).
+admitted for the operation (its scope); the machine intersects it with its owner's ceiling. The
+machine's report of refused hosts is passed on as given, except that a host it calls its own that
+is a wildcard or no valid host name is reported as an address; whether a refused host can be
+granted for a call, and by whom, is the kernel's decision.
 
 Reads are sized for the kernel's default frame limit (16 MiB,
 `CAPYBARA_DEVICES__DIAL_IN__MAX_FRAME_BYTES`); a deployment that lowers it gets the machine's
