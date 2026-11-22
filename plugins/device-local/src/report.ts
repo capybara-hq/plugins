@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto";
-import {
-  type DeviceRef,
-  type DeviceReport,
-  type DeviceReportLimit,
-  type DeviceText,
-  SandboxGoneError,
-  type SandboxHandle,
-  type SandboxPermissionSupport,
+import type {
+  DeviceRef,
+  DeviceReport,
+  DeviceReportLimit,
+  DeviceText,
+  SandboxHandle,
+  SandboxPermissionSupport,
 } from "@capybara-hq/plugin-sdk";
 import { parseSandboxPermissionSupport } from "@capybara-hq/plugin-sdk/device-protocol";
 import { type OwnerFacts, ownerFactsOf } from "./owner-report.js";
@@ -187,12 +186,16 @@ export function deviceReportOf(c: Connection | null, b: Binding | null): DeviceR
 
 /**
  * The permission support of the instance `h` (`DeviceProvider.permissionSupport`), from stored
- * facts only (never a machine round trip): what the machine attested when it installed the
- * handle's generation, narrowed by the owner's current ceiling (outside the sandbox only while the
- * owner allows it). Closed when the handle is not this provider's, its binding is not installed or
- * no hello is stored. `SandboxGoneError` (the kernel recreates the instance, which binds a new
- * generation) when the device's binding is another generation or the machine's last hello did not
- * attest it (the program restarted unbound, so it will never serve this generation again).
+ * facts only (never a machine round trip): what the machine attested when it installed its
+ * binding, narrowed by the owner's current ceiling. Closed when the handle is not this provider's,
+ * no binding is installed or no hello is stored.
+ *
+ * A handle whose instance the machine will never serve again (the device's binding is another
+ * generation, or the machine's last hello did not attest it: the program restarted unbound) still
+ * reads the installed binding's support: the kernel records support as evidence before it uses an
+ * instance and never treats a failed read as gone, so the gone answer is the provider's operations'
+ * (`SandboxGoneError` before anything reaches the machine, `createDeviceLocalProvider`), on which
+ * the kernel recreates the instance and binds a new generation.
  */
 export function supportOf(
   h: SandboxHandle,
@@ -202,14 +205,8 @@ export function supportOf(
   const generation = (h as { generation?: unknown }).generation;
   if (typeof generation !== "string")
     return closedSupport("The instance handle is not a connected machine's instance");
-  if (!b || b.generation !== generation)
-    throw new SandboxGoneError("The device's machine no longer holds this instance generation");
-  if (b.status !== "installed" || !b.installed)
+  if (b?.status !== "installed" || !b.installed)
     return closedSupport("The instance's binding on the machine is not complete yet; retry");
-  if (b.unattested)
-    throw new SandboxGoneError(
-      "The machine restarted without this instance's binding (for example after an upgrade)",
-    );
   if (!c)
     return closedSupport("The machine has not said hello yet; connect it with capybara-device");
   const owner = ownerFactsOf(c.ownerReport);

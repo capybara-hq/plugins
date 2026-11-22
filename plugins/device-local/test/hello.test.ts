@@ -18,6 +18,7 @@ import {
   ROOTS,
   rejection,
   SUPPORT,
+  scopeOf,
   signal,
 } from "./fakes.js";
 
@@ -125,6 +126,19 @@ function setup() {
     const s = await store.state(DEVICE);
     return revisionOf(s.connection, s.binding);
   };
+  /**
+   * Whether an operation on `generation`'s handle is gone (`SandboxGoneError`) before anything
+   * reaches the machine: the kernel then recreates the instance.
+   */
+  const operationGone = async (generation: string) => {
+    const dial = fakeDialIn();
+    const provider = createDeviceLocalProvider({ dialIn: dial.channel, log }, store);
+    const e = await rejection(
+      provider.operation?.(handle(generation), scopeOf({}, DEVICE), signal()) ?? Promise.resolve(),
+    );
+    expect(dial.sent).toEqual([]);
+    return isSandboxGoneError(e);
+  };
   /** The connection hellos, frames and closes arrive on (the kernel's machine and connection). */
   const conn = { machineId: "machine-1", connectionId: "connection-1" };
   const say = (body: unknown) => handler.onHello(DEVICE, body, signal(), { ...conn });
@@ -141,6 +155,7 @@ function setup() {
     install,
     handle,
     revision,
+    operationGone,
     say,
     frame,
     close,
@@ -285,12 +300,14 @@ describe("binding attestation", () => {
     expect(s.rows.get(DEVICE)?.unattested).toBe(true);
     expect(await s.revision()).not.toBe(revision);
     expect(s.changed).toEqual([DEVICE, DEVICE]);
-    const e = await rejection(supportFor(s.store, s.handle("100")));
-    expect(isSandboxGoneError(e)).toBe(true);
+    // the support stays readable (the kernel records it before a use); the operation is gone
+    expect((await supportFor(s.store, s.handle("100"))).unavailableReason).toBeUndefined();
+    expect(await s.operationGone("100")).toBe(true);
     // the kernel recreates: the next generation installs attested
     await s.install("101");
     expect(s.rows.get(DEVICE)?.unattested).toBeUndefined();
     expect((await supportFor(s.store, s.handle("101"))).unavailableReason).toBeUndefined();
+    expect(await s.operationGone("101")).toBe(false);
   });
 
   it("a bound hello attesting the binding refreshes its support from the hello", async () => {
@@ -389,7 +406,7 @@ describe("machine replacement", () => {
       ok: true,
     });
     expect(s.rows.get(DEVICE)?.unattested).toBe(true);
-    expect(isSandboxGoneError(await rejection(supportFor(s.store, s.handle("100"))))).toBe(true);
+    expect(await s.operationGone("100")).toBe(true);
   });
 
   it("the same machine's stale or conflicting report is refused, bound or not, and not recorded", async () => {
@@ -545,11 +562,12 @@ describe("report and permission support", () => {
     expect(await s.revision()).not.toBe(third);
   });
 
-  it("permission support is the installed binding's, closed or gone otherwise", async () => {
+  it("permission support is the installed binding's, closed otherwise; operations of a dead generation are gone", async () => {
     const s = setup();
     const foreign = await supportFor(s.store, { id: DEVICE });
     expect(foreign.unavailableReason).toBeDefined();
-    expect(isSandboxGoneError(await rejection(supportFor(s.store, s.handle("100"))))).toBe(true);
+    expect((await supportFor(s.store, s.handle("100"))).unavailableReason).toBeDefined();
+    expect(await s.operationGone("100")).toBe(true);
     await s.store.commitBinding(
       {
         deviceId: DEVICE,
@@ -579,8 +597,9 @@ describe("report and permission support", () => {
     // blocked owner facts close it again
     await s.frame(policy(ceiling({ sequence: 2, revision: "other", network: "open" })));
     expect((await supportFor(s.store, s.handle("101"))).network.openPublic).toBe(false);
-    // an older handle: the machine holds the newer generation
-    expect(isSandboxGoneError(await rejection(supportFor(s.store, s.handle("100"))))).toBe(true);
+    // an older handle: the machine holds the newer generation, so its operations are gone
+    expect(await s.operationGone("100")).toBe(true);
+    expect(await s.operationGone("101")).toBe(false);
   });
 
   it("deleting the device forgets its rows", async () => {

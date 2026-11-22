@@ -220,6 +220,25 @@ export function createDeviceLocalProvider(
     }
   };
 
+  /**
+   * Before an operation reaches the machine: the handle's generation must be the device's bound
+   * one and its binding attested by the machine's last hello. Otherwise the machine will never
+   * serve it again (a newer generation, or the program restarted unbound, typically after an
+   * upgrade): `SandboxGoneError`, on which the kernel recreates the instance (a new generation
+   * bound under the machine's current runtime). Nothing is sent to the machine.
+   */
+  const assertLive = async (h: SandboxHandle): Promise<LocalDeviceHandle> => {
+    const l = requireLocal(h);
+    const b = await store.binding(l.id);
+    if (!b || b.generation !== l.generation)
+      throw new SandboxGoneError("The device's machine no longer holds this instance generation");
+    if (b.unattested)
+      throw new SandboxGoneError(
+        "The machine restarted without this instance's binding (for example after an upgrade)",
+      );
+    return l;
+  };
+
   /** The scoped native methods of one operation, relayed under `prefix` with their scope. */
   const native = (
     h: SandboxHandle,
@@ -268,7 +287,7 @@ export function createDeviceLocalProvider(
   const background: SandboxBackground = {
     start: async (h, input, args) => {
       const scope = parseSandboxOperationScope(input);
-      const l = requireLocal(h);
+      const l = await assertLive(h);
       // the machine knows its bound generation: the kernel's generation never goes on the wire
       const { signal, instanceGeneration: _generation, ...rest } = args;
       signal.throwIfAborted();
@@ -330,6 +349,7 @@ export function createDeviceLocalProvider(
 
     operation: async (h, input, signal) => {
       const scope = parseSandboxOperationScope(input);
+      await assertLive(h);
       const methods = native(h, scope, "", signal);
       return {
         ...methods,
@@ -351,7 +371,9 @@ export function createDeviceLocalProvider(
       };
     },
     prepare: async (h, input, signal) => {
-      const n = native(h, parseSandboxPreparationScope(input), "prepare", signal);
+      const scope = parseSandboxPreparationScope(input);
+      await assertLive(h);
+      const n = native(h, scope, "prepare", signal);
       return {
         readFile: n.readFile,
         writeFile: n.writeFile,
@@ -359,7 +381,9 @@ export function createDeviceLocalProvider(
       } satisfies SandboxPreparation;
     },
     browse: async (h, input, signal) => {
-      const n = native(h, parseSandboxBrowseScope(input), "browse", signal);
+      const scope = parseSandboxBrowseScope(input);
+      await assertLive(h);
+      const n = native(h, scope, "browse", signal);
       return { stat: n.stat, list: n.list, scan: n.scan } satisfies SandboxBrowse;
     },
     revokeOperation: async (h, ref, signal) => {
