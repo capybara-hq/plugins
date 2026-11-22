@@ -42,6 +42,13 @@ raised grounds; focus is one colour, the neon yellow, everywhere; selected text 
 get a square knob that reads when off, the org initial becomes a neon tag, and the selected agent
 chip a neon edge. Primary buttons keep their text as written.
 
+In the composer's mobile form (below 600, or a touch device at any width) the text box is a
+floating pill (the `composer.box` part) with the settings chip above it. The pill takes a text
+field's corners (top-left and bottom-right) at the composer's cut, as do the send button and the
+chip as buttons; the focus line and the run effects stay on the pill, and the composer around it
+(the chip row, the quick actions) draws no frame. From 600 up with a fine pointer the composer
+itself is the box, as before.
+
 ### Run effects
 
 Everything follows the run state (`run=running` neon yellow, `run=waiting` cyan, `run=failed` red,
@@ -57,7 +64,7 @@ idle green), moves only `transform` and `opacity`, shifts no layout and stops un
 
 The beam is a pseudo-element of the reply being written (the `message.assistant` part while it
 carries `aria-busy`), the composer light one of the
-`composer` part: nothing runs or is measured outside a run, and a sheet, dialog, menu or the
+`composer` part (of the `composer.box` pill in the mobile form): nothing runs or is measured outside a run, and a sheet, dialog, menu or the
 drawer opened over them covers them. Only the static scanlines live in the decoration layer
 above everything; they take no part in a run.
 
