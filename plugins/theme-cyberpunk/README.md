@@ -8,7 +8,7 @@ wordmark. It is our own design and uses no third-party game assets, names or fon
 It uses every layer of Capybara's plugin UI (core specs `2026-11-08-themes-design.md`,
 `2026-11-09-client-extensions-design.md`):
 
-- **L0 theme**: [`themes/cyberpunk.json`](./themes/cyberpunk.json) with its fonts and logo (below).
+- **L0 theme**: [`themes/cyberpunk.json`](./themes/cyberpunk.json) with its fonts, logo, app icons and avatar preset (below).
 - **L1-L2 components** (`src/client.tsx`, a browser bundle built by `capybara-plugin pack`): five
   `component` contributions of the extension (`src/index.ts`).
 - **L3 decoration**: [`client/styles/cyberpunk.css`](./client/styles/cyberpunk.css), selecting
@@ -169,6 +169,15 @@ in jsdom and are type-checked by `test/tsconfig.json` (DOM and JSX).
   [`favicon.svg`](./favicon.svg) is the same mark, cyan offset included, on a transparent 16×16
   ground (also the plugin icon, so it sits in any icon tile; the cyan copy outlines it on light
   tab bars). The wordmark reads `CYBERBARA`.
+- **App icons**: [`app-icon.png`](./app-icon.png) and the maskable
+  [`app-icon-maskable.png`](./app-icon-maskable.png), the neon mark on the `bg` ground at 512 px
+  (the maskable one smaller, inside the central safe circle). A deployment uses them for the home
+  screen icon and the web manifest when the cyberpunk theme is the platform default theme and no
+  icon was uploaded.
+- **Avatar**: the agent avatar preset `cyberbara` ([`avatars/cyberbara.svg`](./avatars/cyberbara.svg),
+  zh 赛博水豚: the neon mark on the `panel` ground) replaces the built-in `capybara` preset in the
+  picker (`hideAvatarPresets`) of an org whose default theme is cyberpunk; agents that already use
+  the built-in one keep it.
 
 ## Fonts and licenses
 
@@ -186,7 +195,9 @@ fonts are under the SIL Open Font License 1.1, whose full text ships next to the
 切角边框，界面字体 JetBrains Mono、正文字体 Chakra Petch（仅拉丁字符，中文回落到内置字体），霓虹像素
 水豚标志，字标为 `CYBERBARA`。
 
-- **主题（L0）**：只有深色一种配色，通过全部对比度与分隔度下限。
+- **主题（L0）**：只有深色一种配色，通过全部对比度与分隔度下限；带 512 px 的应用图标（含可遮罩版本，
+  平台默认主题为赛博朋克且未上传图标时用于主屏图标与 Web 清单），并以智能体头像预设“赛博水豚”替换内
+  置的水豚预设（已在用内置预设的智能体保持不变）。
 - **组件（L1-L2）**：对话属性面板里的运行 HUD（运行状态 待命 / 运行中 / 等待输入 / 故障、本次运
   行用时 `T+` 计时、均衡器式信号条、操作员角色、上行时间、本标签页实时看到的运行 / 工具调用 / 审
   批次数（还没看到时显示“—”）、音效开关）；覆盖层的扫描线与不透明的终端启动画面（每次登录一次，约两

@@ -6,6 +6,7 @@ import {
   parseThemeFile,
   sanitizeThemeSvg,
   THEME_LIMITS,
+  themeAssetRefs,
   validateThemeAssets,
 } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
@@ -44,13 +45,13 @@ describe("cyberpunk theme", () => {
     expect(parsed().logo?.wordmark).toBe("CYBERBARA");
   });
 
-  it("its fonts and logo pass the asset checks", () => {
+  it("its fonts, logo, app icons and avatar pass the asset checks", () => {
     const theme = parsed();
     const files = new Map<string, Uint8Array>();
-    for (const f of theme.fonts ?? []) files.set(f.file.replace(/^\.\//, ""), bytes(f.file));
-    for (const p of [theme.logo?.mark, theme.logo?.favicon]) {
-      if (p !== undefined) files.set(p.replace(/^\.\//, ""), bytes(p));
-    }
+    for (const { ref } of themeAssetRefs(theme)) files.set(ref.replace(/^\.\//, ""), bytes(ref));
+    expect(themeAssetRefs(theme).map((r) => r.field)).toEqual(
+      expect.arrayContaining(["logo.appIcon", "logo.appIconMaskable", "avatars.0.file"]),
+    );
     const { errors } = validateThemeAssets(theme, files);
     expect(errors).toEqual([]);
     expect(theme.fonts?.map((f) => `${f.role} ${f.family} ${f.weight}`)).toEqual([
@@ -67,8 +68,32 @@ describe("cyberpunk theme", () => {
     }
   });
 
+  it("offers its own capybara avatar in place of the built-in one", () => {
+    const theme = parsed();
+    expect(theme.hideAvatarPresets).toEqual(["capybara"]);
+    expect(theme.avatars).toEqual([
+      {
+        id: "cyberbara",
+        name: { en: "Cyberbara", zh: "赛博水豚" },
+        file: "./avatars/cyberbara.svg",
+      },
+    ]);
+  });
+
+  it("app icons are opaque square PNGs of at least 512 px", () => {
+    for (const p of [parsed().logo?.appIcon, parsed().logo?.appIconMaskable]) {
+      if (p === undefined) throw new Error("app icon missing");
+      const png = bytes(p);
+      const view = new DataView(png.buffer, png.byteOffset);
+      // IHDR: width at 16, height at 20, colour type at 25 (2 = RGB, no alpha)
+      expect(view.getUint32(16)).toBe(view.getUint32(20));
+      expect(view.getUint32(16)).toBeGreaterThanOrEqual(THEME_LIMITS.appIconMinSize);
+      expect(png[25]).toBe(2);
+    }
+  });
+
   it("the logo survives the SVG sanitizer pixel for pixel (crisp edges, no styles)", () => {
-    for (const p of ["logo.svg", "favicon.svg"]) {
+    for (const p of ["logo.svg", "favicon.svg", "avatars/cyberbara.svg"]) {
       const r = sanitizeThemeSvg(bytes(p));
       expect(r).not.toHaveProperty("error");
       const svg = (r as { svg: string }).svg;
@@ -105,6 +130,7 @@ describe("cyberpunk theme", () => {
       ".capybara-plugin/plugin.json",
       "logo.svg",
       "favicon.svg",
+      "avatars/cyberbara.svg",
       ...readdirSync(new URL("themes/", root)).map((f) => `themes/${f}`),
       ...readdirSync(new URL("src/", root)).map((f) => `src/${f}`),
       "client/styles/cyberpunk.css",
