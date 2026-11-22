@@ -4,8 +4,8 @@ description: "Helps a maintainer review a pull request in a capybara-hq reposito
 # Synced from capybara-hq/.github. Edit the source there, then run sync.
 metadata:
   source: capybara-hq/.github
-  version: v2.1.0
-  sha256: 7bc33464cd6bdacd30d4857939a600ea798d5e3412174dbeb45c9aecb899caed
+  version: v2.1.1
+  sha256: 5cc3380ca266bbb14ee3144b0a5184fc8e8369f2885099be78532fb848a74f23
 ---
 
 # Reviewing PRs
@@ -80,7 +80,7 @@ Show the maintainer:
 ```text
 Verdict: Ready to merge | Changes needed
 
-Gates: ci-ok <state>, issue-linked <state>, up to date with main <yes/no>, approvals <state>
+Gates: ci-ok <state>, issue-linked <state>, conflicts with main <yes/no>, approvals <state>
 
 Findings:
 1. path/to/file.ts:42 — problem — suggested fix

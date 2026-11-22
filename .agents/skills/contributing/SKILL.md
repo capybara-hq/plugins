@@ -4,8 +4,8 @@ description: "Carries day-to-day work in a capybara-hq repository from an issue 
 # Synced from capybara-hq/.github. Edit the source there, then run sync.
 metadata:
   source: capybara-hq/.github
-  version: v2.1.0
-  sha256: 85bdc76a4de88392e2d8d342215ab86a0dfcf1d5da46657e4e88445218773daa
+  version: v2.1.1
+  sha256: ef48f26175ecc734fc4e6eb0d35a4cb3fe182a5696f420f1aa05391d6a5876e9
 ---
 
 # Contributing
@@ -51,8 +51,9 @@ rules are in `AGENTS.md` and the skills for each area; read them before changing
   `/claim`; a workflow assigns them if nobody has it.
 - **No exemptions for small PRs**: typo and docs fixes also need an accepted issue.
 - **Who merges.** Only maintainers (`@capybara-hq/maintainers`) approve and merge. Merging needs
-  `ci-ok` and `issue-linked`, a branch up to date with `main`, and a code owner's approval of the
-  latest push; a push after approval needs a new approval. CI on a first-time contributor's PR
+  `ci-ok` and `issue-linked` and a code owner's approval of the latest push (the branch need not
+  be up to date with `main`, only free of conflicts: the full CI run on `main` after each merge
+  catches two PRs that break together); a push after approval needs a new approval. CI on a first-time contributor's PR
   waits until a maintainer approves the run.
 
 ## Start
