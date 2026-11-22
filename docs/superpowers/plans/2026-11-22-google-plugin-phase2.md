@@ -359,6 +359,10 @@ the live acceptance below.
 
 ## Open questions (with recommendations)
 
+**Resolved 2026-11-22 by the maintainer:** every recommendation below is accepted. No Google test
+OAuth client exists for now, so live acceptance (enrolment, BigQuery redirect URI, logged-in tool
+lists) is deferred; the live test skips until credentials exist.
+
 1. **Developer Preview enrolment (R1).** Google's pages disagree on whether enrolment is required.
    *Recommendation:* the Workspace guides state enrolment (Workspace account and Cloud project)
    as Google's prerequisite and quote the terms that matter (no access for users outside the
