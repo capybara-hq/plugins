@@ -22,13 +22,15 @@
   },
   "files": [
     "dist",
+    "migrations",
     "README.md"
   ],
   "scripts": {
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.54"
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.54",
+    "kysely": "^0.29.8"
   },
   "devDependencies": {
     "@capybara-hq/testing": "^0.1.0-rc.35"

@@ -145,8 +145,8 @@ export type DeviceLocalLifecycle = Omit<DeviceProvider, "report" | "permissionSu
  * `device-provider@1` for devices served by a machine connected with `capybara-device`: every
  * operation runs on the device's machine through `ctx.dialIn` (protocol 5). The file system is the
  * machine's device directory, which belongs to the machine's owner: `createFileSystem` touches
- * nothing and `destroyFileSystem` does nothing (deleting the device revokes the machine's credential
- * in the kernel; the files stay on the machine).
+ * nothing and `destroyFileSystem` only forgets the device's rows (deleting the device revokes the
+ * machine's credential in the kernel; the files stay on the machine).
  *
  * Every instance generation is bound before use ({@link createInstanceBindings}): `create` binds a
  * new one, `resume` re-verifies the bound one. `suspend` and `destroy` end the generation's tracked
@@ -352,9 +352,13 @@ export function createDeviceLocalProvider(
       return { id };
     },
 
-    /** The files are the machine owner's: nothing to do (never a machine stop). */
-    async destroyFileSystem(_fs, signal) {
+    /**
+     * The device is deleted: its rows go (connection and binding). The files are the machine
+     * owner's: nothing is sent to the machine (never a machine stop).
+     */
+    async destroyFileSystem(fs, signal) {
       signal.throwIfAborted();
+      await store.forget(fs.id);
     },
 
     async destroyFileSystemByName(_name, signal) {

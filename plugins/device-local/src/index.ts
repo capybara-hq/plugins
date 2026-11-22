@@ -2,14 +2,27 @@ import {
   DEVICE_PROVIDER_EXTENSION_POINT,
   type DeviceProvider,
   defineExtension,
-  type SandboxPermissionSupport,
 } from "@capybara-hq/plugin-sdk";
 import { DEVICE_DIAL_IN_PROTOCOL } from "@capybara-hq/plugin-sdk/device-protocol";
+import { createDialInHandler } from "./hello.js";
+import { pgRows } from "./pg-rows.js";
 import { createDeviceLocalProvider } from "./provider.js";
-import type { DeviceLocalStore } from "./store.js";
+import { reportFor, supportFor } from "./report.js";
+import { storeOver } from "./store.js";
 
 export { createInstanceBindings, InstanceBindingError, nextGeneration } from "./bindings.js";
 export { failureOf, machineCall, ON_MACHINE_PREFIX, POLICY_REFUSAL_PREFIX } from "./frames.js";
+export { createDialInHandler, decideHello, type HelloRefusal } from "./hello.js";
+export {
+  applyOwnerReport,
+  decideOwnerReport,
+  type OwnerFacts,
+  type OwnerReportOutcome,
+  ownerFactsOf,
+  type StoredOwnerReport,
+  storedOwnerReportOf,
+} from "./owner-report.js";
+export { pgRows } from "./pg-rows.js";
 export {
   commandLimits,
   createDeviceLocalProvider,
@@ -23,37 +36,24 @@ export {
   OP_DEADLINE_MS,
   relayer,
 } from "./provider.js";
-export type { Binding, DeviceLocalStore, InstalledBinding } from "./store.js";
-
-const NOT_READY =
-  "device-local cannot serve machines yet: its store, hello handling and device report are not installed";
-
-/**
- * Interim parts until the store, the hello handling and the device report land (implementation
- * plan Task 17): no machine is accepted, nothing is stored, and the support claims nothing, so no
- * operation is ever admitted on a device of this provider.
- */
-const unavailableStore: DeviceLocalStore = {
-  binding: async () => {
-    throw new Error(NOT_READY);
-  },
-  commitBinding: async () => {
-    throw new Error(NOT_READY);
-  },
-  installBinding: async () => {
-    throw new Error(NOT_READY);
-  },
-};
-
-const unavailableSupport: SandboxPermissionSupport = {
-  version: 2,
-  boundary: "operation",
-  restricted: null,
-  network: { openPublic: false, allowlist: false, perOperationHosts: false },
-  outsideSandbox: false,
-  background: false,
-  unavailableReason: NOT_READY,
-};
+export {
+  closedSupport,
+  deviceReportOf,
+  reportFor,
+  revisionOf,
+  supportFor,
+  supportOf,
+} from "./report.js";
+export {
+  type Binding,
+  type Connection,
+  type DeviceChange,
+  type DeviceLocalStore,
+  type DeviceRows,
+  type DeviceState,
+  type InstalledBinding,
+  storeOver,
+} from "./store.js";
 
 /**
  * `device-provider@1` over the kernel's dial-in channel: a machine signs in with `capybara-device`
@@ -66,31 +66,22 @@ const plugin = defineExtension({
   sdk: "^0.1.0-rc.54",
   provides: [DEVICE_PROVIDER_EXTENSION_POINT],
   permissions: { dialIn: { protocol: DEVICE_DIAL_IN_PROTOCOL } },
+  migrations: "../migrations",
   setup(ctx) {
+    const store = storeOver(pgRows(ctx.db));
     const provider: DeviceProvider = {
-      ...createDeviceLocalProvider(ctx, unavailableStore),
-      async report(_device, signal) {
+      ...createDeviceLocalProvider(ctx, store),
+      /** From the stored rows only; the org is learned here (a hello names none). */
+      async report(device, signal) {
         signal.throwIfAborted();
-        return {
-          revision: "unavailable",
-          description: {
-            en: "Runs on a computer connected with capybara-device; the computer's owner limits it there.",
-            zh: "运行在用 capybara-device 连接的电脑上，由电脑的主人在本机限制它。",
-          },
-          home: null,
-          limits: [],
-          reset: false,
-        };
+        return reportFor(store, device);
       },
-      async permissionSupport(_h, signal) {
+      /** From the stored rows only, never a machine round trip. */
+      async permissionSupport(h, signal) {
         signal.throwIfAborted();
-        return unavailableSupport;
+        return supportFor(store, h);
       },
-      dialIn: {
-        async onHello() {
-          return { ok: false, code: "local.unavailable", message: NOT_READY };
-        },
-      },
+      dialIn: createDialInHandler(ctx, store),
     };
     ctx.provide(DEVICE_PROVIDER_EXTENSION_POINT, provider);
   },

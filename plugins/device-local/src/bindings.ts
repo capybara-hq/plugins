@@ -104,7 +104,8 @@ export function createInstanceBindings(
       throw new InstanceBindingError(
         "The instance was replaced before its binding completed; retry",
       );
-    return { ...b, status: "installed", installed };
+    const { unattested: _attestedAgain, ...kept } = b;
+    return { ...kept, status: "installed", installed };
   };
 
   return {

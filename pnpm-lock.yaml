@@ -201,6 +201,9 @@ importers:
       '@capybara-hq/plugin-sdk':
         specifier: 0.1.0-rc.54
         version: 0.1.0-rc.54
+      kysely:
+        specifier: ^0.29.8
+        version: 0.29.8
     devDependencies:
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.35

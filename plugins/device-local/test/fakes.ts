@@ -9,7 +9,13 @@ import type {
   DeviceOperation,
   DeviceOwnerCeiling,
 } from "@capybara-hq/plugin-sdk/device-protocol";
-import type { Binding, DeviceLocalStore, InstalledBinding } from "../src/index.js";
+import {
+  type Binding,
+  type Connection,
+  type DeviceLocalStore,
+  type DeviceRows,
+  storeOver,
+} from "../src/index.js";
 
 /** What a fake machine answers one request with: the protocol 5 response body, or a throw. */
 export type Answer = { ok: true; result: unknown } | { ok: false; error: unknown } | unknown;
@@ -70,27 +76,47 @@ export function fakeLog() {
   return { log: log as never, warnings };
 }
 
-/** An in-memory {@link DeviceLocalStore} with the conditional writes the real one makes. */
-export function memoryStore() {
+/**
+ * In-memory {@link DeviceRows}: `rows` holds the bindings, `connections` the connections; a change
+ * runs on copies and writes what it returns, as the PG rows do under their lock.
+ */
+export function memoryRows() {
   const rows = new Map<string, Binding>();
-  const store: DeviceLocalStore = {
-    async binding(deviceId) {
-      const b = rows.get(deviceId);
-      return b ? structuredClone(b) : null;
+  const connections = new Map<string, Connection>();
+  const copy = <T>(v: T | undefined): T | null => (v === undefined ? null : structuredClone(v));
+  const api: DeviceRows = {
+    async read(deviceId) {
+      return { connection: copy(connections.get(deviceId)), binding: copy(rows.get(deviceId)) };
     },
-    async commitBinding(binding, expectedGeneration) {
-      if ((rows.get(binding.deviceId)?.generation ?? null) !== expectedGeneration) return false;
-      rows.set(binding.deviceId, structuredClone(binding));
-      return true;
+    async change(deviceId, fn) {
+      const c = fn(await api.read(deviceId));
+      if (c.connection) {
+        const org = connections.get(deviceId)?.orgId ?? null;
+        connections.set(deviceId, {
+          ...structuredClone(c.connection),
+          orgId: org ?? c.connection.orgId,
+        });
+      }
+      if (c.binding) rows.set(deviceId, structuredClone(c.binding));
+      return c.result;
     },
-    async installBinding(deviceId, generation, bindingId, installed: InstalledBinding) {
-      const b = rows.get(deviceId);
-      if (b?.generation !== generation || b.bindingId !== bindingId) return false;
-      rows.set(deviceId, { ...b, status: "installed", installed: structuredClone(installed) });
-      return true;
+    async connectionOf(deviceId, orgId) {
+      const c = connections.get(deviceId);
+      if (c && c.orgId === null) c.orgId = orgId;
+      return c?.orgId === orgId ? structuredClone(c) : null;
+    },
+    async forget(deviceId) {
+      rows.delete(deviceId);
+      connections.delete(deviceId);
     },
   };
-  return { store, rows };
+  return { api, rows, connections };
+}
+
+/** An in-memory {@link DeviceLocalStore} with the conditional writes the real one makes. */
+export function memoryStore() {
+  const { api, rows, connections } = memoryRows();
+  return { store: storeOver(api, () => "2026-11-22T00:00:00.000Z"), rows, connections };
 }
 
 export const LIMITS: SandboxLimits = {
