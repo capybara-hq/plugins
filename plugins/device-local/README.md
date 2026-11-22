@@ -64,13 +64,37 @@ generation under another runtime identity is refused (`local.invalid_hello`,
   provider calls `ctx.devices.reportChanged`; after a create or resume the kernel reads the report
   again itself.
 - **`permissionSupport()`** answers from the rows only, never a machine round trip: the support the
-  machine attested for the handle's generation, with outside-the-sandbox and the open public
+  machine attested for the installed binding, with outside-the-sandbox and the open public
   internet narrowed to what the owner allows now (no open public internet while the owner's
-  network is an allowlist or the owner facts are blocked or missing); closed when the binding is not installed, gone when the device holds another
-  generation or the binding is unattested.
+  network is an allowlist or the owner facts are blocked or missing); closed when no binding is
+  installed or no hello is stored.
+
+A handle the machine will never serve again (the device's binding is a newer generation, or the
+machine's last hello did not attest it) still reads its installed support, because the kernel
+records support as evidence before a use and never treats a failed read as gone; its operations
+answer `SandboxGoneError` before anything reaches the machine. The kernel keeps such a dispatched
+call's outcome unknown and rebuilds the instance, which binds a new generation; the next call runs
+on it.
+
+## Connecting a computer
+
+The member guide `guides/connect.md` (place `device-connection`, with the desktop app's
+`connect-this-machine` action): `npm install -g @capybara-hq/device@next`,
+`capybara-device login --url <deployment>`, then `capybara-device service install` and
+`service start` (or `capybara-device start` in the foreground). Dial-in limits are the kernel's
+`CAPYBARA_DEVICES__DIAL_IN__*` settings.
 
 ## Existing local devices
 
 Local devices made before this plugin stay bound to the kernel's old `@local` provider and read as
 unavailable. Their owners delete them and connect the computer again with `capybara-device login`,
 choosing this provider.
+
+## Tests
+
+`test/e2e.test.ts` runs the published `capybara-device` (installed from npm into a temporary
+directory: rc.28 unless `CAPYBARA_TEST_DEVICE_LOCAL_E2E_VERSION` names another) against a kernel
+with this plugin, only with `CAPYBARA_TEST_DEVICE_LOCAL_E2E=1` (Docker for the test containers):
+sign-in through the code flow, a `Bash` call, a restart that keeps the binding and one under a
+changed runtime that is rebound, another machine replacing the first, revocation and a new login,
+and deletion. Each program runs under a temporary `HOME` and `XDG_CONFIG_HOME`.

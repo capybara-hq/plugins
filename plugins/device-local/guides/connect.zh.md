@@ -1,5 +1,38 @@
-# 本机
+# 连接本机
 
-在你自己的电脑上使用的设备：电脑用 `capybara-device` 程序连接到平台并为这台设备服务，由你在本机限制它能做什么。
+::shell-action connect-this-machine 连接本机
 
-起个名字，然后新建。
+在你自己的电脑上使用的设备：电脑用 `capybara-device` 程序连接到平台并为这台设备服务，由你在本机限制它能做什么。在桌面应用里，点上面的按钮即可连接正在运行它的这台电脑；在其他地方，请在要连接的电脑的终端里依次执行下面的步骤（macOS 或 Linux，Node 22.12 或更高版本；Windows 请使用 WSL）。
+
+## 1. 安装连接程序
+
+```bash title="安装 capybara-device"
+npm install -g @capybara-hq/device@next
+```
+
+## 2. 登录
+
+```bash title="登录到这个平台"
+capybara-device login --url {{publicUrl}}
+```
+
+命令会在浏览器里打开一个页面（加上 `--no-browser` 时，它会打印地址和一个验证码，可在任意已登录的浏览器里输入）。在页面上选择组织，选择 **本机**，再选择新建设备，或选择你已连接的某台设备把它移到这台电脑。用另一台电脑登录到同一台设备时，会替换掉原来的电脑。
+
+## 3. 保持在线
+
+```bash title="开机自动连接（推荐）"
+capybara-device service install
+capybara-device service start
+```
+
+也可以运行 `capybara-device start` 在前台连接，直到你停止它。程序连接后设备显示为在线；离线时智能体无法使用它。
+
+## 它能做什么
+
+命令在你电脑上的沙箱里运行，位于设备目录（`~/capybara-device/<设备 id>`）内。你在本机设置主人上限：`capybara-device ceiling show` 查看，`capybara-device ceiling set` 修改（是否允许在沙箱外运行、网络、项目范围）。组织和平台的设置同样生效，以最严格的为准。OS 模式下命令以你的用户身份运行，没有 CPU 和内存限制。
+
+删除设备会撤销这台电脑的登录并停止程序，文件仍保留在你的电脑上。
+
+## 此前创建的设备
+
+在这个提供方之前创建的本机设备仍绑定在旧的内置 `@local` 提供方上，已不可用。请删除这类设备，再按上面的步骤重新连接电脑。
