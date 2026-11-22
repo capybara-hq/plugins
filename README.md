@@ -15,7 +15,7 @@ npm; the kernel verifies each download against that integrity.
 | [`connector-mcp`](plugins/connector-mcp) | MCP connector (`connector@1`, Streamable HTTP) |
 | [`connector-openapi`](plugins/connector-openapi) | OpenAPI connector (`connector@1`, one tool per operation) |
 | [`slack`](plugins/slack) | Slack bot (`channel@1`), Sign in with Slack (`identity-source@1`), directory sync (`directory@1`) |
-| [`google`](plugins/google) | Sign in with Google (`identity-source@1`; OpenID Connect with PKCE, the Workspace hosted domain enforced on the verified ID token) |
+| [`google`](plugins/google) | Sign in with Google (`identity-source@1`; OpenID Connect with PKCE, the Workspace hosted domain enforced on the verified ID token) and connector templates for Google Workspace (Gmail, Drive, Calendar, Sheets, Docs, Slides) and BigQuery on `connector-mcp` |
 | [`lark`](plugins/lark) | Lark bot (`channel@1`), Lark login (`identity-source@1`), directory sync (`directory@1`) |
 | [`telegram`](plugins/telegram) | Telegram bot (`channel@1`; long polling or webhook, inline keyboard cards) |
 | [`push-apns`](plugins/push-apns) | Apple Push Notification service (`push-provider@1`; HTTP/2 token auth) for self-built iOS apps |

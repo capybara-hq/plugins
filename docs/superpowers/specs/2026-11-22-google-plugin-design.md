@@ -140,6 +140,15 @@ Protocol and auth facts that shape the templates:
 7. PKCE for confidential Web clients: advertised in discovery, not described in prose.
 8. Whether `gmail.drafts.create` (seen in a per-tool metadata document) is a published scope.
 
+> **Erratum (2026-11-22).** These items were re-verified when phase 2 was planned: see
+> "Re-verification of spec §2.3" in `docs/superpowers/plans/2026-11-22-google-plugin-phase2.md`.
+> In short: enrolment stays uncertain and the guides state it as Google's prerequisite; BigQuery's
+> MCP server is enabled with the BigQuery API (`gcloud services enable bigquery.googleapis.com`);
+> the client and the services share one project; Google blocks clients without "Use this client
+> for an AI-powered agent" from the Workspace servers, so connectors use a separate agent-flagged
+> client (§5.3); the `resource` mismatch is irrelevant with manual discovery; `gmail.drafts.create`
+> is not a published scope and is not requested.
+
 ## 3. Packaging
 
 **One plugin, `plugins/google`**, like `slack`: one extension (phase 1, `identity-source@1` and its
@@ -269,8 +278,8 @@ start of the value, as the validator requires). Steps:
    (no verification needed for `openid email profile` either way); External when consumer accounts
    or several Workspace domains must sign in.
 3. Clients -> Create client -> **Web application**; authorized redirect URI
-   `{{publicUrl}}/api/v1/auth/sso/google/callback`. (Phase 2 adds `{{publicUrl}}/api/v1/oauth/callback`
-   to the same client if the org uses it for connectors.)
+   `{{publicUrl}}/api/v1/auth/sso/google/callback`. (Erratum 2026-11-22: phase 2's connectors use a
+   separate agent-flagged client, §5.3, so the sign-in client gets no connector callback.)
 4. Enter the client id and secret in this page's config; set `allowedDomains` (recommended) or
    decide on consumer accounts.
 5. `::check google-discovery`, `::check google-client`.
@@ -382,7 +391,7 @@ Seven files `connectors/<id>.json`: `gmail`, `google-drive`, `google-calendar`, 
       "client": "manual",
       "tokenAuthMethod": "client_secret_post",
       "scopes": ["https://www.googleapis.com/auth/gmail.readonly", "…"],
-      "authorizationParams": { "access_type": "offline", "prompt": "consent", "include_granted_scopes": "true" }
+      "authorizationParams": { "access_type": "offline", "prompt": "consent" }
     },
     "defaultToolPolicies": { "search_threads": "allow", "create_draft": "ask", "…": "…" }
   }
@@ -397,6 +406,10 @@ Seven files `connectors/<id>.json`: `gmail`, `google-drive`, `google-calendar`, 
 - **`authorizationParams`** does not exist yet: §9.1. Without `access_type=offline` Google returns no
   refresh token, the access token dies after an hour and every member would reconnect hourly, so
   **phase 2 waits for that core change**.
+- **No `include_granted_scopes`** (erratum 2026-11-22, plan Open question 4): all seven connectors
+  share one client, so incremental authorization would give each connector's token the union of
+  every scope the member granted to the client (a Docs connector token that can read Gmail).
+  Without it each token carries only its template's scopes.
 - **Scopes** are the full URLs (`https://www.googleapis.com/auth/<name>`), the sets Google documents
   per server (§2.2), so every tool works. A read-only variant is D9.
 - **`defaultEnabled: false`** while the servers are Developer Preview: an org admin switches on the
@@ -414,9 +427,12 @@ live lists in §2.2, re-read when the PR is written; tool keys have no dots.
 ### 5.3 What the admin and members do
 
 - **Admin** (per template's guide, place `connector-template`, audiences admin and member): in the
-  same Google Cloud project as sign-in (or another), enable the product API and its MCP service;
-  add `{{oauthCallbackUrl}}` to the Web client's redirect URIs and select "Use this client for an
-  AI-powered agent"; consent screen Internal (restricted Gmail and Drive scopes need no verification
+  same Google Cloud project as sign-in (or another), enable the product API and its MCP service
+  in the project that holds the client; create a **separate** Web client for the connectors
+  (erratum 2026-11-22: Google blocks clients without "Use this client for an AI-powered agent" from
+  the Workspace servers and asks for a separate client when one also serves non-agent features such
+  as sign-in) with the redirect URI `{{oauthCallbackUrl}}` and that setting selected, one such
+  client for every Google connector of the org; consent screen Internal (restricted Gmail and Drive scopes need no verification
   then; External production needs verification and CASA, External testing kills refresh tokens after
   7 days and only admits test users); create the connector from the template and enter the client
   id and secret. `::check capybara:oauth-token-endpoint` (the kernel's probe) verifies the client.

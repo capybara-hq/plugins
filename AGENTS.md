@@ -206,7 +206,8 @@ workers and other tests' child processes run plain Node. This is temporary, unti
 - Tests that hit real services run only when their `CAPYBARA_TEST_*` variables are set (each skill
   lists them: model providers, E2B, Slack, Lark, Telegram, Jina (`CAPYBARA_TEST_JINA_API_KEY`), Google sign-in
   (`CAPYBARA_TEST_GOOGLE_CLIENT_ID` and `_CLIENT_SECRET`), MCP / OpenAPI
-  connectors with `CAPYBARA_TEST_LIVE_TOOLS`).
+  connectors with `CAPYBARA_TEST_LIVE_TOOLS`, Google's MCP servers with `CAPYBARA_TEST_LIVE_TOOLS`
+  plus `CAPYBARA_TEST_GOOGLE_ACCESS_TOKEN` (optional `CAPYBARA_TEST_GOOGLE_BIGQUERY_PROJECT`)).
 - Native model platform providers: deepseek `CAPYBARA_TEST_DEEPSEEK_API_KEY` (falls back to
   `CAPYBARA_TEST_OAICOMPAT_API_KEY`); bailian `CAPYBARA_TEST_BAILIAN_API_KEY` with optional `_REGION`
   and `_WORKSPACE_ID`; ark `CAPYBARA_TEST_ARK_API_KEY` with optional `_REGION`, `_ACCESS_KEY_ID` and
