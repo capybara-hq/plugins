@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+    # the default three, plus ready_for_review: a draft runs nothing until it is marked ready
+    types: [opened, synchronize, reopened, ready_for_review]
 
 # A new push to a PR cancels its older run; runs on main are never cancelled.
 concurrency:
@@ -43,6 +45,8 @@ permissions: {}
 #   tools/**, unknown files, or a diff that can't be computed run everything.
 jobs:
   changes:
+    # Drafts run nothing (CONTRIBUTING.md of capybara-hq/.github); a draft cannot merge.
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -81,6 +85,7 @@ jobs:
 
   # Cheap or whole-repo checks and build artifacts: always run in full. Tests are in the test job.
   ci:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -175,7 +180,7 @@ jobs:
   # says it runs, and may be skipped only when the plan says it doesn't. always(): report failure
   # when an upstream job failed instead of being skipped (skipped = passed).
   ci-ok:
-    if: always()
+    if: ${{ always() && !github.event.pull_request.draft }}
     needs: [changes, ci, test]
     runs-on: ubuntu-latest
     permissions: {}

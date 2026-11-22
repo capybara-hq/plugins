@@ -4,8 +4,8 @@ description: "Carries day-to-day work in a capybara-hq repository from an issue 
 # Synced from capybara-hq/.github. Edit the source there, then run sync.
 metadata:
   source: capybara-hq/.github
-  version: v1.0.0
-  sha256: 7715de279860a2d72e71a604eab688d71a85b90c5b0835bf8872925db3b88b8e
+  version: v2.1.0
+  sha256: 85bdc76a4de88392e2d8d342215ab86a0dfcf1d5da46657e4e88445218773daa
 ---
 
 # Contributing
@@ -120,6 +120,13 @@ update it instead of creating another.
    - core developer: `gh pr create --repo capybara-hq/<repo> --base main --head <branch> --title "<title>" --body-file <file>`
 
    The title is the Conventional Commits subject of the change. Give the user the PR URL.
+
+   **Draft while it is still changing.** If more commits are coming before it is ready for
+   review (work in progress, waiting on another PR, a fix still being tried), add `--draft`.
+   CI runs nothing on a draft, so each push does not take the organization's shared runners;
+   when it is ready, `pnpm verify` passes and the user agrees, run
+   `gh pr ready <number> --repo capybara-hq/<repo>`, which starts CI. A draft cannot be merged.
+   A PR that is finished when it is opened is created ready, without `--draft`.
 
 ### PR body
 
