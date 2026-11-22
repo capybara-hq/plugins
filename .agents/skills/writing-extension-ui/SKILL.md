@@ -7,6 +7,8 @@ description: 'Use when adding UI to an extension in this repository (an inline c
 
 This skill covers only the UI an extension contributes; for general extension authoring (manifest, approval, ctx, multi-replica rules, dual-replica tests) see `.agents/skills/writing-extensions`, for tools `.agents/skills/writing-tools`. The web host (the conversation page slots, the "Extensions" menu, the `/plugin-ui` proxy, the bridge's host side), embed token issuing and view rendering are core's: [writing-extension-ui in core](https://github.com/capybara-hq/core/tree/main/.agents/skills/writing-extension-ui).
 
+A theme (design tokens, fonts, logo, app icons, avatar presets, the sign-in decoration) is plain plugin files and needs no extension: `themes` in `.agents/skills/writing-plugins`.
+
 Reference implementations:
 
 - Tier 1 (rendered schema view): `plugins/todo`, views `tasks-panel` / `tasks-section` / `tasks-card`; `plugin__todo__write` returns `card` and calls `invalidate` after writing.
