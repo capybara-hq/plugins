@@ -893,7 +893,7 @@
     },
     {
       "name": "device-local",
-      "version": "0.1.0-rc.0",
+      "version": "0.1.0-rc.1",
       "summary": {
         "en": "Devices on people's own computers: a machine connected with capybara-device serves the device over the dial-in channel, and its owner limits it there",
         "zh": "在自己的电脑上使用设备：用 capybara-device 连接的电脑通过拨入通道为设备服务，由电脑的所有者在本机限制它"
@@ -916,8 +916,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-local",
-          "version": "0.1.0-rc.0",
-          "integrity": "sha512-1RvTyPW4bXuZSM5RdruWF4s8Ip7JtxDZA2aXrb09FdoOXmjJIZu2poOUIIWeVaGG2BESR7k8ixCImEqEwMyL/Q=="
+          "version": "0.1.0-rc.1",
+          "integrity": "sha512-Hf/yjU3T9M4v9yD4jg0rHwXBgJq3/TI4RngE+7bq6naItkPF7R6njJkYoJ+sMIhuT6S47/RT8fgdwrJsJc78dA=="
         }
       }
     }
