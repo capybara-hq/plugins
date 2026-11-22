@@ -46,6 +46,41 @@
     {
       "id": "google-sign-in",
       "place": "extension-deployment"
+    },
+    {
+      "id": "gmail-oauth",
+      "place": "connector-template",
+      "template": "gmail"
+    },
+    {
+      "id": "google-drive-oauth",
+      "place": "connector-template",
+      "template": "google-drive"
+    },
+    {
+      "id": "google-calendar-oauth",
+      "place": "connector-template",
+      "template": "google-calendar"
+    },
+    {
+      "id": "google-sheets-oauth",
+      "place": "connector-template",
+      "template": "google-sheets"
+    },
+    {
+      "id": "google-docs-oauth",
+      "place": "connector-template",
+      "template": "google-docs"
+    },
+    {
+      "id": "google-slides-oauth",
+      "place": "connector-template",
+      "template": "google-slides"
+    },
+    {
+      "id": "bigquery-oauth",
+      "place": "connector-template",
+      "template": "bigquery"
     }
   ]
 }
