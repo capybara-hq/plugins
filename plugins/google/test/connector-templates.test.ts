@@ -133,6 +133,10 @@ const MUST_ASK: Record<string, string[]> = {
   bigquery: ["execute_sql", "cancel_job"],
 };
 
+/** Name parts that mean a write in any Google server; such a tool always asks. */
+const WRITE_LIKE =
+  /(^|_)(create|update|delete|trash|untrash|label|unlabel|spam|send|copy|upload|insert|cancel|respond|move|share|modify|clear|append|batch|apply|remove|execute|write|import|patch)(_|$)/;
+
 const load = (id: string) => JSON.parse(read(`connectors/${id}.json`)) as TemplateFile;
 const fixture = (id: string) => JSON.parse(read(`test/fixtures/${id}-tools.json`)) as Fixture;
 
@@ -152,6 +156,22 @@ describe.each(TEMPLATES)("connectors/%s.json", (id, endpoint, scopes, [zh, en]) 
       connector: "mcp",
       endpoint: { url: endpoint },
     });
+    // no other template key (e.g. `git`, which would hand the member's token to sandbox git)
+    expect(Object.keys(file).sort()).toEqual([
+      "defaultEnabled",
+      "description",
+      "displayName",
+      "icon",
+      "template",
+    ]);
+    expect(Object.keys(file.template).sort()).toEqual([
+      "auth",
+      "connector",
+      "defaultToolPolicies",
+      "endpoint",
+      "plugin",
+      "pluginVersion",
+    ]);
     expect(Object.keys(file.template.endpoint)).toEqual(["url"]);
     expect(GOOGLE_HOSTS.has(new URL(endpoint).host)).toBe(true);
     expect(new URL(endpoint).protocol).toBe("https:");
@@ -195,6 +215,11 @@ describe.each(TEMPLATES)("connectors/%s.json", (id, endpoint, scopes, [zh, en]) 
     for (const t of tools) expect(policies[t.name], t.name).toBe(t.readOnlyHint ? "allow" : "ask");
     expect(Object.values(policies)).not.toContain("deny");
     for (const t of MUST_ASK[id] ?? []) expect(policies[t], t).toBe("ask");
+    // a tool Google adds later with a write-like name never becomes allow through a re-recorded
+    // fixture with a wrong hint
+    for (const t of Object.keys(policies)) {
+      if (WRITE_LIKE.test(t) && t !== "execute_sql_readonly") expect(policies[t], t).toBe("ask");
+    }
   });
 
   it("every recorded tool is callable with the requested scopes", () => {
