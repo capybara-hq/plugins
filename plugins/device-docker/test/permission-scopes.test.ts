@@ -4,10 +4,12 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
+  isProjectPathRefusedError,
   isSandboxOperationOutcomeUnknownError,
   isSandboxPermissionUnsupportedError,
   isSandboxScopeDeniedError,
   isSandboxScopeValidationError,
+  type ProjectPathRefusedError,
   SANDBOX_RUNTIME_SOURCE,
   type SandboxExecutionRef,
   type SandboxHandle,
@@ -24,6 +26,7 @@ import {
 import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDockerSandbox, type DockerSandboxProvider } from "../src/index.js";
+import { OUTSIDE_WORKSPACE_REASON } from "../src/listing.js";
 import { operationUuid } from "../src/operations.js";
 import {
   OPERATION_AGENT_SHA256,
@@ -1029,6 +1032,35 @@ describe.skipIf(!dockerAvailable)(
         isSandboxScopeDeniedError,
       );
       expect("readFile" in (await fresh())).toBe(false);
+    });
+
+    it("refuses a browsed project path outside the workspace with its reason before it runs", async () => {
+      const browse = await sbx.browse(
+        device,
+        {
+          operationId: randomUUID(),
+          admitBeforeMs: Date.now() + 60_000,
+          deviceId: "device-perm",
+          accountId: "acc-perm",
+          ceilingRevision: "ceiling-1",
+          readRoots: ["/workspace"],
+          tag: "browse",
+        },
+        sig(),
+      );
+      for (const path of ["/etc", "/skills", "/opt/capybara", "/", "/workspace-other"]) {
+        for (const call of [
+          browse.list(path, { limit: 1, signal: sig() }),
+          browse.stat(path, sig()),
+          browse.scan(path, { signal: sig() }),
+        ]) {
+          const e = await call.catch((x: unknown) => x);
+          expect(isProjectPathRefusedError(e), path).toBe(true);
+          expect((e as ProjectPathRefusedError).reason).toEqual(OUTSIDE_WORKSPACE_REASON);
+        }
+      }
+      // nothing was consumed: the same scope still answers inside the workspace
+      expect(await browse.stat("/workspace", sig())).toMatchObject({ isDir: true });
     });
 
     describe("background executions", () => {

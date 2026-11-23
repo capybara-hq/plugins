@@ -7,10 +7,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type DeviceProvider,
+  isProjectPathRefusedError,
   isSandboxOperationOutcomeUnknownError,
   isSandboxPermissionUnsupportedError,
   isSandboxScopeDeniedError,
   isSandboxScopeValidationError,
+  type ProjectPathRefusedError,
   SANDBOX_RUNTIME_SOURCE,
   type SandboxExecutionRef,
   type SandboxHandle,
@@ -21,6 +23,7 @@ import { type FakeE2BServer, startFakeE2B } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { envdCloseStdin, envdSendInput, envdStart, OPEN_PUBLIC_DENIED } from "../src/e2b-api.js";
 import { createE2BSandbox, type E2BSandboxConfig, publishedImage } from "../src/index.js";
+import { OUTSIDE_WORKSPACE_REASON } from "../src/listing.js";
 import { OPERATION_AGENT_SHA256, OPERATION_AGENT_SOURCE } from "../src/operation-agent-source.js";
 import { appliedNetworkOf, ROOT_AGENT_PRECHECK, rootAgentArgs } from "../src/provider.js";
 import {
@@ -399,6 +402,36 @@ describe("operation factory fails closed (fake E2B)", { timeout: 20_000 }, () =>
         )
         .catch((x: unknown) => x);
       expect(isSandboxScopeDeniedError(e)).toBe(true);
+    }
+    expect(vmCalls(h.id)).toBe(before);
+  });
+
+  it("refuses a browsed project path outside the workspace with its reason, without a VM call", async () => {
+    const before = vmCalls(h.id);
+    const browse = await sbx.browse?.(
+      h,
+      {
+        operationId: `b-${randomUUID()}`,
+        admitBeforeMs: Date.now() + 60_000,
+        deviceId: "dev-1",
+        accountId: "acc-1",
+        ceilingRevision: "c1",
+        readRoots: ["/workspace"],
+        tag: "t",
+      },
+      sig(),
+    );
+    if (!browse) throw new Error("browse missing");
+    for (const path of ["/etc", "/skills", "/opt/capybara", "/", "/workspace-other"]) {
+      for (const call of [
+        browse.list(path, { limit: 1, signal: sig() }),
+        browse.stat(path, sig()),
+        browse.scan(path, { signal: sig() }),
+      ]) {
+        const e = await call.catch((x: unknown) => x);
+        expect(isProjectPathRefusedError(e), path).toBe(true);
+        expect((e as ProjectPathRefusedError).reason).toEqual(OUTSIDE_WORKSPACE_REASON);
+      }
     }
     expect(vmCalls(h.id)).toBe(before);
   });

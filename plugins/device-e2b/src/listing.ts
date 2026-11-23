@@ -7,6 +7,7 @@ import {
   MAX_DEVICE_SCAN_DEPTH,
   MAX_DEVICE_SCAN_DIRS,
   MAX_DEVICE_SCAN_RESULTS,
+  ProjectPathRefusedError,
   validateSandboxPathShape,
 } from "@capybara-hq/plugin-sdk";
 
@@ -138,7 +139,8 @@ out({"r": found})
  * Checks `path` before anything runs and returns it normalized (`.` / `..` segments resolved, no
  * trailing slash), which is what the script reads and what scan results are built on: the shape
  * (absolute, no control characters), then that it lies lexically under {@link LIST_AREA}; a cloud
- * device offers nothing else, whatever the mode.
+ * device offers nothing else, whatever the mode (a `ProjectPathRefusedError` otherwise). The owner
+ * browse (`browse`, what the kernel adds projects and scans through) checks its paths with it too.
  */
 export function checkListPath(path: string): string {
   if (!path.startsWith("/")) {
@@ -150,7 +152,7 @@ export function checkListPath(path: string): string {
   if (errors.length > 0) {
     throw new Error(`invalid sandbox path ${JSON.stringify(path)}: ${errors.join("; ")}`);
   }
-  if (p !== LIST_AREA && !p.startsWith(`${LIST_AREA}/`)) throw outside(path);
+  if (p !== LIST_AREA && !p.startsWith(`${LIST_AREA}/`)) throw outside();
   return p;
 }
 
@@ -162,10 +164,22 @@ export function listLimit(limit: number): number {
   return Math.min(limit, MAX_DEVICE_LIST_ENTRIES);
 }
 
-const outside = (path: string) =>
-  new Error(
-    `${path} is outside the sandbox's workspace (${LIST_AREA}); a cloud device offers only that, in either mode`,
-  );
+/**
+ * What a person reads when a container device refuses a project directory outside
+ * {@link LIST_AREA} (the kernel answers `device.project_refused` with it). Fixed text: no path and
+ * nothing the instance printed.
+ */
+export const OUTSIDE_WORKSPACE_REASON: Readonly<{ en: string; zh: string }> = Object.freeze({
+  en: `This directory is outside the device's workspace (${LIST_AREA}), the only place a container device offers projects; the rest of the container holds the image's system files and the platform's skills.`,
+  zh: `这个目录在设备的工作区（${LIST_AREA}）之外，而容器设备只在工作区内提供项目；容器里的其他目录是镜像的系统文件和平台提供的技能。`,
+});
+
+/**
+ * The refusal of a path outside {@link LIST_AREA}, lexically or through a link: a
+ * `ProjectPathRefusedError`, so the device page explains it when a project is added instead of a
+ * run failing on it later.
+ */
+const outside = () => new ProjectPathRefusedError({ ...OUTSIDE_WORKSPACE_REASON });
 
 /** What the script run answered (the provider's exec result). */
 export interface ListRun {
@@ -199,7 +213,7 @@ function answerOf(op: "list" | "scan", path: string, run: ListRun, noPython: str
     const why = run.exitCode === 0 ? "an unreadable answer" : `exit code ${String(run.exitCode)}`;
     throw new Error(`${op} ${path} failed in the sandbox (${why}): ${text(run.stderr)}`);
   }
-  if (res.e === "policy") throw outside(path);
+  if (res.e === "policy") throw outside();
   if (res.e === "notdir") throw new Error(`${path} is not a directory`);
   if (res.e === "read") {
     const code = typeof res.c === "string" && /^[A-Z0-9_]+$/.test(res.c) ? ` (${res.c})` : "";

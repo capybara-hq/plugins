@@ -26,6 +26,7 @@ import {
   type SandboxStopResult,
   validateSandboxPathShape,
 } from "@capybara-hq/plugin-sdk";
+import { checkListPath } from "./listing.js";
 import {
   OPERATION_AGENT,
   OPS_DIR,
@@ -1041,6 +1042,9 @@ export function createOperations(deps: OperationDeps) {
         const sig = AbortSignal.any([signal, s]);
         sig.throwIfAborted();
         checkPath(String(native.path));
+        // projects are offered only inside the workspace: refused with a reason the device page
+        // shows when a project is added, before anything runs in the instance
+        checkListPath(String(native.path));
         const runner = await t.session(h, sig);
         const key = `browse-${method}`;
         await consume(h, scope, key, inputHash(key, scope, native), sig, runner);
