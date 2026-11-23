@@ -1,6 +1,7 @@
 import {
   DEVICE_PROVIDER_EXTENSION_POINT,
   defineExtension,
+  platformOnly,
   secret,
   ui,
 } from "@capybara-hq/plugin-sdk";
@@ -34,53 +35,55 @@ const MAX_TIMEOUT_SECONDS = 86_400;
  * `openEgress` / `allowOpenEgress` keys fail with a pointer to the network policy: the org's
  * cloud network (`limits.network`) decides, never a deployment key.
  */
-export const DeploymentConfig = z.strictObject(
-  {
-    /** E2B API key（`e2b_…`）。 */
-    apiKey: ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
-    /** 控制面 API 地址；不填为 `https://api.<domain>`。自托管 E2B 填自己的地址。 */
-    apiUrl: ui(z.url({ protocol: /^https?$/ }).optional(), {
-      label: { zh: "接口地址", en: "API URL" },
-    }),
-    /** 沙箱域名（envd 地址为 `https://49983-<沙箱 id>.<domain>`）；API 返回了沙箱自己的域名时以返回的为准。 */
-    domain: ui(
-      z
-        .string()
-        .regex(HOSTNAME_RE, {
-          message: "domain must be a lowercase hostname such as e2b.app",
-        })
-        .default("e2b.app"),
-      { label: { zh: "沙箱域名", en: "Sandbox domain" } },
-    ),
-    /**
-     * Template name or id. Unset: the plugin builds the template `capybara-sandbox-<tag>` from the
-     * published sandbox image on first use and reuses it (README "Template").
-     */
-    template: ui(z.string().min(1).optional(), { label: { zh: "模板", en: "Template" } }),
-    /**
-     * 沙箱的超时（秒，默认 3600）：到点 E2B 自动暂停（不是删除）沙箱，文件保留。内核每次用沙箱时把它往后推，
-     * 长命令会按命令超时再加余量推后；空闲休眠与过期销毁由内核负责。
-     */
-    timeoutSeconds: ui(z.number().int().min(60).max(MAX_TIMEOUT_SECONDS).default(3600), {
-      label: { zh: "沙箱超时", en: "Sandbox timeout" },
-    }),
-    /**
-     * Whether E2B supports a per-domain network allowlist (E2B cloud: yes). `false` (self-hosted
-     * versions without it) degrades an allowlist to no network with a warning. `open-public` does
-     * not depend on it (internet access with the local ranges denied).
-     */
-    domainAllowlist: ui(z.boolean().default(true), {
-      label: { zh: "按域名出站白名单", en: "Domain egress allowlist" },
-    }),
-  },
-  {
-    // removed keys fail with a pointer to the network policy (pre-0.1.0: no compatibility layer)
-    error: (iss) =>
-      iss.code === "unrecognized_keys" &&
-      (iss.keys.includes("openEgress") || iss.keys.includes("allowOpenEgress"))
-        ? 'openEgress / allowOpenEgress were removed: the org cloud network decides (open-public or an allowlist, sent as limits.network); see the device-e2b README "Network policy".'
-        : undefined,
-  },
+export const DeploymentConfig = platformOnly(
+  z.strictObject(
+    {
+      /** E2B API key（`e2b_…`）。 */
+      apiKey: ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
+      /** 控制面 API 地址；不填为 `https://api.<domain>`。自托管 E2B 填自己的地址。 */
+      apiUrl: ui(z.url({ protocol: /^https?$/ }).optional(), {
+        label: { zh: "接口地址", en: "API URL" },
+      }),
+      /** 沙箱域名（envd 地址为 `https://49983-<沙箱 id>.<domain>`）；API 返回了沙箱自己的域名时以返回的为准。 */
+      domain: ui(
+        z
+          .string()
+          .regex(HOSTNAME_RE, {
+            message: "domain must be a lowercase hostname such as e2b.app",
+          })
+          .default("e2b.app"),
+        { label: { zh: "沙箱域名", en: "Sandbox domain" } },
+      ),
+      /**
+       * Template name or id. Unset: the plugin builds the template `capybara-sandbox-<tag>` from the
+       * published sandbox image on first use and reuses it (README "Template").
+       */
+      template: ui(z.string().min(1).optional(), { label: { zh: "模板", en: "Template" } }),
+      /**
+       * 沙箱的超时（秒，默认 3600）：到点 E2B 自动暂停（不是删除）沙箱，文件保留。内核每次用沙箱时把它往后推，
+       * 长命令会按命令超时再加余量推后；空闲休眠与过期销毁由内核负责。
+       */
+      timeoutSeconds: ui(z.number().int().min(60).max(MAX_TIMEOUT_SECONDS).default(3600), {
+        label: { zh: "沙箱超时", en: "Sandbox timeout" },
+      }),
+      /**
+       * Whether E2B supports a per-domain network allowlist (E2B cloud: yes). `false` (self-hosted
+       * versions without it) degrades an allowlist to no network with a warning. `open-public` does
+       * not depend on it (internet access with the local ranges denied).
+       */
+      domainAllowlist: ui(z.boolean().default(true), {
+        label: { zh: "按域名出站白名单", en: "Domain egress allowlist" },
+      }),
+    },
+    {
+      // removed keys fail with a pointer to the network policy (pre-0.1.0: no compatibility layer)
+      error: (iss) =>
+        iss.code === "unrecognized_keys" &&
+        (iss.keys.includes("openEgress") || iss.keys.includes("allowOpenEgress"))
+          ? 'openEgress / allowOpenEgress were removed: the org cloud network decides (open-public or an allowlist, sent as limits.network); see the device-e2b README "Network policy".'
+          : undefined,
+    },
+  ),
 );
 
 /**

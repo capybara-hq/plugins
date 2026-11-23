@@ -4,7 +4,6 @@ import {
   MODEL_PROVIDER_EXTENSION_POINT_V2,
   ModelError,
   type ModelProvider,
-  orgAccess,
   secret,
   ui,
 } from "@capybara-hq/plugin-sdk";
@@ -28,7 +27,7 @@ const dataPlane = (region: Region) => `https://ark.${region}.volces.com/api/v3`;
 const controlPlane = (region: Region) => `https://ark.${region}.volcengineapi.com`;
 
 /**
- * Deployment config. Every field is org-overridable. The key is required, so a deployment without
+ * Deployment config. Every field is overridable by an org (the default). The key is required, so a deployment without
  * one shows the provider as needing configuration rather than as failing to list its models. The
  * platform may leave it empty (the kernel's load gate makes required overridable fields optional
  * for the platform's copy): orgs following the platform then need configuration and are never
@@ -40,37 +39,28 @@ const controlPlane = (region: Region) => `https://ark.${region}.volcengineapi.co
  * override, so a platform AK/SK never signs a request for an org's config.
  */
 const DeploymentConfig = z.object({
-  apiKey: orgAccess(
-    ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
-    "override",
-  ),
-  region: orgAccess(
-    ui(z.enum(REGIONS).default(DEFAULT_REGION), { label: { zh: "地域", en: "Region" } }),
-    "override",
-  ),
-  management: orgAccess(
-    ui(
-      z
-        .object({
-          // secret too: a new org copy then starts without either field (the kernel removes the
-          // secret leaves of a copy), not with the platform's AK and no SK
-          accessKeyId: ui(secret(z.string().min(1)), {
-            label: { zh: "Access Key ID", en: "Access key ID" },
-          }),
-          secretAccessKey: ui(secret(z.string().min(1)), {
-            label: { zh: "Secret Access Key", en: "Secret access key" },
-          }),
-        })
-        .optional(),
-      {
-        label: {
-          zh: "管理密钥（可选，用于列出推理接入点）",
-          en: "Management keys (optional, lists inference endpoints)",
-        },
-        advanced: true,
+  apiKey: ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
+  region: ui(z.enum(REGIONS).default(DEFAULT_REGION), { label: { zh: "地域", en: "Region" } }),
+  management: ui(
+    z
+      .object({
+        // secret too: a new org copy then starts without either field (the kernel removes the
+        // secret leaves of a copy), not with the platform's AK and no SK
+        accessKeyId: ui(secret(z.string().min(1)), {
+          label: { zh: "Access Key ID", en: "Access key ID" },
+        }),
+        secretAccessKey: ui(secret(z.string().min(1)), {
+          label: { zh: "Secret Access Key", en: "Secret access key" },
+        }),
+      })
+      .optional(),
+    {
+      label: {
+        zh: "管理密钥（可选，用于列出推理接入点）",
+        en: "Management keys (optional, lists inference endpoints)",
       },
-    ),
-    "override",
+      advanced: true,
+    },
   ),
 });
 

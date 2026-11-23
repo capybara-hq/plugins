@@ -1,5 +1,5 @@
 import { createPrivateKey } from "node:crypto";
-import { secret, ui } from "@capybara-hq/plugin-sdk";
+import { platformOnly, secret, ui } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 
 /** The fields push-fcm uses from a Google service account key file. */
@@ -46,32 +46,34 @@ export function parseServiceAccount(text: string): ServiceAccount | { problem: s
 }
 
 /** Deployment config (platform only; push providers have no org config). */
-export const FcmDeployment = z.object({
-  serviceAccount: secret(
-    ui(
-      z
-        .string()
-        .min(1)
-        .superRefine((value, ctx) => {
-          const r = parseServiceAccount(value);
-          if ("problem" in r) ctx.addIssue({ code: "custom", message: r.problem });
-        }),
-      {
-        label: { zh: "服务账号密钥（JSON）", en: "Service account key (JSON)" },
-        help: {
-          zh: "Firebase 控制台 → 项目设置 → 服务账号 → 生成新的私钥，把下载的 JSON 文件整个粘贴进来。",
-          en: "Firebase console → Project settings → Service accounts → Generate new private key; paste the whole downloaded JSON file.",
+export const FcmDeployment = platformOnly(
+  z.object({
+    serviceAccount: secret(
+      ui(
+        z
+          .string()
+          .min(1)
+          .superRefine((value, ctx) => {
+            const r = parseServiceAccount(value);
+            if ("problem" in r) ctx.addIssue({ code: "custom", message: r.problem });
+          }),
+        {
+          label: { zh: "服务账号密钥（JSON）", en: "Service account key (JSON)" },
+          help: {
+            zh: "Firebase 控制台 → 项目设置 → 服务账号 → 生成新的私钥，把下载的 JSON 文件整个粘贴进来。",
+            en: "Firebase console → Project settings → Service accounts → Generate new private key; paste the whole downloaded JSON file.",
+          },
         },
-      },
+      ),
     ),
-  ),
-  applicationIds: ui(z.array(z.string().min(1)).min(1), {
-    label: { zh: "Android 应用 ID", en: "Android application ids" },
-    help: {
-      zh: "这个 Firebase 项目里注册的应用 ID（如 com.example.app）。",
-      en: "The application ids registered in this Firebase project (such as com.example.app).",
-    },
-    widget: "tags",
+    applicationIds: ui(z.array(z.string().min(1)).min(1), {
+      label: { zh: "Android 应用 ID", en: "Android application ids" },
+      help: {
+        zh: "这个 Firebase 项目里注册的应用 ID（如 com.example.app）。",
+        en: "The application ids registered in this Firebase project (such as com.example.app).",
+      },
+      widget: "tags",
+    }),
   }),
-});
+);
 export type FcmDeploymentConfig = z.infer<typeof FcmDeployment>;

@@ -1,41 +1,32 @@
-import { ModelError, orgAccess, secret, ui } from "@capybara-hq/plugin-sdk";
+import { ModelError, secret, ui } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 import { REGIONS, type Region } from "./tables.js";
 
 /**
- * Deployment config. Every field is org-overridable (design B §5.5). The key is required, so a
+ * Deployment config. Every field is overridable by an org (the default). The key is required, so a
  * deployment without one shows the provider as needing configuration rather than as failing to list
  * its models. The platform may leave it empty (the kernel's load gate makes required overridable
  * fields optional for the platform's copy): orgs following the platform then need configuration and
  * are never called, and an org copy brings its own key.
  */
 export const DeploymentConfig = z.object({
-  apiKey: orgAccess(
-    ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
-    "override",
-  ),
-  region: orgAccess(
-    ui(z.enum(REGIONS).default("cn-beijing"), {
-      label: { zh: "地域", en: "Region" },
-    }),
-    "override",
-  ),
-  workspaceId: orgAccess(
-    ui(
-      // Becomes part of the host name: letters, digits and dashes only
-      z
-        .string()
-        .regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,62}$/)
-        .optional(),
-      {
-        label: { zh: "业务空间 ID", en: "Workspace ID" },
-        help: {
-          zh: "除美国（弗吉尼亚）外的地域必填；北京地域不填时使用 dashscope.aliyuncs.com",
-          en: "Required outside US (Virginia); without it Beijing uses dashscope.aliyuncs.com",
-        },
+  apiKey: ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
+  region: ui(z.enum(REGIONS).default("cn-beijing"), {
+    label: { zh: "地域", en: "Region" },
+  }),
+  workspaceId: ui(
+    // Becomes part of the host name: letters, digits and dashes only
+    z
+      .string()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,62}$/)
+      .optional(),
+    {
+      label: { zh: "业务空间 ID", en: "Workspace ID" },
+      help: {
+        zh: "除美国（弗吉尼亚）外的地域必填；北京地域不填时使用 dashscope.aliyuncs.com",
+        en: "Required outside US (Virginia); without it Beijing uses dashscope.aliyuncs.com",
       },
-    ),
-    "override",
+    },
   ),
 });
 
