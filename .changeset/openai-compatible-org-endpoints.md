@@ -1,5 +1,5 @@
 ---
-"@capybara-hq/plugin-openai-compatible": patch
+"@capybara-hq/plugin-openai-compatible": minor
 ---
 
 `endpoints` and `apiKeys` are org-overridable (core#720). Each call resolves the org's effective
