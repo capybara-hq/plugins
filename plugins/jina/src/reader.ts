@@ -1,5 +1,5 @@
-import { type WebFetchProvider, WebProviderError } from "@capybara-hq/plugin-sdk";
-import { apiKeyOf, type JinaEndpoints, jinaConfigured } from "./config.js";
+import { configUrlFetch, type WebFetchProvider, WebProviderError } from "@capybara-hq/plugin-sdk";
+import { apiKeyOf, DEFAULTS, type JinaEnv, jinaConfigured, parseJinaConfig } from "./config.js";
 import { jinaRequest, joinUrl } from "./http.js";
 import { httpUrl, text } from "./util.js";
 
@@ -7,13 +7,20 @@ import { httpUrl, text } from "./util.js";
  * `web-fetch@1` over Jina's reader (`r.jina.ai`). The URL travels in a JSON body so its query string
  * and fragment are never re-parsed as part of Jina's own URL.
  */
-export function createJinaReader(endpoints: Pick<JinaEndpoints, "readerUrl">): WebFetchProvider {
+export function createJinaReader(env: JinaEnv): WebFetchProvider {
   return {
     configured: jinaConfigured,
-    async fetch({ url, orgConfig, signal }) {
-      const apiKey = apiKeyOf(orgConfig);
-      const body = await jinaRequest("reader", joinUrl(endpoints.readerUrl, "/"), {
+    async fetch({ url, config, orgId, signal }) {
+      const apiKey = apiKeyOf(config);
+      const { readerUrl } = parseJinaConfig(config) ?? DEFAULTS;
+      const fetch = configUrlFetch(env.net, {
+        url: readerUrl,
+        platform: parseJinaConfig(env.platform())?.readerUrl,
+        orgId,
+      });
+      const body = await jinaRequest("reader", joinUrl(readerUrl, "/"), {
         apiKey,
+        fetch,
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Return-Format": "markdown" },
         body: JSON.stringify({ url }),

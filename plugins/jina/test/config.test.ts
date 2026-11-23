@@ -17,7 +17,7 @@ describe("jina config", () => {
     expect(apiKeyOf({ apiKey: " k " })).toBe("k");
   });
 
-  it("defaults the deployment endpoints", () => {
+  it("defaults the deployment endpoints and leaves the key optional", () => {
     expect(JinaDeployment.parse({})).toEqual({
       searchUrl: "https://s.jina.ai",
       readerUrl: "https://r.jina.ai",

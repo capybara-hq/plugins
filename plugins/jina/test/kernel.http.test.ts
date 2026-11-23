@@ -100,9 +100,20 @@ describe("jina in a kernel", () => {
     const enabled = await owner({
       method: "PUT",
       url: `/api/v1/orgs/${orgId}/extensions/jina`,
-      payload: { enabled: true, config: { apiKey: "org-key-1" } },
+      payload: { enabled: true },
     });
     expect(enabled.statusCode, enabled.body).toBe(200);
+    // the platform holds no key: the org follows an empty config until it saves its own copy
+    expect(await availablePoints(owner, orgId)).not.toContainEqual({
+      point: "web-search",
+      available: true,
+    });
+    const saved = await owner({
+      method: "PUT",
+      url: `/api/v1/orgs/${orgId}/extensions/jina/overrides`,
+      payload: { values: { apiKey: "org-key-1" } },
+    });
+    expect(saved.statusCode, saved.body).toBe(200);
 
     const points = await availablePoints(owner, orgId);
     expect(points).toContainEqual({ point: "web-search", available: true });
@@ -149,19 +160,28 @@ describe("jina in a kernel", () => {
     expect(readReq?.body).toContain(page);
     expect(readReq?.headers.authorization).toBe("Bearer org-key-1");
 
-    // a second org cannot enable jina without a key (the kernel validates the org config), so
-    // neither point is available to it
+    // a second org follows the platform's empty key: enabling works, but it is needsConfig (the
+    // kernel makes no call) until it saves its own copy
     const org2 = await createOrg(owner, "second");
     const enabled2 = await owner({
       method: "PUT",
       url: `/api/v1/orgs/${org2}/extensions/jina`,
       payload: { enabled: true },
     });
-    expect(enabled2.statusCode, enabled2.body).toBe(400);
-    expect(enabled2.json()).toMatchObject({ error: { code: "extension.config_invalid" } });
+    expect(enabled2.statusCode, enabled2.body).toBe(200);
     const points2 = await availablePoints(owner, org2);
     expect(points2.find((p) => p.point === "web-search")?.available ?? false).toBe(false);
     expect(points2.find((p) => p.point === "web-fetch")?.available ?? false).toBe(false);
+    const requestsBefore = fake.requests.length;
+    const saved2 = await owner({
+      method: "PUT",
+      url: `/api/v1/orgs/${org2}/extensions/jina/overrides`,
+      payload: { values: { apiKey: "org-key-2" } },
+    });
+    expect(saved2.statusCode, saved2.body).toBe(200);
+    const points3 = await availablePoints(owner, org2);
+    expect(points3).toContainEqual({ point: "web-search", available: true });
+    expect(fake.requests.length).toBe(requestsBefore);
   }, 120_000);
 });
 
