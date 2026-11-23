@@ -1,5 +1,7 @@
 import {
+  configUrlFetch,
   defineExtension,
+  type ExtensionNet,
   MODEL_PROVIDER_EXTENSION_POINT_V2,
   ModelError,
   type ModelInfo,
@@ -66,75 +68,154 @@ const EndpointSchema = z.strictObject({
 export type EndpointModelConfig = z.infer<typeof EndpointModelSchema>;
 export type EndpointConfig = z.input<typeof EndpointSchema>;
 
-/**
- * 部署级配置。密钥放在顶层的 `apiKeys`（端点名 → 密钥）：内核只认对象字段路径上的 `secret()`，
- * 标在 `endpoints[]` 数组元素里的密钥既无法打码也无法加密存储，插件会被拒绝加载。
- */
-const DeploymentConfig = z
-  .object({
-    endpoints: ui(
-      z
-        .array(EndpointSchema)
-        .min(1)
-        .refine(
-          (es) => new Set(es.map((e) => e.name)).size === es.length,
-          "duplicate endpoint name",
-        ),
-      { label: { zh: "端点", en: "Endpoints" } },
-    ),
-    /** 端点名 → API 密钥；没有密钥的端点（如内网 vLLM）不填，请求不带 Authorization 头。 */
-    apiKeys: ui(secret(z.record(z.string(), z.string().min(1))), {
-      label: { zh: "API 密钥（按端点名）", en: "API keys (by endpoint name)" },
-    }).default({}),
-  })
-  .superRefine((cfg, ctx) => {
-    cfg.endpoints.forEach((e, i) => {
-      if (DIALECTS[e.dialect].pdfInput) return;
-      e.models.forEach((m, j) => {
-        if (m.documents !== true) return;
-        ctx.addIssue({
-          code: "custom",
-          path: ["endpoints", i, "models", j, "documents"],
-          message: `dialect "${e.dialect}" does not accept PDF documents; documents must be false`,
-        });
+const DeploymentShape = z.object({
+  endpoints: ui(
+    z
+      .array(EndpointSchema)
+      .min(1)
+      .refine((es) => new Set(es.map((e) => e.name)).size === es.length, "duplicate endpoint name"),
+    { label: { zh: "端点", en: "Endpoints" } },
+  ),
+  /**
+   * Endpoint name -> API key; an endpoint without a key (an internal vLLM) has no entry and its
+   * requests carry no Authorization header. An org copy starts as `{}`: the platform's keys never
+   * reach it, so a kept platform endpoint is called without a key unless the org enters one.
+   */
+  apiKeys: ui(secret(z.record(z.string(), z.string().min(1))), {
+    label: { zh: "API 密钥（按端点名）", en: "API keys (by endpoint name)" },
+  }).default({}),
+});
+
+/** PDF input only on dialects that take it; every `apiKeys` key names a configured endpoint. */
+function checkConfig(
+  cfg: { endpoints?: EndpointConfig[] | undefined; apiKeys: Record<string, string> },
+  ctx: z.RefinementCtx,
+): void {
+  const endpoints = cfg.endpoints ?? [];
+  endpoints.forEach((e, i) => {
+    if (DIALECTS[e.dialect].pdfInput) return;
+    e.models.forEach((m, j) => {
+      if (m.documents !== true) return;
+      ctx.addIssue({
+        code: "custom",
+        path: ["endpoints", i, "models", j, "documents"],
+        message: `dialect "${e.dialect}" does not accept PDF documents; documents must be false`,
       });
     });
-    const names = new Set(cfg.endpoints.map((e) => e.name));
-    for (const key of Object.keys(cfg.apiKeys)) {
-      if (!names.has(key)) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["apiKeys", key],
-          message: `apiKeys["${key}"] does not match any endpoint name`,
-        });
-      }
-    }
   });
+  const names = new Set(endpoints.map((e) => e.name));
+  for (const key of Object.keys(cfg.apiKeys)) {
+    if (!names.has(key)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["apiKeys", key],
+        message: `apiKeys["${key}"] does not match any endpoint name`,
+      });
+    }
+  }
+}
+
+/**
+ * Deployment config; both fields are org-overridable. The keys live in the top-level `apiKeys`
+ * (endpoint name -> key): the kernel only recognizes `secret()` on object field paths, so a key
+ * inside an `endpoints[]` element could be neither redacted nor stored encrypted.
+ */
+const DeploymentConfig = DeploymentShape.superRefine(checkConfig);
+
+/**
+ * A config as a call or setup reads it: the platform may leave the (required, overridable)
+ * endpoints empty, leaving them to the orgs (the kernel's load gate relaxes the field).
+ */
+const CallConfig = DeploymentShape.partial({ endpoints: true }).superRefine(checkConfig);
 
 export interface OpenAICompatibleProviderOptions {
-  endpoints: EndpointConfig[];
-  /** 端点名 → API 密钥。 */
+  /** The platform's endpoints: used for calls without a per-call config. */
+  endpoints?: EndpointConfig[] | undefined;
+  /** Endpoint name -> API key, with `endpoints`. */
   apiKeys?: Record<string, string> | undefined;
+  /**
+   * The kernel's guarded client (`ctx.net`): an endpoint URL an org set (not one of the platform's
+   * endpoint URLs) goes through it with the org's id. Without it such a URL is refused.
+   */
+  net?: Pick<ExtensionNet, "fetch"> | undefined;
+  /**
+   * The platform's endpoint URLs at the time of the call (`ctx.config` read when used); defaults
+   * to those of `endpoints`. An endpoint URL in this list was set by the super admin and keeps the
+   * global `fetch`.
+   */
+  platformBaseUrls?: (() => readonly string[]) | undefined;
 }
 
 interface Endpoint {
   cfg: EndpointConfig;
   dialect: Dialect;
   midConversationSystem: boolean;
-  client: OpenAI;
 }
 
-function makeClient(cfg: EndpointConfig, apiKey: string | undefined): OpenAI {
+interface Resolved {
+  endpoints: Endpoint[];
+  apiKeys: Record<string, string>;
+}
+
+/** Without `net`, an org-set URL is refused rather than fetched unguarded. */
+const NO_NET: Pick<ExtensionNet, "fetch"> = {
+  fetch: async () => {
+    throw new ModelError(
+      "invalid_request",
+      "OpenAI-compatible: an organization's own endpoint needs the platform's network client",
+    );
+  },
+};
+
+function toEndpoint(cfg: EndpointConfig): Endpoint {
+  const dialect = DIALECTS[cfg.dialect];
+  return {
+    cfg,
+    dialect,
+    midConversationSystem: cfg.midConversationSystem ?? dialect.midConversationSystem,
+  };
+}
+
+/**
+ * The endpoints and keys of this call: the org's effective config (`config`) as a whole when
+ * given, else the platform defaults. Never mixes the two: a platform key must not reach an org
+ * copy (it would be sent to whatever endpoint the org names).
+ */
+function resolve(opts: OpenAICompatibleProviderOptions, config: unknown): Resolved {
+  if (config === undefined) {
+    return { endpoints: (opts.endpoints ?? []).map(toEndpoint), apiKeys: opts.apiKeys ?? {} };
+  }
+  const parsed = CallConfig.safeParse(config);
+  if (!parsed.success) {
+    throw new ModelError("invalid_request", "OpenAI-compatible: the extension config is invalid");
+  }
+  return {
+    endpoints: (parsed.data.endpoints ?? []).map(toEndpoint),
+    apiKeys: parsed.data.apiKeys,
+  };
+}
+
+function makeClient(
+  opts: OpenAICompatibleProviderOptions,
+  cfg: EndpointConfig,
+  apiKey: string | undefined,
+  orgId: string | undefined,
+): OpenAI {
+  const platform = opts.platformBaseUrls?.() ?? (opts.endpoints ?? []).map((e) => e.baseUrl);
   return new OpenAI({
     baseURL: cfg.baseUrl,
-    // SDK 缺少凭据时会报错：无密钥的端点（如内网 vLLM）给占位值，并在下面去掉 Authorization 头
+    // The SDK requires a credential: a keyless endpoint (an internal vLLM) gets a placeholder and
+    // the Authorization header is removed below
     apiKey: apiKey ?? "unused",
-    // 不读取 OPENAI_ORG_ID / OPENAI_PROJECT_ID / OPENAI_ADMIN_KEY 等环境变量，避免把 OpenAI 的头发给别家服务
+    // A platform endpoint URL keeps the global fetch; an org-set one goes through ctx.net
+    fetch: configUrlFetch(opts.net ?? NO_NET, { url: cfg.baseUrl, platform, orgId }),
+    // Do not read OPENAI_ORG_ID / OPENAI_PROJECT_ID / OPENAI_ADMIN_KEY: never send OpenAI headers
+    // to another service
     organization: null,
     project: null,
     adminAPIKey: null,
     ...(apiKey === undefined ? { defaultHeaders: { Authorization: null } } : {}),
-    // 重试由内核的降级梯子统一处理
+    // Retries belong to the kernel's degradation ladder
     maxRetries: 0,
   });
 }
@@ -149,7 +230,8 @@ function modelInfo(ep: Endpoint, m: EndpointModelConfig): ModelInfo {
     capabilities: {
       tools: true,
       vision: m.vision ?? false,
-      // 配置校验已拒绝在不收 PDF 的方言上开启；直接构造时这里再兜一层
+      // Config validation already refuses it on dialects without PDF input; a direct
+      // construction is guarded here too
       documents: (m.documents ?? false) && ep.dialect.pdfInput,
       reasoning,
       caching: m.caching ?? ep.dialect.caching,
@@ -161,25 +243,19 @@ function modelInfo(ep: Endpoint, m: EndpointModelConfig): ModelInfo {
 }
 
 /**
- * 基于官方 `openai` SDK 的 `chat.completions` 的 model-provider@2 实现：每个端点一个客户端（构造后不变），
- * 无进程内可变状态。
+ * model-provider@2 on the official `openai` SDK's `chat.completions`. No process state: the
+ * endpoints and keys can differ per organization, so the client is built per call.
  */
 export function createOpenAICompatibleProvider(
   opts: OpenAICompatibleProviderOptions,
 ): ModelProvider {
-  const endpoints: Endpoint[] = opts.endpoints.map((cfg) => {
-    const dialect = DIALECTS[cfg.dialect];
-    return {
-      cfg,
-      dialect,
-      midConversationSystem: cfg.midConversationSystem ?? dialect.midConversationSystem,
-      client: makeClient(cfg, opts.apiKeys?.[cfg.name]),
-    };
-  });
-
   return {
-    listModels: async () => endpoints.flatMap((ep) => ep.cfg.models.map((m) => modelInfo(ep, m))),
-    async *stream(req, { signal }): AsyncGenerator<ModelStreamEvent> {
+    async listModels(call) {
+      const { endpoints } = resolve(opts, call?.config);
+      return endpoints.flatMap((ep) => ep.cfg.models.map((m) => modelInfo(ep, m)));
+    },
+    async *stream(req, call): AsyncGenerator<ModelStreamEvent> {
+      const { endpoints, apiKeys } = resolve(opts, call.config);
       const slash = req.model.indexOf("/");
       const ep =
         slash < 0 ? undefined : endpoints.find((e) => e.cfg.name === req.model.slice(0, slash));
@@ -188,8 +264,9 @@ export function createOpenAICompatibleProvider(
       if (ep === undefined || m === undefined) {
         throw new ModelError("invalid_request", `Model "${req.model}" is not configured`);
       }
-      yield* streamChat(ep.client, req, {
-        signal,
+      const client = makeClient(opts, ep.cfg, apiKeys[ep.cfg.name], call.orgId);
+      yield* streamChat(client, req, {
+        signal: call.signal,
         target: {
           upstreamModel,
           dialect: ep.dialect,
@@ -201,16 +278,33 @@ export function createOpenAICompatibleProvider(
   };
 }
 
-/** OpenAI 兼容（Chat Completions）供应商插件：vLLM、DeepSeek、Qwen 等，方言差异只在本插件内。 */
+/** The endpoints of a config read leniently; none when it is invalid. */
+function endpointsOf(config: unknown): EndpointConfig[] {
+  const parsed = CallConfig.safeParse(config ?? {});
+  return parsed.success ? (parsed.data.endpoints ?? []) : [];
+}
+
+/** OpenAI-compatible (Chat Completions) provider plugin: vLLM, DeepSeek, Qwen, ...; dialects stay in this plugin. */
 export default defineExtension({
   name: PROVIDER,
   version: "0.1.0-rc.11",
   sdk: "^0.1.0-rc.0",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
-  // 不声明 network：访问的端点全部由管理员在部署配置里给出，没有固定域名
+  // No network permission: every endpoint comes from config, there is no fixed host. Org-set
+  // endpoint URLs go through ctx.net
   config: { deployment: DeploymentConfig },
   setup(ctx) {
-    const cfg = DeploymentConfig.parse(ctx.config ?? {});
-    ctx.provide(MODEL_PROVIDER_EXTENSION_POINT_V2, createOpenAICompatibleProvider(cfg));
+    // Lenient: the platform may leave the endpoints to the orgs
+    const cfg = CallConfig.safeParse(ctx.config ?? {});
+    ctx.provide(
+      MODEL_PROVIDER_EXTENSION_POINT_V2,
+      createOpenAICompatibleProvider({
+        endpoints: cfg.success ? cfg.data.endpoints : undefined,
+        apiKeys: cfg.success ? cfg.data.apiKeys : undefined,
+        net: ctx.net,
+        // ctx.config is read when used: a hot platform change applies at once
+        platformBaseUrls: () => endpointsOf(ctx.config).map((e) => e.baseUrl),
+      }),
+    );
   },
 });

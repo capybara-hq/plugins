@@ -1,4 +1,10 @@
-import { isModelError, ModelError, type ModelErrorKind } from "@capybara-hq/plugin-sdk";
+import {
+  isModelError,
+  isNetDeniedError,
+  ModelError,
+  type ModelErrorKind,
+  type NetDeniedError,
+} from "@capybara-hq/plugin-sdk";
 import OpenAI from "openai";
 
 /*
@@ -41,6 +47,13 @@ export function kindFromCode(code: string | null | undefined): ModelErrorKind | 
   }
 }
 
+/** The kernel's `NetDeniedError`, thrown directly or wrapped by the SDK (`cause`); else undefined. */
+function netDenied(e: unknown): NetDeniedError | undefined {
+  if (isNetDeniedError(e)) return e;
+  const cause = typeof e === "object" && e !== null ? (e as { cause?: unknown }).cause : undefined;
+  return isNetDeniedError(cause) ? cause : undefined;
+}
+
 /**
  * SDK 异常 → ModelError。`signal` 已中止时一律视为 aborted（中止后 SDK 可能抛出连接类错误）。
  */
@@ -52,6 +65,16 @@ export function toModelError(e: unknown, signal?: AbortSignal): ModelError {
 
   if (signal?.aborted || e instanceof OpenAI.APIUserAbortError) {
     return new ModelError("aborted", "Request aborted", { cause: e });
+  }
+  // The kernel's network rules refused an org's endpoint URL: retrying is useless. The message
+  // names the host, never the URL's path or query
+  const denied = netDenied(e);
+  if (denied !== undefined) {
+    return new ModelError(
+      "invalid_request",
+      `OpenAI-compatible: the request to ${denied.host || "the endpoint"} was refused by the platform's network rules: ${denied.message} Ask an administrator to check the endpoint URL.`,
+      { cause: denied },
+    );
   }
   if (e instanceof OpenAI.APIConnectionTimeoutError) return make("timeout");
   if (e instanceof OpenAI.APIConnectionError) return make("network");
