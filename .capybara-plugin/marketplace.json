@@ -230,7 +230,7 @@
     },
     {
       "name": "slack",
-      "version": "0.1.0-rc.13",
+      "version": "0.1.0-rc.14",
       "summary": {
         "en": "Slack (channel@1 bot over Socket Mode with Block Kit cards, identity-source@1 Sign in with Slack, directory@1)"
       },
@@ -269,8 +269,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-slack",
-          "version": "0.1.0-rc.13",
-          "integrity": "sha512-VJ+oq2LbRKRX50H5iy77TRJa3Icam7NThnEB3M2Bp0lUo9szYMPnjzXwirwOTUWh0nrkFjmTpzqoM0ms95RBzQ=="
+          "version": "0.1.0-rc.14",
+          "integrity": "sha512-8bPioXkAKn8BIKnLlLlwT8qTGTmDurdzthrFX3IN1TJgNh2V4QBdtN1I6Gk0ojNiXUmUDgFPlwBt9+EK5NxbSA=="
         }
       }
     },
@@ -545,7 +545,7 @@
     },
     {
       "name": "github",
-      "version": "0.1.0-rc.2",
+      "version": "0.1.0-rc.3",
       "summary": {
         "en": "Agents work with GitHub as the connected person: issues, pull requests, reviews, repositories and Actions runs, through GitHub's remote MCP server. Each member connects with OAuth through a GitHub App (or OAuth App) the org admin registers",
         "zh": "智能体以连接者本人的身份使用 GitHub：issue、拉取请求、评审、仓库与 Actions 运行，经 GitHub 的远程 MCP 服务器。每位成员通过组织管理员注册的 GitHub App（或 OAuth App）用 OAuth 连接"
@@ -563,8 +563,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-github",
-          "version": "0.1.0-rc.2",
-          "integrity": "sha512-1NsjxCOUqaUhyrUXI9hp0k7Gaj/xo3erv7RU3lrousFgc/1SVn4dAW+QmpYuuv/lZ4cB4CiumhSK2yFgZSBLmQ=="
+          "version": "0.1.0-rc.3",
+          "integrity": "sha512-JBZLm1trUTUXiFMHuvMQfn+p1MchCcifx5TxImhh4vvo+jIrOM9BXOuRu9XWNThovUI6TXyFBBs1G1jte6MnPw=="
         }
       }
     },
@@ -785,7 +785,7 @@
     },
     {
       "name": "google",
-      "version": "0.1.0-rc.1",
+      "version": "0.1.0-rc.2",
       "summary": {
         "en": "Sign in with Google (OpenID Connect for Google Workspace accounts, hosted domain enforced on the verified ID token), plus connector templates for Gmail, Google Drive, Calendar, Sheets, Docs, Slides and BigQuery, each member connecting their own Google account",
         "zh": "使用 Google 登录（Google Workspace 账号通过 OpenID Connect 登录，托管域在校验过的 ID token 上强制检查），并提供 Gmail、Google Drive、Calendar、Sheets、Docs、Slides 和 BigQuery 的 connector 模板，每个成员连接自己的 Google 账号"
@@ -819,14 +819,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-google",
-          "version": "0.1.0-rc.1",
-          "integrity": "sha512-liED+KRp/YnPa38vk3+l8qQ6PDNxSMmHZxC15iWmUrhZTYdZmzWAJjL3bXk9t/RJD4zHHXy9RiQR7jNSseg6Uw=="
+          "version": "0.1.0-rc.2",
+          "integrity": "sha512-TQY8f9MqlkKfMLGggStghijvOJIsp8u/hp2T6shTS8oxDru58TYkLpZDyRz5UplFWiRL0PO85/GrVAKVXQaZCQ=="
         }
       }
     },
     {
       "name": "device-docker",
-      "version": "0.1.0-rc.23",
+      "version": "0.1.0-rc.24",
       "summary": {
         "en": "Devices as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with their files on volumes kept until the device is deleted: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist",
         "zh": "以 Docker 容器（runc 或 gVisor runsc）承载设备，经 Docker socket 代理访问；文件保存在卷上，直到设备被删除。网络默认开放公网（拒绝回环、私有、链路本地与元数据地址），也可用主机白名单"
@@ -853,14 +853,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-docker",
-          "version": "0.1.0-rc.23",
-          "integrity": "sha512-xR28dC3NPIsRaG4jprsvWa7nFZkc7aURbl7o16TTP7j0oNBEhkkZcj2EQRRfz3/XpRMKSxqVT2tdK3KMK3y0AQ=="
+          "version": "0.1.0-rc.24",
+          "integrity": "sha512-M+XP8iLgbQe8K27u29Ta2O5Pg+1pCHT4lFZPN9VxyP9+FrtqBcYG0Uf0tC9/f1MUWBdN4fesyeqHXUpoObUg+w=="
         }
       }
     },
     {
       "name": "device-e2b",
-      "version": "0.1.0-rc.23",
+      "version": "0.1.0-rc.24",
       "summary": {
         "en": "Devices as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, an allowlist or the open internet with local ranges denied (E2B's metadata service stays reachable)",
         "zh": "以 E2B 沙箱承载设备（E2B 云或自托管）：暂停沙箱保留文件，从已发布镜像构建模板，网络为出站白名单或开放公网（拒绝私有、回环与链路本地地址；E2B 元数据端点仍可达，见 README）"
@@ -886,14 +886,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-e2b",
-          "version": "0.1.0-rc.23",
-          "integrity": "sha512-iTl2kOoupSiHPHYhqgE/sx3n8Bn2W4DrEuXBFHTdjOG6+azlFhtgKz1MWzZURJbqU0+P/NuSSOoLdJ9wJJJz8g=="
+          "version": "0.1.0-rc.24",
+          "integrity": "sha512-oGy3ee/KXQi6U3brSw18LL8WqzlTunhYHZP+ph6yzzY1dD+9ndf7FZFpRIfcpmU40vxCd9fUYw5RBGOXzB7oAQ=="
         }
       }
     },
     {
       "name": "device-local",
-      "version": "0.1.0-rc.5",
+      "version": "0.1.0-rc.6",
       "summary": {
         "en": "Devices on people's own computers: a machine connected with capybara-device serves the device over the dial-in channel, and its owner limits it there",
         "zh": "在自己的电脑上使用设备：用 capybara-device 连接的电脑通过拨入通道为设备服务，由电脑的所有者在本机限制它"
@@ -916,8 +916,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-local",
-          "version": "0.1.0-rc.5",
-          "integrity": "sha512-HaR5VFeK2AqMy4EM6glwGd0cZtgjMMS8AsOqimUCYPMT/eubrP/VuxB3eAFpR007xvommVIv5jd5XnXLbiYanw=="
+          "version": "0.1.0-rc.6",
+          "integrity": "sha512-wB9147kTphsBKwtvcgd6fylqECDqtqeZfkqiDY2jBAcErjrOL19alogWYIstof9les4CSi6tO8VgBgdfSYN97A=="
         }
       }
     }
