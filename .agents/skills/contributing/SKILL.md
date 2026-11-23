@@ -1,11 +1,11 @@
 ---
 name: contributing
-description: "Carries day-to-day work in a capybara-hq repository from an issue to a PR ready for a maintainer: start (check and claim the issue, create a worktree branch from upstream main), verify (run pnpm verify and explain failures), open the PR (pre-check the issue gate, commit, push, create the PR with the right body, optional self-review) and address review (read review threads, fix, verify, push, reply, re-request review). Each action reaches its target state, doing missing earlier steps first. Use when the user says things like 'start on issue #N', 'work on #N', 'pick up #N', 'verify', 'run the checks', 'am I ready to push', 'open a PR', 'create the PR', 'submit this', 'address review', 'fix the review comments' or 'respond to feedback'."
+description: "Carries day-to-day work in a capybara-hq repository from an issue to a PR ready for a maintainer: start (check and claim the issue, create a worktree branch from upstream main), verify (run the quick local check, pnpm verify --fast or pnpm verify, plus the changed tests, and explain failures), open the PR (pre-check the issue gate, commit, push, create the PR with the right body, optional self-review) and address review (read review threads, fix, verify, push, reply, re-request review). Each action reaches its target state, doing missing earlier steps first. Use when the user says things like 'start on issue #N', 'work on #N', 'pick up #N', 'verify', 'run the checks', 'am I ready to push', 'open a PR', 'create the PR', 'submit this', 'address review', 'fix the review comments' or 'respond to feedback'."
 # Synced from capybara-hq/.github. Edit the source there, then run sync.
 metadata:
   source: capybara-hq/.github
-  version: v2.1.1
-  sha256: ef48f26175ecc734fc4e6eb0d35a4cb3fe182a5696f420f1aa05391d6a5876e9
+  version: v2.2.0
+  sha256: 2be319d4923043e1aa96d0de68fa49fda8c6a9dc813e7666881f2c6bba4a30e4
 ---
 
 # Contributing
@@ -32,8 +32,12 @@ rules are in `AGENTS.md` and the skills for each area; read them before changing
 - **Two kinds of contributors.** Core developers have write access and push branches to
   `capybara-hq/<repo>`. Community contributors push branches to their fork. Everything else is
   the same: worktree per task, design doc first for larger changes when `AGENTS.md` asks for one,
-  Conventional Commits, changesets where the repository uses them, `pnpm verify` before pushing,
-  a PR, review, merge by a maintainer.
+  Conventional Commits, changesets where the repository uses them, the quick local check before
+  pushing, a PR, review, merge by a maintainer.
+- **Local check versus merge gate.** Locally, run the quick check (see "Verify") and the tests of
+  the files you changed. The merge gate is the PR's required CI statuses, which run everything the
+  diff affects; do not run the full `pnpm verify` unless the user asks or the change spans many
+  packages or the CI plan itself. It repeats CI and can take the machine for many minutes.
 - **Remotes.** The upstream is the remote whose URL points to `capybara-hq/<repo>` (find it with
   `git remote -v`; `<repo>` comes from that URL). If it is `origin`, the user is a core developer
   (confirm with `gh repo view capybara-hq/<repo> --json viewerPermission`: `ADMIN`, `MAINTAIN` or
@@ -84,14 +88,17 @@ Input: an issue number `N` (core developers may also start without one).
 
 ## Verify
 
-1. In the worktree, run `pnpm -s verify --json`. It prints the same contract as doctor:
+1. In the worktree, run `pnpm -s verify --fast --json` when the repository's `AGENTS.md` lists
+   `pnpm verify --fast`, otherwise `pnpm -s verify --json`. It prints the same contract as doctor:
    `{ "ok", "checks": [{ "id", "title", "status", "detail", "fix"? }] }`, exit 0 when nothing is
    `fail`. Keep the `-s`: without it the script banner on stdout breaks JSON parsing.
 2. For each `fail`, explain in plain words what broke and where, using `detail` and `fix`. Fix the
    code when the cause is clear and inside the task; ask when it is not. Do not skip, disable or
    weaken a check to make it pass.
 3. Mention each `warn` (for example a missing changeset) and what CI will run in addition.
-4. Re-run until `ok` is true.
+4. Run the tests of the files you changed, with the single-test command `AGENTS.md` gives.
+5. Re-run until everything passes.
+6. If CI on the PR fails later, read the failing job's log, run that test locally, fix and push.
 
 ## Open the PR
 
@@ -109,7 +116,7 @@ update it instead of creating another.
 2. **Commits**: Conventional Commits (`<type>: <summary>`, imperative, lower case), with the body
    line limits `AGENTS.md` gives. Add a changeset when a published package changed and the
    repository uses changesets (`AGENTS.md` says how). Show the user the commit messages.
-3. **Verify**: `pnpm verify` passes on the final commit.
+3. **Verify**: the quick local check and the changed tests pass on the final commit.
 4. **Self-review (optional, never blocks)**: if your agent can start a sub-agent with fresh
    context, give it the diff (`git diff <upstream>/main...HEAD`), `AGENTS.md` and the skills for the
    touched areas, and ask for a list of problems. Otherwise review the diff yourself against the
@@ -125,7 +132,7 @@ update it instead of creating another.
    **Draft while it is still changing.** If more commits are coming before it is ready for
    review (work in progress, waiting on another PR, a fix still being tried), add `--draft`.
    CI runs nothing on a draft, so each push does not take the organization's shared runners;
-   when it is ready, `pnpm verify` passes and the user agrees, run
+   when it is ready, the quick local check passes and the user agrees, run
    `gh pr ready <number> --repo capybara-hq/<repo>`, which starts CI. A draft cannot be merged.
    A PR that is finished when it is opened is created ready, without `--draft`.
 
@@ -142,7 +149,7 @@ Closes #N
 
 ## Checklist
 
-- [x] `pnpm verify` passes
+- [x] The quick local check passes (`pnpm verify --fast` or `pnpm verify`, plus the changed tests)
 - [ ] A changeset is included if a published package changed
 - [ ] The design doc is linked here if this is a larger change
 ```
@@ -175,7 +182,7 @@ Tick a box only when it is true. When an item does not apply, leave it unticked 
    Keep the threads with `isResolved: false`. Show the user each one: `path:line`, who asked, what.
 3. Fix each point in the worktree, or, when you disagree or it is unclear, propose a reply that
    explains why instead of changing the code. The user decides.
-4. Run `pnpm verify` until it passes, commit (new commits; do not rewrite history the reviewer has
+4. Run the quick local check and the changed tests until they pass, commit (new commits; do not rewrite history the reviewer has
    seen unless the user asks), and push after the user agrees.
 5. Reply in each thread with what changed (and the commit), after the user agrees with the text:
    `gh api repos/capybara-hq/<repo>/pulls/<PR>/comments/<databaseId of the thread's first comment>/replies -f body="<reply>"`.

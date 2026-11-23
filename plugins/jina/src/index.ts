@@ -13,7 +13,7 @@ export { JinaDeployment } from "./config.js";
 export default defineExtension({
   name: "jina",
   version: "0.1.0-rc.9",
-  sdk: "^0.1.0-rc.2",
+  sdk: "^0.1.0-rc.64",
   provides: [WEB_SEARCH_EXTENSION_POINT, WEB_FETCH_EXTENSION_POINT],
   permissions: { network: ["s.jina.ai", "r.jina.ai"] },
   config: { deployment: JinaDeployment },

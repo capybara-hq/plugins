@@ -274,7 +274,7 @@ type CallConfigValue = Partial<z.infer<typeof CallConfig>>;
 export default defineExtension({
   name: "openai",
   version: "0.1.0-rc.11",
-  sdk: "^0.1.0-rc.0",
+  sdk: "^0.1.0-rc.64",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
   // 默认端点；部署配置 baseUrl 可改指向代理（只展示，平台不拦截）
   permissions: { network: ["api.openai.com"] },

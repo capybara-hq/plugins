@@ -184,7 +184,7 @@ export function createArkProvider(defaults: ArkDefaults): ModelProvider {
 export default defineExtension({
   name: "ark",
   version: "0.1.0-rc.11",
-  sdk: "^0.1.0-rc.4",
+  sdk: "^0.1.0-rc.64",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
   // The two regions' data and control planes (display only, the platform does not intercept)
   permissions: {

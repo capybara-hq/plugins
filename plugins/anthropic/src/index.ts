@@ -325,7 +325,7 @@ export function createAnthropicProvider(opts: AnthropicProviderOptions): ModelPr
 export default defineExtension({
   name: "anthropic",
   version: "0.1.0-rc.9",
-  sdk: "^0.1.0-rc.0",
+  sdk: "^0.1.0-rc.64",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
   // Default host; the platform's baseUrl is display-only here, an org's own one goes through ctx.net
   permissions: { network: ["api.anthropic.com"] },

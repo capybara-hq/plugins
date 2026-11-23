@@ -20,6 +20,15 @@
 # - /opt/capybara-runtime holds the restricted operation runtime, root-owned 0755 / 0644 (below);
 # - the plugins' list and scan (project root) run a python3 script inside the sandbox (python3 -I and
 #   timeout from /usr/local/bin, /usr/bin or /bin; standard library only): src/listing.ts in both plugins;
+# - capybara-device (core, docker mode) runs this image by a digest it pins
+#   (packages/device/src/exec/docker-image.ts), never by tag: its device container (entrypoint
+#   `sleep infinity`) and its trusted helper containers set --entrypoint and rely on no
+#   ENTRYPOINT / CMD; they run under an arbitrary uid:gid with a read-only root file system and no
+#   capabilities. It needs /usr/bin/python3 at that path with the standard library modules its
+#   inline helpers import (the helper containers and its environment probe fail closed when one is
+#   missing), /bin/bash and sleep. Changing any of this needs a new pin in core
+#   (`pnpm gen:device-image-pin <version>`); spec
+#   docs/superpowers/specs/2026-11-23-docker-device-without-host-python-design.md in core;
 # - one image for every sandbox mode (`auto` / `sandbox`): what a mode may do is set by policy (the
 #   sandbox tool policy and the egress network), not by missing binaries. It carries Node 22
 #   (official tarball, SHA256 pinned per architecture), pnpm (global, so
@@ -96,7 +105,7 @@ RUN printf '%s\n' \
   > /etc/ssh/ssh_known_hosts \
   && chmod 0644 /etc/ssh/ssh_known_hosts
 
-# The restricted operation runtime (permission profiles): the SDK's SANDBOX_RUNTIME_SOURCE files
+# The restricted operation runtime (permission profiles): the SDK's SANDBOX_RUNTIME_SOURCE.current files
 # (native-files.py, linux-sandbox.py) byte for byte plus the provider's consumer
 # (capybara-operation.py), staged root-owned and read-only; the build fails unless every file
 # matches SHA256SUMS (src/runtime-source.ts; test/permission-scopes.test.ts keeps them in step).

@@ -826,7 +826,7 @@
     },
     {
       "name": "device-docker",
-      "version": "0.1.0-rc.24",
+      "version": "0.1.0-rc.26",
       "summary": {
         "en": "Devices as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with their files on volumes kept until the device is deleted: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist",
         "zh": "以 Docker 容器（runc 或 gVisor runsc）承载设备，经 Docker socket 代理访问；文件保存在卷上，直到设备被删除。网络默认开放公网（拒绝回环、私有、链路本地与元数据地址），也可用主机白名单"
@@ -853,14 +853,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-docker",
-          "version": "0.1.0-rc.24",
-          "integrity": "sha512-M+XP8iLgbQe8K27u29Ta2O5Pg+1pCHT4lFZPN9VxyP9+FrtqBcYG0Uf0tC9/f1MUWBdN4fesyeqHXUpoObUg+w=="
+          "version": "0.1.0-rc.26",
+          "integrity": "sha512-lopV/CZM5mw08/WvV+wxhKQO5CeORB2SbhsDy1qYMYPtT+gidmgRTk//axGFlkh6iQnbEruQ3LhOIHzdvm+TJA=="
         }
       }
     },
     {
       "name": "device-e2b",
-      "version": "0.1.0-rc.24",
+      "version": "0.1.0-rc.26",
       "summary": {
         "en": "Devices as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, an allowlist or the open internet with local ranges denied (E2B's metadata service stays reachable)",
         "zh": "以 E2B 沙箱承载设备（E2B 云或自托管）：暂停沙箱保留文件，从已发布镜像构建模板，网络为出站白名单或开放公网（拒绝私有、回环与链路本地地址；E2B 元数据端点仍可达，见 README）"
@@ -886,14 +886,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-e2b",
-          "version": "0.1.0-rc.24",
-          "integrity": "sha512-oGy3ee/KXQi6U3brSw18LL8WqzlTunhYHZP+ph6yzzY1dD+9ndf7FZFpRIfcpmU40vxCd9fUYw5RBGOXzB7oAQ=="
+          "version": "0.1.0-rc.26",
+          "integrity": "sha512-NAaN3/vydaaV7YhZuWPkGXhZSuXTbreoOmv/QIv3Oh3Ip2sNSnjCcHQN9x5NjrZXRc5baxfZYG++N1698bD+DQ=="
         }
       }
     },
     {
       "name": "device-local",
-      "version": "0.1.0-rc.6",
+      "version": "0.1.0-rc.7",
       "summary": {
         "en": "Devices on people's own computers: a machine connected with capybara-device serves the device over the dial-in channel, and its owner limits it there",
         "zh": "在自己的电脑上使用设备：用 capybara-device 连接的电脑通过拨入通道为设备服务，由电脑的所有者在本机限制它"
@@ -916,8 +916,33 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-local",
-          "version": "0.1.0-rc.6",
-          "integrity": "sha512-wB9147kTphsBKwtvcgd6fylqECDqtqeZfkqiDY2jBAcErjrOL19alogWYIstof9les4CSi6tO8VgBgdfSYN97A=="
+          "version": "0.1.0-rc.7",
+          "integrity": "sha512-IGhfG42LMy8Rf95vHEjGKkEHHhASClFvPZZnLZAHjdHr6fqox6z2q1c4Kn1BRee2kSVT31AOw8hiTurfIXyalA=="
+        }
+      }
+    },
+    {
+      "name": "atlassian",
+      "version": "0.1.0-rc.1",
+      "summary": {
+        "en": "Agents work with Jira, Confluence and Bitbucket as the connected person, through Atlassian's remote MCP server (Atlassian Cloud). Each member connects their own Atlassian account with OAuth; the client is registered automatically, so the org admin enters nothing",
+        "zh": "智能体以连接者本人的身份使用 Jira、Confluence 和 Bitbucket，经 Atlassian 的远程 MCP 服务器（Atlassian Cloud）。每位成员用 OAuth 连接自己的 Atlassian 账号；客户端自动注册，组织管理员无需填写任何内容"
+      },
+      "displayName": {
+        "zh": "Atlassian",
+        "en": "Atlassian"
+      },
+      "icon": "./plugins/atlassian/icon.svg",
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/atlassian#readme",
+      "permissions": {
+        "keys": [],
+        "sensitive": []
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-atlassian",
+          "version": "0.1.0-rc.1",
+          "integrity": "sha512-wi2ntiWlFvKYEDez8uxXd57oHTeR2mHvF4U9fwnokMdTCNdufNKCQUC/90YK15DR1vH3z2vDQksSh8JvQXrz7g=="
         }
       }
     }

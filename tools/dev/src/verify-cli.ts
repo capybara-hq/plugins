@@ -1,22 +1,71 @@
 /**
  * Runs locally what CI's required checks run for this branch's diff (`pnpm verify`).
  *
- *   tsx tools/dev/src/verify-cli.ts [--json]
+ *   tsx tools/dev/src/verify-cli.ts [--json] [--fast]
+ *
+ * `--fast` runs only the quick local check ({@link fastSteps}: lint, typecheck, custom checks)
+ * with no upstream remote, fetch or plan; run the tests of the files you changed next to it.
  */
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadWorkspace, planFromFiles, type Workspace } from "@capybara-hq/ci/affected";
 import { findUpstream, readRemotes } from "./remotes.ts";
 import { type Check, printReport } from "./report.ts";
-import { baseChecks, changesetWarning, safePlan, tryChangedFiles, verifySteps } from "./verify.ts";
+import {
+  baseChecks,
+  changesetWarning,
+  fastSteps,
+  safePlan,
+  tryChangedFiles,
+  type VerifyStep,
+  verifySteps,
+} from "./verify.ts";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url)).replace(/\/$/, "");
 const json = process.argv.includes("--json");
+const fast = process.argv.includes("--fast");
 // In --json mode stdout carries only the report; progress goes to stderr.
 const say = (s: string) => (json ? console.error(s) : console.log(s));
 
-const upstream = findUpstream(readRemotes(root), "plugins");
-if (upstream === null) {
+/** Runs the steps in order; a step without a command is reported as skipped. */
+function runSteps(steps: VerifyStep[]): Check[] {
+  const checks: Check[] = [];
+  for (const step of steps) {
+    if (step.cmd === null) {
+      checks.push({ id: step.id, title: step.title, status: "skip", detail: step.note ?? "" });
+      continue;
+    }
+    say(`\n==> ${step.title}: ${step.cmd.join(" ")}`);
+    const [cmd, ...args] = step.cmd as [string, ...string[]];
+    const r = spawnSync(cmd, args, {
+      cwd: root,
+      encoding: "utf8",
+      stdio: json ? "pipe" : "inherit",
+      maxBuffer: 256 * 1024 * 1024,
+    });
+    const ok = r.status === 0;
+    const tail = json
+      ? `${r.stdout ?? ""}${r.stderr ?? ""}`.trimEnd().split("\n").slice(-20).join("\n")
+      : "";
+    checks.push({
+      id: step.id,
+      title: step.title,
+      status: ok ? "pass" : "fail",
+      detail: ok ? step.cmd.join(" ") : `exit ${r.status ?? "signal"}${tail ? `\n${tail}` : ""}`,
+    });
+  }
+  return checks;
+}
+
+const upstream = fast ? null : findUpstream(readRemotes(root), "plugins");
+if (fast) {
+  const checks = runSteps(fastSteps());
+  say(
+    "\nfast check only; run the tests of the files you changed, CI runs the affected tests before merge",
+  );
+  say("");
+  process.exitCode = printReport(checks, json);
+} else if (upstream === null) {
   process.exitCode = printReport(
     [
       {
@@ -59,31 +108,7 @@ if (upstream === null) {
     say(`changed files: ${files.length}`);
     say(`plan: ${plan.reason}`);
 
-    const checks: Check[] = [...resolved.checks];
-    for (const step of verifySteps(plan, base)) {
-      if (step.cmd === null) {
-        checks.push({ id: step.id, title: step.title, status: "skip", detail: step.note ?? "" });
-        continue;
-      }
-      say(`\n==> ${step.title}: ${step.cmd.join(" ")}`);
-      const [cmd, ...args] = step.cmd as [string, ...string[]];
-      const r = spawnSync(cmd, args, {
-        cwd: root,
-        encoding: "utf8",
-        stdio: json ? "pipe" : "inherit",
-        maxBuffer: 256 * 1024 * 1024,
-      });
-      const ok = r.status === 0;
-      const tail = json
-        ? `${r.stdout ?? ""}${r.stderr ?? ""}`.trimEnd().split("\n").slice(-20).join("\n")
-        : "";
-      checks.push({
-        id: step.id,
-        title: step.title,
-        status: ok ? "pass" : "fail",
-        detail: ok ? step.cmd.join(" ") : `exit ${r.status ?? "signal"}${tail ? `\n${tail}` : ""}`,
-      });
-    }
+    const checks: Check[] = [...resolved.checks, ...runSteps(verifySteps(plan, base))];
     const warning = ws === null ? null : changesetWarning(files, ws, root);
     if (warning !== null) checks.push(warning);
     say("");

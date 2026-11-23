@@ -148,7 +148,7 @@ export function createDeepSeekProvider(defaults: DeepSeekDefaults): ModelProvide
 export default defineExtension({
   name: "deepseek",
   version: "0.1.0-rc.10",
-  sdk: "^0.1.0-rc.29",
+  sdk: "^0.1.0-rc.64",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
   // Default host; a changed baseUrl is display-only here, the platform does not intercept
   permissions: { network: ["api.deepseek.com"] },

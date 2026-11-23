@@ -597,10 +597,18 @@ def install_filter(table, program, listener):
 # ---- roots and Landlock -------------------------------------------------------------------
 
 def verify_roots(native, request):
-    """Validates pinned descriptors against their recorded identity without reopening paths."""
-    result = {"read": [], "write": []}
+    """Validates pinned descriptors against their recorded identity without reopening paths.
+    Read and write roots are directories; a file root (readFiles, exec mode only) is a regular
+    file whose descriptor the consumer opened O_PATH | O_NOFOLLOW, so a symbolic link, directory,
+    FIFO, socket or device given as a file root is refused here, as is a wrong recorded identity.
+    A file root whose pinned file no longer sits at its path (renamed or deleted since the pin:
+    editors and atomic saves do this) or has more than one name (a hard link could share a denied
+    file's inode) is skipped: no rule, no refusal, the path stays unreadable."""
+    result = {"read": [], "write": [], "readFiles": []}
     seen = []
-    for kind in ("read", "write"):
+    if request.get("roots", {}).get("readFiles") and request.get("mode") != "exec":
+        raise Refused("INVALID_REQUEST", "File roots serve exec mode only")
+    for kind in ("read", "write", "readFiles"):
         for entry in request.get("roots", {}).get(kind, []):
             path, fd = entry.get("path"), entry.get("fd")
             if not isinstance(path, str) or type(fd) is not int or not native.valid_path(path) \
@@ -612,10 +620,18 @@ def verify_roots(native, request):
             except OSError:
                 raise Refused("ROOT_CHANGED", "A pinned root descriptor is not available")
             identity = [entry.get("dev"), entry.get("ino")]
-            if not stat.S_ISDIR(info.st_mode) or identity != [info.st_dev, info.st_ino] \
+            os.set_inheritable(fd, False)
+            if kind == "readFiles":
+                if not stat.S_ISREG(info.st_mode):
+                    raise Refused("ROOT_CHANGED", "A pinned file root is not a regular file")
+                if identity != [info.st_dev, info.st_ino]:
+                    raise Refused("ROOT_CHANGED", "A pinned root no longer names its recorded object")
+                if where != path or info.st_nlink != 1:
+                    # renamed, deleted or given a second name since the pin: grant nothing for it
+                    continue
+            elif not stat.S_ISDIR(info.st_mode) or identity != [info.st_dev, info.st_ino] \
                     or where != path:
                 raise Refused("ROOT_CHANGED", "A pinned root no longer names its recorded object")
-            os.set_inheritable(fd, False)
             result[kind].append({"path": path, "fd": fd})
             seen.append({"kind": kind, "path": path, "fd": fd, "dev": info.st_dev,
                          "ino": info.st_ino})
@@ -640,6 +656,10 @@ def landlock_ruleset(roots, system_roots, network_mediated, brokered_writes=Fals
     for root in roots["write"]:
         # Brokered: the command reads its write roots; the broker performs every write.
         rule(root["fd"], FS_READ if brokered_writes else FS_ALL)
+    for root in roots["readFiles"]:
+        # The file's own inode, read only: no READ_DIR (a file has no listing to grant, and its
+        # directory gets no rule from it) and no EXECUTE.
+        rule(root["fd"], FS_READ_FILE)
     opened = []
     try:
         for path in system_roots:
@@ -1976,8 +1996,9 @@ def device_files_lock(request, roots, system_roots):
         raise Refused("INVALID_REQUEST", "The files lock descriptor is not open")
     if not stat.S_ISREG(info.st_mode) or not where.startswith("/") or where.endswith(" (deleted)"):
         raise Refused("INVALID_REQUEST", "The files lock is not a regular file")
-    reach = [r["path"] for r in roots["read"] + roots["write"]] + list(system_roots)
-    for entry in roots["read"] + roots["write"]:
+    granted = roots["read"] + roots["write"] + roots["readFiles"]
+    reach = [r["path"] for r in granted] + list(system_roots)
+    for entry in granted:
         try:
             reach.append(os.readlink("/proc/self/fd/%d" % entry["fd"]))
         except OSError:

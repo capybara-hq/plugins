@@ -134,7 +134,7 @@ export function createBailianProvider(
 export default defineExtension({
   name: "bailian",
   version: "0.1.0-rc.10",
-  sdk: "^0.1.0-rc.4",
+  sdk: "^0.1.0-rc.64",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
   permissions: {
     // Display only (the platform does not intercept). Workspace hosts

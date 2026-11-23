@@ -9,6 +9,7 @@ import {
   baseChecks,
   changedFiles,
   changesetWarning,
+  fastSteps,
   safePlan,
   tryChangedFiles,
   verifySteps,
@@ -76,6 +77,18 @@ describe("verifySteps", () => {
       "commitlint",
       "test",
     ]);
+  });
+});
+
+describe("fastSteps", () => {
+  it("runs lint, typecheck and the custom checks, with no base, plan or tests", () => {
+    const steps = fastSteps();
+    expect(steps.map((s) => s.id)).toEqual(["lint", "typecheck", "check"]);
+    expect(steps.every((s) => s.cmd !== null && !s.cmd.includes("--base"))).toBe(true);
+  });
+
+  it("is the same leading steps as the full verify", () => {
+    expect(verifySteps(basePlan, "abc").slice(0, 3)).toEqual(fastSteps());
   });
 });
 

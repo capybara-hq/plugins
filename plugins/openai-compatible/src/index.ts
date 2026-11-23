@@ -297,7 +297,7 @@ function platformOf(config: unknown): PlatformDefaults {
 export default defineExtension({
   name: PROVIDER,
   version: "0.1.0-rc.11",
-  sdk: "^0.1.0-rc.0",
+  sdk: "^0.1.0-rc.64",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
   // No network permission: every endpoint comes from config, there is no fixed host. Org-set
   // endpoint URLs go through ctx.net

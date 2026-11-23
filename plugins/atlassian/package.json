@@ -1,0 +1,18 @@
+{
+  "name": "@capybara-hq/plugin-atlassian",
+  "version": "0.1.0-rc.1",
+  "description": "Jira, Confluence and Bitbucket connector templates on Atlassian's remote MCP server (Atlassian Cloud), as the connected person (OAuth with dynamic client registration)",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/capybara-hq/plugins.git",
+    "directory": "plugins/atlassian"
+  },
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/atlassian#readme",
+  "type": "module",
+  "files": [],
+  "devDependencies": {
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.27",
+    "yaml": "^2.9.1"
+  }
+}

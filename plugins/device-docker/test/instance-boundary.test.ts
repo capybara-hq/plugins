@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   isSandboxPermissionUnsupportedError,
   isSandboxScopeDeniedError,
+  SANDBOX_RUNTIME_SOURCE,
   type SandboxHandle,
   type SandboxOperationScope,
 } from "@capybara-hq/plugin-sdk";
@@ -45,8 +46,8 @@ const ok = (stdout: Buffer | string = ""): AgentRun => ({
 });
 
 /** The staged-runtime probe's answer: owners, modes and digests as the image stages them. */
-function stagedAnswer(tamper?: "digest" | "writable") {
-  const digests = stagedRuntimeDigests();
+function stagedAnswer(tamper?: "digest" | "writable", override: Record<string, string> = {}) {
+  const digests = { ...stagedRuntimeDigests(), ...override };
   const names = Object.keys(digests).sort();
   const lines = [
     "0 755 directory .",
@@ -148,6 +149,33 @@ describe("support v2", () => {
       expect(support.unavailableReason).toMatch(/staged/);
     },
   );
+});
+
+describe("staged runtime digests against the host SDK", () => {
+  const support = async (override: Record<string, string>) => {
+    const { t } = fakeTransport(stagedAnswer(undefined, override));
+    return createOperations({ transport: t, network: { openPublic: true } }).permissionSupport(
+      h,
+      sig(),
+    );
+  };
+
+  it("keeps an instance of an earlier image available while the host SDK accepts its launcher", async () => {
+    // the launcher released images staged before this restage: the SDK's staged set
+    const earlier = SANDBOX_RUNTIME_SOURCE.files.find((f) => f.name === "linux-sandbox.py");
+    expect(earlier?.sha256).not.toBe(stagedRuntimeDigests()["linux-sandbox.py"]);
+    const got = await support({ "linux-sandbox.py": earlier?.sha256 ?? "" });
+    expect(got.unavailableReason).toBeUndefined();
+    expect(got.background).toBe(true);
+  });
+
+  it("offers nothing for a launcher or helper digest the host SDK does not accept", async () => {
+    for (const name of ["linux-sandbox.py", "native-files.py", "capybara-operation.py"]) {
+      const got = await support({ [name]: "a".repeat(64) });
+      expect(got.background, name).toBe(false);
+      expect(got.unavailableReason, name).toBe(`The staged ${name} does not match its digest`);
+    }
+  });
 });
 
 describe("operation scopes", () => {
