@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-device-e2b",
-  "version": "0.1.0-rc.22",
+  "version": "0.1.0-rc.23",
   "description": "Devices as E2B sandboxes (E2B cloud or self-hosted), with pause / resume and an allowlist or the open internet with local ranges denied (the E2B metadata endpoint stays reachable)",
   "license": "Apache-2.0",
   "repository": {
