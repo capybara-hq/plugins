@@ -21,6 +21,9 @@ import { createE2BSandbox, type E2BSandboxConfig, publishedImage } from "../src/
 import { finishList, finishScan, LIST_PATH, OUTSIDE_WORKSPACE_REASON } from "../src/listing.js";
 import { fakeSystemPath } from "./system-path.js";
 
+/** The fence token every lifecycle call carries here (device update fencing). */
+const FENCE = { token: 1 };
+
 /** The system PATH of the fake E2B (shims and this machine's tools). */
 const systemPath = fakeSystemPath();
 
@@ -99,7 +102,7 @@ describe("device-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
   const provision = async () => {
     const name = `cap-device-${randomUUID()}`;
     const fileSystem = await sbx.createFileSystem({ name, limits: limits(), signal: sig() });
-    return sbx.create({ name, limits: limits(), fileSystem, signal: sig() });
+    return sbx.create({ fence: FENCE, name, limits: limits(), fileSystem, signal: sig() });
   };
 
   beforeAll(async () => {

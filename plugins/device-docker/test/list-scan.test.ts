@@ -27,6 +27,9 @@ import {
   type TestImages,
 } from "./docker-env.js";
 
+/** The fence token every lifecycle call carries here (device update fencing). */
+const FENCE = { token: 1 };
+
 /**
  * `list` / `scan` (project root, core spec 2026-11-14 §4.1, §4.2) on real Docker: read inside the
  * container as the sandbox user, the container's workspace being the whole reachable area (the
@@ -64,6 +67,7 @@ describe.skipIf(!dockerAvailable)("device-docker list and scan", { timeout: 120_
     const name = `cap-${randomUUID()}`;
     const fileSystem = await sbx.createFileSystem({ name, limits: limits(), signal: sig() });
     return sbx.create({
+      fence: FENCE,
       name,
       image: images.sandboxImage,
       limits: limits(),

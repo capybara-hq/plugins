@@ -105,6 +105,9 @@ const testHosts = { [A]: "127.0.0.1", [B]: "127.0.0.1", [C]: "127.0.0.1" };
 const newState = (hosts: string[], extra: { deniedCidrs?: string[]; configFile?: string } = {}) =>
   createEgressState({ mode: "allowlist", allowHosts: hosts, testHosts, log: quiet, ...extra });
 
+/** An apply under a fence token (1 unless given): every apply carries one. */
+const apply = (state: EgressState, config: unknown, fence = 1) => state.apply(config, fence);
+
 const cfgOf = (hosts: string[], deniedCidrs: string[] = []) => ({
   mode: "allowlist" as const,
   hosts,
@@ -287,7 +290,7 @@ describe("apply", () => {
     const state = newState([A]);
     const { http } = await start(state);
     await expect(connectTunnel(http, B)).rejects.toThrow(/403/);
-    const digest = await state.apply(cfgOf([A, B]));
+    const digest = await apply(state, cfgOf([A, B]));
     expect(digest).toBe(allowDigest(cfgOf([A, B])));
     expect(state.policy.digest).toBe(digest);
     const t = await connectTunnel(http, B);
@@ -295,37 +298,62 @@ describe("apply", () => {
     t.socket.destroy();
     // the same list again answers at once with the same digest and closes nothing
     const open = await connectTunnel(http, A);
-    expect(await state.apply(cfgOf([B, A]))).toBe(digest);
+    expect(await apply(state, cfgOf([B, A]))).toBe(digest);
     expect(await open.say("still")).toBe("echo:still");
     open.socket.destroy();
-    await state.apply(cfgOf([B]));
+    await apply(state, cfgOf([B]));
     await expect(connectTunnel(http, A)).rejects.toThrow(/403/);
   });
 
-  it("compare and swap: an apply that read an older list is refused, the current one applies", async () => {
-    const state = newState([A, B]);
-    const read = state.policy.digest;
-    // another caller narrows first
-    await state.apply(cfgOf([A]), read);
-    // the stale caller's wider list never lands after it
-    await expect(state.apply(cfgOf([A, B]), read)).rejects.toThrow(/changed since it was read/);
+  it("fence: an apply without a valid token is refused; a lower token is stale and changes nothing", async () => {
+    const d = mkdtempSync(join(tmpdir(), "egress-fence-"));
+    const configFile = join(d, "allow.json");
+    const state = newState([A, B], { configFile });
+    const { http } = await start(state);
+    await expect(state.apply(cfgOf([A]), undefined)).rejects.toThrow(/no valid fence/);
+    await expect(state.apply(cfgOf([A]), -1)).rejects.toThrow(/no valid fence/);
+    await expect(state.apply(cfgOf([A]), 1.5)).rejects.toThrow(/no valid fence/);
+    // a newer holder narrows with token 7
+    await state.apply(cfgOf([A]), 7);
+    const written = readFileSync(configFile, "utf8");
+    const open = await connectTunnel(http, A);
+    // the stale holder's wider list (token 6) never lands: nothing written, swapped or closed
+    await expect(state.apply(cfgOf([A, B]), 6)).rejects.toMatchObject({
+      code: "stale-fence",
+      fence: 7,
+    });
+    expect(readFileSync(configFile, "utf8")).toBe(written);
     expect(state.policy.allowHosts).toEqual([A]);
-    // the list already in force is acknowledged whatever was read
-    expect(await state.apply(cfgOf([A]), read)).toBe(state.policy.digest);
-    expect(await state.apply(cfgOf([A, C]), state.policy.digest)).toBe(allowDigest(cfgOf([A, C])));
+    expect(await open.say("kept")).toBe("echo:kept");
+    open.socket.destroy();
+    await expect(connectTunnel(http, B)).rejects.toThrow(/403/);
+  });
+
+  it("fence: an equal token is the same holder (idempotent); a higher one with the same list stores the token", async () => {
+    const d = mkdtempSync(join(tmpdir(), "egress-fence-"));
+    const configFile = join(d, "allow.json");
+    const state = newState([A], { configFile });
+    const digest = await state.apply(cfgOf([A, B]), 3);
+    expect(await state.apply(cfgOf([A, B]), 3)).toBe(digest);
+    expect(state.fence).toBe(3);
+    expect(await state.apply(cfgOf([B, A]), 9)).toBe(digest);
+    expect(state.fence).toBe(9);
+    expect(readAllowFile(configFile)).toMatchObject({ hosts: [A, B], fence: 9 });
+    // so an older holder's apply of a different list is refused now
+    await expect(state.apply(cfgOf([A, B, C]), 8)).rejects.toMatchObject({ code: "stale-fence" });
   });
 
   it("a refused request leaves the list in force", async () => {
     const state = newState([A]);
     const before = state.policy;
-    await expect(state.apply(cfgOf([A, "10.0.0.1"]))).rejects.toThrow(/Invalid allowlist host/);
-    await expect(state.apply({ mode: "allowlist", hosts: [] })).rejects.toThrow(/at least one/);
+    await expect(apply(state, cfgOf([A, "10.0.0.1"]))).rejects.toThrow(/Invalid allowlist host/);
+    await expect(apply(state, { mode: "allowlist", hosts: [] })).rejects.toThrow(/at least one/);
     expect(state.policy).toBe(before);
   });
 
   it("an open-public proxy takes no list in place", async () => {
     const state = createEgressState({ mode: "open-public", log: quiet });
-    await expect(state.apply(cfgOf([A]))).rejects.toThrow(/open-public/);
+    await expect(apply(state, cfgOf([A]))).rejects.toThrow(/open-public/);
     expect(state.policy.mode).toBe("open-public");
   });
 
@@ -336,7 +364,7 @@ describe("apply", () => {
     const s = await socksTunnel(socks, A);
     const f = await httpForward(http, A);
     expect(f.head).toMatch(/^HTTP\/1\.1 200/);
-    await state.apply(cfgOf([A, B]));
+    await apply(state, cfgOf([A, B]));
     expect(await c.say("one")).toBe("echo:one");
     expect(await s.say("two")).toBe("echo:two");
     expect(f.socket.destroyed).toBe(false);
@@ -356,7 +384,7 @@ describe("apply", () => {
     const forwardKept = await httpForward(http, A);
     expect(state.connections).toBeGreaterThanOrEqual(6);
 
-    await state.apply(cfgOf([A]));
+    await apply(state, cfgOf([A]));
     // closed before apply resolved: the closes were issued synchronously with the swap
     for (const t of gone) if (t) await t.closed;
     await forwardGone.closed;
@@ -374,9 +402,9 @@ describe("apply", () => {
     const { http } = await start(state);
     const t = await connectTunnel(http, A);
     // a list that still covers a.example.com through another entry keeps the tunnel
-    await state.apply(cfgOf([A, "z.example.org"]));
+    await apply(state, cfgOf([A, "z.example.org"]));
     expect(await t.say("x")).toBe("echo:x");
-    await state.apply(cfgOf(["z.example.org"]));
+    await apply(state, cfgOf(["z.example.org"]));
     await t.closed;
     expect(t.socket.destroyed).toBe(true);
   });
@@ -404,7 +432,7 @@ describe("apply", () => {
       (e: Error) => e.message,
     );
     await expect.poll(() => held.length).toBe(3);
-    await state.apply(cfgOf([A]));
+    await apply(state, cfgOf([A]));
     // the clients of B are closed at once, before their dials complete
     for (const f of held.splice(0)) f();
     const [b, a] = await Promise.all(results);
@@ -449,7 +477,7 @@ describe("apply", () => {
     );
     await expect.poll(() => release !== undefined).toBe(true);
     expect(state.connections).toBe(1);
-    await state.apply(cfgOf([A]));
+    await apply(state, cfgOf([A]));
     expect(await pending).toBe("closed");
     release?.([{ address: "8.8.8.8" }]);
     await expect.poll(() => state.connections).toBe(0);
@@ -472,12 +500,12 @@ describe("apply", () => {
     }) as unknown as Socket;
     const entry = state.admit(A, client);
     expect(state.keep(entry, up)).toBe(true);
-    await state.apply(cfgOf([A], ["203.0.114.0/24"]));
+    await apply(state, cfgOf([A], ["203.0.114.0/24"]));
     expect(destroyed).toBe(2);
     expect(state.connections).toBe(0);
     // and one still connecting when the ranges change is refused once it connects
     const late = state.admit(A, client);
-    await state.apply(cfgOf([A, B], ["203.0.114.0/24"]));
+    await apply(state, cfgOf([A, B], ["203.0.114.0/24"]));
     expect(state.keep(late, up)).toBe(false);
   });
 });
@@ -489,12 +517,13 @@ describe("config file and control socket", () => {
     const d = dir();
     const configFile = join(d, "allow.json");
     const state = newState([A, B], { configFile });
-    const digest = await state.apply(cfgOf([A], ["203.0.113.0/24"]));
+    const digest = await apply(state, cfgOf([A], ["203.0.113.0/24"]));
     expect(JSON.parse(readFileSync(configFile, "utf8"))).toEqual({
       ...cfgOf([A], ["203.0.113.0/24"]),
       digest,
+      fence: 1,
     });
-    expect(readAllowFile(configFile)).toEqual(cfgOf([A], ["203.0.113.0/24"]));
+    expect(readAllowFile(configFile)).toEqual({ ...cfgOf([A], ["203.0.113.0/24"]), fence: 1 });
 
     const started = main({
       MODE: "allowlist",
@@ -505,9 +534,12 @@ describe("config file and control socket", () => {
       SOCKS_PORT: "0",
       CONFIG_FILE: configFile,
       CONTROL_SOCKET: join(d, "control.sock"),
+      // the create-time token: the file's wins
+      FENCE: "0",
     });
     try {
       expect(started.state.policy.allowHosts).toEqual([A]);
+      expect(started.state.fence).toBe(1);
       expect([...started.state.policy.deniedCidrs].sort()).toEqual([
         "198.51.100.0/24",
         "203.0.113.0/24",
@@ -517,6 +549,32 @@ describe("config file and control socket", () => {
       started.socks.close();
       started.http.close();
     }
+  });
+
+  it("without a config file the start token is FENCE (the create-time token), else 0; a bad one stops the proxy", () => {
+    const d = dir();
+    const env = {
+      MODE: "allowlist",
+      ALLOW_HOSTS: JSON.stringify([A]),
+      PORT: "0",
+      SOCKS_PORT: "0",
+      CONFIG_FILE: join(d, "allow.json"),
+      CONTROL_SOCKET: join(d, "control.sock"),
+    };
+    for (const [fence, want] of [
+      ["12", 12],
+      [undefined, 0],
+    ] as const) {
+      const started = main({ ...env, ...(fence !== undefined && { FENCE: fence }) });
+      try {
+        expect(started.state.fence).toBe(want);
+      } finally {
+        started.control.close();
+        started.socks.close();
+        started.http.close();
+      }
+    }
+    expect(() => main({ ...env, FENCE: "-1" })).toThrow(/FENCE/);
   });
 
   it("without a usable control location the proxy still serves (no in-place changes)", async () => {
@@ -553,6 +611,9 @@ describe("config file and control socket", () => {
     expect(() => main(env)).toThrow(/is invalid/);
     writeFileSync(configFile, "{");
     expect(() => main(env)).toThrow(/is invalid/);
+    // a file without a token (an earlier plugin version) stops the proxy too
+    writeFileSync(configFile, JSON.stringify(cfgOf([A])));
+    expect(() => main(env)).toThrow(/no valid fence/);
     expect(readAllowFile(join(d, "missing.json"))).toBeNull();
   });
 
@@ -563,16 +624,24 @@ describe("config file and control socket", () => {
     const control = createControlServer(state);
     servers.push(control);
     await new Promise<void>((r) => control.listen(path, r));
-    const applied = await controlRequest(path, { op: "apply", config: cfgOf([A, B]) });
+    const applied = await controlRequest(path, { op: "apply", config: cfgOf([A, B]), fence: 4 });
     expect(applied).toEqual({ ok: true, digest: allowDigest(cfgOf([A, B])) });
     expect(await controlRequest(path, { op: "status" })).toEqual({
       ok: true,
       mode: "allowlist",
       hosts: [A, B],
       digest: allowDigest(cfgOf([A, B])),
+      fence: 4,
       connections: 0,
     });
-    const bad = await controlRequest(path, { op: "apply", config: cfgOf(["bad host"]) });
+    expect(await controlRequest(path, { op: "apply", config: cfgOf([A]), fence: 3 })).toEqual({
+      ok: false,
+      error: expect.stringMatching(/older fence/),
+      code: "stale-fence",
+      fence: 4,
+    });
+    expect((await controlRequest(path, { op: "apply", config: cfgOf([A]) })).ok).toBe(false);
+    const bad = await controlRequest(path, { op: "apply", config: cfgOf(["bad host"]), fence: 5 });
     expect(bad.ok).toBe(false);
     expect(String(bad.error)).toMatch(/Invalid allowlist host/);
     expect((await controlRequest(path, { op: "drop" })).ok).toBe(false);
@@ -594,7 +663,11 @@ describe("config file and control socket", () => {
       if (!started.http.listening) await new Promise((r) => started.http.once("listening", r));
       const { statSync } = await import("node:fs");
       expect(statSync(controlPath).mode & 0o777).toBe(0o600);
-      const r = await controlRequest(controlPath, { op: "apply", config: cfgOf([A, C]) });
+      const r = await controlRequest(controlPath, {
+        op: "apply",
+        config: cfgOf([A, C]),
+        fence: 1,
+      });
       expect(r.ok).toBe(true);
       expect(JSON.parse(readFileSync(join(d, "allow.json"), "utf8")).hosts).toEqual([A, C]);
     } finally {

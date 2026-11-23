@@ -11,6 +11,8 @@ export interface EgressProxyConfig {
   allowHosts?: string[];
   /** The deployment's extra denied ranges (IPv4 / IPv6 CIDRs), refused in every mode. */
   deniedCidrs?: string[];
+  /** The start fence token (the config file's, else the create-time one); default 0. */
+  fence?: number;
   /** Test only: host name -> pinned IP (exempt from the private address check; allowlist still needs the list). */
   testHosts?: Record<string, string>;
   lookup?: (host: string) => Promise<{ address: string }[]>;
@@ -48,13 +50,17 @@ export interface EgressState {
   readonly testHosts: Record<string, string>;
   /** Admitted connections whose client side has not closed. */
   readonly connections: number;
+  /** The highest fence token applied (or the start token). */
+  readonly fence: number;
   admit(host: string, client: Socket, closed?: import("node:events").EventEmitter): EgressEntry;
   keep(entry: EgressEntry, up: Socket): boolean;
   /**
-   * Validates, writes the config file, swaps, closes what the new list does not cover; the digest.
-   * With `ifDigest`, refused unless the list in force has that digest (compare and swap).
+   * Under the fence token `fence`: refuses a missing or invalid token, throws {@link StaleFence}
+   * for a lower one (nothing changed); otherwise validates, writes the config file with the token,
+   * swaps, closes what the new list does not cover; the digest. The same list with a higher token
+   * only stores the token.
    */
-  apply(config: unknown, ifDigest?: string): Promise<string>;
+  apply(config: unknown, fence: unknown): Promise<string>;
 }
 
 export interface AllowConfig {
@@ -63,6 +69,15 @@ export interface AllowConfig {
   deniedCidrs: string[];
 }
 
+/** An apply refused for its lower fence token. */
+export class StaleFence extends Error {
+  readonly code: "stale-fence";
+  /** The token in force. */
+  readonly fence: number;
+  constructor(fence: number);
+}
+export function isFence(v: unknown): v is number;
+
 export function allowHostError(h: unknown): string | null;
 export function allowDigest(c: {
   mode: string;
@@ -70,7 +85,7 @@ export function allowDigest(c: {
   deniedCidrs: readonly string[];
 }): string;
 export function parseAllowConfig(raw: unknown): AllowConfig;
-export function readAllowFile(file: string): AllowConfig | null;
+export function readAllowFile(file: string): (AllowConfig & { fence: number }) | null;
 export function createEgressState(cfg?: EgressProxyConfig): EgressState;
 export function createControlServer(state: EgressState): NetServer;
 export function controlRequest(path: string, request: unknown): Promise<Record<string, unknown>>;

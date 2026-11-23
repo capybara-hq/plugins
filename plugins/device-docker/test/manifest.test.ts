@@ -16,6 +16,9 @@ import plugin, {
 } from "../src/index.js";
 import { parseSizeMb, reportLimitLines } from "../src/provider.js";
 
+/** The fence token every lifecycle call carries here (device update fencing). */
+const FENCE = { token: 1 };
+
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
   version: string;
 };
@@ -170,6 +173,7 @@ describe("open-public with refuseOpenNetwork (no Docker needed)", () => {
     );
     await expect(
       sbx.create({
+        fence: FENCE,
         name: "cap-00000000-0000-4000-8000-000000000001",
         image: "capybara-sandbox:latest",
         limits: { ...OPEN },
@@ -182,6 +186,7 @@ describe("open-public with refuseOpenNetwork (no Docker needed)", () => {
         { id: "cap-00000000-0000-4000-8000-000000000001" },
         { ...OPEN },
         AbortSignal.timeout(5000),
+        FENCE,
       ),
     ).rejects.toThrow(/refuseOpenNetwork is true/);
   });
@@ -197,6 +202,7 @@ describe("open-public with refuseOpenNetwork (no Docker needed)", () => {
     // it fails on Docker (nothing listens on the endpoint), not on the network refusal
     await expect(
       sbx.create({
+        fence: FENCE,
         name: "cap-device-00000000-0000-4000-8000-000000000001",
         image: "capybara-sandbox:latest",
         limits: { ...ALLOWLIST },
@@ -215,6 +221,7 @@ describe("open-public with refuseOpenNetwork (no Docker needed)", () => {
     });
     await expect(
       sbx.create({
+        fence: FENCE,
         name: "cap-device-00000000-0000-4000-8000-000000000001",
         limits: { ...ALLOWLIST },
         fileSystem: { id: "cap-device-00000000-0000-4000-8000-000000000001" },

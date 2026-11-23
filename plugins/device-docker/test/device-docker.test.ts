@@ -28,6 +28,9 @@ import {
   type TestImages,
 } from "./docker-env.js";
 
+/** The fence token every lifecycle call carries here (device update fencing). */
+const FENCE = { token: 1 };
+
 /**
  * device-provider@1 on real Docker (through the socket proxy of capybara-hq/core's docker/sandbox-proxy):
  * file systems (volumes) that outlive instances (containers), lifecycle, exec timeout and abort,
@@ -112,7 +115,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       limits: o.limits,
       signal: o.signal,
     });
-    return p.create({ ...o, fileSystem });
+    return p.create({ fence: FENCE, ...o, fileSystem });
   };
 
   const sh = async (id: string, command: string, timeoutMs = 30_000) =>
@@ -193,7 +196,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
     // resume 已在运行的实例也算成功
     expect(await sbx.resume(h, sig())).toBe("resumed");
 
-    await sbx.destroy(h, sig());
+    await sbx.destroy(h, sig(), null);
     expect(await exists("container", name)).toBe(false);
     // destroy drops the instance only: the file system stays until destroyFileSystem
     expect(await exists("volume", `${name}-workspace`)).toBe(true);
@@ -215,6 +218,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
     );
     expect(labels).toEqual(["workspace", "skills"]);
     const h1 = await sbx.create({
+      fence: FENCE,
       name,
       image: images.sandboxImage,
       limits: limits(allow(["allowed.example.com"])),
@@ -223,7 +227,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
     });
     await sbx.writeFile(h1, "/workspace/keep.txt", enc.encode("kept"), sig());
     await sbx.writeFile(h1, "/skills/s/SKILL.md", enc.encode("skill"), sig());
-    await sbx.destroy(h1, sig());
+    await sbx.destroy(h1, sig(), null);
     expect(await exists("container", name)).toBe(false);
     expect(await exists("container", `${name}-egress`)).toBe(false);
     expect(await exists("network", `${name}-net`)).toBe(false);
@@ -232,6 +236,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       id: name,
     });
     const h2 = await sbx.create({
+      fence: FENCE,
       name,
       image: images.sandboxImage,
       limits: limits(allow()),
@@ -256,6 +261,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
     await sbx.destroyFileSystem(fileSystem, sig());
     const attempt = () =>
       sbx.create({
+        fence: FENCE,
         name,
         image: images.sandboxImage,
         limits: limits(allow()),
@@ -319,8 +325,8 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
     await gone(sbx.writeFile(h, "/workspace/a", enc.encode("x"), sig()));
     await gone(sbx.stat(h, "/workspace/a", sig()));
     await sbx.suspend(h, sig());
-    await sbx.destroy(h, sig());
-    await sbx.destroyByName?.(h.id, sig());
+    await sbx.destroy(h, sig(), null);
+    await sbx.destroyByName?.(h.id, sig(), null);
   });
 
   it("exec: exit code, stderr, env, cwd and the output cap", async () => {
@@ -373,7 +379,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       // bash 语法可用
       expect((await sh(h.id, "a=(x y); [[ $a == x ]] && echo bash")).stdout).toBe("bash\n");
     } finally {
-      await sbx.destroy(h, sig());
+      await sbx.destroy(h, sig(), null);
     }
   });
 
@@ -431,7 +437,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       // 杀掉命令后 /tmp 里不留 .kill 标记
       expect((await sh(h.id, "ls -a /tmp | grep -c 'kill$' || true")).stdout).toBe("0\n");
     } finally {
-      await sbx.destroy(h, sig());
+      await sbx.destroy(h, sig(), null);
     }
   });
 
@@ -458,7 +464,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       const over = await sbx.readFile(h, "/workspace/bin.dat", { maxBytes: 100, signal: sig() });
       expect(over && dec.decode(over.data)).toBe("short");
     } finally {
-      await sbx.destroy(h, sig());
+      await sbx.destroy(h, sig(), null);
     }
   });
 
@@ -480,7 +486,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       ).rejects.toThrow(/path/);
       await expect(sbx.stat(h, "relative", sig())).rejects.toThrow(/path/);
     } finally {
-      await sbx.destroy(h, sig());
+      await sbx.destroy(h, sig(), null);
     }
   });
 
@@ -513,7 +519,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       // 根文件系统只读
       expect((await sh(h.id, "touch /etc/x")).exitCode).not.toBe(0);
     } finally {
-      await sbx.destroy(h, sig());
+      await sbx.destroy(h, sig(), null);
     }
   });
 
@@ -544,7 +550,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
         /GNU findutils[\s\S]*GNU grep/,
       );
     } finally {
-      await sbx.destroy(h, sig());
+      await sbx.destroy(h, sig(), null);
     }
   });
 
@@ -572,7 +578,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       expect(await exists("container", `${name}-egress`)).toBe(false);
       expect(await exists("network", `${name}-net`)).toBe(false);
     } finally {
-      await sbx.destroy(h2, sig());
+      await sbx.destroy(h2, sig(), null);
     }
   });
 
@@ -586,7 +592,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
     });
     expect(await exists("container", `${name}-egress`)).toBe(true);
     expect(await exists("network", `${name}-net`)).toBe(true);
-    await sbx.destroyByName?.(name, sig());
+    await sbx.destroyByName?.(name, sig(), null);
     for (const [kind, n] of [
       ["container", name],
       ["container", `${name}-egress`],
@@ -618,7 +624,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       const r = await sh(h.id, `curl -sS --max-time 3 http://${targetIp}/`);
       expect(r.exitCode).not.toBe(0);
     } finally {
-      await sbx.destroy(h, sig());
+      await sbx.destroy(h, sig(), null);
     }
   });
 
@@ -659,7 +665,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
         "hello-egress",
       );
     } finally {
-      await sbx.destroy(h, sig());
+      await sbx.destroy(h, sig(), null);
     }
   });
 
@@ -717,7 +723,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
         const direct = await sh(h.id, `curl -sS --noproxy '*' --max-time 3 http://${targetIp}/`);
         expect(direct.exitCode).not.toBe(0);
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
     });
 
@@ -768,13 +774,15 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
         const direct = await sh(h.id, `curl -sS --noproxy '*' --max-time 3 http://${targetIp}/`);
         expect(direct.exitCode).not.toBe(0);
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
     });
 
-    it("update of an earlier version's instance: a wider allowlist swaps only the proxy; open-public, narrowing and a gone container recreate", async () => {
-      // an instance as an earlier plugin version made it (no egress control, no config volume);
-      // the in-place path is covered by network-in-place.test.ts
+    it("update of an earlier version's instance: every allowlist change recreates it (fenced rebuild); a lost proxy resumes from the labels", async () => {
+      // an instance as an earlier plugin version made it (no egress control of this version, no
+      // config volume): its proxy swap deletes first and cannot be fenced, so an allowlist change
+      // answers recreate and the kernel rebuilds the instance with the fence (device update
+      // fencing design §10 step 4); the in-place path is covered by network-in-place.test.ts
       const legacy = createDockerSandbox(cfg, {
         labels: { [TEST_LABEL]: RUN },
         egressTestHosts: { "allowed.example.com": targetIp, "denied.example.com": targetIp },
@@ -792,83 +800,58 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       try {
         await sbx.writeFile(h, "/workspace/keep.txt", enc.encode("kept"), sig());
         const id = (await inspect(name)).Id;
-
-        // allowlist to open-public recreates, so the labels stay truthful
-        expect(await sbx.update(h, limits(OPEN), sig())).toBe("recreate");
-        expect(await sbx.update(h, wider, sig())).toBe("updated");
+        expect(await sbx.update(h, limits(OPEN), sig(), FENCE)).toBe("recreate");
+        expect(await sbx.update(h, wider, sig(), FENCE)).toBe("recreate");
+        expect(await sbx.update(h, limits(allow(["other.example.com"])), sig(), FENCE)).toBe(
+          "recreate",
+        );
+        // nothing was touched: same container, same proxy list
         expect((await inspect(name)).Id).toBe(id);
-        const pe = await envOf(`${name}-egress`);
-        expect(pe).toContain("MODE=allowlist");
-        expect(pe).toContain(`ALLOW_HOSTS=${JSON.stringify(["allowed.example.com", "pypi.org"])}`);
-        expect((await inspect(`${name}-egress`)).State.Running).toBe(true);
-        const r = await sbx.exec(h, {
-          ...who(),
-          command: "cat /workspace/keep.txt; echo; echo $ALL_PROXY",
-          timeoutMs: 30_000,
-          maxOutputBytes: 10_000,
-          signal: sig(),
-        });
-        expect(r.stdout).toBe(`kept\nhttp://${name}-egress:3128\n`);
-
-        // a suspended instance keeps its new proxy stopped
-        await sbx.suspend(h, sig());
-        expect(await sbx.update(h, wider, sig())).toBe("updated");
-        expect((await inspect(`${name}-egress`)).State.Running).toBe(false);
-
+        expect(await envOf(`${name}-egress`)).toContain(
+          `ALLOW_HOSTS=${JSON.stringify(["allowed.example.com"])}`,
+        );
         // a lost proxy is rebuilt from the labels: the create-time allowlist, never wider
+        await sbx.suspend(h, sig());
         await docker("rm", "-f", `${name}-egress`);
         expect(await sbx.resume(h, sig())).toBe("resumed");
         expect(await envOf(`${name}-egress`)).toContain("MODE=allowlist");
         expect((await sh(h.id, "curl -sS --max-time 10 http://allowed.example.com/")).stdout).toBe(
           "hello-egress",
         );
-
-        // the create-time hosts (the labels' lower bound) stay in place; a narrower list or a
-        // provider without the labels recreates
-        expect(await sbx.update(h, allowlisted, sig())).toBe("updated");
-        expect(await sbx.update(h, limits(allow(["other.example.com"])), sig())).toBe("recreate");
-        expect(
-          await sbx.update(h, limits(allow(["allowed.example.com", "other.example.com"])), sig()),
-        ).toBe("updated");
-        expect((await inspect(name)).Id).toBe(id);
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
-      expect(await sbx.update(h, limits(OPEN), sig())).toBe("recreate");
+      expect(await sbx.update(h, limits(OPEN), sig(), FENCE)).toBe("recreate");
     });
 
-    it("update of an earlier version's instance: a new proxy that never becomes ready is removed, and resume rebuilds it from the labels", async () => {
+    it("open-public to open-public swaps only the proxy; a new proxy that never becomes ready is removed, and resume rebuilds it", async () => {
       // an "egress proxy" image that never serves /healthz: the sandbox image
       const broken = createDockerSandbox(
         { ...cfg, egressProxyImage: images.sandboxImage },
         { labels: { [TEST_LABEL]: RUN } },
       );
-      const legacy = createDockerSandbox(cfg, {
-        labels: { [TEST_LABEL]: RUN },
-        egressTestHosts: { "allowed.example.com": targetIp, "denied.example.com": targetIp },
-        legacyEgress: true,
-      });
       const name = sbxName();
-      const h = await newSandbox(legacy, {
+      const h = await newSandbox(sbx, {
         name,
         image: images.sandboxImage,
-        limits: limits(allow(["allowed.example.com"])),
+        limits: limits(OPEN),
         signal: sig(),
       });
       try {
-        // a wider allowlist is applied in place (allowlist to open-public would recreate instead)
-        await expect(
-          broken.update(h, limits(allow(["allowed.example.com", "pypi.org"])), sig()),
-        ).rejects.toThrow(/did not become ready/);
-        // the half-made wider proxy is gone, not left for resume to start
+        const id = (await inspect(name)).Id;
+        // the swap (no list to widen, so nothing a stale holder could apply)
+        expect(await sbx.update(h, limits(OPEN), sig(), FENCE)).toBe("updated");
+        expect((await inspect(name)).Id).toBe(id);
+        expect(await envOf(`${name}-egress`)).toContain("MODE=open-public");
+        await expect(broken.update(h, limits(OPEN), sig(), FENCE)).rejects.toThrow(
+          /did not become ready/,
+        );
+        // the half-made proxy is gone, not left for resume to start
         expect(await exists("container", `${name}-egress`)).toBe(false);
         expect(await sbx.resume(h, sig())).toBe("resumed");
-        expect(await envOf(`${name}-egress`)).toContain("MODE=allowlist");
-        expect((await sh(h.id, "curl -sS --max-time 10 http://allowed.example.com/")).stdout).toBe(
-          "hello-egress",
-        );
+        expect(await envOf(`${name}-egress`)).toContain("MODE=open-public");
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
     });
   });
@@ -1083,6 +1066,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
     );
     await expect(
       locked.create({
+        fence: FENCE,
         name: sbxName(),
         image: images.sandboxImage,
         limits: limits(OPEN),
@@ -1097,7 +1081,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       limits: limits(allow(["allowed.example.com"])),
       signal: sig(),
     });
-    await locked.destroy(h, sig());
+    await locked.destroy(h, sig(), null);
     // a live update to open-public is refused too
     const h2 = await newSandbox(locked, {
       name: sbxName(),
@@ -1106,11 +1090,11 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       signal: sig(),
     });
     try {
-      await expect(locked.update(h2, limits(OPEN), sig())).rejects.toThrow(
+      await expect(locked.update(h2, limits(OPEN), sig(), FENCE)).rejects.toThrow(
         /refuseOpenNetwork is true/,
       );
     } finally {
-      await locked.destroy(h2, sig());
+      await locked.destroy(h2, sig(), null);
     }
   });
 
@@ -1150,7 +1134,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       expect((await inspect(name)).State.Running).toBe(false);
       expect(await open.resume(h, sig())).toBe("resumed");
     } finally {
-      await open.destroy(h, sig());
+      await open.destroy(h, sig(), null);
     }
   });
 
@@ -1183,7 +1167,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       // the restart also ends every other command in the container: the operator is told
       expect(warns).toContainEqual(expect.stringMatching(/restart/));
     } finally {
-      await sbx.destroy(h, sig());
+      await sbx.destroy(h, sig(), null);
     }
   });
 
@@ -1205,7 +1189,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       expect(r.truncated).toBe(true);
       expect(r.stdout).toBe("a");
     } finally {
-      await sbx.destroy(h, sig());
+      await sbx.destroy(h, sig(), null);
     }
   });
 
@@ -1238,7 +1222,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
         await docker("stop", "-t", "1", name);
         expect(await sbx.stat(h, "/workspace/b.txt", sig())).toEqual({ size: 1, isDir: false });
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
     });
 
@@ -1267,7 +1251,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
         expect(await sbx.resume(h, sig())).toBe("resumed");
         expect((await sh(h.id, "echo ok")).stdout).toBe("ok\n");
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
     });
 
@@ -1287,7 +1271,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
         expect((await inspect(name)).State.Running).toBe(true);
         expect((await sh(h.id, "echo alive")).stdout).toBe("alive\n");
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
     });
   });
@@ -1325,7 +1309,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
         expect(elapsed).toBeLessThan((1 + IN_SANDBOX_GRACE_SECONDS + 5) * 1000);
         expect(await sbx.stat(h, "/workspace/never", sig())).toBeNull();
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
     });
 
@@ -1353,7 +1337,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
         lost.abort(new Error("lock lost"));
         await expect(sbx.killAll?.(h, lost.signal)).rejects.toThrow("lock lost");
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
       await expect(sbx.killAll?.(h, sig())).rejects.toSatisfy(isSandboxGoneError);
     });
@@ -1445,7 +1429,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
         // no planted binary ran at all, as the sandbox user or as root
         expect((await abs(h.id, `/bin/cat ${log} 2>/dev/null || :`)).stdout).toBe("");
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
     });
   });
@@ -1477,7 +1461,7 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       expect(await runsc.resume(h, sig())).toBe("resumed");
       expect(await runsc.stat(h, "/workspace/a.txt", sig())).toEqual({ size: 6, isDir: false });
     } finally {
-      await runsc.destroy(h, sig());
+      await runsc.destroy(h, sig(), null);
     }
   });
 });
