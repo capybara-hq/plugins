@@ -1,10 +1,7 @@
 # Connect this machine
 
-::shell-action connect-this-machine Connect this machine
-
 A device on your own computer: the computer connects to the platform with the `capybara-device`
-program and serves the device, and you limit what it may do there. In the desktop app, the button
-above connects the computer it runs on. Anywhere else, run these steps in a terminal on the
+program and serves the device, and you limit what it may do there. Run these steps in a terminal on the
 computer you want to connect (macOS or Linux, Node 22.12 or newer; on Windows use WSL).
 
 ## 1. Install the program
@@ -27,19 +24,29 @@ another computer into the same device replaces the first one.
 ## 3. Keep it online
 
 ```bash title="Connect at login (recommended)"
-capybara-device service install
-capybara-device service start
+capybara-device service install -c <device id>
 ```
 
-Or run `capybara-device start` to connect in the foreground until you stop it. The device shows as
-online once the program is connected; while it is offline, agents cannot use it.
+This is the command `login` printed at its end, with your device id: it installs the service,
+starts it right away and connects again at every login. Or run
+`capybara-device start -c <device id>` to connect in the foreground until you stop it. The device
+shows as online once the program is connected; while it is offline, agents cannot use it.
+
+**If this computer is already connected elsewhere.** Each device this computer serves is one
+connection, kept under its device id, with its own service. Choosing a new device in the browser, or
+moving a device here from another computer, adds a connection; signing in again to a device this
+computer already serves keeps its connection (only the sign-in is renewed; then run
+`capybara-device service restart -c <device id>` if its service is installed). With more than one
+connection every command needs `-c <device id>` (or the device name or host, when it is unique);
+with only one, `-c` may be left out. `capybara-device status` lists the connections with their ids,
+and `login` prints the exact next command, id included, at its end.
 
 ## What it may do
 
 Commands run in a sandbox on your computer, inside the device's directory
 (`~/capybara-device/<device id>`). You set the owner ceiling on the computer:
-`capybara-device ceiling show` shows it, `capybara-device ceiling set` changes it (running outside
-the sandbox, the network, project reach). The organization's and the platform's settings apply as
+`capybara-device ceiling show -c <device id>` shows it, `capybara-device ceiling set -c <device id>`
+changes it (running outside the sandbox, the network, project reach); each connection has its own. The organization's and the platform's settings apply as
 well; the narrowest wins. In OS mode commands run as your user with no CPU or memory limits.
 
 Deleting the device revokes the computer's sign-in and stops the program; the files stay on your
