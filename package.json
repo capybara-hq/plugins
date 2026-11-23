@@ -26,7 +26,7 @@
     "icons:generate": "tsx tools/icons/src/cli.ts",
     "check:marketplace": "pnpm build:ui && capybara-plugin marketplace --check",
     "changeset": "changeset",
-    "version-packages": "pnpm build:ui && changeset version && capybara-plugin sync-versions && capybara-plugin marketplace --write && biome format --write .",
+    "version-packages": "pnpm build:ui && changeset version && capybara-plugin sync-versions && biome format --write . && capybara-plugin marketplace --write",
     "pack-plugins": "pnpm build:ui && capybara-plugin pack --all . --out artifacts/plugins",
     "release": "pnpm build:ui && capybara-plugin release",
     "wt:new": "tsx tools/worktree/src/cli.ts new",

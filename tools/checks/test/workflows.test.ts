@@ -100,11 +100,12 @@ describe("release.yml", () => {
       expect(co[0]?.with?.token).toBeUndefined();
     });
 
-    it("versions, then syncs the plugin manifests, then appends the marketplace entries", () => {
+    it("versions, syncs and formats the plugin manifests, then appends the marketplace entries", () => {
       // Order matters: the packer requires plugin.json / the manifest equal to package.json, and
       // the marketplace entries carry the sha512 of those packs.
+      // Formatting runs before packing, so the packed plugin.json is the formatted one.
       expect(pkg.scripts["version-packages"]).toBe(
-        "pnpm build:ui && changeset version && capybara-plugin sync-versions && capybara-plugin marketplace --write",
+        "pnpm build:ui && changeset version && capybara-plugin sync-versions && biome format --write . && capybara-plugin marketplace --write",
       );
     });
   });
