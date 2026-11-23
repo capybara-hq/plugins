@@ -44,7 +44,7 @@ const limits = (
 const labelsOf = (p: InstancePlan, legacy = false): Record<string, string> => ({
   "dev.capybara.sandbox.network": p.mode,
   "dev.capybara.sandbox.allow-hosts": JSON.stringify(p.allowHosts),
-  ...(!legacy && { "dev.capybara.sandbox.egress-control": "1" }),
+  ...(!legacy && { "dev.capybara.sandbox.egress-control": "2" }),
 });
 
 describe("planInstance", () => {
@@ -143,12 +143,14 @@ describe("egressProxyEnv", () => {
       "MODE=open-public",
       "PORT=3128",
       "SOCKS_PORT=1080",
+      "FENCE=0",
     ]);
     // the list is ignored (open-public takes any public host)
     expect(egressProxyEnv("open-public", L)).toEqual([
       "MODE=open-public",
       "PORT=3128",
       "SOCKS_PORT=1080",
+      "FENCE=0",
     ]);
   });
 
@@ -157,8 +159,13 @@ describe("egressProxyEnv", () => {
       "MODE=allowlist",
       "PORT=3128",
       "SOCKS_PORT=1080",
+      "FENCE=0",
       `ALLOW_HOSTS=${JSON.stringify(L)}`,
     ]);
+  });
+
+  it("the create-time fence token goes through FENCE (device update fencing)", () => {
+    expect(egressProxyEnv("allowlist", L, undefined, [], undefined, 12)).toContain("FENCE=12");
   });
 
   it("the deployment's denied CIDRs go through DENIED_CIDRS in both modes, absent when empty", () => {
@@ -210,11 +217,13 @@ describe("updateDecision", () => {
     expect(updateDecision(from, at(OPEN))).toBe("recreate");
   });
 
-  it("allowlist of an earlier version: a list keeping every recorded host swaps the proxy, a narrower one recreates", () => {
+  it("allowlist of an earlier version (no control, or control 1): every list change recreates (fenced rebuild)", () => {
     const from = labelsOf(at(allow()), true);
-    expect(updateDecision(from, at(allow([...L, "pypi.org"])))).toBe("swap");
+    expect(updateDecision(from, at(allow([...L, "pypi.org"])))).toBe("recreate");
     expect(updateDecision(from, at(allow([L[0] as string])))).toBe("recreate");
-    expect(updateDecision(from, at(allow()))).toBe("swap");
+    expect(updateDecision(from, at(allow()))).toBe("recreate");
+    const v1 = { ...labelsOf(at(allow())), "dev.capybara.sandbox.egress-control": "1" };
+    expect(updateDecision(v1, at(allow([...L, "pypi.org"])))).toBe("recreate");
   });
 
   it("open-public to open-public swaps the proxy", () => {
