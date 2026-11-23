@@ -75,22 +75,47 @@ describe("openai: org-overridable config", () => {
     expect(server.requests.length).toBe(before);
   });
 
-  it("refuses an org base URL on a private address through the injected net fetch", async () => {
+  it("maps a kernel net refusal of an org base URL to invalid_request naming the host", async () => {
     const seen: string[] = [];
     const p = createOpenAIProvider({
       apiKey: "sk-platform",
       baseUrl: `${server.url}/v1`,
       models: [],
+      imageModels: ["gpt-image-1-mini"],
       netFetch: async (url) => {
         seen.push(String(url));
-        throw new Error("net.private_address");
+        const host = new URL(String(url)).hostname;
+        throw Object.assign(
+          new Error(`Access to ${host} is refused: it resolves to a private or reserved address.`),
+          { name: "NetDeniedError", code: "net.private_address", host },
+        );
       },
     });
-    const config = { apiKey: "sk-org", baseUrl: "http://10.0.0.1", models: [model("org-model")] };
-    const e = await failure(drain(p.stream(req(), { signal, config, orgId: "org-1" })));
-    expect(isModelError(e)).toBe(true);
+    const config = {
+      apiKey: "sk-org",
+      baseUrl: "https://10.0.0.1",
+      models: [model("org-model")],
+      imageModels: ["gpt-image-1-mini"],
+    };
+    const opts = { signal, config, orgId: "org-1" };
+    const imageReq = {
+      model: "gpt-image-1-mini",
+      prompt: "a red square",
+      size: { width: 1024, height: 1024 },
+      n: 1,
+      params: {},
+    };
+    for (const run of [
+      () => drain(p.stream(req(), opts)),
+      () => p.generateImage?.(imageReq, opts) ?? Promise.reject(new Error("no generateImage")),
+    ]) {
+      const e = await failure(run());
+      expect(isModelError(e) && e.kind).toBe("invalid_request");
+      expect((e as Error).message).toContain("10.0.0.1");
+      expect((e as Error).message).toContain("refused by the platform's network rules");
+    }
     expect(seen.length).toBeGreaterThan(0);
-    expect(seen[0]).toContain("http://10.0.0.1");
+    expect(seen[0]).toContain("https://10.0.0.1");
   });
 
   it("uses the org's key, models, organization, summary setting and image models", async () => {
