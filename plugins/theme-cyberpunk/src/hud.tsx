@@ -2,10 +2,12 @@ import {
   Button,
   type CapybaraEventType,
   type ComponentProps,
+  Icon,
   KeyValue,
   type RunState,
   Stack,
-  Text,
+  Switch,
+  Tooltip,
   useCapybaraEvents,
   useClientStorage,
   useLocale,
@@ -13,7 +15,7 @@ import {
   useRunState,
   useView,
 } from "@capybara-hq/plugin-client";
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useId, useReducer, useState } from "react";
 import { readCounts, recordEvent } from "./counts.js";
 import { cx, parseHudData, SOUND_KEY } from "./shared.js";
 import { playCue } from "./sound.js";
@@ -84,10 +86,12 @@ function clock(iso: string): string | null {
 }
 
 /**
- * The run HUD (slot `conversation.properties.section`, inside the host's section frame): the open
- * conversation's run state, a signal meter, the server's view data (operator role, last uplink),
- * the elapsed time of the run (a ticker), the runs, tool results and approvals seen live in this
- * browser session ("—" before any), and the sound toggle (off by default, local client storage). Its colours follow the run state through the plugin CSS
+ * The run HUD (slot `conversation.properties.section`, inside the host's section frame): a status
+ * row with the open conversation's run state, the elapsed time of the run (a ticker) and the sound
+ * switch (off by default, local client storage); a signal meter; the server's view data (operator
+ * role, last uplink) and the runs, tool results and approvals seen live in this browser session
+ * ("—" before any). The structure is laid out with design `Stack`s so it reads the same without the
+ * theme; the colours, the dot and the meter come from the plugin CSS
  * (`[data-cap-state~="run=…"]`), only while the cyberpunk theme is active.
  */
 export function RunHud({ conversationId }: ComponentProps<"conversation.properties.section">) {
@@ -96,6 +100,8 @@ export function RunHud({ conversationId }: ComponentProps<"conversation.properti
   const { t } = useLocale();
   const storage = useClientStorage();
   const reducedMotion = usePrefersReducedMotion();
+  const soundId = useId();
+  const soundDescId = useId();
   const [sound, setSound] = useState(() => storage.get(SOUND_KEY) === "on");
   // Counts live in session client storage, recorded by the extension's listener from the page's
   // first load; the HUD records too (idempotent by seq) and re-reads on each event.
@@ -118,8 +124,7 @@ export function RunHud({ conversationId }: ComponentProps<"conversation.properti
   }, [state]);
   const elapsed = useRunClock(state, startedAt);
 
-  const toggleSound = () => {
-    const next = !sound;
+  const changeSound = (next: boolean) => {
     storage.set(SOUND_KEY, next ? "on" : null);
     setSound(next);
     if (next && !reducedMotion) playCue("on");
@@ -135,90 +140,123 @@ export function RunHud({ conversationId }: ComponentProps<"conversation.properti
   const serverValue = (v: string | null | undefined) =>
     status === "failed" ? offline : v === null || v === undefined ? pending : v;
 
-  return (
-    <div className={cx("hud")}>
-      <div className={cx("hud-status")}>
-        <span aria-hidden="true" className={cx("hud-dot")} />
-        <span className={cx("hud-state")}>{t(STATE_LABEL[state])}</span>
-        <span
-          className={cx("hud-ticker")}
-          title={t({ en: "Time of the current or last run", zh: "本次或上次运行的用时" })}
-        >
-          {elapsed === null ? "T+--:--.-" : ticker(elapsed)}
-        </span>
-      </div>
-      <div aria-hidden="true" className={cx("hud-meter")}>
-        {Array.from({ length: BARS }, (_, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: a fixed row of identical bars
-          <span key={i} />
-        ))}
-      </div>
-      <KeyValue
-        keyWidth="10ch"
-        rows={[
-          {
-            k: t({ en: "Node", zh: "节点" }),
-            v: `#${conversationId.slice(-6).toUpperCase()}`,
-          },
-          {
-            k: t({ en: "Operator", zh: "操作员" }),
-            v: serverValue(data === null ? null : role(data.operator)),
-          },
-          {
-            k: t({ en: "Uplink", zh: "上行链路" }),
-            v: serverValue(data === null ? null : clock(data.uplink)),
-          },
-          {
-            k: t({ en: "Runs", zh: "运行" }),
-            v: counts === null ? NONE : String(counts.runs),
-          },
-          {
-            k: t({ en: "Tools", zh: "工具调用" }),
-            v:
-              counts === null
-                ? NONE
-                : t({
-                    en: `${counts.tools} ok / ${counts.errors} err`,
-                    zh: `${counts.tools} 成功 / ${counts.errors} 出错`,
-                  }),
-          },
-          {
-            k: t({ en: "Approvals", zh: "审批" }),
-            v: counts === null ? NONE : String(counts.approvals),
-          },
-        ]}
-      />
-      <Text variant="micro" tone="muted">
-        {t({
-          en: "Runs, tools and approvals: seen live in this browser tab.",
-          zh: "运行、工具调用与审批：本标签页实时看到的次数。",
-        })}
-      </Text>
-      <Stack direction="row" gap={8} align="center" justify="between" wrap>
-        <Button
-          variant="secondary"
-          onClick={toggleSound}
-          title={t({
-            en: "Short synthesized cues on run start, finish, approvals and tool results",
-            zh: "运行开始、结束、审批与工具结果时播放简短的合成提示音",
-          })}
-        >
-          {sound ? t({ en: "Sound: on", zh: "音效：开" }) : t({ en: "Sound: off", zh: "音效：关" })}
-        </Button>
-        {status === "failed" ? (
-          <Button variant="ghost" onClick={retry}>
-            {t({ en: "Reconnect", zh: "重新连接" })}
-          </Button>
-        ) : null}
-      </Stack>
-      {sound && reducedMotion ? (
-        <Text variant="micro" tone="muted">
-          {t({
+  const soundLabel = t({ en: "Sound", zh: "音效" });
+  const soundHelp = [
+    t({
+      en: "Short synthesized cues on run start, finish, approvals and tool results.",
+      zh: "运行开始、结束、审批与工具结果时播放简短的合成提示音。",
+    }),
+    ...(sound && reducedMotion
+      ? [
+          t({
             en: "Muted while your system asks for reduced motion.",
             zh: "系统开启了减少动态效果，音效保持静音。",
-          })}
-        </Text>
-      ) : null}
+          }),
+        ]
+      : []),
+  ].join(" ");
+  const countsHelp = t({
+    en: "Runs, tools and approvals: seen live in this browser tab.",
+    zh: "运行、工具调用与审批：本标签页实时看到的次数。",
+  });
+
+  return (
+    <div className={cx("hud")}>
+      <Stack gap={8}>
+        <Stack direction="row" justify="between" align="center" gap={8} wrap>
+          <Stack direction="row" align="center" gap={8}>
+            <span aria-hidden="true" className={cx("hud-dot")} />
+            <span className={cx("hud-state")}>{t(STATE_LABEL[state])}</span>
+            <span
+              className={cx("hud-ticker")}
+              title={t({ en: "Time of the current or last run", zh: "本次或上次运行的用时" })}
+            >
+              {elapsed === null ? "T+--:--.-" : ticker(elapsed)}
+            </span>
+          </Stack>
+          <Stack direction="row" align="center" gap={4}>
+            <Icon name="volume" size={12} />
+            {/* The switch carries the name (aria-label); the visible text repeats it, so it is
+                hidden from assistive tech. Clicking it flips the switch. */}
+            <label htmlFor={soundId} aria-hidden="true" className={cx("hud-sound-label")}>
+              {soundLabel}
+            </label>
+            <Tooltip content={soundHelp}>
+              <span className={cx("hud-sound")}>
+                <Switch
+                  id={soundId}
+                  checked={sound}
+                  onChange={changeSound}
+                  label={soundLabel}
+                  aria-describedby={soundDescId}
+                />
+              </span>
+            </Tooltip>
+            <span id={soundDescId} hidden>
+              {soundHelp}
+            </span>
+          </Stack>
+        </Stack>
+        <Stack>
+          <div aria-hidden="true" className={cx("hud-meter")}>
+            {Array.from({ length: BARS }, (_, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: a fixed row of identical bars
+              <span key={i} />
+            ))}
+          </div>
+        </Stack>
+        <KeyValue
+          keyWidth="10ch"
+          rows={[
+            {
+              k: t({ en: "Node", zh: "节点" }),
+              v: `#${conversationId.slice(-6).toUpperCase()}`,
+            },
+            {
+              k: t({ en: "Operator", zh: "操作员" }),
+              v: serverValue(data === null ? null : role(data.operator)),
+            },
+            {
+              k: t({ en: "Uplink", zh: "上行链路" }),
+              v: serverValue(data === null ? null : clock(data.uplink)),
+            },
+            {
+              k: t({ en: "Runs", zh: "运行" }),
+              v: counts === null ? NONE : String(counts.runs),
+            },
+            {
+              k: (
+                <Stack direction="row" align="center" gap={4}>
+                  {t({ en: "Tools", zh: "工具调用" })}
+                  <Tooltip content={countsHelp}>
+                    <span className={cx("hud-info")}>
+                      <Icon name="info" size={12} label={countsHelp} />
+                    </span>
+                  </Tooltip>
+                </Stack>
+              ),
+              v:
+                counts === null
+                  ? NONE
+                  : t({
+                      en: `${counts.tools} ok / ${counts.errors} err`,
+                      zh: `${counts.tools} 成功 / ${counts.errors} 出错`,
+                    }),
+            },
+            {
+              k: t({ en: "Approvals", zh: "审批" }),
+              v: counts === null ? NONE : String(counts.approvals),
+            },
+          ]}
+        />
+        {status === "failed" ? (
+          <Stack direction="row" justify="end">
+            <Button variant="ghost" onClick={retry}>
+              {t({ en: "Reconnect", zh: "重新连接" })}
+            </Button>
+          </Stack>
+        ) : null}
+      </Stack>
     </div>
   );
 }
