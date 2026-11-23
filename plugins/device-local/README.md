@@ -100,8 +100,8 @@ on it.
 
 The member guide `guides/connect.md` (place `device-connection`, with the desktop app's
 `connect-this-machine` action): `npm install -g @capybara-hq/device@next`,
-`capybara-device login --url <deployment>`, then `capybara-device service install` and
-`service start` (or `capybara-device start` in the foreground). Dial-in limits are the kernel's
+`capybara-device login --url <deployment>`, then `capybara-device service install -c <device id>`
+(it also starts the service; or `capybara-device start -c <device id>` in the foreground). Dial-in limits are the kernel's
 `CAPYBARA_DEVICES__DIAL_IN__*` settings.
 
 ## Existing local devices

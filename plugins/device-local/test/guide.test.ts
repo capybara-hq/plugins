@@ -38,7 +38,7 @@ describe("setup guide connect", () => {
       expect(commands).toEqual([
         "npm install -g @capybara-hq/device@next",
         "capybara-device login --url {{publicUrl}}",
-        "capybara-device service install\ncapybara-device service start",
+        "capybara-device service install -c <device id>",
       ]);
     }
   });

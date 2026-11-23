@@ -21,15 +21,16 @@ capybara-device login --url {{publicUrl}}
 ## 3. 保持在线
 
 ```bash title="开机自动连接（推荐）"
-capybara-device service install
-capybara-device service start
+capybara-device service install -c <device id>
 ```
 
-也可以运行 `capybara-device start` 在前台连接，直到你停止它。程序连接后设备显示为在线；离线时智能体无法使用它。
+这就是 `login` 在结尾打印的命令（带着你的设备 id）：它会安装服务并立即启动，之后每次登录都会自动连接。也可以运行 `capybara-device start -c <设备 id>` 在前台连接，直到你停止它。程序连接后设备显示为在线；离线时智能体无法使用它。
+
+**如果这台电脑已经连接了其他平台或组织。** 这台电脑服务的每台设备对应一个连接，以设备 id 保存，各有自己的服务。在浏览器里选择新建设备，或把另一台电脑上的设备移到这里，都会新增一个连接；重新登录这台电脑已在服务的设备，则沿用原来的连接（只更新登录凭据；若已安装它的服务，接着运行 `capybara-device service restart -c <设备 id>`）。有多个连接时，每条命令都需要加 `-c <设备 id>`（设备名称或主机名唯一时也可以用它们）；只有一个连接时可以省略 `-c`。`capybara-device status` 会列出所有连接及其 id，`login` 的结尾会打印带有 id 的下一步命令。
 
 ## 它能做什么
 
-命令在你电脑上的沙箱里运行，位于设备目录（`~/capybara-device/<设备 id>`）内。你在本机设置所有者上限：`capybara-device ceiling show` 查看，`capybara-device ceiling set` 修改（是否允许在沙箱外运行、网络、项目范围）。组织和平台的设置同样生效，以最严格的为准。OS 模式下命令以你的用户身份运行，没有 CPU 和内存限制。
+命令在你电脑上的沙箱里运行，位于设备目录（`~/capybara-device/<设备 id>`）内。你在本机设置所有者上限：`capybara-device ceiling show -c <设备 id>` 查看，`capybara-device ceiling set -c <设备 id>` 修改（是否允许在沙箱外运行、网络、项目范围），每个连接各有一份。组织和平台的设置同样生效，以最严格的为准。OS 模式下命令以你的用户身份运行，没有 CPU 和内存限制。
 
 删除设备会撤销这台电脑的登录并停止程序，文件仍保留在你的电脑上。
 
