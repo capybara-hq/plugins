@@ -42,7 +42,9 @@ export {
   describeLocalDevice,
   deviceReportOf,
   reportFor,
+  reportMoved,
   revisionOf,
+  sharedRootsValue,
   supportFor,
   supportOf,
 } from "./report.js";

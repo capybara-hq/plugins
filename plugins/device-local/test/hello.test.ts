@@ -73,11 +73,20 @@ function hello(
   };
 }
 
-const policy = (ownerCeiling: DeviceOwnerCeiling) => ({
+const policy = (ownerCeiling: DeviceOwnerCeiling, sharedProjectRoots?: string[]) => ({
   type: "policy",
-  policy: { allowedDomains: [...ownerCeiling.allowedDomains] },
+  policy: {
+    allowedDomains: [...ownerCeiling.allowedDomains],
+    ...(sharedProjectRoots && { sharedProjectRoots }),
+  },
   ownerCeiling,
 });
+
+/** The report's shared-directories line value (undefined: no such line). */
+const sharedLine = async (store: Parameters<typeof reportFor>[0]) =>
+  (await reportFor(store, { deviceId: DEVICE, orgId: ORG })).limits.find((l) =>
+    l.label.en.startsWith("Also used by another connection"),
+  )?.value;
 
 function setup() {
   const { store, rows, connections } = memoryStore();
@@ -376,6 +385,81 @@ describe("owner policy events", () => {
       await s.frame(frame);
     expect(s.warnings).toHaveLength(4);
     expect(s.changed).toEqual([DEVICE]);
+  });
+});
+
+describe("shared project directories", () => {
+  it("a hello's shared directories are stored sorted and shown; an older hello shows none", async () => {
+    const s = setup();
+    await s.say(
+      hello(null, {
+        policy: { allowedDomains: [], sharedProjectRoots: ["/p/b", "/p/a", "/p/b"] },
+      }),
+    );
+    expect(s.connections.get(DEVICE)?.sharedProjectRoots).toEqual(["/p/a", "/p/b"]);
+    expect(await sharedLine(s.store)).toBe("/p/a, /p/b");
+    // an older device (no field) after a restart: no line
+    await s.say(hello(null, { policy: { allowedDomains: [] } }));
+    expect(s.connections.get(DEVICE)?.sharedProjectRoots).toEqual([]);
+    expect(await sharedLine(s.store)).toBeUndefined();
+  });
+
+  it("a policy event with the same ceiling and new shared directories tells the kernel once, keeping the revision", async () => {
+    const s = setup();
+    await s.install("100");
+    const same = ceiling({ sequence: 1 });
+    await s.say(hello("100", { ownerCeiling: same }));
+    expect(s.changed).toEqual([DEVICE]);
+    const revision = await s.revision();
+    const owner = s.connections.get(DEVICE)?.ownerReport?.report;
+
+    await s.frame(policy(same, ["/p/shared"]));
+    expect(s.changed).toEqual([DEVICE, DEVICE]);
+    // the owner ceiling and the report revision (the kernel's authority epoch input) stay
+    expect(await s.revision()).toBe(revision);
+    expect(s.connections.get(DEVICE)?.ownerReport?.report).toEqual(owner);
+    expect(await sharedLine(s.store)).toBe("/p/shared");
+
+    // the same again (also reordered or duplicated) tells nothing
+    await s.frame(policy(same, ["/p/shared", "/p/shared"]));
+    expect(s.changed).toEqual([DEVICE, DEVICE]);
+
+    // gone again: told once more, the line disappears, the revision still stays
+    await s.frame(policy(same, []));
+    expect(s.changed).toEqual([DEVICE, DEVICE, DEVICE]);
+    expect(await sharedLine(s.store)).toBeUndefined();
+    expect(await s.revision()).toBe(revision);
+  });
+
+  it("a ceiling change with new shared directories tells the kernel once", async () => {
+    const s = setup();
+    await s.say(hello(null, { ownerCeiling: ceiling({ sequence: 1 }) }));
+    const revision = await s.revision();
+    await s.frame(
+      policy(ceiling({ sequence: 2, revision: "owner-2", outsideSandbox: false }), ["/p/x"]),
+    );
+    expect(s.changed).toEqual([DEVICE, DEVICE]);
+    expect(await s.revision()).not.toBe(revision);
+    expect(await sharedLine(s.store)).toBe("/p/x");
+  });
+
+  it("a stale or conflicting event never changes the shared directories; an unreadable summary keeps them", async () => {
+    const s = setup();
+    await s.say(hello(null, { ownerCeiling: ceiling({ sequence: 2, revision: "owner-2" }) }));
+    await s.frame(policy(ceiling({ sequence: 2, revision: "owner-2" }), ["/p/kept"]));
+    expect(await sharedLine(s.store)).toBe("/p/kept");
+    const told = s.changed.length;
+    // stale
+    await s.frame(policy(ceiling({ sequence: 1 }), ["/p/stale"]));
+    expect(await sharedLine(s.store)).toBe("/p/kept");
+    expect(s.changed.length).toBe(told);
+    // an unreadable summary (absent after parsing) keeps what was shown
+    await s.frame({ type: "policy", ownerCeiling: ceiling({ sequence: 2, revision: "owner-2" }) });
+    expect(await sharedLine(s.store)).toBe("/p/kept");
+    expect(s.changed.length).toBe(told);
+    // conflicting: blocks the owner facts, keeps the directories
+    await s.frame(policy(ceiling({ sequence: 2, revision: "other" }), ["/p/conflict"]));
+    expect(await sharedLine(s.store)).toBe("/p/kept");
   });
 });
 

@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,7 +37,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * cases only a real program can show: a restart keeps the binding (same runtime) or is re-probed
  * and rebound (changed runtime); another machine signing in replaces the first; revoking the
  * machine and deleting the device end the program with their messages; a revoked device connects
- * again after a new login. Every program runs under a temporary HOME and XDG_CONFIG_HOME (never the
+ * again after a new login; a project directory the owner listed for one connection that another
+ * connection of the same computer also uses shows in the device report, and its change keeps the
+ * report revision. Every program runs under a temporary HOME and XDG_CONFIG_HOME (never the
  * real `~/.config/capybara-device`). Runs only with `CAPYBARA_TEST_DEVICE_LOCAL_E2E` set (Docker for
  * the test containers; the program's own sandbox of the host OS).
  */
@@ -49,7 +51,7 @@ const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
  * The published program under test: `@capybara-hq/device` at this version (a plugin may not depend
  * on it, so the test installs it from npm into a temporary directory).
  */
-const DEVICE_VERSION = process.env.CAPYBARA_TEST_DEVICE_LOCAL_E2E_VERSION ?? "0.1.0-rc.29";
+const DEVICE_VERSION = process.env.CAPYBARA_TEST_DEVICE_LOCAL_E2E_VERSION ?? "0.1.0-rc.30";
 let program: string;
 let programDir: string;
 
@@ -163,9 +165,12 @@ class Machine {
     return String(done?.deviceId);
   }
 
-  /** `capybara-device start` in the foreground; resolves once the device reads online. */
-  async start(orgId: string, deviceId: string, owner: KernelRequest) {
-    this.run(["start"]);
+  /**
+   * `capybara-device start` in the foreground (`-c <deviceId>` with `connection`: a computer with
+   * several connections); resolves once the device reads online.
+   */
+  async start(orgId: string, deviceId: string, owner: KernelRequest, connection = false) {
+    this.run(connection ? ["start", "-c", deviceId] : ["start"]);
     await waitFor(
       async () => ((await deviceView(owner, orgId, deviceId)).online ? true : undefined),
       60_000,
@@ -186,6 +191,35 @@ class Machine {
       this.proc.kill("SIGTERM");
       await this.exited;
     }
+  }
+
+  /** Runs one short `capybara-device` command to its end; fails with its output unless it exits 0. */
+  async command(args: string[]): Promise<void> {
+    const proc = spawn(process.execPath, [program, ...args], {
+      env: this.env(),
+      cwd: this.home,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    proc.stdout.on("data", (b: Buffer) => {
+      out += b.toString("utf8");
+    });
+    proc.stderr.on("data", (b: Buffer) => {
+      out += b.toString("utf8");
+    });
+    const code = await new Promise<number | null>((resolve) => proc.on("exit", resolve));
+    expect(code, out).toBe(0);
+  }
+
+  /**
+   * Records `roots` as the project directories connection `deviceId` used (its `projects.json`,
+   * which the program writes for every admitted operation's project root).
+   */
+  async usedProjects(deviceId: string, roots: string[]): Promise<void> {
+    const dir = join(this.configDir, "capybara-device", "connections", deviceId);
+    await writeFile(join(dir, "projects.json"), `${JSON.stringify({ version: 1, roots })}\n`, {
+      mode: 0o600,
+    });
   }
 
   /** The program's stored instance binding files (one per device). */
@@ -237,6 +271,17 @@ async function bindingRow(deviceId: string) {
     WHERE device_id = ${deviceId}`.execute(raw);
   return r.rows[0];
 }
+
+/** The kernel's stored report of `deviceId` (what people see on the device page). */
+async function storedReport(deviceId: string) {
+  const r = await sql<{
+    report: { revision: string; limits: { label: { en: string }; value: string }[] } | null;
+  }>`
+    SELECT report FROM capybara.devices WHERE id = ${deviceId}`.execute(raw);
+  return r.rows[0]?.report ?? null;
+}
+
+const SHARED = "Also used by another connection on this computer";
 
 async function machineEpoch(deviceId: string): Promise<number | undefined> {
   const r = await sql<{ machine_epoch: number }>`
@@ -461,6 +506,51 @@ describe.skipIf(!process.env.CAPYBARA_TEST_DEVICE_LOCAL_E2E)(
       expect(await second.ended(), second.output).toBe(0);
       expect(second.output).toContain(DELETED);
       expect(await bindingRow(deviceId)).toBeUndefined();
+    });
+
+    it("a listed project directory another connection also uses shows in the report; its change keeps the revision", async () => {
+      // one computer with two connections (two devices) that both used the same project directory
+      const computer = await Machine.create();
+      const a = await computer.login(session, orgId, { name: `a-${randomUUID().slice(0, 6)}` });
+      const b = await computer.login(session, orgId, { name: `b-${randomUUID().slice(0, 6)}` });
+      const project = join(computer.home, "shared-project");
+      await mkdir(project);
+      await computer.usedProjects(a, [project]);
+      await computer.usedProjects(b, [project]);
+      // the owner lists it for connection a: only then does a's deployment learn it is shared
+      await computer.command(["policy", "add", "projectPaths", project, "-c", a]);
+      await computer.start(orgId, a, owner, true);
+      const shown = await waitFor(
+        async () => {
+          const r = await storedReport(a);
+          return r?.limits.some((l) => l.label.en === SHARED) ? r : undefined;
+        },
+        30_000,
+        "the shared directory in the report",
+      ).catch((e: unknown) => {
+        throw new Error(`${String(e)}; program output: ${computer.output}`);
+      });
+      const line = shown.limits.find((l) => l.label.en === SHARED);
+      expect(line?.value).toBe(project);
+      // the report never names the other connection
+      expect(JSON.stringify(shown)).not.toContain(b);
+
+      // the other connection stops using it while a is connected: a's next policy event carries the
+      // same owner ceiling (other connections' project lists are not part of it) and no shared
+      // directory; the line goes, the revision (the device authority epoch input) stays
+      await computer.usedProjects(b, []);
+      const gone = await waitFor(
+        async () => {
+          const r = await storedReport(a);
+          return r && !r.limits.some((l) => l.label.en === SHARED) ? r : undefined;
+        },
+        30_000,
+        "the shared directory gone from the report",
+      ).catch((e: unknown) => {
+        throw new Error(`${String(e)}; program output: ${computer.output}`);
+      });
+      expect(gone.revision).toBe(shown.revision);
+      await computer.stop();
     });
   },
 );

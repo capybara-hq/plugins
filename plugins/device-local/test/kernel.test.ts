@@ -316,6 +316,7 @@ describe("the PG store (the plugin's migrated schema)", () => {
           observedAt: "2026-11-22T00:00:00.000Z",
           via: "hello",
         },
+        sharedProjectRoots: ["/home/me/a", "/home/me/b"],
         instanceGeneration: "100",
         runtimeIdentity: { ...RUNTIME, instanceGeneration: "100" },
       },
@@ -329,6 +330,7 @@ describe("the PG store (the plugin's migrated schema)", () => {
       mode: "os",
       roots: ROOTS,
       features: ["projects"],
+      sharedProjectRoots: ["/home/me/a", "/home/me/b"],
     });
     // an answer sent through another machine than the recorded one is never installed
     expect(

@@ -64,6 +64,15 @@ generation under another runtime identity is refused (`local.invalid_hello`,
   so a reconnect with the same facts keeps it. After a hello or event moved the revision the
   provider calls `ctx.devices.reportChanged`; after a create or resume the kernel reads the report
   again itself.
+- **Shared project directories.** The machine's policy summary (hello and `policy` event) may carry
+  `sharedProjectRoots`: this connection's project directories another connection on the same
+  computer also uses, only those the owner listed in this connection's `projectPaths`, never naming
+  the other connection. The report lists them as "Also used by another connection on this
+  computer" (no line when none, or from an older device). They are left out of the revision: the
+  kernel moves the device authority epoch on every new revision and they change nothing the device
+  may do, so a change calls `ctx.devices.reportChanged` once with the revision kept and the kernel
+  stores the new text without invalidating approvals. A stale or conflicting `policy` event never
+  changes them; an unreadable summary keeps them.
 - **Refused project paths.** A machine's `project_refused` outcome becomes
   `ProjectPathRefusedError` with the fixed English and Chinese text of its refusal code
   (`other-connection`, `outside-reach`, `denied`; `PROJECT_REFUSAL_TEXT`): the machine is not
