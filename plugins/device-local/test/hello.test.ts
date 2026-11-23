@@ -443,7 +443,7 @@ describe("shared project directories", () => {
     expect(await sharedLine(s.store)).toBe("/p/x");
   });
 
-  it("a stale or conflicting event never changes the shared directories; an unreadable summary keeps them", async () => {
+  it("a stale or conflicting event never changes the shared directories; an unreadable summary or list keeps them", async () => {
     const s = setup();
     await s.say(hello(null, { ownerCeiling: ceiling({ sequence: 2, revision: "owner-2" }) }));
     await s.frame(policy(ceiling({ sequence: 2, revision: "owner-2" }), ["/p/kept"]));
@@ -457,6 +457,17 @@ describe("shared project directories", () => {
     await s.frame({ type: "policy", ownerCeiling: ceiling({ sequence: 2, revision: "owner-2" }) });
     expect(await sharedLine(s.store)).toBe("/p/kept");
     expect(s.changed.length).toBe(told);
+    // an unreadable list in an otherwise readable summary (dropped by the parser) keeps them too
+    const unreadable = policy(ceiling({ sequence: 2, revision: "owner-2" }));
+    for (const sharedProjectRoots of [
+      ["relative/path"],
+      Array.from({ length: 257 }, (_, i) => `/p/${i}`),
+      "/p/not-a-list",
+    ]) {
+      await s.frame({ ...unreadable, policy: { ...unreadable.policy, sharedProjectRoots } });
+      expect(await sharedLine(s.store)).toBe("/p/kept");
+      expect(s.changed.length).toBe(told);
+    }
     // conflicting: blocks the owner facts, keeps the directories
     await s.frame(policy(ceiling({ sequence: 2, revision: "other" }), ["/p/conflict"]));
     expect(await sharedLine(s.store)).toBe("/p/kept");

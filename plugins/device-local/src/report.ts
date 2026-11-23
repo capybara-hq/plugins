@@ -109,14 +109,16 @@ export const revisionOf = (c: Connection | null, b: Binding | null): string =>
 
 /**
  * The shared project directories a policy summary lists, sorted and without duplicates; `prev`
- * when the summary was unreadable (absent), none when it lists none (an older device).
+ * when the summary or its list was unreadable (the parser drops either to undefined). Current
+ * devices always send the list (empty when none), so a missing one is malformed or from an older
+ * device, which never set any.
  */
 export function sharedRootsOf(
   policy: DeviceLocalPolicySummary | undefined,
   prev: readonly string[],
 ): string[] {
-  if (!policy) return [...prev];
-  return [...new Set(policy.sharedProjectRoots ?? [])].sort();
+  if (policy?.sharedProjectRoots === undefined) return [...prev];
+  return [...new Set(policy.sharedProjectRoots)].sort();
 }
 
 const sameRoots = (a: readonly string[], b: readonly string[]): boolean =>
@@ -144,17 +146,26 @@ const SHARED_LABEL: DeviceText = {
 
 /**
  * The shared directories as one limit value within `DEVICE_REPORT_LIMITS.limitValueChars`: as many
- * whole paths as fit, then `+N more`; a single path too long for it keeps its end.
+ * whole paths as fit, in the given (sorted) order and skipping any too long, then ` +N` for the rest
+ * (no word: the value is shown as is in every UI language); when no path fits whole, the end of the
+ * shortest one.
  */
 export function sharedRootsValue(roots: readonly string[]): string {
   const max = DEVICE_REPORT_LIMITS.limitValueChars;
-  for (let k = roots.length; k >= 1; k--) {
-    const more = k < roots.length ? ` +${roots.length - k} more` : "";
-    const value = `${roots.slice(0, k).join(", ")}${more}`;
-    if (value.length <= max) return value;
+  const rest = (n: number) => (n > 0 ? ` +${n}` : "");
+  const kept: string[] = [];
+  for (const root of roots) {
+    // the count assumes every later root is left out: it only shrinks as more are kept
+    const value = `${[...kept, root].join(", ")}${rest(roots.length - kept.length - 1)}`;
+    if (value.length <= max) kept.push(root);
   }
-  const more = roots.length > 1 ? ` +${roots.length - 1} more` : "";
-  const chars = Array.from(roots[0] ?? "");
+  if (kept.length > 0) return `${kept.join(", ")}${rest(roots.length - kept.length)}`;
+  const shortest = roots.reduce<string | undefined>(
+    (best, r) => (best === undefined || r.length < best.length ? r : best),
+    undefined,
+  );
+  const more = rest(roots.length - 1);
+  const chars = Array.from(shortest ?? "");
   let tail = "";
   for (let i = chars.length - 1; i >= 0; i--) {
     const next = `${chars[i]}${tail}`;

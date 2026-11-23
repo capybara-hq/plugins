@@ -72,7 +72,8 @@ generation under another runtime identity is refused (`local.invalid_hello`,
   kernel moves the device authority epoch on every new revision and they change nothing the device
   may do, so a change calls `ctx.devices.reportChanged` once with the revision kept and the kernel
   stores the new text without invalidating approvals. A stale or conflicting `policy` event never
-  changes them; an unreadable summary keeps them.
+  changes them; an unreadable summary, or an unreadable list in a readable one, keeps them. The
+  line fits as many whole directories as it can, skipping one too long, then ` +N` for the rest.
 - **Refused project paths.** A machine's `project_refused` outcome becomes
   `ProjectPathRefusedError` with the fixed English and Chinese text of its refusal code
   (`other-connection`, `outside-reach`, `denied`; `PROJECT_REFUSAL_TEXT`): the machine is not
