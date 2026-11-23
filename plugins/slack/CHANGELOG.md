@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-slack
 
+## 0.1.0-rc.14
+
+### Patch Changes
+
+- 19123cd: Connector-template setup guides name their templates as `templates: [...]` (plugin-sdk
+  0.1.0-rc.60 replaced the single `template` key).
+
 ## 0.1.0-rc.13
 
 ### Minor Changes

@@ -58,7 +58,9 @@ generation under another runtime identity is refused (`local.invalid_hello`,
 - **`report()`** answers from the rows only: a description of the owner's ceiling (project reach
   `machine` / `paths` / `workspace`, always `workspace` in Docker mode; outside the sandbox;
   network) in English and Chinese, the owner's home (OS mode), the machine's own
-  narrowing as read-only limits and `reset: false`. Its revision is a hash of everything it is made
+  narrowing as read-only limits, `reset: false` and `changeHint`: only the computer's owner changes
+  the limits, on that computer, with `capybara-device ceiling set -c <device id> …` (the
+  connection's real id). Its revision is a hash of everything it is made
   of plus the machine epoch (moved when the machine is revoked or replaced), the instance
   generation, its runtime identity and its stored support; times and connection ids are left out,
   so a reconnect with the same facts keeps it. After a hello or event moved the revision the
@@ -84,8 +86,9 @@ generation under another runtime identity is refused (`local.invalid_hello`,
 - **`permissionSupport()`** answers from the rows only, never a machine round trip: the support the
   machine attested for the installed binding, with outside-the-sandbox and the open public
   internet narrowed to what the owner allows now (no open public internet while the owner's
-  network is an allowlist or the owner facts are blocked or missing); closed when no binding is
-  installed or no hello is stored.
+  network is an allowlist or the owner facts are blocked or missing), and `limitedBy` naming the
+  owner for each crossing the machine attested but the owner keeps closed (so the kernel names the
+  owner's limit, not the provider's); closed when no binding is installed or no hello is stored.
 
 A handle the machine will never serve again (the device's binding is a newer generation, or the
 machine's last hello did not attest it) still reads its installed support, because the kernel

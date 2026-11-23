@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import {
   DEVICE_PROVIDER_EXTENSION_POINT,
   isSandboxGoneError,
+  parseDeviceReport,
   type SandboxLimits,
 } from "@capybara-hq/plugin-sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -348,6 +349,12 @@ describe("device report (stub Docker API, no Docker needed)", () => {
     expect(r.description.en).toMatch(/Docker container/);
     expect(r.description.zh).toMatch(/Docker 容器/);
     expect(r.revision).toBe(`${plugin.version}:runc:none`);
+    // who changes the limits: the super admin's settings and the device's network setting
+    expect(r.changeHint).toEqual({
+      en: "CPU, memory and disk come from the platform's sandbox limits (a super admin's deployment settings); the network is this device's network setting, within the organization's and the platform's limits. The container is the whole sandbox: nothing runs outside it.",
+      zh: "CPU、内存和磁盘来自平台的沙箱限制（超级管理员的部署设置）；网络是这台设备的网络设置，在组织和平台的限制之内。容器就是整个沙箱，没有命令在它之外运行。",
+    });
+    expect(parseDeviceReport(r)).toEqual(r);
   });
 
   it("reads cpu and memory from the container, disk only from a sized volume driver", async () => {

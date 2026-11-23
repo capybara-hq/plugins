@@ -5,7 +5,7 @@
     "zh": "Google",
     "en": "Google"
   },
-  "version": "0.1.0-rc.1",
+  "version": "0.1.0-rc.2",
   "publisher": "Capybara",
   "icon": "./icon.svg",
   "description": {
@@ -50,37 +50,37 @@
     {
       "id": "gmail-oauth",
       "place": "connector-template",
-      "template": "gmail"
+      "templates": ["gmail"]
     },
     {
       "id": "google-drive-oauth",
       "place": "connector-template",
-      "template": "google-drive"
+      "templates": ["google-drive"]
     },
     {
       "id": "google-calendar-oauth",
       "place": "connector-template",
-      "template": "google-calendar"
+      "templates": ["google-calendar"]
     },
     {
       "id": "google-sheets-oauth",
       "place": "connector-template",
-      "template": "google-sheets"
+      "templates": ["google-sheets"]
     },
     {
       "id": "google-docs-oauth",
       "place": "connector-template",
-      "template": "google-docs"
+      "templates": ["google-docs"]
     },
     {
       "id": "google-slides-oauth",
       "place": "connector-template",
-      "template": "google-slides"
+      "templates": ["google-slides"]
     },
     {
       "id": "bigquery-oauth",
       "place": "connector-template",
-      "template": "bigquery"
+      "templates": ["bigquery"]
     }
   ]
 }
