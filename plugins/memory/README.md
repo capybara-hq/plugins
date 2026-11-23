@@ -83,7 +83,8 @@ cannot pick the type in plain DDL. Nothing else in the migration is dynamic.
   (`kind: "embedding"`). An org admin maps it to any enabled embedding model on the org's model
   settings, or the super admin sets the deployment default for it. Memories are embedded on write
   (a failure saves the memory without a vector and retries through the `memory-embed` queue);
-  vectors made by an earlier model are re-embedded lazily when a search finds them.
+  vectors made by another model are re-embedded lazily when a search finds them (switching back
+  to a model used before re-embeds too).
 - **Without a model for the purpose** the plugin still works: search is keyword only (no error), and
   the page shows no semantic edges.
 - **Keyword search** segments text with `Intl.Segmenter` (Chinese without spaces included: "回复用中文"

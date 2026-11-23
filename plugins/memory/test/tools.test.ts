@@ -182,7 +182,7 @@ describe("memory tools", { timeout: 60_000 }, () => {
     if (row === null) throw new Error("not written");
     expect(jobs.map((j) => [j.name, (j.opts as { jobId: string }).jobId])).toContainEqual([
       EMBED_QUEUE,
-      embedJobId(row),
+      embedJobId(row, "fake/emb-1"),
     ]);
   });
 

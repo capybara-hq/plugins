@@ -34,6 +34,8 @@ export interface MemoryRow {
   body: string;
   hasEmbedding: boolean;
   embeddingModel: string | null;
+  /** How many vectors were stored for this memory so far (part of the embedding job id). */
+  embeddingVersion: number;
   recallCount: number;
   lastRecalledAt: Date | null;
   createdAt: Date;
@@ -131,6 +133,7 @@ const COLUMNS = [
   "description",
   "body",
   "embedding_model",
+  "embedding_version",
   "recall_count",
   "last_recalled_at",
   "created_at",
@@ -153,6 +156,7 @@ function toRow(r: Raw): MemoryRow {
     body: r.body,
     hasEmbedding: r.has_embedding === true,
     embeddingModel: r.embedding_model,
+    embeddingVersion: Number(r.embedding_version),
     recallCount: r.recall_count,
     lastRecalledAt: r.last_recalled_at,
     createdAt: r.created_at,
