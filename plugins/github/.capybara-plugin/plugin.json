@@ -29,7 +29,7 @@
     {
       "id": "github-oauth",
       "place": "connector-template",
-      "template": "github"
+      "templates": ["github"]
     }
   ]
 }

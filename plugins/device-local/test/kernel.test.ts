@@ -176,8 +176,10 @@ describe("device-local in a kernel", () => {
         const v = await view(signedIn.deviceId);
         return v.body.report?.revision !== first.report?.revision ? v.body : null;
       });
-      expect(second.report?.description.en).toContain("never runs outside the sandbox");
-      expect(second.report?.description.zh).toContain("从不在沙箱外运行");
+      expect(second.report?.description.en).toContain(
+        "the machine's owner keeps every call in the sandbox",
+      );
+      expect(second.report?.description.zh).toContain("本机所有者让每个调用都留在沙箱内");
 
       // the plugin's row learned the device's org from the kernel's report call
       const row = await sql<{ org_id: string | null }>`

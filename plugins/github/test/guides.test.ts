@@ -68,7 +68,7 @@ describe("plugin.json setupGuides", () => {
     const parsed = parsePluginManifest(m);
     expect("errors" in parsed ? parsed.errors : []).toEqual([]);
     expect(m.setupGuides).toEqual([
-      { id: "github-oauth", place: "connector-template", template: "github" },
+      { id: "github-oauth", place: "connector-template", templates: ["github"] },
     ]);
   });
 

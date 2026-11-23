@@ -111,7 +111,7 @@ describe("connector template guides", () => {
       ...TEMPLATE_GUIDES.map(([id]) => ({
         id: `${id}-oauth`,
         place: "connector-template",
-        template: id,
+        templates: [id],
       })),
     ]);
     expect(m.setupGuides).toHaveLength(SETUP_GUIDE_LIMITS.guides);

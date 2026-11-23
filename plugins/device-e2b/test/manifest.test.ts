@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { DEVICE_PROVIDER_EXTENSION_POINT } from "@capybara-hq/plugin-sdk";
+import { DEVICE_PROVIDER_EXTENSION_POINT, parseDeviceReport } from "@capybara-hq/plugin-sdk";
 import {
   assertExtensionSecretsReachable,
   extensionDeploymentSecretValues,
@@ -86,6 +86,11 @@ describe("device-e2b manifest", () => {
     expect(none.revision).toBe(`${plugin.version}:${alias}:none`);
     expect(none.description.en).toMatch(/E2B sandbox \(microVM\).*metadata service/);
     expect(none.description.zh).toMatch(/元数据端点/);
+    expect(none.changeHint).toEqual({
+      en: "CPU, memory and disk come from the E2B template in this extension's deployment config (a super admin's); the network is this device's network setting, within the organization's and the platform's limits. The microVM is the whole sandbox: nothing runs outside it.",
+      zh: "CPU、内存和磁盘来自本扩展部署配置中的 E2B 模板（由超级管理员设置）；网络是这台设备的网络设置，在组织和平台的限制之内。虚拟机就是整个沙箱，没有命令在它之外运行。",
+    });
+    expect(parseDeviceReport(none)).toEqual(none);
     const own = createE2BSandbox(
       providerConfig(DeploymentConfig.parse({ apiKey: "k", template: "my-template" })),
       { log: silent },

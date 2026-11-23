@@ -46,7 +46,10 @@ and `login` prints the exact next command, id included, at its end.
 Commands run in a sandbox on your computer, inside the device's directory
 (`~/capybara-device/<device id>`). You set the owner ceiling on the computer:
 `capybara-device ceiling show -c <device id>` shows it, `capybara-device ceiling set -c <device id>`
-changes it (running outside the sandbox, the network, project reach); each connection has its own. The organization's and the platform's settings apply as
+changes it (running outside the sandbox, the network, project reach); each connection has its own.
+A new connection allows running outside the sandbox: a call that asks to is approved as the
+conversation's permission profile decides; `--outside-sandbox off` keeps every call in the sandbox.
+The organization's and the platform's settings apply as
 well; the narrowest wins. In OS mode commands run as your user with no CPU or memory limits.
 
 Deleting the device revokes the computer's sign-in and stops the program; the files stay on your
