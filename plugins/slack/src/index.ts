@@ -5,13 +5,13 @@ import {
   IDENTITY_SOURCE_EXTENSION_POINT,
 } from "@capybara-hq/plugin-sdk";
 import { createSlackChannel } from "./channel.js";
-import { SlackDeployment, SlackDirectoryConfig } from "./config.js";
+import { SlackDeployment, SlackPlatform } from "./config.js";
 import { createSlackDirectory } from "./directory.js";
 import { createSlackIdentitySource } from "./identity.js";
 import { appTokenCheck, botScopesCheck, botTokenCheck } from "./setup-checks.js";
 
 export { createSlackChannel, MIN_EDIT_INTERVAL_MS, SlackConnection } from "./channel.js";
-export { SlackDeployment, SlackDirectoryConfig } from "./config.js";
+export { SlackDeployment, SlackDirectory } from "./config.js";
 export { createSlackDirectory } from "./directory.js";
 export { createSlackIdentitySource } from "./identity.js";
 export {
@@ -29,7 +29,7 @@ export {
  *   凭据（应用级令牌、机器人令牌）由内核按渠道连接配置传入。
  * - `identity-source@1`（Sign in with Slack，OpenID Connect）：部署级 `clientId` / `clientSecret`，
  *   经 `auth.loginSources` 启用。
- * - `directory@1`（通讯录，`users.list`）：组织级 `teamId` / `botToken`。
+ * - `directory@1`（通讯录，`users.list`）：the overridable `directory.teamId` / `directory.botToken`.
  * - Setup checks (`permissions.setupChecks`): the live rows of the `slack-app` guide, read only.
  * 凭据都由内核按配置传入，故不需要 `secrets` 权限。`permissions.network` 只展示：OIDC 与 Web API 都在
  * `slack.com`；Socket Mode 的 WSS 主机由 Slack 分配（如 `wss-primary.slack.com`、`wss-backup.slack.com`、
@@ -45,14 +45,14 @@ export default defineExtension({
     network: ["slack.com", "wss-primary.slack.com", "files.slack.com"],
     setupChecks: ["bot-token", "bot-scopes", "app-token"],
   },
-  config: { deployment: SlackDeployment, org: SlackDirectoryConfig },
+  config: { deployment: SlackDeployment },
   setup(ctx) {
-    const { apiUrl } = SlackDeployment.parse(ctx.config ?? {});
+    const { apiUrl } = SlackPlatform.parse(ctx.config ?? {});
     ctx.provide(CHANNEL_EXTENSION_POINT, createSlackChannel({ apiUrl, log: ctx.log, kv: ctx.kv }));
     ctx.provide(IDENTITY_SOURCE_EXTENSION_POINT, createSlackIdentitySource());
     ctx.provide(DIRECTORY_EXTENSION_POINT, createSlackDirectory({ apiUrl }));
     // ctx.config is a getter: read the API root at each check run
-    const checks = { apiUrl: () => SlackDeployment.parse(ctx.config ?? {}).apiUrl };
+    const checks = { apiUrl: () => SlackPlatform.parse(ctx.config ?? {}).apiUrl };
     ctx.setup.check("bot-token", botTokenCheck(checks));
     ctx.setup.check("bot-scopes", botScopesCheck(checks));
     ctx.setup.check("app-token", appTokenCheck(checks));

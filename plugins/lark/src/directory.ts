@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Directory, DirectoryMember } from "@capybara-hq/plugin-sdk";
 import { createLarkApi, type LarkCredentials } from "./api.js";
 import { getWithBackoff, type RateLimitBudget } from "./backoff.js";
-import { LarkOrgConfig } from "./config.js";
+import { directoryAppOf } from "./config.js";
 import { assertSameApp, tenantKeyOf } from "./tenant.js";
 
 export interface LarkDirectoryOptions {
@@ -113,7 +113,8 @@ function decodeCursor(s: string): Cursor {
  *   （https://open.larksuite.com/document/ukTMukTMukTM/uUzN04SN3QjL1cDN ）。
  *
  * 行为：
- * - 组织级配置 `{ appId, appSecret }`；`configured()`：两项都填了才算配置好，否则内核静默跳过同步（Ruling A28）；
+ * - Config: `directory: { appId, appSecret }` of the org's effective config (overridable; the platform's
+ *   value while the org follows it). `configured()`：两项都填了才算配置好，否则内核静默跳过同步（Ruling A28）；
  *   未配置时 `listMembers` 抛错（不返回空列表——空列表在手动同步时会把成员全部移除）。
  * - 每页先查企业信息拿 `tenant_key`：成员的 `tenantId` 一律是它（与渠道 verify、登录同一口径，身份键
  *   `lark:<tenant_key>`）；游标里记下第一页的租户，之后每页核对，不同就抛错（应用凭据途中被换成别的租户）。
@@ -229,19 +230,17 @@ export function createLarkDirectory(opts: LarkDirectoryOptions): Directory {
   }
 
   return {
-    configured(orgConfig) {
-      const r = LarkOrgConfig.safeParse(orgConfig ?? {});
-      return r.success && r.data.appId !== undefined && r.data.appSecret !== undefined;
+    configured(config) {
+      return directoryAppOf(config) !== undefined;
     },
 
-    async listMembers({ orgConfig, cursor, signal }) {
-      const c = LarkOrgConfig.parse(orgConfig ?? {});
-      if (c.appId === undefined || c.appSecret === undefined) {
+    async listMembers({ config, cursor, signal }) {
+      const creds = directoryAppOf(config);
+      if (creds === undefined) {
         throw new Error(
-          "Lark directory is not configured: set appId and appSecret in the organization config",
+          "Lark directory is not configured: set directory.appId and directory.appSecret in the extension config",
         );
       }
-      const creds = { appId: c.appId, appSecret: c.appSecret };
       const budget: RateLimitBudget = { leftMs: maxWait };
       const cur = cursor !== undefined ? decodeCursor(cursor) : undefined;
 

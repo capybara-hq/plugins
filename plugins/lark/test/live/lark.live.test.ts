@@ -105,9 +105,9 @@ describe.skipIf(!READY)("Lark live", () => {
 
   it("live: directory lists the first page of members", async () => {
     const dir = createLarkDirectory({ apiUrl: API, loginApp: creds() });
-    const orgConfig = creds();
-    expect(dir.configured?.(orgConfig)).toBe(true);
-    const page = await dir.listMembers({ orgConfig, signal: timeout(60_000) });
+    const config = { directory: creds() };
+    expect(dir.configured?.(config)).toBe(true);
+    const page = await dir.listMembers({ config, signal: timeout(60_000) });
     expect(page.members.length).toBeGreaterThan(0);
     for (const m of page.members) {
       expect(m.externalId).toMatch(/^ou_/);

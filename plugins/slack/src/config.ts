@@ -1,31 +1,14 @@
-import { secret, ui } from "@capybara-hq/plugin-sdk";
+import { platformOnly, secret, ui } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 
 /**
- * 部署级配置。`apiUrl` / `openidUrl` 只为测试或代理改写。`clientId` / `clientSecret` 是 Sign in with Slack
- * （`identity-source@1`）的 OAuth 客户端，只用机器人时不填；`clientSecret` 走密钥（日志打码）。
+ * Directory (`directory@1`) credentials: the Slack workspace id and a bot token (may equal a channel
+ * connection's token, but is configured separately). Both may stay empty: an org that only uses the channel
+ * needs no directory; `Directory.configured` then tells the kernel the directory is not configured
+ * (Ruling A28, the kernel skips the sync silently). `teamId` takes only a workspace id (`T…`): the tenant is
+ * the workspace (Ruling A26); an enterprise id (`E…`) would split one person into two identity rows.
  */
-export const SlackDeployment = z.object({
-  apiUrl: ui(z.string().url().default("https://slack.com/api/"), {
-    label: { zh: "API 地址", en: "API URL" },
-  }),
-  openidUrl: ui(z.string().url().default("https://slack.com/"), {
-    label: { zh: "OpenID 地址", en: "OpenID URL" },
-  }),
-  clientId: ui(z.string().min(1).optional(), { label: { zh: "客户端 ID", en: "Client ID" } }),
-  clientSecret: ui(secret(z.string().min(1)), {
-    label: { zh: "客户端密钥", en: "Client secret" },
-  }).optional(),
-});
-export type SlackDeploymentConfig = z.infer<typeof SlackDeployment>;
-
-/**
- * 组织级配置：通讯录（`directory@1`）的 Slack 工作区 id 与机器人令牌（可与某个渠道连接用同一个令牌，但配置独立）。
- * 两项都可不填：组织只用渠道时启用插件不需要通讯录配置；`Directory.configured` 据此告诉内核通讯录未配置
- * （Ruling A28，内核静默跳过同步）。`teamId` 只收工作区 id（`T…`）：租户是工作区（Ruling A26），企业 id（`E…`）
- * 会把同一个人拆成两行身份。
- */
-export const SlackDirectoryConfig = z.object({
+export const SlackDirectory = z.object({
   teamId: ui(
     z
       .string()
@@ -49,7 +32,65 @@ export const SlackDirectoryConfig = z.object({
     placeholder: "xoxb-…",
   }).optional(),
 });
-export type SlackDirectoryConfigValue = z.infer<typeof SlackDirectoryConfig>;
+export type SlackDirectoryConfig = z.infer<typeof SlackDirectory>;
+
+/**
+ * Deployment config. `apiUrl` / `openidUrl` are overridden only for tests or a proxy. `clientId` /
+ * `clientSecret` are the OAuth client of Sign in with Slack (`identity-source@1`), empty when only the bot is
+ * used; `clientSecret` is a secret (masked in logs).
+ *
+ * Those four are platform-only: `channel@1` (the Socket Mode WebSocket) and login (before an org is known)
+ * carry no org config. `directory` is overridable: an org saves its own workspace and token, otherwise it
+ * follows the platform's.
+ */
+export const SlackDeployment = z.object({
+  apiUrl: platformOnly(
+    ui(z.string().url().default("https://slack.com/api/"), {
+      label: { zh: "API 地址", en: "API URL" },
+    }),
+  ),
+  openidUrl: platformOnly(
+    ui(z.string().url().default("https://slack.com/"), {
+      label: { zh: "OpenID 地址", en: "OpenID URL" },
+    }),
+  ),
+  clientId: platformOnly(
+    ui(z.string().min(1).optional(), { label: { zh: "客户端 ID", en: "Client ID" } }),
+  ),
+  // the marks sit on the inner node: an outer meta would hide its secret() from the kernel
+  clientSecret: platformOnly(
+    ui(secret(z.string().min(1)), { label: { zh: "客户端密钥", en: "Client secret" } }),
+  ).optional(),
+  directory: ui(SlackDirectory.partial().optional(), {
+    label: { zh: "通讯录", en: "Directory" },
+    help: {
+      zh: "跟随平台的每个组织都会同步这个租户的成员",
+      en: "Every organization that follows the platform syncs this tenant's members",
+    },
+  }),
+});
+export type SlackDeploymentConfig = z.infer<typeof SlackDeployment>;
+
+/** The platform-only part of the deployment config (what `setup` reads from `ctx.config`). */
+export const SlackPlatform = SlackDeployment.omit({ directory: true });
+export type SlackPlatformConfig = z.infer<typeof SlackPlatform>;
+
+/**
+ * The directory credentials of an org's effective config (`config.directory`); undefined unless both are
+ * set and valid. Reads only the `directory` key.
+ */
+export function directoryCredsOf(
+  config: unknown,
+): { teamId: string; botToken: string } | undefined {
+  const raw =
+    typeof config === "object" && config !== null
+      ? (config as Record<string, unknown>).directory
+      : undefined;
+  const r = SlackDirectory.safeParse(raw ?? {});
+  return r.success && r.data.teamId !== undefined && r.data.botToken !== undefined
+    ? { teamId: r.data.teamId, botToken: r.data.botToken }
+    : undefined;
+}
 
 /** Slack 的 OpenID Connect 签发者（https://slack.com/.well-known/openid-configuration ，2026-10-20 查阅）。 */
 export const SLACK_ISSUER = "https://slack.com";

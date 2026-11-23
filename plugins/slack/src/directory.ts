@@ -1,5 +1,5 @@
 import type { Directory, DirectoryMember } from "@capybara-hq/plugin-sdk";
-import { SlackDirectoryConfig, workspaceTokenProblem } from "./config.js";
+import { directoryCredsOf, workspaceTokenProblem } from "./config.js";
 
 export interface SlackDirectoryOptions {
   /** Web API 根地址（默认 https://slack.com/api/；测试指向假 Slack）。 */
@@ -40,7 +40,7 @@ const SLACKBOT = "USLACKBOT";
  * Slack 通讯录（`directory@1`）：`users.list` 分页列出工作区成员
  * （https://docs.slack.dev/reference/methods/users.list ，2026-10-20 查阅）。
  *
- * - 组织级配置 `{ teamId, botToken }`；机器人令牌需 `users:read` 与 `users:read.email`（没有后者拿不到邮箱）。
+ * - Config: `directory: { teamId, botToken }` of the org's effective config (overridable)；机器人令牌需 `users:read` 与 `users:read.email`（没有后者拿不到邮箱）。
  *   `configured()`：两项都填了（且 `teamId` 是 `T…`）才算配置好；否则内核静默跳过同步（Ruling A28）。
  * - 每页先 `auth.test`：租户是工作区（Ruling A26）。令牌是组织级安装（`is_enterprise_install`）或 `team_id`
  *   不是 `T…`（企业 id `E…`）都拒绝；`team_id` 还必须等于配置的 `teamId`——成员的 `tenantId`
@@ -112,16 +112,15 @@ export function createSlackDirectory(opts: SlackDirectoryOptions): Directory {
   }
 
   return {
-    configured(orgConfig) {
-      const r = SlackDirectoryConfig.safeParse(orgConfig ?? {});
-      return r.success && r.data.teamId !== undefined && r.data.botToken !== undefined;
+    configured(config) {
+      return directoryCredsOf(config) !== undefined;
     },
 
-    async listMembers({ orgConfig, cursor, signal }) {
-      const c = SlackDirectoryConfig.parse(orgConfig ?? {});
-      if (c.teamId === undefined || c.botToken === undefined) {
+    async listMembers({ config, cursor, signal }) {
+      const c = directoryCredsOf(config);
+      if (c === undefined) {
         throw new Error(
-          "Slack directory is not configured: set teamId and botToken in the organization config",
+          "Slack directory is not configured: set directory.teamId and directory.botToken in the extension config",
         );
       }
       const teamId = c.teamId;

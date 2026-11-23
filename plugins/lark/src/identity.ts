@@ -1,6 +1,6 @@
 import type { ExternalIdentity, IdentitySource } from "@capybara-hq/plugin-sdk";
 import { createLarkApi, type LarkApi } from "./api.js";
-import { accountsBaseOf, apiBaseOf, LarkDeployment, type LarkDeploymentConfig } from "./config.js";
+import { accountsBaseOf, apiBaseOf, LarkPlatform, type LarkPlatformConfig } from "./config.js";
 import { describeError } from "./errors.js";
 import { tenantKeyOf } from "./tenant.js";
 
@@ -11,8 +11,8 @@ const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
 const isHttpUrl = (v: string) => /^https?:\/\//i.test(v);
 
 /** 部署配置 → 登录所需字段；没配 appId / appSecret 时抛错（内核据此显示「登录方式不可用」）。 */
-function loginConfig(config: unknown): LarkDeploymentConfig & { appId: string; appSecret: string } {
-  const c = LarkDeployment.parse(config ?? {});
+function loginConfig(config: unknown): LarkPlatformConfig & { appId: string; appSecret: string } {
+  const c = LarkPlatform.parse(config ?? {});
   if (c.appId === undefined || c.appSecret === undefined) {
     throw new Error(
       "Sign in with Lark is not configured: set appId and appSecret in the lark plugin deployment config",

@@ -1,6 +1,6 @@
 import type { ExternalIdentity, IdentitySource } from "@capybara-hq/plugin-sdk";
 import { createRemoteJWKSet, type JWTPayload, jwtVerify } from "jose";
-import { SLACK_ISSUER, SlackDeployment, type SlackDeploymentConfig } from "./config.js";
+import { SLACK_ISSUER, SlackPlatform, type SlackPlatformConfig } from "./config.js";
 
 /** Sign in with Slack 申请的 scope（https://docs.slack.dev/authentication/sign-in-with-slack/ ，2026-10-20 查阅）。 */
 export const SLACK_OIDC_SCOPES = "openid email profile";
@@ -16,11 +16,11 @@ const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
 const isHttpUrl = (v: string) => /^https?:\/\//i.test(v);
 
 /** 部署配置 → 登录所需字段；没配 client id / secret 时抛错（内核据此显示「登录方式不可用」）。 */
-function loginConfig(config: unknown): SlackDeploymentConfig & {
+function loginConfig(config: unknown): SlackPlatformConfig & {
   clientId: string;
   clientSecret: string;
 } {
-  const c = SlackDeployment.parse(config ?? {});
+  const c = SlackPlatform.parse(config ?? {});
   if (c.clientId === undefined || c.clientSecret === undefined) {
     throw new Error(
       "Sign in with Slack is not configured: set clientId and clientSecret in the slack plugin deployment config",

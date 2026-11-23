@@ -255,12 +255,23 @@ describe("M4 第二段验收：Slack（双副本）", () => {
     const book = im.book("acme-slack-seg2");
     for (const [plugin, body] of [
       ["model-fake", { enabled: true }],
-      ["fake-im", { enabled: true, config: { url: book.url } }],
-      ["slack", { enabled: true, config: { teamId: "T1", botToken: slack.botToken } }],
+      ["fake-im", { enabled: true }],
+      ["slack", { enabled: true }],
     ] as const) {
       const en = await call(ownerJar, "PUT", `${base}/extensions/${plugin}`, body);
       expect(en.status, JSON.stringify(en.json)).toBe(200);
     }
+    // the org's copy of fake-im's overridable directoryUrl points at its book
+    const imCopy = await call(ownerJar, "PUT", `${base}/extensions/fake-im/overrides`, {
+      values: { directoryUrl: book.url },
+    });
+    expect(imCopy.status, JSON.stringify(imCopy.json)).toBe(200);
+    // the directory credentials are the org's copy of the overridable deployment key `directory`
+    const dirCopy = await call(ownerJar, "PUT", `${base}/extensions/slack/overrides`, {
+      values: { "directory.teamId": "T1", "directory.botToken": slack.botToken },
+    });
+    expect(dirCopy.status, JSON.stringify(dirCopy.json)).toBe(200);
+    expect(JSON.stringify(dirCopy.json)).not.toContain(slack.botToken);
     const sync1 = await call(ownerJar, "POST", `${base}/extensions/slack/directory/sync`);
     expect(sync1.status).toBe(202);
     await syncsReach(0, { added: 1, removed: 0 }, "first directory sync");

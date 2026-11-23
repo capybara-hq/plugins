@@ -194,12 +194,14 @@ describe("Lark 登录与通讯录接内核（双副本）", () => {
     expect(replay.location).toContain("sso.state_invalid");
 
     // ================= 2. 通讯录同步：同一个人加入组织 =================
-    const en = await call(ownerJar, "PUT", `${base}/extensions/lark`, {
-      enabled: true,
-      config: { appId: lark.appId, appSecret: SECRET },
-    });
+    const en = await call(ownerJar, "PUT", `${base}/extensions/lark`, { enabled: true });
     expect(en.status, JSON.stringify(en.json)).toBe(200);
-    expect(JSON.stringify(en.json)).not.toContain(SECRET);
+    // the directory app is the org's copy of the overridable deployment key `directory`
+    const dirCopy = await call(ownerJar, "PUT", `${base}/extensions/lark/overrides`, {
+      values: { "directory.appId": lark.appId, "directory.appSecret": SECRET },
+    });
+    expect(dirCopy.status, JSON.stringify(dirCopy.json)).toBe(200);
+    expect(JSON.stringify(dirCopy.json)).not.toContain(SECRET);
     const sync = await call(ownerJar, "POST", `${base}/extensions/lark/directory/sync`);
     expect(sync.status).toBe(202);
     const audit = await waitFor(
