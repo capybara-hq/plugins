@@ -433,9 +433,23 @@ function planLabels(plan: InstancePlan, control = true): Record<string, string> 
   };
 }
 
-/** Whether a container (sandbox or proxy) or image carries this version's egress control label. */
+/**
+ * Whether a container (sandbox or proxy) or image carries this version's egress control label:
+ * only such an instance takes a list in place (`updateDecision`).
+ */
 function hasControl(labels: Record<string, string> | null | undefined): boolean {
   return labels?.[LABEL_CONTROL] === CONTROL_VERSION;
+}
+
+/**
+ * Whether an instance was made with an egress control of any version (`1` or `2`): its list may
+ * have changed in place, so its labels are no lower bound and a lost proxy is rebuilt only from
+ * its config volume (a version-1 file has no fence, so the rebuilt proxy refuses to start and the
+ * instance is recreated, fail closed), and the list in force is read from the proxy.
+ */
+function hadControl(labels: Record<string, string> | null | undefined): boolean {
+  const v = labels?.[LABEL_CONTROL];
+  return v === "1" || v === CONTROL_VERSION;
 }
 
 /** The create-time fence token a container's labels record; null without a valid one. */
@@ -1178,7 +1192,7 @@ export function createDockerSandbox(
         State: { Running: boolean; Paused?: boolean };
         Config: { Labels: Record<string, string> | null };
       }>("GET", `/containers/${enc(n.egress)}/json`, { signal });
-      if (control && !hasControl(c.Config.Labels)) return false;
+      if (control && !hadControl(c.Config.Labels)) return false;
       if (c.State.Paused) await unpause(n.egress, signal);
       running = c.State.Running;
     } catch (e) {
@@ -1700,7 +1714,7 @@ export function createDockerSandbox(
     // A container without this contract's labels resumes with no network (the kernel replaces it
     // on use, since its applied limits are unknown).
     const net = labelNetwork(labels) ?? { mode: "none", allowHosts: [] };
-    const control = hasControl(labels);
+    const control = hadControl(labels);
     // An open-public instance made before refuseOpenNetwork was turned on is not started again:
     // "gone" makes the kernel recreate it under the current rule (create then refuses or builds
     // the allowlist). Auto-start goes through here too, so exec answers SandboxGoneError.
@@ -1840,7 +1854,7 @@ export function createDockerSandbox(
       const net = labelNetwork(labels);
       // The labels hold the create-time list; an allowlist with the egress control may have been
       // changed in place since, so the list in force is the proxy's own.
-      if (net === null || net.mode !== "allowlist" || !hasControl(labels)) return net;
+      if (net === null || net.mode !== "allowlist" || !hadControl(labels)) return net;
       const status = () => egressControl(h.id, "status", undefined, signal);
       let reply: Record<string, unknown>;
       try {
@@ -1877,6 +1891,8 @@ export function createDockerSandbox(
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid)) {
         throw new Error("invalid operation control id");
       }
+      // never restarts a replacement under the same name (§5.3)
+      if (handleFence(h) !== undefined) await checkIncarnation(h, signal);
       await killOrRestart(
         h.id,
         ["/bin/sh", "-c", KILL_OPERATION_SCRIPT, "capybara-killop", uuid],
@@ -2163,7 +2179,7 @@ export function createDockerSandbox(
       }
       // Replace the egress proxy with the new mode and hosts; the container, its environment
       // and its internal network stay. Open connections through the old proxy end.
-      const control = hasControl(labels);
+      const control = hadControl(labels);
       await api
         .json("DELETE", `/containers/${enc(n.egress)}`, { query: { force: true }, signal })
         .catch(ignore(404));
@@ -2178,7 +2194,8 @@ export function createDockerSandbox(
             signal,
             false,
             control,
-            labelFence(labels) ?? 0,
+            // the caller's token too, so the stored token never falls behind an answered call
+            Math.max(labelFence(labels) ?? 0, tokenOf(fence) ?? 0),
           ))
         ) {
           return "recreate";
@@ -2217,12 +2234,12 @@ export function createDockerSandbox(
 
     // a stale holder never removes an instance a newer holder created (its create label, §5.2)
     async destroy(h, signal, fence) {
-      await refuseStale(h.id, "destroy", tokenOf(fence), signal, false);
+      await refuseStale(h.id, "destroy", tokenOf(fence), signal, true);
       await removeInstance(h.id, signal);
     },
 
     async destroyByName(name, signal, fence) {
-      await refuseStale(name, "destroyByName", tokenOf(fence), signal, false);
+      await refuseStale(name, "destroyByName", tokenOf(fence), signal, true);
       await removeInstance(name, signal);
     },
 

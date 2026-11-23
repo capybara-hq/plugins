@@ -1650,10 +1650,10 @@ export function createSocksProxy(cfg) {
  * Container entry: read the config and listen. PORT (default 3128) for the HTTP proxy; SOCKS_PORT
  * (default 1080) for the SOCKS listener; DENIED_CIDRS (JSON array, default empty) for the
  * deployment's extra denied ranges; CONFIG_FILE (default /config/allow.json) for the list a
- * previous control `apply` wrote, which wins over MODE / ALLOW_HOSTS when present (its denied ranges
- * join DENIED_CIDRS); CONTROL_SOCKET (default /run/egress/control.sock) for the control listener,
- * FENCE (default 0) for the token the instance was created with, used only without a config file;
- * which listens before the proxy ports do; when it cannot listen the proxy serves without it, and
+ * previous control `apply` wrote, which wins over MODE / ALLOW_HOSTS / FENCE when present (its
+ * denied ranges join DENIED_CIDRS); FENCE (default 0) for the token the instance was created with,
+ * used only without a config file; CONTROL_SOCKET (default /run/egress/control.sock) for the control
+ * listener, which listens before the proxy ports do; when it cannot listen the proxy serves without it, and
 in-place changes then fail (status / apply calls fail, so the provider recreates the instance). An
  * invalid list or config file throws before listening.
  * @returns {{ http: import("node:http").Server; socks: import("node:net").Server; control: import("node:net").Server; state: ReturnType<typeof createEgressState> }}
@@ -1677,7 +1677,8 @@ export function main(env = process.env) {
   }
   deniedList(deniedCidrs);
   const configFile = env.CONFIG_FILE || DEFAULT_CONFIG_FILE;
-  let fence = env.FENCE === undefined || env.FENCE === "" ? 0 : Number(env.FENCE);
+  const rawFence = env.FENCE === undefined || env.FENCE === "" ? "0" : env.FENCE;
+  let fence = /^(0|[1-9][0-9]*)$/.test(rawFence) ? Number(rawFence) : Number.NaN;
   if (!isFence(fence)) throw new Error("FENCE must be a non-negative safe integer.");
   const saved = readAllowFile(configFile);
   if (saved !== null) {
