@@ -28,9 +28,11 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import { checkListPath } from "./listing.js";
 import {
+  acceptedRuntimeDigests,
   OPERATION_AGENT,
   RUNTIME_DIR,
   sdkRuntimeDigests,
+  stagedDigestProblem,
   stagedRuntimeDigests,
 } from "./runtime-source.js";
 
@@ -913,6 +915,8 @@ export function createOperations(deps: OperationDeps) {
         background: false,
         unavailableReason: reason,
       });
+      const sdk = acceptedRuntimeDigests();
+      if (!sdk.ok) return unavailable(sdk.reason);
       const names = Object.keys(stagedRuntimeDigests()).sort();
       const staged = await t.runIfRunning(h, {
         cmd: [
@@ -933,7 +937,6 @@ export function createOperations(deps: OperationDeps) {
       }
       if (staged.exitCode !== 0) return unavailable("The image has no staged operation runtime");
       const lines = staged.stdout.toString("utf8").trim().split("\n");
-      const expect = stagedRuntimeDigests();
       for (const line of lines.slice(0, names.length + 2)) {
         const m = line.match(/^(\d+) ([0-7]+) (.+?) (\S+)$/);
         const writable = (Number.parseInt(m?.[2] ?? "777", 8) & 0o022) !== 0;
@@ -945,11 +948,17 @@ export function createOperations(deps: OperationDeps) {
       if (digests.length !== names.length) {
         return unavailable("The staged operation runtime is incomplete");
       }
+      const seen = new Set<string>();
       for (const line of digests) {
         const [digest, name] = line.split(/\s+/);
-        if (!name || expect[name] !== digest) {
+        if (!name || !digest || !names.includes(name) || seen.has(name)) {
           return unavailable(`The staged ${name ?? "runtime"} does not match its digest`);
         }
+        seen.add(name);
+        // the host SDK's accepted digests: an instance of an earlier image stays usable while the
+        // kernel's SDK still accepts what it staged
+        const problem = stagedDigestProblem(name, digest);
+        if (problem) return unavailable(problem);
       }
       return {
         version: 2,
