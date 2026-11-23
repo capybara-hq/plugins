@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
-import type {
-  DeviceRef,
-  DeviceReport,
-  DeviceReportLimit,
-  DeviceText,
-  SandboxHandle,
-  SandboxPermissionSupport,
+import {
+  DEVICE_REPORT_LIMITS,
+  type DeviceRef,
+  type DeviceReport,
+  type DeviceReportLimit,
+  type DeviceText,
+  type SandboxHandle,
+  type SandboxPermissionSupport,
 } from "@capybara-hq/plugin-sdk";
 import {
+  type DeviceLocalPolicySummary,
   type DeviceProjectReach,
   parseSandboxPermissionSupport,
 } from "@capybara-hq/plugin-sdk/device-protocol";
@@ -60,7 +62,11 @@ const canonicalSupport = (s: SandboxPermissionSupport) => {
  * - the instance generation, its binding state, the runtime identity it was installed under (the
  *   environment fingerprint among it) and the permission support stored with it.
  * Times and connection ids are left out: a reconnect of the same machine with the same facts keeps
- * the revision, so it never invalidates what was approved.
+ * the revision, so it never invalidates what was approved. So are the shared project directories
+ * (`Connection.sharedProjectRoots`): the kernel moves the device authority epoch on every new
+ * revision, and which directories another connection also uses changes nothing the device may
+ * do (the machine enforces it), so their change is told with the revision kept
+ * ({@link reportMoved}) and the kernel stores the new report without invalidating approvals.
  */
 function revisionFacts(c: Connection | null, b: Binding | null) {
   const owner = c ? ownerFactsOf(c.ownerReport) : null;
@@ -100,6 +106,63 @@ export const revisionOf = (c: Connection | null, b: Binding | null): string =>
   createHash("sha256")
     .update(JSON.stringify(revisionFacts(c, b)))
     .digest("hex");
+
+/**
+ * The shared project directories a policy summary lists, sorted and without duplicates; `prev`
+ * when the summary was unreadable (absent), none when it lists none (an older device).
+ */
+export function sharedRootsOf(
+  policy: DeviceLocalPolicySummary | undefined,
+  prev: readonly string[],
+): string[] {
+  if (!policy) return [...prev];
+  return [...new Set(policy.sharedProjectRoots ?? [])].sort();
+}
+
+const sameRoots = (a: readonly string[], b: readonly string[]): boolean =>
+  a.length === b.length && a.every((r, i) => r === b[i]);
+
+/**
+ * Whether the report of the rows moved between `before` and `after`: its revision, or the shown
+ * shared project directories (left out of the revision, {@link revisionFacts}). The kernel is told
+ * (`ctx.devices.reportChanged`) exactly when this is true.
+ */
+export const reportMoved = (
+  before: { connection: Connection | null; binding: Binding | null },
+  after: { connection: Connection | null; binding: Binding | null },
+): boolean =>
+  revisionOf(before.connection, before.binding) !== revisionOf(after.connection, after.binding) ||
+  !sameRoots(
+    before.connection?.sharedProjectRoots ?? [],
+    after.connection?.sharedProjectRoots ?? [],
+  );
+
+const SHARED_LABEL: DeviceText = {
+  en: "Also used by another connection on this computer",
+  zh: "本机的另一个连接也在使用",
+};
+
+/**
+ * The shared directories as one limit value within `DEVICE_REPORT_LIMITS.limitValueChars`: as many
+ * whole paths as fit, then `+N more`; a single path too long for it keeps its end.
+ */
+export function sharedRootsValue(roots: readonly string[]): string {
+  const max = DEVICE_REPORT_LIMITS.limitValueChars;
+  for (let k = roots.length; k >= 1; k--) {
+    const more = k < roots.length ? ` +${roots.length - k} more` : "";
+    const value = `${roots.slice(0, k).join(", ")}${more}`;
+    if (value.length <= max) return value;
+  }
+  const more = roots.length > 1 ? ` +${roots.length - 1} more` : "";
+  const chars = Array.from(roots[0] ?? "");
+  let tail = "";
+  for (let i = chars.length - 1; i >= 0; i--) {
+    const next = `${chars[i]}${tail}`;
+    if (`…${next}${more}`.length > max) break;
+    tail = next;
+  }
+  return `…${tail}${more}`;
+}
 
 const hosts = (n: number): DeviceText =>
   n === 1
@@ -189,6 +252,8 @@ function limitsOf(c: Connection, owner: OwnerFacts): DeviceReportLimit[] {
       label: { en: "Allowed hosts", zh: "允许的主机" },
       value: String(owner.allowedDomains.length),
     });
+  if (c.sharedProjectRoots.length > 0)
+    lines.push({ label: SHARED_LABEL, value: sharedRootsValue(c.sharedProjectRoots) });
   return lines;
 }
 

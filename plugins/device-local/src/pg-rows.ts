@@ -113,6 +113,9 @@ function connectionOf(r: Row | undefined): Connection | null {
     features: FEATURES.filter((f) => features.includes(f)),
     permissionSupport,
     ownerReport: storedOwnerReportOf(json(r.owner_report)),
+    sharedProjectRoots: Array.isArray(r.shared_project_roots)
+      ? r.shared_project_roots.filter((p): p is string => typeof p === "string")
+      : [],
     instanceGeneration: typeof r.instance_generation === "string" ? r.instance_generation : null,
     runtimeIdentity: identityOf(r.runtime_identity),
   };
@@ -140,6 +143,7 @@ async function writeConnection(db: Db, c: Connection): Promise<void> {
     features: c.features,
     permission_support: JSON.stringify(c.permissionSupport),
     owner_report: c.ownerReport === null ? null : JSON.stringify(c.ownerReport),
+    shared_project_roots: c.sharedProjectRoots,
     instance_generation: c.instanceGeneration,
     runtime_identity: c.runtimeIdentity === null ? null : JSON.stringify(c.runtimeIdentity),
     updated_at: sql`now()`,

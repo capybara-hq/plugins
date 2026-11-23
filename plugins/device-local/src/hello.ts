@@ -10,7 +10,7 @@ import {
   parseDeviceFrame,
 } from "@capybara-hq/plugin-sdk/device-protocol";
 import { applyOwnerReport, type OwnerReportOutcome } from "./owner-report.js";
-import { revisionOf } from "./report.js";
+import { reportMoved, sharedRootsOf } from "./report.js";
 import type { Binding, Connection, DeviceChange, DeviceLocalStore, DeviceState } from "./store.js";
 
 /** A hello refusal: the kernel closes the connection with `code: message` (shown to the owner). */
@@ -139,6 +139,8 @@ export function decideHello(
     features: [...(hello.features ?? [])],
     permissionSupport: hello.permissionSupport,
     ownerReport: applied.next ?? stored?.ownerReport ?? null,
+    // a hello restarts what the machine said: an unreadable summary shows none
+    sharedProjectRoots: sharedRootsOf(hello.policy, []),
     instanceGeneration: gen,
     runtimeIdentity: hello.runtimeIdentity ?? null,
   };
@@ -198,7 +200,11 @@ export function createDialInHandler(
     }
   };
 
-  /** Runs `fn` under the device's lock; tells the kernel when the revision moved. */
+  /**
+   * Runs `fn` under the device's lock; tells the kernel once when the report moved: its revision,
+   * or only the shown shared project directories (then the revision stays, so the kernel stores
+   * the new report without moving the device authority epoch).
+   */
   const change = async <T>(
     deviceId: string,
     fn: (s: DeviceState) => DeviceChange<T> | HelloRefusal,
@@ -207,8 +213,10 @@ export function createDialInHandler(
     const out = await store.change<T | HelloRefusal>(deviceId, (s) => {
       const c = fn(s);
       if ("ok" in c) return { result: c };
-      const before = revisionOf(s.connection, s.binding);
-      moved = before !== revisionOf(c.connection ?? s.connection, c.binding ?? s.binding);
+      moved = reportMoved(s, {
+        connection: c.connection ?? s.connection,
+        binding: c.binding ?? s.binding,
+      });
       return c;
     });
     if (moved) await tell(deviceId);
@@ -237,10 +245,13 @@ export function createDialInHandler(
     },
 
     /**
-     * A `policy` event: the owner changed the machine's ceiling while connected. Recorded through
-     * the owner-report rule (stale ignored, conflicting blocks); an invalid body is logged and
-     * dropped (the kernel keeps the connection; the machine's own enforcement stands), and so is a
-     * frame of any connection other than the one whose hello was recorded last.
+     * A `policy` event: the owner changed the machine's ceiling or policy while connected. The
+     * ceiling is recorded through the owner-report rule (stale ignored, conflicting blocks); the
+     * summary's shared project directories are taken only with a current ceiling (recorded or the
+     * same again; an unreadable summary keeps them), never from a stale or conflicting event. An
+     * invalid body is logged and dropped (the kernel keeps the connection; the machine's own
+     * enforcement stands), and so is a frame of any connection other than the one whose hello was
+     * recorded last.
      */
     async onFrame(deviceId, frame, conn) {
       let event: ReturnType<typeof parseDeviceFrame<"event">>;
@@ -260,8 +271,15 @@ export function createDialInHandler(
         );
         if (applied.outcome === "conflict")
           ctx.log.warn("a machine's owner report conflicts with the recorded one", { deviceId });
+        const current = applied.outcome === "recorded" || applied.outcome === "same";
+        const sharedProjectRoots = current
+          ? sharedRootsOf(event.policy, s.connection.sharedProjectRoots)
+          : s.connection.sharedProjectRoots;
         return applied.next
-          ? { result: applied.outcome, connection: { ...s.connection, ownerReport: applied.next } }
+          ? {
+              result: applied.outcome,
+              connection: { ...s.connection, ownerReport: applied.next, sharedProjectRoots },
+            }
           : { result: applied.outcome };
       });
     },

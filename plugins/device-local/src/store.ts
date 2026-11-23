@@ -70,6 +70,14 @@ export interface Connection {
   permissionSupport: SandboxPermissionSupport;
   /** Null only when the stored one became unreadable (the facts then fail closed). */
   ownerReport: StoredOwnerReport | null;
+  /**
+   * The project directories of this connection that another connection on the same machine also
+   * uses, as the machine's last policy summary listed them (`sharedProjectRoots`: only directories
+   * the owner listed for this connection, never naming the other connection); sorted, without
+   * duplicates, empty when none or from an older device. Shown in the report only: it is not part
+   * of the report revision, so a change never moves the device authority epoch.
+   */
+  sharedProjectRoots: string[];
   instanceGeneration: string | null;
   runtimeIdentity: DeviceRuntimeIdentity | null;
 }
