@@ -1,5 +1,39 @@
 # @capybara-hq/plugin-device-docker
 
+## 0.1.0-rc.25
+
+### Patch Changes
+
+- b2a71fc: Refuse a project directory outside the container's workspace (`/workspace`) with
+  `ProjectPathRefusedError` and a fixed English and Chinese reason, in `list` / `scan` and in the
+  owner browse the kernel adds projects through, before anything runs in the instance: the kernel
+  answers `device.project_refused` and the device page explains the refusal when the project is
+  added, instead of a run failing on it later.
+- f775c1f: The sandbox image stages the SDK's current Linux launcher (`SANDBOX_RUNTIME_SOURCE.current`, the
+  one with exact file read roots; never run in the container), and staged runtime files are checked
+  against the kernel SDK's `SANDBOX_RUNTIME_SOURCE.accepted` instead of one exact digest: instances
+  made from an earlier image keep working while the kernel's SDK accepts what they staged, and
+  operations check only the files the agent runs (`native-files.py`). Needs a kernel whose
+  `@capybara-hq/plugin-sdk` lists `accepted` (the release of core#742); on an older one the device's
+  support is unavailable and says why.
+- ec94f5e: Device report limit values are English and Chinese text (`DeviceReportLimit.value` is
+  `DeviceText` in `@capybara-hq/plugin-sdk`): device-local's limit lines read in the UI language
+  and its shared directories line counts the rest as "+N more" / "；另有 N 个"; device-docker's sizes
+  carry English only. device-e2b reports no limit lines and is released against the same SDK.
+  
+  These plugins need a kernel whose `@capybara-hq/plugin-sdk` carries `DeviceText` limit values
+  (the release of core#707): an older kernel refuses their reports (string values expected), and an
+  older plugin's report is refused by the newer kernel.
+- d0220bc: Docker devices change their egress allowlist in place: `update` hands the egress proxy the new host
+  list (wider, narrower or both) and the current `deniedCidrs` through a control socket only the
+  proxy container reaches. The proxy keeps the list on the instance's config volume
+  (`<name>-egress-conf`, removed with the instance), closes every connection the new list no longer
+  covers, also those still resolving or connecting, and acknowledges with the list's digest; the
+  sandbox container, its background processes and the connections still allowed stay. A lost proxy
+  is rebuilt only from that volume (without it the instance is recreated, never rebuilt from the wider
+  create-time labels). Kind changes and the empty list still recreate; instances of earlier versions
+  keep the old proxy swap until their next recreate.
+
 ## 0.1.0-rc.24
 
 ### Patch Changes

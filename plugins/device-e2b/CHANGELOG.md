@@ -1,5 +1,23 @@
 # @capybara-hq/plugin-device-e2b
 
+## 0.1.0-rc.25
+
+### Patch Changes
+
+- b2a71fc: Refuse a project directory outside the container's workspace (`/workspace`) with
+  `ProjectPathRefusedError` and a fixed English and Chinese reason, in `list` / `scan` and in the
+  owner browse the kernel adds projects through, before anything runs in the instance: the kernel
+  answers `device.project_refused` and the device page explains the refusal when the project is
+  added, instead of a run failing on it later.
+- ec94f5e: Device report limit values are English and Chinese text (`DeviceReportLimit.value` is
+  `DeviceText` in `@capybara-hq/plugin-sdk`): device-local's limit lines read in the UI language
+  and its shared directories line counts the rest as "+N more" / "；另有 N 个"; device-docker's sizes
+  carry English only. device-e2b reports no limit lines and is released against the same SDK.
+  
+  These plugins need a kernel whose `@capybara-hq/plugin-sdk` carries `DeviceText` limit values
+  (the release of core#707): an older kernel refuses their reports (string values expected), and an
+  older plugin's report is refused by the newer kernel.
+
 ## 0.1.0-rc.24
 
 ### Patch Changes
