@@ -350,10 +350,17 @@ describe("owner policy events", () => {
     // the same event again is no change
     await s.frame(policy(off));
     expect(s.changed).toEqual([DEVICE, DEVICE]);
-    // the support narrows to what the owner allows now
-    expect((await supportFor(s.store, s.handle("100"))).outsideSandbox).toBe(false);
+    // the support narrows to what the owner allows now, naming the owner as the layer
+    const narrowed = await supportFor(s.store, s.handle("100"));
+    expect(narrowed.outsideSandbox).toBe(false);
+    // the owner's allowlist network keeps the open public internet closed too
+    expect(narrowed.limitedBy).toEqual({ outsideSandbox: "owner", openPublic: "owner" });
     const report = await reportFor(s.store, { deviceId: DEVICE, orgId: ORG });
-    expect(report.description.en).toContain("never runs outside the sandbox");
+    expect(report.description.en).toContain("the machine's owner keeps every call in the sandbox");
+    // and says who changes it and how, with this device's id
+    expect(report.changeHint?.en).toContain(
+      `capybara-device ceiling set -c ${DEVICE} --outside-sandbox on|off`,
+    );
   });
 
   it("a stale event is ignored; a conflicting one blocks the owner facts (fail closed)", async () => {
@@ -597,8 +604,8 @@ describe("report and permission support", () => {
     await s.say(hello(null, { ownerCeiling: ceiling({ outsideSandbox: false }) }));
     const r = await reportFor(s.store, { deviceId: DEVICE, orgId: ORG });
     expect(r.description).toEqual({
-      en: "Reads the whole machine except secrets and other connections; writes only in the project and workspace; never runs outside the sandbox; network: 2 allowed hosts.",
-      zh: "读取本机全部文件（密钥和其他连接除外）；只在项目和工作区写入；从不在沙箱外运行；网络：允许 2 个主机。",
+      en: "Reads the whole machine except secrets and other connections; writes only in the project and workspace; the machine's owner keeps every call in the sandbox; network: 2 allowed hosts.",
+      zh: "读取本机全部文件（密钥和其他连接除外）；只在项目和工作区写入；本机所有者让每个调用都留在沙箱内；网络：允许 2 个主机。",
     });
     expect(r.home).toBe("/home/me");
     expect(r.reset).toBe(false);
@@ -698,6 +705,7 @@ describe("report and permission support", () => {
     expect(await supportFor(s.store, s.handle("101"))).toEqual({
       ...OUTSIDE,
       network: { ...OUTSIDE.network, openPublic: false },
+      limitedBy: { openPublic: "owner" },
     });
     // an open owner network keeps it
     await s.frame(policy(ceiling({ sequence: 2, revision: "owner-2", network: "open" })));

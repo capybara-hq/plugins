@@ -107,7 +107,7 @@ describe("plugin.json setupGuides", () => {
     expect("errors" in parsed ? parsed.errors : []).toEqual([]);
     expect(manifestJson.setupGuides).toEqual([
       { id: "slack-app", place: "channel-connection" },
-      { id: "slack-connector", place: "connector-template", template: "slack" },
+      { id: "slack-connector", place: "connector-template", templates: ["slack"] },
     ]);
   });
 

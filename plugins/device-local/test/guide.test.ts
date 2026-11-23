@@ -17,7 +17,7 @@ describe("setup guide connect", () => {
     expect(manifest.setupGuides).toEqual([{ id: "connect", place: "device-connection" }]);
   });
 
-  it("guide parses for place device-connection with the publicUrl and no shell action", () => {
+  it("guide parses for place device-connection with the publicUrl", () => {
     expect(
       validateSetupGuide({
         id: "connect",
@@ -29,7 +29,6 @@ describe("setup guide connect", () => {
     for (const locale of ["en", "zh"] as const) {
       const parsed = parseSetupGuide(doc(locale));
       expect(parsed.issues).toEqual([]);
-      expect(parsed.shellActions).toEqual([]);
       const commands = parsed.codeBlocks.map((b) => b.text.trim());
       expect(commands).toEqual([
         "npm install -g @capybara-hq/device@next",

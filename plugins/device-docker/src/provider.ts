@@ -1434,6 +1434,7 @@ export function createDockerSandbox(
       home: null,
       limits: lines,
       reset: true,
+      changeHint: CHANGE_HINT,
     };
   };
 
@@ -1855,6 +1856,12 @@ export function parseSizeMb(size: string | undefined): number | null {
             : n / MIB;
   return mb > 0 ? Math.round(mb) : null;
 }
+
+/** Who changes a Docker device's limits and where (`DeviceReport.changeHint`). */
+export const CHANGE_HINT = {
+  en: "CPU, memory and disk come from the platform's sandbox limits (a super admin's deployment settings); the network is this device's network setting, within the organization's and the platform's limits. The container is the whole sandbox: nothing runs outside it.",
+  zh: "CPU、内存和磁盘来自平台的沙箱限制（超级管理员的部署设置）；网络是这台设备的网络设置，在组织和平台的限制之内。容器就是整个沙箱，没有命令在它之外运行。",
+} as const;
 
 /** The report's limit lines for an instance's limits (pure). */
 export function reportLimitLines(l: InstanceLimits): DeviceReportLimit[] {

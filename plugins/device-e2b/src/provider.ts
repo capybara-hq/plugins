@@ -1479,6 +1479,10 @@ export function createE2BSandbox(
         home: null,
         limits: [],
         reset: true,
+        changeHint: {
+          en: "CPU, memory and disk come from the E2B template in this extension's deployment config (a super admin's); the network is this device's network setting, within the organization's and the platform's limits. The microVM is the whole sandbox: nothing runs outside it.",
+          zh: "CPU、内存和磁盘来自本扩展部署配置中的 E2B 模板（由超级管理员设置）；网络是这台设备的网络设置，在组织和平台的限制之内。虚拟机就是整个沙箱，没有命令在它之外运行。",
+        },
       };
     },
 

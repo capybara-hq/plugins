@@ -24,7 +24,7 @@
     {
       "id": "slack-connector",
       "place": "connector-template",
-      "template": "slack"
+      "templates": ["slack"]
     }
   ]
 }

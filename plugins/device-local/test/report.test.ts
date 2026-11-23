@@ -40,6 +40,21 @@ const reachLimit = (c: Connection) =>
   deviceReportOf(c, null).limits.find((l) => l.label.en === "Project reach");
 
 describe("the local device report", () => {
+  it("says who changes the limits and how, with the connection's device id", () => {
+    const report = parseDeviceReport(deviceReportOf(connection("machine"), null));
+    expect(report.changeHint).toEqual({
+      en: "Only the owner of the computer changes these limits, on that computer: capybara-device ceiling set -c dev-1 --outside-sandbox on|off --network open|allowlist --project-reach machine|paths|workspace",
+      zh: "只有这台电脑的所有者能在电脑上更改这些限制：capybara-device ceiling set -c dev-1 --outside-sandbox on|off --network open|allowlist --project-reach machine|paths|workspace",
+    });
+    // a real device id (a uuid) still fits the report's limit
+    const long = parseDeviceReport(
+      deviceReportOf({ ...connection("machine"), deviceId: "0".repeat(36) }, null),
+    );
+    expect(long.changeHint?.en.length).toBeLessThanOrEqual(DEVICE_REPORT_LIMITS.changeHintChars);
+    // before the machine connects there is nothing to change yet
+    expect(deviceReportOf(null, null).changeHint).toBeUndefined();
+  });
+
   it("describes each reach in en and zh", () => {
     const machine = describeLocalDevice({
       projectReach: "machine",
@@ -47,8 +62,8 @@ describe("the local device report", () => {
       mode: "os",
     });
     expect(machine).toEqual({
-      en: "Reads the whole machine except secrets and other connections; writes only in the project and workspace; never runs outside the sandbox",
-      zh: "读取本机全部文件（密钥和其他连接除外）；只在项目和工作区写入；从不在沙箱外运行",
+      en: "Reads the whole machine except secrets and other connections; writes only in the project and workspace; the machine's owner keeps every call in the sandbox",
+      zh: "读取本机全部文件（密钥和其他连接除外）；只在项目和工作区写入；本机所有者让每个调用都留在沙箱内",
     });
     const outside = describeLocalDevice({
       projectReach: "machine",

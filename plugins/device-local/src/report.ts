@@ -211,7 +211,10 @@ export function describeLocalDevice(c: {
         en: "runs outside the sandbox only per approved call",
         zh: "仅在获批的单次调用中在沙箱外运行",
       }
-    : { en: "never runs outside the sandbox", zh: "从不在沙箱外运行" };
+    : {
+        en: "the machine's owner keeps every call in the sandbox",
+        zh: "本机所有者让每个调用都留在沙箱内",
+      };
   return { en: `${reads.en}; ${outside.en}`, zh: `${reads.zh}；${outside.zh}` };
 }
 
@@ -269,6 +272,20 @@ function limitsOf(c: Connection, owner: OwnerFacts): DeviceReportLimit[] {
 }
 
 /**
+ * Who changes this connection's limits and how (`DeviceReport.changeHint`): only the machine's
+ * owner, on the machine, with the connection's own device id in the command.
+ */
+export function localChangeHint(deviceId: string): DeviceText {
+  const command =
+    `capybara-device ceiling set -c ${deviceId} --outside-sandbox on|off ` +
+    "--network open|allowlist --project-reach machine|paths|workspace";
+  return {
+    en: `Only the owner of the computer changes these limits, on that computer: ${command}`,
+    zh: `只有这台电脑的所有者能在电脑上更改这些限制：${command}`,
+  };
+}
+
+/**
  * The device report (`DeviceProvider.report`) from the stored rows: never a machine round trip.
  * Before the machine's first hello it says so; the revision still names the binding.
  */
@@ -294,6 +311,7 @@ export function deviceReportOf(c: Connection | null, b: Binding | null): DeviceR
     limits: limitsOf(c, owner),
     // the files are the machine owner's directory: the provider never resets them
     reset: false,
+    changeHint: localChangeHint(c.deviceId),
   };
 }
 
@@ -323,18 +341,22 @@ export function supportOf(
   if (!c)
     return closedSupport("The machine has not said hello yet; connect it with capybara-device");
   const owner = ownerFactsOf(c.ownerReport);
-  const attested = b.installed.permissionSupport;
+  const { limitedBy: _attested, ...attested } = b.installed.permissionSupport;
+  const ownerOpen = owner.state === "report" && owner.network === "open";
+  // a crossing the machine could give but the owner's ceiling (or its missing facts) keeps closed
+  // names the owner, so the kernel says who changes it
+  const limitedBy = {
+    ...(attested.outsideSandbox && !owner.outsideSandbox && { outsideSandbox: "owner" as const }),
+    ...(attested.network.openPublic && !ownerOpen && { openPublic: "owner" as const }),
+  };
   return parseSandboxPermissionSupport({
     ...attested,
     // never wider than the owner allows now (a ceiling change since the binding narrows it)
     outsideSandbox: attested.outsideSandbox && owner.outsideSandbox,
     // the open public internet only while the owner's sandbox network is open (an allowlist, or
     // blocked or missing facts, narrow every command's egress on the machine)
-    network: {
-      ...attested.network,
-      openPublic:
-        attested.network.openPublic && owner.state === "report" && owner.network === "open",
-    },
+    network: { ...attested.network, openPublic: attested.network.openPublic && ownerOpen },
+    ...(Object.keys(limitedBy).length > 0 && { limitedBy }),
   });
 }
 
