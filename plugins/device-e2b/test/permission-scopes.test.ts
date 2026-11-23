@@ -36,6 +36,9 @@ import {
 } from "../src/runtime-source.js";
 import { fakeSystemPath } from "./system-path.js";
 
+/** The fence token every lifecycle call carries here (device update fencing). */
+const FENCE = { token: 1 };
+
 /** The system PATH of the fake E2B (shims and this machine's tools). */
 const systemPath = fakeSystemPath();
 
@@ -269,7 +272,7 @@ describe("operation factory fails closed (fake E2B)", { timeout: 20_000 }, () =>
     );
     const name = `cap-device-${randomUUID()}`;
     const fileSystem = await sbx.createFileSystem({ name, limits, signal: sig() });
-    h = await sbx.create({ name, limits, fileSystem, signal: sig() });
+    h = await sbx.create({ fence: FENCE, name, limits, fileSystem, signal: sig() });
   });
   afterAll(async () => {
     await api?.close();
@@ -343,7 +346,7 @@ describe("operation factory fails closed (fake E2B)", { timeout: 20_000 }, () =>
     const name = `cap-device-${randomUUID()}`;
     const net: SandboxLimits = { ...limits, network: { kind: "allowlist", hosts: ["pypi.org"] } };
     const fileSystem = await sbx.createFileSystem({ name, limits: net, signal: sig() });
-    const g = await sbx.create({ name, limits: net, fileSystem, signal: sig() });
+    const g = await sbx.create({ fence: FENCE, name, limits: net, fileSystem, signal: sig() });
     const before = vmCalls(g.id);
     for (const network of [
       { kind: "none" as const },
@@ -766,7 +769,7 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
     );
     const name = `cap-device-${randomUUID()}`;
     const fileSystem = await sbx.createFileSystem({ name, limits, signal: sig() });
-    h = await sbx.create({ name, limits, fileSystem, signal: sig() });
+    h = await sbx.create({ fence: FENCE, name, limits, fileSystem, signal: sig() });
   });
   afterAll(async () => {
     for (const entry of held.values()) entry.end();

@@ -27,12 +27,17 @@
 // /run/egress/control.sock, a Unix socket on a tmpfs only this container reaches; the sandbox
 // reaches the proxy only on its TCP ports) takes a new host list and denied ranges from
 // `node proxy.mjs control apply` (one JSON line on stdin), started by the provider through the
-// Docker exec API. The proxy writes the list to CONFIG_FILE (default /config/allow.json, on the
+// Docker exec API. Every apply carries the kernel's fence token (device update fencing design
+// §5.1): the proxy keeps the highest token it applied next to the list, refuses a lower one
+// (`code: "stale-fence"`, nothing written or swapped), and stores token and list in one file
+// write. The proxy writes the list to CONFIG_FILE (default /config/allow.json, on the
 // instance's own volume), swaps it in, closes every admitted connection the new list no longer
 // covers (resolving, connecting or tunnelling), and only then replies with the list's digest. At
-// start a valid CONFIG_FILE wins over MODE / ALLOW_HOSTS (it is exactly the list last applied);
-// an unreadable one stops the proxy (never a fall back to the create-time list, which may be
-// wider); its denied ranges join DENIED_CIDRS. `control status` prints the list in force.
+// start a valid CONFIG_FILE wins over MODE / ALLOW_HOSTS / FENCE (it is exactly the list and token
+// last applied); an unreadable one, or one without a valid token, stops the proxy (never a fall
+// back to the create-time list, which may be wider); its denied ranges join DENIED_CIDRS. Without
+// a file the token is FENCE (the token the instance was created with), else 0. `control status`
+// prints the list and the token in force.
 //
 // Test only: CAPYBARA_EGRESS_TEST_HOSTS (JSON object name -> IP) pins a name to an IP and exempts
 // it from the private address check (in allowlist it must still be on the list; in open-public a
@@ -456,6 +461,21 @@ export function allowDigest(c) {
   return createHash("sha256").update(canonical).digest("hex");
 }
 
+/** Whether `v` is a valid fence token: a non-negative safe integer. */
+export function isFence(v) {
+  return typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+}
+
+/** An apply refused because its fence token is lower than the one in force. */
+export class StaleFence extends Error {
+  /** @param {number} fence the token in force */
+  constructor(fence) {
+    super("The apply carries an older fence than the one in force; nothing was applied.");
+    this.code = "stale-fence";
+    this.fence = fence;
+  }
+}
+
 /**
  * Validates a list sent through the control socket (or read from the config file): an allowlist
  * with at least one host, every host valid, every denied range a CIDR. One bad entry refuses the
@@ -509,10 +529,15 @@ async function writeAtomic(file, data) {
  * records the normalized host and, once connected, the upstream address. `apply` closes every
  * entry the new list does not cover; a connection still resolving or connecting re-checks the list
  * in force when its upstream connects (`keep`).
- * @param {{ mode?: "open-public" | "allowlist"; allowHosts?: string[]; deniedCidrs?: string[]; testHosts?: Record<string, string>; configFile?: string; log?: (msg: string) => void }} cfg
+ * `fence` is the highest token applied (or the start token): `apply` refuses a lower one.
+ * @param {{ mode?: "open-public" | "allowlist"; allowHosts?: string[]; deniedCidrs?: string[]; fence?: number; testHosts?: Record<string, string>; configFile?: string; log?: (msg: string) => void }} cfg
  */
 export function createEgressState(cfg = {}) {
   const mode = cfg.mode ?? "open-public";
+  if (cfg.fence !== undefined && !isFence(cfg.fence)) {
+    throw new Error("The start fence must be a non-negative safe integer.");
+  }
+  let fence = cfg.fence ?? 0;
   if (!MODES.includes(mode)) throw new Error(`Unknown egress proxy mode ${JSON.stringify(mode)}.`);
   const testHosts = cfg.testHosts ?? {};
   const log = cfg.log ?? defaultLog;
@@ -560,6 +585,10 @@ export function createEgressState(cfg = {}) {
     get policy() {
       return policy;
     },
+    /** The highest fence token applied (or the start token). */
+    get fence() {
+      return fence;
+    },
     testHosts,
     /** Admitted connections not yet closed (tests). */
     get connections() {
@@ -602,31 +631,47 @@ export function createEgressState(cfg = {}) {
       return true;
     },
     /**
-     * Puts a new list in force (allowlist proxies only): validate, write the config file, swap,
-     * close every connection the new list does not cover, then resolve with the digest. A list
-     * with the digest already in force resolves at once. `ifDigest` (when given) makes it a compare
-     * and swap: refused unless the list in force has that digest, so an apply from a caller that
-     * read the proxy's list before another caller changed it never lands after that change. This
-     * narrows, but does not close, the stale-holder race: a caller that lost its lease without
-     * noticing and read the list after the newer change still applies; only a fencing token from
-     * the kernel would close it, and `update` carries none.
+     * Puts a new list in force (allowlist proxies only) under the kernel's fence token `token`
+     * (device update fencing design §5.1). In one turn of the serialized chain: a missing or
+     * invalid token is refused; a token lower than the one in force throws {@link StaleFence}
+     * (nothing written, swapped or closed); a list with the digest already in force resolves at
+     * once, after persisting a raised token; otherwise write the list with the token, swap, close
+     * every connection the new list does not cover, then resolve with the digest. The check, the
+     * write and the swap cannot interleave with another apply, which is why the proxy, not the
+     * provider in a kernel replica, is the authority.
      * @param {unknown} raw
-     * @param {string} [ifDigest]
+     * @param {unknown} token
      */
-    apply(raw, ifDigest) {
+    apply(raw, token) {
       const run = chain.then(async () => {
+        if (!isFence(token)) throw new Error("The apply carries no valid fence.");
+        if (token < fence) throw new StaleFence(fence);
         const next = parseAllowConfig(raw);
         if (policy.mode !== "allowlist") {
           throw new Error("This proxy runs open-public: only an allowlist proxy takes a new list.");
         }
         const digest = allowDigest(next);
-        if (digest === policy.digest) return digest;
-        if (ifDigest !== undefined && ifDigest !== policy.digest) {
-          throw new Error("The list in force changed since it was read; nothing was applied.");
+        if (digest === policy.digest) {
+          if (token > fence) {
+            // the raised token is stored, so a later stale apply is refused although the list
+            // did not change
+            if (cfg.configFile !== undefined) {
+              await writeAtomic(
+                cfg.configFile,
+                `${JSON.stringify({ mode: "allowlist", hosts: [...policy.allowHosts], deniedCidrs: [...policy.deniedCidrs], digest, fence: token })}\n`,
+              );
+            }
+            fence = token;
+          }
+          return digest;
         }
         if (cfg.configFile !== undefined) {
-          await writeAtomic(cfg.configFile, `${JSON.stringify({ ...next, digest })}\n`);
+          await writeAtomic(
+            cfg.configFile,
+            `${JSON.stringify({ ...next, digest, fence: token })}\n`,
+          );
         }
+        fence = token;
         policy = makePolicy("allowlist", next.hosts, next.deniedCidrs);
         let closed = 0;
         for (const entry of [...registry]) {
@@ -648,8 +693,10 @@ export function createEgressState(cfg = {}) {
 
 /**
  * Reads the config file a previous `apply` wrote: null when there is none; throws when it exists
- * but cannot be read or is invalid (the proxy must not start on a guess).
+ * but cannot be read or is invalid, its fence token included (the proxy must not start on a
+ * guess; a file without a token was written by an earlier plugin version).
  * @param {string} file
+ * @returns {{ mode: "allowlist"; hosts: string[]; deniedCidrs: string[]; fence: number } | null}
  */
 export function readAllowFile(file) {
   let text;
@@ -660,7 +707,10 @@ export function readAllowFile(file) {
     throw new Error(`Cannot read the egress list ${file}: ${e?.message ?? e}`);
   }
   try {
-    return parseAllowConfig(JSON.parse(text));
+    const raw = JSON.parse(text);
+    const config = parseAllowConfig(raw);
+    if (!isFence(raw.fence)) throw new Error("it carries no valid fence");
+    return { ...config, fence: raw.fence };
   } catch (e) {
     throw new Error(`The egress list ${file} is invalid: ${e?.message ?? e}`);
   }
@@ -673,8 +723,9 @@ const CONTROL_DEADLINE_MS = 30_000;
 
 /**
  * The control listener (not listening): one JSON request line per connection,
- * `{"op":"apply","config":{...}}` or `{"op":"status"}`, answered with one JSON line
- * `{"ok":true,"digest":...}` (status adds `mode` and `hosts`) or `{"ok":false,"error":...}`.
+ * `{"op":"apply","config":{...},"fence":N}` or `{"op":"status"}`, answered with one JSON line
+ * `{"ok":true,"digest":...}` (status adds `mode`, `hosts` and `fence`) or
+ * `{"ok":false,"error":...}` (a stale fence adds `"code":"stale-fence"` and the `fence` in force).
  * @param {ReturnType<typeof createEgressState>} state
  */
 export function createControlServer(state) {
@@ -703,6 +754,7 @@ export function createControlServer(state) {
           mode: p.mode,
           hosts: [...p.allowHosts],
           digest: p.digest,
+          fence: state.fence,
           connections: state.connections,
         });
         return;
@@ -712,10 +764,11 @@ export function createControlServer(state) {
         return;
       }
       try {
-        const ifDigest = typeof req.ifDigest === "string" ? req.ifDigest : undefined;
-        reply({ ok: true, digest: await state.apply(req.config, ifDigest) });
+        reply({ ok: true, digest: await state.apply(req.config, req.fence) });
       } catch (e) {
-        reply({ ok: false, error: String(e?.message ?? e) });
+        if (e instanceof StaleFence) {
+          reply({ ok: false, error: e.message, code: e.code, fence: e.fence });
+        } else reply({ ok: false, error: String(e?.message ?? e) });
       }
     };
     sock.on("data", (chunk) => {
@@ -797,7 +850,7 @@ async function controlMain(args, env) {
   const op = args[0];
   try {
     if (op !== "apply" && op !== "status") throw new Error("usage: control apply|status");
-    // apply reads `{ config, ifDigest? }` as one JSON line on stdin
+    // apply reads `{ config, fence }` as one JSON line on stdin
     const request = op === "apply" ? { op, ...JSON.parse(await readLine(process.stdin)) } : { op };
     const reply = await controlRequest(path, request);
     process.stdout.write(`${JSON.stringify(reply)}\n`);
@@ -1597,9 +1650,10 @@ export function createSocksProxy(cfg) {
  * Container entry: read the config and listen. PORT (default 3128) for the HTTP proxy; SOCKS_PORT
  * (default 1080) for the SOCKS listener; DENIED_CIDRS (JSON array, default empty) for the
  * deployment's extra denied ranges; CONFIG_FILE (default /config/allow.json) for the list a
- * previous control `apply` wrote, which wins over MODE / ALLOW_HOSTS when present (its denied ranges
- * join DENIED_CIDRS); CONTROL_SOCKET (default /run/egress/control.sock) for the control listener,
- * which listens before the proxy ports do; when it cannot listen the proxy serves without it, and
+ * previous control `apply` wrote, which wins over MODE / ALLOW_HOSTS / FENCE when present (its
+ * denied ranges join DENIED_CIDRS); FENCE (default 0) for the token the instance was created with,
+ * used only without a config file; CONTROL_SOCKET (default /run/egress/control.sock) for the control
+ * listener, which listens before the proxy ports do; when it cannot listen the proxy serves without it, and
 in-place changes then fail (status / apply calls fail, so the provider recreates the instance). An
  * invalid list or config file throws before listening.
  * @returns {{ http: import("node:http").Server; socks: import("node:net").Server; control: import("node:net").Server; state: ReturnType<typeof createEgressState> }}
@@ -1623,14 +1677,18 @@ export function main(env = process.env) {
   }
   deniedList(deniedCidrs);
   const configFile = env.CONFIG_FILE || DEFAULT_CONFIG_FILE;
+  const rawFence = env.FENCE === undefined || env.FENCE === "" ? "0" : env.FENCE;
+  let fence = /^(0|[1-9][0-9]*)$/.test(rawFence) ? Number(rawFence) : Number.NaN;
+  if (!isFence(fence)) throw new Error("FENCE must be a non-negative safe integer.");
   const saved = readAllowFile(configFile);
   if (saved !== null) {
     // exactly the list last applied; the denied ranges only ever add up
     mode = saved.mode;
     allowHosts = saved.hosts;
     deniedCidrs = [...new Set([...deniedCidrs, ...saved.deniedCidrs])];
+    fence = saved.fence;
   }
-  const state = createEgressState({ mode, allowHosts, deniedCidrs, testHosts, configFile });
+  const state = createEgressState({ mode, allowHosts, deniedCidrs, fence, testHosts, configFile });
   const port = Number(env.PORT ?? 3128);
   const socksPort = Number(env.SOCKS_PORT ?? 1080);
   const http = createEgressProxy({ state, lookup });

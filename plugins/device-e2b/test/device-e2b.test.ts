@@ -37,6 +37,9 @@ import {
 } from "../src/index.js";
 import { fakeSystemPath } from "./system-path.js";
 
+/** The fence token every lifecycle call carries here (device update fencing). */
+const FENCE = { token: 1 };
+
 /** The system PATH of the fake E2B (shims and this machine's tools). */
 const systemPath = fakeSystemPath();
 
@@ -95,7 +98,7 @@ const provision = async (
   name: string = sbxName(),
 ) => {
   const fileSystem = await s.createFileSystem({ name, limits: l, signal: sig() });
-  return s.create({ name, limits: l, fileSystem, signal: sig() });
+  return s.create({ fence: FENCE, name, limits: l, fileSystem, signal: sig() });
 };
 
 /**
@@ -246,6 +249,7 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
       const name = sbxName();
       const fileSystem = await sbx.createFileSystem({ name, limits: limits(), signal: sig() });
       const h = await sbx.create({
+        fence: FENCE,
         name,
         image: "ignored:latest",
         limits: limits(),
@@ -261,20 +265,38 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
     it("files survive destroy and recreate", async () => {
       const name = sbxName();
       const fileSystem = await sbx.createFileSystem({ name, limits: limits(), signal: sig() });
-      const h = await sbx.create({ name, limits: limits(), fileSystem, signal: sig() });
+      const h = await sbx.create({
+        fence: FENCE,
+        name,
+        limits: limits(),
+        fileSystem,
+        signal: sig(),
+      });
       await sbx.writeFile(h, "/workspace/keep.txt", enc.encode("kept"), sig());
-      await sbx.destroy(h, sig());
+      await sbx.destroy(h, sig(), null);
       expect(fake.sandboxes.get(h.id)?.state).toBe("paused");
       expect(pauseBodies(h.id).at(-1)).toEqual({ memory: false });
-      await sbx.destroy(h, sig()); // already paused (409) also succeeds
-      const h2 = await sbx.create({ name, limits: limits(), fileSystem, signal: sig() });
+      await sbx.destroy(h, sig(), null); // already paused (409) also succeeds
+      const h2 = await sbx.create({
+        fence: FENCE,
+        name,
+        limits: limits(),
+        fileSystem,
+        signal: sig(),
+      });
       const r = await sbx.readFile(h2, "/workspace/keep.txt", { maxBytes: 100, signal: sig() });
       expect(r && dec.decode(r.data)).toBe("kept");
       // destroyByName pauses the instance found by name and keeps the files
-      await sbx.destroyByName(name, sig());
+      await sbx.destroyByName(name, sig(), null);
       expect(fake.sandboxes.get(h.id)?.state).toBe("paused");
-      await sbx.destroyByName(name, sig()); // nothing running: success
-      const h3 = await sbx.create({ name, limits: limits(), fileSystem, signal: sig() });
+      await sbx.destroyByName(name, sig(), null); // nothing running: success
+      const h3 = await sbx.create({
+        fence: FENCE,
+        name,
+        limits: limits(),
+        fileSystem,
+        signal: sig(),
+      });
       expect((await sbx.stat(h3, "/workspace/keep.txt", sig()))?.size).toBe(4);
       // the file system goes with destroyFileSystem
       await sbx.destroyFileSystem(fileSystem, sig());
@@ -287,7 +309,7 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
       const fileSystem = await sbx.createFileSystem({ name, limits: limits(), signal: sig() });
       await fake.removeSandbox(fileSystem.id);
       const e = await sbx
-        .create({ name, limits: limits(), fileSystem, signal: sig() })
+        .create({ fence: FENCE, name, limits: limits(), fileSystem, signal: sig() })
         .catch((x: unknown) => x);
       expect(isFileSystemGoneError(e)).toBe(true);
       expect(String((e as Error).message)).toContain(fileSystem.id);
@@ -300,7 +322,7 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
       ]) {
         fail();
         const e2 = await sbx
-          .create({ name: name2, limits: limits(), fileSystem: fs2, signal: sig() })
+          .create({ fence: FENCE, name: name2, limits: limits(), fileSystem: fs2, signal: sig() })
           .catch((x: unknown) => x);
         expect(e2).toBeInstanceOf(Error);
         expect(isFileSystemGoneError(e2)).toBe(false);
@@ -341,7 +363,7 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
       await fake.expire(h.id);
       expect(await sbx.resume(h, sig())).toBe("gone");
       await sbx.suspend(h, sig());
-      await sbx.destroy(h, sig());
+      await sbx.destroy(h, sig(), null);
     });
 
     it("destroyFileSystemByName kills every sandbox of the name across pages, legacy names too", async () => {
@@ -356,7 +378,7 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
         });
         const a = await s2.createFileSystem({ name, limits: limits(), signal: sig() });
         // a running instance on it, plus a sandbox@1 sandbox under a cap-<conversationId> name
-        await s2.create({ name, limits: limits(), fileSystem: a, signal: sig() });
+        await s2.create({ fence: FENCE, name, limits: limits(), fileSystem: a, signal: sig() });
         const legacyName = `cap-${randomUUID()}`;
         const legacy = await s2.createFileSystem({
           name: legacyName,
@@ -435,7 +457,7 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
           signal: sig(),
         });
         await expect(
-          s2.create({ name: sbxName(), limits: limits(), fileSystem, signal: sig() }),
+          s2.create({ fence: FENCE, name: sbxName(), limits: limits(), fileSystem, signal: sig() }),
         ).rejects.toThrow(/invalid sandbox domain/);
       } finally {
         await p.close();
@@ -452,14 +474,14 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
         sbx.createFileSystem({ name: sbxName(), limits: limits(), signal: s }),
       ).rejects.toThrow("stop");
       await expect(
-        sbx.create({ name: sbxName(), limits: limits(), fileSystem: h, signal: s }),
+        sbx.create({ fence: FENCE, name: sbxName(), limits: limits(), fileSystem: h, signal: s }),
       ).rejects.toThrow("stop");
       await expect(sbx.destroyFileSystem(h, s)).rejects.toThrow("stop");
       await expect(sbx.destroyFileSystemByName("cap-x", s)).rejects.toThrow("stop");
       await expect(sbx.resume(h, s)).rejects.toThrow("stop");
       await expect(sbx.suspend(h, s)).rejects.toThrow("stop");
-      await expect(sbx.destroy(h, s)).rejects.toThrow("stop");
-      await expect(sbx.destroyByName("cap-x", s)).rejects.toThrow("stop");
+      await expect(sbx.destroy(h, s, null)).rejects.toThrow("stop");
+      await expect(sbx.destroyByName("cap-x", s, null)).rejects.toThrow("stop");
       await expect(
         sbx.exec(h, { ...who(), command: "true", timeoutMs: 1000, maxOutputBytes: 10, signal: s }),
       ).rejects.toThrow("stop");
@@ -493,10 +515,17 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
         sbx.createFileSystem({ name: "../x", limits: limits(), signal: sig() }),
       ).rejects.toThrow(/invalid sandbox name/);
       await expect(
-        sbx.create({ name: "../x", limits: limits(), fileSystem: { id: "i1" }, signal: sig() }),
+        sbx.create({
+          fence: FENCE,
+          name: "../x",
+          limits: limits(),
+          fileSystem: { id: "i1" },
+          signal: sig(),
+        }),
       ).rejects.toThrow(/invalid sandbox name/);
       await expect(
         sbx.create({
+          fence: FENCE,
           name: sbxName(),
           limits: limits(),
           fileSystem: { id: "bad/id?x" },
@@ -921,7 +950,7 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
     it("update answers recreate when the network update fails (the kernel then offers a file reset)", async () => {
       const h = await outdated();
       failPut.set(h.id, 500);
-      expect(await s.update?.(h, limits({ kind: "open-public", hosts: [] }), sig())).toBe(
+      expect(await s.update?.(h, limits({ kind: "open-public", hosts: [] }), sig(), FENCE)).toBe(
         "recreate",
       );
     });
@@ -969,19 +998,22 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
       await s.suspend(h, sig());
       expect(fake.sandboxes.get(h.id)?.state).toBe("paused");
       // the stub answers 404 for a paused sandbox, so "updated" means it was resumed first
-      expect(await s.update?.(h, limits({ kind: "allowlist", hosts: ["pypi.org"] }), sig())).toBe(
-        "updated",
-      );
+      expect(
+        await s.update?.(h, limits({ kind: "allowlist", hosts: ["pypi.org"] }), sig(), FENCE),
+      ).toBe("updated");
       expect(fake.sandboxes.get(h.id)?.state).toBe("running");
       expect(
         await s.update?.(
           h,
           limits({ kind: "allowlist", hosts: ["registry.npmjs.org", "*.githubusercontent.com"] }),
           sig(),
+          FENCE,
         ),
       ).toBe("updated");
-      expect(await s.update?.(h, limits(), sig())).toBe("updated");
-      expect(await s.update?.(h, limits({ kind: "allowlist", hosts: [] }), sig())).toBe("updated");
+      expect(await s.update?.(h, limits(), sig(), FENCE)).toBe("updated");
+      expect(await s.update?.(h, limits({ kind: "allowlist", hosts: [] }), sig(), FENCE)).toBe(
+        "updated",
+      );
       expect(updates.get(h.id)).toEqual([
         { allowOut: ["pypi.org"], denyOut: ["0.0.0.0/0", "fc00::/7", "fe80::/10", "::1/128"] },
         {
@@ -995,12 +1027,12 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
 
     it("open-public opens the internet with the local ranges denied, and back to an allowlist", async () => {
       const h = await provision(s, limits());
-      expect(await s.update?.(h, limits({ kind: "open-public", hosts: [] }), sig())).toBe(
+      expect(await s.update?.(h, limits({ kind: "open-public", hosts: [] }), sig(), FENCE)).toBe(
         "updated",
       );
-      expect(await s.update?.(h, limits({ kind: "allowlist", hosts: ["pypi.org"] }), sig())).toBe(
-        "updated",
-      );
+      expect(
+        await s.update?.(h, limits({ kind: "allowlist", hosts: ["pypi.org"] }), sig(), FENCE),
+      ).toBe("updated");
       expect(updates.get(h.id)).toEqual([
         { allow_internet_access: true, denyOut: OPEN_DENIED },
         { allowOut: ["pypi.org"], denyOut: ["0.0.0.0/0", "fc00::/7", "fe80::/10", "::1/128"] },
@@ -1021,7 +1053,7 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
         tier: "open",
         devHosts: [],
       } as unknown as SandboxLimits;
-      await expect(s.update?.(h, old, sig())).rejects.toThrow(/no valid network/);
+      await expect(s.update?.(h, old, sig(), FENCE)).rejects.toThrow(/no valid network/);
       expect(connects()).toBe(seen);
       expect(updates.get(h.id)).toBeUndefined();
     });
@@ -1035,7 +1067,7 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
         ...limits(),
         network: { kind: "open", hosts: ["pypi.org"] },
       } as unknown as SandboxLimits;
-      await expect(s.update?.(h, badKind, sig())).rejects.toThrow(/no valid network/);
+      await expect(s.update?.(h, badKind, sig(), FENCE)).rejects.toThrow(/no valid network/);
       expect(connects()).toBe(seen);
       expect(updates.get(h.id)).toBeUndefined();
     });
@@ -1044,7 +1076,12 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
       const noDomains = make({ apiUrl: proxy.url, domainAllowlist: false });
       const h = await provision(noDomains, limits());
       expect(
-        await noDomains.update?.(h, limits({ kind: "allowlist", hosts: ["pypi.org"] }), sig()),
+        await noDomains.update?.(
+          h,
+          limits({ kind: "allowlist", hosts: ["pypi.org"] }),
+          sig(),
+          FENCE,
+        ),
       ).toBe("updated");
       expect(updates.get(h.id)).toEqual([{ allow_internet_access: false }]);
       expect(warns.join("\n")).toMatch(/allowlist/);
@@ -1053,23 +1090,23 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
     it("a sandbox that is gone → SandboxGoneError (at connect or at the network update)", async () => {
       const a = await provision(s, limits());
       await fake.expire(a.id);
-      const e1 = await s.update?.(a, limits(), sig()).catch((x: unknown) => x);
+      const e1 = await s.update?.(a, limits(), sig(), FENCE).catch((x: unknown) => x);
       expect(isSandboxGoneError(e1)).toBe(true);
       const b = await provision(s, limits());
       vanishOnUpdate.add(b.id);
-      const e2 = await s.update?.(b, limits(), sig()).catch((x: unknown) => x);
+      const e2 = await s.update?.(b, limits(), sig(), FENCE).catch((x: unknown) => x);
       expect(isSandboxGoneError(e2)).toBe(true);
     });
 
     it("a failed connect or an auth failure is an ordinary error; a failed update answers recreate", async () => {
       const h = await provision(s, limits());
       fake.failNext({ method: "POST", path: /\/connect$/ }, 500, "boom");
-      const e = await s.update?.(h, limits(), sig()).catch((x: unknown) => x);
+      const e = await s.update?.(h, limits(), sig(), FENCE).catch((x: unknown) => x);
       expect(e).toBeInstanceOf(Error);
       expect(isSandboxGoneError(e)).toBe(false);
       for (const status of [401, 403]) {
         failUpdate.set(h.id, status);
-        const u = await s.update?.(h, limits(), sig()).catch((x: unknown) => x);
+        const u = await s.update?.(h, limits(), sig(), FENCE).catch((x: unknown) => x);
         expect(u).toBeInstanceOf(Error);
         expect(String((u as Error).message)).toMatch(new RegExp(`HTTP ${status}`));
         expect(isSandboxGoneError(u)).toBe(false);
@@ -1077,7 +1114,7 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
       // the VM keeps its old policy: the kernel records it unapplied and offers a file reset
       for (const status of [500, 503]) {
         failUpdate.set(h.id, status);
-        expect(await s.update?.(h, limits(), sig())).toBe("recreate");
+        expect(await s.update?.(h, limits(), sig(), FENCE)).toBe("recreate");
       }
       expect(updates.get(h.id)).toBeUndefined();
     });
@@ -1086,13 +1123,13 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
       const h = await provision(s, limits());
       await s.suspend(h, sig());
       const before = AbortSignal.abort(new Error("stop early"));
-      await expect(s.update?.(h, limits(), before)).rejects.toThrow(/stop early/);
+      await expect(s.update?.(h, limits(), before, FENCE)).rejects.toThrow(/stop early/);
       const connects = () =>
         fake.calls.filter((c) => c.path === `/v2/sandboxes/${h.id}/connect`).length;
       const seen = connects();
       fake.hangNext({ method: "POST", path: /\/connect$/ });
       const ac = new AbortController();
-      const p = s.update?.(h, limits(), ac.signal);
+      const p = s.update?.(h, limits(), ac.signal, FENCE);
       // the hanging connect reached the fake (so the hang is used up, not left for later tests)
       await waitFor(() => connects() > seen);
       ac.abort(new Error("stop now"));

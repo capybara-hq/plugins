@@ -117,7 +117,7 @@ describe.skipIf(!dockerAvailable)(
         });
         for (const e of devices) {
           const name = `cap-device-${e}`;
-          await p.destroyByName(name, AbortSignal.timeout(60_000)).catch(() => undefined);
+          await p.destroyByName(name, AbortSignal.timeout(60_000), null).catch(() => undefined);
           await p.destroyFileSystemByName(name, AbortSignal.timeout(60_000)).catch(() => undefined);
         }
       }

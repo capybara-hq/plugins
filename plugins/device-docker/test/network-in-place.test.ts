@@ -1,6 +1,12 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import type { DeviceProvider, SandboxHandle, SandboxLimits } from "@capybara-hq/plugin-sdk";
+import {
+  type DeviceProvider,
+  isSandboxGoneError,
+  isStaleFenceError,
+  type SandboxHandle,
+  type SandboxLimits,
+} from "@capybara-hq/plugin-sdk";
 import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -18,6 +24,9 @@ import {
   TEST_LABEL,
   type TestImages,
 } from "./docker-env.js";
+
+/** The fence token every lifecycle call carries here (device update fencing). */
+const FENCE = { token: 1 };
 
 /**
  * In-place allowlist changes on real Docker (core design 2026-11-23 docker in-place network
@@ -115,13 +124,19 @@ describe.skipIf(!dockerAvailable)(
       await images?.remove();
     }, 120_000);
 
-    const newSandbox = async (p: DeviceProvider, name: string, hosts: string[]) => {
+    const newSandbox = async (
+      p: DeviceProvider,
+      name: string,
+      hosts: string[],
+      fence: { token: number } = FENCE,
+    ) => {
       const fileSystem = await p.createFileSystem({
         name,
         limits: limits(allow(hosts)),
         signal: sig(),
       });
       return p.create({
+        fence,
         name,
         image: images.sandboxImage,
         limits: limits(allow(hosts)),
@@ -189,17 +204,23 @@ describe.skipIf(!dockerAvailable)(
           "control",
           "status",
         ),
-      ) as { ok: boolean; hosts: string[]; connections: number };
+      ) as { ok: boolean; hosts: string[]; connections: number; fence: number };
 
     it("create gives the instance the egress control: labels, config volume and control tmpfs", async () => {
       const name = sbxName();
       const h = await newSandbox(sbx, name, [A]);
       try {
         expect((await inspect(name)).Config.Labels).toMatchObject({
-          "dev.capybara.sandbox.egress-control": "1",
+          "dev.capybara.sandbox.egress-control": "2",
+          "dev.capybara.sandbox.fence": "1",
         });
         const p = await inspect(`${name}-egress`);
-        expect(p.Config.Labels).toMatchObject({ "dev.capybara.sandbox.egress-control": "1" });
+        expect(p.Config.Labels).toMatchObject({
+          "dev.capybara.sandbox.egress-control": "2",
+          "dev.capybara.sandbox.fence": "1",
+        });
+        // the proxy starts with the create-time token (device update fencing design §5.2)
+        expect((await status(name)).fence).toBe(1);
         expect(p.Mounts).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
@@ -227,7 +248,7 @@ describe.skipIf(!dockerAvailable)(
           ).trim(),
         ).toBe("600 node");
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
       // destroy removes the instance's config volume with the containers
       expect(await exists("volume", `${name}-egress-conf`)).toBe(false);
@@ -241,7 +262,7 @@ describe.skipIf(!dockerAvailable)(
         const ids = [(await inspect(name)).Id, (await inspect(`${name}-egress`)).Id];
         expect(await reaches(name, B)).toBe(false);
         await holdConnection(name, A, "/tmp/a.out");
-        expect(await sbx.update(h, limits(allow([A, B])), sig())).toBe("updated");
+        expect(await sbx.update(h, limits(allow([A, B])), sig(), FENCE)).toBe("updated");
         const before = await lines(name, "/tmp/a.out");
         await expect
           .poll(() => lines(name, "/tmp/a.out"), { timeout: 30_000 })
@@ -260,7 +281,7 @@ describe.skipIf(!dockerAvailable)(
           deniedCidrs: expect.arrayContaining(["198.51.100.0/24"]),
         });
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
     });
 
@@ -271,7 +292,7 @@ describe.skipIf(!dockerAvailable)(
         const id = (await inspect(name)).Id;
         await holdConnection(name, A, "/tmp/a.out");
         await holdConnection(name, B, "/tmp/b.out");
-        expect(await sbx.update(h, limits(allow([A])), sig())).toBe("updated");
+        expect(await sbx.update(h, limits(allow([A])), sig(), FENCE)).toBe("updated");
         await expect.poll(() => ended(name, "/tmp/b.out"), { timeout: 30_000 }).toBe(true);
         const before = await lines(name, "/tmp/a.out");
         await expect
@@ -282,9 +303,9 @@ describe.skipIf(!dockerAvailable)(
         expect(await reaches(name, A)).toBe(true);
         expect((await inspect(name)).Id).toBe(id);
         // the same list again is idempotent
-        expect(await sbx.update(h, limits(allow([A])), sig())).toBe("updated");
+        expect(await sbx.update(h, limits(allow([A])), sig(), FENCE)).toBe("updated");
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
     });
 
@@ -306,7 +327,7 @@ describe.skipIf(!dockerAvailable)(
         await expect
           .poll(async () => (await status(name)).connections, { timeout: 30_000 })
           .toBe(1);
-        expect(await sbx.update(h, limits(allow([A])), sig())).toBe("updated");
+        expect(await sbx.update(h, limits(allow([A])), sig(), FENCE)).toBe("updated");
         await expect.poll(() => ended(name, "/tmp/slow.out"), { timeout: 30_000 }).toBe(true);
         const out = await inSandbox(name, "cat /tmp/slow.out");
         // closed by the narrowing, not answered 502 by a dial that ran out (10 s)
@@ -314,7 +335,7 @@ describe.skipIf(!dockerAvailable)(
         expect(out).not.toMatch(/exit:0/);
         expect((await status(name)).connections).toBe(0);
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
     });
 
@@ -322,21 +343,21 @@ describe.skipIf(!dockerAvailable)(
       const name = sbxName();
       const h = await newSandbox(sbx, name, [A, B]);
       try {
-        expect(await sbx.update(h, limits(allow([A])), sig())).toBe("updated");
+        expect(await sbx.update(h, limits(allow([A])), sig(), FENCE)).toBe("updated");
         await sbx.suspend(h, sig());
         expect(await sbx.resume(h, sig())).toBe("resumed");
         expect(await reaches(name, B)).toBe(false);
         expect(await reaches(name, A)).toBe(true);
 
         await sbx.suspend(h, sig());
-        expect(await sbx.update(h, limits(allow([B])), sig())).toBe("updated");
+        expect(await sbx.update(h, limits(allow([B])), sig(), FENCE)).toBe("updated");
         expect((await inspect(`${name}-egress`)).State.Running).toBe(false);
         expect((await inspect(name)).State.Running).toBe(false);
         expect(await sbx.resume(h, sig())).toBe("resumed");
         expect(await reaches(name, A)).toBe(false);
         expect(await reaches(name, B)).toBe(true);
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
     });
 
@@ -344,7 +365,7 @@ describe.skipIf(!dockerAvailable)(
       const name = sbxName();
       const h = await newSandbox(sbx, name, [A, B]);
       try {
-        expect(await sbx.update(h, limits(allow([A])), sig())).toBe("updated");
+        expect(await sbx.update(h, limits(allow([A])), sig(), FENCE)).toBe("updated");
         await docker("rm", "-f", `${name}-egress`);
         expect(await sbx.resume(h, sig())).toBe("resumed");
         // the labels still say [A, B]; the rebuilt proxy enforces [A]
@@ -356,10 +377,10 @@ describe.skipIf(!dockerAvailable)(
         expect(await reaches(name, A)).toBe(true);
         // update rebuilds a lost proxy the same way and applies the change on it
         await docker("rm", "-f", `${name}-egress`);
-        expect(await sbx.update(h, limits(allow([B])), sig())).toBe("updated");
+        expect(await sbx.update(h, limits(allow([B])), sig(), FENCE)).toBe("updated");
         expect((await status(name)).hosts).toEqual([B]);
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
     });
 
@@ -367,10 +388,10 @@ describe.skipIf(!dockerAvailable)(
       const name = sbxName();
       const h: SandboxHandle = await newSandbox(sbx, name, [A, B]);
       try {
-        expect(await sbx.update(h, limits(allow([A])), sig())).toBe("updated");
+        expect(await sbx.update(h, limits(allow([A])), sig(), FENCE)).toBe("updated");
         await docker("rm", "-f", `${name}-egress`);
         await docker("volume", "rm", `${name}-egress-conf`);
-        expect(await sbx.update(h, limits(allow([A])), sig())).toBe("recreate");
+        expect(await sbx.update(h, limits(allow([A])), sig(), FENCE)).toBe("recreate");
         expect(await sbx.resume(h, sig())).toBe("gone");
         // never a proxy rebuilt from the labels
         expect(await exists("container", `${name}-egress`)).toBe(false);
@@ -380,7 +401,7 @@ describe.skipIf(!dockerAvailable)(
         expect(await exists("container", `${name}-egress`)).toBe(false);
         await docker("volume", "rm", `${name}-egress-conf`);
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
     });
 
@@ -388,7 +409,7 @@ describe.skipIf(!dockerAvailable)(
       const name = sbxName();
       const h = await newSandbox(sbx, name, [A, B]);
       try {
-        expect(await sbx.update(h, limits(allow([A])), sig())).toBe("updated");
+        expect(await sbx.update(h, limits(allow([A])), sig(), FENCE)).toBe("updated");
         await docker(
           "exec",
           "-u",
@@ -402,7 +423,7 @@ describe.skipIf(!dockerAvailable)(
         expect(await sbx.resume(h, sig())).toBe("gone");
         expect((await inspect(`${name}-egress`)).State.Running).toBe(false);
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
     });
 
@@ -410,11 +431,11 @@ describe.skipIf(!dockerAvailable)(
       const name = sbxName();
       const h = await newSandbox(sbx, name, [A]);
       try {
-        expect(await sbx.update(h, limits(allow([])), sig())).toBe("recreate");
-        expect(await sbx.update(h, limits({ kind: "open-public", hosts: [] }), sig())).toBe(
+        expect(await sbx.update(h, limits(allow([])), sig(), FENCE)).toBe("recreate");
+        expect(await sbx.update(h, limits({ kind: "open-public", hosts: [] }), sig(), FENCE)).toBe(
           "recreate",
         );
-        // an apply that read an older list (a holder that lost its lease) is refused
+        // an apply with an older token (a holder that lost its lease) is refused
         const stale = await new Promise<number | null>((resolve) => {
           const p = spawn("docker", [
             "exec",
@@ -429,24 +450,143 @@ describe.skipIf(!dockerAvailable)(
           ]);
           p.on("close", resolve);
           p.stdin.end(
-            `${JSON.stringify({ config: { mode: "allowlist", hosts: [A, B] }, ifDigest: "0".repeat(64) })}\n`,
+            `${JSON.stringify({ config: { mode: "allowlist", hosts: [A, B] }, fence: 0 })}\n`,
           );
         });
         expect(stale).toBe(1);
         expect(await reaches(name, B)).toBe(false);
         await docker("exec", "-u", "node", `${name}-egress`, "rm", "/run/egress/control.sock");
-        await expect(sbx.update(h, limits(allow([A, B])), sig())).rejects.toThrow(
-          /egress proxy's control (status|apply) failed/,
+        await expect(sbx.update(h, limits(allow([A, B])), sig(), FENCE)).rejects.toThrow(
+          /egress proxy's control apply failed/,
         );
         // nothing changed in the proxy
         expect(await reaches(name, B)).toBe(false);
         // an abort before the call rejects at once
         await expect(
-          sbx.update(h, limits(allow([A, B])), AbortSignal.abort(new Error("stop"))),
+          sbx.update(h, limits(allow([A, B])), AbortSignal.abort(new Error("stop")), FENCE),
         ).rejects.toThrow(/stop/);
       } finally {
-        await sbx.destroy(h, sig());
+        await sbx.destroy(h, sig(), null);
       }
+    });
+
+    // device update fencing design §5, §9: the kernel's token orders the holders of a device
+    describe("fencing", () => {
+      it("a stale update after a newer narrowing is refused: the list and the closed connection stay", async () => {
+        const name = sbxName();
+        const h = await newSandbox(sbx, name, [A, B]);
+        try {
+          await holdConnection(name, B, "/tmp/b.out");
+          // the newer holder narrows with token 7: the connection to B closes
+          expect(await sbx.update(h, limits(allow([A])), sig(), { token: 7 })).toBe("updated");
+          await expect.poll(() => ended(name, "/tmp/b.out"), { timeout: 30_000 }).toBe(true);
+          // the stale holder's wider list (token 6) never lands
+          const err = await sbx
+            .update(h, limits(allow([A, B])), sig(), { token: 6 })
+            .catch((e: unknown) => e);
+          expect(isStaleFenceError(err)).toBe(true);
+          expect((err as { current?: number }).current).toBe(7);
+          expect((await status(name)).hosts).toEqual([A]);
+          expect((await status(name)).fence).toBe(7);
+          expect(await reaches(name, B)).toBe(false);
+          // the token is stored with the list (a restart keeps it)
+          expect(
+            JSON.parse(
+              await docker("exec", "-u", "node", `${name}-egress`, "cat", "/config/allow.json"),
+            ),
+          ).toMatchObject({ hosts: [A], fence: 7 });
+          // the same list with a higher token raises it; an older kernel (no token) recreates
+          expect(await sbx.update(h, limits(allow([A])), sig(), { token: 9 })).toBe("updated");
+          expect((await status(name)).fence).toBe(9);
+          expect(
+            await (
+              sbx.update as (
+                h: SandboxHandle,
+                l: SandboxLimits,
+                s: AbortSignal,
+              ) => Promise<"updated" | "recreate">
+            )(h, limits(allow([A, B])), sig()),
+          ).toBe("recreate");
+          expect((await status(name)).hosts).toEqual([A]);
+        } finally {
+          await sbx.destroy(h, sig(), null);
+        }
+      });
+
+      it("a late create or destroy against an instance a newer holder made or updated is refused", async () => {
+        const name = sbxName();
+        const h = await newSandbox(sbx, name, [A], { token: 5 });
+        try {
+          const id = (await inspect(name)).Id;
+          const fileSystem = { id: name };
+          const late = await sbx
+            .create({
+              name,
+              image: images.sandboxImage,
+              limits: limits(allow([A, B])),
+              fileSystem,
+              signal: sig(),
+              fence: { token: 4 },
+            })
+            .catch((e: unknown) => e);
+          expect(isStaleFenceError(late)).toBe(true);
+          expect(await sbx.destroy(h, sig(), { token: 4 }).catch((e: unknown) => e)).toSatisfy(
+            isStaleFenceError,
+          );
+          expect(
+            await sbx.destroyByName(name, sig(), { token: 4 }).catch((e: unknown) => e),
+          ).toSatisfy(isStaleFenceError);
+          expect((await inspect(name)).Id).toBe(id);
+          // a token raised in place counts too (the proxy's own, read through its status)
+          expect(await sbx.update(h, limits(allow([A])), sig(), { token: 8 })).toBe("updated");
+          expect(
+            await sbx
+              .create({
+                name,
+                image: images.sandboxImage,
+                limits: limits(allow([A, B])),
+                fileSystem,
+                signal: sig(),
+                fence: { token: 6 },
+              })
+              .catch((e: unknown) => e),
+          ).toSatisfy(isStaleFenceError);
+          expect((await inspect(name)).Id).toBe(id);
+        } finally {
+          await sbx.destroy(h, sig(), null);
+        }
+      });
+
+      it("a handle names one incarnation: a replacement under the same name is gone to it", async () => {
+        const name = sbxName();
+        const old = await newSandbox(sbx, name, [A], { token: 3 });
+        // a newer holder rebuilds the instance under the same name (token 4)
+        const fresh = await newSandbox(sbx, name, [A], { token: 4 });
+        try {
+          expect(fresh).toMatchObject({ id: name, fence: 4 });
+          const run = (h: SandboxHandle) =>
+            sbx.exec(h, {
+              tag: randomUUID(),
+              actor: { accountId: randomUUID(), conversationId: randomUUID() },
+              command: "true",
+              timeoutMs: 30_000,
+              maxOutputBytes: 1_000,
+              signal: sig(),
+            });
+          expect(await run(old).catch((e: unknown) => e)).toSatisfy(isSandboxGoneError);
+          expect(await sbx.resume(old, sig())).toBe("gone");
+          expect(
+            await sbx
+              .update(old, limits(allow([A, B])), sig(), { token: 9 })
+              .catch((e: unknown) => e),
+          ).toSatisfy(isSandboxGoneError);
+          expect((await run(fresh)).exitCode).toBe(0);
+          // nothing changed for the current incarnation
+          expect((await status(name)).hosts).toEqual([A]);
+        } finally {
+          await sbx.destroy(fresh, sig(), null);
+        }
+      });
     });
   },
 );

@@ -18,6 +18,9 @@ import {
   type TestImages,
 } from "./docker-env.js";
 
+/** The fence token every lifecycle call carries here (device update fencing). */
+const FENCE = { token: 1 };
+
 /**
  * Concurrent use of one Docker sandbox (sub-agents spec §10.6, §10.7): tagged exec commands run
  * side by side, `killTagged` kills only one holder's commands, a timeout kills only its own
@@ -70,6 +73,7 @@ describe.skipIf(!dockerAvailable)("device-docker concurrent exec", { timeout: 12
     const name = `cap-${randomUUID()}`;
     const fileSystem = await sbx.createFileSystem({ name, limits: limits(), signal: sig() });
     return sbx.create({
+      fence: FENCE,
       name,
       image: images.sandboxImage,
       limits: limits(hosts),
@@ -120,7 +124,7 @@ describe.skipIf(!dockerAvailable)("device-docker concurrent exec", { timeout: 12
       expect(gap < 1_000_000_000n).toBe(true);
       expect(Date.now() - t0).toBeLessThan(4000 + 2000);
     } finally {
-      await sbx.destroy(h, sig());
+      await sbx.destroy(h, sig(), null);
     }
   });
 
@@ -144,7 +148,7 @@ describe.skipIf(!dockerAvailable)("device-docker concurrent exec", { timeout: 12
       bStop.abort();
       expect(await b).toMatchObject({ exitCode: null, timedOut: false });
     } finally {
-      await sbx.destroy(h, sig());
+      await sbx.destroy(h, sig(), null);
     }
   });
 
@@ -162,7 +166,7 @@ describe.skipIf(!dockerAvailable)("device-docker concurrent exec", { timeout: 12
       stop.abort();
       await long;
     } finally {
-      await sbx.destroy(h, sig());
+      await sbx.destroy(h, sig(), null);
     }
   });
 
@@ -176,7 +180,7 @@ describe.skipIf(!dockerAvailable)("device-docker concurrent exec", { timeout: 12
       expect(a).toMatchObject({ timedOut: true, exitCode: null });
       expect(b).toMatchObject({ exitCode: 0, stdout: "b\n" });
     } finally {
-      await sbx.destroy(h, sig());
+      await sbx.destroy(h, sig(), null);
     }
   });
 
@@ -193,7 +197,7 @@ describe.skipIf(!dockerAvailable)("device-docker concurrent exec", { timeout: 12
       expect(b).toMatchObject({ exitCode: 0, stdout: "b\n" });
       expect(s).toEqual(expect.objectContaining({ isDir: true }));
     } finally {
-      await sbx.destroy(h, sig());
+      await sbx.destroy(h, sig(), null);
     }
   });
 

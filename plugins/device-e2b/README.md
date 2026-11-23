@@ -244,6 +244,13 @@ configuration at once, with no restart: running commands keep running, new conne
   errors): the VM keeps its old policy, and the kernel records the limits unapplied and offers a file reset, so the device always
   has a way forward.
 - Connections already open when the rules narrow are E2B's business; the docs do not say whether they are cut.
+- **No fencing token.** The kernel passes a fence token to `update`, `create`, `destroy` and `destroyByName` (core design
+  `2026-11-23-device-update-fencing-design.md`); this plugin ignores it, because `PUT /sandboxes/{id}/network` replaces the
+  policy unconditionally and sandbox metadata is fixed at creation, so there is nowhere to keep a token the write itself
+  checks. **Residual race**: a kernel replica that lost its lease without noticing can still apply an older network policy after
+  a newer holder's change; it stays in force until the next lifecycle step applies the desired policy again (the kernel's
+  intent record makes the next holder re-apply when the stale call may land later, but not when it lands after that holder's
+  `update`; core issue #766 tracks reapplying when the installed policy is wider than the record).
 
 **Command time limit**: a single command runs at most `sandbox.limits.maxCommandSeconds`, and no more than the time left in the run it belongs to (`runtime.maxRunSeconds`,
 default 900 seconds, Ruling M20); to run long commands, raise `runtime.maxRunSeconds` to at least `maxCommandSeconds`.

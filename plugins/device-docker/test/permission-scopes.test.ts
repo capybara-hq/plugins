@@ -59,6 +59,8 @@ import {
  * @capybara-hq/testing runs against it. Skipped without Docker.
  */
 
+/** The fence token every lifecycle call carries here (device update fencing). */
+const FENCE = { token: 1 };
 const exec = promisify(execFile);
 const imageDir = fileURLToPath(new URL("../image/", import.meta.url));
 const RUN = randomUUID().slice(0, 8);
@@ -194,6 +196,7 @@ describe.skipIf(!dockerAvailable)(
         signal: sig(),
       });
       return provider.create({
+        fence: FENCE,
         name,
         limits: limits(network),
         fileSystem,

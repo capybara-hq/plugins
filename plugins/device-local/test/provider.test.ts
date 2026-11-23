@@ -44,6 +44,9 @@ import {
   signal,
 } from "./fakes.js";
 
+/** The fence token every lifecycle call carries here (device update fencing). */
+const FENCE = { token: 1 };
+
 const DEVICE = "dev-1";
 const EXEC_RESULT = { exitCode: 0, stdout: "ok", stderr: "", truncated: false, timedOut: false };
 
@@ -80,6 +83,7 @@ function setup(m = machine()) {
 /** A created instance's handle (the machine answered create and the binding). */
 async function created(s: ReturnType<typeof setup>): Promise<LocalDeviceHandle> {
   const h = (await s.provider.create({
+    fence: FENCE,
     name: `cap-device-${DEVICE}`,
     limits: LIMITS,
     fileSystem: { id: DEVICE },
@@ -673,6 +677,7 @@ describe("lifecycle", () => {
   it("create binds the committed generation before returning", async () => {
     const s = setup();
     const h = (await s.provider.create({
+      fence: FENCE,
       name: `cap-device-${DEVICE}`,
       limits: LIMITS,
       fileSystem: { id: DEVICE },
@@ -691,6 +696,7 @@ describe("lifecycle", () => {
     expect(h).toEqual({ id: DEVICE, roots: ROOTS, limits: LIMITS, generation: h.generation });
     // the next instance names this one as its previous
     const next = (await s.provider.create({
+      fence: FENCE,
       name: `cap-device-${DEVICE}`,
       limits: LIMITS,
       fileSystem: { id: DEVICE },
@@ -708,6 +714,7 @@ describe("lifecycle", () => {
     );
     await expect(
       s.provider.create({
+        fence: FENCE,
         name: "cap-device-other",
         limits: LIMITS,
         fileSystem: { id: DEVICE },
@@ -716,6 +723,7 @@ describe("lifecycle", () => {
     ).rejects.toThrow("does not belong");
     const e = await rejection(
       s.provider.create({
+        fence: FENCE,
         name: `cap-device-${DEVICE}`,
         limits: LIMITS,
         fileSystem: { id: DEVICE },
@@ -743,6 +751,7 @@ describe("lifecycle", () => {
       isDeviceOfflineError(
         await rejection(
           s.provider.create({
+            fence: FENCE,
             name: `cap-device-${DEVICE}`,
             limits: LIMITS,
             fileSystem: { id: DEVICE },
@@ -816,7 +825,7 @@ describe("lifecycle", () => {
     const s = setup();
     const h = await created(s);
     await s.provider.suspend(h, signal());
-    await s.provider.destroy(h, signal());
+    await s.provider.destroy(h, signal(), null);
     expect(s.dial.sent.map((r) => [r.op, r.args])).toEqual([
       ["create", { limits: LIMITS }],
       ["create", { limits: LIMITS }],
@@ -829,9 +838,9 @@ describe("lifecycle", () => {
     const live = await created(s);
     expect(live.generation).not.toBe(old.generation);
     await s.provider.suspend(old, signal());
-    await s.provider.destroy(old, signal());
+    await s.provider.destroy(old, signal(), null);
     // a handle with no stored binding at all reaches nothing either
-    await s.provider.destroy({ ...live, id: "dev-other" }, signal());
+    await s.provider.destroy({ ...live, id: "dev-other" }, signal(), null);
     expect(s.dial.sent).toEqual([]);
     await s.provider.suspend(live, signal());
     expect(s.dial.ops()).toEqual(["create"]);
@@ -849,7 +858,7 @@ describe("lifecycle", () => {
     const h = await created(s);
     refuse = true;
     await s.provider.suspend(h, signal());
-    await s.provider.destroy(h, signal());
+    await s.provider.destroy(h, signal(), null);
     expect(s.warnings.map((w) => w.msg)).toEqual([
       "could not end the device's work on its machine at suspend",
       "could not end the device's work on its machine at destroy",
@@ -857,8 +866,8 @@ describe("lifecycle", () => {
     s.dial.sent.length = 0;
     s.dial.state.online = false;
     await s.provider.suspend(h, signal());
-    await s.provider.destroy(h, signal());
-    await s.provider.destroyByName(`cap-device-${DEVICE}`, signal());
+    await s.provider.destroy(h, signal(), null);
+    await s.provider.destroyByName(`cap-device-${DEVICE}`, signal(), null);
     await s.provider.destroyFileSystem({ id: DEVICE }, signal());
     await s.provider.destroyFileSystemByName(`cap-device-${DEVICE}`, signal());
     await s.provider.destroyFileSystemByName("cap-legacy-conversation", signal());
@@ -869,7 +878,7 @@ describe("lifecycle", () => {
     const s = setup();
     await s.provider.destroyFileSystem({ id: DEVICE }, signal());
     await s.provider.destroyFileSystemByName(`cap-device-${DEVICE}`, signal());
-    await s.provider.destroyByName(`cap-device-${DEVICE}`, signal());
+    await s.provider.destroyByName(`cap-device-${DEVICE}`, signal(), null);
     expect(s.dial.sent).toEqual([]);
     const h: LocalDeviceHandle = { id: DEVICE, roots: ROOTS, limits: LIMITS, generation: "1" };
     await expect(s.provider.suspend(h, AbortSignal.abort(new Error("lease lost")))).rejects.toThrow(
