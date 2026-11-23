@@ -15,7 +15,8 @@ import { SANDBOX_RUNTIME_SOURCE } from "@capybara-hq/plugin-sdk";
  * are checked against the host SDK's `SANDBOX_RUNTIME_SOURCE.accepted` (by name, every digest a
  * staged copy may have: its staged set, its current bytes and at most one previous revision),
  * never against one exact digest: an instance made from an earlier image of this provider stays
- * available while the host SDK still accepts what it staged, and a host SDK without `accepted`
+ * available while the host SDK still accepts the launcher it staged (a file the agent runs,
+ * `native-files.py`, must be exactly the one operations expect), and a host SDK without `accepted`
  * (older than this provider supports) makes restricted support unavailable. Changing these files
  * follows core's "Changing the SDK runtime sources" (tools/checks/README.md in capybara-hq/core).
  *

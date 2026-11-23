@@ -468,6 +468,8 @@ export function createOperations(deps: OperationDeps) {
     signal.throwIfAborted();
     checkPath(String(native.path));
     const input = { ...native, dataB64: undefined, data: digestOf(native.dataB64) };
+    // before admission: a host SDK that disowns the staged helper spends no one-shot record
+    const expect = sdkRuntimeDigests();
     // native work runs no command and opens no connection: the network does not apply
     await consume(h, scope, method, inputHash(method, scope, input), signal);
     const { frames } = await agent(h, {
@@ -476,7 +478,7 @@ export function createOperations(deps: OperationDeps) {
       stdin: request({
         opKey: opKey(scope.operationId),
         admitBeforeMs: scope.admitBeforeMs,
-        expect: sdkRuntimeDigests(),
+        expect,
         kind: "device",
         native: { method, ...native },
       }),
@@ -698,6 +700,7 @@ export function createOperations(deps: OperationDeps) {
       }
       checkPath(args.outputPath);
       const input2 = { ...args, signal: undefined };
+      const expect = sdkRuntimeDigests();
       await checkNetwork(h, scope, args.signal);
       const consumed = await record(
         h,
@@ -726,7 +729,7 @@ export function createOperations(deps: OperationDeps) {
         ...(barrier !== undefined && { barrier }),
         opKey: opKey(scope.operationId),
         admitBeforeMs: scope.admitBeforeMs,
-        expect: sdkRuntimeDigests(),
+        expect,
         executionId: ref.executionId,
         // the whole instance: the agent's device kind (no launcher), under the instance network
         kind: "device",
@@ -1042,6 +1045,7 @@ export function createOperations(deps: OperationDeps) {
         // projects are offered only inside the workspace: refused with a reason the device page
         // shows when a project is added, before anything runs in the instance
         checkListPath(String(native.path));
+        const expect = sdkRuntimeDigests();
         await consume(h, scope, `browse-${method}`, inputHash(method, scope, native), sig);
         const { frames } = await agent(h, {
           cmd: [PYTHON, "-I", OPERATION_AGENT, "direct"],
@@ -1049,7 +1053,7 @@ export function createOperations(deps: OperationDeps) {
           stdin: request({
             opKey: opKey(scope.operationId),
             admitBeforeMs: scope.admitBeforeMs,
-            expect: sdkRuntimeDigests(),
+            expect,
             kind: "scoped",
             readRoots: [...scope.readRoots],
             writeRoots: [],
