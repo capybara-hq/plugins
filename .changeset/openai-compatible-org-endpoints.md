@@ -12,3 +12,8 @@ leniently: the platform may leave `endpoints` to the orgs.
 
 Needs a kernel whose `@capybara-hq/plugin-sdk` ships `configUrlFetch` and org-bound per-call
 config (the release of core#720).
+
+The `openai` SDK client reads no `OPENAI_*` host environment variable: the key, admin key,
+organization, project, webhook secret and base URL are always explicit, and `OPENAI_CUSTOM_HEADERS`
+(which the SDK merges into every request, even over the key) is dropped, so no host value reaches
+an org-chosen URL.

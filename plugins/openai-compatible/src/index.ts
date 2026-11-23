@@ -10,10 +10,11 @@ import {
   secret,
   ui,
 } from "@capybara-hq/plugin-sdk";
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import { z } from "zod";
 import { DIALECTS, type Dialect, PROVIDER } from "./dialects.js";
 import { streamChat } from "./map-stream.js";
+import { isolatedOpenAI } from "./openai-client.js";
 
 const EndpointModelSchema = z.object({
   /** 端点上的原始模型 id（可含 `/`，如 vLLM 的 `Qwen/Qwen3-8B`）。 */
@@ -214,18 +215,14 @@ function makeClient(
   orgId: string | undefined,
 ): OpenAI {
   const platform = (platformDefaults(opts).endpoints ?? []).map((e) => e.baseUrl);
-  return new OpenAI({
+  // No OPENAI_* env var is read (isolatedOpenAI): never send a host value to another service
+  return isolatedOpenAI({
     baseURL: cfg.baseUrl,
     // The SDK requires a credential: a keyless endpoint (an internal vLLM) gets a placeholder and
     // the Authorization header is removed below
     apiKey: apiKey ?? "unused",
     // A platform endpoint URL keeps the global fetch; an org-set one goes through ctx.net
     fetch: configUrlFetch(opts.net ?? NO_NET, { url: cfg.baseUrl, platform, orgId }),
-    // Do not read OPENAI_ORG_ID / OPENAI_PROJECT_ID / OPENAI_ADMIN_KEY: never send OpenAI headers
-    // to another service
-    organization: null,
-    project: null,
-    adminAPIKey: null,
     ...(apiKey === undefined ? { defaultHeaders: { Authorization: null } } : {}),
     // Retries belong to the kernel's degradation ladder
     maxRetries: 0,
