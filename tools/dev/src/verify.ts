@@ -29,12 +29,29 @@ export function changedFiles(cwd: string, base: string): string[] {
   return [...out].sort();
 }
 
-/** The local equivalent of CI's required jobs for this plan, in run order. */
-export function verifySteps(plan: Plan, base: string): VerifyStep[] {
-  const steps: VerifyStep[] = [
+/** The steps every verify run starts with, in run order. */
+function checkSteps(): VerifyStep[] {
+  return [
     { id: "lint", title: "Lint", cmd: ["pnpm", "lint"] },
     { id: "typecheck", title: "Typecheck", cmd: ["pnpm", "typecheck"] },
     { id: "check", title: "Plugin and skill checks", cmd: ["pnpm", "check"] },
+  ];
+}
+
+/**
+ * The quick local check (`--fast`): lint, typecheck and the custom checks. No upstream remote,
+ * fetch, merge base or plan, and no tests: every test file shares the vitest project whose
+ * global setup starts PostgreSQL and Valkey containers. The contributor runs the tests of the
+ * files they changed; CI runs every affected test and is the merge gate.
+ */
+export function fastSteps(): VerifyStep[] {
+  return checkSteps();
+}
+
+/** The local equivalent of CI's required jobs for this plan, in run order. */
+export function verifySteps(plan: Plan, base: string): VerifyStep[] {
+  const steps: VerifyStep[] = [
+    ...checkSteps(),
     {
       // Every public plugin version has its marketplace.json entry, and the entries at the base
       // are unchanged (append-only), as CI checks on a PR.
