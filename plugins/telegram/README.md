@@ -66,7 +66,7 @@ Shown in the form with zh / en labels and help.
 |---|---|---|
 | `apiUrl` | `https://api.telegram.org` | Bot API root URL; change it only in tests or when going through a reverse proxy |
 
-The deployment-level config lives under the kernel config `extensionConfig.telegram`. There is no org-level config.
+The deployment-level config lives under the kernel config `extensionConfig.telegram`. The whole config is platform-only: an org has no copy of it.
 
 ## Behavior
 

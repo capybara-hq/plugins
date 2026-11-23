@@ -62,7 +62,7 @@ Notes for operators:
   the manifest from the setup guide (or add the bot scope `files:write` under **OAuth & Permissions**)
   and **reinstall the app** to the workspace; the bot token stays the same. Until then the bot's
   replies still arrive and each delivered file is shown as a link.
-- The org must enable the `slack` plugin before it can create a connection (its org-level fields are
+- The org must enable the `slack` plugin before it can create a connection (its `directory` config, which an org may override, is
   optional and only for [directory sync](#directory-directory1)). The tokens are stored in the
   secret store, and the API only returns "set".
 - The app's name in the manifest is the connection's name; Slack caps it at 35 characters, so shorten it in

@@ -7,9 +7,9 @@ API (plain `fetch`, no vendor SDK).
 
 | Field | Notes |
 |---|---|
-| `apiKey` | secret; required; overridable per organization |
-| `region` | default `cn-beijing`; overridable per organization |
-| `workspaceId` | overridable per organization; required outside `us-east-1`, optional in `cn-beijing` (which then uses the shared domain `dashscope.aliyuncs.com`) |
+| `apiKey` | secret; required; org-overridable |
+| `region` | default `cn-beijing`; org-overridable |
+| `workspaceId` | org-overridable; required outside `us-east-1`, optional in `cn-beijing` (which then uses the shared domain `dashscope.aliyuncs.com`) |
 
 The key is required, so a deployment without one shows the provider as needing configuration
 rather than as failing to list its models. The platform may leave it empty for the organizations
