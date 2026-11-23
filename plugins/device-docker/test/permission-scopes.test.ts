@@ -33,6 +33,7 @@ import {
   RUNTIME_BUNDLE_VERSION,
   runtimeChecksums,
   SDK_RUNTIME_FILES,
+  STAGED_SDK_DIGESTS,
   sdkRuntimeDigests,
 } from "../src/runtime-source.js";
 import {
@@ -66,13 +67,16 @@ const enc = new TextEncoder();
 const dec = new TextDecoder();
 
 describe("staged runtime", () => {
-  it("stages the SDK runtime bytes unchanged", async () => {
+  it("stages the SDK's current runtime bytes unchanged, each digest one the SDK accepts", async () => {
     expect(SANDBOX_RUNTIME_SOURCE.version).toBe(RUNTIME_BUNDLE_VERSION);
     for (const name of SDK_RUNTIME_FILES) {
-      const file = SANDBOX_RUNTIME_SOURCE.files.find((f) => f.name === name);
+      const file = SANDBOX_RUNTIME_SOURCE.current.find((f) => f.name === name);
       const staged = await readFile(`${imageDir}runtime/${name}`, "utf8");
-      expect(staged === file?.source, `${name} differs from the SDK bundle`).toBe(true);
-      expect(createHash("sha256").update(staged).digest("hex")).toBe(file?.sha256);
+      expect(staged === file?.source, `${name} differs from the SDK's current bytes`).toBe(true);
+      const digest = createHash("sha256").update(staged).digest("hex");
+      expect(digest).toBe(file?.sha256);
+      expect(digest).toBe(STAGED_SDK_DIGESTS[name]);
+      expect(SANDBOX_RUNTIME_SOURCE.accepted[name]).toContain(digest);
     }
   });
 
@@ -2124,7 +2128,9 @@ os.kill(os.getpid(), signal.SIGKILL)  # ${marker}`;
       const build = spawnSync("docker", ["build", "-q", "-t", tag, "-"], {
         input:
           `FROM ${context}\nUSER 0:0\n` +
-          "RUN sed -i 's/^LANDLOCK_ABI_REQUIRED = 6/LANDLOCK_ABI_REQUIRED = 5/' /opt/capybara-runtime/linux-sandbox.py\nUSER 1000:1000\n",
+          // the native helper the agent runs: the launcher is never run, so operations check only
+          // this one (a launcher digest the SDK does not accept fails the probe alone; unit tests)
+          "RUN printf '\\n# mutant\\n' >> /opt/capybara-runtime/native-files.py\nUSER 1000:1000\n",
         encoding: "utf8",
       });
       expect(build.status, build.stderr).toBe(0);

@@ -96,7 +96,7 @@ RUN printf '%s\n' \
   > /etc/ssh/ssh_known_hosts \
   && chmod 0644 /etc/ssh/ssh_known_hosts
 
-# The restricted operation runtime (permission profiles): the SDK's SANDBOX_RUNTIME_SOURCE files
+# The restricted operation runtime (permission profiles): the SDK's SANDBOX_RUNTIME_SOURCE.current files
 # (native-files.py, linux-sandbox.py) byte for byte plus the provider's consumer
 # (capybara-operation.py), staged root-owned and read-only; the build fails unless every file
 # matches SHA256SUMS (src/runtime-source.ts; test/permission-scopes.test.ts keeps them in step).
