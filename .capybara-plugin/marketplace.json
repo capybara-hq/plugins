@@ -920,6 +920,31 @@
           "integrity": "sha512-IGhfG42LMy8Rf95vHEjGKkEHHhASClFvPZZnLZAHjdHr6fqox6z2q1c4Kn1BRee2kSVT31AOw8hiTurfIXyalA=="
         }
       }
+    },
+    {
+      "name": "atlassian",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Agents work with Jira, Confluence and Bitbucket as the connected person, through Atlassian's remote MCP server (Atlassian Cloud). Each member connects their own Atlassian account with OAuth; the client is registered automatically, so the org admin enters nothing",
+        "zh": "智能体以连接者本人的身份使用 Jira、Confluence 和 Bitbucket，经 Atlassian 的远程 MCP 服务器（Atlassian Cloud）。每位成员用 OAuth 连接自己的 Atlassian 账号；客户端自动注册，组织管理员无需填写任何内容"
+      },
+      "displayName": {
+        "zh": "Atlassian",
+        "en": "Atlassian"
+      },
+      "icon": "./plugins/atlassian/icon.svg",
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/atlassian#readme",
+      "permissions": {
+        "keys": [],
+        "sensitive": []
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-atlassian",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-gNpL9XTyk80san4VP97njk11Q3XagI260dyZIhIYoiw47lLVE401NAJ/qLo+DNUdsCl/SVJTWwEsa6WWSsFu/w=="
+        }
+      }
     }
   ]
 }

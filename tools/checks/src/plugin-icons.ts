@@ -17,6 +17,8 @@ import type { Finding } from "./finding.js";
 export const BRAND_ICON_EXEMPTIONS: Readonly<Record<string, string>> = {
   anthropic: "vendor brand: the Anthropic press-kit symbol",
   ark: "vendor-specific provider (Volcengine Ark): keeps its own provider mark",
+  atlassian:
+    "vendor brand: the Atlassian mark (connector templates carry the Jira, Confluence and Bitbucket icons)",
   bailian: "vendor-specific provider (Alibaba Cloud Model Studio): keeps its own provider mark",
   deepseek: "vendor brand: the DeepSeek whale",
   github: "vendor brand: the GitHub mark",

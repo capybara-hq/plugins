@@ -1,0 +1,63 @@
+{
+  "source": "https://developer.atlassian.com/cloud/rovo-mcp/guides/supported-tools/",
+  "recordedAt": "2026-11-23",
+  "common": [
+    "atlassianUserInfo",
+    "getAccessibleAtlassianResources",
+    "getContentFormatGuide",
+    "discover",
+    "executeRead",
+    "executeWrite",
+    "executeDestructive"
+  ],
+  "groups": {
+    "read_bitbucket": {
+      "scope": "read:bitbucket:agent-interface",
+      "tools": [
+        "listBitbucketWorkspaces",
+        "getBitbucketWorkspace",
+        "listBitbucketRepositories",
+        "getBitbucketRepository",
+        "getBitbucketRepoDefaultReviewers",
+        "getBitbucketRepoFileContent",
+        "getBitbucketRepoBranch",
+        "getBitbucketRepoCommit",
+        "listBitbucketRepoCommitReports",
+        "getBitbucketRepoCommitReport",
+        "getBitbucketRepoCommitReportAnnotations",
+        "listBitbucketRepoPullRequests",
+        "getBitbucketRepoPullRequest",
+        "getBitbucketRepoPullRequestDiff",
+        "listBitbucketRepoPullRequestComments",
+        "listBitbucketRepoPullRequestTasks",
+        "listBitbucketRepoPipelines",
+        "getBitbucketRepoPipeline",
+        "listBitbucketRepoPipelineSteps",
+        "getBitbucketRepoPipelineStep",
+        "getBitbucketRepoPipelineStepLog",
+        "listBitbucketRepoDeployments",
+        "getBitbucketRepoDeployment",
+        "listBitbucketRepoEnvironments",
+        "getBitbucketRepoEnvironment"
+      ]
+    },
+    "write_bitbucket": {
+      "scope": "write:bitbucket:agent-interface",
+      "tools": [
+        "createBitbucketRepoPullRequest",
+        "updateBitbucketRepoPullRequest",
+        "mergeBitbucketRepoPullRequest",
+        "approveBitbucketRepoPullRequest",
+        "requestChangesOnBitbucketRepoPullRequest",
+        "addBitbucketRepoPullRequestComment",
+        "resolveBitbucketRepoPullRequestComment",
+        "reopenBitbucketRepoPullRequestComment",
+        "createBitbucketRepoPullRequestTask",
+        "setBitbucketRepoPullRequestTaskState",
+        "createBitbucketRepoBranch",
+        "createBitbucketRepoCommit",
+        "runBitbucketRepoPipeline"
+      ]
+    }
+  }
+}
