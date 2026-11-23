@@ -1345,6 +1345,97 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       }
       await expect(sbx.killAll?.(h, sig())).rejects.toSatisfy(isSandboxGoneError);
     });
+
+    it("binaries planted on the image's writable PATH never replace the provider's tools (#106)", async () => {
+      const h = await newSandbox(sbx, {
+        name: sbxName(),
+        image: images.sandboxImage,
+        limits: limits(allow()),
+        signal: sig(),
+      });
+      // The image's PATH starts with this directory, which the sandbox user owns.
+      const planted = "/workspace/.cache/npm-global/bin";
+      const log = "/workspace/planted.log";
+      const record = `echo "$(/usr/bin/id -u) $(/usr/bin/basename "$0")" >> ${log}`;
+      // a `timeout` that drops the limit, a `setsid` that passes through (so the wrapper still
+      // runs), and do-nothing stand-ins for every other tool the wrapper, the kill scripts and
+      // the file scripts use (some of them run as root)
+      const fakes: Record<string, string> = {
+        timeout: `${record}\nwhile [ "$1" = -s ]; do shift 2; done; shift; exec "$@"`,
+        setsid: `${record}\nexec /usr/bin/setsid "$@"`,
+      };
+      for (const tool of [
+        "pgrep",
+        "pkill",
+        "kill",
+        "sleep",
+        "cat",
+        "rm",
+        "head",
+        "mkdir",
+        "dirname",
+        "stat",
+        "true",
+        "sed",
+        "printf",
+      ])
+        fakes[tool] = `${record}\nexit 0`;
+      // only absolute paths in the test's own commands: their PATH is the image's
+      const abs = (id: string, command: string) => sh(id, command);
+      const sleeping = async (pattern: string) =>
+        Number(
+          (await abs(h.id, `/usr/bin/pgrep -fc -- ${JSON.stringify(pattern)} || :`)).stdout.trim(),
+        );
+      try {
+        for (const [tool, body] of Object.entries(fakes))
+          await sbx.writeFile(h, `${planted}/${tool}`, enc.encode(`#!/bin/sh\n${body}\n`), sig());
+        await abs(h.id, `/bin/chmod 0755 ${planted}/*`);
+        // the sandbox user's own lookups do find them
+        expect((await abs(h.id, "command -v timeout")).stdout.trim()).toBe(`${planted}/timeout`);
+        await abs(h.id, `/bin/rm -f ${log}`);
+
+        // the in-sandbox deadline still applies with nobody watching (docker exec gets the
+        // image's PATH, like every exec)
+        const started = Date.now();
+        await orphan(h.id, "/bin/sleep 111 & /bin/sleep 112", 1000);
+        await waitUntil(async () => (await sleeping("^/bin/sleep 11[12]")) === 2, 10_000);
+        await waitUntil(async () => (await sleeping("^/bin/sleep 11[12]")) === 0, 20_000);
+        expect(Date.now() - started).toBeLessThan((1 + IN_SANDBOX_GRACE_SECONDS + 5) * 1000);
+
+        // a timeout and an abort still kill the command and its children
+        const r = await sbx.exec(h, {
+          ...who(),
+          command: "echo started; /bin/sleep 113 & /bin/sleep 114",
+          timeoutMs: 1000,
+          maxOutputBytes: 1000,
+          signal: sig(),
+        });
+        expect(r).toMatchObject({ exitCode: null, timedOut: true, stdout: "started\n" });
+        expect(await sleeping("^/bin/sleep 11[34]")).toBe(0);
+        await orphan(h.id, "/bin/sleep 115", 600_000);
+        await waitUntil(async () => (await sleeping("^/bin/sleep 115")) === 1, 10_000);
+        await sbx.killAll?.(h, sig());
+        expect(await sleeping("^/bin/sleep 115")).toBe(0);
+
+        // file calls (the /skills write runs as root) use the system tools
+        await sbx.writeFile(h, "/workspace/sub/a.txt", enc.encode("plain"), sig());
+        await sbx.writeFile(h, "/skills/planted-check/SKILL.md", enc.encode("root"), sig());
+        expect(
+          dec.decode(
+            (await sbx.readFile(h, "/workspace/sub/a.txt", { maxBytes: 100, signal: sig() }))?.data,
+          ),
+        ).toBe("plain");
+        expect(await sbx.stat(h, "/skills/planted-check/SKILL.md", sig())).toEqual({
+          size: 4,
+          isDir: false,
+        });
+
+        // no planted binary ran at all, as the sandbox user or as root
+        expect((await abs(h.id, `/bin/cat ${log} 2>/dev/null || :`)).stdout).toBe("");
+      } finally {
+        await sbx.destroy(h, sig());
+      }
+    });
   });
 
   it.skipIf(!runscAvailable)("runsc: lifecycle under gVisor", async () => {

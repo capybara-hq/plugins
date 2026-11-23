@@ -17,6 +17,10 @@ import { type FakeE2BServer, startFakeE2B } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createE2BSandbox, type E2BSandboxConfig, publishedImage } from "../src/index.js";
 import { finishList, finishScan, LIST_PATH } from "../src/listing.js";
+import { fakeSystemPath } from "./system-path.js";
+
+/** The system PATH of the fake E2B (shims and this machine's tools). */
+const systemPath = fakeSystemPath();
 
 /**
  * `list` / `scan` (project root, core spec 2026-11-14 §4.1, §4.2) on E2B, against the fake E2B
@@ -119,7 +123,7 @@ describe("device-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
     sbx = createE2BSandbox(
       cfg,
       { log: silent },
-      { envdUrl: fake.url, listPath: `${bin}:/usr/bin:/bin` },
+      { envdUrl: fake.url, listPath: `${bin}:/usr/bin:/bin`, systemPath },
     );
     h = await provision();
   });
@@ -248,7 +252,7 @@ describe("device-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
     });
 
     it("runs with the system PATH, never the image's (whose first entry the sandbox user can write)", async () => {
-      const plain = createE2BSandbox(cfg, { log: silent }, { envdUrl: fake.url });
+      const plain = createE2BSandbox(cfg, { log: silent }, { envdUrl: fake.url, systemPath });
       await plain.list?.(h, "/workspace", { limit: 1, signal: sig() }).catch(() => undefined); // this machine may keep python3 / timeout elsewhere
       const start = fake.calls.filter((c) => c.path === "/process.Process/Start").at(-1);
       const proc = (start?.body as { process?: { envs?: Record<string, string>; args?: string[] } })
@@ -397,7 +401,11 @@ describe("device-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
     it("a template without python3 or timeout is a clear error", async () => {
       const empty = scratch();
       try {
-        const bare = createE2BSandbox(cfg, { log: silent }, { envdUrl: fake.url, listPath: empty });
+        const bare = createE2BSandbox(
+          cfg,
+          { log: silent },
+          { envdUrl: fake.url, listPath: empty, systemPath },
+        );
         const o = { signal: sig() };
         await expect(bare.list?.(h, "/workspace", { ...o, limit: 1 })).rejects.toThrow(
           /no python3 or no timeout/,

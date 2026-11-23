@@ -455,15 +455,30 @@ function proxyModeOf(plan: InstancePlan): ProxyMode {
 export const IN_SANDBOX_GRACE_SECONDS = 5;
 
 /**
+ * The PATH every provider-run script and lookup uses: root-owned system directories only. The
+ * image's own PATH starts with `/workspace/.cache/npm-global/bin`, which the sandbox user can
+ * write, so a sandboxed command could otherwise plant a `timeout`, `pgrep`, `head`, ... there that
+ * a later wrapper, kill script or root file write would run (#106). Only the user's own command
+ * keeps the image's PATH.
+ */
+export const SYSTEM_PATH = "/usr/sbin:/usr/bin:/sbin:/bin";
+
+/** The absolute `setsid` every exec starts with (never looked up on the image's PATH). */
+export const SETSID = "/usr/bin/setsid";
+
+/**
  * 命令包装：在新会话里跑（setsid），先把会话 id 写到 `<ctl>.pid`，再看有没有 `<ctl>.kill`（杀的请求先到）；
  * 中止时按会话杀掉命令派生的全部进程。命令经 `timeout -s KILL` 运行：到沙箱里的时限即杀掉它所在的进程组。
  * After a timeout (124 or 137) the wrapper also kills what is left of its session: uutils `timeout`
  * (Ubuntu 26.04's default coreutils) kills only its child, not the child's process group (#7).
- * `$0` 是标记、`$1` 是 ctl、`$2` 是命令、`$3` 是沙箱里的时限（秒）。
+ * The wrapper looks up `timeout` and its own tools on `$4` (the system PATH) only; the command
+ * itself runs with the PATH the exec was given (#106).
+ * `$0` 是标记、`$1` 是 ctl、`$2` 是命令、`$3` 是沙箱里的时限（秒）、`$4` 是系统 PATH。
  */
 const EXEC_WRAPPER =
-  'c=$1; echo $$ > "$c.pid" 2>/dev/null; if [ -e "$c.kill" ]; then exit 137; fi; ' +
-  'timeout -s KILL "$3" /bin/bash -c "$2"; s=$?; ' +
+  'c=$1; u=$PATH; PATH=$4; echo $$ > "$c.pid" 2>/dev/null; if [ -e "$c.kill" ]; then exit 137; fi; ' +
+  't=$(command -v timeout) || { rm -f "$c.pid"; exit 127; }; ' +
+  'PATH=$u; "$t" -s KILL "$3" /bin/bash -c "$2"; s=$?; PATH=$4; ' +
   "if [ $s -eq 124 ] || [ $s -eq 137 ]; then " +
   'for p in $(pgrep -s $$); do [ "$p" = $$ ] || kill -9 "$p" 2>/dev/null; done; fi; ' +
   'rm -f "$c.pid"; exit $s';
@@ -472,7 +487,7 @@ const EXEC_WRAPPER =
 export function execArgv(ctl: string, command: string, timeoutMs: number): string[] {
   const seconds = Math.ceil(timeoutMs / 1000) + IN_SANDBOX_GRACE_SECONDS;
   return [
-    "setsid",
+    SETSID,
     "-w",
     "/bin/sh",
     "-c",
@@ -481,6 +496,7 @@ export function execArgv(ctl: string, command: string, timeoutMs: number): strin
     ctl,
     command,
     String(seconds),
+    SYSTEM_PATH,
   ];
 }
 
@@ -605,6 +621,11 @@ interface RunOpts {
   cmd: string[];
   user: string;
   env?: string[];
+  /**
+   * Keep the image's PATH (the user's command, and the operation agent that runs one). Otherwise
+   * the exec gets `PATH=SYSTEM_PATH` unless `env` sets its own PATH.
+   */
+  imagePath?: true;
   cwd?: string;
   stdin?: Uint8Array;
   /** stdout + stderr 合计最多收集的字节。 */
@@ -863,6 +884,8 @@ export function createDockerSandbox(
       const r = await run(container, {
         cmd: ["wget", "-q", "-O", "-", `http://127.0.0.1:${PROXY_PORT}/healthz`],
         user: "",
+        // the egress proxy's own image (nothing in the sandbox writes there)
+        imagePath: true,
         maxOutputBytes: 1024,
         signal,
       }).catch((e: unknown) => {
@@ -959,11 +982,18 @@ export function createDockerSandbox(
 
   // ---------- exec ----------
 
+  /** The exec's environment: the system PATH unless the caller keeps the image's or sets one. */
+  const execEnv = (o: RunOpts): string[] | undefined => {
+    if (o.imagePath || o.env?.some((e) => e.startsWith("PATH="))) return o.env;
+    return [`PATH=${SYSTEM_PATH}`, ...(o.env ?? [])];
+  };
+
   /** 在容器里跑一条命令（劫持连接收多路复用的输出）。容器不在抛 SandboxGoneError。 */
   async function run(container: string, o: RunOpts): Promise<RunResult> {
     o.signal.throwIfAborted();
     const startedAt = Date.now();
     let execId: string;
+    const env = execEnv(o);
     try {
       const r = await api.json<{ Id: string }>("POST", `/containers/${enc(container)}/exec`, {
         body: {
@@ -973,7 +1003,7 @@ export function createDockerSandbox(
           Tty: false,
           Cmd: o.cmd,
           ...(o.user !== "" && { User: o.user }),
-          ...(o.env && { Env: o.env }),
+          ...(env && { Env: env }),
           ...(o.cwd !== undefined && { WorkingDir: o.cwd }),
         },
         signal: o.signal,
@@ -1286,9 +1316,14 @@ export function createDockerSandbox(
     if (nonce !== undefined) env.push(`CAPYBARA_ADMISSION_NONCE=${nonce}`);
     const r = await autoStart(h, args.signal, () =>
       run(h.id, {
-        cmd: [...prefix, ...execArgv(ctl, args.command, args.timeoutMs)],
+        // The admission agent checks for a literal `setsid` and execs /usr/bin/setsid itself.
+        cmd:
+          prefix.length > 0
+            ? [...prefix, "setsid", ...execArgv(ctl, args.command, args.timeoutMs).slice(1)]
+            : execArgv(ctl, args.command, args.timeoutMs),
         user: SANDBOX_USER,
         env,
+        imagePath: true,
         cwd: args.cwd ?? "/workspace",
         maxOutputBytes: args.maxOutputBytes,
         timeoutMs: args.timeoutMs,
@@ -1319,11 +1354,17 @@ export function createDockerSandbox(
   const transport: OperationTransport = {
     run: (h, o) =>
       autoStart(h, o.signal, () =>
-        run(h.id, { ...o, user: userOf(o.user), cwd: "/", ...(o.kill && { kill: o.kill }) }),
+        run(h.id, {
+          ...o,
+          user: userOf(o.user),
+          cwd: "/",
+          imagePath: true,
+          ...(o.kill && { kill: o.kill }),
+        }),
       ),
     async runIfRunning(h, o) {
       try {
-        return await run(h.id, { ...o, user: userOf(o.user), cwd: "/" });
+        return await run(h.id, { ...o, user: userOf(o.user), cwd: "/", imagePath: true });
       } catch (e) {
         if (e instanceof NotRunningError) return "not-running";
         throw e;

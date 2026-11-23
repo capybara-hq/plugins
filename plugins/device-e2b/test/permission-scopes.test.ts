@@ -31,6 +31,10 @@ import {
   runtimeChecksums,
   runtimeFiles,
 } from "../src/runtime-source.js";
+import { fakeSystemPath } from "./system-path.js";
+
+/** The system PATH of the fake E2B (shims and this machine's tools). */
+const systemPath = fakeSystemPath();
 
 /**
  * Permission profiles on E2B (core spec 2026-11-16 permission operation contract), without a VM:
@@ -258,7 +262,7 @@ describe("operation factory fails closed (fake E2B)", { timeout: 20_000 }, () =>
     sbx = createE2BSandbox(
       cfg,
       { log: { info: () => undefined, warn: () => undefined, error: () => undefined } },
-      { envdUrl: fake.url },
+      { envdUrl: fake.url, systemPath },
     );
     const name = `cap-device-${randomUUID()}`;
     const fileSystem = await sbx.createFileSystem({ name, limits, signal: sig() });
@@ -725,7 +729,7 @@ describe("root agent commands (fake E2B)", { timeout: 20_000 }, () => {
         domainAllowlist: true,
       },
       { log: { info: () => undefined, warn: () => undefined, error: () => undefined } },
-      { envdUrl: proxy.url },
+      { envdUrl: proxy.url, systemPath },
     );
     const name = `cap-device-${randomUUID()}`;
     const fileSystem = await sbx.createFileSystem({ name, limits, signal: sig() });
