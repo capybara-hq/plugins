@@ -6,7 +6,7 @@
     "zh": "Atlassian",
     "en": "Atlassian"
   },
-  "version": "0.1.0-rc.0",
+  "version": "0.1.0-rc.1",
   "publisher": "Capybara",
   "description": {
     "en": "Agents work with Jira, Confluence and Bitbucket as the connected person, through Atlassian's remote MCP server (Atlassian Cloud). Each member connects their own Atlassian account with OAuth; the client is registered automatically, so the org admin enters nothing",
