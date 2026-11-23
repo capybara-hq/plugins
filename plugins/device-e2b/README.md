@@ -136,7 +136,9 @@ or the device is recreated**; the timeout is pushed to at least "command timeout
   and readFile on a directory also returns null.
 - **list / scan** (projects): a `python3 -I` script (`src/listing.ts`, the same file as the Docker plugin's; it follows the rules of core's local device docker mode) runs in the sandbox as the
   sandbox user under `timeout -s KILL 30` with `PATH=/usr/local/bin:/usr/bin:/bin`, the normalized path passed as argv. The reachable area is `/workspace` (core spec 2026-11-14 project root §4.2; the kernel scopes a cloud device's projects to it): a path
-  outside it, also through a link, is refused; a link whose target leaves it is not a directory. `scan` walks breadth-first, at most 500 directories, two levels below the
+  outside it, also through a link, is refused with `ProjectPathRefusedError` and a fixed reason (en / zh) the kernel answers as `device.project_refused`, and the owner
+  browse (`browse`: `stat` / `list` / `scan`, what the kernel adds projects through) refuses such a path the same way before anything runs, so the device page
+  explains the refusal when the project is added; a link whose target leaves it is not a directory. `scan` walks breadth-first, at most 500 directories, two levels below the
   base, without following links. An abort returns at once; the read-only script ends at its time limit at worst. A template without python3 or timeout gets a clear error (the
   published template has both), and so does a listing that hits the 30 s limit.
 - **writeFile**: envd's upload endpoint opens the target as root and follows symlinks, so writing to the target directly could bypass permissions with something like `/workspace/l -> /etc`.

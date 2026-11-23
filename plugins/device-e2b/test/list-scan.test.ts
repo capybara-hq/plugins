@@ -6,17 +6,19 @@ import {
   DEVICE_SCAN_SKIPPED_BASE_DIRS,
   DEVICE_SCAN_SKIPPED_DIRS,
   type DeviceProvider,
+  isProjectPathRefusedError,
   isSandboxGoneError,
   type Logger,
   MAX_DEVICE_SCAN_DIRS,
   MAX_DEVICE_SCAN_RESULTS,
+  type ProjectPathRefusedError,
   type SandboxHandle,
   type SandboxLimits,
 } from "@capybara-hq/plugin-sdk";
 import { type FakeE2BServer, startFakeE2B } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createE2BSandbox, type E2BSandboxConfig, publishedImage } from "../src/index.js";
-import { finishList, finishScan, LIST_PATH } from "../src/listing.js";
+import { finishList, finishScan, LIST_PATH, OUTSIDE_WORKSPACE_REASON } from "../src/listing.js";
 import { fakeSystemPath } from "./system-path.js";
 
 /** The system PATH of the fake E2B (shims and this machine's tools). */
@@ -225,7 +227,7 @@ describe("device-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
       await expect(list(`${d}/closed`)).rejects.toThrow(/cannot be read/);
     });
 
-    it("throws for a path outside the workspace, also through a link", async () => {
+    it("refuses a path outside the workspace, also through a link, with its reason", async () => {
       const d = await fixture("ln -s /etc etc");
       // a missing child below a link out throws too: null would tell whether /etc/nope exists
       for (const path of [
@@ -237,7 +239,10 @@ describe("device-e2b list and scan (fake E2B)", { timeout: 20_000 }, () => {
         `${d}/etc`,
         `${d}/etc/nope`,
       ]) {
-        await expect(list(path, 10), path).rejects.toThrow(/outside/);
+        const e = await list(path, 10).catch((x: unknown) => x);
+        // a project refusal the device page shows when the project is added
+        expect(isProjectPathRefusedError(e), path).toBe(true);
+        expect((e as ProjectPathRefusedError).reason, path).toEqual(OUTSIDE_WORKSPACE_REASON);
       }
       await expect(list("/workspace/../etc")).rejects.toThrow(/outside/);
       await expect(list("relative")).rejects.toThrow(/path/);
