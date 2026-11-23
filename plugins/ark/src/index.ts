@@ -7,7 +7,7 @@ import {
   secret,
   ui,
 } from "@capybara-hq/plugin-sdk";
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import { z } from "zod";
 import { embedTexts } from "./embed.js";
 import { listEndpoints, type Management } from "./endpoints.js";
@@ -15,6 +15,7 @@ import { toModelError } from "./errors.js";
 import { generateImages } from "./image.js";
 import { listArkModels, withEndpoints } from "./list.js";
 import { streamChat } from "./map-stream.js";
+import { isolatedOpenAI } from "./openai-client.js";
 
 // capybara:allow-module-state a read-only list of region names
 const REGIONS = ["cn-beijing", "cn-shanghai"] as const;
@@ -156,13 +157,10 @@ export function createArkProvider(defaults: ArkDefaults): ModelProvider {
       let client: OpenAI;
       try {
         const { apiKey, baseUrl } = resolve(defaults, opts.config);
-        client = new OpenAI({
+        // No OPENAI_* env var is read (isolatedOpenAI): never send a host value to Ark
+        client = isolatedOpenAI({
           baseURL: baseUrl,
           apiKey,
-          // Do not read OPENAI_* env vars: never send OpenAI headers to another service
-          organization: null,
-          project: null,
-          adminAPIKey: null,
           // Retries belong to the kernel's degradation ladder
           maxRetries: 0,
         });
