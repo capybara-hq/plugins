@@ -38,6 +38,7 @@ describe("config UI hints", () => {
     const top = fields(schema);
     for (const k of ["apiUrl", "openidUrl", "clientId", "clientSecret"])
       expect(top[k]?.["x-platform-only"]).toBe(true);
+    expect(top.clientSecret?.["x-secret"]).toBe(true);
     const dirField = top.directory;
     expect(dirField?.["x-platform-only"]).toBeUndefined();
     expect(dirField?.["x-ui"]?.help?.en).toBe(

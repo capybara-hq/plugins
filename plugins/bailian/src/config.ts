@@ -36,7 +36,10 @@ export const DeploymentConfig = z.object({
  */
 export const CallConfig = DeploymentConfig.partial({ apiKey: true });
 
-/** Defaults the provider is built with (from `ctx.config` at setup), used only without `opts.config`. */
+/**
+ * Defaults the provider is built with (from `ctx.config` at setup), used only without
+ * `opts.config`.
+ */
 export interface BailianDefaults {
   apiKey?: string | undefined;
   region?: Region | undefined;

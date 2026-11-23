@@ -19,11 +19,11 @@ import { isolatedOpenAI } from "./openai-client.js";
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
 
 /**
- * Deployment config. Both fields are overridable by an org (the default). The key is required, so a deployment without
- * one shows the provider as needing configuration rather than as failing to list its models. The
- * platform may leave it empty (the kernel's load gate makes required overridable fields optional
- * for the platform's copy): orgs following the platform then need configuration and are never
- * called, and an org copy brings its own key.
+ * Deployment config. Both fields are overridable by an org (the default).
+ * The key is required, so a deployment without one shows the provider as needing configuration
+ * rather than as failing to list its models. The platform may leave it empty (the kernel's load
+ * gate makes required overridable fields optional for the platform's copy): orgs following the
+ * platform then need configuration and are never called, and an org copy brings its own key.
  */
 const DeploymentConfig = z.object({
   apiKey: ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
@@ -51,8 +51,8 @@ export interface DeepSeekDefaults {
   netFetch: NetFetch;
   /**
    * The platform's base URL at the time of the call (`ctx.config` read when used); defaults to
-   * `baseUrl`. A per-call `baseUrl` equal to it is the platform's (set by the super admin) and keeps
-   * the global `fetch`.
+   * `baseUrl`. A per-call `baseUrl` equal to it is the platform's (set by the super admin) and
+   * keeps the global `fetch`.
    */
   platformBaseUrl?: (() => string | undefined) | undefined;
 }

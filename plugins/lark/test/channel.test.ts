@@ -118,6 +118,8 @@ describe("plugin manifest", () => {
     expect(isPlatformOnly(shape.directory as z.ZodTypeAny)).toBe(false);
     const json = configJsonSchema(dep as z.ZodTypeAny);
     expect(validateConfigUi(json, "deployment")).toEqual([]);
+    const topProps = json.properties as Record<string, Record<string, unknown>>;
+    expect(topProps.appSecret?.["x-secret"]).toBe(true);
     const dirJson = (json.properties as Record<string, Record<string, unknown>>).directory;
     expect((dirJson?.["x-ui"] as { help?: { en?: string } } | undefined)?.help?.en).toBe(
       "Every organization that follows the platform syncs this tenant's members",

@@ -1,7 +1,7 @@
 import { platformOnly, secret, ui } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 
-/** Deployment config. `apiUrl` is only rewritten for tests and reverse proxies. No org-level config. */
+/** Deployment config. `apiUrl` is only rewritten for tests and reverse proxies. Platform-only. */
 export const TelegramDeployment = platformOnly(
   z.object({
     apiUrl: ui(z.string().url().default("https://api.telegram.org"), {

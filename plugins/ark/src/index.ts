@@ -28,11 +28,11 @@ const dataPlane = (region: Region) => `https://ark.${region}.volces.com/api/v3`;
 const controlPlane = (region: Region) => `https://ark.${region}.volcengineapi.com`;
 
 /**
- * Deployment config. Every field is overridable by an org (the default). The key is required, so a deployment without
- * one shows the provider as needing configuration rather than as failing to list its models. The
- * platform may leave it empty (the kernel's load gate makes required overridable fields optional
- * for the platform's copy): orgs following the platform then need configuration and are never
- * called, and an org copy brings its own key.
+ * Deployment config. Every field is overridable by an org (the default).
+ * The key is required, so a deployment without one shows the provider as needing configuration
+ * rather than as failing to list its models. The platform may leave it empty (the kernel's load
+ * gate makes required overridable fields optional for the platform's copy): orgs following the
+ * platform then need configuration and are never called, and an org copy brings its own key.
  *
  * The inference key lists the models itself (`GET /api/v3/models`, live 2026-11-08). The optional
  * `management` AK/SK only adds the account's inference endpoints (`ep-…`, control-plane
@@ -125,9 +125,9 @@ function resolve(defaults: ArkDefaults, config: unknown): Resolved {
 
 /**
  * model-provider@2 for Volcengine Ark: the list from the data plane's `/models`, chat on its Chat
- * Completions API (the official `openai` SDK), text embeddings on `/embeddings/multimodal`, Seedream
- * images on `/images/generations`. No
- * process state: everything is built per call because the key and region can differ per org.
+ * Completions API (the official `openai` SDK), text embeddings on `/embeddings/multimodal`,
+ * Seedream images on `/images/generations`. No process state: everything is built per call
+ * because the key and region can differ per org.
  */
 export function createArkProvider(defaults: ArkDefaults): ModelProvider {
   return {
