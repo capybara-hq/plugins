@@ -3,7 +3,10 @@
     "zh": "Jira",
     "en": "Jira"
   },
-  "description": "Read, search and update Jira work items, comments, worklogs, boards and sprints as the connected person, through Atlassian's remote MCP server (Atlassian Cloud). Each member connects their own Atlassian account with OAuth; the client is registered automatically, so no admin setup is needed in Capybara.",
+  "description": {
+    "en": "Read, search and update Jira work items, comments, worklogs, boards and sprints as the connected person, through Atlassian's remote MCP server (Atlassian Cloud). Each member connects their own Atlassian account with OAuth; the client is registered automatically, so no admin setup is needed in Capybara.",
+    "zh": "经由 Atlassian 的远程 MCP 服务器（Atlassian Cloud），以连接者本人的身份读取、搜索和更新 Jira 工作项、评论、工时记录、看板和冲刺。每位成员用 OAuth 连接自己的 Atlassian 账号；客户端自动注册，无需在 Capybara 里做任何管理员设置。"
+  },
   "icon": "./icons/jira.svg",
   "template": {
     "plugin": "connector-mcp",

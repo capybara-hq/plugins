@@ -3,7 +3,10 @@
     "zh": "GitHub",
     "en": "GitHub"
   },
-  "description": "Issues, pull requests, reviews, repositories and Actions runs as the connected person, through GitHub's remote MCP server. Each member connects their own GitHub account with OAuth; an org admin registers a GitHub App (recommended) or OAuth App and enters its client here.",
+  "description": {
+    "en": "Issues, pull requests, reviews, repositories and Actions runs as the connected person, through GitHub's remote MCP server. Each member connects their own GitHub account with OAuth; an org admin registers a GitHub App (recommended) or OAuth App and enters its client here.",
+    "zh": "经由 GitHub 的远程 MCP 服务器，以连接者本人的身份处理 issue、拉取请求、评审、仓库和 Actions 运行。每位成员用 OAuth 连接自己的 GitHub 账号；组织管理员注册一个 GitHub App（推荐）或 OAuth App，并在这里填入它的客户端。"
+  },
   "icon": "./icon.svg",
   "template": {
     "plugin": "connector-mcp",

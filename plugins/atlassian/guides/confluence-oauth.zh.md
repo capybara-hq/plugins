@@ -30,6 +30,11 @@ Domain: "{{oauthCallbackUrl}}"
 如果你的 Atlassian 组织启用了 IP 白名单，它同样作用于工具调用：请为 Confluence 放行本 Capybara 部署的出口地址，否则即使
 连接成功，调用也会因 IP 地址被拒绝而失败。
 
+## Atlassian 站点上的 Confluence
+
+成员连接的 Atlassian 站点必须开通了 Confluence。如果站点只有 Jira，连接会成功，但每个 Confluence 工具都会
+返回 404。请在 Atlassian Administration 里为站点添加 Confluence，成员无需重新连接。
+
 ## 3. 检查
 
 ::check capybara:connector-tools 已有成员连接并读到工具列表
@@ -42,7 +47,7 @@ Domain: "{{oauthCallbackUrl}}"
 ::: audience member
 ## 连接你的 Atlassian 账号
 
-选择**连接**，登录 Atlassian 并在授权页面上同意。如果你属于多个 Atlassian 站点，请选择智能体要工作的那个：Atlassian 通常只为
+选择**连接**，登录 Atlassian 并在授权页面上同意。如果你属于多个 Atlassian 站点，请选择智能体要工作的那个（站点上须有 Confluence）：Atlassian 通常只为
 你选择的站点授予令牌。如果 Atlassian 拒绝回跳，请联系你的 Atlassian 组织管理员，把本平台的回调地址加入 Atlassian MCP 服务器的域名列表。
 
 之后智能体以你的身份操作 Confluence，写入操作会先问你（除非管理员改了设置）。

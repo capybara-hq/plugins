@@ -34,6 +34,9 @@ If your Atlassian organization uses IP allowlisting, its rules also apply to too
 outbound address of this Capybara deployment for Jira, or calls fail with an IP address error even
 though connecting worked.
 
+The Atlassian site members connect to must have Jira; add it to the site in Atlassian
+Administration if it has only other Atlassian apps.
+
 ## 3. Check
 
 ::check capybara:connector-tools A member connected and the tool list was read

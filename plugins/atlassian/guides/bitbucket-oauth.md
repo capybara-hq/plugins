@@ -34,15 +34,11 @@ If your Atlassian organization uses IP allowlisting, its rules also apply to too
 outbound address of this Capybara deployment for Bitbucket, or calls fail with an IP address error even
 though connecting worked.
 
-## Bitbucket prerequisites and status
+## Link the Bitbucket workspace
 
-The template is **off by default**. Atlassian's MCP server offers the Bitbucket tools only for a
-Bitbucket Cloud workspace that is **linked to an Atlassian organization**; link it first
-(Bitbucket workspace settings, or Atlassian Administration). Atlassian's documentation is not
-consistent on whether the Bitbucket tools accept OAuth or only an API token, and this template
-has not been confirmed against a live workspace yet. Switch it on, connect one account and check
-that the tool list shows Bitbucket tools before you announce it to members. Capybara does not
-support Atlassian's API token sign-in yet.
+Atlassian's MCP server offers the Bitbucket tools only for a Bitbucket Cloud workspace that is
+**linked to an Atlassian organization**; link it first (Bitbucket workspace settings, or Atlassian
+Administration).
 
 ## 3. Check
 

@@ -3,7 +3,10 @@
     "zh": "Slack",
     "en": "Slack"
   },
-  "description": "Search, read and send Slack messages, canvases, lists and files as the connected person, through Slack's MCP server. Each member connects their own Slack account; an org admin enters the OAuth client of the company's internal Slack app.",
+  "description": {
+    "en": "Search, read and send Slack messages, canvases, lists and files as the connected person, through Slack's MCP server. Each member connects their own Slack account; an org admin enters the OAuth client of the company's internal Slack app.",
+    "zh": "经由 Slack 的 MCP 服务器，以连接者本人的身份搜索、读取和发送 Slack 消息、画布、列表和文件。每位成员连接自己的 Slack 账号；组织管理员填入公司内部 Slack 应用的 OAuth 客户端。"
+  },
   "icon": "./icon.svg",
   "defaultEnabled": false,
   "template": {

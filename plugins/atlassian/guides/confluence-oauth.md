@@ -34,6 +34,12 @@ If your Atlassian organization uses IP allowlisting, its rules also apply to too
 outbound address of this Capybara deployment for Confluence, or calls fail with an IP address error even
 though connecting worked.
 
+## Confluence on the Atlassian site
+
+The Atlassian site members connect to must have Confluence. On a site with only Jira, connecting
+succeeds but every Confluence tool answers 404. Add Confluence to the site in Atlassian
+Administration; members do not need to reconnect.
+
 ## 3. Check
 
 ::check capybara:connector-tools A member connected and the tool list was read
@@ -48,7 +54,7 @@ own policy. Reads and searches (content, CQL search, spaces, comments, versions,
 ## Connect your Atlassian account
 
 Choose **Connect**, sign in to Atlassian and approve the consent screen. If you belong to several
-Atlassian sites, pick the one agents should work in: Atlassian usually grants the token for the site you choose.
+Atlassian sites, pick the one agents should work in (it must have Confluence): Atlassian usually grants the token for the site you choose.
 If Atlassian refuses the redirect, ask your Atlassian organization admin to add this platform's
 callback URL to the Atlassian MCP server domains.
 

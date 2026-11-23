@@ -30,13 +30,10 @@ Domain: "{{oauthCallbackUrl}}"
 如果你的 Atlassian 组织启用了 IP 白名单，它同样作用于工具调用：请为 Bitbucket 放行本 Capybara 部署的出口地址，否则即使
 连接成功，调用也会因 IP 地址被拒绝而失败。
 
-## Bitbucket 的前提和现状
+## 关联 Bitbucket 工作区
 
-本模板**默认关闭**。Atlassian 的 MCP 服务器只为**已关联到 Atlassian 组织**的 Bitbucket Cloud 工作区提供
-Bitbucket 工具，请先完成关联（在 Bitbucket 工作区设置或 Atlassian Administration 里）。Atlassian 的文档
-对 Bitbucket 工具是否接受 OAuth、还是只接受 API token 说法不一，本模板也还没有在真实工作区上验证过。请先
-开启它，连接一个账号，确认工具列表里出现了 Bitbucket 工具，再通知成员使用。Capybara 目前还不支持 Atlassian 的
-API token 登录方式。
+Atlassian 的 MCP 服务器只为**已关联到 Atlassian 组织**的 Bitbucket Cloud 工作区提供 Bitbucket 工具，
+请先完成关联（在 Bitbucket 工作区设置或 Atlassian Administration 里）。
 
 ## 3. 检查
 

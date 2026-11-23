@@ -3,7 +3,10 @@
     "zh": "Google 文档",
     "en": "Google Docs"
   },
-  "description": "Read and edit Google Docs as the connected person, through Google's Docs MCP server (Google Workspace Developer Preview). Each member connects their own Google account; an org admin enters the OAuth client of the company's Google Cloud project.",
+  "description": {
+    "en": "Read and edit Google Docs as the connected person, through Google's Docs MCP server (Google Workspace Developer Preview). Each member connects their own Google account; an org admin enters the OAuth client of the company's Google Cloud project.",
+    "zh": "经由 Google 的 Docs MCP 服务器（Google Workspace 开发者预览版），以连接者本人的身份阅读和编辑 Google 文档。每位成员连接自己的 Google 账号；组织管理员填入公司 Google Cloud 项目的 OAuth 客户端。"
+  },
   "icon": "./icons/google-docs.svg",
   "defaultEnabled": false,
   "template": {

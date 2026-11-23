@@ -30,6 +30,8 @@ Domain: "{{oauthCallbackUrl}}"
 如果你的 Atlassian 组织启用了 IP 白名单，它同样作用于工具调用：请为 Jira 放行本 Capybara 部署的出口地址，否则即使
 连接成功，调用也会因 IP 地址被拒绝而失败。
 
+成员连接的 Atlassian 站点必须开通了 Jira；如果站点只有其他 Atlassian 应用，请在 Atlassian Administration 里为它添加 Jira。
+
 ## 3. 检查
 
 ::check capybara:connector-tools 已有成员连接并读到工具列表
