@@ -368,3 +368,8 @@ export function openaiRoutes(): (req: FakeRequest) => FakeResponse {
     return text("Hello there, friend!");
   };
 }
+
+/** A guarded fetch that must not be used: calls on the platform's endpoint keep the global fetch. */
+export const refusingNetFetch = async (): Promise<Response> => {
+  throw new Error("ctx.net.fetch must not be used for the platform's endpoint");
+};

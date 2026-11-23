@@ -14,7 +14,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
 import plugin, { createOpenAIProvider } from "../src/index.js";
-import { errorJson, imageResponse, PNG_BASE64 } from "./fixtures.js";
+import { errorJson, imageResponse, PNG_BASE64, refusingNetFetch } from "./fixtures.js";
 
 let server: FakeModelServer;
 let next: (path: string) => FakeResponse = () => imageResponse(1);
@@ -29,6 +29,7 @@ const provider = (
   log?: { warn: (msg: string, meta?: Record<string, unknown>) => void },
 ): ModelProvider =>
   createOpenAIProvider({
+    netFetch: refusingNetFetch,
     ...(log ? { log } : {}),
     apiKey: "sk-fixture",
     baseUrl: `${server.url}/v1`,
@@ -302,6 +303,7 @@ describe.skipIf(!LIVE_KEY || !LIVE_IMAGE_MODEL)(
   () => {
     it("generates one 1024x1024 image", async () => {
       const p = createOpenAIProvider({
+        netFetch: refusingNetFetch,
         apiKey: LIVE_KEY ?? "",
         models: [
           {
