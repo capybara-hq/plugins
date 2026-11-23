@@ -23,6 +23,17 @@
 // and only that answer is judged and dialled; when encrypted DNS fails the name is refused and the
 // fake address is never dialled.
 //
+// In-place list changes (allowlist only): a control socket (CONTROL_SOCKET, default
+// /run/egress/control.sock, a Unix socket on a tmpfs only this container reaches; the sandbox
+// reaches the proxy only on its TCP ports) takes a new host list and denied ranges from
+// `node proxy.mjs control apply` (one JSON line on stdin), started by the provider through the
+// Docker exec API. The proxy writes the list to CONFIG_FILE (default /config/allow.json, on the
+// instance's own volume), swaps it in, closes every admitted connection the new list no longer
+// covers (resolving, connecting or tunnelling), and only then replies with the list's digest. At
+// start a valid CONFIG_FILE wins over MODE / ALLOW_HOSTS (it is exactly the list last applied);
+// an unreadable one stops the proxy (never a fall back to the create-time list, which may be
+// wider); its denied ranges join DENIED_CIDRS. `control status` prints the list in force.
+//
 // Test only: CAPYBARA_EGRESS_TEST_HOSTS (JSON object name -> IP) pins a name to an IP and exempts
 // it from the private address check (in allowlist it must still be on the list; in open-public a
 // pinned name is allowed). CAPYBARA_EGRESS_TEST_RESOLVE (JSON object name -> IP) answers a name
@@ -31,10 +42,14 @@
 // call createDockerSandbox directly can.
 //
 // Dependency-free, Node >= 22. Error text reaches the model (through curl / pip output): English.
+import { createHash } from "node:crypto";
 import { lookup as dnsLookup } from "node:dns/promises";
+import { chmodSync, readFileSync, rmSync } from "node:fs";
+import { open as openFile, rename } from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { BlockList, connect, createServer as createNetServer, isIP } from "node:net";
+import { dirname } from "node:path";
 
 // This file runs in the egress proxy container (not in the kernel process); the module-level
 // objects below are constant tables, read-only after start.
@@ -337,7 +352,22 @@ export function isForbiddenAddress(ip, denied) {
   if (g === null) return true;
   const canonical = g.map((x) => x.toString(16)).join(":");
   if (blocked.check(canonical, "ipv6")) return true;
-  if (denied === undefined) return false;
+  return denied === undefined ? false : inDenied(ip, denied);
+}
+
+/**
+ * Whether `ip` falls in the deployment's denied ranges only (`denied`, {@link deniedList}), the
+ * embedded IPv4 of the IPv6 forms {@link isForbiddenAddress} names included. Unparseable is denied.
+ * @param {string} ip
+ * @param {BlockList} denied
+ */
+export function inDenied(ip, denied) {
+  const family = isIP(ip);
+  if (family === 4) return denied.check(ip, "ipv4");
+  if (family !== 6) return true;
+  const g = v6Groups(ip);
+  if (g === null) return true;
+  const canonical = g.map((x) => x.toString(16)).join(":");
   if (denied.check(canonical, "ipv6")) return true;
   const zeros = (from, to) => g.slice(from, to).every((x) => x === 0);
   const v4 = (hi, lo) => denied.check(v4Of(hi, lo), "ipv4");
@@ -394,6 +424,393 @@ class Refused extends Error {
     this.status = status;
   }
 }
+
+// ---- the list in force, the connection registry and in-place changes ---------------------------
+
+/**
+ * Why `h` is not a valid allowlist entry (null when it is): plugin-sdk's validateAllowHost (an
+ * exact lowercase public name, or `*.` followed by one).
+ * @param {unknown} h
+ */
+export function allowHostError(h) {
+  if (typeof h !== "string" || h.length === 0) return "host must be a non-empty string";
+  if (h.length > 253) return "host must be at most 253 characters";
+  const name = h.startsWith("*.") ? h.slice(2) : h;
+  return publicNameError(name);
+}
+
+const sortedUnique = (list) => [...new Set(list)].sort();
+
+/**
+ * The digest of a list (pure): sha256 over the mode, the hosts and the denied ranges, each list
+ * sorted and without duplicates. The provider computes the same (src/provider.ts
+ * `egressAllowDigest`) and accepts an in-place change only when the proxy answers with it.
+ * @param {{ mode: string; hosts: readonly string[]; deniedCidrs: readonly string[] }} c
+ */
+export function allowDigest(c) {
+  const canonical = JSON.stringify({
+    mode: c.mode,
+    hosts: sortedUnique(c.hosts),
+    deniedCidrs: sortedUnique(c.deniedCidrs),
+  });
+  return createHash("sha256").update(canonical).digest("hex");
+}
+
+/**
+ * Validates a list sent through the control socket (or read from the config file): an allowlist
+ * with at least one host, every host valid, every denied range a CIDR. One bad entry refuses the
+ * whole list. Returns the normalized config.
+ * @param {unknown} raw
+ * @returns {{ mode: "allowlist"; hosts: string[]; deniedCidrs: string[] }}
+ */
+export function parseAllowConfig(raw) {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error("The egress list must be a JSON object { mode, hosts, deniedCidrs }.");
+  }
+  if (raw.mode !== "allowlist") {
+    throw new Error('Only an allowlist ("mode": "allowlist") is changed in place.');
+  }
+  if (!Array.isArray(raw.hosts) || raw.hosts.length === 0) {
+    throw new Error("The allowlist needs at least one host (an empty list is no network).");
+  }
+  for (const h of raw.hosts) {
+    const err = allowHostError(h);
+    if (err !== null) throw new Error(`Invalid allowlist host ${q(h)}: ${err}.`);
+  }
+  const deniedCidrs = raw.deniedCidrs ?? [];
+  deniedList(deniedCidrs);
+  return { mode: "allowlist", hosts: [...raw.hosts], deniedCidrs: [...deniedCidrs] };
+}
+
+/** Writes `data` to `file` through a temp file, fsync and rename (a crash leaves the old or the new file). */
+async function writeAtomic(file, data) {
+  const tmp = `${file}.tmp`;
+  const fh = await openFile(tmp, "w", 0o600);
+  try {
+    await fh.writeFile(data);
+    await fh.sync();
+  } finally {
+    await fh.close();
+  }
+  await rename(tmp, file);
+  // the rename itself is durable once the directory is synced (best effort)
+  const dir = await openFile(dirname(file), "r").catch(() => null);
+  if (dir !== null) {
+    await dir.sync().catch(() => undefined);
+    await dir.close();
+  }
+}
+
+/**
+ * The proxy's mutable state, shared by the HTTP and SOCKS listeners and the control socket of one
+ * process: the list in force (`policy`, replaced as a whole, so a check sees the old or the new
+ * list, never a mix) and the registry of admitted connections. An entry is registered when a
+ * request names its target, before name resolution, and leaves when its client side closes; it
+ * records the normalized host and, once connected, the upstream address. `apply` closes every
+ * entry the new list does not cover; a connection still resolving or connecting re-checks the list
+ * in force when its upstream connects (`keep`).
+ * @param {{ mode?: "open-public" | "allowlist"; allowHosts?: string[]; deniedCidrs?: string[]; testHosts?: Record<string, string>; configFile?: string; log?: (msg: string) => void }} cfg
+ */
+export function createEgressState(cfg = {}) {
+  const mode = cfg.mode ?? "open-public";
+  if (!MODES.includes(mode)) throw new Error(`Unknown egress proxy mode ${JSON.stringify(mode)}.`);
+  const testHosts = cfg.testHosts ?? {};
+  const log = cfg.log ?? defaultLog;
+  const makePolicy = (m, hosts, deniedCidrs) =>
+    Object.freeze({
+      mode: m,
+      allowHosts: Object.freeze(hosts.map((h) => h.toLowerCase())),
+      deniedCidrs: Object.freeze([...deniedCidrs]),
+      denied: deniedList(deniedCidrs),
+      digest: allowDigest({ mode: m, hosts: hosts.map((h) => h.toLowerCase()), deniedCidrs }),
+    });
+  let policy = makePolicy(
+    mode,
+    mode === "open-public" ? [] : (cfg.allowHosts ?? []),
+    cfg.deniedCidrs ?? [],
+  );
+  /** @type {Set<{ host: string; pinned: boolean; ip: string | null; revoked: boolean; sockets: Set<import("node:net").Socket> }>} */
+  const registry = new Set();
+  /** Applies run one after another (a later one waits for the earlier to finish). */
+  let chain = Promise.resolve();
+
+  const covers = (entry, p) => {
+    if (p.mode === "allowlist" && !hostAllowed(entry.host, p.allowHosts)) return false;
+    // pinned test names are exempt from the address checks, as at admission
+    // (the closed classes were checked at admission and do not change; the denied ranges can)
+    if (entry.ip !== null && !entry.pinned && inDenied(entry.ip, p.denied)) return false;
+    return true;
+  };
+  const revoke = (entry) => {
+    entry.revoked = true;
+    registry.delete(entry);
+    // a reset drops what is still queued for sending (written under the old list)
+    for (const s of entry.sockets) {
+      try {
+        if (typeof s.resetAndDestroy === "function" && !s.destroyed && !s.connecting) {
+          s.resetAndDestroy();
+        } else s.destroy();
+      } catch {
+        s.destroy();
+      }
+    }
+  };
+
+  return {
+    get policy() {
+      return policy;
+    },
+    testHosts,
+    /** Admitted connections not yet closed (tests). */
+    get connections() {
+      return registry.size;
+    },
+    /**
+     * Registers a request for `host` (before resolution) with its client side `client`; the entry
+     * leaves the registry when `closed` emits "close" (the client socket, or an HTTP response).
+     * @param {string} host
+     * @param {import("node:net").Socket} client
+     * @param {import("node:events").EventEmitter} [closed]
+     */
+    admit(host, client, closed = client) {
+      const h = normalizeHost(host);
+      const entry = {
+        host: h,
+        pinned: Object.hasOwn(testHosts, h),
+        ip: null,
+        revoked: false,
+        sockets: new Set([client]),
+      };
+      registry.add(entry);
+      closed.once("close", () => registry.delete(entry));
+      return entry;
+    },
+    /**
+     * Records the upstream socket of an admitted entry once it connected; false when the entry was
+     * revoked or the list in force no longer covers it (then the caller drops `up`).
+     * @param {ReturnType<this["admit"]>} entry
+     * @param {import("node:net").Socket} up
+     */
+    keep(entry, up) {
+      entry.ip = up.remoteAddress ?? null;
+      if (entry.revoked || !registry.has(entry) || !covers(entry, policy)) {
+        // the caller drops `up` and refuses; the client side stays to receive the refusal
+        registry.delete(entry);
+        return false;
+      }
+      entry.sockets.add(up);
+      return true;
+    },
+    /**
+     * Puts a new list in force (allowlist proxies only): validate, write the config file, swap,
+     * close every connection the new list does not cover, then resolve with the digest. A list
+     * with the digest already in force resolves at once. `ifDigest` (when given) makes it a compare
+     * and swap: refused unless the list in force has that digest, so an apply from a caller that
+     * read the proxy's list before another caller changed it never lands after that change. This
+     * narrows, but does not close, the stale-holder race: a caller that lost its lease without
+     * noticing and read the list after the newer change still applies; only a fencing token from
+     * the kernel would close it, and `update` carries none.
+     * @param {unknown} raw
+     * @param {string} [ifDigest]
+     */
+    apply(raw, ifDigest) {
+      const run = chain.then(async () => {
+        const next = parseAllowConfig(raw);
+        if (policy.mode !== "allowlist") {
+          throw new Error("This proxy runs open-public: only an allowlist proxy takes a new list.");
+        }
+        const digest = allowDigest(next);
+        if (digest === policy.digest) return digest;
+        if (ifDigest !== undefined && ifDigest !== policy.digest) {
+          throw new Error("The list in force changed since it was read; nothing was applied.");
+        }
+        if (cfg.configFile !== undefined) {
+          await writeAtomic(cfg.configFile, `${JSON.stringify({ ...next, digest })}\n`);
+        }
+        policy = makePolicy("allowlist", next.hosts, next.deniedCidrs);
+        let closed = 0;
+        for (const entry of [...registry]) {
+          if (!covers(entry, policy)) {
+            revoke(entry);
+            closed++;
+          }
+        }
+        log(
+          `egress allowlist changed: allow ${next.hosts.join(", ")}; extra denied: ${next.deniedCidrs.join(", ") || "(none)"}; closed ${closed} connection(s)`,
+        );
+        return digest;
+      });
+      chain = run.catch(() => undefined);
+      return run;
+    },
+  };
+}
+
+/**
+ * Reads the config file a previous `apply` wrote: null when there is none; throws when it exists
+ * but cannot be read or is invalid (the proxy must not start on a guess).
+ * @param {string} file
+ */
+export function readAllowFile(file) {
+  let text;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (e) {
+    if (e?.code === "ENOENT") return null;
+    throw new Error(`Cannot read the egress list ${file}: ${e?.message ?? e}`);
+  }
+  try {
+    return parseAllowConfig(JSON.parse(text));
+  } catch (e) {
+    throw new Error(`The egress list ${file} is invalid: ${e?.message ?? e}`);
+  }
+}
+
+/** The longest control request line. */
+const CONTROL_MAX_BYTES = 1024 * 1024;
+/** A control exchange must finish within this time. */
+const CONTROL_DEADLINE_MS = 30_000;
+
+/**
+ * The control listener (not listening): one JSON request line per connection,
+ * `{"op":"apply","config":{...}}` or `{"op":"status"}`, answered with one JSON line
+ * `{"ok":true,"digest":...}` (status adds `mode` and `hosts`) or `{"ok":false,"error":...}`.
+ * @param {ReturnType<typeof createEgressState>} state
+ */
+export function createControlServer(state) {
+  return createNetServer((sock) => {
+    let buf = "";
+    let done = false;
+    const deadline = AbortSignal.timeout(CONTROL_DEADLINE_MS);
+    const onDeadline = () => sock.destroy();
+    deadline.addEventListener("abort", onDeadline, { once: true });
+    sock.once("close", () => deadline.removeEventListener("abort", onDeadline));
+    sock.on("error", () => sock.destroy());
+    sock.setEncoding("utf8");
+    const reply = (body) => sock.end(`${JSON.stringify(body)}\n`);
+    const handle = async (line) => {
+      let req;
+      try {
+        req = JSON.parse(line);
+      } catch {
+        reply({ ok: false, error: "The control request is not JSON." });
+        return;
+      }
+      if (req?.op === "status") {
+        const p = state.policy;
+        reply({
+          ok: true,
+          mode: p.mode,
+          hosts: [...p.allowHosts],
+          digest: p.digest,
+          connections: state.connections,
+        });
+        return;
+      }
+      if (req?.op !== "apply") {
+        reply({ ok: false, error: "Unknown control operation." });
+        return;
+      }
+      try {
+        const ifDigest = typeof req.ifDigest === "string" ? req.ifDigest : undefined;
+        reply({ ok: true, digest: await state.apply(req.config, ifDigest) });
+      } catch (e) {
+        reply({ ok: false, error: String(e?.message ?? e) });
+      }
+    };
+    sock.on("data", (chunk) => {
+      if (done) return;
+      buf += chunk;
+      const nl = buf.indexOf("\n");
+      if (nl >= 0) {
+        done = true;
+        void handle(buf.slice(0, nl));
+      } else if (buf.length > CONTROL_MAX_BYTES) {
+        done = true;
+        reply({ ok: false, error: "The control request is too long." });
+      }
+    });
+  });
+}
+
+/**
+ * Sends one control request to the socket at `path` and resolves with the parsed reply.
+ * @param {string} path
+ * @param {unknown} request
+ */
+export function controlRequest(path, request) {
+  return new Promise((resolve, reject) => {
+    const s = connect(path);
+    let buf = "";
+    const deadline = AbortSignal.timeout(CONTROL_DEADLINE_MS);
+    const onDeadline = () => s.destroy(new Error("The egress proxy control request timed out."));
+    deadline.addEventListener("abort", onDeadline, { once: true });
+    s.setEncoding("utf8");
+    s.on("data", (c) => {
+      buf += c;
+    });
+    s.on("error", (e) => {
+      deadline.removeEventListener("abort", onDeadline);
+      reject(e);
+    });
+    s.on("end", () => {
+      deadline.removeEventListener("abort", onDeadline);
+      try {
+        resolve(JSON.parse(buf));
+      } catch {
+        reject(new Error("The egress proxy sent no valid control reply."));
+      }
+    });
+    s.write(`${JSON.stringify(request)}\n`);
+  });
+}
+
+/** Reads one line from a stream (at most CONTROL_MAX_BYTES). */
+function readLine(stream) {
+  return new Promise((resolve, reject) => {
+    let buf = "";
+    stream.setEncoding("utf8");
+    const onData = (c) => {
+      buf += c;
+      const nl = buf.indexOf("\n");
+      if (nl >= 0 || buf.length > CONTROL_MAX_BYTES) {
+        stream.off("data", onData);
+        stream.pause();
+        if (nl < 0) reject(new Error("The control input is too long."));
+        else resolve(buf.slice(0, nl));
+      }
+    };
+    stream.on("data", onData);
+    stream.once("end", () => resolve(buf));
+    stream.once("error", reject);
+  });
+}
+
+/**
+ * The control client (`node proxy.mjs control apply|status`): `apply` reads the config as one JSON
+ * line on stdin. Prints the reply as one JSON line; exit code 0 only when the proxy answered ok.
+ * @param {string[]} args
+ * @param {Record<string, string | undefined>} env
+ */
+async function controlMain(args, env) {
+  const path = env.CONTROL_SOCKET || DEFAULT_CONTROL_SOCKET;
+  const op = args[0];
+  try {
+    if (op !== "apply" && op !== "status") throw new Error("usage: control apply|status");
+    // apply reads `{ config, ifDigest? }` as one JSON line on stdin
+    const request = op === "apply" ? { op, ...JSON.parse(await readLine(process.stdin)) } : { op };
+    const reply = await controlRequest(path, request);
+    process.stdout.write(`${JSON.stringify(reply)}\n`);
+    process.exitCode = reply?.ok === true ? 0 : 1;
+  } catch (e) {
+    process.stderr.write(`egress control failed: ${e?.message ?? e}\n`);
+    process.exitCode = 1;
+  }
+  process.stdin.destroy();
+}
+
+const DEFAULT_CONTROL_SOCKET = "/run/egress/control.sock";
+const DEFAULT_CONFIG_FILE = "/config/allow.json";
 
 /**
  * Decide which IPs may be connected to: host check for the mode -> resolve -> no address may be
@@ -755,20 +1172,33 @@ function splice(client, up) {
 const defaultLookup = (h) => dnsLookup(h, { all: true, verbatim: true });
 const defaultLog = (msg) => console.warn(msg);
 
-/** Shared options for both listeners. */
+/**
+ * Shared options for both listeners: the state (`cfg.state`, shared with the other listener and the
+ * control socket; else one of their own from `cfg`) and the resolver seams. `check()` is what
+ * `resolveTarget` needs, with the list in force at the moment of the call.
+ */
 function proxyOptions(cfg) {
-  const mode = cfg.mode ?? "open-public";
-  if (!MODES.includes(mode)) throw new Error(`Unknown egress proxy mode ${JSON.stringify(mode)}.`);
-  return {
-    mode,
-    allowHosts: (cfg.allowHosts ?? []).map((h) => h.toLowerCase()),
-    testHosts: cfg.testHosts ?? {},
-    denied: deniedList(cfg.deniedCidrs ?? []),
+  const state = cfg.state ?? createEgressState(cfg);
+  const base = {
+    connect: cfg.connect ?? connect,
+    testHosts: state.testHosts,
     lookup: cfg.lookup ?? defaultLookup,
     encryptedDns: cfg.encryptedDns ?? createEncryptedDns(),
     log: cfg.log ?? defaultLog,
   };
+  return {
+    ...base,
+    state,
+    check() {
+      const p = state.policy;
+      return { ...base, mode: p.mode, allowHosts: p.allowHosts, denied: p.denied };
+    },
+  };
 }
+
+/** The refusal when the list changed while a connection was being opened. */
+const CHANGED_REFUSAL = (h) =>
+  `Outbound access to ${h} is blocked: the sandbox egress allowlist changed while connecting.`;
 
 /** A host for logs: quoted, every non-printable-ASCII character escaped, so nothing can forge log lines. */
 const q = (s) =>
@@ -821,14 +1251,22 @@ export function createEgressProxy(cfg) {
       return;
     }
     const port = url.port === "" ? 80 : Number(url.port);
+    // registered before resolution: a list change closes it whatever stage it is in
+    const entry = opts.state.admit(url.hostname, req.socket, res);
     let sock;
     try {
-      const ips = await resolveTarget(url.hostname, opts);
-      sock = await connectAny(ips, port).catch(() => {
+      const ips = await resolveTarget(url.hostname, opts.check());
+      if (entry.revoked) throw new Refused(403, CHANGED_REFUSAL(normalizeHost(url.hostname)));
+      sock = await connectAny(ips, port, undefined, opts.connect).catch(() => {
         throw new Refused(502, `Cannot connect to ${url.host}.`);
       });
     } catch (e) {
       refuse(res, e, url.host);
+      return;
+    }
+    if (!opts.state.keep(entry, sock)) {
+      sock.destroy();
+      refuse(res, new Refused(403, CHANGED_REFUSAL(normalizeHost(url.hostname))), url.host);
       return;
     }
     const headers = forwardHeaders(req.headers);
@@ -848,6 +1286,8 @@ export function createEgressProxy(cfg) {
     });
     up.on("error", (e) => refuse(res, e, url.host));
     req.on("aborted", () => up.destroy());
+    // the client went away (also after its request body was complete): drop the upstream too
+    res.once("close", () => sock.destroy());
     req.pipe(up);
   });
 
@@ -865,18 +1305,25 @@ export function createEgressProxy(cfg) {
       fail(400, "CONNECT needs host:port.");
       return;
     }
+    const entry = opts.state.admit(hp[0], socket);
     let ips;
     try {
-      ips = await resolveTarget(hp[0], opts);
+      ips = await resolveTarget(hp[0], opts.check());
     } catch (e) {
       fail(e instanceof Refused ? e.status : 502, e instanceof Refused ? e.message : "Failed.");
       return;
     }
+    if (entry.revoked) return;
     let up;
     try {
-      up = await connectAny(ips, hp[1]);
+      up = await connectAny(ips, hp[1], undefined, opts.connect);
     } catch {
       fail(502, `Cannot connect to ${hp[0]}:${hp[1]}.`);
+      return;
+    }
+    if (!opts.state.keep(entry, up)) {
+      up.destroy();
+      fail(403, CHANGED_REFUSAL(normalizeHost(hp[0])));
       return;
     }
     socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
@@ -1044,27 +1491,34 @@ export function createSocksProxy(cfg) {
         deny(SOCKS5_NOT_ALLOWED, `port ${port} is not allowed.`);
         return;
       }
-      if (isLiteral && opts.mode !== "open-public") {
+      if (isLiteral && opts.state.policy.mode !== "open-public") {
         deny(SOCKS5_NOT_ALLOWED, "IP address destinations are not allowed; send a host name.");
         return;
       }
+      const entry = opts.state.admit(host, socket);
       let ips;
       try {
-        ips = await resolveTarget(host, opts);
+        ips = await resolveTarget(host, opts.check());
       } catch (e) {
         const status = e instanceof Refused ? e.status : 502;
         deny(status === 502 ? SOCKS5_HOST_UNREACHABLE : SOCKS5_NOT_ALLOWED, e.message);
         return;
       }
+      if (entry.revoked) return;
       let up;
       try {
-        up = await connectAny(ips, port);
+        up = await connectAny(ips, port, undefined, opts.connect);
       } catch (e) {
         deny(socks5ConnectCode(e), `Cannot connect to ${target}.`);
         return;
       }
       if (socket.destroyed) {
         up.destroy();
+        return;
+      }
+      if (!opts.state.keep(entry, up)) {
+        up.destroy();
+        deny(SOCKS5_NOT_ALLOWED, CHANGED_REFUSAL(normalizeHost(host)));
         return;
       }
       deadline.removeEventListener("abort", onDeadline);
@@ -1140,17 +1594,22 @@ export function createSocksProxy(cfg) {
 }
 
 /**
- * Container entry: read the config from the environment and listen. PORT (default 3128) for the
- * HTTP proxy; SOCKS_PORT (default 1080) for the SOCKS listener; DENIED_CIDRS (JSON array, default
- * empty) for the deployment's extra denied ranges. An invalid list throws before listening.
- * @returns {{ http: import("node:http").Server; socks: import("node:net").Server }}
+ * Container entry: read the config and listen. PORT (default 3128) for the HTTP proxy; SOCKS_PORT
+ * (default 1080) for the SOCKS listener; DENIED_CIDRS (JSON array, default empty) for the
+ * deployment's extra denied ranges; CONFIG_FILE (default /config/allow.json) for the list a
+ * previous control `apply` wrote, which wins over MODE / ALLOW_HOSTS when present (its denied ranges
+ * join DENIED_CIDRS); CONTROL_SOCKET (default /run/egress/control.sock) for the control listener,
+ * which listens before the proxy ports do; when it cannot listen the proxy serves without it, and
+in-place changes then fail (status / apply calls fail, so the provider recreates the instance). An
+ * invalid list or config file throws before listening.
+ * @returns {{ http: import("node:http").Server; socks: import("node:net").Server; control: import("node:net").Server; state: ReturnType<typeof createEgressState> }}
  */
 export function main(env = process.env) {
-  const mode = env.MODE === undefined || env.MODE === "" ? "open-public" : env.MODE;
+  let mode = env.MODE === undefined || env.MODE === "" ? "open-public" : env.MODE;
   if (!MODES.includes(mode)) {
     throw new Error(`Unknown MODE ${JSON.stringify(mode)}; expected open-public or allowlist.`);
   }
-  const allowHosts = mode === "open-public" ? [] : JSON.parse(env.ALLOW_HOSTS ?? "[]");
+  let allowHosts = mode === "open-public" ? [] : JSON.parse(env.ALLOW_HOSTS ?? "[]");
   const testHosts = JSON.parse(env.CAPYBARA_EGRESS_TEST_HOSTS ?? "{}");
   const testResolve = JSON.parse(env.CAPYBARA_EGRESS_TEST_RESOLVE ?? "{}");
   /** @param {string} h */
@@ -1158,31 +1617,67 @@ export function main(env = process.env) {
     Object.hasOwn(testResolve, h)
       ? Promise.resolve([{ address: String(testResolve[h]) }])
       : defaultLookup(h);
-  const deniedCidrs = JSON.parse(env.DENIED_CIDRS ?? "[]");
+  let deniedCidrs = JSON.parse(env.DENIED_CIDRS ?? "[]");
   if (!Array.isArray(deniedCidrs)) {
     throw new Error("DENIED_CIDRS must be a JSON array of CIDR strings.");
   }
   deniedList(deniedCidrs);
+  const configFile = env.CONFIG_FILE || DEFAULT_CONFIG_FILE;
+  const saved = readAllowFile(configFile);
+  if (saved !== null) {
+    // exactly the list last applied; the denied ranges only ever add up
+    mode = saved.mode;
+    allowHosts = saved.hosts;
+    deniedCidrs = [...new Set([...deniedCidrs, ...saved.deniedCidrs])];
+  }
+  const state = createEgressState({ mode, allowHosts, deniedCidrs, testHosts, configFile });
   const port = Number(env.PORT ?? 3128);
   const socksPort = Number(env.SOCKS_PORT ?? 1080);
-  const http = createEgressProxy({ mode, allowHosts, deniedCidrs, testHosts, lookup });
-  const hosts = mode === "open-public" ? "any public host" : allowHosts.join(", ") || "(none)";
-  http.listen(port, () => {
-    console.log(
-      `egress proxy (${mode}) listening on ${port}; allow: ${hosts}; extra denied: ${deniedCidrs.join(", ") || "(none)"}`,
-    );
+  const http = createEgressProxy({ state, lookup });
+  const socks = createSocksProxy({ state, lookup });
+  const control = createControlServer(state);
+  const controlPath = env.CONTROL_SOCKET || DEFAULT_CONTROL_SOCKET;
+  let portsStarted = false;
+  const listenPorts = () => {
+    if (portsStarted) return;
+    portsStarted = true;
+    const hosts = mode === "open-public" ? "any public host" : allowHosts.join(", ") || "(none)";
+    http.listen(port, () => {
+      console.log(
+        `egress proxy (${mode}) listening on ${port}; allow: ${hosts}; extra denied: ${deniedCidrs.join(", ") || "(none)"}${saved !== null ? ` (from ${configFile})` : ""}`,
+      );
+    });
+    socks.listen(socksPort, () => {
+      console.log(`egress SOCKS proxy (${mode}) listening on ${socksPort}`);
+    });
+  };
+  // Without its tmpfs (a proxy started by an earlier plugin version's create) the control cannot
+  // listen: the proxy then runs without it, and an in-place change fails (the provider recreates).
+  control.on("error", (e) => {
+    console.warn(`egress control socket unavailable (${e.message}); in-place list changes are off`);
+    listenPorts();
   });
-  const socks = createSocksProxy({ mode, allowHosts, deniedCidrs, testHosts, lookup });
-  socks.listen(socksPort, () => {
-    console.log(`egress SOCKS proxy (${mode}) listening on ${socksPort}`);
+  try {
+    rmSync(controlPath, { force: true });
+  } catch {
+    // a read-only location: listen reports it
+  }
+  control.listen(controlPath, () => {
+    // only this container's user reaches it (the directory is 0700 as well)
+    chmodSync(controlPath, 0o600);
+    listenPorts();
   });
   const stop = () => {
+    control.close();
     socks.close();
     http.close(() => process.exit(0));
   };
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);
-  return { http, socks };
+  return { http, socks, control, state };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+if (import.meta.url === `file://${process.argv[1]}`) {
+  if (process.argv[2] === "control") void controlMain(process.argv.slice(3), process.env);
+  else main();
+}

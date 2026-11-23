@@ -84,8 +84,10 @@ export interface OperationTransport {
     nonce: string,
   ): Promise<ExecResult>;
   /**
-   * The network the instance applies (its container labels), or null when they are missing or
-   * unreadable; SandboxGoneError when the container is gone. Never starts the instance.
+   * The network the instance applies, or null when its labels are missing or unreadable;
+   * SandboxGoneError when the container is gone. The container labels, except for an allowlist
+   * with the egress control, where the list in force is the egress proxy's own (changed in place
+   * since create); a stopped proxy is then started as auto-start does.
    */
   appliedNetwork(h: SandboxHandle, signal: AbortSignal): Promise<AppliedNetwork | null>;
   /** Kills every foreground execution whose control path carries `uuid`. */
