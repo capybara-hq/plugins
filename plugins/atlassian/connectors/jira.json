@@ -1,0 +1,82 @@
+{
+  "displayName": {
+    "zh": "Jira",
+    "en": "Jira"
+  },
+  "description": "Read, search and update Jira work items, comments, worklogs, boards and sprints as the connected person, through Atlassian's remote MCP server (Atlassian Cloud). Each member connects their own Atlassian account with OAuth; the client is registered automatically, so no admin setup is needed in Capybara.",
+  "icon": "./icons/jira.svg",
+  "template": {
+    "plugin": "connector-mcp",
+    "pluginVersion": "^0.1.0-rc.1",
+    "connector": "mcp",
+    "endpoint": {
+      "url": "https://mcp.atlassian.com/v2/mcp?tools=all"
+    },
+    "auth": {
+      "type": "oauth_code",
+      "ownership": "personal",
+      "discovery": "mcp",
+      "client": "dcr",
+      "scopes": [
+        "read:jira:agent-interface",
+        "write:jira:agent-interface",
+        "search:jira:agent-interface",
+        "read:me",
+        "read:account",
+        "offline_access"
+      ]
+    },
+    "defaultToolPolicies": {
+      "atlassianUserInfo": "allow",
+      "getAccessibleAtlassianResources": "allow",
+      "getContentFormatGuide": "allow",
+      "discover": "allow",
+      "executeRead": "allow",
+      "executeWrite": "ask",
+      "executeDestructive": "ask",
+      "getJiraIssue": "allow",
+      "listJiraProjects": "allow",
+      "listJiraProjectIssueTypesMetadata": "allow",
+      "getJiraIssueTypeMetaWithFields": "allow",
+      "listJiraIssueTransitions": "allow",
+      "listJiraIssueLinkTypes": "allow",
+      "listJiraIssueRemoteIssueLinks": "allow",
+      "listJiraIssueWorklogs": "allow",
+      "lookupJiraAccountId": "allow",
+      "listJiraIssueAssignableUsers": "allow",
+      "listJiraIssueComments": "allow",
+      "listJiraIssueChangelogs": "allow",
+      "getJiraCurrentUser": "allow",
+      "getJiraUser": "allow",
+      "listJiraStatuses": "allow",
+      "listJiraProjectComponents": "allow",
+      "getJiraProjectVersions": "allow",
+      "getJiraProjectVersionRelatedWork": "allow",
+      "listJiraBoards": "allow",
+      "getJiraBoardConfig": "allow",
+      "getJiraBoardIssueData": "allow",
+      "getJiraBoardSprintData": "allow",
+      "listJiraBoardSprints": "allow",
+      "listJiraFilters": "allow",
+      "listJiraDashboards": "allow",
+      "getJiraEntityProperty": "allow",
+      "downloadJiraIssueAttachment": "allow",
+      "searchJiraIssuesUsingJql": "allow",
+      "createJiraIssue": "ask",
+      "editJiraIssue": "ask",
+      "transitionJiraIssue": "ask",
+      "addOrEditJiraIssueComment": "ask",
+      "addOrEditJiraIssueWorklog": "ask",
+      "createJiraIssueLink": "ask",
+      "manageJiraProjectVersion": "ask",
+      "manageJiraProjectVersionRelatedWork": "ask",
+      "manageJiraSprint": "ask",
+      "createJiraBoard": "ask",
+      "watchJiraIssue": "ask",
+      "uploadAttachmentToJiraIssue": "ask",
+      "editJiraEntityProperty": "ask",
+      "createJiraIssueRemoteIssueLink": "ask",
+      "convertJiraIssueHierarchy": "ask"
+    }
+  }
+}

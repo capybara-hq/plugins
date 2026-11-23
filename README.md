@@ -31,6 +31,7 @@ npm; the kernel verifies each download against that integrity.
 | [`file-preview`](plugins/file-preview) | File previewers in the conversation panel (`file-preview@1`): code, zip archives, xlsx spreadsheets, docx documents, PDF, SVG and static HTML, each in a sandboxed embed with workers |
 | [`theme-cyberpunk`](plugins/theme-cyberpunk) | The Cyberpunk theme (declarative, no extension): neon yellow on deep blue-black, techno fonts, a neon pixel capybara |
 | [`github`](plugins/github) | GitHub connector template (declarative, no extension): issues, pull requests, reviews, repositories and Actions through GitHub's remote MCP server, per person with OAuth |
+| [`atlassian`](plugins/atlassian) | Jira, Confluence and Bitbucket connector templates (declarative, no extension) on Atlassian's remote MCP server (Atlassian Cloud), per person with OAuth and dynamic client registration |
 | [`skills-core`](plugins/skills-core) | Core skills (declarative, no extension): `skill-guide` teaches an agent to write, register, test and share its own skills |
 | [`example-counter`](plugins/example-counter), [`example-board`](plugins/example-board) | Reference implementations for plugin authors (not published) |
 

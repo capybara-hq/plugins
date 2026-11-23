@@ -1,0 +1,71 @@
+{
+  "source": "https://developer.atlassian.com/cloud/rovo-mcp/guides/supported-tools/",
+  "recordedAt": "2026-11-23",
+  "common": [
+    "atlassianUserInfo",
+    "getAccessibleAtlassianResources",
+    "getContentFormatGuide",
+    "discover",
+    "executeRead",
+    "executeWrite",
+    "executeDestructive"
+  ],
+  "groups": {
+    "read_jira": {
+      "scope": "read:jira:agent-interface",
+      "tools": [
+        "getJiraIssue",
+        "listJiraProjects",
+        "listJiraProjectIssueTypesMetadata",
+        "getJiraIssueTypeMetaWithFields",
+        "listJiraIssueTransitions",
+        "listJiraIssueLinkTypes",
+        "listJiraIssueRemoteIssueLinks",
+        "listJiraIssueWorklogs",
+        "lookupJiraAccountId",
+        "listJiraIssueAssignableUsers",
+        "listJiraIssueComments",
+        "listJiraIssueChangelogs",
+        "getJiraCurrentUser",
+        "getJiraUser",
+        "listJiraStatuses",
+        "listJiraProjectComponents",
+        "getJiraProjectVersions",
+        "getJiraProjectVersionRelatedWork",
+        "listJiraBoards",
+        "getJiraBoardConfig",
+        "getJiraBoardIssueData",
+        "getJiraBoardSprintData",
+        "listJiraBoardSprints",
+        "listJiraFilters",
+        "listJiraDashboards",
+        "getJiraEntityProperty",
+        "downloadJiraIssueAttachment"
+      ]
+    },
+    "search_jira": {
+      "scope": "search:jira:agent-interface",
+      "tools": ["searchJiraIssuesUsingJql"]
+    },
+    "write_jira": {
+      "scope": "write:jira:agent-interface",
+      "tools": [
+        "createJiraIssue",
+        "editJiraIssue",
+        "transitionJiraIssue",
+        "addOrEditJiraIssueComment",
+        "addOrEditJiraIssueWorklog",
+        "createJiraIssueLink",
+        "manageJiraProjectVersion",
+        "manageJiraProjectVersionRelatedWork",
+        "manageJiraSprint",
+        "createJiraBoard",
+        "watchJiraIssue",
+        "uploadAttachmentToJiraIssue",
+        "editJiraEntityProperty",
+        "createJiraIssueRemoteIssueLink",
+        "convertJiraIssueHierarchy"
+      ]
+    }
+  }
+}

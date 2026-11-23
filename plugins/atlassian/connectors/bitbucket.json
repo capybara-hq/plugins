@@ -1,0 +1,77 @@
+{
+  "displayName": {
+    "zh": "Bitbucket",
+    "en": "Bitbucket"
+  },
+  "description": "Read Bitbucket Cloud repositories, pull requests, pipelines and deployments, and create or review pull requests, as the connected person, through Atlassian's remote MCP server. The Bitbucket workspace must be linked to an Atlassian organization. Off by default: OAuth access to the Bitbucket tools is not yet confirmed.",
+  "icon": "./icons/bitbucket.svg",
+  "defaultEnabled": false,
+  "template": {
+    "plugin": "connector-mcp",
+    "pluginVersion": "^0.1.0-rc.1",
+    "connector": "mcp",
+    "endpoint": {
+      "url": "https://mcp.atlassian.com/v2/mcp?tools=all"
+    },
+    "auth": {
+      "type": "oauth_code",
+      "ownership": "personal",
+      "discovery": "mcp",
+      "client": "dcr",
+      "scopes": [
+        "read:bitbucket:agent-interface",
+        "write:bitbucket:agent-interface",
+        "read:me",
+        "read:account",
+        "offline_access"
+      ]
+    },
+    "defaultToolPolicies": {
+      "atlassianUserInfo": "allow",
+      "getAccessibleAtlassianResources": "allow",
+      "getContentFormatGuide": "allow",
+      "discover": "allow",
+      "executeRead": "allow",
+      "executeWrite": "ask",
+      "executeDestructive": "ask",
+      "listBitbucketWorkspaces": "allow",
+      "getBitbucketWorkspace": "allow",
+      "listBitbucketRepositories": "allow",
+      "getBitbucketRepository": "allow",
+      "getBitbucketRepoDefaultReviewers": "allow",
+      "getBitbucketRepoFileContent": "allow",
+      "getBitbucketRepoBranch": "allow",
+      "getBitbucketRepoCommit": "allow",
+      "listBitbucketRepoCommitReports": "allow",
+      "getBitbucketRepoCommitReport": "allow",
+      "getBitbucketRepoCommitReportAnnotations": "allow",
+      "listBitbucketRepoPullRequests": "allow",
+      "getBitbucketRepoPullRequest": "allow",
+      "getBitbucketRepoPullRequestDiff": "allow",
+      "listBitbucketRepoPullRequestComments": "allow",
+      "listBitbucketRepoPullRequestTasks": "allow",
+      "listBitbucketRepoPipelines": "allow",
+      "getBitbucketRepoPipeline": "allow",
+      "listBitbucketRepoPipelineSteps": "allow",
+      "getBitbucketRepoPipelineStep": "allow",
+      "getBitbucketRepoPipelineStepLog": "allow",
+      "listBitbucketRepoDeployments": "allow",
+      "getBitbucketRepoDeployment": "allow",
+      "listBitbucketRepoEnvironments": "allow",
+      "getBitbucketRepoEnvironment": "allow",
+      "createBitbucketRepoPullRequest": "ask",
+      "updateBitbucketRepoPullRequest": "ask",
+      "mergeBitbucketRepoPullRequest": "ask",
+      "approveBitbucketRepoPullRequest": "ask",
+      "requestChangesOnBitbucketRepoPullRequest": "ask",
+      "addBitbucketRepoPullRequestComment": "ask",
+      "resolveBitbucketRepoPullRequestComment": "ask",
+      "reopenBitbucketRepoPullRequestComment": "ask",
+      "createBitbucketRepoPullRequestTask": "ask",
+      "setBitbucketRepoPullRequestTaskState": "ask",
+      "createBitbucketRepoBranch": "ask",
+      "createBitbucketRepoCommit": "ask",
+      "runBitbucketRepoPipeline": "ask"
+    }
+  }
+}
