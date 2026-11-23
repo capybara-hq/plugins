@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-github
 
+## 0.1.0-rc.3
+
+### Patch Changes
+
+- 19123cd: Connector-template setup guides name their templates as `templates: [...]` (plugin-sdk
+  0.1.0-rc.60 replaced the single `template` key).
+
 ## 0.1.0-rc.2
 
 ### Patch Changes
