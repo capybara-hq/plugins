@@ -772,11 +772,18 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       }
     });
 
-    it("update: a wider allowlist swaps only the proxy; open-public, narrowing and a gone container recreate", async () => {
+    it("update of an earlier version's instance: a wider allowlist swaps only the proxy; open-public, narrowing and a gone container recreate", async () => {
+      // an instance as an earlier plugin version made it (no egress control, no config volume);
+      // the in-place path is covered by network-in-place.test.ts
+      const legacy = createDockerSandbox(cfg, {
+        labels: { [TEST_LABEL]: RUN },
+        egressTestHosts: { "allowed.example.com": targetIp, "denied.example.com": targetIp },
+        legacyEgress: true,
+      });
       const name = sbxName();
       const allowlisted = limits(allow(["allowed.example.com"]));
       const wider = limits(allow(["allowed.example.com", "pypi.org"]));
-      const h = await newSandbox(sbx, {
+      const h = await newSandbox(legacy, {
         name,
         image: images.sandboxImage,
         limits: allowlisted,
@@ -830,14 +837,19 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       expect(await sbx.update(h, limits(OPEN), sig())).toBe("recreate");
     });
 
-    it("update: a new proxy that never becomes ready is removed, and resume rebuilds it from the labels", async () => {
+    it("update of an earlier version's instance: a new proxy that never becomes ready is removed, and resume rebuilds it from the labels", async () => {
       // an "egress proxy" image that never serves /healthz: the sandbox image
       const broken = createDockerSandbox(
         { ...cfg, egressProxyImage: images.sandboxImage },
         { labels: { [TEST_LABEL]: RUN } },
       );
+      const legacy = createDockerSandbox(cfg, {
+        labels: { [TEST_LABEL]: RUN },
+        egressTestHosts: { "allowed.example.com": targetIp, "denied.example.com": targetIp },
+        legacyEgress: true,
+      });
       const name = sbxName();
-      const h = await newSandbox(sbx, {
+      const h = await newSandbox(legacy, {
         name,
         image: images.sandboxImage,
         limits: limits(allow(["allowed.example.com"])),

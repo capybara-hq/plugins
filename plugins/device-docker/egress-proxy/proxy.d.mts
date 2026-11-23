@@ -18,7 +18,63 @@ export interface EgressProxyConfig {
   encryptedDns?: EncryptedDns;
   /** Receives one English line per refusal; default console.warn. */
   log?: (msg: string) => void;
+  /** The state shared with the other listener and the control socket; default one of its own. */
+  state?: EgressState;
+  /** Where `apply` writes the list in force (the container's /config/allow.json); none in tests. */
+  configFile?: string;
+  /** Test seam: the transport `connectAny` dials with. */
+  connect?: (opts: { host: string; port: number; allowHalfOpen: boolean }) => Socket;
 }
+
+/** The list in force; replaced as a whole by `apply`. */
+export interface EgressPolicy {
+  readonly mode: EgressProxyMode;
+  readonly allowHosts: readonly string[];
+  readonly deniedCidrs: readonly string[];
+  readonly denied: BlockList;
+  readonly digest: string;
+}
+
+export interface EgressEntry {
+  readonly host: string;
+  readonly pinned: boolean;
+  ip: string | null;
+  revoked: boolean;
+  readonly sockets: Set<Socket>;
+}
+
+export interface EgressState {
+  readonly policy: EgressPolicy;
+  readonly testHosts: Record<string, string>;
+  /** Admitted connections whose client side has not closed. */
+  readonly connections: number;
+  admit(host: string, client: Socket, closed?: import("node:events").EventEmitter): EgressEntry;
+  keep(entry: EgressEntry, up: Socket): boolean;
+  /**
+   * Validates, writes the config file, swaps, closes what the new list does not cover; the digest.
+   * With `ifDigest`, refused unless the list in force has that digest (compare and swap).
+   */
+  apply(config: unknown, ifDigest?: string): Promise<string>;
+}
+
+export interface AllowConfig {
+  mode: "allowlist";
+  hosts: string[];
+  deniedCidrs: string[];
+}
+
+export function allowHostError(h: unknown): string | null;
+export function allowDigest(c: {
+  mode: string;
+  hosts: readonly string[];
+  deniedCidrs: readonly string[];
+}): string;
+export function parseAllowConfig(raw: unknown): AllowConfig;
+export function readAllowFile(file: string): AllowConfig | null;
+export function createEgressState(cfg?: EgressProxyConfig): EgressState;
+export function createControlServer(state: EgressState): NetServer;
+export function controlRequest(path: string, request: unknown): Promise<Record<string, unknown>>;
+export function inDenied(ip: string, denied: BlockList): boolean;
 
 export const MODES: readonly EgressProxyMode[];
 /** A copy of plugin-sdk's OPEN_PUBLIC_DENIED_CIDRS: every closed address, in both modes. */
@@ -84,4 +140,6 @@ export function createSocksProxy(
 export function main(env?: Record<string, string | undefined>): {
   http: Server;
   socks: NetServer;
+  control: NetServer;
+  state: EgressState;
 };

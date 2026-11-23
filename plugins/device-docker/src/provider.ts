@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 import { type NetworkInterfaceInfo, networkInterfaces } from "node:os";
 import type { Duplex } from "node:stream";
@@ -48,10 +48,10 @@ export function publishedImages(version: string): { sandbox: string; egress: str
 
 /**
  * The SDK's provider with `update` always present: it applies a new `limits.network` to an existing
- * instance, `"updated"` when only the egress proxy had to change (recreated with the new proxy mode
- * and hosts), `"recreate"` when the container itself must be recreated (network or
- * environment differ, or the container is gone). Limits are fixed when the instance (container) is
- * created.
+ * instance, `"updated"` when the egress proxy took the new host list in place (or, for an instance
+ * of an earlier version, was recreated with a wider one), `"recreate"` when the container itself
+ * must be recreated (network kind or environment differ, or the container is gone). Limits are
+ * fixed when the instance (container) is created.
  */
 export type DockerSandboxProvider = DeviceProvider &
   Required<
@@ -144,6 +144,11 @@ export interface DockerSandboxTestOptions {
    */
   egressTestResolve?: Record<string, string>;
   /**
+   * Creates instances as an earlier plugin version did: no egress control label, no config volume
+   * (the proxy-swap path of `update` for such instances).
+   */
+  legacyEgress?: boolean;
+  /**
    * A file the background supervisor of `taskId` waits for after it recorded itself and before its
    * final admission check (a readiness barrier for the start/revoke and start/stop race tests).
    */
@@ -215,6 +220,22 @@ const LABEL_ALLOW = "dev.capybara.sandbox.allow-hosts";
 const LABEL_NET = "dev.capybara.sandbox.network";
 /** The proxy mode an egress proxy container runs (on the proxy container itself). */
 const LABEL_EGRESS_MODE = "dev.capybara.sandbox.mode";
+/**
+ * On the sandbox container and its egress proxy: the proxy takes host list changes in place
+ * through its control socket and keeps the list in force on the instance's config volume
+ * (`<name>-egress-conf`). Set at `create` on every instance this version makes; labels never
+ * change later. For such an instance the sandbox labels hold the create-time list, which after an
+ * in-place narrowing is wider than the list in force, so a lost proxy is rebuilt only from the
+ * volume, never from the labels.
+ */
+const LABEL_CONTROL = "dev.capybara.sandbox.egress-control";
+/** The egress proxy's config file (on the config volume) and control socket (on a tmpfs). */
+const EGRESS_CONFIG_DIR = "/config";
+const EGRESS_CONTROL_DIR = "/run/egress";
+/** The egress proxy image's user (`node`, uid 1000): it owns the config volume and control socket. */
+const EGRESS_USER = "node";
+/** How long one in-place list change may take (the proxy's own deadline is 30 s too). */
+const EGRESS_APPLY_TIMEOUT_MS = 30_000;
 
 /**
  * Container / volume / network names: `create`'s and `createFileSystem`'s name
@@ -232,6 +253,7 @@ export function sandboxResourceNames(name: string) {
   return {
     container: name,
     egress: `${name}-egress`,
+    egressConf: `${name}-egress-conf`,
     network: `${name}-net`,
     workspace: `${name}-workspace`,
     skills: `${name}-skills`,
@@ -386,12 +408,36 @@ export function hostDeniedCidrs(
   return [...new Set(out)];
 }
 
-/** The labels that record a plan on the sandbox container. */
-function planLabels(plan: InstancePlan): Record<string, string> {
+/** The labels that record a plan on the sandbox container (and whether its proxy has the control). */
+function planLabels(plan: InstancePlan, control = true): Record<string, string> {
   return {
     [LABEL_NET]: plan.mode,
     [LABEL_ALLOW]: JSON.stringify(plan.allowHosts),
+    ...(control && { [LABEL_CONTROL]: "1" }),
   };
+}
+
+/** Whether a container (sandbox or proxy) carries the egress control label. */
+function hasControl(labels: Record<string, string> | null | undefined): boolean {
+  return labels?.[LABEL_CONTROL] === "1";
+}
+
+/**
+ * The digest of an egress list (pure), the same as the proxy's `allowDigest`
+ * (egress-proxy/proxy.mjs; test/egress-proxy-control.test.ts keeps them equal): sha256 over the
+ * mode, the hosts and the denied ranges, each sorted and without duplicates.
+ */
+export function egressAllowDigest(c: {
+  mode: string;
+  hosts: readonly string[];
+  deniedCidrs: readonly string[];
+}): string {
+  const sorted = (l: readonly string[]) => [...new Set(l)].sort();
+  return createHash("sha256")
+    .update(
+      JSON.stringify({ mode: c.mode, hosts: sorted(c.hosts), deniedCidrs: sorted(c.deniedCidrs) }),
+    )
+    .digest("hex");
 }
 
 /**
@@ -414,17 +460,21 @@ function labelNetwork(
 }
 
 /**
- * Whether `update` may move an instance from its container `labels` to `plan` by recreating only
- * its egress proxy (pure). Only a host list that keeps every recorded host (or open-public to
- * open-public) is swapped in place, so a proxy rebuilt from the labels never allows more than the
- * one `update` put in place. A change of network kind is `"recreate"`, allowlist to open-public
- * too: the labels then say what the instance has, and `resume` can hold an open-public instance
- * to `refuseOpenNetwork` by its labels.
+ * How `update` moves an instance from its container `labels` to `plan` (pure):
+ * - `"apply"`: allowlist to a non-empty allowlist on an instance with the egress control label:
+ *   the proxy takes the new list in place (wider, narrower or both) and keeps its connections the
+ *   new list still covers.
+ * - `"swap"`: recreate only the egress proxy, for open-public to open-public, and for an instance
+ *   of an earlier version (no control label) only when the new list keeps every recorded host, so a
+ *   proxy rebuilt from the labels never allows more than the one `update` put in place.
+ * - `"recreate"`: everything else. A change of network kind recreates, allowlist to open-public
+ *   too: the labels then say what the instance has, and `resume` can hold an open-public instance
+ *   to `refuseOpenNetwork` by its labels.
  */
 export function updateDecision(
   labels: Record<string, string>,
   plan: InstancePlan,
-): "updated" | "recreate" {
+): "apply" | "swap" | "recreate" {
   const from = labelNetwork(labels);
   // A container without this contract's labels may have no internal network at all: a proxy swap
   // cannot give it one, so it must be recreated.
@@ -434,9 +484,10 @@ export function updateDecision(
   // `update` makes for a `none` plan).
   if (plan.mode === "none" || from.mode === "none") return "recreate";
   if (plan.mode === "open-public" || from.mode === "open-public") {
-    return plan.mode === from.mode ? "updated" : "recreate";
+    return plan.mode === from.mode ? "swap" : "recreate";
   }
-  return from.allowHosts.every((h) => plan.allowHosts.includes(h)) ? "updated" : "recreate";
+  if (hasControl(labels)) return "apply";
+  return from.allowHosts.every((h) => plan.allowHosts.includes(h)) ? "swap" : "recreate";
 }
 
 /**
@@ -709,7 +760,10 @@ export function createDockerSandbox(
     }
   };
 
-  /** Drops the instance under `name`: container, egress proxy and internal network (never volumes). */
+  /**
+   * Drops the instance under `name`: container, egress proxy, internal network and the proxy's
+   * config volume, which belongs to the instance (never the file system's volumes).
+   */
   const destroyByName = async (name: string, signal: AbortSignal) => {
     signal.throwIfAborted();
     const n = sandboxResourceNames(name);
@@ -720,7 +774,10 @@ export function createDockerSandbox(
           .catch(ignore(404, 409)),
       ),
     );
-    await removeWithRetry(`/networks/${enc(n.network)}`, signal);
+    await Promise.all([
+      removeWithRetry(`/networks/${enc(n.network)}`, signal),
+      removeWithRetry(`/volumes/${enc(n.egressConf)}`, signal),
+    ]);
   };
 
   /**
@@ -899,13 +956,39 @@ export function createDockerSandbox(
     }
   };
 
-  /** Creates and starts the egress proxy (on the shared network and the sandbox's internal one). */
+  /** The ranges every egress proxy refuses on top of the closed classes (current config). */
+  const egressDenied = () => [...(cfg.deniedCidrs ?? []), ...hostDeniedCidrs(cfg.endpoint)];
+
+  /**
+   * Whether the instance's egress config volume exists and was made by this plugin (role label);
+   * a volume Docker created on its own for a missing mount source has none and does not count.
+   */
+  const egressConfOk = async (name: string, signal: AbortSignal): Promise<boolean> => {
+    try {
+      const v = await api.json<{ Labels: Record<string, string> | null }>(
+        "GET",
+        `/volumes/${enc(sandboxResourceNames(name).egressConf)}`,
+        { signal },
+      );
+      return v.Labels?.[LABEL_ROLE] === "egress-conf";
+    } catch (e) {
+      if (isStatus(e, 404)) return false;
+      throw e;
+    }
+  };
+
+  /**
+   * Creates and starts the egress proxy (on the shared network and the sandbox's internal one).
+   * With `control` it mounts the instance's config volume at /config (the list a previous in-place
+   * change left there wins over the environment) and a tmpfs for its control socket.
+   */
   const createEgress = async (
     name: string,
     mode: ProxyMode,
     allowHosts: string[],
     signal: AbortSignal,
     mayExist = false,
+    control = false,
   ) => {
     const n = sandboxResourceNames(name);
     const made = createContainer(
@@ -916,13 +999,14 @@ export function createDockerSandbox(
           mode,
           allowHosts,
           test.egressTestHosts,
-          [...(cfg.deniedCidrs ?? []), ...hostDeniedCidrs(cfg.endpoint)],
+          egressDenied(),
           test.egressTestResolve,
         ),
         Labels: {
           ...baseLabels(name, "egress"),
           [LABEL_EGRESS_MODE]: mode,
           [LABEL_ALLOW]: JSON.stringify(allowHosts),
+          ...(control && { [LABEL_CONTROL]: "1" }),
         },
         HostConfig: {
           NetworkMode: cfg.network,
@@ -934,25 +1018,85 @@ export function createDockerSandbox(
           MemorySwap: 128 * MIB,
           NanoCpus: 500_000_000,
           PidsLimit: 128,
+          ...(control && {
+            // uid 1000 = the image's node user; only processes in this container reach the socket
+            Tmpfs: {
+              [EGRESS_CONTROL_DIR]: "rw,noexec,nosuid,nodev,size=64k,uid=1000,gid=1000,mode=0700",
+            },
+            Mounts: [{ Type: "volume", Source: n.egressConf, Target: EGRESS_CONFIG_DIR }],
+          }),
         },
         NetworkingConfig: { EndpointsConfig: { [cfg.network]: {}, [n.network]: {} } },
       },
       signal,
     );
     await (mayExist ? made.catch(ignore(409)) : made);
+    // The volume may have gone between the caller's check and the create, in which case Docker
+    // made an empty, unlabelled one for the mount and the proxy would start from the environment
+    // (the create-time list): drop that container and volume before anything starts.
+    if (control && !(await egressConfOk(name, signal))) {
+      await api
+        .json("DELETE", `/containers/${enc(n.egress)}`, { query: { force: true }, signal })
+        .catch(ignore(404));
+      await removeUnlabelledConf(name, signal);
+      return false;
+    }
     await start(n.egress, signal);
     await waitEgressReady(n.egress, signal);
+    return true;
+  };
+
+  /** Removes `<name>-egress-conf` only when it lacks the role label (one Docker made on its own). */
+  const removeUnlabelledConf = async (name: string, signal: AbortSignal) => {
+    const vol = sandboxResourceNames(name).egressConf;
+    const v = await api
+      .json<{ Labels: Record<string, string> | null }>("GET", `/volumes/${enc(vol)}`, { signal })
+      .catch((e: unknown) => {
+        if (isStatus(e, 404)) return null;
+        throw e;
+      });
+    if (v !== null && v.Labels?.[LABEL_ROLE] !== "egress-conf") {
+      await removeWithRetry(`/volumes/${enc(vol)}`, signal);
+    }
   };
 
   /**
-   * On resume the egress proxy (and the internal network) must exist and run; a lost proxy is
-   * rebuilt with the mode and hosts recorded on the sandbox container.
+   * Whether the egress proxy image takes in-place list changes (its image label
+   * `dev.capybara.sandbox.egress-control=1`, set by egress-proxy/Dockerfile). A deployment's own
+   * older build lacks it: its instances are made without the control (the proxy swap and recreate
+   * paths), never with a control the proxy cannot answer. The image is pulled when missing.
+   */
+  const egressImageHasControl = async (signal: AbortSignal): Promise<boolean> => {
+    // the socket proxy allows the image reference in the path as is (slashes included)
+    const path = `/images/${cfg.egressProxyImage}/json`;
+    const inspectImage = () =>
+      api.json<{ Config?: { Labels?: Record<string, string> | null } }>("GET", path, { signal });
+    let img: { Config?: { Labels?: Record<string, string> | null } };
+    try {
+      img = await inspectImage();
+    } catch (e) {
+      if (!isStatus(e, 404)) throw e;
+      await pull(cfg.egressProxyImage, signal);
+      img = await inspectImage();
+    }
+    return hasControl(img.Config?.Labels);
+  };
+
+  /**
+   * On resume the egress proxy (and the internal network) must exist and run; `false` when only a
+   * recreate of the instance can give it a network no wider than the one last applied. A lost
+   * proxy of an instance without the control label is rebuilt with the mode and hosts recorded on
+   * the sandbox container (its lower bound). With the control label (`control`) the labels may be
+   * wider than the list in force (an in-place narrowing), so a lost proxy is rebuilt only on the
+   * instance's config volume, which holds the list in force; without that volume, or with a proxy
+   * that lacks the control (made by an earlier version), the answer is `false`.
    */
   const ensureEgressRunning = async (
     name: string,
     mode: ProxyMode,
     allowHosts: string[],
     signal: AbortSignal,
+    control = false,
   ): Promise<boolean> => {
     const n = sandboxResourceNames(name);
     await ensureSharedNetwork(signal);
@@ -960,24 +1104,52 @@ export function createDockerSandbox(
     if (!(await ensureInternalNetwork(name, signal))) return false;
     let running: boolean;
     try {
-      const c = await api.json<{ State: { Running: boolean; Paused?: boolean } }>(
-        "GET",
-        `/containers/${enc(n.egress)}/json`,
-        { signal },
-      );
+      const c = await api.json<{
+        State: { Running: boolean; Paused?: boolean };
+        Config: { Labels: Record<string, string> | null };
+      }>("GET", `/containers/${enc(n.egress)}/json`, { signal });
+      if (control && !hasControl(c.Config.Labels)) return false;
       if (c.State.Paused) await unpause(n.egress, signal);
       running = c.State.Running;
     } catch (e) {
       if (!isStatus(e, 404)) throw e;
+      // never rebuilt from the (possibly wider) labels when the volume with the list is gone
+      if (control && !(await egressConfOk(name, signal))) return false;
       // a concurrent auto-start may create it at the same moment: a name conflict is fine
-      await createEgress(name, mode, allowHosts, signal, true);
-      return true;
+      try {
+        return await createEgress(name, mode, allowHosts, signal, true, control);
+      } catch (e) {
+        if (control && !signal.aborted && !(await egressRunning(name, signal))) return false;
+        throw e;
+      }
     }
     if (!running) {
-      await start(n.egress, signal);
-      await waitEgressReady(n.egress, signal);
+      try {
+        await start(n.egress, signal);
+        await waitEgressReady(n.egress, signal);
+      } catch (e) {
+        // A proxy with the control that cannot start (its config file unreadable, say) stops
+        // rather than guess its list: only a recreate gives the instance a network again.
+        if (control && !signal.aborted && !(await egressRunning(name, signal))) return false;
+        throw e;
+      }
     }
     return true;
+  };
+
+  /** Whether the egress proxy container runs (false when it exited or is missing). */
+  const egressRunning = async (name: string, signal: AbortSignal): Promise<boolean> => {
+    try {
+      const c = await api.json<{ State: { Running: boolean } }>(
+        "GET",
+        `/containers/${enc(sandboxResourceNames(name).egress)}/json`,
+        { signal },
+      );
+      return c.State.Running;
+    } catch (e) {
+      if (isStatus(e, 404)) return false;
+      throw e;
+    }
   };
 
   // ---------- exec ----------
@@ -1257,6 +1429,100 @@ export function createDockerSandbox(
     }
   }
 
+  /**
+   * Runs the egress proxy's control client (`node /app/proxy.mjs control <op>`, as the image's
+   * user, through the Docker exec API; the sandbox cannot reach the control socket) and returns its
+   * parsed reply. A non-zero exit, a timeout, an abort or an unreadable reply throws.
+   */
+  const egressControl = async (
+    name: string,
+    op: "apply" | "status",
+    input: unknown,
+    signal: AbortSignal,
+  ): Promise<Record<string, unknown>> => {
+    const r = await run(sandboxResourceNames(name).egress, {
+      cmd: ["node", "/app/proxy.mjs", "control", op],
+      user: EGRESS_USER,
+      // the egress proxy's own image (nothing in the sandbox writes there)
+      imagePath: true,
+      // apply: `{ config, ifDigest }` as one JSON line on stdin
+      ...(op === "apply" && { stdin: Buffer.from(`${JSON.stringify(input)}\n`) }),
+      maxOutputBytes: 64 * 1024,
+      timeoutMs: EGRESS_APPLY_TIMEOUT_MS,
+      signal,
+    });
+    if (r.aborted) throw abortReason(signal);
+    const out = r.stdout.toString("utf8").trim();
+    let reply: Record<string, unknown> | null = null;
+    try {
+      reply = JSON.parse(out.slice(out.lastIndexOf("\n") + 1)) as Record<string, unknown>;
+    } catch {
+      reply = null;
+    }
+    if (r.timedOut || r.exitCode !== 0 || reply === null || reply.ok !== true) {
+      const why =
+        typeof reply?.error === "string"
+          ? reply.error
+          : r.timedOut
+            ? "timed out"
+            : stderrOf(r) || `exit code ${String(r.exitCode)}`;
+      throw new Error(`device-docker: the egress proxy's control ${op} failed: ${why}`);
+    }
+    return reply;
+  };
+
+  /**
+   * `update` for allowlist to a non-empty allowlist on an instance with the egress control: hands
+   * the proxy the new list (and the current denied ranges) through its control socket. The proxy
+   * writes it to the config volume, swaps it, closes every connection the new list does not cover
+   * and only then answers with the list's digest; `"updated"` only on the expected digest, any
+   * failure throws (the kernel then recreates the instance). A suspended instance has its proxy
+   * started for the call and stopped again, so the volume holds the new list for the next resume.
+   */
+  const applyInPlace = async (
+    h: SandboxHandle,
+    c: { State: { Running: boolean } },
+    labels: Record<string, string>,
+    plan: InstancePlan,
+    signal: AbortSignal,
+  ): Promise<"updated" | "recreate"> => {
+    const from = labelNetwork(labels);
+    if (from === null || from.mode !== "allowlist") return "recreate";
+    // the proxy must run, rebuilt only from the config volume when lost (else recreate)
+    if (!(await ensureEgressRunning(h.id, "allowlist", from.allowHosts, signal, true))) {
+      return "recreate";
+    }
+    const sent = { mode: "allowlist", hosts: [...plan.allowHosts], deniedCidrs: egressDenied() };
+    // Compare and swap on the list read under this lease: an apply of a holder that lost the lease
+    // and lands after a newer holder's change is refused instead of overwriting it. It narrows the
+    // race, not closes it: a holder that lost the lease unnoticed and read the list after that
+    // change still applies (only a kernel fencing token would close it; `update` carries none).
+    const read = await egressControl(h.id, "status", undefined, signal);
+    if (typeof read.digest !== "string") {
+      throw new Error("device-docker: the egress proxy reported no digest");
+    }
+    const reply = await egressControl(
+      h.id,
+      "apply",
+      { config: sent, ifDigest: read.digest },
+      signal,
+    );
+    if (reply.digest !== egressAllowDigest(sent)) {
+      throw new Error(
+        "device-docker: the egress proxy acknowledged a different list than the one sent",
+      );
+    }
+    if (!c.State.Running) {
+      await api
+        .json("POST", `/containers/${enc(sandboxResourceNames(h.id).egress)}/stop`, {
+          query: { t: STOP_SECONDS },
+          signal,
+        })
+        .catch(ignore(304, 404));
+    }
+    return "updated";
+  };
+
   async function resume(h: SandboxHandle, signal: AbortSignal): Promise<"resumed" | "gone"> {
     signal.throwIfAborted();
     let c: {
@@ -1273,13 +1539,19 @@ export function createDockerSandbox(
     // A container without this contract's labels resumes with no network (the kernel replaces it
     // on use, since its applied limits are unknown).
     const net = labelNetwork(labels) ?? { mode: "none", allowHosts: [] };
+    const control = hasControl(labels);
     // An open-public instance made before refuseOpenNetwork was turned on is not started again:
     // "gone" makes the kernel recreate it under the current rule (create then refuses or builds
     // the allowlist). Auto-start goes through here too, so exec answers SandboxGoneError.
     if (net.mode === "open-public" && cfg.refuseOpenNetwork) return "gone";
     // An internal network made by an earlier version (a host gateway on the bridge) answers
     // "gone" as well: the kernel recreates the instance on the same files with a hardened one.
-    if (net.mode !== "none" && !(await ensureEgressRunning(h.id, net.mode, net.allowHosts, signal)))
+    // A lost proxy of an instance with the egress control and no config volume answers "gone" too:
+    // never rebuilt from the create-time labels, which may be wider than the list last applied.
+    if (
+      net.mode !== "none" &&
+      !(await ensureEgressRunning(h.id, net.mode, net.allowHosts, signal, control))
+    )
       return "gone";
     try {
       // A `docker pause`d container still reports Running, but exec answers 409: unpause it.
@@ -1372,19 +1644,46 @@ export function createDockerSandbox(
     },
     execFull: (h, args, ctl, prefix, nonce) => execWith(h, args, ctl, prefix, nonce),
     async appliedNetwork(h, signal) {
+      let labels: Record<string, string>;
       try {
         const c = await api.json<{ Config: { Labels: Record<string, string> | null } }>(
           "GET",
           `/containers/${enc(h.id)}/json`,
           { signal },
         );
-        return labelNetwork(c.Config.Labels ?? {});
+        labels = c.Config.Labels ?? {};
       } catch (e) {
         if (isStatus(e, 404)) {
           throw new SandboxGoneError(`sandbox container ${h.id} no longer exists`, { cause: e });
         }
         throw e;
       }
+      const net = labelNetwork(labels);
+      // The labels hold the create-time list; an allowlist with the egress control may have been
+      // changed in place since, so the list in force is the proxy's own.
+      if (net === null || net.mode !== "allowlist" || !hasControl(labels)) return net;
+      const status = () => egressControl(h.id, "status", undefined, signal);
+      let reply: Record<string, unknown>;
+      try {
+        reply = await status();
+      } catch (e) {
+        // a stopped or lost proxy: start only the proxy (rebuilt only from its volume), never
+        // the sandbox container
+        if (!(e instanceof NotRunningError) && !(e instanceof SandboxGoneError)) throw e;
+        if (!(await ensureEgressRunning(h.id, "allowlist", net.allowHosts, signal, true))) {
+          throw new SandboxGoneError(`the egress proxy of ${h.id} cannot be rebuilt`, { cause: e });
+        }
+        reply = await status();
+      }
+      const hosts = reply.hosts;
+      if (
+        reply.mode !== "allowlist" ||
+        !Array.isArray(hosts) ||
+        !hosts.every((x): x is string => typeof x === "string")
+      ) {
+        throw new Error("device-docker: the egress proxy reported an unreadable list");
+      }
+      return { mode: "allowlist", allowHosts: hosts };
     },
     killOperation: async (h, uuid, signal) => {
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid)) {
@@ -1537,12 +1836,25 @@ export function createDockerSandbox(
       await destroyByName(name, signal);
       try {
         let networkMode = "none";
+        // the egress control, when the proxy image has it (an older own build of a deployment
+        // does not: its instances take the proxy swap and recreate paths)
+        let control = !test.legacyEgress;
         if (plan.mode !== "none") {
           // The sandbox joins only its internal network, which has no exit; its egress proxy is the
           // only other member and joins the shared network for the outbound leg.
           await ensureSharedNetwork(signal);
           await ensureInternalNetwork(name, signal);
-          await createEgress(name, plan.mode, plan.allowHosts, signal);
+          control &&= await egressImageHasControl(signal);
+          if (control) {
+            // the proxy's config volume (destroyByName above removed any earlier one)
+            await ensureVolume(
+              { Name: n.egressConf, Labels: baseLabels(name, "egress-conf") },
+              signal,
+            );
+          }
+          if (!(await createEgress(name, plan.mode, plan.allowHosts, signal, false, control))) {
+            throw new Error(`device-docker: the egress config volume ${n.egressConf} went away`);
+          }
           networkMode = n.network;
         }
 
@@ -1557,7 +1869,7 @@ export function createDockerSandbox(
             WorkingDir: "/workspace",
             Cmd: ["sleep", "infinity"],
             Env: sandboxEnv(name, plan.mode),
-            Labels: { ...baseLabels(name, "sandbox"), ...planLabels(plan) },
+            Labels: { ...baseLabels(name, "sandbox"), ...planLabels(plan, control) },
             HostConfig: {
               Runtime: cfg.runtime,
               Init: true,
@@ -1626,19 +1938,27 @@ export function createDockerSandbox(
         if (isStatus(e, 404)) return "recreate";
         throw e;
       }
+      const labels = c.Config.Labels ?? {};
       // No network cannot be applied to a running proxy container in place (updateDecision agrees
       // for a `none` plan and for every container without this contract's labels).
-      if (updateDecision(c.Config.Labels ?? {}, plan) === "recreate") return "recreate";
+      const decision = updateDecision(labels, plan);
+      if (decision === "recreate") return "recreate";
+      const n = sandboxResourceNames(h.id);
+      if (decision === "apply") return applyInPlace(h, c, labels, plan, signal);
       // Replace the egress proxy with the new mode and hosts; the container, its environment
       // and its internal network stay. Open connections through the old proxy end.
-      const n = sandboxResourceNames(h.id);
+      const control = hasControl(labels);
       await api
         .json("DELETE", `/containers/${enc(n.egress)}`, { query: { force: true }, signal })
         .catch(ignore(404));
       await ensureSharedNetwork(signal);
       if (!(await ensureInternalNetwork(h.id, signal))) return "recreate";
       try {
-        await createEgress(h.id, proxyModeOf(plan), plan.allowHosts, signal);
+        if (
+          !(await createEgress(h.id, proxyModeOf(plan), plan.allowHosts, signal, false, control))
+        ) {
+          return "recreate";
+        }
       } catch (e) {
         // A proxy that was made but never became ready (or the call was aborted) may allow more
         // than the labels record, and resume would just start it again: drop it, so the next

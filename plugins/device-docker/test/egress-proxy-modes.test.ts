@@ -1,6 +1,9 @@
 import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { type AddressInfo, connect, type Server as NetServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   connectAny,
@@ -144,23 +147,42 @@ const socks4 = (ip: number[], port: number) => {
 const socks5Http = (port: number, req: Buffer) =>
   raw(port, [greeting, req], (got) => (got.length >= 12 && got[3] === 0 ? httpGet : null));
 
+/** A config file path and control socket path of their own for one main() (none exist yet). */
+const own = () => {
+  const dir = mkdtempSync(join(tmpdir(), "egress-main-"));
+  return { CONFIG_FILE: join(dir, "allow.json"), CONTROL_SOCKET: join(dir, "control.sock") };
+};
+const stopMain = (started: ReturnType<typeof main>) => {
+  started.control.close();
+  started.socks.close();
+  started.http.closeAllConnections();
+  started.http.close();
+};
+
 describe("modes", () => {
   it("defaults to open-public and always opens the SOCKS listener", () => {
-    const started = main({ PORT: "0", SOCKS_PORT: "0" });
+    const started = main({ PORT: "0", SOCKS_PORT: "0", ...own() });
     try {
       expect(started.socks).not.toBeNull();
     } finally {
-      started.socks.close();
-      started.http.close();
+      stopMain(started);
     }
   });
 
   it("reads the deployment-denied CIDRs from DENIED_CIDRS and refuses an invalid list", async () => {
-    const started = main({ PORT: "0", SOCKS_PORT: "0", DENIED_CIDRS: '["203.0.114.0/24"]' });
-    started.socks.close();
-    started.http.close();
-    expect(() => main({ PORT: "0", DENIED_CIDRS: '["not-a-cidr"]' })).toThrow(/denied CIDR/);
-    expect(() => main({ PORT: "0", DENIED_CIDRS: '"203.0.114.0/24"' })).toThrow(/DENIED_CIDRS/);
+    const started = main({
+      PORT: "0",
+      SOCKS_PORT: "0",
+      DENIED_CIDRS: '["203.0.114.0/24"]',
+      ...own(),
+    });
+    stopMain(started);
+    expect(() => main({ PORT: "0", DENIED_CIDRS: '["not-a-cidr"]', ...own() })).toThrow(
+      /denied CIDR/,
+    );
+    expect(() => main({ PORT: "0", DENIED_CIDRS: '"203.0.114.0/24"', ...own() })).toThrow(
+      /DENIED_CIDRS/,
+    );
   });
 
   it("judges CAPYBARA_EGRESS_TEST_RESOLVE answers like any resolution (no exemption)", async () => {
@@ -170,6 +192,7 @@ describe("modes", () => {
       SOCKS_PORT: "0",
       ALLOW_HOSTS: '["metadata.permission.example"]',
       CAPYBARA_EGRESS_TEST_RESOLVE: '{"metadata.permission.example":"169.254.169.254"}',
+      ...own(),
     });
     try {
       if (!started.http.listening) await new Promise((r) => started.http.once("listening", r));
@@ -178,15 +201,15 @@ describe("modes", () => {
       expect(out).toMatch(/^HTTP\/1\.1 403/);
       expect(out).toMatch(/private or reserved address/);
     } finally {
-      started.socks.close();
-      started.http.closeAllConnections();
-      started.http.close();
+      stopMain(started);
     }
   });
 
   it("refuses an unknown mode", () => {
-    expect(() => main({ MODE: "strict", PORT: "0" })).toThrow(/expected open-public or allowlist/);
-    expect(() => main({ MODE: "wide", PORT: "0" })).toThrow(/Unknown MODE/);
+    expect(() => main({ MODE: "strict", PORT: "0", ...own() })).toThrow(
+      /expected open-public or allowlist/,
+    );
+    expect(() => main({ MODE: "wide", PORT: "0", ...own() })).toThrow(/Unknown MODE/);
     expect(() => createEgressProxy({ mode: "wide" as "allowlist" })).toThrow(
       /Unknown egress proxy mode/,
     );

@@ -37,10 +37,14 @@ const limits = (
   network,
 });
 
-/** The labels `create` puts on a container for a plan (as provider.ts planLabels does). */
-const labelsOf = (p: InstancePlan): Record<string, string> => ({
+/**
+ * The labels `create` puts on a container for a plan (as provider.ts planLabels does); `legacy` is
+ * an instance made by an earlier version (no egress control label).
+ */
+const labelsOf = (p: InstancePlan, legacy = false): Record<string, string> => ({
   "dev.capybara.sandbox.network": p.mode,
   "dev.capybara.sandbox.allow-hosts": JSON.stringify(p.allowHosts),
+  ...(!legacy && { "dev.capybara.sandbox.egress-control": "1" }),
 });
 
 describe("planInstance", () => {
@@ -195,15 +199,27 @@ describe("updateDecision", () => {
     expect(updateDecision(labelsOf(at(OPEN)), at(allow(["pypi.org"])))).toBe("recreate");
   });
 
-  it("allowlist: a host list keeping every recorded host is updated, a narrower one recreates", () => {
+  it("allowlist with the egress control: wider, narrower or both apply in place", () => {
     const from = labelsOf(at(allow()));
-    expect(updateDecision(from, at(allow([...L, "pypi.org"])))).toBe("updated");
-    expect(updateDecision(from, at(allow([L[0] as string])))).toBe("recreate");
-    expect(updateDecision(from, at(allow()))).toBe("updated");
+    expect(updateDecision(from, at(allow([...L, "pypi.org"])))).toBe("apply");
+    expect(updateDecision(from, at(allow([L[0] as string])))).toBe("apply");
+    expect(updateDecision(from, at(allow(["pypi.org"])))).toBe("apply");
+    expect(updateDecision(from, at(allow()))).toBe("apply");
+    // the kind still recreates, the empty list (no network) included
+    expect(updateDecision(from, at(allow([])))).toBe("recreate");
+    expect(updateDecision(from, at(OPEN))).toBe("recreate");
   });
 
-  it("open-public to open-public is updated", () => {
-    expect(updateDecision(labelsOf(at(OPEN)), at(OPEN))).toBe("updated");
+  it("allowlist of an earlier version: a list keeping every recorded host swaps the proxy, a narrower one recreates", () => {
+    const from = labelsOf(at(allow()), true);
+    expect(updateDecision(from, at(allow([...L, "pypi.org"])))).toBe("swap");
+    expect(updateDecision(from, at(allow([L[0] as string])))).toBe("recreate");
+    expect(updateDecision(from, at(allow()))).toBe("swap");
+  });
+
+  it("open-public to open-public swaps the proxy", () => {
+    expect(updateDecision(labelsOf(at(OPEN)), at(OPEN))).toBe("swap");
+    expect(updateDecision(labelsOf(at(OPEN), true), at(OPEN))).toBe("swap");
   });
 
   it("no network is recreated in every direction, the decision `update` makes", () => {
