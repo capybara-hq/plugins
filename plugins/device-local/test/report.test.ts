@@ -148,7 +148,7 @@ describe("the local device report", () => {
     expect(value.zh.length).toBeLessThanOrEqual(max);
     // the rest is counted in words of each UI language
     expect(value.en).toMatch(/^\/home\/me\/projects\/p0, .* \+\d+ more$/);
-    expect(value.zh).toMatch(/^\/home\/me\/projects\/p0, .*，另有 \d+ 个$/);
+    expect(value.zh).toMatch(/^\/home\/me\/projects\/p0, .*；另有 \d+ 个$/);
     const long = `/home/me/${"x".repeat(100)}/end`;
     // no root left out: no count, the same text in both languages
     expect(sharedRootsValue([long]).en.length).toBeLessThanOrEqual(max);
@@ -157,14 +157,14 @@ describe("the local device report", () => {
     // a root too long is skipped, the others that fit are kept whole
     expect(sharedRootsValue(["/a", long, "/p/b"].sort())).toEqual({
       en: "/a, /p/b +1 more",
-      zh: "/a, /p/b，另有 1 个",
+      zh: "/a, /p/b；另有 1 个",
     });
-    expect(sharedRootsValue([long, "/p/b"])).toEqual({ en: "/p/b +1 more", zh: "/p/b，另有 1 个" });
+    expect(sharedRootsValue([long, "/p/b"])).toEqual({ en: "/p/b +1 more", zh: "/p/b；另有 1 个" });
     // only when no root fits whole: the end of the shortest one
     const longer = `/home/me/${"y".repeat(120)}/other`;
     const both = sharedRootsValue([long, longer].sort());
     expect(both.en).toMatch(/^….*\/end \+1 more$/);
-    expect(both.zh).toMatch(/^….*\/end，另有 1 个$/);
+    expect(both.zh).toMatch(/^….*\/end；另有 1 个$/);
     expect(both.en.length).toBeLessThanOrEqual(max);
     expect(both.zh.length).toBeLessThanOrEqual(max);
     const report = deviceReportOf(connection("paths", "os", many), null);

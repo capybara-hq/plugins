@@ -147,12 +147,12 @@ const SHARED_LABEL: DeviceText = {
 /**
  * The shared directories as one limit value within `DEVICE_REPORT_LIMITS.limitValueChars` in each
  * language: as many whole paths as fit, in the given (sorted) order and skipping any too long,
- * then "+N more" (zh "另有 N 个") for the rest; when no path fits whole, the end of the shortest one.
+ * then "+N more" (zh "；另有 N 个") for the rest; when no path fits whole, the end of the shortest one.
  */
 export function sharedRootsValue(roots: readonly string[]): { en: string; zh: string } {
   return {
     en: fitRoots(roots, (n) => ` +${n} more`),
-    zh: fitRoots(roots, (n) => `，另有 ${n} 个`),
+    zh: fitRoots(roots, (n) => `；另有 ${n} 个`),
   };
 }
 
@@ -257,8 +257,8 @@ const MODE_VALUE: Record<Connection["mode"], DeviceText> = {
 };
 
 const NETWORK_VALUE: Record<OwnerFacts["network"], DeviceText> = {
-  open: { en: "open", zh: "开放" },
-  allowlist: { en: "allowlist", zh: "允许列表" },
+  open: { en: "open", zh: "开放互联网" },
+  allowlist: { en: "allowlist", zh: "白名单" },
 };
 
 /** The machine's own narrowing, read only (set with `capybara-device ceiling set` there). */

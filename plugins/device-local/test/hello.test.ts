@@ -606,7 +606,7 @@ describe("report and permission support", () => {
       { label: { en: "Mode", zh: "模式" }, value: { en: "os", zh: "本机系统" } },
       { label: { en: "Outside the sandbox", zh: "沙箱外运行" }, value: { en: "off", zh: "关闭" } },
       { label: { en: "Project reach", zh: "项目范围" }, value: { en: "machine", zh: "整台机器" } },
-      { label: { en: "Network", zh: "网络" }, value: { en: "allowlist", zh: "允许列表" } },
+      { label: { en: "Network", zh: "网络" }, value: { en: "allowlist", zh: "白名单" } },
       { label: { en: "Allowed hosts", zh: "允许的主机" }, value: { en: "2" } },
     ]);
   });
