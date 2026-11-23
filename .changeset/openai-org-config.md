@@ -7,3 +7,8 @@ is org-overridable. Calls for an org use the org's whole effective config: an or
 API key fails with `auth` before any request and never falls back to the platform key, and an org's
 own API URL goes through the kernel's guarded network client. The platform may leave the key and
 models empty. Needs the SDK release with `configUrlFetch` and `platformOnly`.
+
+The `openai` SDK client reads no `OPENAI_*` host environment variable: the key, admin key,
+organization, project, webhook secret and base URL are always explicit, and `OPENAI_CUSTOM_HEADERS`
+(which the SDK merges into every request, even over the key) is dropped, so no host value reaches
+an org-chosen URL.

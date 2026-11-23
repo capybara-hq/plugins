@@ -13,10 +13,11 @@ import {
   secret,
   ui,
 } from "@capybara-hq/plugin-sdk";
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import { z } from "zod";
 import { generateOpenAIImage, imageModelInfo, KNOWN_IMAGE_MODEL_IDS } from "./image.js";
 import { streamResponses } from "./map-stream.js";
+import { isolatedOpenAI } from "./openai-client.js";
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 
@@ -181,13 +182,11 @@ export function createOpenAIProvider(opts: OpenAIProviderOptions): ModelProvider
     }
     const baseURL = cfg.baseUrl ?? DEFAULT_BASE_URL;
     const platform = (opts.platformBaseUrl ?? (() => opts.baseUrl))();
-    const client = new OpenAI({
+    // No OPENAI_* env var is read (isolatedOpenAI): an organization header only when configured
+    const client = isolatedOpenAI({
       apiKey: cfg.apiKey,
       baseURL,
-      // An organization header only when configured: never read OPENAI_* env vars
       organization: cfg.organization ?? null,
-      project: null,
-      adminAPIKey: null,
       // The platform's endpoint keeps the global fetch, an org's own one is guarded
       fetch: configUrlFetch(
         { fetch: opts.netFetch },
