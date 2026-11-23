@@ -1,10 +1,7 @@
 # Connect this machine
 
-::shell-action connect-this-machine Connect this machine
-
 A device on your own computer: the computer connects to the platform with the `capybara-device`
-program and serves the device, and you limit what it may do there. In the desktop app, the button
-above connects the computer it runs on. Anywhere else, run these steps in a terminal on the
+program and serves the device, and you limit what it may do there. Run these steps in a terminal on the
 computer you want to connect (macOS or Linux, Node 22.12 or newer; on Windows use WSL).
 
 ## 1. Install the program
