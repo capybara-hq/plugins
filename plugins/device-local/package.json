@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-device-local",
-  "version": "0.1.0-rc.2",
+  "version": "0.1.0-rc.3",
   "description": "Devices on people's own computers: a machine connected with capybara-device serves the device over the dial-in channel, and its owner limits it there",
   "license": "Apache-2.0",
   "repository": {
