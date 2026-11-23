@@ -69,7 +69,8 @@ const trimSlashes = (url: string) => url.replace(/\/+$/, "");
  * whenever its shape changes, so an upgrade never reads a shape an older version wrote (old keys
  * expire by TTL). v3: `capabilities.documents`. v4: keyed by the endpoint too (sha256 of the base
  * URL, trailing slashes ignored): `ctx.kv` is extension-wide, so an org's own endpoint must not
- * write entries other orgs read.
+ * write entries other orgs read. Keyed by endpoint, not by API key: entries hold capability
+ * metadata only, never anything a key grants.
  */
 const modelCacheKey = (baseUrl: string, id: string) =>
   `models:v4:${createHash("sha256").update(trimSlashes(baseUrl)).digest("hex")}:${id}`;
@@ -181,6 +182,22 @@ const DeploymentConfig = z.object({
  */
 const CallConfig = DeploymentConfig.partial({ apiKey: true });
 
+/**
+ * `ANTHROPIC_CUSTOM_HEADERS` (host env) names, each mapped to `null`. The SDK merges that variable
+ * into every request's headers, an org's own endpoint included; a `null` default header removes
+ * it. Parsed exactly as the SDK does (lines, name before the first `:`). Capybara never sets it.
+ */
+function blockedEnvHeaders(): Record<string, null> {
+  const out: Record<string, null> = {};
+  const env = process.env.ANTHROPIC_CUSTOM_HEADERS;
+  if (!env) return out;
+  for (const line of env.split("\n")) {
+    const colon = line.indexOf(":");
+    if (colon >= 0) out[line.substring(0, colon).trim()] = null;
+  }
+  return out;
+}
+
 interface Resolved {
   client: Anthropic;
   baseUrl: string;
@@ -216,6 +233,8 @@ function resolve(defaults: AnthropicProviderOptions, opts: ModelCallOptions | un
     apiKey,
     // Never read ANTHROPIC_AUTH_TOKEN: no bearer token of the host goes to another endpoint
     authToken: null,
+    // Never send host-configured custom headers to any endpoint
+    defaultHeaders: blockedEnvHeaders(),
     baseURL: baseUrl,
     // The platform's endpoint keeps the global fetch; an org's own one goes through ctx.net
     fetch: configUrlFetch(defaults.net, { url: baseUrl, platform, orgId: opts?.orgId }),

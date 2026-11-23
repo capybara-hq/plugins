@@ -220,6 +220,26 @@ describe("anthropic org-overridable config", () => {
     );
   });
 
+  it("host ANTHROPIC_CUSTOM_HEADERS never reach an org's own endpoint", async () => {
+    const saved = process.env.ANTHROPIC_CUSTOM_HEADERS;
+    process.env.ANTHROPIC_CUSTOM_HEADERS = "X-Secret: s";
+    try {
+      const net = recordingNet();
+      const p = setupWith({ config: { apiKey: "sk-platform", baseUrl: server.url }, net });
+      const own = server.url.replace("127.0.0.1", "localhost");
+      await p.listModels({
+        orgId: "org-1",
+        config: { apiKey: "sk-org", baseUrl: own, models: ["claude-sonnet-5-5"] },
+      });
+      expect(net.calls).toHaveLength(1);
+      expect(server.requests.at(-1)?.headers["x-api-key"]).toBe("sk-org");
+      expect(server.requests.at(-1)?.headers["x-secret"]).toBeUndefined();
+    } finally {
+      if (saved === undefined) delete process.env.ANTHROPIC_CUSTOM_HEADERS;
+      else process.env.ANTHROPIC_CUSTOM_HEADERS = saved;
+    }
+  });
+
   it("createAnthropicProvider without a key anywhere -> auth before any request", async () => {
     const before = server.requests.length;
     const e = await createAnthropicProvider({
