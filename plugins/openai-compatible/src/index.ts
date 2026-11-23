@@ -139,11 +139,22 @@ export interface OpenAICompatibleProviderOptions {
    */
   net?: Pick<ExtensionNet, "fetch"> | undefined;
   /**
-   * The platform's endpoint URLs at the time of the call (`ctx.config` read when used); defaults
-   * to those of `endpoints`. An endpoint URL in this list was set by the super admin and keeps the
+   * The platform's config at the time of the call (`ctx.config` read when used); replaces
+   * `endpoints` / `apiKeys` when given. It serves calls without a per-call config, and its endpoint
+   * URLs are the platform's: an endpoint at one of them was set by the super admin and keeps the
    * global `fetch`.
    */
-  platformBaseUrls?: (() => readonly string[]) | undefined;
+  platform?: (() => PlatformDefaults) | undefined;
+}
+
+interface PlatformDefaults {
+  endpoints?: EndpointConfig[] | undefined;
+  apiKeys?: Record<string, string> | undefined;
+}
+
+/** The platform's endpoints and keys now: live from `platform` when given, else the fixed options. */
+function platformDefaults(opts: OpenAICompatibleProviderOptions): PlatformDefaults {
+  return opts.platform?.() ?? { endpoints: opts.endpoints, apiKeys: opts.apiKeys };
 }
 
 interface Endpoint {
@@ -183,7 +194,8 @@ function toEndpoint(cfg: EndpointConfig): Endpoint {
  */
 function resolve(opts: OpenAICompatibleProviderOptions, config: unknown): Resolved {
   if (config === undefined) {
-    return { endpoints: (opts.endpoints ?? []).map(toEndpoint), apiKeys: opts.apiKeys ?? {} };
+    const d = platformDefaults(opts);
+    return { endpoints: (d.endpoints ?? []).map(toEndpoint), apiKeys: d.apiKeys ?? {} };
   }
   const parsed = CallConfig.safeParse(config);
   if (!parsed.success) {
@@ -201,7 +213,7 @@ function makeClient(
   apiKey: string | undefined,
   orgId: string | undefined,
 ): OpenAI {
-  const platform = opts.platformBaseUrls?.() ?? (opts.endpoints ?? []).map((e) => e.baseUrl);
+  const platform = (platformDefaults(opts).endpoints ?? []).map((e) => e.baseUrl);
   return new OpenAI({
     baseURL: cfg.baseUrl,
     // The SDK requires a credential: a keyless endpoint (an internal vLLM) gets a placeholder and
@@ -278,10 +290,10 @@ export function createOpenAICompatibleProvider(
   };
 }
 
-/** The endpoints of a config read leniently; none when it is invalid. */
-function endpointsOf(config: unknown): EndpointConfig[] {
+/** A platform config read leniently; nothing when it is invalid. */
+function platformOf(config: unknown): PlatformDefaults {
   const parsed = CallConfig.safeParse(config ?? {});
-  return parsed.success ? (parsed.data.endpoints ?? []) : [];
+  return parsed.success ? parsed.data : {};
 }
 
 /** OpenAI-compatible (Chat Completions) provider plugin: vLLM, DeepSeek, Qwen, ...; dialects stay in this plugin. */
@@ -294,16 +306,13 @@ export default defineExtension({
   // endpoint URLs go through ctx.net
   config: { deployment: DeploymentConfig },
   setup(ctx) {
-    // Lenient: the platform may leave the endpoints to the orgs
-    const cfg = CallConfig.safeParse(ctx.config ?? {});
     ctx.provide(
       MODEL_PROVIDER_EXTENSION_POINT_V2,
       createOpenAICompatibleProvider({
-        endpoints: cfg.success ? cfg.data.endpoints : undefined,
-        apiKeys: cfg.success ? cfg.data.apiKeys : undefined,
         net: ctx.net,
-        // ctx.config is read when used: a hot platform change applies at once
-        platformBaseUrls: () => endpointsOf(ctx.config).map((e) => e.baseUrl),
+        // ctx.config is read leniently (the platform may leave the endpoints to the orgs) and when
+        // used: a hot platform change applies at once to both the defaults and the platform URLs
+        platform: () => platformOf(ctx.config),
       }),
     );
   },

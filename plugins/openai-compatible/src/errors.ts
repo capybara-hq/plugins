@@ -59,6 +59,9 @@ function netDenied(e: unknown): NetDeniedError | undefined {
  */
 export function toModelError(e: unknown, signal?: AbortSignal): ModelError {
   if (isModelError(e)) return e as ModelError;
+  // A ModelError thrown inside the SDK's fetch comes back wrapped (APIConnectionError): keep it
+  const cause = typeof e === "object" && e !== null ? (e as { cause?: unknown }).cause : undefined;
+  if (isModelError(cause)) return cause as ModelError;
   const message = e instanceof Error ? e.message : String(e);
   const make = (kind: ModelErrorKind, extra?: { retryAfterMs?: number }) =>
     new ModelError(kind, `OpenAI-compatible: ${message}`, { cause: e, ...extra });

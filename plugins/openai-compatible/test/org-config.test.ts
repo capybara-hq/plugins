@@ -8,7 +8,7 @@ import {
 import { type FakeModelServer, startFakeModelServer } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
-import plugin, { type EndpointConfig } from "../src/index.js";
+import plugin, { createOpenAICompatibleProvider, type EndpointConfig } from "../src/index.js";
 import { chatRoutes } from "./fixtures.js";
 
 /**
@@ -39,11 +39,16 @@ const platformEndpoint = (): EndpointConfig => ({
   models: [model],
 });
 
-/** Runs the extension's setup over a fake ctx and returns the provider it registered. */
-function setup(config: unknown, netFetch: NetFetch): ModelProvider {
+/**
+ * Runs the extension's setup over a fake ctx and returns the provider it registered. With `live`,
+ * `ctx.config` reads `live.config` each time (a hot platform change).
+ */
+function setup(config: unknown, netFetch: NetFetch, live?: { config: unknown }): ModelProvider {
   let provided: ModelProvider | undefined;
   const ctx = {
-    config,
+    get config() {
+      return live === undefined ? config : live.config;
+    },
     net: { fetch: netFetch },
     log: { debug() {}, info() {}, warn() {}, error() {} },
     provide: (_point: string, impl: ModelProvider) => {
@@ -159,5 +164,51 @@ describe("org-overridable endpoints and apiKeys", () => {
     const own: EndpointConfig = { ...platformEndpoint(), name: "own" };
     const models = await p.listModels({ orgId: ORG, config: { endpoints: [own] } });
     expect(models.map((m) => m.id)).toEqual(["own/m"]);
+  });
+
+  it("without a net client, an org's own URL is refused as invalid_request and nothing is fetched", async () => {
+    const p = createOpenAICompatibleProvider({ endpoints: [platformEndpoint()] });
+    const own: EndpointConfig = {
+      ...platformEndpoint(),
+      name: "own",
+      baseUrl: `${server.url}/own/v1`,
+    };
+    const before = server.requests.length;
+    const err = await drain(p, req("own/m"), {
+      orgId: ORG,
+      config: { endpoints: [own] },
+    }).catch((e: unknown) => e);
+    expect(isModelError(err)).toBe(true);
+    expect((err as { kind?: string }).kind).toBe("invalid_request");
+    expect((err as Error).message).toContain("network client");
+    expect(server.requests.length).toBe(before);
+  });
+
+  it("a hot platform change applies to both the default endpoints and the platform URLs", async () => {
+    const net = vi.fn<NetFetch>(async () => {
+      throw new NetDeniedError("net.private_address", "10.9.9.9", "Refused.");
+    });
+    const old: EndpointConfig = {
+      ...platformEndpoint(),
+      name: "old",
+      baseUrl: "http://10.9.9.9/v1",
+    };
+    const live = { config: { endpoints: [old] } as unknown };
+    const p = setup(undefined, net, live);
+    expect((await p.listModels()).map((m) => m.id)).toEqual(["old/m"]);
+
+    live.config = { endpoints: [platformEndpoint()], apiKeys: { plat: "sk-platform" } };
+    expect((await p.listModels()).map((m) => m.id)).toEqual(["plat/m"]);
+    const before = server.requests.length;
+    await drain(p, req("plat/m"), {});
+    expect(net).not.toHaveBeenCalled();
+    expect(server.requests.slice(before).at(-1)?.headers.authorization).toBe("Bearer sk-platform");
+
+    // The old URL is no longer the platform's: an org copy keeping it is guarded
+    const err = await drain(p, req("old/m"), { orgId: ORG, config: { endpoints: [old] } }).catch(
+      (e: unknown) => e,
+    );
+    expect(net).toHaveBeenCalled();
+    expect((err as { kind?: string }).kind).toBe("invalid_request");
   });
 });
