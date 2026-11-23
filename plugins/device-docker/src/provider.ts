@@ -611,8 +611,7 @@ const KILL_TAGGED_SCRIPT =
  * its tag (`revokeOperation`): the forced pass over the ordinary wrappers. Background executions
  * are stopped by their root-owned record (operations.ts).
  */
-const KILL_OPERATION_SCRIPT =
-  `${KILL_TREE}${KILL_MATCHES}x "capybara-exec /tmp/[.]capybara-exec-[a-z0-9-]+-$1( |$)"; exit 0`;
+const KILL_OPERATION_SCRIPT = `${KILL_TREE}${KILL_MATCHES}x "capybara-exec /tmp/[.]capybara-exec-[a-z0-9-]+-$1( |$)"; exit 0`;
 
 /** The control file of one exec: carries the holder's tag when there is one. */
 export function execControlPath(tag?: string): string {
