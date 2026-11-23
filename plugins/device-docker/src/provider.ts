@@ -560,6 +560,19 @@ const KILL_TREE =
   'kill -9 -"$1" 2>/dev/null; pkill -9 -s "$1" 2>/dev/null; }; ';
 
 /**
+ * The forced pass `x <pattern>` over every exec whose command line matches: each match is stopped
+ * (SIGSTOP) before any is killed, then its tree is killed as above. The exec's own process is the
+ * outer `setsid -w` (a session leader, so setsid forks the wrapper and waits): were the wrapper
+ * killed first, that parent would wake and exit with the signal number (9) as an ordinary exit
+ * code, and the result would read as a command that failed rather than one that was killed
+ * (plugins#184). Stopped, it cannot run until its own SIGKILL ends it, whatever order the matches
+ * come in.
+ */
+const KILL_MATCHES =
+  'x() { qs=$(pgrep -f -- "$1"); [ -n "$qs" ] || return 0; kill -STOP $qs 2>/dev/null; ' +
+  'for q in $qs; do k "$q"; kill -9 "$q" 2>/dev/null; done; }; ';
+
+/**
  * 杀掉经 exec 启动、仍在运行的全部命令（接手崩溃的前任时）：按命令行找到每个包装（会话首进程），
  * 按进程组与会话 SIGKILL。模式里的 `[.]` 让它匹配不到这个脚本自己的命令行。
  */
@@ -575,8 +588,8 @@ const TERM_AGENTS =
   'while pgrep -f -- "$a" >/dev/null && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done; }; ';
 
 const KILL_ALL_SCRIPT =
-  `${KILL_TREE}${TERM_AGENTS}g "/tmp/[.]capybara-exec-"; for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-"); do ` +
-  'k "$q"; kill -9 "$q" 2>/dev/null; done; exit 0';
+  `${KILL_TREE}${KILL_MATCHES}${TERM_AGENTS}g "/tmp/[.]capybara-exec-"; ` +
+  'x "capybara-exec /tmp/[.]capybara-exec-"; exit 0';
 
 /**
  * Kills the exec commands of the holders whose tags are the script's arguments (`killTagged`):
@@ -587,10 +600,11 @@ const KILL_ALL_SCRIPT =
  * Other holders' commands keep running.
  */
 const KILL_TAGGED_SCRIPT =
-  `${KILL_TREE}${TERM_AGENTS}u='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; ` +
+  `${KILL_TREE}${KILL_MATCHES}${TERM_AGENTS}u='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; ` +
   // One graceful pass for every tag at once, so the wait stays within the kill budget.
-  'a=$(printf "%s|" "$@" | sed "s/|$//"); g "/tmp/[.]capybara-exec-($a)-$u( |$)"; for t in "$@"; do for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-$t-$u( |$)"); do ' +
-  'k "$q"; kill -9 "$q" 2>/dev/null; done; done; exit 0';
+  // (`w`, not `a`: `g` sets `a` for its own pattern)
+  'w=$(printf "%s|" "$@" | sed "s/|$//"); g "/tmp/[.]capybara-exec-($w)-$u( |$)"; ' +
+  'x "capybara-exec /tmp/[.]capybara-exec-($w)-$u( |$)"; exit 0';
 
 /**
  * Kills every foreground execution whose control path ends with one operation's UUID, whatever
@@ -598,8 +612,7 @@ const KILL_TAGGED_SCRIPT =
  * are stopped by their root-owned record (operations.ts).
  */
 const KILL_OPERATION_SCRIPT =
-  `${KILL_TREE}for q in $(pgrep -f -- "capybara-exec /tmp/[.]capybara-exec-[a-z0-9-]+-$1( |$)"); do ` +
-  'k "$q"; kill -9 "$q" 2>/dev/null; done; exit 0';
+  `${KILL_TREE}${KILL_MATCHES}x "capybara-exec /tmp/[.]capybara-exec-[a-z0-9-]+-$1( |$)"; exit 0`;
 
 /** The control file of one exec: carries the holder's tag when there is one. */
 export function execControlPath(tag?: string): string {
