@@ -98,6 +98,11 @@ export interface E2BSandboxTestOptions {
    * commands on the test machine, where python3 and timeout may live elsewhere).
    */
   listPath?: string;
+  /**
+   * The PATH the provider's own scripts and the exec wrapper's lookups use instead of
+   * {@link SYSTEM_PATH} (the fake E2B runs commands on the test machine, through shims).
+   */
+  systemPath?: string;
   /** Drops a background start's acknowledgement as if the transport lost it (live tests). */
   loseBackgroundAck?: (taskId: string) => boolean;
   /** Replaces the real `bg-start` command of a background start (live tests). */
@@ -209,9 +214,30 @@ const KILL_MARKED =
   'for p in $l; do kill -9 "$p" 2>/dev/null; done; sleep 0.05; done; ' +
   '[ -z "$(m "$1" "$2")" ] || exit 1; }; ';
 
+/**
+ * The PATH every provider-run script and lookup uses: root-owned system directories only. The
+ * published image's PATH starts with `/workspace/.cache/npm-global/bin`, which the sandbox user
+ * can write, so a sandboxed command could otherwise plant a `timeout`, `pgrep`, `cat`, ... there
+ * that a later wrapper, kill script or root file write would run (#106). Only the user's own
+ * command keeps the PATH envd gives it.
+ */
+export const SYSTEM_PATH = "/usr/sbin:/usr/bin:/sbin:/bin";
+
+/**
+ * Starts the exec wrapper in a new session: `setsid` is looked up on `$1` (the system PATH) only,
+ * then exec'd with the PATH envd gave the command restored. `$2`... are `setsid`'s arguments.
+ */
+const SETSID_LAUNCH =
+  'u=$PATH; PATH=$1; shift; s=$(command -v setsid) || exit 127; PATH=$u; exec "$s" "$@"';
+
+/**
+ * The wrapper looks up `timeout` and its own tools on `$4` (the system PATH) only; the command
+ * itself runs with the PATH the exec was given (#106). `$4` 是系统 PATH。
+ */
 const EXEC_WRAPPER =
-  'c=$1; echo $$ > "$c.pid" 2>/dev/null; if [ -e "$c.kill" ]; then exit 137; fi; ' +
-  'timeout -s KILL "$3" /bin/bash -c "$2"; s=$?; ' +
+  'c=$1; u=$PATH; PATH=$4; echo $$ > "$c.pid" 2>/dev/null; if [ -e "$c.kill" ]; then exit 137; fi; ' +
+  't=$(command -v timeout) || { rm -f "$c.pid"; exit 127; }; ' +
+  'PATH=$u; "$t" -s KILL "$3" /bin/bash -c "$2"; s=$?; PATH=$4; ' +
   "if [ $s -eq 124 ] || [ $s -eq 137 ]; then " +
   'for p in $(pgrep -s $$); do [ "$p" = $$ ] || kill -9 "$p" 2>/dev/null; done; ' +
   // a fresh shell without the marker: /proc/<pid>/environ of this shell and of its forks keeps
@@ -220,9 +246,24 @@ const EXEC_WRAPPER =
   'rm -f "$c.pid"; exit $s';
 
 /** `exec` 交给 envd 的 `setsid` 参数（导出供测试直接经 envd 启动，模拟「内核崩溃后无人看管」）。 */
-export function execArgs(ctl: string, command: string, timeoutMs: number): string[] {
+export function execArgs(
+  ctl: string,
+  command: string,
+  timeoutMs: number,
+  systemPath: string = SYSTEM_PATH,
+): string[] {
   const seconds = Math.ceil(timeoutMs / 1000) + IN_SANDBOX_GRACE_SECONDS;
-  return ["-w", "/bin/sh", "-c", EXEC_WRAPPER, "capybara-exec", ctl, command, String(seconds)];
+  return [
+    "-w",
+    "/bin/sh",
+    "-c",
+    EXEC_WRAPPER,
+    "capybara-exec",
+    ctl,
+    command,
+    String(seconds),
+    systemPath,
+  ];
 }
 
 /**
@@ -463,6 +504,11 @@ interface RunOpts {
   cmd: string;
   args: string[];
   env?: Record<string, string>;
+  /**
+   * Keep the PATH envd gives the process (the user's command, and the operation agent that runs
+   * one). Otherwise it gets `PATH=<system PATH>` unless `env` sets its own PATH.
+   */
+  envdPath?: true;
   cwd?: string;
   /** Written to the process's stdin once it started, then stdin is closed. */
   stdin?: Uint8Array;
@@ -569,6 +615,7 @@ export function createE2BSandbox(
 ): DeviceProvider {
   const api = createE2BApi(cfg.apiUrl ?? `https://api.${cfg.domain}`, cfg.apiKey);
   const enc = encodeURIComponent;
+  const systemPath = test.systemPath ?? SYSTEM_PATH;
 
   const checkId = (id: string) => {
     if (!SANDBOX_ID_RE.test(id)) throw new Error(`invalid E2B sandbox id: ${JSON.stringify(id)}`);
@@ -883,10 +930,11 @@ export function createE2BSandbox(
     };
     o.signal.addEventListener("abort", onAbort, { once: true });
 
+    const envs = o.envdPath || o.env?.PATH !== undefined ? o.env : { PATH: systemPath, ...o.env };
     const req: StartRequest = {
       cmd: o.cmd,
       args: o.args,
-      ...(o.env && { envs: o.env }),
+      ...(envs && { envs }),
       ...(o.cwd !== undefined && { cwd: o.cwd }),
     };
     let streamError: unknown;
@@ -1248,6 +1296,7 @@ export function createE2BSandbox(
         cmd: o.cmd[0] as string,
         args,
         ...(o.env && { env: o.env }),
+        envdPath: true,
         ...(o.stdin && { stdin: o.stdin }),
         cwd: "/",
         maxOutputBytes: o.maxOutputBytes,
@@ -1306,12 +1355,17 @@ export function createE2BSandbox(
       args.signal,
       Math.ceil(args.timeoutMs / 1000) + TIMEOUT_MARGIN_SECONDS,
     );
-    const wrapper = execArgs(ctl, args.command, args.timeoutMs);
+    const wrapper = execArgs(ctl, args.command, args.timeoutMs, systemPath);
     const r = await run(t, {
       user: SANDBOX_USER,
-      cmd: prefix.length > 0 ? (prefix[0] as string) : "setsid",
-      args: prefix.length > 0 ? [...prefix.slice(1), "setsid", ...wrapper] : wrapper,
+      // The admission agent checks for a literal `setsid` and execs /usr/bin/setsid itself.
+      cmd: prefix.length > 0 ? (prefix[0] as string) : "/bin/sh",
+      args:
+        prefix.length > 0
+          ? [...prefix.slice(1), "setsid", ...wrapper]
+          : ["-c", SETSID_LAUNCH, "capybara-launch", systemPath, ...wrapper],
       env,
+      envdPath: true,
       cwd: args.cwd ?? "/workspace",
       maxOutputBytes: args.maxOutputBytes,
       timeoutMs: args.timeoutMs,

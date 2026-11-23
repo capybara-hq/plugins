@@ -110,7 +110,9 @@ or the device is recreated**; the timeout is pushed to at least "command timeout
 
 - **exec**: envd's `process.Process/Start` (a server stream of the Connect protocol), run as the `sandbox` user:
   `setsid -w /bin/sh -c <wrapper> … timeout -s KILL <timeout + 5 seconds> /bin/bash -c <command>`; the wrapper first writes the session id to
-  `/tmp/.capybara-exec-<uuid>.pid`. The `timeout` inside the sandbox is the backstop: when a kernel replica crashes the timer on the plugin side is gone, disconnecting envd's stream does not end
+  `/tmp/.capybara-exec-<uuid>.pid`. `setsid` and `timeout` are looked up on the system PATH (`/usr/sbin:/usr/bin:/sbin:/bin`, root-owned) only, never on
+  the command's PATH, whose first entry `/workspace/.cache/npm-global/bin` the sandbox user can write; the command keeps envd's PATH, and every other
+  provider-run script (kills, file calls, root writes, runtime staging) gets `PATH` set to the system PATH (#106). The `timeout` inside the sandbox is the backstop: when a kernel replica crashes the timer on the plugin side is gone, disconnecting envd's stream does not end
   the process, and pause then resume would bring the process back; on expiry it kills the process group the command is in.
   On timeout or abort: a kill-processes script runs as the sandbox user, SIGKILLing all processes the command spawned by process group and session (the same as the Docker plugin),
   then every process whose environment carries the command's marker `CAPYBARA_EXEC=<control file>` (set on every exec, so a child that left the

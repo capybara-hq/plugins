@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -27,6 +35,10 @@ import {
   publishedImage,
   templateAlias,
 } from "../src/index.js";
+import { fakeSystemPath } from "./system-path.js";
+
+/** The system PATH of the fake E2B (shims and this machine's tools). */
+const systemPath = fakeSystemPath();
 
 /**
  * device-provider@1 on E2B, against the fake E2B (startFakeE2B of @capybara-hq/testing: control plane API +
@@ -168,7 +180,7 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
     return createE2BSandbox(
       { ...cfg, apiUrl: server.url, ...over },
       { log },
-      { envdUrl: server.url },
+      { envdUrl: server.url, systemPath },
     );
   };
 
@@ -606,7 +618,7 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
         const s = createE2BSandbox(
           { ...cfg, apiUrl: proxy.url, template: undefined },
           { log: console },
-          { envdUrl: p.url },
+          { envdUrl: p.url, systemPath },
         );
         const e = await s
           .createFileSystem({ name: sbxName(), limits: limits(), signal: sig() })
@@ -636,7 +648,7 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
         const s = createE2BSandbox(
           { ...cfg, apiUrl: proxy.url, template: undefined },
           { log: console },
-          { envdUrl: p.url },
+          { envdUrl: p.url, systemPath },
         );
         await expect(
           s.createFileSystem({ name: sbxName(), limits: limits(), signal: sig() }),
@@ -670,7 +682,7 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
       const s = createE2BSandbox(
         { ...cfg, apiUrl: p.url, template: undefined },
         { log: console, signal: life.signal },
-        { envdUrl: p.url },
+        { envdUrl: p.url, systemPath },
       );
       const started = s
         .createFileSystem({ name: sbxName(), limits: limits(), signal: sig() })
@@ -1336,7 +1348,11 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
     });
 
     /** 经 envd 以 exec 的命令行启动一条命令，收到 start 事件就断开（模拟发起它的内核副本崩溃）。 */
-    const orphan = async (command: string, timeoutMs: number): Promise<void> => {
+    const orphan = async (
+      command: string,
+      timeoutMs: number,
+      envs?: Record<string, string>,
+    ): Promise<void> => {
       const s = fake.sandboxes.get(h.id);
       if (!s) throw new Error("no sandbox");
       const conn = new AbortController();
@@ -1345,7 +1361,12 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
       await envdStart(
         t,
         "sandbox",
-        { cmd: "setsid", args: execArgs(ctl, command, timeoutMs), cwd: "/workspace" },
+        {
+          cmd: "setsid",
+          args: execArgs(ctl, command, timeoutMs, systemPath),
+          cwd: "/workspace",
+          ...(envs && { envs }),
+        },
         (e) => {
           if ("start" in e) conn.abort();
         },
@@ -1366,6 +1387,66 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
       expect(elapsed).toBeGreaterThanOrEqual(1000);
       expect(elapsed).toBeLessThan((1 + IN_SANDBOX_GRACE_SECONDS + 5) * 1000);
       expect(await sbx.stat(h, "/workspace/never", sig())).toBeNull();
+    });
+
+    it("a timeout planted earlier on the command's PATH does not lift the in-sandbox deadline (#106)", async () => {
+      // the published image's PATH starts with a directory the sandbox user can write
+      const planted = "/workspace/.cache/npm-global/bin";
+      const fakeTimeout =
+        '#!/bin/sh\necho planted >> /workspace/planted.log\nwhile [ "$1" = -s ]; do shift 2; done; shift; exec "$@"\n';
+      await sbx.writeFile(h, `${planted}/timeout`, new TextEncoder().encode(fakeTimeout), sig());
+      const root = fake.sandboxes.get(h.id)?.root as string;
+      chmodSync(`${root}${planted}/timeout`, 0o755);
+      try {
+        const started = Date.now();
+        await orphan("sleep 33 & sleep 34; echo never > /workspace/never", 1000, {
+          PATH: `${planted}:${systemPath}`,
+        });
+        await waitFor(() => fake.running(h.id).length === 1);
+        const pids = fake.running(h.id).map((p) => p.pid);
+        await waitFor(
+          () => fake.running(h.id).length === 0 && pids.every((p) => !fake.alive(p)),
+          15_000,
+        );
+        expect(Date.now() - started).toBeLessThan((1 + IN_SANDBOX_GRACE_SECONDS + 5) * 1000);
+        expect(await sbx.stat(h, "/workspace/never", sig())).toBeNull();
+        expect(await sbx.stat(h, "/workspace/planted.log", sig())).toBeNull();
+      } finally {
+        rmSync(`${root}${planted}`, { recursive: true, force: true });
+      }
+    });
+
+    it("the provider's own scripts run with the system PATH; only the command keeps envd's (#106)", async () => {
+      const from = fake.calls.length;
+      await sbx.exec(h, {
+        ...who(),
+        command: "true",
+        timeoutMs: 5000,
+        maxOutputBytes: 10,
+        signal: sig(),
+      });
+      await sbx.writeFile(h, "/workspace/p.txt", new TextEncoder().encode("x"), sig());
+      await sbx.writeFile(h, "/skills/p/SKILL.md", new TextEncoder().encode("x"), sig());
+      await sbx.readFile(h, "/workspace/p.txt", { maxBytes: 10, signal: sig() });
+      await sbx.stat(h, "/workspace/p.txt", sig());
+      await sbx.killAll?.(h, sig());
+      const starts = fake.calls
+        .slice(from)
+        .filter((c) => c.path === "/process.Process/Start")
+        .map(
+          (c) =>
+            (c.body as { process: { cmd: string; args: string[]; envs?: Record<string, string> } })
+              .process,
+        );
+      const launch = starts.filter((p) => p.args.includes("capybara-launch"));
+      expect(launch).toHaveLength(1);
+      // the command keeps envd's PATH; setsid and timeout are looked up on the system PATH
+      expect(launch[0]?.cmd).toBe("/bin/sh");
+      expect(launch[0]?.envs?.PATH).toBeUndefined();
+      expect(launch[0]?.args.at(-1)).toBe(systemPath);
+      const scripts = starts.filter((p) => !p.args.includes("capybara-launch"));
+      expect(scripts.length).toBeGreaterThanOrEqual(5);
+      for (const p of scripts) expect(p.envs?.PATH).toBe(systemPath);
     });
 
     it("killAll stops every leftover exec command (also after pause), gone → SandboxGoneError", async () => {
