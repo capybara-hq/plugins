@@ -114,7 +114,10 @@ pnpm exec vitest run plugins/<name>   # one plugin's tests, from the repo root
 pnpm pack-plugins        # every plugin into artifacts/plugins
 pnpm wt:new <branch>     # start a task worktree
 pnpm doctor:env          # check your environment (--json; use pnpm -s for clean JSON)
-pnpm verify              # the required checks locally for the current branch (--json, pnpm -s)
+pnpm verify --fast       # the local check before pushing: lint, typecheck, custom checks, ~12 s, no
+                         # upstream remote; then the tests of the files you changed (pnpm exec vitest
+                         # run <path>). CI on the PR runs every affected test and is the merge gate
+pnpm verify              # optional: what CI runs for the current branch, locally (--json, pnpm -s)
 ```
 
 Kernel-level tests load the plugin under test from `src` into a kernel installed from npm.
