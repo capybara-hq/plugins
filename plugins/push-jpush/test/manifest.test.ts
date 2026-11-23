@@ -17,7 +17,7 @@ describe("push-jpush manifest", () => {
     expect(plugin.provides).toEqual([PUSH_PROVIDER_EXTENSION_POINT]);
     expect(plugin.permissions?.network).toEqual(["api.jpush.cn"]);
     expect(plugin.permissions?.setupChecks).toEqual(["jpush-credentials"]);
-    expect(plugin.config?.org).toBeUndefined();
+    expect(Object.keys(plugin.config ?? {})).toEqual(["deployment"]);
   });
 
   it("keeps the master secret secret and accepts a minimal config", () => {
