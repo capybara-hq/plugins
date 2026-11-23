@@ -138,12 +138,19 @@ describe("the local device report", () => {
     const many = Array.from({ length: 20 }, (_, i) => `/home/me/projects/p${i}`);
     const value = sharedRootsValue(many);
     expect(value.length).toBeLessThanOrEqual(max);
-    expect(value).toMatch(/^\/home\/me\/projects\/p0, .* \+\d+ more$/);
+    // a language-neutral count of the rest (the value is shown as is in every UI language)
+    expect(value).toMatch(/^\/home\/me\/projects\/p0, .* \+\d+$/);
     const long = `/home/me/${"x".repeat(100)}/end`;
     expect(sharedRootsValue([long]).length).toBeLessThanOrEqual(max);
     expect(sharedRootsValue([long])).toMatch(/^….*\/end$/);
-    expect(sharedRootsValue([long, "/p/b"])).toMatch(/^….*\/end \+1 more$/);
-    expect(sharedRootsValue([long, "/p/b"]).length).toBeLessThanOrEqual(max);
+    // a root too long is skipped, the others that fit are kept whole
+    expect(sharedRootsValue(["/a", long, "/p/b"].sort())).toBe("/a, /p/b +1");
+    expect(sharedRootsValue([long, "/p/b"])).toBe("/p/b +1");
+    // only when no root fits whole: the end of the shortest one
+    const longer = `/home/me/${"y".repeat(120)}/other`;
+    const both = sharedRootsValue([long, longer].sort());
+    expect(both).toMatch(/^….*\/end \+1$/);
+    expect(both.length).toBeLessThanOrEqual(max);
     const report = deviceReportOf(connection("paths", "os", many), null);
     expect(parseDeviceReport(report)).toEqual(report);
   });
