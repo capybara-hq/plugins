@@ -1867,13 +1867,13 @@ export const CHANGE_HINT = {
 export function reportLimitLines(l: InstanceLimits): DeviceReportLimit[] {
   const out: DeviceReportLimit[] = [];
   if (l.cpu !== null) {
-    out.push({ label: { en: "CPU", zh: "CPU" }, value: `${Number(l.cpu.toFixed(2))}` });
+    out.push({ label: { en: "CPU", zh: "CPU" }, value: { en: `${Number(l.cpu.toFixed(2))}` } });
   }
   if (l.memoryMb !== null) {
-    out.push({ label: { en: "Memory", zh: "内存" }, value: `${l.memoryMb} MB` });
+    out.push({ label: { en: "Memory", zh: "内存" }, value: { en: `${l.memoryMb} MB` } });
   }
   if (l.diskMb !== null) {
-    out.push({ label: { en: "Disk", zh: "磁盘" }, value: `${l.diskMb} MB` });
+    out.push({ label: { en: "Disk", zh: "磁盘" }, value: { en: `${l.diskMb} MB` } });
   }
   return out;
 }

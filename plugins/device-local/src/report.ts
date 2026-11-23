@@ -145,14 +145,21 @@ const SHARED_LABEL: DeviceText = {
 };
 
 /**
- * The shared directories as one limit value within `DEVICE_REPORT_LIMITS.limitValueChars`: as many
- * whole paths as fit, in the given (sorted) order and skipping any too long, then ` +N` for the rest
- * (no word: the value is shown as is in every UI language); when no path fits whole, the end of the
- * shortest one.
+ * The shared directories as one limit value within `DEVICE_REPORT_LIMITS.limitValueChars` in each
+ * language: as many whole paths as fit, in the given (sorted) order and skipping any too long,
+ * then "+N more" (zh "；另有 N 个") for the rest; when no path fits whole, the end of the shortest one.
  */
-export function sharedRootsValue(roots: readonly string[]): string {
+export function sharedRootsValue(roots: readonly string[]): { en: string; zh: string } {
+  return {
+    en: fitRoots(roots, (n) => ` +${n} more`),
+    zh: fitRoots(roots, (n) => `；另有 ${n} 个`),
+  };
+}
+
+/** {@link sharedRootsValue} in one language: `more(n)` names the `n` roots left out. */
+function fitRoots(roots: readonly string[], more: (n: number) => string): string {
   const max = DEVICE_REPORT_LIMITS.limitValueChars;
-  const rest = (n: number) => (n > 0 ? ` +${n}` : "");
+  const rest = (n: number) => (n > 0 ? more(n) : "");
   const kept: string[] = [];
   for (const root of roots) {
     // the count assumes every later root is left out: it only shrinks as more are kept
@@ -164,15 +171,15 @@ export function sharedRootsValue(roots: readonly string[]): string {
     (best, r) => (best === undefined || r.length < best.length ? r : best),
     undefined,
   );
-  const more = rest(roots.length - 1);
+  const left = rest(roots.length - 1);
   const chars = Array.from(shortest ?? "");
   let tail = "";
   for (let i = chars.length - 1; i >= 0; i--) {
     const next = `${chars[i]}${tail}`;
-    if (`…${next}${more}`.length > max) break;
+    if (`…${next}${left}`.length > max) break;
     tail = next;
   }
-  return `…${tail}${more}`;
+  return `…${tail}${left}`;
 }
 
 const hosts = (n: number): DeviceText =>
@@ -241,30 +248,42 @@ function describe(c: Connection, owner: OwnerFacts): DeviceText {
   };
 }
 
-const REACH_VALUE: Record<DeviceProjectReach, string> = {
-  machine: "machine",
-  paths: "listed directories",
-  workspace: "workspace",
+const REACH_VALUE: Record<DeviceProjectReach, DeviceText> = {
+  machine: { en: "machine", zh: "整台机器" },
+  paths: { en: "listed directories", zh: "列出的目录" },
+  workspace: { en: "workspace", zh: "工作区" },
+};
+
+const MODE_VALUE: Record<Connection["mode"], DeviceText> = {
+  os: { en: "os", zh: "本机系统" },
+  docker: { en: "docker", zh: "Docker 容器" },
+};
+
+const NETWORK_VALUE: Record<OwnerFacts["network"], DeviceText> = {
+  open: { en: "open", zh: "开放互联网" },
+  allowlist: { en: "allowlist", zh: "白名单" },
 };
 
 /** The machine's own narrowing, read only (set with `capybara-device ceiling set` there). */
 function limitsOf(c: Connection, owner: OwnerFacts): DeviceReportLimit[] {
   const lines: DeviceReportLimit[] = [
-    { label: { en: "Mode", zh: "模式" }, value: c.mode },
+    { label: { en: "Mode", zh: "模式" }, value: MODE_VALUE[c.mode] },
     {
       label: { en: "Outside the sandbox", zh: "沙箱外运行" },
-      value: owner.outsideSandbox ? "per approved call" : "off",
+      value: owner.outsideSandbox
+        ? { en: "per approved call", zh: "仅限获批的单次调用" }
+        : { en: "off", zh: "关闭" },
     },
     {
       label: { en: "Project reach", zh: "项目范围" },
       value: REACH_VALUE[effectiveReach(c.mode, owner.projectReach)],
     },
-    { label: { en: "Network", zh: "网络" }, value: owner.network },
+    { label: { en: "Network", zh: "网络" }, value: NETWORK_VALUE[owner.network] },
   ];
   if (owner.network === "allowlist")
     lines.push({
       label: { en: "Allowed hosts", zh: "允许的主机" },
-      value: String(owner.allowedDomains.length),
+      value: { en: String(owner.allowedDomains.length) },
     });
   if (c.sharedProjectRoots.length > 0)
     lines.push({ label: SHARED_LABEL, value: sharedRootsValue(c.sharedProjectRoots) });
