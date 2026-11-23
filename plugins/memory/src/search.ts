@@ -64,7 +64,7 @@ async function keywordRank(db: Db, owner: Owner, tokens: string[]): Promise<stri
 async function enqueueStale(ctx: MemoryDeps, owner: Owner, model: string): Promise<void> {
   const stale = await ctx.db
     .selectFrom("memories")
-    .select(["id", "description", "body"])
+    .select(["id", "description", "body", "embedding_version"])
     .where("org_id", "=", owner.orgId)
     .where("agent_id", "=", owner.agentId)
     .where("account_id", "=", owner.accountId)
@@ -76,7 +76,13 @@ async function enqueueStale(ctx: MemoryDeps, owner: Owner, model: string): Promi
     .limit(STALE_BATCH)
     .execute();
   for (const r of stale) {
-    await enqueueEmbed(ctx.queue, owner, { id: r.id, description: r.description, body: r.body });
+    const row = {
+      id: r.id,
+      description: r.description,
+      body: r.body,
+      embeddingVersion: Number(r.embedding_version),
+    };
+    await enqueueEmbed(ctx, owner, row, { model });
   }
 }
 

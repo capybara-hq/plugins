@@ -8,7 +8,8 @@ import { getByIds, type MemoryRow, type Owner } from "./store.js";
  * by org admins; no model = keyword search only). The `embedding` column is `vector` (pgvector) or
  * `real[]`, fixed when the migration ran; which one is read from the column itself, never from
  * whether pgvector is installed now. Vectors have no fixed dimension, so only vectors of the
- * current model are ever compared; older ones are re-embedded by the `memory-embed` queue.
+ * current model are ever compared; older ones are re-embedded by the `memory-embed` queue, also
+ * after switching back to a model used before.
  */
 
 type Db = ExtensionContext["db"];
@@ -39,18 +40,27 @@ export const modelKey = (m: { provider: string; id: string }): string => `${m.pr
 export const documentText = (row: Pick<MemoryRow, "description" | "body">): string =>
   `${row.description}\n${row.body}`;
 
-/** What identifies one text of one memory: its id and the text its vector is made from. */
-export type EmbedTarget = Pick<MemoryRow, "id" | "description" | "body">;
+/**
+ * What identifies one embedding state of a memory: its id, the text its vector is made from, and
+ * how many vectors were stored for it so far.
+ */
+export type EmbedTarget = Pick<MemoryRow, "id" | "description" | "body" | "embeddingVersion">;
 
 /**
- * The job id of embedding one text of a memory: the memory's id and the first 12 hex digits of the
- * SHA-256 of {@link documentText} (no `:`). The queue keeps completed and failed jobs for a while
- * and dedupes on the id while it keeps them, so an id per memory alone would drop the job of a
- * later edit; an id per text dedupes only repeats of the same text. The job reloads the latest row
- * either way, so a job for an older text is harmless.
+ * The job id of (re-)embedding one state of a memory with one model: the memory's id and the first
+ * 12 hex digits of the SHA-256 of the target model, the memory's `embeddingVersion` and
+ * {@link documentText} (no `:`). The queue keeps completed and failed jobs for a while and dedupes
+ * on the id while it keeps them, so each part matters: the text, or a later edit's job is dropped;
+ * the model, or a switch to a model whose job was refused earlier is dropped; the version (one more
+ * on every stored vector), or switching back to a model used before (A -> B -> A) reuses the id of
+ * the retained job of the first switch. Repeats of the same state and model share one job. The job
+ * reloads the latest row either way, so a job for an older state is harmless.
  */
-export const embedJobId = (row: EmbedTarget): string => {
-  const digest = createHash("sha256").update(documentText(row)).digest("hex").slice(0, 12);
+export const embedJobId = (row: EmbedTarget, model: string): string => {
+  const digest = createHash("sha256")
+    .update(`${model}\0${row.embeddingVersion}\0${documentText(row)}`)
+    .digest("hex")
+    .slice(0, 12);
   return `memory-embed-${row.id}-${digest}`;
 };
 
@@ -69,22 +79,33 @@ export const isPermanentEmbedError = (e: unknown): boolean => {
   return code === "model.unconfigured" || code === "model.hook_denied";
 };
 
-/** Enqueues (re-)embedding a memory's current text; one job per text (see {@link embedJobId}). */
+/**
+ * Enqueues (re-)embedding a memory's current state with the org's model for `memory.embed`
+ * (`model`, as {@link modelKey}, when the caller already knows it; else read with
+ * `ctx.models.describe`). No model mapped enqueues nothing: a search enqueues the memories without
+ * a vector once one is mapped. One job per state and model (see {@link embedJobId}).
+ */
 export async function enqueueEmbed(
-  queue: MemoryDeps["queue"],
+  ctx: Pick<MemoryDeps, "queue" | "models">,
   owner: Owner,
   row: EmbedTarget,
-  delayMs?: number,
+  opts: { model?: string; delayMs?: number } = {},
 ): Promise<void> {
+  let model = opts.model;
+  if (model === undefined) {
+    const target = await ctx.models.describe({ orgId: owner.orgId, purpose: EMBED_PURPOSE });
+    if (target === null) return;
+    model = modelKey(target);
+  }
   const data: EmbedJob = {
     orgId: owner.orgId,
     agentId: owner.agentId,
     accountId: owner.accountId,
     memoryId: row.id,
   };
-  await queue.add(EMBED_QUEUE, data, {
-    jobId: embedJobId(row),
-    ...(delayMs === undefined ? {} : { delayMs }),
+  await ctx.queue.add(EMBED_QUEUE, data, {
+    jobId: embedJobId(row, model),
+    ...(opts.delayMs === undefined ? {} : { delayMs: opts.delayMs }),
   });
 }
 
@@ -228,7 +249,11 @@ export async function computeEmbedding(
   if (column === null) return;
   const updated = await ctx.db
     .updateTable("memories")
-    .set({ embedding: literal(vector, column), embedding_model: model })
+    .set({
+      embedding: literal(vector, column),
+      embedding_model: model,
+      embedding_version: sql`embedding_version + 1`,
+    })
     .where("org_id", "=", owner.orgId)
     .where("agent_id", "=", owner.agentId)
     .where("account_id", "=", owner.accountId)
@@ -254,7 +279,7 @@ export async function embedMemory(
     await computeEmbedding(ctx, owner, row, opts.signal);
   } catch (e) {
     if (isPermanentEmbedError(e)) return;
-    await enqueueEmbed(ctx.queue, owner, row, EMBED_RETRY_DELAY_MS);
+    await enqueueEmbed(ctx, owner, row, { delayMs: EMBED_RETRY_DELAY_MS });
   }
 }
 

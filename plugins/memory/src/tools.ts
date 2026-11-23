@@ -246,7 +246,7 @@ async function embedWithin(
   });
   if (await Promise.race([embedded, stopped])) return;
   try {
-    await enqueueEmbed(ctx.queue, owner, row, EMBED_RETRY_DELAY_MS);
+    await enqueueEmbed(ctx, owner, row, { delayMs: EMBED_RETRY_DELAY_MS });
   } catch {
     // the memory is saved; a later search re-embeds memories without a vector
   }

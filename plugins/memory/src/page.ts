@@ -552,7 +552,7 @@ export async function pageAction(ctx: MemoryDeps, args: UiActionArgs): Promise<U
           conversationId: null,
         });
         // the text changed: re-embed through the queue (a page call does not wait for a model)
-        await enqueueEmbed(ctx.queue, sel.owner, saved).catch(() => {});
+        await enqueueEmbed(ctx, sel.owner, saved).catch(() => {});
         return viewOf({ detail: await detailOf(db, sel.owner, saved) });
       } catch (e) {
         if (e instanceof MemoryError) {

@@ -157,17 +157,18 @@ describe.each(schemas)("search on an $name schema", { timeout: 180_000 }, ({ sta
     const row = await write(A, "user/morning.md", "Drinks a coffee every morning", "Habit", old);
     expect((await get(db, A, row.path))?.embeddingModel).toBe("fake/emb-1");
 
+    const embedded = await get(db, A, row.path);
+    if (embedded === null) throw new Error("not written");
+    expect(embedded.embeddingVersion).toBe(1);
+
     const next = deps(fakeModels({ model: "emb-2", dims: 7 }));
     // the stored vector belongs to another model (and dimension): no vector hit, no error
     expect(await search(next, db, A, "espresso", 5)).toEqual([]);
+    const jobId = embedJobId(embedded, "fake/emb-2");
     expect(jobs).toEqual([
-      {
-        name: EMBED_QUEUE,
-        data: { ...A, memoryId: row.id },
-        opts: { jobId: embedJobId(row) },
-      },
+      { name: EMBED_QUEUE, data: { ...A, memoryId: row.id }, opts: { jobId } },
     ]);
-    expect(embedJobId(row)).toMatch(new RegExp(`^memory-embed-${row.id}-[0-9a-f]{12}$`));
+    expect(jobId).toMatch(new RegExp(`^memory-embed-${row.id}-[0-9a-f]{12}$`));
     // the job re-embeds with the current model; then the vector path finds it
     await runEmbedJob(next, { ...A, memoryId: row.id });
     expect((await get(db, A, row.path))?.embeddingModel).toBe("fake/emb-2");
@@ -187,7 +188,7 @@ describe.each(schemas)("search on an $name schema", { timeout: 180_000 }, ({ sta
       {
         name: EMBED_QUEUE,
         data: { ...A, memoryId: row.id },
-        opts: { jobId: embedJobId(row), delayMs: EMBED_RETRY_DELAY_MS },
+        opts: { jobId: embedJobId(row, "fake/emb-1"), delayMs: EMBED_RETRY_DELAY_MS },
       },
     ]);
 
@@ -236,13 +237,48 @@ describe.each(schemas)("search on an $name schema", { timeout: 180_000 }, ({ sta
     });
     await search(d, db, A, "espresso", 5);
     expect(jobs.map((j) => (j.opts as { jobId: string }).jobId)).toEqual([
-      embedJobId(row),
-      embedJobId(edited),
+      embedJobId(row, "fake/emb-1"),
+      embedJobId(edited, "fake/emb-1"),
     ]);
-    expect(embedJobId(edited)).not.toBe(embedJobId(row));
+    expect(embedJobId(edited, "fake/emb-1")).not.toBe(embedJobId(row, "fake/emb-1"));
     // the same text again is the same job (deduped while pending)
     await search(d, db, A, "espresso", 5);
     expect(jobs).toHaveLength(2);
+  });
+
+  it("re-embeds with a model used before when the org switches back to it (A -> B -> A)", async () => {
+    // one queue for the whole run: completed jobs stay retained, as in the kernel
+    const queue = fakeQueue(jobs);
+    const withModel = (model: string): MemoryDeps => ({
+      db,
+      models: fakeModels({ model }),
+      queue,
+    });
+    const a = withModel("emb-a");
+    const b = withModel("emb-b");
+    const row = await write(A, "user/morning.md", "Drinks a coffee every morning", "Habit", a);
+    expect((await get(db, A, row.path))?.embeddingModel).toBe("fake/emb-a");
+
+    // A -> B: the search enqueues a re-embed, the job runs with B
+    await search(b, db, A, "espresso", 5);
+    expect(jobs).toHaveLength(1);
+    await runEmbedJob(b, { ...A, memoryId: row.id });
+    expect((await get(db, A, row.path))?.embeddingModel).toBe("fake/emb-b");
+
+    // B -> A: the completed job for B is still retained; A must get a job of its own
+    await search(a, db, A, "espresso", 5);
+    expect(jobs).toHaveLength(2);
+    await runEmbedJob(a, { ...A, memoryId: row.id });
+    expect((await get(db, A, row.path))?.embeddingModel).toBe("fake/emb-a");
+    expect((await search(a, db, A, "espresso", 5)).map((h) => h.row.path)).toEqual([
+      "user/morning.md",
+    ]);
+
+    // A -> B again: same text, same model as the first switch, so a new job is needed as well
+    await search(b, db, A, "espresso", 5);
+    expect(jobs).toHaveLength(3);
+    const ids = jobs.map((j) => (j.opts as { jobId: string }).jobId);
+    expect(new Set(ids).size).toBe(3);
   });
 
   it("still answers when enqueueing stale memories fails", async () => {
