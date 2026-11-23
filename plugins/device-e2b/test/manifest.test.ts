@@ -53,7 +53,7 @@ describe("device-e2b manifest", () => {
     expect(plugin.permissions).toEqual({});
     // the kernel checks this range against the installed SDK version; device-provider@1 is the
     // rc.51 SDK's
-    expect(plugin.sdk).toBe("^0.1.0-rc.51");
+    expect(plugin.sdk).toBe("^0.1.0-rc.64");
   });
 
   it("declares networkAllowlist (also without domainAllowlist) and ships the device-connection guide", () => {
