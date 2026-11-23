@@ -13,7 +13,7 @@ Two commands help at every step:
 
 - `pnpm doctor:env` checks your environment (Node, pnpm, dependencies, Docker, remotes, git
   identity); `--fix` performs only fixes that need no decision.
-- `pnpm verify` runs the required checks locally for your branch. Run it before pushing.
+- `pnpm verify` runs locally what CI runs for your branch's diff; run it before pushing (this repository has no `--fast`). CI on the PR (`ci-ok`) is the merge gate.
 
 Both accept `--json`; run them as `pnpm -s doctor:env --json` so pnpm's banner does not precede the
 JSON. Start a task in a worktree with `pnpm wt:new <branch>`; it branches from the upstream `main`.
