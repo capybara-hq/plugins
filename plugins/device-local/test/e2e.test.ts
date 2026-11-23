@@ -531,7 +531,7 @@ describe.skipIf(!process.env.CAPYBARA_TEST_DEVICE_LOCAL_E2E)(
         throw new Error(`${String(e)}; program output: ${computer.output}`);
       });
       const line = shown.limits.find((l) => l.label.en === SHARED);
-      expect(line?.value).toBe(project);
+      expect(line?.value).toEqual({ en: project, zh: project });
       // the report never names the other connection
       expect(JSON.stringify(shown)).not.toContain(b);
 

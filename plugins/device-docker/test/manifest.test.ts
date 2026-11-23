@@ -354,15 +354,15 @@ describe("device report (stub Docker API, no Docker needed)", () => {
     const plain = createDockerSandbox(providerConfig(DeploymentConfig.parse({ endpoint })));
     const r = await plain.report(ref({ id: ID }), sig());
     expect(r.limits).toEqual([
-      { label: { en: "CPU", zh: "CPU" }, value: "1.5" },
-      { label: { en: "Memory", zh: "内存" }, value: "2048 MB" },
+      { label: { en: "CPU", zh: "CPU" }, value: { en: "1.5" } },
+      { label: { en: "Memory", zh: "内存" }, value: { en: "2048 MB" } },
     ]);
     expect(r.revision).toBe(`${plugin.version}:runc:${ID}:1.5-2048--`);
     const sized = createDockerSandbox(
       providerConfig(DeploymentConfig.parse({ endpoint, volumeDriver: "sized", runtime: "runsc" })),
     );
     const s = await sized.report(ref({ id: ID }), sig());
-    expect(s.limits.map((l) => l.value)).toEqual(["1.5", "2048 MB", "4096 MB"]);
+    expect(s.limits.map((l) => l.value.en)).toEqual(["1.5", "2048 MB", "4096 MB"]);
     expect(s.revision).toBe(`${plugin.version}:runsc:${ID}:1.5-2048-4096`);
   });
 

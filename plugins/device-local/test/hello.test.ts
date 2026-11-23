@@ -82,11 +82,11 @@ const policy = (ownerCeiling: DeviceOwnerCeiling, sharedProjectRoots?: string[])
   ownerCeiling,
 });
 
-/** The report's shared-directories line value (undefined: no such line). */
+/** The report's shared-directories line value in English (undefined: no such line). */
 const sharedLine = async (store: Parameters<typeof reportFor>[0]) =>
   (await reportFor(store, { deviceId: DEVICE, orgId: ORG })).limits.find((l) =>
     l.label.en.startsWith("Also used by another connection"),
-  )?.value;
+  )?.value.en;
 
 function setup() {
   const { store, rows, connections } = memoryStore();
@@ -603,11 +603,11 @@ describe("report and permission support", () => {
     expect(r.home).toBe("/home/me");
     expect(r.reset).toBe(false);
     expect(r.limits).toEqual([
-      { label: { en: "Mode", zh: "模式" }, value: "os" },
-      { label: { en: "Outside the sandbox", zh: "沙箱外运行" }, value: "off" },
-      { label: { en: "Project reach", zh: "项目范围" }, value: "machine" },
-      { label: { en: "Network", zh: "网络" }, value: "allowlist" },
-      { label: { en: "Allowed hosts", zh: "允许的主机" }, value: "2" },
+      { label: { en: "Mode", zh: "模式" }, value: { en: "os", zh: "本机系统" } },
+      { label: { en: "Outside the sandbox", zh: "沙箱外运行" }, value: { en: "off", zh: "关闭" } },
+      { label: { en: "Project reach", zh: "项目范围" }, value: { en: "machine", zh: "整台机器" } },
+      { label: { en: "Network", zh: "网络" }, value: { en: "allowlist", zh: "允许列表" } },
+      { label: { en: "Allowed hosts", zh: "允许的主机" }, value: { en: "2" } },
     ]);
   });
 

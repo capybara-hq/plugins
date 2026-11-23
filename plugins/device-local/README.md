@@ -73,7 +73,10 @@ generation under another runtime identity is refused (`local.invalid_hello`,
   may do, so a change calls `ctx.devices.reportChanged` once with the revision kept and the kernel
   stores the new text without invalidating approvals. A stale or conflicting `policy` event never
   changes them; an unreadable summary, or an unreadable list in a readable one, keeps them. The
-  line fits as many whole directories as it can, skipping one too long, then ` +N` for the rest.
+  line fits as many whole directories as it can, skipping one too long, then `+N more` (Chinese:
+  `另有 N 个`) for the rest, within the 60-character limit in each language. Every limit value is
+  English and Chinese text (`DeviceReportLimit.value` is `DeviceText`); pure numbers carry English
+  only.
 - **Refused project paths.** A machine's `project_refused` outcome becomes
   `ProjectPathRefusedError` with the fixed English and Chinese text of its refusal code
   (`other-connection`, `outside-reach`, `denied`; `PROJECT_REFUSAL_TEXT`): the machine is not

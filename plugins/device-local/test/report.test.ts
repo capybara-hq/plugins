@@ -86,10 +86,17 @@ describe("the local device report", () => {
 
   it("lists the project reach under limits and changes the revision with it", () => {
     const label = { en: "Project reach", zh: "项目范围" };
-    expect(reachLimit(connection("machine"))).toEqual({ label, value: "machine" });
-    expect(reachLimit(connection("paths"))).toEqual({ label, value: "listed directories" });
-    expect(reachLimit(connection("workspace"))).toEqual({ label, value: "workspace" });
-    expect(reachLimit(connection("machine", "docker"))).toEqual({ label, value: "workspace" });
+    const workspace = { en: "workspace", zh: "工作区" };
+    expect(reachLimit(connection("machine"))).toEqual({
+      label,
+      value: { en: "machine", zh: "整台机器" },
+    });
+    expect(reachLimit(connection("paths"))).toEqual({
+      label,
+      value: { en: "listed directories", zh: "列出的目录" },
+    });
+    expect(reachLimit(connection("workspace"))).toEqual({ label, value: workspace });
+    expect(reachLimit(connection("machine", "docker"))).toEqual({ label, value: workspace });
     const revisions = (["machine", "paths", "workspace"] as const).map(
       (r) => deviceReportOf(connection(r), null).revision,
     );
@@ -106,7 +113,7 @@ describe("the local device report", () => {
           en: "Also used by another connection on this computer",
           zh: "本机的另一个连接也在使用",
         },
-        value: "/p/shared, /p/two",
+        value: { en: "/p/shared, /p/two", zh: "/p/shared, /p/two" },
       },
     ]);
     // the kernel's own check passes
@@ -133,24 +140,33 @@ describe("the local device report", () => {
     expect(reportMoved(rows(none), rows(connection("machine")))).toBe(true);
   });
 
-  it("fits many or long shared directories in one limit value", () => {
+  it("fits many or long shared directories in one limit value per language", () => {
     const max = DEVICE_REPORT_LIMITS.limitValueChars;
     const many = Array.from({ length: 20 }, (_, i) => `/home/me/projects/p${i}`);
     const value = sharedRootsValue(many);
-    expect(value.length).toBeLessThanOrEqual(max);
-    // a language-neutral count of the rest (the value is shown as is in every UI language)
-    expect(value).toMatch(/^\/home\/me\/projects\/p0, .* \+\d+$/);
+    expect(value.en.length).toBeLessThanOrEqual(max);
+    expect(value.zh.length).toBeLessThanOrEqual(max);
+    // the rest is counted in words of each UI language
+    expect(value.en).toMatch(/^\/home\/me\/projects\/p0, .* \+\d+ more$/);
+    expect(value.zh).toMatch(/^\/home\/me\/projects\/p0, .*，另有 \d+ 个$/);
     const long = `/home/me/${"x".repeat(100)}/end`;
-    expect(sharedRootsValue([long]).length).toBeLessThanOrEqual(max);
-    expect(sharedRootsValue([long])).toMatch(/^….*\/end$/);
+    // no root left out: no count, the same text in both languages
+    expect(sharedRootsValue([long]).en.length).toBeLessThanOrEqual(max);
+    expect(sharedRootsValue([long]).en).toMatch(/^….*\/end$/);
+    expect(sharedRootsValue([long]).zh).toBe(sharedRootsValue([long]).en);
     // a root too long is skipped, the others that fit are kept whole
-    expect(sharedRootsValue(["/a", long, "/p/b"].sort())).toBe("/a, /p/b +1");
-    expect(sharedRootsValue([long, "/p/b"])).toBe("/p/b +1");
+    expect(sharedRootsValue(["/a", long, "/p/b"].sort())).toEqual({
+      en: "/a, /p/b +1 more",
+      zh: "/a, /p/b，另有 1 个",
+    });
+    expect(sharedRootsValue([long, "/p/b"])).toEqual({ en: "/p/b +1 more", zh: "/p/b，另有 1 个" });
     // only when no root fits whole: the end of the shortest one
     const longer = `/home/me/${"y".repeat(120)}/other`;
     const both = sharedRootsValue([long, longer].sort());
-    expect(both).toMatch(/^….*\/end \+1$/);
-    expect(both.length).toBeLessThanOrEqual(max);
+    expect(both.en).toMatch(/^….*\/end \+1 more$/);
+    expect(both.zh).toMatch(/^….*\/end，另有 1 个$/);
+    expect(both.en.length).toBeLessThanOrEqual(max);
+    expect(both.zh.length).toBeLessThanOrEqual(max);
     const report = deviceReportOf(connection("paths", "os", many), null);
     expect(parseDeviceReport(report)).toEqual(report);
   });
