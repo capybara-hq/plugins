@@ -9,11 +9,12 @@ import {
   secret,
   ui,
 } from "@capybara-hq/plugin-sdk";
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import { z } from "zod";
 import { toModelError } from "./errors.js";
 import { listDeepSeekModels } from "./list.js";
 import { streamChat } from "./map-stream.js";
+import { isolatedOpenAI } from "./openai-client.js";
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
 
@@ -127,14 +128,11 @@ export function createDeepSeekProvider(defaults: DeepSeekDefaults): ModelProvide
       let client: OpenAI;
       try {
         const { apiKey, baseUrl, fetch: f } = resolve(defaults, opts);
-        client = new OpenAI({
+        // No OPENAI_* env var is read (isolatedOpenAI): never send a host value to another service
+        client = isolatedOpenAI({
           baseURL: baseUrl,
           apiKey,
           fetch: sdkFetch(f),
-          // Do not read OPENAI_* env vars: never send OpenAI headers to another service
-          organization: null,
-          project: null,
-          adminAPIKey: null,
           // Retries belong to the kernel's degradation ladder
           maxRetries: 0,
         });
