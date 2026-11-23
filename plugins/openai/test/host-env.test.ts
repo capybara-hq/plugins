@@ -2,6 +2,7 @@ import type { ModelRequest } from "@capybara-hq/plugin-sdk";
 import { type FakeModelServer, startFakeModelServer } from "@capybara-hq/testing";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createOpenAIProvider } from "../src/index.js";
+import { isolatedOpenAI } from "../src/openai-client.js";
 import { openaiRoutes } from "./fixtures.js";
 
 /**
@@ -82,5 +83,41 @@ describe("openai: host environment", () => {
       expect(r.headers["x-host-secret"]).toBeUndefined();
       expect(JSON.stringify(r.headers)).not.toContain("host-env");
     }
+  });
+
+  it("an explicit undefined option does not bring back the SDK's env default", async () => {
+    for (const [k, v] of Object.entries(HOST_ENV)) vi.stubEnv(k, v);
+    const client = isolatedOpenAI({
+      apiKey: "sk-org",
+      baseURL: `${server.url}/v1`,
+      organization: undefined,
+      project: undefined,
+      adminAPIKey: undefined,
+      webhookSecret: undefined,
+      maxRetries: 0,
+    });
+    expect(client.organization).toBeNull();
+    expect(client.project).toBeNull();
+    expect(client.adminAPIKey).toBeNull();
+    expect(client.webhookSecret).toBeNull();
+    const before = server.requests.length;
+    await client.models.list().catch(() => undefined);
+    const sent = server.requests.slice(before);
+    expect(sent.length).toBeGreaterThan(0);
+    for (const r of sent) {
+      expect(r.headers["openai-organization"]).toBeUndefined();
+      expect(r.headers["openai-project"]).toBeUndefined();
+      expect(JSON.stringify(r.headers)).not.toContain("host-env");
+    }
+  });
+
+  it("refuses an empty API key or base URL instead of reading OPENAI_* env vars", () => {
+    for (const [k, v] of Object.entries(HOST_ENV)) vi.stubEnv(k, v);
+    expect(() => isolatedOpenAI({ apiKey: "", baseURL: `${server.url}/v1` })).toThrow(
+      "apiKey must be a non-empty string",
+    );
+    expect(() =>
+      isolatedOpenAI({ apiKey: "sk-org", baseURL: undefined as unknown as string }),
+    ).toThrow("baseURL must be a non-empty string");
   });
 });

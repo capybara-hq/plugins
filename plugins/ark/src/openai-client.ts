@@ -16,7 +16,20 @@ export type IsolatedClientOptions = Omit<ClientOptions, "apiKey" | "baseURL"> & 
  */
 class OpenAI extends SdkOpenAI {
   constructor(opts: IsolatedClientOptions) {
-    super({ organization: null, project: null, adminAPIKey: null, webhookSecret: null, ...opts });
+    for (const key of ["apiKey", "baseURL"] as const) {
+      const value: unknown = opts[key];
+      if (typeof value !== "string" || value === "") {
+        throw new Error(`isolatedOpenAI: ${key} must be a non-empty string`);
+      }
+    }
+    // After the spread: an explicit `undefined` would bring back the SDK's env default
+    super({
+      ...opts,
+      organization: opts.organization ?? null,
+      project: opts.project ?? null,
+      adminAPIKey: opts.adminAPIKey ?? null,
+      webhookSecret: opts.webhookSecret ?? null,
+    });
     this._options = { ...this._options, defaultHeaders: opts.defaultHeaders };
   }
 }
