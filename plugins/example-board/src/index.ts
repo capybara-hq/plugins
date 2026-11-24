@@ -116,7 +116,7 @@ const sleep = (ms: number, signal: AbortSignal) =>
  */
 export default defineExtension({
   name: "example-board",
-  version: "0.1.0-rc.3",
+  version: "0.1.0-rc.4",
   sdk: "^0.1.0-rc.0",
   provides: [],
   migrations: "../migrations",

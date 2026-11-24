@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-bailian
 
+## 0.1.0-rc.11
+
+### Patch Changes
+
+- fd77b82: The deployment config drops `orgAccess`: every field is org-overridable by default (unified plugin
+  config, core#720).
+
 ## 0.1.0-rc.10
 
 ### Patch Changes

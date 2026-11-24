@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-file-preview
 
+## 0.1.0-rc.4
+
+### Patch Changes
+
+- 64d564f: Repacked with the core#720 toolchain (plugin-sdk 0.1.0-rc.64): the package's static manifest no
+  longer carries the removed `config.org` list. No behaviour change.
+
 ## 0.1.0-rc.3
 
 ### Patch Changes

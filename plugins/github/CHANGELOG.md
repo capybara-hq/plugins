@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-github
 
+## 0.1.0-rc.4
+
+### Patch Changes
+
+- 6cb229b: Connector template descriptions in English and Chinese (`{ en, zh }`, plugin-sdk 0.1.0-rc.65), so a
+  deployment shows each template's description in the page language.
+
 ## 0.1.0-rc.3
 
 ### Patch Changes

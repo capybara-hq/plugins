@@ -1,5 +1,14 @@
 # @capybara-hq/plugin-google
 
+## 0.1.0-rc.3
+
+### Patch Changes
+
+- 6cb229b: Connector template descriptions in English and Chinese (`{ en, zh }`, plugin-sdk 0.1.0-rc.65), so a
+  deployment shows each template's description in the page language.
+- fd77b82: The deployment config is marked platform-only (unified plugin config, core#720): this plugin has no
+  org-bound entry, so an org never overrides its fields.
+
 ## 0.1.0-rc.2
 
 ### Patch Changes

@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-telegram
 
+## 0.1.0-rc.13
+
+### Patch Changes
+
+- fd77b82: The deployment config is marked platform-only (unified plugin config, core#720): this plugin has no
+  org-bound entry, so an org never overrides its fields.
+
 ## 0.1.0-rc.12
 
 ### Minor Changes
