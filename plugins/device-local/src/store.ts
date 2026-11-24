@@ -162,17 +162,24 @@ export interface DeviceLocalStore {
   /**
    * Commits a new `awaiting-device` binding in place of the current one, only while the current
    * binding's generation is still `expectedGeneration` (null: no binding yet). Returns false, and
-   * writes nothing, when another commit came first. Throws {@link StaleFenceError}, writing
-   * nothing, when the current binding holds a higher fence token than the new one carries.
+   * writes nothing, when another commit came first. With `fence` (the create's token), throws
+   * {@link StaleFenceError}, writing nothing, when the current binding holds a higher token;
+   * without one (a create from an older kernel that sends no fence) nothing is compared.
    */
-  commitBinding(binding: Binding, expectedGeneration: string | null): Promise<boolean>;
+  commitBinding(
+    binding: Binding,
+    expectedGeneration: string | null,
+    fence?: number,
+  ): Promise<boolean>;
   /**
    * `update` of the instance generation `generation` (device update fencing): in one atomic step,
    * refuses a token lower than the stored one ({@link StaleFenceError}), then raises the stored
-   * token and, when `limits` allow at least what the generation enforces (`current` when the row
-   * stores none) with the same resources, stores them and answers `updated`. Anything narrower
-   * keeps the stored limits and answers `recreate`: a running service or escalated command could
-   * still reach a removed host. `gone` (nothing written) when the device's binding is another
+   * token and, when the network of `limits` allows at least what the generation enforces
+   * (`current` when the row stores none), stores them and answers `updated`. Resources never
+   * decide it: they reach the commands sent from then on and instances created afterwards, so a
+   * resource change alone does not restart anything. A narrower network keeps the stored limits
+   * and answers `recreate`: a running service or escalated command could still reach a removed
+   * host. `gone` (nothing written) when the device's binding is another
    * generation.
    */
   updateLimits(
@@ -231,9 +238,6 @@ export function networkCovers(
   return prev.hosts.every((h) => allowed.has(hostKey(h)));
 }
 
-const sameResources = (a: SandboxLimits, b: SandboxLimits): boolean =>
-  a.cpu === b.cpu && a.memoryMb === b.memoryMb && a.diskMb === b.diskMb;
-
 /** The store over `rows` (PG in production, memory in unit tests): the binding rules live here. */
 export function storeOver(
   rows: DeviceRows,
@@ -241,10 +245,10 @@ export function storeOver(
 ): DeviceLocalStore {
   return {
     binding: async (deviceId) => (await rows.read(deviceId)).binding,
-    commitBinding: (binding, expectedGeneration) =>
+    commitBinding: (binding, expectedGeneration, fence) =>
       rows.change(binding.deviceId, (s) => {
-        if (binding.fenceToken !== undefined)
-          assertFresh(binding.deviceId, s.binding?.fenceToken, binding.fenceToken, "create");
+        if (fence !== undefined)
+          assertFresh(binding.deviceId, s.binding?.fenceToken, fence, "create");
         return (s.binding?.generation ?? null) === expectedGeneration
           ? { result: true, binding }
           : { result: false };
@@ -255,8 +259,7 @@ export function storeOver(
         assertFresh(deviceId, b?.fenceToken, token, "update");
         if (b?.generation !== generation) return { result: "gone" as const };
         const enforced = b.limits ?? current;
-        const widens =
-          sameResources(limits, enforced) && networkCovers(limits.network, enforced.network);
+        const widens = networkCovers(limits.network, enforced.network);
         const binding: Binding = {
           ...b,
           fenceToken: token,

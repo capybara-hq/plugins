@@ -920,21 +920,58 @@ describe("update (device update fencing)", () => {
     expect(s.rows.get(DEVICE)).toEqual(before);
   });
 
-  it("answers recreate for a narrowing or a resource change, keeping the limits but raising the token", async () => {
+  it("answers recreate for a narrowing, keeping the limits but raising the token", async () => {
     const s = setup();
     const h = await created(s);
     const narrower = { ...LIMITS, network: { kind: "allowlist" as const, hosts: [] } };
     expect(await s.provider.update?.(h, narrower, signal(), { token: 2 })).toBe("recreate");
     expect(s.rows.get(DEVICE)).toMatchObject({ limits: LIMITS, fenceToken: 2 });
-    expect(await s.provider.update?.(h, { ...LIMITS, cpu: 4 }, signal(), { token: 2 })).toBe(
-      "recreate",
-    );
     // the token a recreate answer stored still refuses an older holder
     expect(
       isStaleFenceError(
         await rejection(s.provider.update?.(h, WIDER, signal(), FENCE) as Promise<unknown>),
       ),
     ).toBe(true);
+  });
+
+  it("decides on the network alone: a widening with new resources is updated and stores them", async () => {
+    const s = setup();
+    const h = await created(s);
+    const resized = { ...WIDER, cpu: 4, memoryMb: 4096 };
+    expect(await s.provider.update?.(h, resized, signal(), { token: 2 })).toBe("updated");
+    expect(s.rows.get(DEVICE)?.limits).toEqual(resized);
+    // resources alone, same network: updated too
+    expect(await s.provider.update?.(h, { ...resized, cpu: 1 }, signal(), { token: 2 })).toBe(
+      "updated",
+    );
+  });
+
+  it("allowlist to open-public is a widening; open-public to an allowlist recreates", async () => {
+    const s = setup();
+    const h = await created(s);
+    const open = { ...LIMITS, network: { kind: "open-public" as const, hosts: [] } };
+    expect(await s.provider.update?.(h, open, signal(), { token: 2 })).toBe("updated");
+    expect(s.rows.get(DEVICE)?.limits).toEqual(open);
+    expect(await s.provider.update?.(h, WIDER, signal(), { token: 2 })).toBe("recreate");
+    expect(s.rows.get(DEVICE)?.limits).toEqual(open);
+  });
+
+  it("a create without a fence (an older kernel) compares nothing and stores 0", async () => {
+    const s = setup();
+    const h = await created(s);
+    await s.provider.update?.(h, WIDER, signal(), { token: 9 });
+    const next = (await s.provider.create({
+      fence: undefined as unknown as { token: number },
+      name: `cap-device-${DEVICE}`,
+      limits: LIMITS,
+      fileSystem: { id: DEVICE },
+      signal: signal(),
+    })) as LocalDeviceHandle;
+    expect(s.rows.get(DEVICE)).toMatchObject({
+      generation: next.generation,
+      limits: LIMITS,
+      fenceToken: 0,
+    });
   });
 
   it("answers recreate without a fence (an older kernel) and gone for a replaced generation", async () => {
@@ -979,8 +1016,20 @@ describe("update (device update fencing)", () => {
     expect(s.dial.ops()).toEqual(["create"]);
   });
 
-  it("resume and escalated commands use the stored limits, not the handle's", async () => {
-    const s = setup();
+  it("resume, escalated commands and background starts use the stored limits, not the handle's", async () => {
+    const s = setup(
+      machine({
+        backgroundStart: () => ({
+          ok: true,
+          result: {
+            executionId: "exec-1",
+            operationId: "operation-1",
+            instanceId: DEVICE,
+            instanceGeneration: "1",
+          },
+        }),
+      }),
+    );
     const h = await created(s);
     await s.provider.update?.(h, WIDER, signal(), { token: 2 });
     expect(await s.provider.resume(h, signal())).toBe("resumed");
@@ -989,5 +1038,16 @@ describe("update (device update fencing)", () => {
     const op = await s.provider.operation?.(h, scope, signal());
     await op?.exec({ command: "true", timeoutMs: 100, maxOutputBytes: 10, signal: signal() });
     expect(s.dial.sent.at(-1)?.args.limits).toEqual(WIDER);
+    await s.provider.background?.start(h, scope, {
+      command: "sleep 1",
+      timeoutMs: 1000,
+      maxOutputBytes: 1000,
+      signal: signal(),
+      taskId: "task-1",
+      outputPath: `${ROOTS.workspace}/task.out`,
+      retainUntilMs: scope.admitBeforeMs + 1000,
+      instanceGeneration: h.generation,
+    });
+    expect(s.dial.sent.at(-1)).toMatchObject({ op: "backgroundStart", args: { limits: WIDER } });
   });
 });

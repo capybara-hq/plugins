@@ -481,12 +481,13 @@ export function createDeviceLocalProvider(
       const id = args.fileSystem.id;
       if (deviceIdOfName(args.name) !== id)
         throw new Error(`instance ${args.name} does not belong to file system ${id}`);
-      // a stale holder replaces nothing (checked again atomically when the binding commits);
-      // without a fence (an older kernel) the new generation starts at 0
-      const fenceToken = args.fence?.token ?? 0;
+      // a stale holder is refused before the machine is asked (a read: the commit below compares
+      // again in its locked transaction); without a fence (an older kernel) nothing is compared
+      // and the new generation stores 0
+      const fence = args.fence?.token;
       await assertFence(id, args.fence, "create");
       const roots = await machineCreate(id, args.limits, args.signal);
-      const binding = await bindings.bindNew(id, args.signal, { limits: args.limits, fenceToken });
+      const binding = await bindings.bindNew(id, args.signal, { limits: args.limits, fence });
       return { id, roots, limits: args.limits, generation: binding.generation };
     },
 
@@ -494,9 +495,10 @@ export function createDeviceLocalProvider(
      * Applies new limits to the running generation without recreating it, a store write only:
      * every command already carries its operation's network, and the next `ensureService` sends
      * the stored network, on which the machine restarts a running service started with another.
-     * A widening (same resources, every enforced host still allowed) is stored and `updated`; a
-     * narrowing, a resource change or a call without a fence (an older kernel) answers `recreate`,
-     * since a running service or escalated command could still reach a removed host. A token lower
+     * A network widening (every enforced host still allowed) is stored with the new resources
+     * (sent with the commands from then on) and `updated`; a narrowing or a call without a fence
+     * (an older kernel) answers `recreate`, since a running service or escalated command could
+     * still reach a removed host. A token lower
      * than the stored one is refused with `StaleFenceError`, checked and stored in one step.
      */
     async update(h, limits, signal, fence) {

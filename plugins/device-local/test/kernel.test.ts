@@ -379,7 +379,11 @@ describe("the PG store (the plugin's migrated schema)", () => {
       network: { kind: "allowlist" as const, hosts: ["example.com", "example.org"] },
     };
     expect(
-      await store.commitBinding({ ...binding("200", null), limits: LIMITS, fenceToken: 4 }, null),
+      await store.commitBinding(
+        { ...binding("200", null), limits: LIMITS, fenceToken: 4 },
+        null,
+        4,
+      ),
     ).toBe(true);
     expect(await store.binding("pg-dev")).toMatchObject({ limits: LIMITS, fenceToken: 4 });
     // two updates race: the higher token wins whatever the order, the lower one is refused
@@ -396,7 +400,7 @@ describe("the PG store (the plugin's migrated schema)", () => {
     });
     // a create of a stale holder commits nothing
     await expect(
-      store.commitBinding({ ...binding("201", "200"), fenceToken: 5 }, "200"),
+      store.commitBinding({ ...binding("201", "200"), fenceToken: 5 }, "200", 5),
     ).rejects.toMatchObject({ staleFence: true });
     expect((await store.binding("pg-dev"))?.generation).toBe("200");
     expect(await store.updateLimits("pg-dev", "199", wider, 7, LIMITS)).toBe("gone");

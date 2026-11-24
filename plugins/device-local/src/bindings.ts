@@ -4,6 +4,7 @@ import {
   isSandboxPermissionUnsupportedError,
   isSandboxScopeDeniedError,
   isSandboxWorkUnsettledError,
+  type SandboxLimits,
 } from "@capybara-hq/plugin-sdk";
 import type {
   BindInstanceRequest,
@@ -61,12 +62,13 @@ export interface InstanceBindings {
   /**
    * Commits the next generation of the device and binds it; resolves the installed binding.
    * `seed`: the generation's create-time limits and the create's fence token, stored with it (a
-   * current binding holding a higher token refuses the commit with `StaleFenceError`).
+   * current binding holding a higher token refuses the commit with `StaleFenceError`). Without a
+   * token (an older kernel) the generation stores 0 and nothing is compared.
    */
   bindNew(
     deviceId: string,
     signal: AbortSignal,
-    seed?: Pick<Binding, "limits" | "fenceToken">,
+    seed?: { limits: SandboxLimits; fence: number | undefined },
   ): Promise<Binding>;
   /**
    * Re-sends the binding of `generation` and verifies the machine still holds it with the same
@@ -130,10 +132,9 @@ export function createInstanceBindings(
         bindingId: randomUUID(),
         previousGeneration: previous,
         status: "awaiting-device",
-        ...(seed?.limits && { limits: seed.limits }),
-        ...(seed?.fenceToken !== undefined && { fenceToken: seed.fenceToken }),
+        ...(seed && { limits: seed.limits, fenceToken: seed.fence ?? 0 }),
       };
-      if (!(await store.commitBinding(binding, previous)))
+      if (!(await store.commitBinding(binding, previous, seed?.fence)))
         throw new InstanceBindingError(
           "Another instance of this device was created at the same time; retry",
         );

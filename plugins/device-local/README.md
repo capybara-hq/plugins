@@ -14,18 +14,22 @@ answer strictly (the machine is not trusted).
 | `createFileSystem` / `destroyFileSystem` | Nothing on the machine: the device directory (`~/capybara-device/<device id>`) belongs to the machine's owner and stays when the device is deleted; `destroyFileSystem` forgets the device's rows |
 | `create` | `create` (ends the previous generation's background work, answers the directory's roots), then `bindInstance` of a new instance generation; the handle is handed out only once the machine attested the binding |
 | `resume` | Needs the machine online. `create` again (ends any background work a suspension could not reach), then the identical `bindInstance`; `gone` when the roots changed (a new login into another directory or mode) or the machine can no longer hold the generation (its runtime changed) |
-| `update` | Nothing on the machine: a widening of the network (same resources, every host still allowed) is stored with the generation's binding and answers `updated`; the next `ensureService` sends it, and the machine restarts a running service started with another network. A narrowing, a resource change or a call without a fence answers `recreate` |
+| `update` | Nothing on the machine: a widening of the network (every host still allowed) is stored with the generation's binding, new resources included (commands carry them from then on), and answers `updated`; the next `ensureService` sends the network, and the machine restarts a running service started with another. A narrowing or a call without a fence answers `recreate` |
 | `suspend` / `destroy` | `create` when the machine is online: the generation's tracked background work ends, files are kept. Never fails while the machine is offline |
 | `operation` / `prepare` / `browse` / `background` / `revokeOperation` | The scoped protocol 6 operations, each with its admitted scope |
 | raw `exec` / `readFile` / … , `killAll` / `killTagged` | Refused or nothing: a protocol 6 machine runs work only under an admitted operation scope |
 
 **Limits and fencing.** The limits in force are stored with the generation's binding (`create`
 stores the kernel's, `update` replaces them on a widening); the kernel keeps the handle as `create`
-returned it. `limitsApplyAt` is `instance` (a recreate applies new limits). Every lifecycle call's
-fence token is compared with the stored one in the same locked PG transaction that writes it:
-`update` and `create` with a lower token throw `StaleFenceError` and write nothing (`create`
-before it reaches the machine), and so does `destroy` of the bound generation; a `recreate` answer
-still raises the stored token.
+returned it. `limitsApplyAt` is `instance` (a recreate applies new limits). Fence tokens (device
+update fencing): `update` compares the token with the stored one and stores it in one locked PG
+transaction, refusing a lower one with `StaleFenceError` and writing nothing; a `recreate` answer
+still raises the stored token. `create` and `destroy` read the stored token first and refuse a
+lower one before they ask the machine; that read and the machine call are not one atomic step, so
+a newer holder's token stored in between is not seen by them (a narrow window: the kernel's own
+fenced write for the holder precedes each call). `create` compares once more, atomically, when it
+commits the new binding, so a stale holder never installs a generation. A `create` without a fence
+(an older kernel) compares nothing and stores 0.
 
 A command carries the instance's resources and, as its outer network, the network the kernel
 admitted for the operation (its scope); the machine intersects it with its owner's ceiling. The
