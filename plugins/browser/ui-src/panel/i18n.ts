@@ -13,7 +13,6 @@ export const STRINGS = {
     handback: "Hand back to the agent",
     takeoverHint: "You are controlling the browser. Press Esc to hand it back.",
     statusAgent: "The agent is using the browser",
-    statusUser: "You are controlling the browser",
     statusUserElsewhere: "You are controlling the browser from another view",
     statusLoading: "Loading…",
     statusConnecting: "Connecting…",
@@ -31,6 +30,10 @@ export const STRINGS = {
     handoffCancel: "Cancel",
     reconnect: "Reconnect",
     view: "Browser view",
+    secure: "Secure connection",
+    fileDialog: "The page opened a file chooser; the agent can pick a file with its upload tool.",
+    allowFailed: "Could not allow the host:",
+    answerFailed: "Could not send your answer:",
   },
   zh: {
     title: "浏览器",
@@ -44,7 +47,6 @@ export const STRINGS = {
     handback: "交还智能体",
     takeoverHint: "你正在控制浏览器。按 Esc 交还给智能体。",
     statusAgent: "智能体正在使用浏览器",
-    statusUser: "你正在控制浏览器",
     statusUserElsewhere: "你正在另一个视图中控制浏览器",
     statusLoading: "加载中…",
     statusConnecting: "正在连接…",
@@ -62,6 +64,10 @@ export const STRINGS = {
     handoffCancel: "取消",
     reconnect: "重新连接",
     view: "浏览器画面",
+    secure: "安全连接",
+    fileDialog: "页面打开了文件选择框；智能体可以用上传工具选择文件。",
+    allowFailed: "无法允许该主机：",
+    answerFailed: "无法发送你的回答：",
   },
 } as const;
 

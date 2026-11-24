@@ -54,14 +54,27 @@ function setup(
   opts: {
     locale?: "zh" | "en";
     width?: number;
+    dpr?: number;
     ticket?: () => Response;
     answer?: () => Response;
+    hosts?: () => Response;
+    /** Storage throws, as in the opaque-origin sandboxed iframe. */
+    noStorage?: boolean;
   } = {},
 ): Setup {
   FakeSocket.all = [];
   const dom = new JSDOM(PANEL_HTML, { url: "https://app.test/plugin-ui/browser/browser" });
   const win = dom.window as unknown as Window & typeof globalThis;
   Object.defineProperty(win, "innerWidth", { value: opts.width ?? 800, configurable: true });
+  Object.defineProperty(win, "devicePixelRatio", { value: opts.dpr ?? 1, configurable: true });
+  if (opts.noStorage)
+    for (const name of ["sessionStorage", "localStorage"])
+      Object.defineProperty(win, name, {
+        configurable: true,
+        get: () => {
+          throw new dom.window.DOMException("The document is sandboxed", "SecurityError");
+        },
+      });
   const fetchCalls: { url: string; body: unknown }[] = [];
   const host: unknown[] = [];
   const fetchImpl = async (url: string, init?: { body?: string }): Promise<Response> => {
@@ -73,6 +86,7 @@ function setup(
       );
     }
     if (url === "handoff-answer" && opts.answer) return opts.answer();
+    if (url === "network-hosts" && opts.hosts) return opts.hosts();
     return new Response("{}", { status: 200 });
   };
   const stage = dom.window.document.getElementById("stage") as HTMLElement;
@@ -86,6 +100,7 @@ function setup(
   });
   win.dispatchEvent(
     new dom.window.MessageEvent("message", {
+      source: dom.window,
       data: {
         protocol: "capybara-embed/1",
         type: "init",
@@ -177,41 +192,129 @@ describe("panel", () => {
     });
   });
 
-  it("restores the takeover UI after a remount from sessionStorage and the first state", async () => {
+  it("a remounted panel with storage throwing is interactive while the person holds control", async () => {
+    const s = setup({ noStorage: true });
+    const sock = await live(s, state({ control: "user" }));
+    // no takeover click in this panel: a remount (expand / collapse) mid-takeover
+    expect(($(s, "handback") as HTMLElement).hidden).toBe(false);
+    expect($(s, "status").textContent).toBe(t("en", "takeoverHint"));
+    const view = $(s, "view");
+    view.getBoundingClientRect = () => ({ left: 0, top: 0, width: 480, height: 300 }) as DOMRect;
+    view.dispatchEvent(new s.dom.window.KeyboardEvent("keydown", { key: "a", code: "KeyA" }));
+    expect(sock.sent).toContainEqual({ t: "key", kind: "down", key: "a", code: "KeyA" });
+    view.dispatchEvent(
+      new s.dom.window.MouseEvent("mousemove", { clientX: 240, clientY: 150, bubbles: true }),
+    );
+    expect(sock.sent).toContainEqual({ t: "mouse", kind: "move", x: 640, y: 400 });
+    s.dom.window.document.dispatchEvent(
+      new s.dom.window.KeyboardEvent("keydown", { key: "Escape" }),
+    );
+    expect(sock.sent).toContainEqual({ t: "handback" });
+    expect(s.host.at(-1)).toEqual({
+      protocol: "capybara-embed/1",
+      type: "panel-mode",
+      full: false,
+    });
+  });
+
+  it("asks for full-viewport frames whenever the person holds control", async () => {
+    const s = setup({ dpr: 2 });
+    const sock = await live(s);
+    expect(sock.sent[0]).toEqual({ t: "hello", maxWidth: 640, maxHeight: 400 });
+    sock.push(state({ control: "user" }));
+    expect(sock.sent.at(-1)).toEqual({ t: "resize", maxWidth: 960, maxHeight: 600 });
+    sock.push(state({ control: "agent" }));
+    expect(sock.sent.at(-1)).toEqual({ t: "resize", maxWidth: 640, maxHeight: 400 });
+  });
+
+  it("does not drive the page while the agent holds control", async () => {
     const s = setup();
     const sock = await live(s);
-    $(s, "takeover").click();
-    sock.push(state({ control: "user" }));
-    const key =
-      (s.dom.window.sessionStorage.length > 0 && s.dom.window.sessionStorage.key(0)) || "";
-    expect(key).toContain("c1");
-    // A second panel on the same storage (a remount).
-    const win = s.dom.window as unknown as Window & typeof globalThis;
-    const host2: unknown[] = [];
+    const view = $(s, "view");
+    view.dispatchEvent(new s.dom.window.KeyboardEvent("keydown", { key: "a" }));
+    view.dispatchEvent(new s.dom.window.MouseEvent("mousemove", { clientX: 1, clientY: 1 }));
+    expect(sock.sent.some((m) => m.t === "key" || (m.t === "mouse" && m.kind === "move"))).toBe(
+      false,
+    );
+  });
+
+  it("offers takeover only in the live view", async () => {
+    const s = setup();
+    await vi.waitFor(() => expect(FakeSocket.all.length).toBe(1));
+    expect(($(s, "takeover") as HTMLElement).hidden).toBe(true);
+    const sock = s.sock();
+    sock.open();
+    sock.push(state());
+    expect(($(s, "takeover") as HTMLElement).hidden).toBe(false);
+    sock.drop(4409);
+    expect(($(s, "takeover") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("ignores messages that do not come from the host page", async () => {
+    FakeSocket.all = [];
+    const dom = new JSDOM(PANEL_HTML, { url: "https://app.test/plugin-ui/browser/browser" });
+    const win = dom.window as unknown as Window & typeof globalThis;
+    const calls: string[] = [];
     mountPanel({
       window: win,
-      fetch: (async () => new Response(JSON.stringify({ url: "wss://x" }))) as never,
+      fetch: (async (u: string) => {
+        calls.push(u);
+        return new Response("{}");
+      }) as never,
       WebSocket: FakeSocket as never,
-      post: (m) => host2.push(m),
-      decode: async () => ({ width: 1, height: 1 }) as never,
+      post: () => undefined,
     });
     win.dispatchEvent(
-      new s.dom.window.MessageEvent("message", {
-        data: {
-          protocol: "capybara-embed/1",
-          type: "init",
-          token: "t",
-          locale: "en",
-          context: { orgId: "o", conversationId: "c1" },
-        },
+      new dom.window.MessageEvent("message", {
+        source: null,
+        data: { protocol: "capybara-embed/1", type: "init", token: "x", locale: "en" },
       }),
     );
-    await vi.waitFor(() => expect(FakeSocket.all.length).toBe(2));
-    const sock2 = FakeSocket.all[1] as FakeSocket;
-    sock2.open();
-    sock2.push(state({ control: "user" }));
-    expect(host2).toEqual([]);
-    expect(($(s, "handback") as HTMLElement).hidden).toBe(false);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(calls).toEqual([]);
+  });
+
+  it("shows a lock for a secure page", async () => {
+    const s = setup();
+    const sock = await live(s, state({ secure: true }));
+    expect(($(s, "lock") as HTMLElement).hidden).toBe(false);
+    expect($(s, "lock").getAttribute("aria-label")).toBe(t("en", "secure"));
+    sock.push(state({ secure: false }));
+    expect(($(s, "lock") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("flashes only clicks newer than the ones it has seen", async () => {
+    const s = setup();
+    const sock = await live(s, state({ lastClick: { x: 1, y: 1, seq: 3 } }));
+    const flash = $(s, "flash") as HTMLElement;
+    expect(flash.hidden).toBe(true);
+    sock.push(state({ lastClick: { x: 1, y: 1, seq: 3 } }));
+    expect(flash.hidden).toBe(true);
+    sock.push(state({ lastClick: { x: 2, y: 2, seq: 4 } }));
+    expect(flash.hidden).toBe(false);
+  });
+
+  it("a dialog strip hides after 10 s or when the page changes; a file chooser has fixed text", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    await vi.advanceTimersByTimeAsync(0);
+    const sock = s.sock();
+    sock.open();
+    sock.push(state());
+    sock.push({ t: "dialog", kind: "alert", message: "hi" });
+    expect(($(s, "dialog") as HTMLElement).hidden).toBe(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(($(s, "dialog") as HTMLElement).hidden).toBe(true);
+    sock.push({ t: "dialog", kind: "file", message: "" });
+    expect($(s, "dialog-text").textContent).toBe(t("en", "fileDialog"));
+    // a state of the same page (the reply that follows the dialog) keeps it readable
+    sock.push(state());
+    expect(($(s, "dialog") as HTMLElement).hidden).toBe(false);
+    // the next page's state hides it
+    sock.push(
+      state({ tabs: [{ id: "t1", title: "Next", url: "https://example.com/next", active: true }] }),
+    );
+    expect(($(s, "dialog") as HTMLElement).hidden).toBe(true);
   });
 
   it("typing in the address bar and Enter sends nav with the url", async () => {
@@ -236,18 +339,101 @@ describe("panel", () => {
     ]);
   });
 
-  it("allow button adds the host and reloads", async () => {
+  it("allow button adds the host and opens the blocked page", async () => {
     const s = setup();
     const sock = await live(s);
-    sock.push({ t: "blocked", host: "cdn.test", url: "https://cdn.test/a.js" });
+    sock.push({ t: "blocked", host: "cdn.test", url: "https://cdn.test/page" });
     expect(($(s, "blocked") as HTMLElement).hidden).toBe(false);
     expect($(s, "blocked").textContent).toContain("cdn.test");
     $(s, "allow").click();
-    await vi.waitFor(() => expect(sock.sent).toContainEqual({ t: "nav", action: "reload" }));
+    await vi.waitFor(() =>
+      expect(sock.sent).toContainEqual({ t: "nav", url: "https://cdn.test/page" }),
+    );
+    expect(sock.sent).not.toContainEqual({ t: "nav", action: "reload" });
     expect(s.fetchCalls.find((c) => c.url === "network-hosts")?.body).toEqual({
       hosts: ["cdn.test"],
     });
     expect(($(s, "blocked") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("an allow that restarts the daemon: the 4404 is retried and the page opened again", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    await vi.advanceTimersByTimeAsync(0);
+    const sock = s.sock();
+    sock.open();
+    sock.push(state());
+    sock.push({ t: "blocked", host: "cdn.test", url: "https://cdn.test/page" });
+    $(s, "allow").click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sock.sent).toContainEqual({ t: "nav", url: "https://cdn.test/page" });
+    // the service restarts with the new network: the viewer is closed, the restart not done yet
+    sock.drop(4404);
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(FakeSocket.all).toHaveLength(2);
+    const sock2 = s.sock();
+    sock2.drop(4404);
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(true);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(FakeSocket.all).toHaveLength(3);
+    const sock3 = s.sock();
+    sock3.open();
+    sock3.push(state({ tabs: [{ id: "t1", title: "", url: "about:blank", active: true }] }));
+    expect(sock3.sent).toContainEqual({ t: "nav", url: "https://cdn.test/page" });
+  });
+
+  it("a 4404 is retried twice before the empty state", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    await vi.advanceTimersByTimeAsync(0);
+    s.sock().drop(4404);
+    await vi.advanceTimersByTimeAsync(1_000);
+    s.sock().drop(4404);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(FakeSocket.all).toHaveLength(3);
+    s.sock().drop(4404);
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("the empty state looks for the browser every 10 s while visible, for 30 min at most", async () => {
+    vi.useFakeTimers();
+    const s = setup({
+      ticket: () => new Response(JSON.stringify({ code: "service_not_running" }), { status: 409 }),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const tickets = () => s.fetchCalls.filter((c) => c.url === "stream-ticket").length;
+    expect(tickets()).toBe(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(tickets()).toBe(2);
+    const doc = s.dom.window.document;
+    let vis = "hidden";
+    Object.defineProperty(doc, "visibilityState", { get: () => vis, configurable: true });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(tickets()).toBe(2);
+    vis = "visible";
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    const atEnd = tickets();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(tickets()).toBe(atEnd);
+    expect(atEnd).toBeLessThanOrEqual(2 + (30 * 60) / 10);
+  });
+
+  it("shows why an allow was refused", async () => {
+    const s = setup({
+      hosts: () =>
+        new Response(
+          JSON.stringify({ error: { code: "not_owner", message: "Only the owner can allow." } }),
+          { status: 403 },
+        ),
+    });
+    const sock = await live(s);
+    sock.push({ t: "blocked", host: "cdn.test", url: "https://cdn.test/" });
+    $(s, "allow").click();
+    await vi.waitFor(() => expect(($(s, "notice") as HTMLElement).hidden).toBe(false));
+    expect($(s, "notice").textContent).toContain(t("en", "allowFailed"));
+    expect($(s, "notice").textContent).toContain("Only the owner can allow.");
+    expect(($(s, "blocked") as HTMLElement).hidden).toBe(false);
   });
 
   it("panel shows reconnect after device-offline close and fetches a new ticket on click", async () => {
@@ -361,13 +547,41 @@ describe("handoff banner", () => {
     expect(sock.sent.some((m) => m.t === "handback")).toBe(false);
   });
 
-  it("keeps the banner when the answer fails otherwise", async () => {
-    const s = setup({ answer: () => new Response("{}", { status: 500 }) });
+  it("keeps the banner and shows why when the answer fails otherwise", async () => {
+    const s = setup({
+      answer: () =>
+        new Response(JSON.stringify({ error: { code: "x", message: "The device is gone." } }), {
+          status: 500,
+        }),
+    });
     await live(s, state({ handoff }));
     $(s, "handoff-done").click();
-    await vi.waitFor(() => expect(s.fetchCalls.some((c) => c.url === "handoff-answer")).toBe(true));
-    await new Promise((r) => queueMicrotask(() => r(undefined)));
+    await vi.waitFor(() => expect(($(s, "notice") as HTMLElement).hidden).toBe(false));
+    expect($(s, "notice").textContent).toContain(t("en", "answerFailed"));
+    expect($(s, "notice").textContent).toContain("The device is gone.");
     expect(($(s, "handoff") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("handing back with a pending handoff answers it Done", async () => {
+    const s = setup();
+    const sock = await live(s, state({ control: "user", handoff }));
+    $(s, "handback").click();
+    expect(sock.sent).toContainEqual({ t: "handback" });
+    await vi.waitFor(() =>
+      expect(s.fetchCalls.find((c) => c.url === "handoff-answer")?.body).toEqual({
+        callId: "call-1",
+        done: true,
+      }),
+    );
+  });
+
+  it("handing back without a handoff answers nothing", async () => {
+    const s = setup();
+    const sock = await live(s, state({ control: "user" }));
+    $(s, "handback").click();
+    expect(sock.sent).toContainEqual({ t: "handback" });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(s.fetchCalls.some((c) => c.url === "handoff-answer")).toBe(false);
   });
 
   it("works in the compact size class", async () => {

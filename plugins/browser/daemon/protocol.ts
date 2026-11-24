@@ -132,5 +132,6 @@ export type ViewerOut =
       /** The pending handoff question, if any (message at most HANDOFF_MAX_CHARS). */
       handoff?: { callId: string; message: string };
     }
+  /** `url`: the page to open once the host is allowed (the blocked navigation, or the page whose resource was refused). */
   | { t: "blocked"; host: string; url: string }
   | { t: "dialog"; kind: "alert" | "confirm" | "prompt" | "file"; message: string };

@@ -6,7 +6,15 @@
 import { lstatSync, mkdirSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { basename, extname, join, sep } from "node:path";
-import type { BrowserContext, CDPSession, Dialog, Download, Locator, Page } from "playwright-core";
+import type {
+  BrowserContext,
+  CDPSession,
+  Dialog,
+  Download,
+  Locator,
+  Page,
+  Request,
+} from "playwright-core";
 import {
   MAX_TABS,
   type ToolErrorCode,
@@ -404,11 +412,12 @@ export class BrowserSession {
         this.loadingTabs.delete(id);
         this.emit({ type: "state" });
       }
-      if (this.proxy !== undefined && PROXY_FAILURE_RE.test(err)) this.checkBlocked(r.url());
+      if (this.proxy !== undefined && PROXY_FAILURE_RE.test(err))
+        this.checkBlocked(r.url(), this.pageToOpen(page, r));
     });
     page.on("response", (r) => {
       if (this.proxy !== undefined && r.status() === 403 && r.url().startsWith("http:")) {
-        this.checkBlocked(r.url());
+        this.checkBlocked(r.url(), this.pageToOpen(page, r.request()));
       }
     });
     page.on("dialog", (d) => this.onDialog(d));
@@ -601,8 +610,19 @@ export class BrowserSession {
     return real;
   }
 
-  /** Probes the proxy for the URL's host and reports it when refused. */
-  private checkBlocked(rawUrl: string): Promise<boolean> {
+  /**
+   * The page a viewer opens once the refused host is allowed: the navigation's target for a
+   * main-frame navigation, else the page that loaded the refused resource.
+   */
+  private pageToOpen(page: Page, r: Request): string {
+    return r.isNavigationRequest() && r.frame() === page.mainFrame() ? r.url() : page.url();
+  }
+
+  /**
+   * Probes the proxy for the URL's host and reports it when refused; the viewers' `blocked`
+   * message carries `pageUrl` (default: the URL itself), the page to open once allowed.
+   */
+  private checkBlocked(rawUrl: string, pageUrl?: string): Promise<boolean> {
     const proxy = this.proxy;
     if (proxy === undefined) return Promise.resolve(false);
     let url: URL;
@@ -619,7 +639,7 @@ export class BrowserSession {
         this.probes.delete(host);
         if (refused) {
           for (const c of this.collectors) c.blocked.add(host);
-          this.emit({ type: "blocked", host, url: url.href });
+          this.emit({ type: "blocked", host, url: pageUrl ?? url.href });
         }
         return refused;
       });

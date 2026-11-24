@@ -32,6 +32,7 @@ export const PANEL_HTML = `<!doctype html>
   .tab .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; text-align: left; padding: 0; }
   #bar { display: flex; gap: 4px; padding: 4px; align-items: center; }
   #url { flex: 1; min-width: 0; }
+  #lock { display: inline-flex; color: var(--cb-muted, GrayText); }
   #status { color: var(--cb-muted, GrayText); padding: 0 8px 4px; min-height: 18px; }
   #status[data-control="user"] { color: var(--cb-accent, Highlight); }
   #stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: var(--cb-panel, Canvas); position: relative; overflow: hidden; }
@@ -51,6 +52,7 @@ export const PANEL_HTML = `<!doctype html>
   <button type="button" id="back"></button>
   <button type="button" id="forward"></button>
   <button type="button" id="reload"></button>
+  <span id="lock" role="img" hidden><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="5" width="8" height="6" fill="currentColor"/><path d="M4 5V3.5a2 2 0 0 1 4 0V5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></span>
   <input id="url" type="text" spellcheck="false" autocomplete="off">
   <button type="button" id="takeover" class="primary"></button>
   <button type="button" id="handback" class="primary" hidden></button>
@@ -68,6 +70,7 @@ export const PANEL_HTML = `<!doctype html>
 </div>
 <div id="blocked" class="strip" hidden><p><span id="blocked-label"></span> <span id="blocked-host"></span></p><button type="button" id="allow" class="primary"></button></div>
 <div id="dialog" class="strip" hidden><p><span id="dialog-label"></span> <span id="dialog-text"></span></p></div>
+<div id="notice" class="strip" role="alert" hidden><p><span id="notice-text"></span></p></div>
 <script src="panel.js"></script>
 </body>
 </html>

@@ -1,7 +1,14 @@
 import { createServer, type Server } from "node:http";
 import { connect } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { openViewer, removeDir, request, startTestDaemon, type TestDaemon } from "./helpers.js";
+import {
+  openViewer,
+  removeDir,
+  request,
+  startFixtureServer,
+  startTestDaemon,
+  type TestDaemon,
+} from "./helpers.js";
 
 /** An egress proxy like the device's: refuses blocked.test (403), tunnels everything else. */
 async function startRefusingProxy(): Promise<{ url: string; server: Server }> {
@@ -80,6 +87,21 @@ describe("browser daemon blocked hosts", () => {
     v.send({ t: "handback" });
     await back;
     await v.close();
+  });
+
+  it("a refused resource names the page that loaded it, the page to open once allowed", async () => {
+    const fx = await startFixtureServer({
+      "/page": '<!doctype html><title>P</title><script src="https://blocked.test/a.js"></script>',
+    });
+    try {
+      const v = await openViewer(d.socketPath, { maxWidth: 480, maxHeight: 300 });
+      const blocked = v.after((m) => m.t === "blocked");
+      await request(d.socketPath, { op: "navigate", url: `${fx.url}/page` });
+      expect(await blocked).toEqual({ t: "blocked", host: "blocked.test", url: `${fx.url}/page` });
+      await v.close();
+    } finally {
+      await fx.close();
+    }
   });
 
   it("a plain http navigation the proxy refuses is reported too", async () => {
