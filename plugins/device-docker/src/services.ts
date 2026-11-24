@@ -1,5 +1,6 @@
 // Device services (browser use spec §5–6), shared by device-docker and device-e2b: this file is
 // identical in both plugins (device-e2b's test/services.test.ts compares them byte for byte).
+import { createHash } from "node:crypto";
 import {
   DEVICE_SERVICE_MAX_MESSAGE,
   DEVICE_SERVICE_NAME_RE,
@@ -67,23 +68,31 @@ export const SERVICE_NODE = "/usr/local/bin/node";
  *   regular file, so a planted FIFO cannot block it), starts `node <stateDir>/<entry> <args>`
  *   in a new session with the state directory as its working directory, and waits until the
  *   service listens on its socket (or exits, reported with the tail of its log).
+ * - Files go digest first (R27): a start request carries the files' digest and paths; the manager
+ *   starts from the files in the state directory when its `.files-digest` record matches and
+ *   those files hash to the digest, and otherwise answers `{"filesNeeded": true}`; the provider
+ *   then sends the files, which the manager checks against the digest, writes, and records the
+ *   digest for (temp file and rename, the old record removed first).
  * - A pid record counts only while its process is alive with the recorded start time on the
  *   recorded boot: after a suspend, a restart or a pid reuse it reads as stopped.
  * - The service gets the manager's environment (the instance's, with its egress proxy variables)
  *   with `PATH` set to root-owned directories, the spec's `env`, and the socket and state
- *   variables. Nothing restarts a service that exited: the next `ensure` (reviewed again by the
+ *   variables (`CAPYBARA_SERVICE_WORKSPACE` too: the device's workspace root). Nothing restarts a service that exited: the next `ensure` (reviewed again by the
  *   kernel) does.
  * - A state root that is missing or not the sandbox user's (an image before device services)
  *   answers {@link SERVICE_IMAGE_TOO_OLD}.
  * - `stop` sends SIGTERM to the service's process group, waits up to 5 s, then SIGKILLs every
  *   process left in its session.
  */
-export const SERVICE_MANAGER_SCRIPT = `import base64, fcntl, json, os, re, signal, stat, sys, time
+export const SERVICE_MANAGER_SCRIPT = `import base64, fcntl, hashlib, json, os, re, signal, stat, sys, time
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 STATE = ("/var/lib/capybara/svc", ())
 TOO_OLD = "This device's image predates device services, or /var/lib/capybara/svc is not owned by the sandbox user. The instance must be recreated on the current image: that happens after a period without use, or delete the device and create it again."
 RUN = ("/tmp", (".capybara-svc",))
+WORKSPACE = "/workspace"
+DIGEST_FILE = ".files-digest"
+DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 NODE = "/usr/local/bin/node"
 PATH = "/usr/local/bin:/usr/bin:/bin"
 DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -293,6 +302,46 @@ def write_files(sfd, files):
         with os.fdopen(out, "wb") as f:
             f.write(base64.b64decode(b64))
 
+def files_digest(items):
+    # sha256 over (path, bytes) in the given order: path, NUL, byte length, NUL, bytes
+    h = hashlib.sha256()
+    for rel, data in items:
+        h.update(rel.encode("utf-8") + b"\\0" + str(len(data)).encode() + b"\\0")
+        h.update(data)
+    return h.hexdigest()
+
+def read_stored(sfd, rel):
+    parts = segments(rel)
+    fd = os.dup(sfd)
+    try:
+        for p in parts[:-1]:
+            nfd = os.open(p, DIR, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        f = open_reg(parts[-1], os.O_RDONLY, fd)
+    finally:
+        os.close(fd)
+    with os.fdopen(f, "rb") as fh:
+        return fh.read()
+
+def stored_matches(sfd, paths, digest):
+    # a hit needs the recorded digest and the files on disk hashing to it (a file changed in the
+    # state directory since is a miss)
+    try:
+        if read_stored(sfd, DIGEST_FILE).decode("ascii").strip() != digest:
+            return False
+        return files_digest([(rel, read_stored(sfd, rel)) for rel in paths]) == digest
+    except (OSError, UnicodeDecodeError):
+        return False
+
+def record_digest(sfd, digest):
+    tmp = DIGEST_FILE + ".tmp"
+    unlink(sfd, tmp)
+    fd = open_reg(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, sfd)
+    with os.fdopen(fd, "w") as f:
+        f.write(digest + "\\n")
+    os.rename(tmp, DIGEST_FILE, src_dir_fd=sfd, dst_dir_fd=sfd)
+
 def log_tail(rfd):
     try:
         fd = open_reg("log", os.O_RDONLY, rfd)
@@ -314,8 +363,19 @@ def ensure(name, req):
     if rec is not None or req.get("ifRunning") is True:
         answer(status(name, rec))
     entry, args, env, files = req.get("entry"), req.get("args"), req.get("env") or {}, req.get("files")
-    if not isinstance(files, dict) or not isinstance(entry, str) or entry not in files:
+    digest, paths = req.get("digest"), req.get("paths")
+    if not isinstance(digest, str) or not DIGEST_RE.match(digest):
+        fail("invalid service files digest")
+    if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths) or len(set(paths)) != len(paths):
+        fail("invalid service file list")
+    for rel in paths:
+        segments(rel)
+    if DIGEST_FILE in paths or (DIGEST_FILE + ".tmp") in paths:
+        fail("%s is reserved in a service's state directory" % DIGEST_FILE)
+    if not isinstance(entry, str) or entry not in paths:
         fail("the service entry must be one of its files")
+    if files is not None and (not isinstance(files, dict) or set(files) != set(paths)):
+        fail("the service files do not match their list")
     if not isinstance(args, list) or not all(isinstance(a, str) and "\\0" not in a for a in args):
         fail("invalid service arguments")
     if not isinstance(env, dict) or not all(isinstance(k, str) and KEY_RE.match(k) and isinstance(v, str) and "\\0" not in v for k, v in env.items()):
@@ -332,7 +392,18 @@ def ensure(name, req):
     except OSError as e:
         fail("cannot open the service state directory: %s (a link or a non-directory is in the way)" % e.strerror)
     os.close(root)
-    write_files(sfd, files)
+    if files is None:
+        # digest first: start from the files already there, or ask for them
+        if not stored_matches(sfd, paths, digest):
+            answer({"filesNeeded": True})
+    else:
+        decoded = {rel: base64.b64decode(files[rel]) for rel in paths}
+        if files_digest([(rel, decoded[rel]) for rel in paths]) != digest:
+            fail("the service files do not match their digest")
+        # no stale record may vouch for a half-written set
+        unlink(sfd, DIGEST_FILE)
+        write_files(sfd, files)
+        record_digest(sfd, digest)
     state_dir = status(name, None)["stateDir"]
     sock = "%s/%s/%s/sock" % (RUN[0], RUN[1][0], name)
     unlink(rfd, "sock")
@@ -343,7 +414,8 @@ def ensure(name, req):
     os.set_blocking(logfd, True)
     penv = {k: v for k, v in os.environ.items() if not k.startswith("CAPYBARA_")}
     penv.update(env)
-    penv.update({"PATH": PATH, "CAPYBARA_SERVICE_SOCKET": sock, "CAPYBARA_SERVICE_STATE": state_dir})
+    penv.update({"PATH": PATH, "CAPYBARA_SERVICE_SOCKET": sock, "CAPYBARA_SERVICE_STATE": state_dir,
+                 "CAPYBARA_SERVICE_WORKSPACE": WORKSPACE})
     argv = [NODE, "%s/%s" % (state_dir, entry)] + args
     at = time.time()
     pid = os.fork()
@@ -423,27 +495,79 @@ export function managerArgv(op: "status" | "ensure" | "stop", name: string): str
 }
 
 /**
- * The `ensure` request on the manager's stdin. With `ifRunning` it carries nothing of the spec:
- * the manager never starts anything then.
+ * The digest of a spec's files (R27): sha256 over the files in path order, each as its path,
+ * NUL, its byte length in decimal, NUL, its bytes. `paths` is that order; the manager hashes the
+ * files it holds in the same order.
  */
-export function managerRequest(spec: DeviceServiceSpec, ifRunning: boolean): Uint8Array {
+export function serviceFilesDigest(files: Record<string, Uint8Array>): {
+  digest: string;
+  paths: string[];
+} {
+  const paths = Object.keys(files).sort();
+  const h = createHash("sha256");
+  for (const p of paths) {
+    const data = files[p] as Uint8Array;
+    h.update(Buffer.from(`${p}\0${String(data.byteLength)}\0`, "utf8"));
+    h.update(data);
+  }
+  return { digest: h.digest("hex"), paths };
+}
+
+/**
+ * The `ensure` request on the manager's stdin. With `ifRunning` it carries nothing of the spec:
+ * the manager never starts anything then. Otherwise it carries the entry, arguments,
+ * environment, the files' digest and their paths, and the files themselves only `withFiles`: a
+ * start asks with the digest first, and the manager starts from the files already in the state
+ * directory when they hash to it, or answers {@link isFilesNeeded} (then the provider sends them).
+ */
+export function managerRequest(
+  spec: DeviceServiceSpec,
+  o: { ifRunning?: boolean; withFiles?: boolean } = {},
+): Uint8Array {
   checkServiceName(spec.name);
-  const body = ifRunning
-    ? { ifRunning: true }
-    : {
-        entry: spec.entry,
-        args: spec.args,
-        env: spec.env ?? {},
+  let body: Record<string, unknown>;
+  if (o.ifRunning) body = { ifRunning: true };
+  else {
+    const { digest, paths } = serviceFilesDigest(spec.files);
+    body = {
+      entry: spec.entry,
+      args: spec.args,
+      env: spec.env ?? {},
+      digest,
+      paths,
+      ...(o.withFiles && {
         files: Object.fromEntries(
-          Object.entries(spec.files).map(([k, v]) => [k, Buffer.from(v).toString("base64")]),
+          paths.map((k) => [k, Buffer.from(spec.files[k] as Uint8Array).toString("base64")]),
         ),
-      };
+      }),
+    };
+  }
   const json = Buffer.from(JSON.stringify(body), "utf8");
   const out = Buffer.alloc(4 + json.byteLength);
   out.writeUInt32BE(json.byteLength, 0);
   json.copy(out, 4);
   return out;
 }
+
+/** The manager answered a digest-only start with "send the files" (a successful exit). */
+export function isFilesNeeded(r: { exitCode: number | null; stdout: string }): boolean {
+  if (r.exitCode !== 0) return false;
+  const line = r.stdout.trim().split("\n").pop() ?? "";
+  try {
+    return (JSON.parse(line) as { filesNeeded?: unknown }).filesNeeded === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The environment variable naming the device's workspace root for a service (R26). A local
+ * constant until the SDK's `DEVICE_SERVICE_WORKSPACE_ENV` (same name) is released.
+ */
+export const DEVICE_SERVICE_WORKSPACE_ENV = "CAPYBARA_SERVICE_WORKSPACE";
+
+/** The device's workspace root a service is told about (both providers). */
+export const SERVICE_WORKSPACE = "/workspace";
 
 /** Parses the manager's answer; `{error}`, a failed exit or an unreadable answer throws. */
 export function parseManagerReply(

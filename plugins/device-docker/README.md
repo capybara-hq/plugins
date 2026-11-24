@@ -291,6 +291,12 @@ named process per device, started on an extension's behalf after the kernel's co
 - **Environment**: the instance's (with its egress proxy variables `HTTP_PROXY` / `HTTPS_PROXY` = `http://<proxy>:3128`, so a
   browser's `--proxy-server` goes through the proxy), `PATH=/usr/local/bin:/usr/bin:/bin`, the spec's `env`,
   `CAPYBARA_SERVICE_SOCKET` and `CAPYBARA_SERVICE_STATE`.
+- **Files, digest first**: a start sends the files' digest (sha256 over the files in path order: path, NUL, byte length, NUL,
+  bytes) and their paths, never the files; the manager starts from the files in the state directory when its `.files-digest`
+  record matches and the files there still hash to it, and otherwise answers "files needed", after which the provider sends the
+  files (checked against the digest, written, the record replaced by a temp file and rename). A restart of an unchanged service
+  therefore moves no file bytes. The service's environment also names the device's workspace root
+  (`CAPYBARA_SERVICE_WORKSPACE=/workspace`).
 - **Network changes**: the egress proxy enforces the device's allowlist live (an in-place apply swaps the list and closes every
   connection the new list does not cover; a change of kind recreates the container, and the service with it), so an `ifRunning`
   ensure after an allowlist change has nothing to re-apply.

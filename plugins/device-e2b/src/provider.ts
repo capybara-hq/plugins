@@ -59,6 +59,7 @@ import {
   runtimeFiles,
 } from "./runtime-source.js";
 import {
+  isFilesNeeded,
   managerArgv,
   managerRequest,
   parseManagerReply,
@@ -102,6 +103,8 @@ export interface E2BSandboxConfig {
  * 部署配置 schema 是 strict）。
  */
 export interface E2BSandboxTestOptions {
+  /** Sees the size of every request written to the service manager's stdin (R27 tests). */
+  onServiceManagerStdin?: (name: string, bytes: number) => void;
   /** envd 地址改为这个（假 E2B 按 `E2b-Sandbox-Id` 请求头路由），不按沙箱 id 与域名拼。 */
   envdUrl?: string;
   /**
@@ -163,6 +166,8 @@ const UPLOAD_DIR = "/opt/capybara/upload";
 const MAX_TIMEOUT_SECONDS = 86_400;
 /** 长命令：沙箱超时至少推到命令超时之后这么多秒。 */
 const TIMEOUT_MARGIN_SECONDS = 120;
+/** The manager answered a digest-only start with "send the files" (R27). */
+const FILES_NEEDED = "files-needed" as const;
 /** The service manager's time limit: writing the files, then up to 30 s until the service listens. */
 const SERVICE_MANAGER_TIMEOUT_MS = 90_000;
 /**
@@ -1520,8 +1525,9 @@ export function createE2BSandbox(
     name: string,
     signal: AbortSignal,
     o: { stdin?: Uint8Array; start?: boolean } = {},
-  ): Promise<DeviceServiceStatus> => {
+  ): Promise<DeviceServiceStatus | typeof FILES_NEEDED> => {
     signal.throwIfAborted();
+    if (o.stdin) test.onServiceManagerStdin?.(name, o.stdin.byteLength);
     const [cmd, ...args] = managerArgv(op, name) as [string, ...string[]];
     const t = o.start ? await attach(h.id, signal) : await targetIfRunning(h.id, signal);
     if (t === undefined) return stoppedService(name);
@@ -1543,12 +1549,21 @@ export function createE2BSandbox(
       throw e;
     }
     if (r.aborted) throw abortReason(signal);
-    return parseManagerReply(name, {
+    const reply = {
       exitCode: r.exitCode,
       stdout: r.stdout.toString("utf8"),
       stderr: stderrOf(r),
       timedOut: r.timedOut,
-    });
+    };
+    if (op === "ensure" && isFilesNeeded(reply)) return FILES_NEEDED;
+    return parseManagerReply(name, reply);
+  };
+
+  /** `manage` for the calls that never ask for files (status, stop, an `ifRunning` ensure). */
+  const manageStatus = async (...a: Parameters<typeof manage>): Promise<DeviceServiceStatus> => {
+    const s = await manage(...a);
+    if (s === FILES_NEEDED) throw new Error(`device service ${a[2]}: unexpected files request`);
+    return s;
   };
 
   /**
@@ -1937,19 +1952,29 @@ export function createE2BSandbox(
      * destroy) ends it with every other process.
      */
     async ensureService(h, spec, signal, opts) {
-      const ifRunning = opts?.ifRunning === true;
-      return manage(h, "ensure", spec.name, signal, {
-        stdin: managerRequest(spec, ifRunning),
-        start: !ifRunning,
+      if (opts?.ifRunning === true) {
+        return manageStatus(h, "ensure", spec.name, signal, {
+          stdin: managerRequest(spec, { ifRunning: true }),
+        });
+      }
+      // digest first (R27): the files cross only when the state directory does not hold them
+      const first = await manage(h, "ensure", spec.name, signal, {
+        stdin: managerRequest(spec),
+        start: true,
+      });
+      if (first !== FILES_NEEDED) return first;
+      return manageStatus(h, "ensure", spec.name, signal, {
+        stdin: managerRequest(spec, { withFiles: true }),
+        start: true,
       });
     },
 
     async stopService(h, name, signal) {
-      await manage(h, "stop", name, signal);
+      await manageStatus(h, "stop", name, signal);
     },
 
     async serviceStatus(h, name, signal) {
-      return manage(h, "status", name, signal);
+      return manageStatus(h, "status", name, signal);
     },
 
     async serviceRequest(h, name, body, opts) {

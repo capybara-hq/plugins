@@ -276,6 +276,12 @@ as device-docker's (README "Device services and streams" there; `src/services.ts
   sandbox user; `/var/lib` is root's, so nothing the sandbox user planted redirects it). Runtime files under
   `/tmp/.capybara-svc/<name>/`; `/tmp` is on the VM's disk here, so a pid record counts only while its process runs with the
   recorded start time on the recorded boot (a cold start after a pause changes the boot id).
+- **Files, digest first**: a start sends the files' digest (sha256 over the files in path order: path, NUL, byte length, NUL,
+  bytes) and their paths, never the files; the manager starts from the files in the state directory when its `.files-digest`
+  record matches and the files there still hash to it, and otherwise answers "files needed", after which the provider sends the
+  files (checked against the digest, written, the record replaced by a temp file and rename). A restart of an unchanged service
+  therefore moves no file bytes. The service's environment also names the device's workspace root
+  (`CAPYBARA_SERVICE_WORKSPACE=/workspace`).
 - **Network**: the VM's (E2B applies the egress rules to the whole VM and `update` changes them in place), so an `ifRunning`
   ensure after an allowlist change has nothing to re-apply.
 - **Requests and streams**: the relay runs inline (`node --input-type=module -e <SOCKET_RELAY_SOURCE> <socket>`), an envd process

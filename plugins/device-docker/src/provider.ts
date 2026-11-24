@@ -41,6 +41,7 @@ import {
 import { createOperations, type OperationTransport, refusedFrame } from "./operations.js";
 import { OPERATION_AGENT } from "./runtime-source.js";
 import {
+  isFilesNeeded,
   managerArgv,
   managerRequest,
   parseManagerReply,
@@ -195,6 +196,8 @@ export interface DockerSandboxTestOptions {
    * write instead (deterministic interception tests: steal, then write back).
    */
   interceptBackgroundStdin?: (taskId: string, stdin: Uint8Array) => Promise<Uint8Array>;
+  /** Sees the size of every request written to the service manager's stdin (R27 tests). */
+  onServiceManagerStdin?: (name: string, bytes: number) => void;
 }
 
 /** The sandbox user (the image's `sandbox`): commands and file operations run as it. */
@@ -267,6 +270,8 @@ const EGRESS_CONTROL_DIR = "/run/egress";
 const EGRESS_USER = "node";
 /** How long one in-place list change may take (the proxy's own deadline is 30 s too). */
 const EGRESS_APPLY_TIMEOUT_MS = 30_000;
+/** The manager answered a digest-only start with "send the files" (R27). */
+const FILES_NEEDED = "files-needed" as const;
 /** The service manager's time limit: writing the files, then up to 30 s until the service listens. */
 const SERVICE_MANAGER_TIMEOUT_MS = 90_000;
 
@@ -1953,8 +1958,9 @@ export function createDockerSandbox(
     name: string,
     signal: AbortSignal,
     o: { stdin?: Uint8Array; start?: boolean } = {},
-  ): Promise<DeviceServiceStatus> => {
+  ): Promise<DeviceServiceStatus | typeof FILES_NEEDED> => {
     signal.throwIfAborted();
+    if (o.stdin) test.onServiceManagerStdin?.(name, o.stdin.byteLength);
     const go = () =>
       run(h.id, {
         cmd: managerArgv(op, name),
@@ -1977,12 +1983,21 @@ export function createDockerSandbox(
       }
     }
     if (r.aborted) throw abortReason(signal);
-    return parseManagerReply(name, {
+    const reply = {
       exitCode: r.exitCode,
       stdout: r.stdout.toString("utf8"),
       stderr: stderrOf(r),
       timedOut: r.timedOut,
-    });
+    };
+    if (op === "ensure" && isFilesNeeded(reply)) return FILES_NEEDED;
+    return parseManagerReply(name, reply);
+  };
+
+  /** `manage` for the calls that never ask for files (status, stop, an `ifRunning` ensure). */
+  const manageStatus = async (...a: Parameters<typeof manage>): Promise<DeviceServiceStatus> => {
+    const s = await manage(...a);
+    if (s === FILES_NEEDED) throw new Error(`device service ${a[2]}: unexpected files request`);
+    return s;
   };
 
   /**
@@ -2523,19 +2538,29 @@ export function createDockerSandbox(
      * `ifRunning` ensure after an allowlist change has nothing to re-apply.
      */
     async ensureService(h, spec, signal, opts) {
-      const ifRunning = opts?.ifRunning === true;
-      return manage(h, "ensure", spec.name, signal, {
-        stdin: managerRequest(spec, ifRunning),
-        start: !ifRunning,
+      if (opts?.ifRunning === true) {
+        return manageStatus(h, "ensure", spec.name, signal, {
+          stdin: managerRequest(spec, { ifRunning: true }),
+        });
+      }
+      // digest first (R27): the files cross only when the state directory does not hold them
+      const first = await manage(h, "ensure", spec.name, signal, {
+        stdin: managerRequest(spec),
+        start: true,
+      });
+      if (first !== FILES_NEEDED) return first;
+      return manageStatus(h, "ensure", spec.name, signal, {
+        stdin: managerRequest(spec, { withFiles: true }),
+        start: true,
       });
     },
 
     async stopService(h, name, signal) {
-      await manage(h, "stop", name, signal);
+      await manageStatus(h, "stop", name, signal);
     },
 
     async serviceStatus(h, name, signal) {
-      return manage(h, "status", name, signal);
+      return manageStatus(h, "status", name, signal);
     },
 
     async serviceRequest(h, name, body, opts) {

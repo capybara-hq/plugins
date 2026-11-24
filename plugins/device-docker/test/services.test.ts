@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -93,6 +93,9 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
   let proxy: SocketProxy;
   const netName = `capybara-sandbox-test-${RUN}`;
   let sbx: DeviceProvider;
+  /** Every request written to the service manager's stdin (name, size). */
+  const sent: { name: string; bytes: number }[] = [];
+  const sentFor = (name: string) => sent.filter((x) => x.name === name).map((x) => x.bytes);
 
   const create = async (name = `cap-${randomUUID()}`) => {
     const fileSystem = await sbx.createFileSystem({ name, limits: limits(), signal: sig() });
@@ -133,7 +136,10 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
         network: netName,
         egressProxyImage: images.egressImage,
       },
-      { labels: { [TEST_LABEL]: RUN } },
+      {
+        labels: { [TEST_LABEL]: RUN },
+        onServiceManagerStdin: (name, bytes) => sent.push({ name, bytes }),
+      },
     );
     oldImageDir = await mkdtemp(join(tmpdir(), "capybara-nosvc-"));
     await writeFile(
@@ -251,6 +257,47 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
     await waitFor(async () => (await relays(h)) === "0");
   });
 
+  it("sends the files only when the state directory does not hold them (digest first)", async () => {
+    const { h } = await create();
+    const MIB = 1024 * 1024;
+    const filler = (seed: number) => new Uint8Array(2 * MIB).map((_, i) => (i * seed) % 251);
+    const spec = (seed: number) => echo("digest", { "lib/filler.bin": filler(seed) });
+    const started = await sbx.ensureService?.(h, spec(7), sig());
+    expect(started?.state).toBe("running");
+    // the first start: a digest-only ask, then the files (the 2 MiB filler as base64)
+    const [ask, files, ...rest] = sentFor("digest");
+    expect(rest).toEqual([]);
+    expect(ask).toBeLessThan(4096);
+    expect(files).toBeGreaterThan(2 * MIB);
+    // a second start after a stop: the digest alone, no file crosses
+    await sbx.stopService?.(h, "digest", sig());
+    sent.length = 0;
+    expect((await sbx.ensureService?.(h, spec(7), sig()))?.state).toBe("running");
+    expect(sentFor("digest")).toHaveLength(1);
+    expect(sentFor("digest")[0]).toBeLessThan(4096);
+    // a running service is found without any files either
+    expect((await sbx.ensureService?.(h, spec(7), sig()))?.state).toBe("running");
+    expect(sentFor("digest")).toHaveLength(2);
+    expect(sentFor("digest")[1]).toBeLessThan(4096);
+    // changed files: files_needed, then the new files, written
+    await sbx.stopService?.(h, "digest", sig());
+    sent.length = 0;
+    expect((await sbx.ensureService?.(h, spec(11), sig()))?.state).toBe("running");
+    expect(sentFor("digest")).toHaveLength(2);
+    expect(sentFor("digest")[1]).toBeGreaterThan(2 * MIB);
+    const dir = serviceStateDir("digest");
+    const sum = async () =>
+      (await sh(h, `sha256sum ${dir}/lib/filler.bin | cut -d' ' -f1`)).stdout.trim();
+    expect(await sum()).toBe(createHash("sha256").update(filler(11)).digest("hex"));
+    // a file changed in the state directory since is a miss as well: the files are sent again
+    await sbx.stopService?.(h, "digest", sig());
+    expect((await sh(h, `printf x >> ${dir}/lib/filler.bin`)).exitCode).toBe(0);
+    sent.length = 0;
+    expect((await sbx.ensureService?.(h, spec(11), sig()))?.state).toBe("running");
+    expect(sentFor("digest")).toHaveLength(2);
+    expect(await sum()).toBe(createHash("sha256").update(filler(11)).digest("hex"));
+  });
+
   it("service files land on the persistent volume", async () => {
     const { name, fileSystem, h } = await create();
     const status = await sbx.ensureService?.(
@@ -262,9 +309,9 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
     // outside the workspace: no project root, Glob / Grep, share or delivery reaches it
     expect(status?.stateDir.startsWith("/var/lib/capybara/svc/")).toBe(true);
     expect((await sh(h, "ls -A /workspace")).stdout).not.toMatch(/capybara/);
-    // the service writes its state directory, and only the files it was given land there
+    // only the files it was given land there, with their digest record
     expect((await sh(h, `cd ${status?.stateDir} && ls -A && id -u`)).stdout).toBe(
-      "data\necho.mjs\n1000\n",
+      ".files-digest\ndata\necho.mjs\n1000\n",
     );
     const note = () =>
       sbx.readFile(h, `${status?.stateDir}/data/note.txt`, { maxBytes: 100, signal: sig() });
@@ -405,5 +452,6 @@ createServer(() => {}).listen(process.env.CAPYBARA_SERVICE_SOCKET);
     expect(env.CAPYBARA_SERVICE_STATE).toBe(s?.stateDir);
     expect(env.CAPYBARA_SERVICE_SOCKET).toMatch(/^\/tmp\//);
     expect(env.PATH).toBe("/usr/local/bin:/usr/bin:/bin");
+    expect(env.CAPYBARA_SERVICE_WORKSPACE).toBe("/workspace");
   });
 });

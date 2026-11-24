@@ -99,6 +99,9 @@ describe.skipIf(!READY)("device-e2b services (live)", { timeout: 240_000 }, () =
   const name = `cap-device-live-svc-${randomUUID()}`;
   let fs: FileSystemHandle;
   let h: SandboxHandle;
+  /** Every request written to the service manager's stdin (name, size). */
+  const sent: { name: string; bytes: number }[] = [];
+  const sentFor = (svc: string) => sent.filter((x) => x.name === svc).map((x) => x.bytes);
 
   beforeAll(async () => {
     const cfg = DeploymentConfig.parse({
@@ -109,7 +112,11 @@ describe.skipIf(!READY)("device-e2b services (live)", { timeout: 240_000 }, () =
       timeoutSeconds: 600,
     });
     const log = { info: console.info, warn: console.warn, error: console.error };
-    sbx = createE2BSandbox(providerConfig(cfg), { log });
+    sbx = createE2BSandbox(
+      providerConfig(cfg),
+      { log },
+      { onServiceManagerStdin: (svc, bytes) => sent.push({ name: svc, bytes }) },
+    );
     fs = await sbx.createFileSystem({ name, limits, signal: AbortSignal.timeout(BUILD_MS) });
     h = await sbx.create({ fence: FENCE, name, limits, fileSystem: fs, signal: sig() });
   }, BUILD_MS + 60_000);
@@ -191,6 +198,41 @@ describe.skipIf(!READY)("device-e2b services (live)", { timeout: 240_000 }, () =
     });
     expect(await sbx.resume(h, sig())).toBe("resumed");
     expect((await sbx.serviceStatus?.(h, "keep", sig()))?.state).toBe("stopped");
+  });
+
+  it("sends the files only when the state directory does not hold them (digest first)", async () => {
+    const MIB = 1024 * 1024;
+    const filler = (seed: number) => new Uint8Array(MIB).map((_, i) => (i * seed) % 251);
+    const ENV = `import { createServer } from "node:net";
+import { writeFileSync } from "node:fs";
+writeFileSync("env.json", JSON.stringify(process.env));
+createServer(() => {}).listen(process.env.CAPYBARA_SERVICE_SOCKET);
+`;
+    const spec = (seed: number): DeviceServiceSpec => ({
+      name: "digest",
+      runtime: "node",
+      entry: "env.mjs",
+      args: [],
+      files: { "env.mjs": enc.encode(ENV), "lib/filler.bin": filler(seed) },
+    });
+    const s = await sbx.ensureService?.(h, spec(7), sig());
+    expect(sentFor("digest")).toHaveLength(2);
+    const raw = await sbx.readFile(h, `${s?.stateDir}/env.json`, {
+      maxBytes: 64_000,
+      signal: sig(),
+    });
+    const svcEnv = JSON.parse(dec.decode(raw?.data)) as Record<string, string>;
+    expect(svcEnv.CAPYBARA_SERVICE_WORKSPACE).toBe("/workspace");
+    await sbx.stopService?.(h, "digest", sig());
+    sent.length = 0;
+    expect((await sbx.ensureService?.(h, spec(7), sig()))?.state).toBe("running");
+    expect(sentFor("digest")).toHaveLength(1);
+    expect(sentFor("digest")[0]).toBeLessThan(4096);
+    await sbx.stopService?.(h, "digest", sig());
+    sent.length = 0;
+    expect((await sbx.ensureService?.(h, spec(11), sig()))?.state).toBe("running");
+    expect(sentFor("digest")).toHaveLength(2);
+    expect(sentFor("digest")[1]).toBeGreaterThan(MIB);
   });
 
   it("service files land on the persistent volume", async () => {
