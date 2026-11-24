@@ -95,7 +95,9 @@ describe("browser daemon blocked hosts", () => {
     });
     try {
       const v = await openViewer(d.socketPath, { maxWidth: 480, maxHeight: 300 });
-      const blocked = v.after((m) => m.t === "blocked");
+      // the daemon is shared by this file: a late note of an earlier test's blocked host may
+      // still arrive, so wait for the one this page caused
+      const blocked = v.after((m) => m.t === "blocked" && m.url.startsWith(fx.url));
       await request(d.socketPath, { op: "navigate", url: `${fx.url}/page` });
       expect(await blocked).toEqual({ t: "blocked", host: "blocked.test", url: `${fx.url}/page` });
       await v.close();
