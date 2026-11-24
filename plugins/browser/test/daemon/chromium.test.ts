@@ -21,4 +21,18 @@ describe("chromium launch plan", () => {
     expect(plan.args).toEqual(expect.arrayContaining(["--single-process", "--use-mock-keychain"]));
     expect(plan.args.some((a) => a.startsWith("--proxy-server"))).toBe(false);
   });
+
+  it("gives proxy credentials to Playwright, not to the flag", () => {
+    const plan = chromiumLaunchPlan({
+      stateDir: "/s",
+      env: { HTTPS_PROXY: "http://u%40x:p%3Aw@egress:3128" },
+      platform: "linux",
+    });
+    expect(plan.args.some((a) => a.startsWith("--proxy-server"))).toBe(false);
+    expect(plan.proxyAuth).toEqual({
+      server: "http://egress:3128",
+      username: "u@x",
+      password: "p:w",
+    });
+  });
 });

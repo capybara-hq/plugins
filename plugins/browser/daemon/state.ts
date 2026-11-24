@@ -2,7 +2,7 @@
 // viewer stream of the device reaches, so it alone decides who controls the browser. Timers are
 // allowed here: the daemon runs inside the device, not in the kernel.
 
-import { IDLE_STOP_MS, TAKEOVER_GRACE_MS } from "./protocol.js";
+import { HANDOFF_MAX_CHARS, IDLE_STOP_MS, TAKEOVER_GRACE_MS } from "./protocol.js";
 
 /** Time source and timers (injected in tests). */
 export interface Clock {
@@ -44,6 +44,7 @@ export class DaemonState {
   private idleTimer: unknown;
   private graceTimer: unknown;
   private disposed = false;
+  private pendingHandoff: { callId: string; message: string } | undefined;
 
   constructor(opts: DaemonStateOptions) {
     this.clock = opts.clock ?? systemClock;
@@ -66,10 +67,34 @@ export class DaemonState {
     return this.viewers;
   }
 
+  get requestsInFlight(): number {
+    return this.inflight;
+  }
+
   /** Subscribes to control changes; returns the unsubscribe function. */
   onChange(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
+  }
+
+  /** The pending handoff question (the latest notice), if any. */
+  get handoff(): { callId: string; message: string } | undefined {
+    return this.pendingHandoff;
+  }
+
+  /** Records a handoff question; it replaces any earlier one. */
+  noticeHandoff(callId: string, message: string): void {
+    const m =
+      message.length <= HANDOFF_MAX_CHARS ? message : `${message.slice(0, HANDOFF_MAX_CHARS - 1)}…`;
+    this.pendingHandoff = { callId, message: m };
+    this.emit();
+  }
+
+  /** Clears the pending handoff when it is `callId`'s; a stale clear changes nothing. */
+  clearHandoff(callId: string): void {
+    if (this.pendingHandoff?.callId !== callId) return;
+    this.pendingHandoff = undefined;
+    this.emit();
   }
 
   takeover(): void {

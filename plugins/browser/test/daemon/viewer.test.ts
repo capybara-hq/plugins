@@ -1,5 +1,8 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { ViewerOut } from "../../daemon/protocol.js";
+import { connect } from "node:net";
+import { encodeServiceMessage } from "@capybara-hq/plugin-sdk";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { startDaemon } from "../../daemon/main.js";
+import { HANDOFF_MAX_CHARS, type ViewerOut } from "../../daemon/protocol.js";
 import {
   jpegSize,
   openViewer,
@@ -7,6 +10,7 @@ import {
   request,
   startFixtureServer,
   startTestDaemon,
+  TEST_BROWSERS,
   type TestDaemon,
 } from "./helpers.js";
 
@@ -24,9 +28,20 @@ const isState = (m: ViewerOut): m is State => m.t === "state";
 
 let fx: Awaited<ReturnType<typeof startFixtureServer>>;
 let d: TestDaemon;
+// the /slow page answers when the test releases it
+let slowHit: () => void = () => undefined;
+let releaseSlow: () => void = () => undefined;
 
 beforeAll(async () => {
-  fx = await startFixtureServer({ "/size": SIZE, "/alert": ALERT, "/button": BUTTON });
+  fx = await startFixtureServer({
+    "/size": SIZE,
+    "/alert": ALERT,
+    "/button": BUTTON,
+    "/slow": (_req, res) => {
+      releaseSlow = () => res.writeHead(200, { "content-type": "text/html" }).end(BUTTON);
+      slowHit();
+    },
+  });
   d = await startTestDaemon();
 });
 
@@ -123,5 +138,107 @@ describe("browser daemon viewer", () => {
     expect(r.ok).toBe(true);
     expect(await clicked).toMatchObject({ lastClick: { x: 30, y: 20 } });
     await v.close();
+  });
+
+  it("a request queued behind a slow one is refused when a takeover begins meanwhile", async () => {
+    await request(d.socketPath, { op: "navigate", url: `${fx.url}/button` });
+    const v = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 });
+    await v.next(isState);
+    const hit = new Promise<void>((r) => {
+      slowHit = r;
+    });
+    const slow = request(d.socketPath, { op: "navigate", url: `${fx.url}/slow` });
+    await hit; // the navigation runs and holds the queue
+    const queued = request(d.socketPath, { op: "press", key: "Tab" });
+    await vi.waitFor(() => expect(d.daemon.state.requestsInFlight).toBe(2));
+    const taken = v.after((m) => isState(m) && m.control === "user");
+    v.send({ t: "takeover" });
+    await taken;
+    releaseSlow();
+    expect((await slow).ok).toBe(true); // a running action is left to finish
+    expect(await queued).toMatchObject({ ok: false, error: "taken_over" });
+    const back = v.after((m) => isState(m) && m.control === "agent");
+    v.send({ t: "handback" });
+    await back;
+    await v.close();
+  });
+});
+
+describe("browser daemon handoff notice", () => {
+  it("viewers see the pending handoff; the latest wins; only its callId clears it", async () => {
+    const v = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 });
+    await v.next(isState);
+    const first = v.after((m) => isState(m) && m.handoff?.callId === "c1");
+    expect(
+      await request(d.socketPath, { op: "handoff_notice", callId: "c1", message: "Log in" }),
+    ).toMatchObject({ ok: true });
+    expect(await first).toMatchObject({ handoff: { callId: "c1", message: "Log in" } });
+    // allowed while the person holds control; a long message is cut to 4 KB
+    const taken = v.after((m) => isState(m) && m.control === "user");
+    v.send({ t: "takeover" });
+    await taken;
+    const second = v.after((m) => isState(m) && m.handoff?.callId === "c2");
+    const notice = await request(d.socketPath, {
+      op: "handoff_notice",
+      callId: "c2",
+      message: "x".repeat(10_000),
+    });
+    expect(notice.ok).toBe(true);
+    const s2 = (await second) as State;
+    expect(s2.handoff?.message.length).toBeLessThanOrEqual(HANDOFF_MAX_CHARS);
+    // a new viewer (a remounted panel) gets it in its first state
+    const v2 = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 });
+    expect((await v2.next(isState)).handoff?.callId).toBe("c2");
+    // a stale clear changes nothing; the matching one clears
+    expect(await request(d.socketPath, { op: "handoff_clear", callId: "c1" })).toMatchObject({
+      ok: true,
+    });
+    const cleared = v.after((m) => isState(m) && m.handoff === undefined);
+    expect(await request(d.socketPath, { op: "handoff_clear", callId: "c2" })).toMatchObject({
+      ok: true,
+    });
+    await cleared;
+    expect(d.daemon.state.handoff).toBeUndefined();
+    const back = v.after((m) => isState(m) && m.control === "agent");
+    v.send({ t: "handback" });
+    await back;
+    await v.close();
+    await v2.close();
+  });
+});
+
+describe("browser daemon viewer before Chromium is ready", () => {
+  it("a stream closed before ready leaves no viewer counted", async () => {
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const stateDir = mkdtempSync(join(tmpdir(), "cbd-"));
+    const socketPath = join(stateDir, "sock");
+    const daemon = await startDaemon({
+      socketPath,
+      stateDir,
+      env: {},
+      browsersPath: TEST_BROWSERS,
+    });
+    let ready = false;
+    daemon.ready.then(() => {
+      ready = true;
+    });
+    try {
+      await new Promise<void>((resolve) => {
+        const sock = connect(socketPath, () => {
+          sock.write(encodeServiceMessage(new TextEncoder().encode('{"kind":"stream"}')));
+          sock.end();
+        });
+        sock.on("close", () => resolve());
+      });
+      expect(ready).toBe(false);
+      await vi.waitFor(() => expect(daemon.state.viewerCount).toBe(0));
+      await daemon.ready;
+      expect(daemon.state.viewerCount).toBe(0);
+    } finally {
+      await daemon.close();
+      removeDir(stateDir);
+    }
   });
 });

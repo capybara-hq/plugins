@@ -1,9 +1,12 @@
 // The browser session (spec §5, §9): the tabs of the one Chromium of the device, the agent's
 // actions on them, and the events viewers follow (tab and navigation state, blocked hosts,
-// dialogs). Who may act (takeover) is decided by main.ts before an action reaches this file.
+// dialogs). Takeover: main.ts refuses a request that arrives while the person holds control, and
+// run() checks again when a queued request leaves the queue (`takenOver`).
 
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { request as httpRequest } from "node:http";
-import type { BrowserContext, CDPSession, Dialog, Locator, Page } from "playwright-core";
+import { basename, extname, join, sep } from "node:path";
+import type { BrowserContext, CDPSession, Dialog, Download, Locator, Page } from "playwright-core";
 import {
   MAX_TABS,
   type ToolErrorCode,
@@ -42,8 +45,41 @@ const ACTION_TIMEOUT_MS = 10_000;
 const NAVIGATION_TIMEOUT_MS = 30_000;
 const LOAD_GRACE_MS = 5_000;
 const MAX_WAIT_MS = 60_000;
-/** Below the device service message limit (8 MiB) once base64 and JSON are added. */
-const MAX_SCREENSHOT_BYTES = 6 * 1024 * 1024;
+/**
+ * The largest screenshot, decoded: its base64 plus the reply's JSON stays below the device service
+ * message limit (8 MiB), with 64 KiB left for the rest of the reply.
+ */
+export const MAX_SCREENSHOT_BYTES = Math.floor(((8 * 1024 * 1024 - 64 * 1024) * 3) / 4);
+/** Caps of page-controlled text in replies and viewer messages (a title can be megabytes). */
+export const MAX_TITLE_CHARS = 2048;
+export const MAX_URL_CHARS = 2048;
+export const MAX_DIALOG_CHARS = 4096;
+const DEFAULT_WAIT_MS = 10_000;
+const MAX_UNREPORTED = 20;
+
+export const TAKEN_OVER_MESSAGE = "The user is controlling the browser; call wait or handoff.";
+
+/** `s` cut to `max` characters, with an ellipsis when cut. */
+export function clip(s: string, max: number): string {
+  return s.length <= max ? s : `${s.slice(0, Math.max(0, max - 1))}…`;
+}
+
+/** A file name safe to create in the downloads directory. */
+export function safeFileName(raw: string): string {
+  const visible = [...raw]
+    .map((ch) => {
+      const code = ch.charCodeAt(0);
+      return code < 0x20 || code === 0x7f ? "_" : ch;
+    })
+    .join("");
+  const name = basename(visible.replace(/\\/g, "/"))
+    .replace(/[/:*?"<>|]/g, "_")
+    .replace(/^\.+/, "")
+    .trim()
+    .slice(0, 200);
+  return name === "" ? "download" : name;
+}
+
 const PROXY_PROBE_TIMEOUT_MS = 5_000;
 
 const REF_RE = /^(f\d+)?e\d+$/;
@@ -179,6 +215,8 @@ export class BrowserSession {
   private readonly ctx: BrowserContext;
   private readonly proxy: string | undefined;
   private readonly clock: Clock;
+  /** The device's workspace root (CAPYBARA_SERVICE_WORKSPACE): uploads and downloads stay in it. */
+  private readonly workspace: string | undefined;
   private readonly pages = new Map<string, Page>();
   private readonly ids = new WeakMap<Page, string>();
   private readonly titles = new Map<string, string>();
@@ -186,14 +224,20 @@ export class BrowserSession {
   private readonly listeners = new Set<(e: SessionEvent) => void>();
   private readonly collectors = new Set<Collector>();
   private readonly probes = new Map<string, Promise<boolean>>();
+  private readonly reservedDownloads = new Set<string>();
+  private readonly unreported: string[] = [];
   private nextId = 1;
   private active: string | undefined;
   private queue: Promise<unknown> = Promise.resolve();
   lastClick: { x: number; y: number } | undefined;
 
-  constructor(ctx: BrowserContext, opts: { proxy?: string | undefined; clock?: Clock }) {
+  constructor(
+    ctx: BrowserContext,
+    opts: { proxy?: string | undefined; clock?: Clock; workspace?: string | undefined },
+  ) {
     this.ctx = ctx;
     this.proxy = opts.proxy;
+    this.workspace = opts.workspace;
     this.clock = opts.clock ?? systemClock;
     ctx.setDefaultTimeout(ACTION_TIMEOUT_MS);
     ctx.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
@@ -238,8 +282,8 @@ export class BrowserSession {
   tabs(): (TabInfo & { active: boolean })[] {
     return [...this.pages.entries()].map(([id, p]) => ({
       id,
-      title: this.titles.get(id) ?? "",
-      url: p.url(),
+      title: clip(this.titles.get(id) ?? "", MAX_TITLE_CHARS),
+      url: clip(p.url(), MAX_URL_CHARS),
       active: id === this.active,
     }));
   }
@@ -299,6 +343,7 @@ export class BrowserSession {
       }
     });
     page.on("dialog", (d) => this.onDialog(d));
+    page.on("download", (d) => this.onDownload(d));
     page.on("filechooser", () => {
       this.note("The page opened a file chooser; use the upload tool with the file input's ref.");
       this.emit({ type: "dialog", kind: "file", message: "" });
@@ -323,7 +368,7 @@ export class BrowserSession {
       return;
     }
     const kind = type === "confirm" || type === "prompt" ? type : "alert";
-    const message = d.message();
+    const message = clip(d.message(), MAX_DIALOG_CHARS);
     // An alert only informs; a confirm or prompt is dismissed, the safe answer, and the agent
     // learns it so it can act differently.
     const settle = kind === "alert" ? d.accept() : d.dismiss();
@@ -334,8 +379,80 @@ export class BrowserSession {
     this.emit({ type: "dialog", kind, message });
   }
 
+  /**
+   * Adds a note to the replies of the requests in flight; with none in flight (a download that
+   * finished after its click replied, a dialog the person caused) the next reply carries it.
+   */
   private note(text: string): void {
-    for (const c of this.collectors) c.notes.push(text);
+    const n = clip(text, MAX_DIALOG_CHARS + 200);
+    if (this.collectors.size === 0) {
+      this.unreported.push(n);
+      if (this.unreported.length > MAX_UNREPORTED) this.unreported.shift();
+      return;
+    }
+    for (const c of this.collectors) c.notes.push(n);
+  }
+
+  /**
+   * Saves a download into `<workspace>/downloads` under its suggested name (sanitized, numbered
+   * when taken); the requests in flight wait for it and name the saved path. Without a workspace
+   * the download is cancelled.
+   */
+  private onDownload(d: Download): void {
+    const workspace = this.workspace;
+    if (workspace === undefined) {
+      d.cancel().catch(() => undefined);
+      this.note("The page started a download, which was cancelled: the device has no workspace.");
+      return;
+    }
+    const dir = join(workspace, "downloads");
+    const name = safeFileName(d.suggestedFilename());
+    const ext = extname(name);
+    const stem = name.slice(0, name.length - ext.length);
+    const save = (async () => {
+      mkdirSync(dir, { recursive: true });
+      let target = join(dir, name);
+      for (let i = 1; existsSync(target) || this.reservedDownloads.has(target); i++) {
+        target = join(dir, `${stem} (${i})${ext}`);
+      }
+      this.reservedDownloads.add(target);
+      try {
+        await d.saveAs(target);
+        this.note(`Downloaded ${JSON.stringify(d.suggestedFilename())} to ${target}.`);
+      } catch (e) {
+        this.note(
+          `The download of ${JSON.stringify(d.suggestedFilename())} failed: ${firstLine(e)}`,
+        );
+      } finally {
+        this.reservedDownloads.delete(target);
+      }
+    })();
+    for (const c of this.collectors) c.pending.push(save);
+  }
+
+  /** The real path of an upload, refused unless it is inside the workspace. */
+  private uploadPath(path: string): string {
+    const workspace = this.workspace;
+    if (workspace === undefined) {
+      throw new ActionError("failed", "Uploads are unavailable: the device has no workspace.");
+    }
+    const root = realpathSync(workspace);
+    let real: string;
+    try {
+      real = realpathSync(path);
+    } catch {
+      throw new ActionError(
+        "failed",
+        `No file at ${path}; give the absolute path of a file in the workspace (${root}).`,
+      );
+    }
+    if (real !== root && !real.startsWith(root.endsWith(sep) ? root : root + sep)) {
+      throw new ActionError(
+        "failed",
+        `Upload paths must be inside the workspace (${root}); copy the file there first.`,
+      );
+    }
+    return real;
   }
 
   /** Probes the proxy for the URL's host and reports it when refused. */
@@ -373,13 +490,23 @@ export class BrowserSession {
     return run;
   }
 
-  /** Runs a tool request; never throws. */
-  async run(req: ToolRequest): Promise<ToolReply> {
-    const c: Collector = { blocked: new Set(), notes: [], pending: [] };
+  /**
+   * Runs a tool request; never throws. `takenOver` is checked when a queued request leaves the
+   * queue: a takeover that began while it waited refuses it. An action already running is left to
+   * finish (stopping it halfway would leave the page in an unknown state).
+   */
+  async run(req: ToolRequest, opts: { takenOver?: () => boolean } = {}): Promise<ToolReply> {
+    const c: Collector = { blocked: new Set(), notes: this.unreported.splice(0), pending: [] };
     this.collectors.add(c);
     let reply: ToolReply;
     try {
-      const out = await (req.op === "wait" ? this.exec(req) : this.serial(() => this.exec(req)));
+      const out = await (req.op === "wait"
+        ? this.exec(req)
+        : this.serial(() => {
+            if (opts.takenOver?.() === true)
+              throw new ActionError("taken_over", TAKEN_OVER_MESSAGE);
+            return this.exec(req);
+          }));
       await this.settleProbes(c);
       const page = await this.activePage();
       const text = [...c.notes, ...(out.text === undefined ? [] : [out.text])].join("\n");
@@ -397,7 +524,7 @@ export class BrowserSession {
       if (!(e instanceof ActionError) && e instanceof Error && e.name === "TimeoutError") {
         code = "timeout";
       }
-      if (c.blocked.size > 0 && code !== "no_such_ref") {
+      if (c.blocked.size > 0 && code !== "no_such_ref" && code !== "taken_over") {
         code = "blocked";
         message = `The device's network settings block ${[...c.blocked].join(", ")}. Ask the user to allow the host in the browser panel, then retry.`;
       }
@@ -423,7 +550,11 @@ export class BrowserSession {
     } catch {
       title = this.titles.get(this.tabIdOf(page)) ?? "";
     }
-    return { url: page.url(), title, tabId: this.tabIdOf(page) };
+    return {
+      url: clip(page.url(), MAX_URL_CHARS),
+      title: clip(title, MAX_TITLE_CHARS),
+      tabId: this.tabIdOf(page),
+    };
   }
 
   private async locate(page: Page, ref: string): Promise<Locator> {
@@ -584,8 +715,9 @@ export class BrowserSession {
       }
       case "upload": {
         const page = await this.activePage();
+        const path = this.uploadPath(req.path);
         const loc = await this.locate(page, req.ref);
-        await loc.setInputFiles(req.path);
+        await loc.setInputFiles(path);
         return {};
       }
       case "click_at":
@@ -715,7 +847,10 @@ export class BrowserSession {
   }
 
   private async waitOp(req: Extract<ToolRequest, { op: "wait" }>): Promise<{ text?: string }> {
-    const timeout = Math.max(0, Math.min(MAX_WAIT_MS, Math.floor(req.timeoutMs)));
+    const asked = Number(req.timeoutMs);
+    const timeout = Number.isFinite(asked)
+      ? Math.max(0, Math.min(MAX_WAIT_MS, Math.floor(asked)))
+      : DEFAULT_WAIT_MS;
     const page = await this.activePage();
     if (req.text !== undefined) {
       await page

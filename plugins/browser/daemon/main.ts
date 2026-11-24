@@ -5,7 +5,7 @@
 import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { encodeServiceMessage, ServiceMessageDecoder } from "@capybara-hq/plugin-sdk";
-import { ActionError, BrowserSession } from "./actions.js";
+import { ActionError, BrowserSession, TAKEN_OVER_MESSAGE } from "./actions.js";
 import { chromiumLaunchPlan, launchChromium } from "./chromium.js";
 import {
   DEFAULT_FRAME_MAX_BYTES,
@@ -41,13 +41,18 @@ export interface Daemon {
   close(): Promise<void>;
 }
 
-export const TAKEN_OVER_MESSAGE = "The user is controlling the browser; call wait or handoff.";
+export { TAKEN_OVER_MESSAGE };
+
+/** Names the device's workspace root; the provider sets it for every service (ruling R26). */
+export const SERVICE_WORKSPACE_ENV = "CAPYBARA_SERVICE_WORKSPACE";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
 // capybara:allow-module-state read-only constant (device service process, not the kernel)
 const REQUEST_OPS = new Set<string>([
+  "handoff_notice",
+  "handoff_clear",
   "navigate",
   "tabs",
   "snapshot",
@@ -79,9 +84,21 @@ function parse(raw: Uint8Array): unknown {
   }
 }
 
-function write(sock: Socket, value: unknown): boolean {
+/**
+ * Writes one message; false when the socket is gone or backed up. A message above the service
+ * message limit is not sent (`tooLarge` is called): encodeServiceMessage throws a RangeError for it.
+ */
+function write(sock: Socket, value: unknown, tooLarge?: () => void): boolean {
   if (sock.destroyed) return false;
-  return sock.write(encodeServiceMessage(enc.encode(JSON.stringify(value))));
+  let framed: Uint8Array;
+  try {
+    framed = encodeServiceMessage(enc.encode(JSON.stringify(value)));
+  } catch (e) {
+    if (!(e instanceof RangeError)) throw e;
+    tooLarge?.();
+    return false;
+  }
+  return sock.write(framed);
 }
 
 const fail = (message: string): ToolReply => ({
@@ -113,10 +130,36 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     ctx.on("close", () => {
       if (!closing) opts.onBrowserGone?.();
     });
-    return new BrowserSession(ctx, { proxy: plan.proxy, clock });
+    const workspace = opts.env[SERVICE_WORKSPACE_ENV];
+    return new BrowserSession(ctx, {
+      proxy: plan.proxy,
+      clock,
+      workspace: workspace === undefined || workspace === "" ? undefined : workspace,
+    });
   });
   const ready = browser.then(() => undefined);
   ready.catch(() => undefined);
+
+  /** Handoff bookkeeping from the plugin server: not agent input, so allowed during a takeover. */
+  async function handoffOp(
+    req: Extract<ToolRequest, { op: "handoff_notice" | "handoff_clear" }>,
+  ): Promise<ToolReply> {
+    if (typeof req.callId !== "string" || req.callId === "")
+      return fail("The handoff needs a callId.");
+    if (req.op === "handoff_notice") {
+      if (typeof req.message !== "string") return fail("The handoff notice needs a message.");
+      state.noticeHandoff(req.callId, req.message);
+    } else {
+      state.clearHandoff(req.callId);
+    }
+    let session: BrowserSession;
+    try {
+      session = await browser;
+    } catch (e) {
+      return fail(`The browser could not start: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    return { ok: true, page: await session.pageInfo(await session.activePage()), blockedHosts: [] };
+  }
 
   async function handleRequest(raw: unknown): Promise<ToolReply> {
     if (
@@ -127,6 +170,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       return fail("Unknown browser request.");
     }
     const req = raw as ToolRequest;
+    if (req.op === "handoff_notice" || req.op === "handoff_clear") return handoffOp(req);
     if (state.control === "user" && req.op !== "wait") {
       return { ok: false, error: "taken_over", message: TAKEN_OVER_MESSAGE, blockedHosts: [] };
     }
@@ -136,7 +180,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     } catch (e) {
       return fail(`The browser could not start: ${e instanceof Error ? e.message : String(e)}`);
     }
-    const reply = await session.run(req);
+    const reply = await session.run(req, { takenOver: () => state.control === "user" });
     if (reply.ok) {
       const since = state.takeHandbackNote();
       if (since !== undefined) reply.userControlledSince = since;
@@ -152,6 +196,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     let kind: "request" | "stream" | undefined;
     let handled = false;
     let viewer: ViewerSession | undefined;
+    // set when this connection counted itself as a viewer: every open is balanced by one close,
+    // also when the socket closes before Chromium is ready and no ViewerSession exists
+    let opened = false;
     let viewerChain: Promise<void> = Promise.resolve();
 
     const end = () => {
@@ -160,6 +207,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         const v = viewer;
         viewer = undefined;
         void v.close();
+      }
+      if (opened) {
+        opened = false;
         state.viewerClosed();
       }
     };
@@ -172,6 +222,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         if (first?.kind === "request") kind = "request";
         else if (first?.kind === "stream") {
           kind = "stream";
+          opened = true;
           state.viewerOpened();
           browser.then(
             (session) => {
@@ -182,7 +233,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
                 clock,
                 frameMaxBytes: frameCap,
                 transport: {
-                  send: (m) => write(sock, m),
+                  send: (m) => {
+                    // a message above the service limit is dropped, never thrown
+                    let dropped = false;
+                    const ok = write(sock, m, () => {
+                      dropped = true;
+                    });
+                    return ok || dropped || sock.destroyed;
+                  },
                   whenDrained: () => new Promise((r) => sock.once("drain", () => r())),
                 },
               });
@@ -200,9 +258,16 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         handleRequest(parse(raw))
           .catch((e) => fail(e instanceof ActionError ? e.message : String(e)))
           .then((reply) => {
-            write(sock, reply);
+            write(sock, reply, () =>
+              write(
+                sock,
+                fail("The reply was too large to send; ask for less (a smaller maxBytes)."),
+                () => undefined,
+              ),
+            );
             sock.end();
           })
+          .catch(() => sock.destroy())
           .finally(() => state.requestEnded());
         return;
       }

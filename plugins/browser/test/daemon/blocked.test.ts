@@ -58,6 +58,15 @@ describe("browser daemon blocked hosts", () => {
     await v.close();
   });
 
+  it("uploads are refused without a workspace", async () => {
+    const r = await request(d.socketPath, { op: "upload", ref: "e1", path: "/etc/hosts" });
+    expect(r).toMatchObject({
+      ok: false,
+      error: "failed",
+      message: "Uploads are unavailable: the device has no workspace.",
+    });
+  });
+
   it("a plain http navigation the proxy refuses is reported too", async () => {
     const r = await request(d.socketPath, { op: "navigate", url: "http://blocked.test/x" });
     expect(r).toMatchObject({ ok: false, error: "blocked", blockedHosts: ["blocked.test"] });

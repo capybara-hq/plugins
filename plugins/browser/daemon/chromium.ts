@@ -13,8 +13,14 @@ export interface LaunchPlan {
   profileDir: string;
   /** Extra Chromium flags (Playwright adds --headless and --remote-debugging-pipe itself). */
   args: string[];
-  /** The proxy Chromium uses, when the device's environment names one. */
+  /** The proxy Chromium uses, when the device's environment names one (credentials included). */
   proxy: string | undefined;
+  /**
+   * A proxy whose URL carries credentials: given to Playwright's `proxy` option instead of the
+   * --proxy-server flag (Chromium takes no credentials in the flag; Playwright answers the
+   * proxy's auth challenge).
+   */
+  proxyAuth?: { server: string; username: string; password: string; bypass?: string };
 }
 
 function envValue(env: Record<string, string | undefined>, name: string): string | undefined {
@@ -34,15 +40,31 @@ export function chromiumLaunchPlan(opts: {
   // helper processes); spike: stable for navigation, input, screencast and tabs.
   if (opts.platform === "darwin") args.push("--single-process");
   const proxy = envValue(opts.env, "HTTPS_PROXY") ?? envValue(opts.env, "HTTP_PROXY");
+  // Chromium sends loopback (localhost, 127.0.0.1, [::1]) direct, never through the proxy; the
+  // provider's network rules keep the device's host services closed.
+  let proxyAuth: LaunchPlan["proxyAuth"];
   if (proxy !== undefined) {
-    args.push(`--proxy-server=${proxy}`);
     const noProxy = envValue(opts.env, "NO_PROXY");
-    if (noProxy !== undefined) {
-      const list = noProxy
-        .split(",")
-        .map((s) => s.trim())
-        .filter((s) => s !== "");
-      if (list.length > 0) args.push(`--proxy-bypass-list=${list.join(";")}`);
+    const bypass = (noProxy ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s !== "");
+    let url: URL | undefined;
+    try {
+      url = new URL(proxy.includes("://") ? proxy : `http://${proxy}`);
+    } catch {
+      url = undefined;
+    }
+    if (url !== undefined && (url.username !== "" || url.password !== "")) {
+      proxyAuth = {
+        server: `${url.protocol}//${url.host}`,
+        username: decodeURIComponent(url.username),
+        password: decodeURIComponent(url.password),
+        ...(bypass.length > 0 ? { bypass: bypass.join(",") } : {}),
+      };
+    } else {
+      args.push(`--proxy-server=${proxy}`);
+      if (bypass.length > 0) args.push(`--proxy-bypass-list=${bypass.join(";")}`);
     }
   }
   return {
@@ -50,6 +72,7 @@ export function chromiumLaunchPlan(opts: {
     profileDir: join(opts.stateDir, "profile"),
     args,
     proxy,
+    ...(proxyAuth === undefined ? {} : { proxyAuth }),
   };
 }
 
@@ -107,6 +130,8 @@ export async function launchChromium(plan: LaunchPlan): Promise<BrowserContext> 
     executablePath,
     args: plan.args,
     viewport: { ...VIEWPORT },
-    acceptDownloads: false,
+    // downloads are saved into the workspace by the session (actions.ts)
+    acceptDownloads: true,
+    ...(plan.proxyAuth === undefined ? {} : { proxy: plan.proxyAuth }),
   });
 }

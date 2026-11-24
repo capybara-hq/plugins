@@ -39,6 +39,9 @@ export const VIEWER_UNACKED_FRAMES = 2;
  */
 export const DEFAULT_FRAME_MAX_BYTES = 256 * 1024;
 
+/** The longest handoff message the daemon keeps. */
+export const HANDOFF_MAX_CHARS = 4096;
+
 /** The most tabs the browser keeps open. */
 export const MAX_TABS = 10;
 
@@ -55,7 +58,14 @@ export type ToolRequest =
   | { op: "click_at"; x: number; y: number }
   | { op: "type_at"; x: number; y: number; text: string }
   | { op: "wait"; text?: string; ref?: string; navigation?: boolean; timeoutMs: number }
-  | { op: "screenshot"; fullPage?: boolean; maxBytes: number };
+  | { op: "screenshot"; fullPage?: boolean; maxBytes: number }
+  /**
+   * The plugin server's handoff bookkeeping (not agent input, so allowed during a takeover): the
+   * daemon keeps at most one pending handoff, the latest notice wins, and a clear removes it only
+   * when its callId matches. Viewers see it in `state.handoff`.
+   */
+  | { op: "handoff_notice"; callId: string; message: string }
+  | { op: "handoff_clear"; callId: string };
 
 export type ToolErrorCode = "taken_over" | "no_such_ref" | "timeout" | "blocked" | "failed";
 
@@ -107,6 +117,8 @@ export type ViewerOut =
       secure: boolean;
       control: "agent" | "user";
       lastClick?: { x: number; y: number };
+      /** The pending handoff question, if any (message at most HANDOFF_MAX_CHARS). */
+      handoff?: { callId: string; message: string };
     }
   | { t: "blocked"; host: string; url: string }
   | { t: "dialog"; kind: "alert" | "confirm" | "prompt" | "file"; message: string };

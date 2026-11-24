@@ -4,7 +4,13 @@
 // once (the panel remounts on expand and collapse, so the daemon is the source of truth).
 
 import type { CDPSession, Page } from "playwright-core";
-import { type BrowserSession, captureFitting, jpegSize, type SessionEvent } from "./actions.js";
+import {
+  type BrowserSession,
+  captureFitting,
+  clip,
+  jpegSize,
+  type SessionEvent,
+} from "./actions.js";
 import {
   VIEWER_MAX_FPS,
   VIEWER_UNACKED_FRAMES,
@@ -51,6 +57,7 @@ export class ViewerSession {
   private cdp: CDPSession | undefined;
   /** Serializes attach / detach / restart. */
   private chain: Promise<unknown> = Promise.resolve();
+  private inputChain: Promise<void> = Promise.resolve();
   private seq = 0;
   private acked = 0;
   private lastSentAt = 0;
@@ -73,8 +80,12 @@ export class ViewerSession {
     this.frameMaxBytes = opts.frameMaxBytes;
   }
 
-  /** Handles one viewer message; the first must be `hello`. */
-  async handle(m: ViewerIn): Promise<void> {
+  /**
+   * Handles one viewer message; the first must be `hello`. It returns at once: screencast work runs
+   * on its own chain and input (mouse, keys, address bar, tabs) on another, in order, so a slow
+   * navigation or screenshot never holds back a takeover, hand back or frame ack.
+   */
+  handle(m: ViewerIn): void {
     if (this.closed) return;
     if (!this.started) {
       if (m.t !== "hello") return;
@@ -85,14 +96,14 @@ export class ViewerSession {
         this.state.onChange(() => this.queueState()),
       );
       this.sendState();
-      await this.serial(() => this.attach());
+      void this.serial(() => this.attach());
       return;
     }
     switch (m.t) {
       case "hello":
       case "resize":
         this.setSize(m.maxWidth, m.maxHeight);
-        await this.serial(async () => {
+        void this.serial(async () => {
           await this.detach();
           await this.attach();
         });
@@ -108,31 +119,41 @@ export class ViewerSession {
         this.state.handback();
         return;
       case "mouse":
-        await this.mouse(m);
+        this.input(() => this.mouse(m));
         return;
       case "key":
-        await this.key(m);
+        this.input(() => this.key(m));
         return;
       case "nav":
-        await this.browser.viewerNav({
-          ...(typeof m.url === "string" ? { url: m.url } : {}),
-          ...(m.action === undefined ? {} : { action: m.action }),
-        });
+        this.input(() =>
+          this.browser.viewerNav({
+            ...(typeof m.url === "string" ? { url: m.url } : {}),
+            ...(m.action === undefined ? {} : { action: m.action }),
+          }),
+        );
         return;
       case "tab":
-        try {
-          if (m.action === "open") await this.browser.openTab();
-          else if (m.action === "switch" && m.tabId !== undefined)
-            await this.browser.switchTo(m.tabId);
-          else if (m.action === "close" && m.tabId !== undefined) {
-            await this.browser.tabById(m.tabId).close();
-            await this.browser.activePage();
+        this.input(async () => {
+          try {
+            if (m.action === "open") await this.browser.openTab();
+            else if (m.action === "switch" && m.tabId !== undefined)
+              await this.browser.switchTo(m.tabId);
+            else if (m.action === "close" && m.tabId !== undefined) {
+              await this.browser.tabById(m.tabId).close();
+              await this.browser.activePage();
+            }
+          } catch {
+            // a stale tab id: the next state message shows the real tabs
           }
-        } catch {
-          // a stale tab id: the next state message shows the real tabs
-        }
+        });
         return;
     }
+  }
+
+  /** Runs viewer input in arrival order, apart from the screencast chain. */
+  private input(fn: () => Promise<void>): void {
+    const run = this.inputChain.then(fn, fn);
+    this.inputChain = run.catch(() => undefined);
   }
 
   /** Ends the viewer: stops its screencast and its subscriptions. */
@@ -156,8 +177,37 @@ export class ViewerSession {
     return run.catch(() => undefined);
   }
 
-  private send(m: ViewerOut): void {
+  /**
+   * A non-frame message cut to the per-message cap (BROWSER_FRAME_MAX_BYTES): long page text is
+   * shortened, and a message that still does not fit is dropped (null). Frames are sized when
+   * captured.
+   */
+  private fitted(m: ViewerOut): ViewerOut | null {
+    const fits = (x: ViewerOut) => Buffer.byteLength(JSON.stringify(x)) <= this.frameMaxBytes;
+    if (m.t === "frame" || fits(m)) return m;
+    let small: ViewerOut;
+    if (m.t === "state") {
+      const handoff =
+        m.handoff === undefined
+          ? {}
+          : { handoff: { ...m.handoff, message: clip(m.handoff.message, 200) } };
+      small = {
+        ...m,
+        tabs: m.tabs.map((t) => ({ ...t, title: clip(t.title, 200), url: clip(t.url, 200) })),
+        ...handoff,
+      };
+    } else if (m.t === "dialog") {
+      small = { ...m, message: clip(m.message, 200) };
+    } else {
+      small = { ...m, url: clip(m.url, 200) };
+    }
+    return fits(small) ? small : null;
+  }
+
+  private send(raw: ViewerOut): void {
     if (this.closed) return;
+    const m = this.fitted(raw);
+    if (m === null) return;
     if (!this.out.send(m) && !this.draining) {
       this.draining = true;
       this.out.whenDrained().then(() => {
@@ -202,6 +252,7 @@ export class ViewerSession {
       secure: active?.url.startsWith("https:") ?? false,
       control: this.state.control,
       ...(last === undefined ? {} : { lastClick: last }),
+      ...(this.state.handoff === undefined ? {} : { handoff: this.state.handoff }),
     });
   }
 
@@ -308,9 +359,10 @@ export class ViewerSession {
 
   private async mouse(m: Extract<ViewerIn, { t: "mouse" }>): Promise<void> {
     const page = await this.browser.activePage();
-    const x = Number(m.x);
-    const y = Number(m.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    if (!Number.isFinite(Number(m.x)) || !Number.isFinite(Number(m.y))) return;
+    // inside the viewport, whatever the panel's rounding
+    const x = Math.max(0, Math.min(VIEWPORT.width - 1, Number(m.x)));
+    const y = Math.max(0, Math.min(VIEWPORT.height - 1, Number(m.y)));
     const button = m.button === "right" ? "right" : "left";
     try {
       if (m.kind === "move") await page.mouse.move(x, y);
