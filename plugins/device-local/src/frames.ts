@@ -145,6 +145,13 @@ export const SERVICE_OP_DEADLINE_MS = 60_000;
  */
 export type ServiceBody =
   | {
+      /** `ifRunning`: the name only; the machine starts nothing and needs no files. */
+      op: "service.ensure";
+      spec: { name: string };
+      network: { kind: "open-public" | "allowlist"; hosts: string[] };
+      ifRunning: true;
+    }
+  | {
       op: "service.ensure";
       spec: {
         name: string;
@@ -156,7 +163,6 @@ export type ServiceBody =
       /** `sha256:` + hex over the files ({@link filesDigestOf}); sent with or without `files`. */
       filesDigest?: string;
       network: { kind: "open-public" | "allowlist"; hosts: string[] };
-      ifRunning?: boolean;
     }
   | { op: "service.stop"; name: string }
   | { op: "service.status"; name: string }

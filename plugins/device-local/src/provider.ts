@@ -154,7 +154,11 @@ export function commandLimits(h: LocalDeviceHandle, scope: SandboxOperationScope
   return { cpu, memoryMb, diskMb, network };
 }
 
-/** A service status answer, checked before anything uses it. */
+/** An absolute path the machine reported: a string starting with `/`, without NUL. */
+const isAbsolutePath = (v: unknown): v is string =>
+  typeof v === "string" && v.startsWith("/") && !v.includes("\0");
+
+/** A service status answer, checked before anything uses it (`codeDir` is kept when present). */
 function statusOf(v: unknown): DeviceServiceStatus {
   const s = v as Partial<DeviceServiceStatus> | null;
   if (
@@ -163,12 +167,19 @@ function statusOf(v: unknown): DeviceServiceStatus {
     typeof s.name !== "string" ||
     (s.state !== "running" && s.state !== "stopped") ||
     (s.startedAt !== null && typeof s.startedAt !== "string") ||
-    typeof s.stateDir !== "string"
+    typeof s.stateDir !== "string" ||
+    (s.codeDir !== undefined && !isAbsolutePath(s.codeDir))
   )
     throw new ToolError(
       "The connected machine sent an invalid service status; update capybara-device on that machine and retry",
     );
-  return { name: s.name, state: s.state, startedAt: s.startedAt, stateDir: s.stateDir };
+  return {
+    name: s.name,
+    state: s.state,
+    startedAt: s.startedAt,
+    stateDir: s.stateDir,
+    ...(s.codeDir !== undefined && { codeDir: s.codeDir }),
+  };
 }
 
 /** The handle as a local one, or the kernel rebuilds the instance (a handle it cannot use). */
@@ -500,42 +511,61 @@ export function createDeviceLocalProvider(
      */
     async ensureService(h, spec, signal, o) {
       const l = requireLocal(h);
-      const files: Record<string, string> = {};
-      for (const [path, data] of Object.entries(spec.files)) files[path] = b64Of(data);
+      const network = { kind: l.limits.network.kind, hosts: [...l.limits.network.hosts] };
+      const opts = { deadlineMs: SERVICE_OP_DEADLINE_MS, signal };
+      // ifRunning finds a running service by its name: nothing to start, so no files and no retry.
+      if (o?.ifRunning)
+        return statusOf(
+          await serviceCall(
+            ctx.dialIn,
+            l.id,
+            { op: "service.ensure", spec: { name: spec.name }, network, ifRunning: true },
+            opts,
+          ),
+        );
       const filesDigest = filesDigestOf(spec.files);
-      const base = {
-        op: "service.ensure" as const,
-        network: { kind: l.limits.network.kind, hosts: [...l.limits.network.hosts] },
-        ...(o?.ifRunning && { ifRunning: true as const }),
-      };
-      const send = async (withFiles: boolean) =>
+      const send = async (files?: Record<string, string>) =>
         statusOf(
           await serviceCall(
             ctx.dialIn,
             l.id,
             {
-              ...base,
+              op: "service.ensure",
+              network,
               spec: {
                 name: spec.name,
                 entry: spec.entry,
                 args: spec.args,
-                ...(withFiles && { files }),
+                ...(files && { files }),
                 ...(spec.env && { env: spec.env }),
               },
               filesDigest,
             },
-            { deadlineMs: SERVICE_OP_DEADLINE_MS, signal },
+            opts,
           ),
         );
       // The digest goes first, so a machine that holds these files starts without them crossing
       // the relay (`files_needed` asks for them); an older machine, which does not know the digest
       // and answers `invalid`, gets the files once.
       try {
-        return await send(false);
+        return await send();
       } catch (e) {
-        if (e instanceof ServiceOpRefusedError) return await send(true);
-        throw e;
+        if (!(e instanceof ServiceOpRefusedError)) throw e;
       }
+      // Encoded only now that the machine asked for them, and checked against the frame capacity
+      // of the machine's connection, which would otherwise drop the oversized frame.
+      const files: Record<string, string> = {};
+      let size = 0;
+      for (const [path, data] of Object.entries(spec.files)) {
+        files[path] = b64Of(data);
+        size += files[path].length + path.length;
+      }
+      const cap = await frameCapacity(ctx.dialIn, l.id);
+      if (size + FRAME_ENVELOPE_BYTES > cap)
+        throw new ToolError(
+          `The service files for ${spec.name} (${size} bytes encoded) do not fit in one frame of the connected machine (${cap} bytes); raise CAPYBARA_DEVICES__DIAL_IN__MAX_FRAME_BYTES on the deployment and the machine, or use a smaller service`,
+        );
+      return await send(files);
     },
 
     async stopService(h, name, signal) {

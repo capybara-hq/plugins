@@ -11,7 +11,7 @@ const STATE_DIR = "/home/me/capybara-device/dev-1/services/echo";
 type Body = Record<string, unknown>;
 
 /** An in-memory machine for the service ops: a service is "running" with the files it was given. */
-function serviceMachine(opts: { oldMachine?: boolean } = {}) {
+function serviceMachine(opts: { oldMachine?: boolean; codeDir?: unknown } = {}) {
   const digests = new Set<string>();
   const running = new Map<string, { startedAt: string; network: unknown }>();
   const requests: Body[] = [];
@@ -24,11 +24,21 @@ function serviceMachine(opts: { oldMachine?: boolean } = {}) {
         state: r ? "running" : "stopped",
         startedAt: r?.startedAt ?? null,
         stateDir: STATE_DIR,
+        ...(opts.codeDir !== undefined && { codeDir: opts.codeDir }),
       };
     };
     switch (body.op) {
       case "service.ensure": {
         const spec = body.spec as { name: string; files?: Record<string, string> };
+        // Like capybara-device: an ifRunning ensure carries only the name and starts nothing.
+        if (body.ifRunning === true) {
+          if (Object.keys(spec).join() !== "name" || "filesDigest" in body)
+            return {
+              ok: false,
+              error: { kind: "invalid", message: "ifRunning takes a name only" },
+            };
+          return { ok: true, result: status(spec.name) };
+        }
         if (opts.oldMachine && !spec.files)
           return { ok: false, error: { kind: "invalid", message: "spec.files must be an object" } };
         const digest = body.filesDigest as string | undefined;
@@ -59,7 +69,7 @@ function serviceMachine(opts: { oldMachine?: boolean } = {}) {
   return { answer, requests, running, digests };
 }
 
-function setup(opts: { oldMachine?: boolean } = {}) {
+function setup(opts: { oldMachine?: boolean; codeDir?: unknown } = {}) {
   const m = serviceMachine(opts);
   const dial = fakeDialIn((req) => m.answer(req.body as Body));
   const { store } = memoryStore();
@@ -124,11 +134,70 @@ describe("device-local services", () => {
     expect(m.requests[1]).toHaveProperty("spec.files");
   });
 
-  it("ensureService with ifRunning forwards the flag and starts nothing", async () => {
+  it("ensureService with ifRunning sends only the name and starts nothing", async () => {
     const { m, provider } = setup();
     const status = await provider.ensureService?.(HANDLE, SPEC, signal(), { ifRunning: true });
     expect(status?.state).toBe("stopped");
-    expect(m.requests[0]).toMatchObject({ ifRunning: true });
+    expect(m.requests).toEqual([
+      {
+        op: "service.ensure",
+        spec: { name: "echo" },
+        network: { kind: "allowlist", hosts: ["example.com"] },
+        ifRunning: true,
+      },
+    ]);
+  });
+
+  it("an ifRunning ensure is never retried with files", async () => {
+    const { dial, provider } = setup();
+    for (const kind of ["files_needed", "invalid"]) {
+      dial.sent.length = 0;
+      dial.state.answer = () => ({ ok: false, error: { kind, message: "no" } });
+      const e = await rejection(
+        provider.ensureService?.(HANDLE, SPEC, signal(), { ifRunning: true }) as Promise<unknown>,
+      );
+      expect(e).toBeInstanceOf(Error);
+      expect(dial.sent).toHaveLength(1);
+    }
+  });
+
+  it("keeps the machine's code directory in the status", async () => {
+    const codeDir = "/home/me/capybara-device/dev-1/services/echo/code";
+    const { provider } = setup({ codeDir });
+    const status = await provider.ensureService?.(HANDLE, SPEC, signal());
+    expect(status).toEqual({
+      name: "echo",
+      state: "running",
+      startedAt: expect.any(String),
+      stateDir: STATE_DIR,
+      codeDir,
+    });
+    expect(await provider.serviceStatus?.(HANDLE, "echo", signal())).toHaveProperty(
+      "codeDir",
+      codeDir,
+    );
+  });
+
+  it("refuses a code directory that is not an absolute path", async () => {
+    for (const codeDir of ["code", 7, "/a\0b"]) {
+      const { provider } = setup({ codeDir });
+      const e = await rejection(
+        provider.serviceStatus?.(HANDLE, "echo", signal()) as Promise<unknown>,
+      );
+      expect((e as Error).message).toMatch(/invalid service status/);
+    }
+  });
+
+  it("refuses service files larger than the connection's frame capacity before sending", async () => {
+    const { m, dial, provider } = setup();
+    dial.state.capacity = 128 * 1024;
+    const big = { ...SPEC, files: { "echo.mjs": new Uint8Array(200 * 1024) } };
+    const e = await rejection(provider.ensureService?.(HANDLE, big, signal()) as Promise<unknown>);
+    expect((e as Error).message).toMatch(/frame/i);
+    expect((e as Error).message).toMatch(/MAX_FRAME_BYTES/);
+    // Only the digest-first ensure went out; the files never did.
+    expect(m.requests).toHaveLength(1);
+    expect(m.requests[0]).not.toHaveProperty("spec.files");
   });
 
   it("serviceRequest decodes the reply body", async () => {
@@ -199,6 +268,24 @@ describe("device-local services", () => {
     );
     expect((e as Error).message).toContain("no services");
     expect((e as Error).name).toMatch(/Unsupported/);
+  });
+
+  it("maps denied, invalid and other machine failures", async () => {
+    const { dial, provider } = setup();
+    const cases: [string, RegExp, RegExp][] = [
+      ["denied", /ScopeDenied/, /not yours/],
+      ["invalid", /ToolError|Refused/, /refused the service.status request: bad name/],
+      ["error", /ToolError/, /boom.*check the service and retry/],
+    ];
+    for (const [kind, name, message] of cases) {
+      const text = kind === "denied" ? "not yours" : kind === "invalid" ? "bad name" : "boom";
+      dial.state.answer = () => ({ ok: false, error: { kind, message: text } });
+      const e = await rejection(
+        provider.serviceStatus?.(HANDLE, "echo", signal()) as Promise<unknown>,
+      );
+      expect((e as Error).message).toMatch(message);
+      expect((e as Error).name + (e as Error).constructor.name).toMatch(name);
+    }
   });
 
   it("passes the device service conformance", async () => {
