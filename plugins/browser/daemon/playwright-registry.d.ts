@@ -3,6 +3,8 @@
 declare module "playwright-core/lib/coreBundle" {
   interface Executable {
     name: string;
+    /** The browser's install directory (Playwright's INSTALLATION_COMPLETE marker lives here). */
+    directory: string | undefined;
     executablePath(): string | undefined;
   }
   export const registry: {

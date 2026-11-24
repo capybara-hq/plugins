@@ -174,8 +174,13 @@ async function loadPlaywright(browsersPath: string): Promise<Playwright> {
   return loaded.pw;
 }
 
-/** The headless shell's executable, downloaded into the registry first when missing. */
-export async function ensureChromium(browsersPath: string): Promise<string> {
+type Registry = typeof import("playwright-core/lib/coreBundle")["registry"]["registry"];
+type Executable = NonNullable<ReturnType<Registry["findExecutable"]>>;
+
+/** playwright-core's registry and its headless shell, for browsers in `browsersPath`. */
+async function headlessShell(
+  browsersPath: string,
+): Promise<{ registry: Registry; exe: Executable; executablePath: string; directory: string }> {
   await loadPlaywright(browsersPath);
   const mod = (await import("playwright-core/lib/coreBundle")) as {
     registry?: typeof import("playwright-core/lib/coreBundle").registry;
@@ -185,14 +190,37 @@ export async function ensureChromium(browsersPath: string): Promise<string> {
   if (registry === undefined) throw new Error("playwright-core has no browser registry");
   const exe = registry.findExecutable("chromium-headless-shell");
   if (exe === undefined) throw new Error("playwright-core does not know chromium-headless-shell");
-  const path = exe.executablePath();
-  if (path !== undefined && existsSync(path)) return path;
-  await registry.install([exe], { gc: false });
-  const installed = exe.executablePath();
-  if (installed === undefined || !existsSync(installed)) {
+  const executablePath = exe.executablePath();
+  if (executablePath === undefined || exe.directory === undefined)
+    throw new Error("playwright-core has no chromium-headless-shell for this platform");
+  return { registry, exe, executablePath, directory: exe.directory };
+}
+
+/**
+ * Where the headless shell lives in `browsersPath`, and the file Playwright writes into its
+ * directory once an install has finished (INSTALLATION_COMPLETE, written last).
+ */
+export async function headlessShellPaths(
+  browsersPath: string,
+): Promise<{ executable: string; marker: string }> {
+  const { executablePath, directory } = await headlessShell(browsersPath);
+  return { executable: executablePath, marker: join(directory, "INSTALLATION_COMPLETE") };
+}
+
+/** The headless shell's executable, downloaded into the registry first when missing. */
+export async function ensureChromium(browsersPath: string): Promise<string> {
+  const { registry, exe, executablePath, directory } = await headlessShell(browsersPath);
+  // Installed means Playwright's marker: another process installing into the same directory has
+  // the executable on disk long before the rest (still being written: spawn ETXTBSY).
+  const marked = existsSync(join(directory, "INSTALLATION_COMPLETE"));
+  if (marked && existsSync(executablePath)) return executablePath;
+  // The registry's lock makes this wait for an install already running, which it then finds
+  // done. A marked install without its executable (removed since) is installed again.
+  await registry.install([exe], { gc: false, force: marked });
+  if (!existsSync(executablePath)) {
     throw new Error("the Chromium download finished without an executable");
   }
-  return installed;
+  return executablePath;
 }
 
 /** Installs (when needed) and launches Chromium on the plan's profile. */
@@ -209,4 +237,40 @@ export async function launchChromium(plan: LaunchPlan): Promise<BrowserContext> 
     downloadsPath: plan.downloadsTmp,
     ...(plan.proxyAuth === undefined ? {} : { proxy: plan.proxyAuth }),
   });
+}
+
+/**
+ * The id of Chromium's browser process (CDP SystemInfo), asked right after the launch: a stop
+ * kills a Chromium that does not close (Playwright itself waits 180 s before it kills).
+ * Undefined when the browser does not say.
+ */
+export async function browserProcessId(ctx: BrowserContext): Promise<number | undefined> {
+  const browser = ctx.browser();
+  if (browser === null) return undefined;
+  try {
+    const cdp = await browser.newBrowserCDPSession();
+    try {
+      const info = await cdp.send("SystemInfo.getProcessInfo");
+      return info.processInfo.find((p) => p.type === "browser")?.id;
+    } finally {
+      await cdp.detach().catch(() => undefined);
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+/** Kills Chromium: its process group (Playwright starts it detached, as the group's leader). */
+export function killChromium(pid: number): void {
+  // never 0 or 1 (kill(-0) is this process's own group, kill(-1) every process of the user)
+  if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) return;
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
 }
