@@ -36,6 +36,18 @@ beforeAll(async () => {
       res.writeHead(302, { location: "/login" }).end();
     },
     "/login": "<!doctype html><title>Login</title><h1>Login page</h1>",
+    "/plain": (_req, res) => {
+      const h = hold;
+      if (h !== undefined) {
+        hold = undefined;
+        held.push(res);
+        h(res);
+        return;
+      }
+      res
+        .writeHead(200, { "content-type": "text/html" })
+        .end("<!doctype html><title>Plain</title>");
+    },
     "/other": "<!doctype html><title>Other</title><h1>Other page</h1>",
   });
   d = await startTestDaemon({ launch: launchWatched });
@@ -107,6 +119,23 @@ describe("navigate through redirects", () => {
       ok: true,
       page: { url: `${fx.url}/login`, title: "Login" },
     });
+    await v.close();
+  });
+
+  it("a navigation dropped for one in flight to the same address that loads without a redirect succeeds", async () => {
+    await request(d.socketPath, { op: "navigate", url: "about:blank" });
+    const v = await openViewer(d.socketPath, { maxWidth: 480, maxHeight: 300 });
+    await v.next((m) => m.t === "state");
+    const arrived = holdNext();
+    v.send({ t: "nav", url: `${fx.url}/plain` });
+    const first = await arrived;
+    const dropped = nextGotoFailure();
+    const nav = request(d.socketPath, { op: "navigate", url: `${fx.url}/plain` });
+    await dropped;
+    first
+      .writeHead(200, { "content-type": "text/html" })
+      .end("<!doctype html><title>Plain</title>");
+    expect(await nav).toMatchObject({ ok: true, page: { url: `${fx.url}/plain`, title: "Plain" } });
     await v.close();
   });
 
