@@ -211,10 +211,11 @@ export async function ensureChromium(browsersPath: string): Promise<string> {
   const { registry, exe, executablePath, directory } = await headlessShell(browsersPath);
   // Installed means Playwright's marker: another process installing into the same directory has
   // the executable on disk long before the rest (still being written: spawn ETXTBSY).
-  if (existsSync(join(directory, "INSTALLATION_COMPLETE")) && existsSync(executablePath))
-    return executablePath;
-  // the registry's lock makes this wait for an install already running, which it then finds done
-  await registry.install([exe], { gc: false });
+  const marked = existsSync(join(directory, "INSTALLATION_COMPLETE"));
+  if (marked && existsSync(executablePath)) return executablePath;
+  // The registry's lock makes this wait for an install already running, which it then finds
+  // done. A marked install without its executable (removed since) is installed again.
+  await registry.install([exe], { gc: false, force: marked });
   if (!existsSync(executablePath)) {
     throw new Error("the Chromium download finished without an executable");
   }
@@ -260,6 +261,8 @@ export async function browserProcessId(ctx: BrowserContext): Promise<number | un
 
 /** Kills Chromium: its process group (Playwright starts it detached, as the group's leader). */
 export function killChromium(pid: number): void {
+  // never 0 or 1 (kill(-0) is this process's own group, kill(-1) every process of the user)
+  if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) return;
   try {
     process.kill(-pid, "SIGKILL");
   } catch {

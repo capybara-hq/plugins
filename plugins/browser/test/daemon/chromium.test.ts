@@ -84,7 +84,7 @@ describe("chromium browsers directory", () => {
 });
 
 describe("chromium install", () => {
-  it("waits for an install another process is running, never launching its half-written files", async () => {
+  it("takes a headless shell as installed only with Playwright's marker, never its half-written files", async () => {
     // its own browsers directory: playwright-core reads it once per test file's process
     const dir = mkdtempSync(join(tmpdir(), "cbd-install-"));
     try {

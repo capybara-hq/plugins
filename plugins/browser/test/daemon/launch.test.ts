@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -129,6 +129,80 @@ describe("browser daemon: stop", () => {
     process.kill(pid, "SIGSTOP");
     await daemon.close();
     expect(alive(pid)).toBe(false);
+  });
+
+  it("returns after the grace without killing when the browser's process id is unknown", async () => {
+    let ctx: BrowserContext | undefined;
+    const { daemon } = await daemonWith({
+      browserCloseGraceMs: 300,
+      launch: async (plan) => {
+        const real = await launchChromium(plan);
+        ctx = real;
+        // a browser that does not name its process
+        return new Proxy(real, {
+          get: (target, key) => {
+            if (key === "browser") return () => null;
+            const v = Reflect.get(target, key, target);
+            return typeof v === "function" ? v.bind(target) : v;
+          },
+        });
+      },
+    });
+    await daemon.ready;
+    if (ctx === undefined) throw new Error("not launched");
+    const pid = await browserProcessId(ctx);
+    if (pid === undefined) throw new Error("no browser process id");
+    cleanup.push(() => {
+      if (alive(pid)) process.kill(pid, "SIGKILL");
+    });
+    process.kill(pid, "SIGSTOP");
+    await daemon.close();
+    // nothing to kill: the stop returned anyway, Chromium is left to the process exit
+    expect(alive(pid)).toBe(true);
+  });
+
+  it("abandons a launch still running at the stop; it only closes once it finishes", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "cbd-"));
+    cleanup.push(() => removeDir(stateDir));
+    // tabs a restart would reopen (the first in the blank tab, the second in a new one)
+    const session = JSON.stringify({
+      savedAt: Date.now(),
+      tabs: ["http://127.0.0.1:9/a", "http://127.0.0.1:9/b"],
+      active: 0,
+    });
+    writeFileSync(join(stateDir, "session.json"), session);
+    let opened = 0;
+    let finish: (() => void) | undefined;
+    const launched = new Promise<BrowserContext>((resolve) => {
+      finish = () =>
+        resolve(
+          launchChromium(plan).then((ctx) => {
+            ctx.on("page", () => opened++);
+            return ctx;
+          }),
+        );
+    });
+    let plan!: Parameters<typeof launchChromium>[0];
+    const { daemon } = await daemonWith({
+      stateDir,
+      socketPath: join(stateDir, "sock"),
+      browserCloseGraceMs: 300,
+      launch: (p) => {
+        plan = p;
+        return launched;
+      },
+    });
+    // the launch (an install, say) is still running: the stop does not wait for it
+    await daemon.close();
+    finish?.();
+    const ctx = await launched;
+    await new Promise<void>((r) => {
+      if (ctx.browser()?.isConnected() === false) r();
+      else ctx.once("close", () => r());
+    });
+    // no tab restored, and the session file not written back
+    expect(opened).toBe(0);
+    expect(readFileSync(join(stateDir, "session.json"), "utf8")).toBe(session);
   });
 });
 

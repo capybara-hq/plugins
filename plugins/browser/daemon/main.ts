@@ -178,8 +178,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const launch = opts.launch ?? launchChromium;
   const closeGraceMs = opts.browserCloseGraceMs ?? BROWSER_CLOSE_GRACE_MS;
   let current: Promise<BrowserSession> | undefined;
-  /** The running browser's process id, asked right after its launch (see stopBrowser). */
-  let browserPid: number | undefined;
+  /**
+   * The process id of the browser `current` launched, asked right after its launch (stopBrowser
+   * kills it); dropped when that browser closes or its launch fails.
+   */
+  let running: { launch: Promise<BrowserSession>; pid: number | undefined } | undefined;
   let restored = false;
 
   /** Resolves with `value`, or undefined once `ms` passed. */
@@ -199,11 +202,17 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
    */
   function browser(): Promise<BrowserSession> {
     if (current !== undefined) return current;
-    const starting = launch(plan).then(async (ctx) => {
-      browserPid = await within(browserProcessId(ctx), BROWSER_CLOSE_GRACE_MS);
+    if (closing) return Promise.reject(new Error("The browser daemon is stopping."));
+    const starting: Promise<BrowserSession> = launch(plan).then(async (ctx) => {
+      // before the process id lookup: a Chromium that exits during it is still reported
+      let gone = false;
       ctx.on("close", () => {
+        gone = true;
+        if (running?.launch === starting) running = undefined;
         if (!closing) opts.onBrowserGone?.();
       });
+      const pid = await within(browserProcessId(ctx), BROWSER_CLOSE_GRACE_MS);
+      if (!gone) running = { launch: starting, pid };
       const workspace = opts.env[SERVICE_WORKSPACE_ENV];
       const session = new BrowserSession(ctx, {
         proxy: plan.proxy,
@@ -213,18 +222,23 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         downloadMaxBytes: downloadMaxBytes(opts.env),
         ...(opts.downloadWaitMs === undefined ? {} : { downloadWaitMs: opts.downloadWaitMs }),
       });
-      if (!restored) {
+      // A launch that finishes after a stop only gets closed (stopBrowser): no tabs restored and
+      // no saves, which would write back the session file an idle stop just forgot.
+      if (!restored && !closing) {
         restored = true;
         if (saved !== undefined) await sessionFile.restoreTabs(session, saved);
       }
-      const save = () => sessionFile.save(session, () => state.handoff);
-      session.on(save);
-      state.onChange(save);
+      if (!closing) {
+        const save = () => sessionFile.save(session, () => state.handoff);
+        session.on(save);
+        state.onChange(save);
+      }
       return session;
     });
     current = starting;
     starting.catch(() => {
       if (current === starting) current = undefined;
+      if (running?.launch === starting) running = undefined;
     });
     return starting;
   }
@@ -256,8 +270,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   }
 
   /**
-   * Closes Chromium; one that has not closed within the grace is killed. A launch still running
-   * after the grace is left to finish and close in the background (nothing to kill yet).
+   * Closes Chromium; one that has not closed within the grace is killed, and the stop waits at
+   * most one more grace for that. A launch still running after the grace (an install included)
+   * is abandoned: it closes in the background when it finishes, and in the service the process
+   * exit ends it (an unfinished install has no marker, so the next start installs again).
    */
   async function stopBrowser(): Promise<void> {
     const starting = current;
@@ -270,10 +286,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       closed.then(() => true),
       closeGraceMs,
     );
-    if (inTime === true || browserPid === undefined) return;
-    killChromium(browserPid);
-    // Playwright sees the process exit and finishes the close
-    await closed;
+    const pid = running?.launch === starting ? running.pid : undefined;
+    if (inTime === true || pid === undefined) return;
+    killChromium(pid);
+    // Playwright sees the process exit and finishes the close; a process that does not die
+    // (D state) is left to the service's exit, where Playwright kills its group
+    await within(closed, closeGraceMs);
   }
 
   const ready = browser().then(() => undefined);
