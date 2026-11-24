@@ -248,9 +248,14 @@ configuration at once, with no restart: running commands keep running, new conne
   `2026-11-23-device-update-fencing-design.md`); this plugin ignores it, because `PUT /sandboxes/{id}/network` replaces the
   policy unconditionally and sandbox metadata is fixed at creation, so there is nowhere to keep a token the write itself
   checks. **Residual race**: a kernel replica that lost its lease without noticing can still apply an older network policy after
-  a newer holder's change; it stays in force until the next lifecycle step applies the desired policy again (the kernel's
-  intent record makes the next holder re-apply when the stale call may land later, but not when it lands after that holder's
-  `update`; core issue #766 tracks reapplying when the installed policy is wider than the record).
+  a newer holder's change. The plugin therefore implements **`appliedNetwork`**: a pure read of the policy the VM records
+  (`GET /sandboxes/{id}`; it never connects or resumes the VM and never re-applies anything), with no network reported as an
+  empty allowlist and a policy this version does not recognize (such as an earlier version's open-public deny list) as
+  unknown. At each lifecycle step under the exclusive lease (a resume, a running VM the use holds alone, an instance on kept
+  files) the kernel compares it with the limits it recorded and, when the VM allows more (open public over an allowlist, a
+  host the record does not cover) or the answer is unknown, applies the desired policy again through `update`. A stale
+  policy that lands while the VM keeps running under shared uses stays in force until that next step (at the latest after the
+  kernel's maximum running time, when the VM is suspended and resumed).
 
 **Command time limit**: a single command runs at most `sandbox.limits.maxCommandSeconds`, and no more than the time left in the run it belongs to (`runtime.maxRunSeconds`,
 default 900 seconds, Ruling M20); to run long commands, raise `runtime.maxRunSeconds` to at least `maxCommandSeconds`.

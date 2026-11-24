@@ -9,7 +9,7 @@ allowBuilds:
   ssh2: true
 overrides:
   # one plugin-sdk instance: connector e2e checks `instanceof ToolError` across packages
-  "@capybara-hq/plugin-sdk": 0.1.0-rc.65
+  "@capybara-hq/plugin-sdk": 0.1.0-rc.67
   # one plugin-client instance: the host global and the hooks' context are shared by every plugin
   "@capybara-hq/plugin-client": 0.1.0-rc.9
   # one kernel and test kit that match it: an older kernel imports SDK exports R3 removed

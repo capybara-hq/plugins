@@ -827,6 +827,103 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
     });
   });
 
+  /**
+   * E2B's answer for `GET /sandboxes/{id}` (the recorded state and network, as verified live
+   * 2026-11-19), which the fake E2B does not serve; undefined for any other request.
+   */
+  const sandboxInfo = (method: string, path: string) => {
+    const get = /^\/sandboxes\/([^/]+)$/.exec(path);
+    if (method !== "GET" || !get?.[1]) return undefined;
+    const sb = fake.sandboxes.get(decodeURIComponent(get[1]));
+    if (!sb) return { status: 404, body: { code: 404, message: "not found" } };
+    return {
+      status: 200,
+      body: {
+        sandboxID: sb.id,
+        state: sb.state,
+        envdAccessToken: sb.envdAccessToken,
+        ...(sb.allowInternetAccess === false && { allowInternetAccess: false }),
+        network: sb.network ?? {},
+      },
+    };
+  };
+
+  describe("appliedNetwork (a pure read of the network the VM enforces)", () => {
+    let proxy: Awaited<ReturnType<typeof proxyOf>>;
+    let s: ReturnType<typeof make>;
+    beforeAll(async () => {
+      proxy = await proxyOf(fake, (method, path) => sandboxInfo(method, path));
+      s = make({ apiUrl: proxy.url });
+    });
+    afterAll(async () => {
+      await proxy?.close();
+    });
+    /** Every call that could change the VM: connect (resume), pause, kill, network writes. */
+    const writes = (id: string) =>
+      fake.calls.filter((c) => c.method !== "GET" && c.path.includes(id)).length;
+    /** A suspended device of the given network, its handle and its write count before the read. */
+    const suspended = async (network: SandboxLimits["network"]) => {
+      const h = await provision(s, limits(network));
+      await s.suspend(h, sig());
+      return { h, before: writes(h.id) };
+    };
+
+    it("no network (an empty allowlist) reads as an empty allowlist", async () => {
+      const { h, before } = await suspended({ kind: "allowlist", hosts: [] });
+      expect(await s.appliedNetwork?.(h, sig())).toEqual({ kind: "allowlist", hosts: [] });
+      expect(writes(h.id)).toBe(before);
+      expect(fake.sandboxes.get(h.id)?.state).toBe("paused");
+    });
+
+    it("an allowlist reads as its hosts", async () => {
+      const hosts = ["registry.npmjs.org", "*.githubusercontent.com"];
+      const { h, before } = await suspended({ kind: "allowlist", hosts });
+      expect(await s.appliedNetwork?.(h, sig())).toEqual({ kind: "allowlist", hosts });
+      expect(writes(h.id)).toBe(before);
+    });
+
+    it("open-public reads as open-public", async () => {
+      const { h, before } = await suspended({ kind: "open-public", hosts: [] });
+      expect(await s.appliedNetwork?.(h, sig())).toEqual({ kind: "open-public", hosts: [] });
+      expect(writes(h.id)).toBe(before);
+    });
+
+    it("an open-public VM of an earlier version reads as unknown and is neither resumed nor re-applied", async () => {
+      const { h, before } = await suspended({ kind: "open-public", hosts: [] });
+      const sb = fake.sandboxes.get(h.id);
+      if (!sb) throw new Error("no sandbox");
+      sb.network = { denyOut: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] };
+      // null: it may allow more than this version's open-public, so the kernel applies the
+      // desired limits again through update
+      expect(await s.appliedNetwork?.(h, sig())).toBeNull();
+      expect(writes(h.id)).toBe(before);
+      expect(sb.state).toBe("paused");
+      expect(sb.network).toEqual({ denyOut: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] });
+    });
+
+    it("reads a running VM without touching it", async () => {
+      const h = await provision(s, limits({ kind: "allowlist", hosts: ["pypi.org"] }));
+      const before = writes(h.id);
+      expect(await s.appliedNetwork?.(h, sig())).toEqual({
+        kind: "allowlist",
+        hosts: ["pypi.org"],
+      });
+      expect(writes(h.id)).toBe(before);
+    });
+
+    it("a missing VM is SandboxGoneError; an aborted signal rejects before any call", async () => {
+      const h = await provision(s, limits());
+      await s.destroyFileSystem({ id: h.id }, sig());
+      const gone = await s.appliedNetwork?.(h, sig()).catch((e: unknown) => e);
+      expect(isSandboxGoneError(gone)).toBe(true);
+      const seen = fake.calls.length;
+      const ac = new AbortController();
+      ac.abort(new Error("stop"));
+      await expect(s.appliedNetwork?.(h, ac.signal)).rejects.toThrow(/stop/);
+      expect(fake.calls.length).toBe(seen);
+    });
+  });
+
   describe("an open-public VM made with an earlier, shorter deny list", () => {
     /** Network update bodies the stub accepted, by sandbox id. */
     const puts = new Map<string, unknown[]>();
@@ -838,21 +935,8 @@ describe("device-e2b (fake E2B)", { timeout: 20_000 }, () => {
       // E2B's answers for GET /sandboxes/{id} (the recorded policy) and PUT .../network (applied
       // to the fake's state), as verified live 2026-11-19
       proxy = await proxyOf(fake, (method, path, body) => {
-        const get = /^\/sandboxes\/([^/]+)$/.exec(path);
-        if (method === "GET" && get?.[1]) {
-          const sb = fake.sandboxes.get(decodeURIComponent(get[1]));
-          if (!sb) return { status: 404, body: { code: 404, message: "not found" } };
-          return {
-            status: 200,
-            body: {
-              sandboxID: sb.id,
-              state: sb.state,
-              envdAccessToken: sb.envdAccessToken,
-              ...(sb.allowInternetAccess === false && { allowInternetAccess: false }),
-              network: sb.network ?? {},
-            },
-          };
-        }
+        const info = sandboxInfo(method, path);
+        if (info) return info;
         const put = /^\/sandboxes\/([^/]+)\/network$/.exec(path);
         if (method !== "PUT" || !put?.[1]) return undefined;
         const id = decodeURIComponent(put[1]);

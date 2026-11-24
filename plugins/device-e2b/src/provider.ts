@@ -582,6 +582,22 @@ export function outdatedOpenPublic(info: Parameters<typeof appliedNetworkOf>[0])
   );
 }
 
+/**
+ * The SDK form of a VM's applied network (pure): no network is an empty allowlist (the SDK has no
+ * `none` kind); unknown stays null.
+ */
+export function toSdkNetwork(applied: AppliedNetwork | null): SandboxLimits["network"] | null {
+  if (applied === null) return null;
+  switch (applied.mode) {
+    case "none":
+      return { kind: "allowlist", hosts: [] };
+    case "allowlist":
+      return { kind: "allowlist", hosts: [...applied.allowHosts] };
+    case "open-public":
+      return { kind: "open-public", hosts: [] };
+  }
+}
+
 /** The create-body fields of a network policy (`POST /v2/sandboxes`). */
 function createNetworkOf(policy: NetworkPolicy): Record<string, unknown> {
   switch (policy.kind) {
@@ -1142,31 +1158,43 @@ export function createE2BSandbox(
   };
 
   /**
+   * The VM's recorded state from `GET /sandboxes/{id}`: a pure read (it never connects, resumes or
+   * changes the VM; it works on a paused one). A missing VM → SandboxGoneError.
+   */
+  const sandboxInfo = async (
+    id: string,
+    signal: AbortSignal,
+  ): Promise<Parameters<typeof appliedNetworkOf>[0]> => {
+    signal.throwIfAborted();
+    checkId(id);
+    try {
+      return (
+        (
+          await api.json<Parameters<typeof appliedNetworkOf>[0]>("GET", `/sandboxes/${enc(id)}`, {
+            signal,
+          })
+        ).data ?? {}
+      );
+    } catch (e) {
+      if (isE2BNotFound(e))
+        throw new SandboxGoneError(`sandbox ${id} no longer exists`, { cause: e });
+      throw e;
+    }
+  };
+
+  /**
    * The network a VM applies (`GET /sandboxes/{id}`). An open-public VM made by an earlier version
    * with a shorter deny list gets the current open-public policy re-applied first (connecting it
    * unless `connected`), so an upgrade never leaves a device refusing every operation; a failed
-   * re-apply is an ordinary error (retried on the next use; a file reset also applies it).
+   * re-apply is an ordinary error (retried on the next use; a file reset also applies it). Not a
+   * pure read: the provider's `appliedNetwork` uses {@link sandboxInfo} alone.
    */
   const currentNetwork = async (
     id: string,
     signal: AbortSignal,
     connected: boolean,
   ): Promise<AppliedNetwork | null> => {
-    signal.throwIfAborted();
-    checkId(id);
-    let info: Parameters<typeof appliedNetworkOf>[0];
-    try {
-      info =
-        (
-          await api.json<Parameters<typeof appliedNetworkOf>[0]>("GET", `/sandboxes/${enc(id)}`, {
-            signal,
-          })
-        ).data ?? {};
-    } catch (e) {
-      if (isE2BNotFound(e))
-        throw new SandboxGoneError(`sandbox ${id} no longer exists`, { cause: e });
-      throw e;
-    }
+    const info = await sandboxInfo(id, signal);
     if (!outdatedOpenPublic(info)) return appliedNetworkOf(info);
     if (!connected) await attach(id, signal);
     try {
@@ -1531,6 +1559,19 @@ export function createE2BSandbox(
       // the file system lives on as a paused sandbox until an instance connects it
       await pause(r.data.sandboxID, signal, false);
       return { id: r.data.sandboxID };
+    },
+
+    /**
+     * The network the VM enforces now, from its recorded configuration (`GET /sandboxes/{id}`): a
+     * pure read that never connects (resumes) the VM or re-applies a policy, on a paused VM too.
+     * No network reads as an empty allowlist. A configuration this version does not recognize
+     * (an open-public VM of an earlier version with a shorter deny list) is null: it may allow
+     * more than this version's open-public, so the kernel applies the desired limits again through
+     * `update` (the fence cannot be honored here, README "Network policy"). A missing VM →
+     * SandboxGoneError.
+     */
+    async appliedNetwork(h, signal) {
+      return toSdkNetwork(appliedNetworkOf(await sandboxInfo(h.id, signal)));
     },
 
     /**
