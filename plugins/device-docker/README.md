@@ -260,6 +260,42 @@ of the device's list (a host cannot be granted per call, the egress proxy covers
 running instance in place at its next use (`update`), without a restart. `refuseOpenNetwork` lets a
 deployment refuse the open network outright (support then reports `openPublic: false`).
 
+## Device services and streams
+
+`ensureService` / `stopService` / `serviceStatus` / `serviceRequest` / `openStream` (core's browser use design §5–6): one long-lived
+named process per device, started on an extension's behalf after the kernel's command review, reached only through the provider.
+
+- **Process**: the provider runs its service manager (`src/services.ts`, `python3 -I`, standard library, shared byte for byte with
+  device-e2b) in the container as the sandbox user. `ensure` takes the service's lock, keeps a running service as it is (an
+  `ifRunning` ensure never starts anything and leaves a stopped container stopped), writes the spec's files into the state
+  directory, then forks `node <stateDir>/<entry> <args>` (`/usr/local/bin/node`) into its own session with the state directory as
+  its working directory, and answers once the service listens on its socket (or reports its exit with the tail of its log). The
+  process outlives the exec that started it (Docker reparents it to the container's init) and is not one of the exec commands:
+  `killAll` / `killTagged` leave it alone. Nothing restarts a service that exited: the kernel's next ensure does, reviewed again.
+- **State directory**: `/workspace/.capybara/svc/<name>` on the workspace volume (kept with the device's files, outside every
+  project the scan offers: a hidden directory). Files are written without following links: every directory is opened `O_NOFOLLOW`
+  from `/workspace` down and every file `O_NOFOLLOW` relative to its directory, so a link planted there (by the service itself or a
+  command, both the sandbox user) fails the ensure instead of redirecting the write.
+- **Runtime files**: `/tmp/.capybara-svc/<name>/` (0700): `pid` (pid, process start time, boot id, `startedAt`), `sock` (the
+  socket, `CAPYBARA_SERVICE_SOCKET`), `lock`, `log`. `/tmp` is a tmpfs, so a stop, a suspension, a restart fallback or a recreate
+  wipes them; a pid record also counts only while its process runs with the recorded start time, so it never claims a dead or
+  reused pid.
+- **Environment**: the instance's (with its egress proxy variables `HTTP_PROXY` / `HTTPS_PROXY` = `http://<proxy>:3128`, so a
+  browser's `--proxy-server` goes through the proxy), `PATH=/usr/local/bin:/usr/bin:/bin`, the spec's `env`,
+  `CAPYBARA_SERVICE_SOCKET` and `CAPYBARA_SERVICE_STATE`.
+- **Network changes**: the egress proxy enforces the device's allowlist live (an in-place apply swaps the list and closes every
+  connection the new list does not cover; a change of kind recreates the container, and the service with it), so an `ifRunning`
+  ensure after an allowlist change has nothing to re-apply.
+- **Suspend / destroy**: `docker stop` and the container's removal end the service with every process.
+- **Requests and streams**: an exec of `/usr/local/bin/capybara-socket-relay <socket>` (in the image, `image/capybara-socket-relay.mjs`,
+  equal to `SOCKET_RELAY_SOURCE`) with stdin attached: the relay connects to the socket, says `ready` on stderr, then copies bytes
+  both ways; the framed service protocol (`encodeServiceMessage`) rides the exec's stdin and its demultiplexed stdout. A failed
+  connect is "not running". The relay exits when either side closes (closing the stream closes the exec's connection, which ends
+  the relay's stdin). A request opens one relay per call. An instance made from an image without the relay (before this version)
+  answers requests with node's "Cannot find module" reason until it is recreated.
+- **Residual**: the service runs as the sandbox user, like every command in the device, so a command can stop it, read its state
+  directory or replace its socket; the device is one trust domain.
+
 ## Permission profiles (operation contract)
 
 The provider implements the optional operation half of `device-provider@1` (core spec

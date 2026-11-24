@@ -260,6 +260,28 @@ configuration at once, with no restart: running commands keep running, new conne
 **Command time limit**: a single command runs at most `sandbox.limits.maxCommandSeconds`, and no more than the time left in the run it belongs to (`runtime.maxRunSeconds`,
 default 900 seconds, Ruling M20); to run long commands, raise `runtime.maxRunSeconds` to at least `maxCommandSeconds`.
 
+## Device services and streams
+
+`ensureService` / `stopService` / `serviceStatus` / `serviceRequest` / `openStream` (core's browser use design §5–6), the same
+as device-docker's (README "Device services and streams" there; `src/services.ts` is that plugin's file byte for byte), over envd:
+
+- **Process**: the service manager (`python3 -I`) runs as the `sandbox` user through `process.Process/Start`, the request on
+  stdin (`SendInput`). It forks `node <stateDir>/<entry> <args>` into its own session; envd keeps it running after the manager's
+  stream ended (verified live 2026-11-24). A normal ensure connects (resumes) a paused VM; an `ifRunning` ensure, `serviceStatus`,
+  `stopService`, requests and streams never resume one (a paused VM answers stopped / not running: pausing without memory ended
+  every process).
+- **State directory**: `/workspace/.capybara/svc/<name>` on the VM's disk (the device's file system). Runtime files under
+  `/tmp/.capybara-svc/<name>/`; `/tmp` is on the VM's disk here, so a pid record counts only while its process runs with the
+  recorded start time on the recorded boot (a cold start after a pause changes the boot id).
+- **Network**: the VM's (E2B applies the egress rules to the whole VM and `update` changes them in place), so an `ifRunning`
+  ensure after an allowlist change has nothing to re-apply.
+- **Requests and streams**: the relay runs inline (`node --input-type=module -e <SOCKET_RELAY_SOURCE> <socket>`): an E2B file
+  system keeps the template it was made from, which may predate the relay in the image. It is an envd process with stdin kept
+  open; each message is one `SendInput` call (sent in order), the service's messages arrive on its stdout. Closing kills the relay
+  by pid (`SendSignal`; cutting envd's stream does not end a process), which drops its connection to the service. Opening a stream
+  extends the VM's timeout to at least an hour (the kernel's idle suspension still pauses it); a request does not extend it.
+  There is no backpressure towards envd: the service's messages queue in the provider while nobody reads them.
+
 ## Permission profiles (operation contract)
 
 The provider implements the permission operation contract of `device-provider@1`: `permissionSupport`, a

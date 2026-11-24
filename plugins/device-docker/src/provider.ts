@@ -8,6 +8,7 @@ import {
   type DeviceRef,
   type DeviceReport,
   type DeviceReportLimit,
+  type DeviceServiceStatus,
   type ExecResult,
   FileSystemGoneError,
   type Logger,
@@ -39,6 +40,17 @@ import {
 } from "./listing.js";
 import { createOperations, type OperationTransport, refusedFrame } from "./operations.js";
 import { OPERATION_AGENT } from "./runtime-source.js";
+import {
+  managerArgv,
+  managerRequest,
+  parseManagerReply,
+  RELAY_PATH,
+  relayRequest,
+  relayStream,
+  SERVICE_NODE,
+  serviceSocketPath,
+  serviceStateDir,
+} from "./services.js";
 
 /** The images published with a given device-docker version (the plugins repo's image workflow). */
 export function publishedImages(version: string): { sandbox: string; egress: string } {
@@ -68,6 +80,11 @@ export type DockerSandboxProvider = DeviceProvider &
       | "browse"
       | "revokeOperation"
       | "background"
+      | "ensureService"
+      | "stopService"
+      | "serviceStatus"
+      | "serviceRequest"
+      | "openStream"
     >
   > & {
     readonly limitsApplyAt: "instance";
@@ -251,6 +268,8 @@ const EGRESS_CONTROL_DIR = "/run/egress";
 const EGRESS_USER = "node";
 /** How long one in-place list change may take (the proxy's own deadline is 30 s too). */
 const EGRESS_APPLY_TIMEOUT_MS = 30_000;
+/** The service manager's time limit: writing the files, then up to 30 s until the service listens. */
+const SERVICE_MANAGER_TIMEOUT_MS = 90_000;
 
 /**
  * Container / volume / network names: `create`'s and `createFileSystem`'s name
@@ -1912,6 +1931,124 @@ export function createDockerSandbox(
     network: { openPublic: !cfg.refuseOpenNetwork },
   });
 
+  // ---------- device services (browser use spec §5-6, src/services.ts) ----------
+
+  const stoppedService = (name: string): DeviceServiceStatus => ({
+    name,
+    state: "stopped",
+    startedAt: null,
+    stateDir: serviceStateDir(name),
+  });
+
+  /**
+   * Runs the service manager in the container as the sandbox user. `start` starts a stopped
+   * container first (a normal ensure); otherwise a stopped container answers `stopped` (its
+   * processes died with it) and is left stopped.
+   */
+  const manage = async (
+    h: SandboxHandle,
+    op: "status" | "ensure" | "stop",
+    name: string,
+    signal: AbortSignal,
+    o: { stdin?: Uint8Array; start?: boolean } = {},
+  ): Promise<DeviceServiceStatus> => {
+    signal.throwIfAborted();
+    const go = () =>
+      run(h.id, {
+        cmd: managerArgv(op, name),
+        user: SANDBOX_USER,
+        cwd: "/",
+        ...(o.stdin && { stdin: o.stdin }),
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: SERVICE_MANAGER_TIMEOUT_MS,
+        signal,
+        incarnation: h,
+      });
+    let r: RunResult;
+    if (o.start) r = await autoStart(h, signal, go);
+    else {
+      try {
+        r = await go();
+      } catch (e) {
+        if (e instanceof NotRunningError) return stoppedService(name);
+        throw e;
+      }
+    }
+    if (r.aborted) throw abortReason(signal);
+    return parseManagerReply(name, {
+      exitCode: r.exitCode,
+      stdout: r.stdout.toString("utf8"),
+      stderr: stderrOf(r),
+      timedOut: r.timedOut,
+    });
+  };
+
+  /**
+   * Starts the socket relay to the service's socket (an exec as the sandbox user with stdin
+   * attached) and returns a relay stream over the hijacked connection: stdin carries our framed
+   * messages, the demultiplexed stdout the service's, stderr the relay's `ready` or its reason.
+   * A stopped container is not started: the service died with it.
+   */
+  const openRelay = async (h: SandboxHandle, name: string, signal: AbortSignal) => {
+    signal.throwIfAborted();
+    const socketPath = serviceSocketPath(name);
+    const notRunning = (cause: unknown) =>
+      new Error(`device service ${name} is not running: the instance is stopped`, { cause });
+    if (handleFence(h) !== undefined) await checkIncarnation(h, signal);
+    let execId: string;
+    try {
+      const r = await api.json<{ Id: string }>("POST", `/containers/${enc(h.id)}/exec`, {
+        body: {
+          AttachStdin: true,
+          AttachStdout: true,
+          AttachStderr: true,
+          Tty: false,
+          Cmd: [SERVICE_NODE, RELAY_PATH, socketPath],
+          User: SANDBOX_USER,
+          Env: [`PATH=${SYSTEM_PATH}`],
+          WorkingDir: "/",
+        },
+        signal,
+      });
+      execId = r.Id;
+    } catch (e) {
+      if (isStatus(e, 404)) {
+        throw new SandboxGoneError(`sandbox container ${h.id} no longer exists`, { cause: e });
+      }
+      if (isStatus(e, 409)) throw notRunning(e);
+      throw e;
+    }
+    let socket: Duplex;
+    try {
+      socket = await api.hijack(`/exec/${execId}/start`, { Detach: false, Tty: false }, signal);
+    } catch (e) {
+      if (isStatus(e, 404)) {
+        throw new SandboxGoneError(`sandbox container ${h.id} no longer exists`, { cause: e });
+      }
+      if (isStatus(e, 409)) throw notRunning(e);
+      throw e;
+    }
+    const opened = relayStream(name, {
+      write: (bytes) =>
+        new Promise<void>((resolve, reject) => {
+          socket.write(bytes, (e) => (e ? reject(e) : resolve()));
+        }),
+      // the exec's stdin closes with the connection, and the relay then drops its connection
+      // to the service and exits
+      close: () => socket.destroy(),
+      pause: () => socket.pause(),
+      resume: () => socket.resume(),
+    });
+    const demux = new StreamDemuxer((kind, data) =>
+      kind === 1 ? opened.sink.stdout(data) : opened.sink.stderr(data),
+    );
+    socket.on("data", (c: Buffer) => demux.push(c));
+    socket.on("error", (e) => opened.sink.ended(`the relay connection failed: ${e.message}`));
+    socket.on("end", () => socket.destroy());
+    socket.on("close", () => opened.sink.ended());
+    return opened;
+  };
+
   /**
    * The device report: what the container is, no home, the cpu / memory / disk the instance was
    * created with (read from the container and its workspace volume; none without an instance),
@@ -2364,6 +2501,67 @@ export function createDockerSandbox(
       const b = checkListPath(base);
       const r = await listOp(h, "scan", b, 0, opts.signal);
       return finishScan(b, r, NO_PYTHON);
+    },
+
+    /**
+     * A device service: a process the manager starts detached in its own session as the sandbox
+     * user, its state directory on the workspace volume. Its network is the instance's: the
+     * manager hands it the container's egress proxy variables (`HTTPS_PROXY` / `HTTP_PROXY`, so a
+     * browser's `--proxy-server` reaches the proxy), and the egress proxy enforces the device's
+     * allowlist live (an in-place apply swaps the list and closes every connection the new list
+     * does not cover; a change of kind recreates the container, and the service with it). So an
+     * `ifRunning` ensure after an allowlist change has nothing to re-apply.
+     */
+    async ensureService(h, spec, signal, opts) {
+      const ifRunning = opts?.ifRunning === true;
+      return manage(h, "ensure", spec.name, signal, {
+        stdin: managerRequest(spec, ifRunning),
+        start: !ifRunning,
+      });
+    },
+
+    async stopService(h, name, signal) {
+      await manage(h, "stop", name, signal);
+    },
+
+    async serviceStatus(h, name, signal) {
+      return manage(h, "status", name, signal);
+    },
+
+    async serviceRequest(h, name, body, opts) {
+      opts.signal.throwIfAborted();
+      const limit = AbortSignal.any([opts.signal, AbortSignal.timeout(opts.timeoutMs)]);
+      let opened: Awaited<ReturnType<typeof openRelay>>;
+      try {
+        opened = await openRelay(h, name, limit);
+      } catch (e) {
+        opts.signal.throwIfAborted();
+        if (limit.aborted) {
+          throw new Error(
+            `device service ${name} did not answer within ${String(opts.timeoutMs)} ms`,
+          );
+        }
+        throw e;
+      }
+      return relayRequest(name, opened, body, opts);
+    },
+
+    async openStream(h, target, signal) {
+      const opened = await openRelay(h, target.service, signal);
+      const onAbort = () => opened.stream.close("aborted while opening");
+      signal.addEventListener("abort", onAbort, { once: true });
+      try {
+        await opened.ready;
+        signal.throwIfAborted();
+        await opened.stream.send(new TextEncoder().encode(JSON.stringify({ kind: "stream" })));
+      } catch (e) {
+        opened.stream.close("open failed");
+        signal.throwIfAborted();
+        throw e;
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+      return opened.stream;
     },
 
     // The operation contract (operations.ts): fresh immutable scopes per invocation.

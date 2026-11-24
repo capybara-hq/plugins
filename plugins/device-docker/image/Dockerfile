@@ -29,6 +29,10 @@
 #   missing), /bin/bash and sleep. Changing any of this needs a new pin in core
 #   (`pnpm gen:device-image-pin <version>`); spec
 #   docs/superpowers/specs/2026-11-23-docker-device-without-host-python-design.md in core;
+# - device services (src/services.ts): the provider runs its service manager with /usr/bin/python3
+#   (standard library only, Linux /proc) and every service and the socket relay with
+#   /usr/local/bin/node; state directories live under /workspace/.capybara/svc, runtime files under
+#   /tmp/.capybara-svc;
 # - one image for every sandbox mode (`auto` / `sandbox`): what a mode may do is set by policy (the
 #   sandbox tool policy and the egress network), not by missing binaries. It carries Node 22
 #   (official tarball, SHA256 pinned per architecture), pnpm (global, so
@@ -114,6 +118,13 @@ RUN printf '%s\n' \
 COPY --chown=0:0 runtime/ /opt/capybara-runtime/
 RUN set -eu; cd /opt/capybara-runtime; sha256sum -c SHA256SUMS; \
   chmod 0755 /opt/capybara-runtime; chmod 0644 /opt/capybara-runtime/*
+
+# The device service socket relay (`capybara-socket-relay <socket>`, src/services.ts
+# SOCKET_RELAY_SOURCE byte for byte, test/services.test.ts keeps them in step): the provider
+# reaches a device service's unix socket only through an exec of it, stdin / stdout carrying the
+# framed service protocol. Root-owned, run with /usr/local/bin/node by absolute path.
+COPY --chown=0:0 capybara-socket-relay.mjs /usr/local/bin/capybara-socket-relay
+RUN chmod 0755 /usr/local/bin/capybara-socket-relay
 
 ENV HOME=/workspace \
   LANG=C.UTF-8 \

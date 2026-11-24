@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   type DeviceProvider,
   type DeviceReport,
+  type DeviceServiceStatus,
   type ExecResult,
   FileSystemGoneError,
   type Logger,
@@ -57,6 +58,17 @@ import {
   runtimeChecksums,
   runtimeFiles,
 } from "./runtime-source.js";
+import {
+  managerArgv,
+  managerRequest,
+  parseManagerReply,
+  relayRequest,
+  relayStream,
+  SERVICE_NODE,
+  SOCKET_RELAY_SOURCE,
+  serviceSocketPath,
+  serviceStateDir,
+} from "./services.js";
 
 /** 部署配置（见 index.ts 的 DeploymentConfig）。 */
 export interface E2BSandboxConfig {
@@ -152,6 +164,14 @@ const UPLOAD_DIR = "/opt/capybara/upload";
 const MAX_TIMEOUT_SECONDS = 86_400;
 /** 长命令：沙箱超时至少推到命令超时之后这么多秒。 */
 const TIMEOUT_MARGIN_SECONDS = 120;
+/** The service manager's time limit: writing the files, then up to 30 s until the service listens. */
+const SERVICE_MANAGER_TIMEOUT_MS = 90_000;
+/**
+ * The sandbox timeout a device stream asks for when it opens (the E2B backstop that pauses an
+ * unattended VM): a live view keeps the VM up at least this long; the kernel's idle suspension
+ * still pauses it once nobody uses the device.
+ */
+const STREAM_TIMEOUT_SECONDS = 3600;
 /** 中止 / 超时杀掉命令后，最多再等输出流结束这么久（毫秒），之后直接断开。 */
 const KILL_GRACE_MS = 3000;
 /** 读文件时额外留给 stderr 的字节。 */
@@ -1479,6 +1499,153 @@ export function createE2BSandbox(
     network: { allowlist: cfg.domainAllowlist },
   });
 
+  // ---------- device services (browser use spec §5-6, src/services.ts) ----------
+
+  const stoppedService = (name: string): DeviceServiceStatus => ({
+    name,
+    state: "stopped",
+    startedAt: null,
+    stateDir: serviceStateDir(name),
+  });
+
+  /**
+   * Runs the service manager in the VM as the sandbox user. `start` connects (resumes) a paused
+   * VM first (a normal ensure); otherwise a paused or missing VM answers `stopped` (pausing
+   * without memory ended every process) and is left as it is.
+   */
+  const manage = async (
+    h: SandboxHandle,
+    op: "status" | "ensure" | "stop",
+    name: string,
+    signal: AbortSignal,
+    o: { stdin?: Uint8Array; start?: boolean } = {},
+  ): Promise<DeviceServiceStatus> => {
+    signal.throwIfAborted();
+    const [cmd, ...args] = managerArgv(op, name) as [string, ...string[]];
+    const t = o.start ? await attach(h.id, signal) : await targetIfRunning(h.id, signal);
+    if (t === undefined) return stoppedService(name);
+    let r: RunResult;
+    try {
+      r = await run(t, {
+        user: SANDBOX_USER,
+        cmd,
+        args,
+        cwd: "/",
+        ...(o.stdin && { stdin: o.stdin }),
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: SERVICE_MANAGER_TIMEOUT_MS,
+        signal,
+      });
+    } catch (e) {
+      if (!o.start && pausedMeanwhile(e)) return stoppedService(name);
+      throw e;
+    }
+    if (r.aborted) throw abortReason(signal);
+    return parseManagerReply(name, {
+      exitCode: r.exitCode,
+      stdout: r.stdout.toString("utf8"),
+      stderr: stderrOf(r),
+      timedOut: r.timedOut,
+    });
+  };
+
+  /**
+   * Starts the socket relay to the service's socket (`node -e <relay>`, inline: an E2B file
+   * system keeps the template it was made from, which may predate the relay in the image) as an
+   * envd process with stdin kept open: `SendInput` carries our framed messages, its stdout the
+   * service's, its stderr the relay's `ready` or its reason. A paused VM is not resumed: the
+   * service died with its processes. Closing kills the relay by pid (envd keeps a process
+   * running when its stream is cut), which drops its connection to the service.
+   */
+  const openRelay = async (
+    h: SandboxHandle,
+    name: string,
+    signal: AbortSignal,
+    minSeconds?: number,
+  ) => {
+    signal.throwIfAborted();
+    const socketPath = serviceSocketPath(name);
+    const running = await targetIfRunning(h.id, signal);
+    if (running === undefined) {
+      throw new Error(`device service ${name} is not running: the instance is paused`);
+    }
+    // a running VM only has its timeout extended (a stream asks for a longer one)
+    const t = minSeconds === undefined ? running : await attach(h.id, signal, minSeconds);
+    const conn = new AbortController();
+    let pid: number | undefined;
+    let closing = false;
+    let resolvePid!: (p: number) => void;
+    let rejectPid!: (e: Error) => void;
+    const pidKnown = new Promise<number>((res, rej) => {
+      resolvePid = res;
+      rejectPid = rej;
+    });
+    pidKnown.catch(() => undefined);
+    const killRelay = (p: number) =>
+      void envdKill(t, p, AbortSignal.timeout(15_000)).catch(() => undefined);
+    let chain: Promise<void> = Promise.resolve();
+    const opened = relayStream(name, {
+      // one SendInput per message, in order
+      write: (bytes) => {
+        const next = chain.then(async () => {
+          const p = await pidKnown;
+          await envdSendInput(t, p, bytes, conn.signal);
+        });
+        chain = next.catch(() => undefined);
+        return next;
+      },
+      close: () => {
+        if (closing) return;
+        closing = true;
+        if (pid !== undefined) killRelay(pid);
+        rejectPid(new Error(`device service ${name}: the stream is closed`));
+        conn.abort();
+      },
+    });
+    const onAbort = () => opened.stream.close("aborted while opening");
+    signal.addEventListener("abort", onAbort, { once: true });
+    void opened.ready.then(
+      () => signal.removeEventListener("abort", onAbort),
+      () => signal.removeEventListener("abort", onAbort),
+    );
+    void envdStart(
+      t,
+      SANDBOX_USER,
+      {
+        cmd: SERVICE_NODE,
+        args: ["--input-type=module", "-e", SOCKET_RELAY_SOURCE, socketPath],
+        envs: { PATH: systemPath },
+        cwd: "/",
+      },
+      (e) => {
+        if ("start" in e) {
+          pid = e.start.pid;
+          if (pid === undefined) {
+            opened.sink.ended("E2B started the relay without a pid");
+            return;
+          }
+          // closed before envd named the process: kill it now
+          if (closing) killRelay(pid);
+          else resolvePid(pid);
+        } else if ("data" in e) {
+          if (e.data.stdout) opened.sink.stdout(Buffer.from(e.data.stdout, "base64"));
+          if (e.data.stderr) opened.sink.stderr(Buffer.from(e.data.stderr, "base64"));
+        }
+      },
+      conn.signal,
+      true,
+    ).then(
+      () => opened.sink.ended(),
+      (e: unknown) =>
+        opened.sink.ended(
+          closing
+            ? undefined
+            : `the relay stream failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 300)}`,
+        ),
+    );
+    return opened;
+  };
+
   // ---------- 契约 ----------
 
   return {
@@ -1708,6 +1875,61 @@ export function createE2BSandbox(
       );
       if (r.exitCode !== 0)
         throw new Error(`cannot stop crashed holders' commands: ${stderrOf(r)}`);
+    },
+
+    /**
+     * A device service: a process the manager starts detached in its own session as the sandbox
+     * user, its state directory on the VM's disk (the device's file system). Its network is the
+     * VM's: E2B applies the egress rules to the whole VM and `update` changes them in place, so an
+     * `ifRunning` ensure after an allowlist change has nothing to re-apply. Pausing (suspend,
+     * destroy) ends it with every other process.
+     */
+    async ensureService(h, spec, signal, opts) {
+      const ifRunning = opts?.ifRunning === true;
+      return manage(h, "ensure", spec.name, signal, {
+        stdin: managerRequest(spec, ifRunning),
+        start: !ifRunning,
+      });
+    },
+
+    async stopService(h, name, signal) {
+      await manage(h, "stop", name, signal);
+    },
+
+    async serviceStatus(h, name, signal) {
+      return manage(h, "status", name, signal);
+    },
+
+    async serviceRequest(h, name, body, opts) {
+      opts.signal.throwIfAborted();
+      const limit = AbortSignal.any([opts.signal, AbortSignal.timeout(opts.timeoutMs)]);
+      let opened: Awaited<ReturnType<typeof openRelay>>;
+      try {
+        opened = await openRelay(h, name, limit);
+      } catch (e) {
+        opts.signal.throwIfAborted();
+        if (limit.aborted) {
+          throw new Error(
+            `device service ${name} did not answer within ${String(opts.timeoutMs)} ms`,
+          );
+        }
+        throw e;
+      }
+      return relayRequest(name, opened, body, opts);
+    },
+
+    async openStream(h, target, signal) {
+      const opened = await openRelay(h, target.service, signal, STREAM_TIMEOUT_SECONDS);
+      try {
+        await opened.ready;
+        signal.throwIfAborted();
+        await opened.stream.send(new TextEncoder().encode(JSON.stringify({ kind: "stream" })));
+      } catch (e) {
+        opened.stream.close("open failed");
+        signal.throwIfAborted();
+        throw e;
+      }
+      return opened.stream;
     },
 
     async exec(h, args): Promise<ExecResult> {

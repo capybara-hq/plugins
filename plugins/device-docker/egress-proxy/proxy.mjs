@@ -39,6 +39,11 @@
 // a file the token is FENCE (the token the instance was created with), else 0. `control status`
 // prints the list and the token in force.
 //
+// Device services (src/services.ts) reach the network through this proxy like every command: the
+// provider's service manager hands a service the instance's HTTP_PROXY / HTTPS_PROXY
+// (http://<proxy>:3128), so a browser started with `--proxy-server` from them goes through the same
+// checks; an in-place apply closes a service's connections the new list does not cover.
+//
 // Test only: CAPYBARA_EGRESS_TEST_HOSTS (JSON object name -> IP) pins a name to an IP and exempts
 // it from the private address check (in allowlist it must still be on the list; in open-public a
 // pinned name is allowed). CAPYBARA_EGRESS_TEST_RESOLVE (JSON object name -> IP) answers a name
