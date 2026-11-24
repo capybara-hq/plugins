@@ -1,5 +1,9 @@
 # @capybara-hq/plugin-device-docker
 
+## 0.1.0-rc.28
+
+No changes in this release.
+
 ## 0.1.0-rc.27
 
 ### Patch Changes

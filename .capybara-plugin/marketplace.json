@@ -826,7 +826,7 @@
     },
     {
       "name": "device-docker",
-      "version": "0.1.0-rc.27",
+      "version": "0.1.0-rc.28",
       "summary": {
         "en": "Devices as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with their files on volumes kept until the device is deleted: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist",
         "zh": "以 Docker 容器（runc 或 gVisor runsc）承载设备，经 Docker socket 代理访问；文件保存在卷上，直到设备被删除。网络默认开放公网（拒绝回环、私有、链路本地与元数据地址），也可用主机白名单"
@@ -853,14 +853,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-docker",
-          "version": "0.1.0-rc.27",
-          "integrity": "sha512-rnVMzzEA77UlhK1JfJrXCdBzwV5WL4FBZCUBYVciLFPxbPNa0g+jaQqEvxEr9Gq60AFhKigLg2Dz6nCEcaXk6g=="
+          "version": "0.1.0-rc.28",
+          "integrity": "sha512-AMmRgf+D8Aap5RKdrhNvPH+1ItvTtQohOCzr6B0xaSzOYD78BbYZxKniOZzEqphGxOymoZe+LCqfTSnKGdKRWg=="
         }
       }
     },
     {
       "name": "device-e2b",
-      "version": "0.1.0-rc.27",
+      "version": "0.1.0-rc.28",
       "summary": {
         "en": "Devices as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, an allowlist or the open internet with local ranges denied (E2B's metadata service stays reachable)",
         "zh": "以 E2B 沙箱承载设备（E2B 云或自托管）：暂停沙箱保留文件，从已发布镜像构建模板，网络为出站白名单或开放公网（拒绝私有、回环与链路本地地址；E2B 元数据端点仍可达，见 README）"
@@ -886,8 +886,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-e2b",
-          "version": "0.1.0-rc.27",
-          "integrity": "sha512-T8U1Wv15ulKwsTA/bUcURTUJJDwNcCUd0nQk9hoNiwO8nz8dMp+W2chB9rXTvfWDKQsMdzBw0GTw/YslG+RYsA=="
+          "version": "0.1.0-rc.28",
+          "integrity": "sha512-QTf4Xt8Fy4AwoAYwnR6x5Dkdt3C1o3QPPbEO7lYUmF5l5nHykEKlWJ6YwBy3jrwwKD5cI0rbnWANgZUipLBsZg=="
         }
       }
     },
