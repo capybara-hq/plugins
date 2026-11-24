@@ -156,12 +156,17 @@ describe("Lark 插件接内核（双副本）", () => {
     const book = im.book("acme-lark");
     for (const [plugin, body] of [
       ["model-fake", { enabled: true }],
-      ["fake-im", { enabled: true, config: { url: book.url } }],
+      ["fake-im", { enabled: true }],
       ["lark", { enabled: true }],
     ] as const) {
       const en = await call(ownerJar, "PUT", `${base}/extensions/${plugin}`, body);
       expect(en.status, JSON.stringify(en.json)).toBe(200);
     }
+    // the org's copy of fake-im's overridable directoryUrl points at its book
+    const imCopy = await call(ownerJar, "PUT", `${base}/extensions/fake-im/overrides`, {
+      values: { directoryUrl: book.url },
+    });
+    expect(imCopy.status, JSON.stringify(imCopy.json)).toBe(200);
     const ag = await call(ownerJar, "POST", `${base}/agents`, {
       definition: {
         name: "Helper",

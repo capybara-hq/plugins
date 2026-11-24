@@ -1,5 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { isModelError, ModelError, type ModelErrorKind } from "@capybara-hq/plugin-sdk";
+import {
+  isModelError,
+  isNetDeniedError,
+  ModelError,
+  type ModelErrorKind,
+  type NetDeniedError,
+} from "@capybara-hq/plugin-sdk";
 
 /** `retry-after-ms`（毫秒）优先，其次 `retry-after`（秒或 HTTP 日期）。 */
 function retryAfterMs(headers: Headers | undefined): number | undefined {
@@ -40,6 +46,13 @@ function kindFromType(type: string | null | undefined): ModelErrorKind | null {
   }
 }
 
+/** The kernel's `NetDeniedError`, thrown directly or wrapped by the SDK (`cause`); else undefined. */
+function netDenied(e: unknown): NetDeniedError | undefined {
+  if (isNetDeniedError(e)) return e;
+  const cause = typeof e === "object" && e !== null ? (e as { cause?: unknown }).cause : undefined;
+  return isNetDeniedError(cause) ? cause : undefined;
+}
+
 /**
  * SDK 异常 → ModelError。只按异常类、HTTP 状态码与 API 错误 `type` 判断，不匹配错误信息字符串。
  * `signal` 已中止时一律视为 aborted（中止后 SDK 可能抛出连接类错误）。
@@ -52,6 +65,16 @@ export function toModelError(e: unknown, signal?: AbortSignal): ModelError {
 
   if (signal?.aborted || e instanceof Anthropic.APIUserAbortError) {
     return new ModelError("aborted", "Request aborted", { cause: e });
+  }
+  // The kernel's network rules refused an org's API URL: invalid_request (retrying is useless),
+  // naming the host, never the URL's path, query or headers
+  const denied = netDenied(e);
+  if (denied) {
+    return new ModelError(
+      "invalid_request",
+      `Anthropic: the request to ${denied.host || "the API URL"} was refused by the platform's network rules: ${denied.message} Ask an administrator to check the API URL.`,
+      { cause: denied },
+    );
   }
   if (e instanceof Anthropic.APIConnectionTimeoutError) return make("timeout");
   if (e instanceof Anthropic.APIConnectionError) return make("network");

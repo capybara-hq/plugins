@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { defineExtension, type ExtensionContext } from "@capybara-hq/plugin-sdk";
+import { defineExtension, type ExtensionContext, platformOnly } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 
 /** 部署级配置：每次递增的步长，默认 1。 */
-const DeploymentConfig = z.object({
-  step: z.number().int().positive().default(1),
-});
+const DeploymentConfig = platformOnly(
+  z.object({
+    step: z.number().int().positive().default(1),
+  }),
+);
 
 type Db = ExtensionContext["db"];
 
@@ -57,7 +59,7 @@ export async function applyDelayedInc(db: Db, jobId: string, step: number): Prom
 export default defineExtension({
   name: "example-counter",
   version: "0.1.0-rc.3",
-  sdk: "^0.1.0-rc.0",
+  sdk: "^0.1.0-rc.64",
   provides: ["counter@1"],
   config: { deployment: DeploymentConfig },
   migrations: "../migrations",

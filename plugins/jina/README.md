@@ -7,8 +7,10 @@ Provides `web-search@1` and `web-fetch@1` through Jina's search (`s.jina.ai`) an
 
 ## Configuration
 
-- **Organization:** an API key (`apiKey`, secret) from the Jina API dashboard at jina.ai. Each organization sets its own; the provider is not configured until it does.
-- **Deployment (advanced):** `searchUrl` and `readerUrl` override the service endpoints, for tests or to go through a proxy. The defaults are the public Jina endpoints.
+All fields are deployment config that an organization may override:
+
+- `apiKey` (secret): from the Jina API dashboard at jina.ai. The platform may set a shared key; an organization that follows an empty platform key is not configured until it saves its own.
+- `searchUrl` and `readerUrl` (advanced): override the service endpoints, for tests or to go through a proxy. The defaults are the public Jina endpoints. An organization's own URL goes through the kernel's guarded client (private addresses refused).
 
 ## Using it
 

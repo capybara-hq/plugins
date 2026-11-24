@@ -1,9 +1,10 @@
 import {
+  configUrlFetch,
   WebProviderError,
   type WebSearchProvider,
   type WebSearchResult,
 } from "@capybara-hq/plugin-sdk";
-import { apiKeyOf, type JinaEndpoints, jinaConfigured } from "./config.js";
+import { apiKeyOf, DEFAULTS, type JinaEnv, jinaConfigured, parseJinaConfig } from "./config.js";
 import { jinaRequest, joinUrl } from "./http.js";
 import { httpUrl, text } from "./util.js";
 
@@ -25,18 +26,24 @@ function toResult(item: unknown): WebSearchResult | undefined {
 }
 
 /** `web-search@1` over Jina's search API (`s.jina.ai`), snippets only. */
-export function createJinaSearch(endpoints: Pick<JinaEndpoints, "searchUrl">): WebSearchProvider {
+export function createJinaSearch(env: JinaEnv): WebSearchProvider {
   return {
     configured: jinaConfigured,
-    async search({ query, allowedDomains, maxResults, orgConfig, signal }) {
-      const apiKey = apiKeyOf(orgConfig);
+    async search({ query, allowedDomains, maxResults, config, orgId, signal }) {
+      const apiKey = apiKeyOf(config);
+      const { searchUrl } = parseJinaConfig(config) ?? DEFAULTS;
+      const fetch = configUrlFetch(env.net, {
+        url: searchUrl,
+        platform: parseJinaConfig(env.platform())?.searchUrl,
+        orgId,
+      });
       const headers: Record<string, string> = { "X-Respond-With": "no-content" };
       const site = allowedDomains?.length === 1 ? allowedDomains[0] : undefined;
       if (site !== undefined && /^[\x21-\x7e]+$/.test(site)) headers["X-Site"] = `https://${site}`;
       const body = await jinaRequest(
         "search",
-        joinUrl(endpoints.searchUrl, `/?q=${encodeURIComponent(query)}`),
-        { apiKey, method: "GET", headers, signal },
+        joinUrl(searchUrl, `/?q=${encodeURIComponent(query)}`),
+        { apiKey, fetch, method: "GET", headers, signal },
       );
       const data = (body as { data?: unknown } | null)?.data;
       if (!Array.isArray(data)) {

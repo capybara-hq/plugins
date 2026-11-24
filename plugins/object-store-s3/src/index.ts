@@ -19,33 +19,38 @@ import {
   type ObjectHead,
   type ObjectStore,
   type PresignedUpload,
+  platformOnly,
   secret,
   ui,
 } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
 
 /** 部署级配置：一个部署一个桶（键前缀由内核加）。 */
-const DeploymentConfig = z.object({
-  /** S3 兼容服务的地址（如 MinIO `http://minio:9000`）；不填用 AWS S3 的区域端点。 */
-  endpoint: ui(z.string().url().optional(), { label: { zh: "服务地址", en: "Endpoint" } }),
-  region: ui(z.string().min(1), { label: { zh: "区域", en: "Region" } }),
-  bucket: ui(z.string().min(1), { label: { zh: "存储桶", en: "Bucket" } }),
-  accessKeyId: ui(secret(z.string().min(1)), { label: { zh: "访问密钥 ID", en: "Access key ID" } }),
-  secretAccessKey: ui(secret(z.string().min(1)), {
-    label: { zh: "访问密钥", en: "Secret access key" },
+const DeploymentConfig = platformOnly(
+  z.object({
+    /** S3 兼容服务的地址（如 MinIO `http://minio:9000`）；不填用 AWS S3 的区域端点。 */
+    endpoint: ui(z.string().url().optional(), { label: { zh: "服务地址", en: "Endpoint" } }),
+    region: ui(z.string().min(1), { label: { zh: "区域", en: "Region" } }),
+    bucket: ui(z.string().min(1), { label: { zh: "存储桶", en: "Bucket" } }),
+    accessKeyId: ui(secret(z.string().min(1)), {
+      label: { zh: "访问密钥 ID", en: "Access key ID" },
+    }),
+    secretAccessKey: ui(secret(z.string().min(1)), {
+      label: { zh: "访问密钥", en: "Secret access key" },
+    }),
+    /** 路径风格访问（`<endpoint>/<bucket>/<key>`）；MinIO、Ceph 等一般要开。 */
+    forcePathStyle: ui(z.boolean().default(false), {
+      label: { zh: "路径风格访问", en: "Path-style access" },
+    }),
+    /**
+     * 浏览器可达的地址：预签名 URL 用它签名（主机名参与签名，不能事后替换）。
+     * 内核经内网地址 `endpoint` 访问存储、浏览器经公网地址直传时填写；不填用 `endpoint`。
+     */
+    publicEndpoint: ui(z.string().url().optional(), {
+      label: { zh: "公网地址", en: "Public endpoint" },
+    }),
   }),
-  /** 路径风格访问（`<endpoint>/<bucket>/<key>`）；MinIO、Ceph 等一般要开。 */
-  forcePathStyle: ui(z.boolean().default(false), {
-    label: { zh: "路径风格访问", en: "Path-style access" },
-  }),
-  /**
-   * 浏览器可达的地址：预签名 URL 用它签名（主机名参与签名，不能事后替换）。
-   * 内核经内网地址 `endpoint` 访问存储、浏览器经公网地址直传时填写；不填用 `endpoint`。
-   */
-  publicEndpoint: ui(z.string().url().optional(), {
-    label: { zh: "公网地址", en: "Public endpoint" },
-  }),
-});
+);
 
 export type S3StoreConfig = z.input<typeof DeploymentConfig>;
 
@@ -343,7 +348,7 @@ function abortFrom(signal: AbortSignal): AbortController {
 export default defineExtension({
   name: "object-store-s3",
   version: "0.1.0-rc.11",
-  sdk: "^0.1.0-rc.0",
+  sdk: "^0.1.0-rc.64",
   provides: [OBJECT_STORE_EXTENSION_POINT],
   config: { deployment: DeploymentConfig },
   setup(ctx) {

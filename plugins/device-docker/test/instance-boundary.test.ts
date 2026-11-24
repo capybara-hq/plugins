@@ -161,10 +161,12 @@ describe("staged runtime digests against the host SDK", () => {
   };
 
   it("keeps an instance of an earlier image available while the host SDK accepts its launcher", async () => {
-    // the launcher released images staged before this restage: the SDK's staged set
-    const earlier = SANDBOX_RUNTIME_SOURCE.files.find((f) => f.name === "linux-sandbox.py");
-    expect(earlier?.sha256).not.toBe(stagedRuntimeDigests()["linux-sandbox.py"]);
-    const got = await support({ "linux-sandbox.py": earlier?.sha256 ?? "" });
+    // the launcher released images staged before this restage: a digest the SDK still accepts
+    // (its `accepted` list keeps the earlier launcher for one revision after the promotion)
+    const staged = stagedRuntimeDigests()["linux-sandbox.py"];
+    const earlier = SANDBOX_RUNTIME_SOURCE.accepted["linux-sandbox.py"]?.find((d) => d !== staged);
+    expect(earlier).toBeDefined();
+    const got = await support({ "linux-sandbox.py": earlier ?? "" });
     expect(got.unavailableReason).toBeUndefined();
     expect(got.background).toBe(true);
   });

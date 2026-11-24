@@ -1,4 +1,9 @@
-import type { InboundEvent } from "@capybara-hq/plugin-sdk";
+import {
+  configJsonSchema,
+  type InboundEvent,
+  isPlatformOnly,
+  validateConfigUi,
+} from "@capybara-hq/plugin-sdk";
 import {
   type FakeLarkServer,
   findLarkButton,
@@ -7,6 +12,7 @@ import {
   startFakeLark,
 } from "@capybara-hq/testing";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { z } from "zod";
 import { decodeActionValue, VALUE_KEY } from "../src/actions.js";
 import { createLarkChannel, MIN_EDIT_INTERVAL_MS } from "../src/channel.js";
 import plugin from "../src/index.js";
@@ -100,11 +106,26 @@ describe("plugin manifest", () => {
     expect(dep?.safeParse({ appId: lark.appId, appSecret: "s" }).success).toBe(true);
     expect(dep?.safeParse({ appId: "nope", appSecret: "s" }).success).toBe(false);
     expect(dep?.safeParse({ appId: lark.appId, appSecret: "" }).success).toBe(false);
-    // 通讯录（组织级）：两项都可选（只用机器人的组织也能启用插件）
-    const org = plugin.config?.org;
-    expect(org?.parse({})).toEqual({});
-    expect(org?.safeParse({ appId: lark.appId, appSecret: "s" }).success).toBe(true);
-    expect(org?.safeParse({ appId: "nope" }).success).toBe(false);
+    // directory (overridable): both fields optional (an org that only uses the bot can enable it)
+    expect(dep?.parse({ directory: {} })).toEqual({ region: "lark", directory: {} });
+    expect(dep?.safeParse({ directory: { appId: lark.appId, appSecret: "s" } }).success).toBe(true);
+    expect(dep?.safeParse({ directory: { appId: "nope" } }).success).toBe(false);
+    expect(Object.keys(plugin.config ?? {})).toEqual(["deployment"]);
+    // login and API-base fields are platform-only; the directory is overridable
+    const shape = (dep as z.ZodObject<z.ZodRawShape>).shape;
+    for (const k of ["region", "apiUrl", "accountsUrl", "appId", "appSecret"])
+      expect(isPlatformOnly(shape[k] as z.ZodTypeAny)).toBe(true);
+    expect(isPlatformOnly(shape.directory as z.ZodTypeAny)).toBe(false);
+    const json = configJsonSchema(dep as z.ZodTypeAny);
+    expect(validateConfigUi(json, "deployment")).toEqual([]);
+    const topProps = json.properties as Record<string, Record<string, unknown>>;
+    expect(topProps.appSecret?.["x-secret"]).toBe(true);
+    const dirJson = (json.properties as Record<string, Record<string, unknown>>).directory;
+    expect((dirJson?.["x-ui"] as { help?: { en?: string } } | undefined)?.help?.en).toBe(
+      "Every organization that follows the platform syncs this tenant's members",
+    );
+    const dirProps = dirJson?.properties as Record<string, Record<string, unknown>>;
+    expect(dirProps.appSecret?.["x-secret"]).toBe(true);
     const ch = channel();
     expect(ch.features).toEqual({
       cards: true,

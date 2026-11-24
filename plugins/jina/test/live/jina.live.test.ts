@@ -8,10 +8,14 @@ import { createJinaSearch } from "../../src/search.js";
  * `set -a; . ~/.capybara-test.env; set +a; pnpm exec vitest run plugins/jina/test/live`
  */
 const KEY = process.env.CAPYBARA_TEST_JINA_API_KEY;
-const urls = { searchUrl: "https://s.jina.ai", readerUrl: "https://r.jina.ai" };
-const search = createJinaSearch(urls);
-const reader = createJinaReader(urls);
-const cfg = { apiKey: KEY ?? "" };
+const platform = { searchUrl: "https://s.jina.ai", readerUrl: "https://r.jina.ai" };
+const env = {
+  net: { fetch: (...a: Parameters<typeof fetch>) => fetch(...a) },
+  platform: () => platform,
+};
+const search = createJinaSearch(env);
+const reader = createJinaReader(env);
+const cfg = { apiKey: KEY ?? "", ...platform };
 const TIMEOUT = 60_000;
 
 describe.skipIf(!KEY)("jina live", () => {
@@ -21,7 +25,7 @@ describe.skipIf(!KEY)("jina live", () => {
       const { results } = await search.search({
         query: "capybara animal",
         maxResults: 5,
-        orgConfig: cfg,
+        config: cfg,
         signal: AbortSignal.timeout(TIMEOUT),
       });
       expect(results.length).toBeGreaterThanOrEqual(1);
@@ -42,7 +46,7 @@ describe.skipIf(!KEY)("jina live", () => {
         query: "capybara",
         allowedDomains: ["wikipedia.org"],
         maxResults: 5,
-        orgConfig: cfg,
+        config: cfg,
         signal: AbortSignal.timeout(TIMEOUT),
       });
       expect(results.length).toBeGreaterThan(0);
@@ -60,7 +64,7 @@ describe.skipIf(!KEY)("jina live", () => {
     async () => {
       const page = await reader.fetch({
         url: "https://en.wikipedia.org/wiki/Capybara",
-        orgConfig: cfg,
+        config: cfg,
         signal: AbortSignal.timeout(TIMEOUT),
       });
       expect(page.markdown).toContain("Capybara");
@@ -76,7 +80,7 @@ describe.skipIf(!KEY)("jina live", () => {
         .search({
           query: "capybara",
           maxResults: 1,
-          orgConfig: { apiKey: "jina_invalid_key_for_test" },
+          config: { ...platform, apiKey: "jina_invalid_key_for_test" },
           signal: AbortSignal.timeout(TIMEOUT),
         })
         .catch((e: unknown) => e);

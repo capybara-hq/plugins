@@ -28,7 +28,9 @@ afterAll(async () => {
   await Promise.all([slack?.stop(), other?.stop()]);
 });
 
-const cfg = (s: FakeSlackServer = slack, teamId = "T1") => ({ teamId, botToken: s.botToken });
+const cfg = (s: FakeSlackServer = slack, teamId = "T1") => ({
+  directory: { teamId, botToken: s.botToken },
+});
 const dir = (s: FakeSlackServer = slack, o: { maxRateLimitWaitMs?: number } = {}) =>
   createSlackDirectory({ apiUrl: s.apiUrl, pageSize: 2, ...o });
 const signal = () => AbortSignal.timeout(15_000);
@@ -41,7 +43,7 @@ describe("Slack directory@1", () => {
     let pages = 0;
     do {
       const r = await dir().listMembers({
-        orgConfig: cfg(),
+        config: cfg(),
         ...(cursor !== undefined && { cursor }),
         signal: signal(),
       });
@@ -94,7 +96,7 @@ describe("Slack directory@1", () => {
 
   it("fails when the token belongs to another team than the configured teamId", async () => {
     await expect(
-      dir(other).listMembers({ orgConfig: cfg(other, "T1"), signal: signal() }),
+      dir(other).listMembers({ config: cfg(other, "T1"), signal: signal() }),
     ).rejects.toThrow(/T2.*T1|team/);
     expect(other.calls.some((c) => c.method === "users.list")).toBe(false);
   });
@@ -103,7 +105,7 @@ describe("Slack directory@1", () => {
     const grid = await startFakeSlack({ teamId: "E1" });
     try {
       await expect(
-        dir(grid).listMembers({ orgConfig: cfg(grid, "T1"), signal: signal() }),
+        dir(grid).listMembers({ config: cfg(grid, "T1"), signal: signal() }),
       ).rejects.toThrow(/workspace/);
       expect(grid.calls.some((c) => c.method === "users.list")).toBe(false);
     } finally {
@@ -112,7 +114,7 @@ describe("Slack directory@1", () => {
     slack.failNext("auth.test", {
       body: { ok: true, team_id: "T1", user_id: "UBOT", is_enterprise_install: true },
     });
-    await expect(dir().listMembers({ orgConfig: cfg(), signal: signal() })).rejects.toThrow(
+    await expect(dir().listMembers({ config: cfg(), signal: signal() })).rejects.toThrow(
       /enterprise/,
     );
   });
@@ -121,22 +123,39 @@ describe("Slack directory@1", () => {
     const d = dir();
     expect(d.configured?.(cfg())).toBe(true);
     expect(d.configured?.({})).toBe(false);
-    expect(d.configured?.({ teamId: "T1" })).toBe(false);
-    expect(d.configured?.({ botToken: "xoxb-1" })).toBe(false);
+    expect(d.configured?.({ directory: {} })).toBe(false);
+    expect(d.configured?.({ directory: { teamId: "T1" } })).toBe(false);
+    expect(d.configured?.({ directory: { botToken: "xoxb-1" } })).toBe(false);
     expect(d.configured?.(undefined)).toBe(false);
-    expect(d.configured?.({ teamId: "E1", botToken: "xoxb-1" })).toBe(false);
+    expect(d.configured?.({ directory: { teamId: "E1", botToken: "xoxb-1" } })).toBe(false);
+    // the old org-level shape at the top level no longer counts
+    expect(d.configured?.({ teamId: "T1", botToken: "xoxb-1" })).toBe(false);
+  });
+
+  it("reads config.directory next to the platform-only fields of the effective config", async () => {
+    const r = await dir().listMembers({
+      config: {
+        apiUrl: "https://slack.com/api/",
+        openidUrl: "https://slack.com/",
+        clientId: "c1",
+        clientSecret: "s1",
+        ...cfg(),
+      },
+      signal: signal(),
+    });
+    expect(r.members.every((m) => m.tenantId === "T1")).toBe(true);
   });
 
   it("fails when the directory is not configured", async () => {
-    await expect(dir().listMembers({ orgConfig: {}, signal: signal() })).rejects.toThrow(
-      /teamId and botToken/,
+    await expect(dir().listMembers({ config: {}, signal: signal() })).rejects.toThrow(
+      /directory\.teamId and directory\.botToken/,
     );
   });
 
   it("maps platform errors to the error code only (no token)", async () => {
     slack.failNext("users.list", { error: "missing_scope" });
     const err = await dir()
-      .listMembers({ orgConfig: cfg(), signal: signal() })
+      .listMembers({ config: cfg(), signal: signal() })
       .catch((e: unknown) => e as Error);
     expect((err as Error).message).toContain("missing_scope");
     expect((err as Error).message).not.toContain(slack.botToken);
@@ -145,7 +164,7 @@ describe("Slack directory@1", () => {
   it("on HTTP 429 waits Retry-After and retries", async () => {
     slack.failNext("users.list", { status: 429, retryAfter: 1 });
     const t0 = Date.now();
-    const r = await dir().listMembers({ orgConfig: cfg(), signal: signal() });
+    const r = await dir().listMembers({ config: cfg(), signal: signal() });
     expect(Date.now() - t0).toBeGreaterThanOrEqual(900);
     // 第一页：Slackbot（排除）与 U1
     expect(r.members.map((m) => m.externalId)).toEqual(["U1"]);
@@ -155,7 +174,7 @@ describe("Slack directory@1", () => {
     // 第一次 + 3 次重试，全部 429
     slack.failNext("users.list", { status: 429, retryAfter: 0 }, 4);
     const before = slack.calls.filter((c) => c.method === "users.list").length;
-    await expect(dir().listMembers({ orgConfig: cfg(), signal: signal() })).rejects.toThrow(
+    await expect(dir().listMembers({ config: cfg(), signal: signal() })).rejects.toThrow(
       /rate limited/,
     );
     expect(slack.calls.filter((c) => c.method === "users.list").length - before).toBe(4);
@@ -166,7 +185,7 @@ describe("Slack directory@1", () => {
     const before = slack.calls.filter((c) => c.method === "users.list").length;
     const t0 = Date.now();
     await expect(
-      dir(slack, { maxRateLimitWaitMs: 1500 }).listMembers({ orgConfig: cfg(), signal: signal() }),
+      dir(slack, { maxRateLimitWaitMs: 1500 }).listMembers({ config: cfg(), signal: signal() }),
     ).rejects.toThrow(/rate limited \(retry after 1s\)/);
     expect(Date.now() - t0).toBeGreaterThanOrEqual(900);
     expect(slack.calls.filter((c) => c.method === "users.list").length - before).toBe(2);
@@ -176,7 +195,7 @@ describe("Slack directory@1", () => {
     slack.failNext("users.list", { status: 429, retryAfter: 120 });
     const t0 = Date.now();
     await expect(
-      dir(slack, { maxRateLimitWaitMs: 5000 }).listMembers({ orgConfig: cfg(), signal: signal() }),
+      dir(slack, { maxRateLimitWaitMs: 5000 }).listMembers({ config: cfg(), signal: signal() }),
     ).rejects.toThrow(/rate limited.*120/);
     expect(Date.now() - t0).toBeLessThan(2000);
   });
@@ -185,7 +204,7 @@ describe("Slack directory@1", () => {
     slack.failNext("users.list", { status: 429, retryAfter: 5 });
     const ac = new AbortController();
     const t0 = Date.now();
-    const p = dir().listMembers({ orgConfig: cfg(), signal: ac.signal });
+    const p = dir().listMembers({ config: cfg(), signal: ac.signal });
     setTimeout(() => ac.abort(new Error("stop")), 200);
     await expect(p).rejects.toThrow();
     expect(Date.now() - t0).toBeLessThan(2000);

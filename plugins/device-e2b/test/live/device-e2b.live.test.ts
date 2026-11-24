@@ -15,6 +15,9 @@ import {
   templateAlias,
 } from "../../src/index.js";
 
+/** The fence token every lifecycle call carries here (device update fencing). */
+const FENCE = { token: 1 };
+
 /**
  * 真实 E2B 验收：`pnpm vitest run plugins/device-e2b/test/live`
  *
@@ -165,7 +168,7 @@ describe.skipIf(!READY)("device-e2b live", { timeout: 180_000 }, () => {
     });
     expect(await stateOf(fs.id)).toBe("paused");
     expect(await sbx.createFileSystem({ name, limits: allowlist, signal: sig() })).toEqual(fs);
-    h = await sbx.create({ name, limits: allowlist, fileSystem: fs, signal: sig() });
+    h = await sbx.create({ fence: FENCE, name, limits: allowlist, fileSystem: fs, signal: sig() });
     expect(h.id).toBe(fs.id);
   });
 
@@ -234,7 +237,13 @@ describe.skipIf(!READY)("device-e2b live", { timeout: 180_000 }, () => {
     };
     try {
       const ofs = await sbx.createFileSystem({ name: openName, limits: open, signal: sig() });
-      const oh = await sbx.create({ name: openName, limits: open, fileSystem: ofs, signal: sig() });
+      const oh = await sbx.create({
+        fence: FENCE,
+        name: openName,
+        limits: open,
+        fileSystem: ofs,
+        signal: sig(),
+      });
       const pub = await sbx.exec(oh, {
         ...who(),
         command: "curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://example.com/",
@@ -314,7 +323,7 @@ describe.skipIf(!READY)("device-e2b live", { timeout: 180_000 }, () => {
       ...allowlist,
       network: { kind: "open-public", hosts: [] },
     };
-    expect(await sbx.update?.(h, open, sig())).toBe("updated");
+    expect(await sbx.update?.(h, open, sig(), FENCE)).toBe("updated");
     const pub = await run(
       "curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://example.com/",
     );
@@ -323,7 +332,7 @@ describe.skipIf(!READY)("device-e2b live", { timeout: 180_000 }, () => {
     console.info(
       `[e2b-live] metadata endpoint after the open-public update: HTTP ${await mmds(h)}`,
     );
-    expect(await sbx.update?.(h, allowlist, sig())).toBe("updated");
+    expect(await sbx.update?.(h, allowlist, sig(), FENCE)).toBe("updated");
     const blocked = await run("curl -sS -o /dev/null --max-time 10 https://example.com/");
     expect(blocked.exitCode).not.toBe(0);
   });
@@ -407,9 +416,9 @@ describe.skipIf(!READY)("device-e2b live", { timeout: 180_000 }, () => {
 
   it("files survive instance destroy; the processes do not (pause without memory)", async () => {
     await run("echo kept > /workspace/kept.txt; nohup sleep 600 >/dev/null 2>&1 &");
-    await sbx.destroy(h, sig());
+    await sbx.destroy(h, sig(), null);
     expect(await stateOf(fs.id)).toBe("paused");
-    h = await sbx.create({ name, limits: allowlist, fileSystem: fs, signal: sig() });
+    h = await sbx.create({ fence: FENCE, name, limits: allowlist, fileSystem: fs, signal: sig() });
     expect((await run("cat /workspace/kept.txt")).stdout).toBe("kept\n");
     expect((await run("pgrep -x sleep || echo none")).stdout).toBe("none\n");
   });
@@ -511,7 +520,7 @@ describe.skipIf(!READY)("device-e2b live", { timeout: 180_000 }, () => {
     await sbx.destroyFileSystem(fs, sig());
     expect(await sbx.resume(h, sig())).toBe("gone");
     const e = await sbx
-      .create({ name, limits: allowlist, fileSystem: fs, signal: sig() })
+      .create({ fence: FENCE, name, limits: allowlist, fileSystem: fs, signal: sig() })
       .catch((x: unknown) => x);
     expect(isFileSystemGoneError(e)).toBe(true);
   });

@@ -143,9 +143,9 @@ describe.skipIf(!READY)("Slack live", () => {
 
   it("live: directory lists the first page of workspace members", async () => {
     const dir = createSlackDirectory({ apiUrl: API });
-    const orgConfig = { teamId: TEAM_ID, botToken: BOT_TOKEN };
-    expect(dir.configured?.(orgConfig)).toBe(true);
-    const page = await dir.listMembers({ orgConfig, signal: timeout(60_000) });
+    const config = { directory: { teamId: TEAM_ID, botToken: BOT_TOKEN } };
+    expect(dir.configured?.(config)).toBe(true);
+    const page = await dir.listMembers({ config, signal: timeout(60_000) });
     expect(page.members.length).toBeGreaterThan(0);
     for (const m of page.members) {
       expect(m.tenantId).toBe(TEAM_ID);

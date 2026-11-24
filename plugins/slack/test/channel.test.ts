@@ -1,4 +1,4 @@
-import type { InboundEvent } from "@capybara-hq/plugin-sdk";
+import { type InboundEvent, isPlatformOnly } from "@capybara-hq/plugin-sdk";
 import {
   type FakeSlackServer,
   findSlackButton,
@@ -8,6 +8,7 @@ import {
   startFakeSlack,
 } from "@capybara-hq/testing";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { z } from "zod";
 import { decodeActionValue } from "../src/actions.js";
 import { createSlackChannel } from "../src/channel.js";
 import plugin from "../src/index.js";
@@ -84,18 +85,22 @@ describe("plugin manifest", () => {
       network: ["slack.com", "wss-primary.slack.com", "files.slack.com"],
       setupChecks: ["bot-token", "bot-scopes", "app-token"],
     });
-    // 部署级：登录的 client id / secret 可选（只用机器人时不填）；组织级：通讯录的 teamId / botToken 可选
+    // 部署级：登录的 client id / secret 可选（只用机器人时不填）；directory teamId / botToken optional (overridable)
     const dep = plugin.config?.deployment;
     expect(dep?.parse({})).toMatchObject({ apiUrl: "https://slack.com/api/" });
     expect(dep?.parse({ clientId: "c", clientSecret: "s" })).toMatchObject({ clientId: "c" });
-    expect(plugin.config?.org?.parse({})).toEqual({});
-    expect(plugin.config?.org?.parse({ teamId: "T1", botToken: "xoxb-1" })).toEqual({
-      teamId: "T1",
-      botToken: "xoxb-1",
+    expect(dep?.parse({ directory: {} })).toMatchObject({ directory: {} });
+    expect(dep?.parse({ directory: { teamId: "T1", botToken: "xoxb-1" } })).toMatchObject({
+      directory: { teamId: "T1", botToken: "xoxb-1" },
     });
-    expect(plugin.config?.org?.safeParse({ teamId: "T1", botToken: "xapp-1" }).success).toBe(false);
-    // Ruling A26：租户是工作区（T…），企业 id（E…）会把身份拆开
-    expect(plugin.config?.org?.safeParse({ teamId: "E1", botToken: "xoxb-1" }).success).toBe(false);
+    expect(Object.keys(plugin.config ?? {})).toEqual(["deployment"]);
+    const shape = (dep as z.ZodObject<z.ZodRawShape>).shape;
+    for (const k of ["apiUrl", "openidUrl", "clientId", "clientSecret"])
+      expect(isPlatformOnly(shape[k] as z.ZodTypeAny)).toBe(true);
+    expect(isPlatformOnly(shape.directory as z.ZodTypeAny)).toBe(false);
+    expect(dep?.safeParse({ directory: { teamId: "T1", botToken: "xapp-1" } }).success).toBe(false);
+    // Ruling A26: the tenant is the workspace (T…); an enterprise id (E…) would split identities
+    expect(dep?.safeParse({ directory: { teamId: "E1", botToken: "xoxb-1" } }).success).toBe(false);
     const ch = channel();
     expect(ch.features).toEqual({
       cards: true,

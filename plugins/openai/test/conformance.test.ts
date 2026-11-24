@@ -14,7 +14,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import plugin, { createOpenAIProvider, type ModelConfig } from "../src/index.js";
 import { buildRequest } from "../src/map-request.js";
-import { errorJson, openaiRoutes, sseResponse } from "./fixtures.js";
+import { errorJson, openaiRoutes, refusingNetFetch, sseResponse } from "./fixtures.js";
 
 const gpt = (id: string, over: Partial<ModelConfig> = {}): ModelConfig => ({
   id,
@@ -31,6 +31,7 @@ describeModelProviderConformance("openai (fixtures)", async () => {
   return {
     plugin: "openai",
     provider: createOpenAIProvider({
+      netFetch: refusingNetFetch,
       apiKey: "sk-fixture",
       baseUrl: `${server.url}/v1`,
       models: [gpt("gpt-5.5", { documents: true })],
@@ -55,6 +56,7 @@ describe.skipIf(!LIVE_KEY || !LIVE_MODEL)("live", { timeout: 120_000 }, () => {
   describeModelProviderConformance(`openai (live, ${LIVE_MODEL})`, async () => ({
     plugin: "openai",
     provider: createOpenAIProvider({
+      netFetch: refusingNetFetch,
       apiKey: LIVE_KEY ?? "",
       // 当前 GPT-5 系列都接受图片与 PDF（input_file）
       models: [gpt(LIVE_MODEL ?? "", { documents: true })],
@@ -73,6 +75,7 @@ describe.skipIf(!LIVE_KEY || !LIVE_MODEL)(
   () => {
     it("accepts a history tool name absent from the tool list", async () => {
       const provider = createOpenAIProvider({
+        netFetch: refusingNetFetch,
         apiKey: LIVE_KEY ?? "",
         models: [gpt(LIVE_MODEL ?? "")],
       });
@@ -160,6 +163,7 @@ describe("openai: errors and edge cases", () => {
   let next: () => FakeResponse;
   const provider = () =>
     createOpenAIProvider({
+      netFetch: refusingNetFetch,
       apiKey: "sk-fixture",
       baseUrl: `${server.url}/v1`,
       models: [gpt("gpt-5.5"), gpt("gpt-4.1", { reasoning: false, streamIdleTimeoutMs: 60_000 })],
@@ -342,6 +346,7 @@ describe("openai: errors and edge cases", () => {
 
   it("network failure -> network", async () => {
     const p = createOpenAIProvider({
+      netFetch: refusingNetFetch,
       apiKey: "sk-fixture",
       baseUrl: "http://127.0.0.1:1/v1",
       models: [gpt("gpt-5.5")],
@@ -426,6 +431,7 @@ describe("openai: errors and edge cases", () => {
         usage: { input_tokens: 10, output_tokens: 5 },
       });
     const p = createOpenAIProvider({
+      netFetch: refusingNetFetch,
       apiKey: "sk-fixture",
       baseUrl: `${server.url}/v1`,
       models: [gpt("gpt-5.5")],
@@ -630,6 +636,7 @@ describe("openai: errors and edge cases", () => {
 
   it('reasoningSummary: "off" deployment declares only effort (summaries cannot be requested)', async () => {
     const p = createOpenAIProvider({
+      netFetch: refusingNetFetch,
       apiKey: "sk-fixture",
       baseUrl: `${server.url}/v1`,
       models: [gpt("gpt-5.5")],
@@ -641,6 +648,7 @@ describe("openai: errors and edge cases", () => {
 
   it("effortLevels from the model config become the effort enum (order kept, no default)", async () => {
     const p = createOpenAIProvider({
+      netFetch: refusingNetFetch,
       apiKey: "sk-fixture",
       baseUrl: `${server.url}/v1`,
       models: [gpt("gpt-5.5", { effortLevels: ["max", "low", "xhigh"] })],
@@ -706,6 +714,7 @@ describe("openai: errors and edge cases", () => {
 
   it("documents comes from the model config (default false)", async () => {
     const p = createOpenAIProvider({
+      netFetch: refusingNetFetch,
       apiKey: "sk-fixture",
       baseUrl: `${server.url}/v1`,
       models: [gpt("a", { documents: true }), gpt("b", { vision: false })],

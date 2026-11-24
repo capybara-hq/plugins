@@ -1,7 +1,9 @@
 import {
+  configUrlFetch,
   defineExtension,
   EFFORT_VALUES,
   type Effort,
+  type ExtensionNet,
   MODEL_PROVIDER_EXTENSION_POINT_V2,
   ModelError,
   type ModelInfo,
@@ -11,10 +13,16 @@ import {
   secret,
   ui,
 } from "@capybara-hq/plugin-sdk";
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import { z } from "zod";
 import { generateOpenAIImage, imageModelInfo, KNOWN_IMAGE_MODEL_IDS } from "./image.js";
 import { streamResponses } from "./map-stream.js";
+import { isolatedOpenAI } from "./openai-client.js";
+
+const DEFAULT_BASE_URL = "https://api.openai.com/v1";
+
+/** `ctx.net.fetch`: the kernel's guarded client. */
+export type NetFetch = ExtensionNet["fetch"];
 
 const EffortLevel = z.enum(EFFORT_VALUES as [Effort, ...Effort[]], {
   error: `effort level must be one of ${EFFORT_VALUES.join(", ")}`,
@@ -50,11 +58,15 @@ const ModelConfigSchema = z.object({
 export type ModelConfig = z.infer<typeof ModelConfigSchema>;
 
 export interface OpenAIProviderOptions {
-  apiKey: string;
+  /**
+   * Defaults for a call made without a per-call config (a conformance run); an org's call carries
+   * its whole effective config and never mixes these in.
+   */
+  apiKey?: string | undefined;
   baseUrl?: string | undefined;
   organization?: string | undefined;
-  /** 至少 1 个；listModels 直接由它生成。 */
-  models: ModelConfig[];
+  /** listModels is generated from it. */
+  models?: ModelConfig[] | undefined;
   /** 部署级默认值："off" 时不请求推理摘要；默认 "auto"。agent 的 thinking 参数可覆盖。 */
   reasoningSummary?: "auto" | "off" | undefined;
   /**
@@ -64,6 +76,16 @@ export interface OpenAIProviderOptions {
   imageModels?: string[] | undefined;
   /** Receives the warning about ignored image model ids. */
   log?: { warn(message: string): void } | undefined;
+  /**
+   * The guarded fetch an org's own base URL goes through (`ctx.net.fetch`), so an org admin cannot
+   * point the provider at an internal address the super admin did not allow for the org.
+   */
+  netFetch: NetFetch;
+  /**
+   * The platform's base URL at the time of the call (`ctx.config` read when used); defaults to
+   * `baseUrl`. A per-call `baseUrl` equal to it is the platform's and keeps the global `fetch`.
+   */
+  platformBaseUrl?: (() => string | undefined) | undefined;
 }
 
 /**
@@ -123,52 +145,106 @@ function modelInfo(m: ModelConfig, reasoningSummary: "auto" | "off"): ModelInfo 
   };
 }
 
-/** 基于官方 SDK 与原生 Responses API 的 model-provider@2 实现。无进程内可变状态。 */
+interface Resolved {
+  client: OpenAI;
+  models: ModelConfig[];
+  reasoningSummary: "auto" | "off";
+  imageModels: string[];
+}
+
+/**
+ * 基于官方 SDK 与原生 Responses API 的 model-provider@2 实现。无进程内可变状态：key、端点与模型表
+ * 可因组织而异，客户端按调用构造。
+ */
 export function createOpenAIProvider(opts: OpenAIProviderOptions): ModelProvider {
-  const client = new OpenAI({
-    apiKey: opts.apiKey,
-    ...(opts.baseUrl !== undefined ? { baseURL: opts.baseUrl } : {}),
-    ...(opts.organization !== undefined ? { organization: opts.organization } : {}),
-    // 重试由内核的降级梯子统一处理
-    maxRetries: 0,
-  });
-  const models = opts.models;
-  const reasoningSummary = opts.reasoningSummary ?? "auto";
-  const configuredImageModels = opts.imageModels ?? [];
-  // An id without facts (a retired or misspelled model) is skipped, never a broken provider
-  const unknown = configuredImageModels.filter((id) => !KNOWN_IMAGE_MODEL_IDS.includes(id));
-  if (unknown.length > 0) {
-    opts.log?.warn(
-      `openai: ignoring unknown image model(s) ${unknown.join(", ")}; known: ${KNOWN_IMAGE_MODEL_IDS.join(", ")}`,
-    );
+  /** The key, endpoint, models and client of this call: the org's whole effective config. */
+  function resolve(call: { config?: unknown; orgId?: string } | undefined): Resolved {
+    let cfg: CallConfigValue;
+    if (call?.config === undefined) {
+      // The setup defaults serve only a call without a per-call config
+      cfg = {
+        apiKey: opts.apiKey,
+        baseUrl: opts.baseUrl,
+        organization: opts.organization,
+        models: opts.models,
+        reasoningSummary: opts.reasoningSummary ?? "auto",
+        imageModels: opts.imageModels,
+      };
+    } else {
+      const parsed = CallConfig.safeParse(call.config);
+      if (!parsed.success) {
+        throw new ModelError("invalid_request", "OpenAI: the extension config is invalid");
+      }
+      cfg = parsed.data;
+    }
+    if (cfg.apiKey === undefined || cfg.apiKey === "") {
+      throw new ModelError("auth", "OpenAI: no API key is configured");
+    }
+    const baseURL = cfg.baseUrl ?? DEFAULT_BASE_URL;
+    const platform = (opts.platformBaseUrl ?? (() => opts.baseUrl))();
+    // No OPENAI_* env var is read (isolatedOpenAI): an organization header only when configured
+    const client = isolatedOpenAI({
+      apiKey: cfg.apiKey,
+      baseURL,
+      organization: cfg.organization ?? null,
+      // The platform's endpoint keeps the global fetch, an org's own one is guarded
+      fetch: configUrlFetch(
+        { fetch: opts.netFetch },
+        {
+          url: cfg.baseUrl ?? DEFAULT_BASE_URL,
+          platform: platform === undefined ? DEFAULT_BASE_URL : [platform, DEFAULT_BASE_URL],
+          orgId: call?.orgId,
+        },
+      ),
+      // 重试由内核的降级梯子统一处理
+      maxRetries: 0,
+    });
+    const configuredImageModels = cfg.imageModels ?? [];
+    // An id without facts (a retired or misspelled model) is skipped, never a broken provider
+    const unknown = configuredImageModels.filter((id) => !KNOWN_IMAGE_MODEL_IDS.includes(id));
+    if (unknown.length > 0) {
+      opts.log?.warn(
+        `openai: ignoring unknown image model(s) ${unknown.join(", ")}; known: ${KNOWN_IMAGE_MODEL_IDS.join(", ")}`,
+      );
+    }
+    return {
+      client,
+      models: cfg.models ?? [],
+      reasoningSummary: cfg.reasoningSummary ?? "auto",
+      imageModels: configuredImageModels.filter((id) => KNOWN_IMAGE_MODEL_IDS.includes(id)),
+    };
   }
-  const imageModels = configuredImageModels.filter((id) => KNOWN_IMAGE_MODEL_IDS.includes(id));
 
   return {
-    listModels: async () => [
-      ...models.map((m) => modelInfo(m, reasoningSummary)),
-      ...imageModels.map((id) => imageModelInfo(id)),
-    ],
-    async generateImage(req, { signal }) {
+    listModels: async (call) => {
+      const { models, reasoningSummary, imageModels } = resolve(call);
+      return [
+        ...models.map((m) => modelInfo(m, reasoningSummary)),
+        ...imageModels.map((id) => imageModelInfo(id)),
+      ];
+    },
+    async generateImage(req, call) {
+      const { client, imageModels } = resolve(call);
       if (!imageModels.includes(req.model)) {
         throw new ModelError("invalid_request", `Image model "${req.model}" is not configured`);
       }
-      return generateOpenAIImage(client, req, signal);
+      return generateOpenAIImage(client, req, call.signal);
     },
-    async *stream(req, { signal }): AsyncGenerator<ModelStreamEvent> {
+    async *stream(req, call): AsyncGenerator<ModelStreamEvent> {
+      const { client, models, reasoningSummary } = resolve(call);
       const m = models.find((x) => x.id === req.model);
       if (m === undefined) {
         throw new ModelError("invalid_request", `Model "${req.model}" is not configured`);
       }
       yield* streamResponses(client, req, {
-        signal,
+        signal: call.signal,
         traits: { reasoning: m.reasoning, reasoningSummary },
       });
     },
   };
 }
 
-/** 部署级配置。 */
+/** 部署级配置。Every field is org-overridable. */
 const DeploymentConfig = z.object({
   apiKey: ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
   baseUrl: ui(z.string().url().optional(), { label: { zh: "接口地址", en: "API URL" } }),
@@ -190,27 +266,39 @@ const DeploymentConfig = z.object({
   }),
 });
 
+/** A call's config: the platform may leave the key and models to the orgs. */
+const CallConfig = DeploymentConfig.partial({ apiKey: true, models: true });
+type CallConfigValue = Partial<z.infer<typeof CallConfig>>;
+
 /** OpenAI 供应商插件：官方 SDK + 原生 Responses API。 */
 export default defineExtension({
   name: "openai",
   version: "0.1.0-rc.11",
-  sdk: "^0.1.0-rc.0",
+  sdk: "^0.1.0-rc.64",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
   // 默认端点；部署配置 baseUrl 可改指向代理（只展示，平台不拦截）
   permissions: { network: ["api.openai.com"] },
   config: { deployment: DeploymentConfig },
   setup(ctx) {
-    const cfg = DeploymentConfig.parse(ctx.config ?? {});
+    // Lenient: the platform may leave the overridable key and models empty
+    const cfg = CallConfig.safeParse(ctx.config ?? {});
+    const d = cfg.success ? cfg.data : undefined;
     ctx.provide(
       MODEL_PROVIDER_EXTENSION_POINT_V2,
       createOpenAIProvider({
-        apiKey: cfg.apiKey,
-        baseUrl: cfg.baseUrl,
-        organization: cfg.organization,
-        models: cfg.models,
-        reasoningSummary: cfg.reasoningSummary,
-        imageModels: cfg.imageModels,
+        apiKey: d?.apiKey,
+        baseUrl: d?.baseUrl,
+        organization: d?.organization,
+        models: d?.models,
+        reasoningSummary: d?.reasoningSummary,
+        imageModels: d?.imageModels,
         log: ctx.log,
+        netFetch: (url, init, o) => ctx.net.fetch(url, init, o),
+        // ctx.config is read when used: a hot platform change applies at once
+        platformBaseUrl: () => {
+          const now = CallConfig.safeParse(ctx.config ?? {});
+          return now.success ? now.data.baseUrl : undefined;
+        },
       }),
     );
   },

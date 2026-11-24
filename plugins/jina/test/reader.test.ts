@@ -1,4 +1,4 @@
-import { WebProviderError } from "@capybara-hq/plugin-sdk";
+import { NetDeniedError, WebProviderError } from "@capybara-hq/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createJinaReader } from "../src/reader.js";
 import { type FakeJina, startFakeJina } from "./fake-jina.js";
@@ -11,10 +11,16 @@ afterEach(async () => {
   await fake.stop();
 });
 
+const config = () => ({ apiKey: "k", readerUrl: fake.url });
+const guardedCalls: string[] = [];
+const guardedFetch = ((url: string | URL) => {
+  guardedCalls.push(String(url));
+  throw new NetDeniedError("net.private_address", new URL(String(url)).hostname, "private");
+}) as unknown as typeof fetch;
 function run(url: string) {
-  return createJinaReader({ readerUrl: fake.url }).fetch({
+  return createJinaReader({ net: { fetch: guardedFetch }, platform: config }).fetch({
     url,
-    orgConfig: { apiKey: "k" },
+    config: config(),
     signal: new AbortController().signal,
   });
 }
@@ -86,5 +92,32 @@ describe("jina web-fetch", () => {
       expect(err.kind).toBe("unavailable");
       expect(err.message).toBe("Jina reader returned an unexpected response");
     }
+  });
+
+  it("an org readerUrl goes through the guarded client and a private host is refused", async () => {
+    guardedCalls.length = 0;
+    const err = await kindOf(
+      createJinaReader({ net: { fetch: guardedFetch }, platform: config }).fetch({
+        url: "https://example.com/a",
+        config: { apiKey: "k", readerUrl: "http://10.0.0.5:9" },
+        orgId: "o1",
+        signal: new AbortController().signal,
+      }),
+    );
+    expect(err.kind).toBe("invalid");
+    expect(guardedCalls[0]).toContain("10.0.0.5");
+  });
+
+  it("the platform's own readerUrl bypasses the guarded client", async () => {
+    guardedCalls.length = 0;
+    fake.respond(ok({ content: "x" }));
+    await run("https://example.com/a");
+    expect(guardedCalls).toHaveLength(0);
+  });
+
+  it("configured needs an apiKey in the config", () => {
+    const p = createJinaReader({ net: { fetch: guardedFetch }, platform: config });
+    expect(p.configured?.({})).toBe(false);
+    expect(p.configured?.({ apiKey: "k" })).toBe(true);
   });
 });

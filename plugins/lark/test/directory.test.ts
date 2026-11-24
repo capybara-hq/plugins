@@ -34,21 +34,23 @@ afterAll(async () => {
   await Promise.all([lark?.stop(), other?.stop()]);
 });
 
-const cfg = (s: FakeLarkServer = lark) => ({ appId: s.appId, appSecret: s.appSecret });
+const cfg = (s: FakeLarkServer = lark) => ({
+  directory: { appId: s.appId, appSecret: s.appSecret },
+});
 const dir = (
   s: FakeLarkServer = lark,
   o: { maxRateLimitWaitMs?: number; loginApp?: { appId: string; appSecret: string } } = {},
 ) => createLarkDirectory({ apiUrl: s.url, pageSize: 2, ...o });
 const signal = () => AbortSignal.timeout(15_000);
 
-async function listAll(d = dir(), orgConfig: unknown = cfg()) {
+async function listAll(d = dir(), config: unknown = cfg()) {
   const members: DirectoryMember[] = [];
   const cursors: string[] = [];
   let cursor: string | undefined;
   let pages = 0;
   do {
     const r = await d.listMembers({
-      orgConfig,
+      config,
       ...(cursor !== undefined && { cursor }),
       signal: signal(),
     });
@@ -113,34 +115,58 @@ describe("Lark directory@1", () => {
     expect(depts.every((c) => c.query.fetch_child === "true")).toBe(true);
   });
 
-  it("configured(): true only with both appId and appSecret", () => {
+  it("configured(): true only with both directory.appId and directory.appSecret", () => {
     const d = dir();
     expect(d.configured?.(cfg())).toBe(true);
     expect(d.configured?.({})).toBe(false);
     expect(d.configured?.(undefined)).toBe(false);
-    expect(d.configured?.({ appId: lark.appId })).toBe(false);
-    expect(d.configured?.({ appSecret: "s" })).toBe(false);
-    expect(d.configured?.({ appId: "not-an-app-id", appSecret: "s" })).toBe(false);
+    expect(d.configured?.({ directory: {} })).toBe(false);
+    expect(d.configured?.({ directory: { appId: lark.appId } })).toBe(false);
+    expect(d.configured?.({ directory: { appSecret: "s" } })).toBe(false);
+    expect(d.configured?.({ directory: { appId: "not-an-app-id", appSecret: "s" } })).toBe(false);
+    // the platform-only login app at the top level is never the directory app
+    expect(d.configured?.({ appId: lark.appId, appSecret: lark.appSecret })).toBe(false);
+  });
+
+  it("reads only config.directory: the login app of the effective config is ignored", async () => {
+    await expect(
+      dir().listMembers({
+        config: { appId: lark.appId, appSecret: lark.appSecret },
+        signal: signal(),
+      }),
+    ).rejects.toThrow(/not configured/);
+    // an effective config carries the platform-only fields next to the org's directory copy
+    const r = await dir().listMembers({
+      config: {
+        region: "lark",
+        apiUrl: lark.url,
+        appId: LOGIN_APP.appId,
+        appSecret: LOGIN_APP.appSecret,
+        directory: { appId: lark.appId, appSecret: lark.appSecret },
+      },
+      signal: signal(),
+    });
+    expect(r.members.every((m) => m.tenantId === "t1")).toBe(true);
   });
 
   it("unconfigured → throws (never an empty list)", async () => {
-    await expect(dir().listMembers({ orgConfig: {}, signal: signal() })).rejects.toThrow(
+    await expect(dir().listMembers({ config: {}, signal: signal() })).rejects.toThrow(
       /not configured/,
     );
   });
 
   it("a cursor from another tenant is rejected", async () => {
-    const first = await dir().listMembers({ orgConfig: cfg(), signal: signal() });
+    const first = await dir().listMembers({ config: cfg(), signal: signal() });
     expect(first.next).toBeDefined();
     await expect(
       dir(other).listMembers({
-        orgConfig: cfg(other),
+        config: cfg(other),
         cursor: first.next as string,
         signal: signal(),
       }),
     ).rejects.toThrow(/tenant/);
     await expect(
-      dir().listMembers({ orgConfig: cfg(), cursor: "garbage!", signal: signal() }),
+      dir().listMembers({ config: cfg(), cursor: "garbage!", signal: signal() }),
     ).rejects.toThrow(/cursor/);
   });
 
@@ -152,7 +178,7 @@ describe("Lark directory@1", () => {
     lark.departments.unshift({ openDepartmentId: "od-new", name: "New", parent: "0" });
     try {
       await expect(
-        dir().listMembers({ orgConfig: cfg(), cursor: inDept as string, signal: signal() }),
+        dir().listMembers({ config: cfg(), cursor: inDept as string, signal: signal() }),
       ).rejects.toThrow(/changed/);
     } finally {
       lark.departments.shift();
@@ -162,7 +188,7 @@ describe("Lark directory@1", () => {
   it("users without status (scope missing) → throws instead of treating everyone as active", async () => {
     lark.hideUserStatus(true);
     try {
-      await expect(dir().listMembers({ orgConfig: cfg(), signal: signal() })).rejects.toThrow(
+      await expect(dir().listMembers({ config: cfg(), signal: signal() })).rejects.toThrow(
         /status/,
       );
     } finally {
@@ -173,20 +199,20 @@ describe("Lark directory@1", () => {
   it("platform errors carry the code, never the secret", async () => {
     const err = await dir()
       .listMembers({
-        orgConfig: { appId: lark.appId, appSecret: "wrong-dir-secret" },
+        config: { directory: { appId: lark.appId, appSecret: "wrong-dir-secret" } },
         signal: signal(),
       })
       .catch((e: Error) => e);
     expect((err as Error).message).toMatch(/code 10015/);
     expect((err as Error).message).not.toContain("wrong-dir-secret");
     lark.failNext("departments", { status: 400, code: 40004, msg: "no dept authority" });
-    const first = await dir().listMembers({ orgConfig: cfg(), signal: signal() });
+    const first = await dir().listMembers({ config: cfg(), signal: signal() });
     // 根部门的第一页不查部门；之后某页查部门时报错
     let cursor = first.next;
     let e2: Error | undefined;
     for (let i = 0; i < 10 && cursor !== undefined && !e2; i++) {
       try {
-        cursor = (await dir().listMembers({ orgConfig: cfg(), cursor, signal: signal() })).next;
+        cursor = (await dir().listMembers({ config: cfg(), cursor, signal: signal() })).next;
       } catch (e) {
         e2 = e as Error;
       }
@@ -197,7 +223,7 @@ describe("Lark directory@1", () => {
   it("429 → waits x-ogw-ratelimit-reset and retries", async () => {
     lark.failNext("find_by_department", { status: 429, code: 99991400, retryAfter: 1 });
     const started = Date.now();
-    const r = await dir().listMembers({ orgConfig: cfg(), signal: signal() });
+    const r = await dir().listMembers({ config: cfg(), signal: signal() });
     expect(Date.now() - started).toBeGreaterThanOrEqual(900);
     expect(r.members.length).toBeGreaterThan(0);
   });
@@ -207,7 +233,7 @@ describe("Lark directory@1", () => {
     lark.failNext("find_by_department", { status: 429, code: 99991400, retryAfter: 1 }, 5);
     try {
       await expect(
-        dir(lark, { maxRateLimitWaitMs: 1500 }).listMembers({ orgConfig: cfg(), signal: signal() }),
+        dir(lark, { maxRateLimitWaitMs: 1500 }).listMembers({ config: cfg(), signal: signal() }),
       ).rejects.toThrow(/rate limited/);
       const after = lark.calls.filter((c) => c.api === "find_by_department").length;
       expect(after - before).toBe(2);
@@ -215,7 +241,7 @@ describe("Lark directory@1", () => {
       // 清掉剩余的失败
       for (let i = 0; i < 3; i++) {
         await dir(lark, { maxRateLimitWaitMs: 0 })
-          .listMembers({ orgConfig: cfg(), signal: signal() })
+          .listMembers({ config: cfg(), signal: signal() })
           .catch(() => {});
       }
     }
@@ -225,7 +251,7 @@ describe("Lark directory@1", () => {
     lark.failNext("find_by_department", { status: 429, code: 99991400, retryAfter: 10 });
     const ac = new AbortController();
     const started = Date.now();
-    const p = dir().listMembers({ orgConfig: cfg(), signal: ac.signal });
+    const p = dir().listMembers({ config: cfg(), signal: ac.signal });
     setTimeout(() => ac.abort(new Error("stop")), 200);
     await expect(p).rejects.toThrow(/stop/);
     expect(Date.now() - started).toBeLessThan(3000);
@@ -233,17 +259,17 @@ describe("Lark directory@1", () => {
 
   it("a different app than the deployment login app in the same tenant → throws", async () => {
     await expect(
-      dir(lark, { loginApp: LOGIN_APP }).listMembers({ orgConfig: cfg(), signal: signal() }),
+      dir(lark, { loginApp: LOGIN_APP }).listMembers({ config: cfg(), signal: signal() }),
     ).rejects.toThrow(/same Lark app/);
     // 登录应用就是这个应用：照常
-    const ok = await dir(lark, { loginApp: cfg() }).listMembers({
-      orgConfig: cfg(),
+    const ok = await dir(lark, { loginApp: cfg().directory }).listMembers({
+      config: cfg(),
       signal: signal(),
     });
     expect(ok.members.length).toBeGreaterThan(0);
     // 登录应用属于别的租户（凭据在这里取不到 token）：不影响本租户的通讯录
     const ok2 = await dir(other, { loginApp: LOGIN_APP }).listMembers({
-      orgConfig: cfg(other),
+      config: cfg(other),
       signal: signal(),
     });
     expect(ok2.next).toBeUndefined();
@@ -267,7 +293,7 @@ describe("Lark directory@1", () => {
       const d = dir(flat);
       const page = (cursor?: string) =>
         d.listMembers({
-          orgConfig: cfg(flat),
+          config: cfg(flat),
           ...(cursor !== undefined && { cursor }),
           signal: signal(),
         });
@@ -289,7 +315,7 @@ describe("Lark directory@1", () => {
   it("app contact scope is not 'all members' (root department rejected) → page 1 throws", async () => {
     lark.rejectRootDepartment(true);
     try {
-      await expect(dir().listMembers({ orgConfig: cfg(), signal: signal() })).rejects.toThrow(
+      await expect(dir().listMembers({ config: cfg(), signal: signal() })).rejects.toThrow(
         /code 40004.*all members|all members.*code 40004/,
       );
     } finally {
@@ -300,7 +326,7 @@ describe("Lark directory@1", () => {
   it("tenant query goes through the same rate-limit backoff", async () => {
     lark.failNext("tenant", { status: 429, code: 99991400, retryAfter: 1 });
     const started = Date.now();
-    const r = await dir().listMembers({ orgConfig: cfg(), signal: signal() });
+    const r = await dir().listMembers({ config: cfg(), signal: signal() });
     expect(Date.now() - started).toBeGreaterThanOrEqual(900);
     expect(r.members.length).toBeGreaterThan(0);
   });
@@ -309,12 +335,12 @@ describe("Lark directory@1", () => {
     // 第 1 次企业信息查询（本应用）正常，第 2 次（登录应用）503 → 抛错，不放行
     lark.failNext("tenant", { status: 503, code: 5000 }, 1, 1);
     await expect(
-      dir(lark, { loginApp: LOGIN_APP }).listMembers({ orgConfig: cfg(), signal: signal() }),
+      dir(lark, { loginApp: LOGIN_APP }).listMembers({ config: cfg(), signal: signal() }),
     ).rejects.toThrow(/code 5000/);
     // 登录应用凭据错误（10015）→ 放行
     const ok = await dir(lark, {
       loginApp: { appId: LOGIN_APP.appId, appSecret: "wrong" },
-    }).listMembers({ orgConfig: cfg(), signal: signal() });
+    }).listMembers({ config: cfg(), signal: signal() });
     expect(ok.members.length).toBeGreaterThan(0);
   });
 });

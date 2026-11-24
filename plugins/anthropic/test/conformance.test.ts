@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   isModelError,
   MODEL_PROVIDER_EXTENSION_POINT_V2,
@@ -38,6 +39,10 @@ const memoryKv = (): Kv & { store: Map<string, string>; ttls: number[] } => {
   };
 };
 
+/** The kv key of a cached model: by endpoint (sha256 of the base URL) and id. */
+const cacheKey = (baseUrl: string, id: string) =>
+  `models:v4:${createHash("sha256").update(baseUrl).digest("hex")}:${id}`;
+
 // ---- 夹具模式 ----
 describeModelProviderConformance("anthropic (fixtures)", async () => {
   const server = await startFakeModelServer(anthropicRoutes());
@@ -45,6 +50,7 @@ describeModelProviderConformance("anthropic (fixtures)", async () => {
     plugin: "anthropic",
     provider: createAnthropicProvider({
       kv: memoryKv(),
+      net: { fetch },
       apiKey: "sk-ant-fixture",
       baseUrl: server.url,
       models: ["claude-opus-5-5"],
@@ -69,6 +75,7 @@ describe.skipIf(!LIVE_KEY)("live", { timeout: 120_000 }, () => {
     plugin: "anthropic",
     provider: createAnthropicProvider({
       kv: memoryKv(),
+      net: { fetch },
       apiKey: LIVE_KEY ?? "",
       models: ["claude-haiku-5-5"],
       serverFallbacks: "default",
@@ -85,6 +92,7 @@ describe.skipIf(!LIVE_KEY)("live toolChoice", { timeout: 60_000 }, () => {
   it("history with tool_use + tool_result, tools declared, toolChoice none -> text only", async () => {
     const provider = createAnthropicProvider({
       kv: memoryKv(),
+      net: { fetch },
       apiKey: LIVE_KEY ?? "",
       models: ["claude-haiku-5-5"],
       serverFallbacks: "default",
@@ -146,6 +154,7 @@ describe.skipIf(!LIVE_KEY)("live history with renamed tools", { timeout: 60_000 
   it("accepts a history tool name absent from the tool list", async () => {
     const provider = createAnthropicProvider({
       kv: memoryKv(),
+      net: { fetch },
       apiKey: LIVE_KEY ?? "",
       models: ["claude-haiku-5-5"],
       serverFallbacks: "default",
@@ -229,6 +238,7 @@ describe("anthropic: errors and edge cases", () => {
   const provider = (kv: Kv = memoryKv()) =>
     createAnthropicProvider({
       kv,
+      net: { fetch },
       apiKey: "sk-ant-fixture",
       baseUrl: server.url,
       models: ["claude-haiku-5-5", "claude-sonnet-5"],
@@ -448,6 +458,7 @@ describe("anthropic: errors and edge cases", () => {
   it("network failure -> network", async () => {
     const p = createAnthropicProvider({
       kv: memoryKv(),
+      net: { fetch },
       apiKey: "sk-ant-fixture",
       baseUrl: "http://127.0.0.1:1",
       models: ["claude-haiku-5-5"],
@@ -592,6 +603,7 @@ describe("anthropic: errors and edge cases", () => {
     const warnings: { msg: string; meta?: Record<string, unknown> }[] = [];
     const p = createAnthropicProvider({
       kv: memoryKv(),
+      net: { fetch },
       apiKey: "sk-ant-fixture",
       baseUrl: server.url,
       models: ["claude-haiku-5-5", "claude-missing", "claude-sonnet-5"],
@@ -611,6 +623,7 @@ describe("anthropic: errors and edge cases", () => {
     const warnings: unknown[] = [];
     const p = createAnthropicProvider({
       kv,
+      net: { fetch },
       apiKey: "sk-ant-fixture",
       baseUrl: server.url,
       models: ids,
@@ -641,7 +654,7 @@ describe("anthropic: errors and edge cases", () => {
     expect(isModelError(err)).toBe(true);
     expect(isModelError(err) && err.retryable).toBe(true);
     // 成功的 id 仍写入 kv 缓存
-    expect(kv.store.has("models:v3:claude-haiku-5-5")).toBe(true);
+    expect(kv.store.has(cacheKey(server.url, "claude-haiku-5-5"))).toBe(true);
     modelFail.clear();
   });
 
@@ -662,6 +675,7 @@ describe("anthropic: errors and edge cases", () => {
     const id = `claude-${NO_THINKING}-1`;
     const p = createAnthropicProvider({
       kv: memoryKv(),
+      net: { fetch },
       apiKey: "sk-ant-fixture",
       baseUrl: server.url,
       models: [id],
@@ -692,6 +706,7 @@ describe("anthropic: errors and edge cases", () => {
     const id = `claude-${FEW_EFFORT_LEVELS}-1`;
     const p = createAnthropicProvider({
       kv: memoryKv(),
+      net: { fetch },
       apiKey: "sk-ant-fixture",
       baseUrl: server.url,
       models: [id],
@@ -708,6 +723,7 @@ describe("anthropic: errors and edge cases", () => {
     const id = `claude-${NULL_EFFORT_LEVELS}-1`;
     const p = createAnthropicProvider({
       kv: memoryKv(),
+      net: { fetch },
       apiKey: "sk-ant-fixture",
       baseUrl: server.url,
       models: [id],
@@ -824,8 +840,8 @@ describe("anthropic: errors and edge cases", () => {
       ],
     });
     expect([...kv.store.keys()].sort()).toEqual([
-      "models:v3:claude-haiku-5-5",
-      "models:v3:claude-sonnet-5",
+      cacheKey(server.url, "claude-haiku-5-5"),
+      cacheKey(server.url, "claude-sonnet-5"),
     ]);
     expect(models.every((m) => !m.capabilities.midConversationSystem)).toBe(true);
     expect(kv.ttls).toEqual([3600, 3600]);
@@ -838,6 +854,7 @@ describe("anthropic: errors and edge cases", () => {
   it("vision / documents come from the Models API image_input / pdf_input", async () => {
     const p = createAnthropicProvider({
       kv: memoryKv(),
+      net: { fetch },
       apiKey: "sk-ant-fixture",
       baseUrl: server.url,
       models: ["claude-haiku-5-5", "claude-nothink"],

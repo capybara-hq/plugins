@@ -1,10 +1,13 @@
 import { configJsonSchema, validateConfigUi } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { SlackConnection } from "../src/channel.js";
-import { SlackDirectoryConfig } from "../src/config.js";
+import { SlackDeployment } from "../src/config.js";
 
 type Field = {
   "x-secret"?: boolean;
+  "x-platform-only"?: boolean;
+  properties?: Record<string, Field>;
+  required?: string[];
   "x-ui"?: { label?: unknown; help?: { zh: string; en: string }; inboundModes?: string[] };
 };
 const fields = (schema: Record<string, unknown>) => schema.properties as Record<string, Field>;
@@ -29,11 +32,20 @@ describe("config UI hints", () => {
       expect(f[k]?.["x-secret"]).toBe(true);
   });
 
-  it("org fields say they are optional and only for member sync", () => {
-    const schema = configJsonSchema(SlackDirectoryConfig);
-    expect(validateConfigUi(schema, "org")).toEqual([]);
-    expect(schema.required).toBeUndefined();
-    const f = fields(schema);
+  it("directory fields are overridable, optional and only for member sync", () => {
+    const schema = configJsonSchema(SlackDeployment);
+    expect(validateConfigUi(schema, "deployment")).toEqual([]);
+    const top = fields(schema);
+    for (const k of ["apiUrl", "openidUrl", "clientId", "clientSecret"])
+      expect(top[k]?.["x-platform-only"]).toBe(true);
+    expect(top.clientSecret?.["x-secret"]).toBe(true);
+    const dirField = top.directory;
+    expect(dirField?.["x-platform-only"]).toBeUndefined();
+    expect(dirField?.["x-ui"]?.help?.en).toBe(
+      "Every organization that follows the platform syncs this tenant's members",
+    );
+    expect(dirField?.required).toBeUndefined();
+    const f = dirField?.properties ?? {};
     expect(f.teamId?.["x-ui"]?.label).toEqual({ zh: "工作区 ID", en: "Workspace ID" });
     expect(f.teamId?.["x-ui"]?.help?.zh).toMatch(/^选填/);
     expect(f.teamId?.["x-ui"]?.help?.en).toMatch(/^Optional/);

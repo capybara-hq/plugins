@@ -14,7 +14,7 @@ export { makeFcmProvider } from "./provider.js";
 const MANIFEST = Object.freeze({
   name: "push-fcm",
   version: "0.1.0-rc.0",
-  sdk: "^0.1.0-rc.46",
+  sdk: "^0.1.0-rc.64",
 } as const);
 
 /**

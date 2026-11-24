@@ -181,9 +181,14 @@ describe("Telegram plugin in the kernel (dual replica, long polling)", () => {
 
     // ================= setup: plugins, agent, Telegram connection =================
     const book = im.book("acme-telegram");
+    // fake-im's directory URL is an overridable deployment field: the org saves its own copy
+    const dir = await call(ownerJar, "PUT", `${base}/extensions/fake-im/overrides`, {
+      values: { directoryUrl: book.url },
+    });
+    expect(dir.status, JSON.stringify(dir.json)).toBe(200);
     for (const [plugin, body] of [
       ["model-fake", { enabled: true }],
-      ["fake-im", { enabled: true, config: { url: book.url } }],
+      ["fake-im", { enabled: true }],
       ["fake-ask", { enabled: true }],
       ["telegram", { enabled: true }],
     ] as const) {

@@ -4,11 +4,10 @@ import {
   MODEL_PROVIDER_EXTENSION_POINT_V2,
   ModelError,
   type ModelProvider,
-  orgAccess,
   secret,
   ui,
 } from "@capybara-hq/plugin-sdk";
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import { z } from "zod";
 import { embedTexts } from "./embed.js";
 import { listEndpoints, type Management } from "./endpoints.js";
@@ -16,6 +15,7 @@ import { toModelError } from "./errors.js";
 import { generateImages } from "./image.js";
 import { listArkModels, withEndpoints } from "./list.js";
 import { streamChat } from "./map-stream.js";
+import { isolatedOpenAI } from "./openai-client.js";
 
 // capybara:allow-module-state a read-only list of region names
 const REGIONS = ["cn-beijing", "cn-shanghai"] as const;
@@ -28,11 +28,11 @@ const dataPlane = (region: Region) => `https://ark.${region}.volces.com/api/v3`;
 const controlPlane = (region: Region) => `https://ark.${region}.volcengineapi.com`;
 
 /**
- * Deployment config. Every field is org-overridable. The key is required, so a deployment without
- * one shows the provider as needing configuration rather than as failing to list its models. The
- * platform may leave it empty (the kernel's load gate makes required overridable fields optional
- * for the platform's copy): orgs following the platform then need configuration and are never
- * called, and an org copy brings its own key.
+ * Deployment config. Every field is overridable by an org (the default).
+ * The key is required, so a deployment without one shows the provider as needing configuration
+ * rather than as failing to list its models. The platform may leave it empty (the kernel's load
+ * gate makes required overridable fields optional for the platform's copy): orgs following the
+ * platform then need configuration and are never called, and an org copy brings its own key.
  *
  * The inference key lists the models itself (`GET /api/v3/models`, live 2026-11-08). The optional
  * `management` AK/SK only adds the account's inference endpoints (`ep-…`, control-plane
@@ -40,37 +40,28 @@ const controlPlane = (region: Region) => `https://ark.${region}.volcengineapi.co
  * override, so a platform AK/SK never signs a request for an org's config.
  */
 const DeploymentConfig = z.object({
-  apiKey: orgAccess(
-    ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
-    "override",
-  ),
-  region: orgAccess(
-    ui(z.enum(REGIONS).default(DEFAULT_REGION), { label: { zh: "地域", en: "Region" } }),
-    "override",
-  ),
-  management: orgAccess(
-    ui(
-      z
-        .object({
-          // secret too: a new org copy then starts without either field (the kernel removes the
-          // secret leaves of a copy), not with the platform's AK and no SK
-          accessKeyId: ui(secret(z.string().min(1)), {
-            label: { zh: "Access Key ID", en: "Access key ID" },
-          }),
-          secretAccessKey: ui(secret(z.string().min(1)), {
-            label: { zh: "Secret Access Key", en: "Secret access key" },
-          }),
-        })
-        .optional(),
-      {
-        label: {
-          zh: "管理密钥（可选，用于列出推理接入点）",
-          en: "Management keys (optional, lists inference endpoints)",
-        },
-        advanced: true,
+  apiKey: ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
+  region: ui(z.enum(REGIONS).default(DEFAULT_REGION), { label: { zh: "地域", en: "Region" } }),
+  management: ui(
+    z
+      .object({
+        // secret too: a new org copy then starts without either field (the kernel removes the
+        // secret leaves of a copy), not with the platform's AK and no SK
+        accessKeyId: ui(secret(z.string().min(1)), {
+          label: { zh: "Access Key ID", en: "Access key ID" },
+        }),
+        secretAccessKey: ui(secret(z.string().min(1)), {
+          label: { zh: "Secret Access Key", en: "Secret access key" },
+        }),
+      })
+      .optional(),
+    {
+      label: {
+        zh: "管理密钥（可选，用于列出推理接入点）",
+        en: "Management keys (optional, lists inference endpoints)",
       },
-    ),
-    "override",
+      advanced: true,
+    },
   ),
 });
 
@@ -134,9 +125,9 @@ function resolve(defaults: ArkDefaults, config: unknown): Resolved {
 
 /**
  * model-provider@2 for Volcengine Ark: the list from the data plane's `/models`, chat on its Chat
- * Completions API (the official `openai` SDK), text embeddings on `/embeddings/multimodal`, Seedream
- * images on `/images/generations`. No
- * process state: everything is built per call because the key and region can differ per org.
+ * Completions API (the official `openai` SDK), text embeddings on `/embeddings/multimodal`,
+ * Seedream images on `/images/generations`. No process state: everything is built per call
+ * because the key and region can differ per org.
  */
 export function createArkProvider(defaults: ArkDefaults): ModelProvider {
   return {
@@ -166,13 +157,10 @@ export function createArkProvider(defaults: ArkDefaults): ModelProvider {
       let client: OpenAI;
       try {
         const { apiKey, baseUrl } = resolve(defaults, opts.config);
-        client = new OpenAI({
+        // No OPENAI_* env var is read (isolatedOpenAI): never send a host value to Ark
+        client = isolatedOpenAI({
           baseURL: baseUrl,
           apiKey,
-          // Do not read OPENAI_* env vars: never send OpenAI headers to another service
-          organization: null,
-          project: null,
-          adminAPIKey: null,
           // Retries belong to the kernel's degradation ladder
           maxRetries: 0,
         });
@@ -196,7 +184,7 @@ export function createArkProvider(defaults: ArkDefaults): ModelProvider {
 export default defineExtension({
   name: "ark",
   version: "0.1.0-rc.11",
-  sdk: "^0.1.0-rc.4",
+  sdk: "^0.1.0-rc.64",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
   // The two regions' data and control planes (display only, the platform does not intercept)
   permissions: {

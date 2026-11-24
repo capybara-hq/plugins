@@ -11,7 +11,7 @@ An IM platform is usually one extension offering all three extension points, sha
 |---|---|---|---|
 | `channel@1` (bot) | `channel.ts`, cards in `cards.ts` | one per **channel connection** (`connectionSchema`, created by an org admin under "Channels") | yes (`orgScoped`) |
 | `identity-source@1` (web login) | `identity.ts` | **deployment-level** (`config.deployment`, enabled through the kernel config `auth.loginSources`) | no |
-| `directory@1` (directory sync) | `directory.ts` | **org-level** (`config.org`) | yes (`orgScoped`) |
+| `directory@1` (directory sync) | `directory.ts` | **`directory` deployment key** (overridable by default: an org saves its own copy; read from the per-call `config`) | yes (`orgScoped`) |
 
 General extension authoring (manifest, two-level config, multi-replica rules, approval) is in `.agents/skills/writing-extensions`; this skill covers what is specific to these three extension points. The kernel side (gateway role, leader election and sharing, durable queues, dedupe, the webhook route, the login flow, the directory sync guards) is core's: [writing-channels in core](https://github.com/capybara-hq/core/tree/main/.agents/skills/writing-channels).
 
@@ -183,13 +183,13 @@ interface IdentitySource {
 
 ```ts
 interface Directory {
-  configured?(orgConfig: unknown): boolean;
-  listMembers(args: { orgConfig; cursor?; signal }): Promise<{ members: DirectoryMember[]; next?: string }>;
+  configured?(config: unknown): boolean;
+  listMembers(args: { config; orgId?; cursor?; signal }): Promise<{ members: DirectoryMember[]; next?: string }>;
 }
 ```
 
 - **Pagination**: one page per call with `next`; the last page has none. Each page gets 60 seconds, a round at most 10000 pages. Put everything needed to continue in the cursor (stateless).
-- **`configured(orgConfig)`**: implement it when the same extension also provides other extension points and the directory fields are optional in the org config. False makes the kernel skip scans, `directory_changed` and re-checks, and a manual sync answers 409 `directory.not_configured`. Pure function: no requests, no throwing.
+- **`configured(config)`**: implement it when the same extension also provides other extension points and the directory fields are optional in the effective config. False makes the kernel skip scans, `directory_changed` and re-checks, and a manual sync answers 409 `directory.not_configured`. Pure function: no requests, no throwing.
 - **Throw when not configured or the credentials are wrong; never return an empty list**: an empty list means "everyone left".
 - **An incomplete listing must fail**: any page that can't be fetched in full (insufficient permission, rate-limit waits over budget, the department structure changing mid-sync, the tenant changing within a round, a status field unavailable) throws. The kernel removes people only after a fully successful round. Never return "whatever you could get".
 - **Rate limiting**: within a page retry for the wait the platform gives, with a budget (both extensions: 30 seconds per page, at most 3 per request); beyond it throw "rate limited" (the round is incomplete).
@@ -217,7 +217,7 @@ The fake platforms are in `@capybara-hq/testing`:
 ## New channel extension checklist
 
 1. Write the README first: app creation steps and the permission (scope) table, the doc source and lookup date of every trade-off, acknowledgement / reconnection / rate limiting / length / error mapping, and items to confirm in a real integration.
-2. Manifest: `provides` the extension points needed, `permissions.network`, `config.deployment` (login), `config.org` (directory; `configured` when fields are optional), and the channel connection config in `connectionSchema`.
+2. Manifest: `provides` the extension points needed, `permissions.network`, `config.deployment` (login fields `platformOnly`; the `directory` key overridable; `configured` when its fields are optional), and the channel connection config in `connectionSchema`.
 3. Implement per the conventions above, with escaping and the link allowlist in their own file with unit tests.
 4. Fake server: if the platform protocol can be fully simulated, simulate it (Lark's protobuf frames) so tests run the real SDK; a new fake platform belongs in `@capybara-hq/testing` (a PR in core).
 5. A dual-replica case for the same identity in all three places.

@@ -1,4 +1,8 @@
-import { WebProviderError, type WebProviderErrorKind } from "@capybara-hq/plugin-sdk";
+import {
+  isNetDeniedError,
+  WebProviderError,
+  type WebProviderErrorKind,
+} from "@capybara-hq/plugin-sdk";
 
 export type JinaOp = "search" | "reader";
 
@@ -27,6 +31,8 @@ export async function jinaRequest(
   url: string,
   init: {
     apiKey: string;
+    /** The fetch to use (default: the global one); see `jinaFetch`. */
+    fetch?: typeof fetch;
     method: "GET" | "POST";
     headers?: Record<string, string>;
     body?: string;
@@ -36,7 +42,7 @@ export async function jinaRequest(
   const name = `Jina ${op}`;
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await (init.fetch ?? fetch)(url, {
       method: init.method,
       headers: {
         ...init.headers,
@@ -48,6 +54,11 @@ export async function jinaRequest(
     });
   } catch (err) {
     if (init.signal.aborted) throw err;
+    if (isNetDeniedError(err)) {
+      throw new WebProviderError(`${name} failed: the endpoint address is not allowed`, {
+        kind: "invalid",
+      });
+    }
     throw new WebProviderError(`${name} failed: network error`, { kind: "unavailable" });
   }
   if (!res.ok) {

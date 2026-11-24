@@ -12,7 +12,8 @@ COPY proxy.mjs /app/proxy.mjs
 # inherits it; /run/egress: the mount point of the control socket's tmpfs.
 RUN mkdir -p /config /run/egress && chown node:node /config /run/egress && chmod 0700 /config /run/egress
 # the provider gives an instance the in-place list control only when its proxy image says so
-LABEL dev.capybara.sandbox.egress-control="1"
+# (version 2: every apply carries the kernel's fence token; FENCE is the create-time token)
+LABEL dev.capybara.sandbox.egress-control="2"
 USER node
 EXPOSE 3128 1080
 CMD ["node", "/app/proxy.mjs"]

@@ -1,4 +1,10 @@
-import { isModelError, ModelError, type ModelErrorKind } from "@capybara-hq/plugin-sdk";
+import {
+  isModelError,
+  isNetDeniedError,
+  ModelError,
+  type ModelErrorKind,
+  type NetDeniedError,
+} from "@capybara-hq/plugin-sdk";
 import OpenAI from "openai";
 
 /** `retry-after-ms`（毫秒）优先，其次 `retry-after`（秒或 HTTP 日期）。 */
@@ -39,18 +45,39 @@ export function kindFromCode(code: string | null | undefined): ModelErrorKind | 
   }
 }
 
+/** The kernel's `NetDeniedError`, thrown directly or wrapped by the SDK (`cause`); else undefined. */
+function netDenied(e: unknown): NetDeniedError | undefined {
+  if (isNetDeniedError(e)) return e;
+  const cause = typeof e === "object" && e !== null ? (e as { cause?: unknown }).cause : undefined;
+  return isNetDeniedError(cause) ? cause : undefined;
+}
+
 /**
  * SDK 异常 → ModelError。只按异常类、HTTP 状态码与结构化错误 `code` 判断，不匹配错误信息字符串。
  * `signal` 已中止时一律视为 aborted（中止后 SDK 可能抛出连接类错误）。
  */
 export function toModelError(e: unknown, signal?: AbortSignal): ModelError {
   if (isModelError(e)) return e as ModelError;
+  // A ModelError thrown inside the SDK's fetch comes back wrapped (APIConnectionError): keep it
+  const wrapped =
+    typeof e === "object" && e !== null ? (e as { cause?: unknown }).cause : undefined;
+  if (isModelError(wrapped)) return wrapped as ModelError;
   const message = e instanceof Error ? e.message : String(e);
   const make = (kind: ModelErrorKind, extra?: { retryAfterMs?: number }) =>
     new ModelError(kind, `OpenAI: ${message}`, { cause: e, ...extra });
 
   if (signal?.aborted || e instanceof OpenAI.APIUserAbortError) {
     return new ModelError("aborted", "Request aborted", { cause: e });
+  }
+  // The kernel's network rules refused an org's endpoint URL: retrying is useless. The message
+  // names the host, never the URL's path or query
+  const denied = netDenied(e);
+  if (denied !== undefined) {
+    return new ModelError(
+      "invalid_request",
+      `OpenAI: the request to ${denied.host || "the endpoint"} was refused by the platform's network rules: ${denied.message} Ask an administrator to check the endpoint URL.`,
+      { cause: denied },
+    );
   }
   if (e instanceof OpenAI.APIConnectionTimeoutError) return make("timeout");
   if (e instanceof OpenAI.APIConnectionError) return make("network");

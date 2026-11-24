@@ -8,9 +8,9 @@ the model list, endpoints, embeddings and images use plain `fetch`.
 
 | Field | Notes |
 |---|---|
-| `apiKey` | secret; required; overridable per organization |
-| `region` | `cn-beijing` (default) or `cn-shanghai`; overridable per organization |
-| `management.accessKeyId`, `management.secretAccessKey` | optional, advanced; both secret, so an organization's copy starts without the pair; overridable per organization; list custom `ep-` endpoints |
+| `apiKey` | secret; required; org-overridable |
+| `region` | `cn-beijing` (default) or `cn-shanghai`; org-overridable |
+| `management.accessKeyId`, `management.secretAccessKey` | optional, advanced; both secret, so an organization's copy starts without the pair; org-overridable; list custom `ep-` endpoints |
 
 The key is required, so a deployment without one shows the provider as needing configuration
 rather than as failing to list its models. The platform may leave it empty for the organizations

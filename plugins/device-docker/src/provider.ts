@@ -3,6 +3,7 @@ import { isIP } from "node:net";
 import { type NetworkInterfaceInfo, networkInterfaces } from "node:os";
 import type { Duplex } from "node:stream";
 import {
+  type DeviceFence,
   type DeviceProvider,
   type DeviceRef,
   type DeviceReport,
@@ -14,6 +15,7 @@ import {
   SandboxGoneError,
   type SandboxHandle,
   type SandboxLimits,
+  StaleFenceError,
   validateAllowHost,
   validateSandboxPathShape,
 } from "@capybara-hq/plugin-sdk";
@@ -229,6 +231,19 @@ const LABEL_EGRESS_MODE = "dev.capybara.sandbox.mode";
  * volume, never from the labels.
  */
 const LABEL_CONTROL = "dev.capybara.sandbox.egress-control";
+/**
+ * The egress control version this provider speaks: `2` adds the kernel's fence token to every
+ * apply (device update fencing design §5.1, §10 step 4). An instance (or proxy image) carrying
+ * an earlier value is treated like one without the control: an allowlist change recreates it,
+ * which rebuilds it fenced.
+ */
+const CONTROL_VERSION = "2";
+/**
+ * On the sandbox container and its egress proxy: the fence token the instance was created with
+ * (device update fencing design §5.2). A lower bound of the token the instance holds (its proxy
+ * raises its own with each in-place apply), and the identity a handle names (§5.3).
+ */
+const LABEL_FENCE = "dev.capybara.sandbox.fence";
 /** The egress proxy's config file (on the config volume) and control socket (on a tmpfs). */
 const EGRESS_CONFIG_DIR = "/config";
 const EGRESS_CONTROL_DIR = "/run/egress";
@@ -330,8 +345,9 @@ export function egressProxyEnv(
   testHosts?: Record<string, string>,
   deniedCidrs: readonly string[] = [],
   testResolve?: Record<string, string>,
+  fence = 0,
 ): string[] {
-  const env = [`MODE=${mode}`, `PORT=${PROXY_PORT}`, `SOCKS_PORT=${SOCKS_PORT}`];
+  const env = [`MODE=${mode}`, `PORT=${PROXY_PORT}`, `SOCKS_PORT=${SOCKS_PORT}`, `FENCE=${fence}`];
   // open-public has no host list: any public host
   if (mode === "allowlist") env.push(`ALLOW_HOSTS=${JSON.stringify(allowHosts)}`);
   if (deniedCidrs.length > 0) env.push(`DENIED_CIDRS=${JSON.stringify(deniedCidrs)}`);
@@ -413,13 +429,58 @@ function planLabels(plan: InstancePlan, control = true): Record<string, string> 
   return {
     [LABEL_NET]: plan.mode,
     [LABEL_ALLOW]: JSON.stringify(plan.allowHosts),
-    ...(control && { [LABEL_CONTROL]: "1" }),
+    ...(control && { [LABEL_CONTROL]: CONTROL_VERSION }),
   };
 }
 
-/** Whether a container (sandbox or proxy) carries the egress control label. */
+/**
+ * Whether a container (sandbox or proxy) or image carries this version's egress control label:
+ * only such an instance takes a list in place (`updateDecision`).
+ */
 function hasControl(labels: Record<string, string> | null | undefined): boolean {
-  return labels?.[LABEL_CONTROL] === "1";
+  return labels?.[LABEL_CONTROL] === CONTROL_VERSION;
+}
+
+/**
+ * Whether an instance was made with an egress control of any version (`1` or `2`): its list may
+ * have changed in place, so its labels are no lower bound and a lost proxy is rebuilt only from
+ * its config volume (a version-1 file has no fence, so the rebuilt proxy refuses to start and the
+ * instance is recreated, fail closed), and the list in force is read from the proxy.
+ */
+function hadControl(labels: Record<string, string> | null | undefined): boolean {
+  const v = labels?.[LABEL_CONTROL];
+  return v === "1" || v === CONTROL_VERSION;
+}
+
+/** The create-time fence token a container's labels record; null without a valid one. */
+export function labelFence(labels: Record<string, string> | null | undefined): number | null {
+  const v = labels?.[LABEL_FENCE];
+  if (v === undefined || !/^(0|[1-9][0-9]{0,15})$/.test(v)) return null;
+  const n = Number(v);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+/** The fence token a handle names (this version's handles carry one; older ones do not). */
+export function handleFence(h: SandboxHandle): number | undefined {
+  const f = (h as SandboxHandle & { fence?: unknown }).fence;
+  return typeof f === "number" && Number.isSafeInteger(f) && f >= 0 ? f : undefined;
+}
+
+/**
+ * Whether container `labels` belong to the incarnation handle `h` names (device update fencing
+ * design §5.3): a handle with a fence names the instance created with that token, so a container
+ * under the same name with another (or no) fence label is a replacement, and the handle's instance
+ * is gone. A handle without a fence (made by an earlier version) matches any container.
+ */
+export function sameIncarnation(h: SandboxHandle, labels: Record<string, string> | null): boolean {
+  const want = handleFence(h);
+  return want === undefined || labelFence(labels) === want;
+}
+
+/** A valid token from the kernel, or undefined (an older kernel sends none). */
+function tokenOf(fence: DeviceFence | null | undefined): number | undefined {
+  const t = fence?.token;
+  return typeof t === "number" && Number.isSafeInteger(t) && t >= 0 ? t : undefined;
 }
 
 /**
@@ -464,10 +525,12 @@ function labelNetwork(
  * - `"apply"`: allowlist to a non-empty allowlist on an instance with the egress control label:
  *   the proxy takes the new list in place (wider, narrower or both) and keeps its connections the
  *   new list still covers.
- * - `"swap"`: recreate only the egress proxy, for open-public to open-public, and for an instance
- *   of an earlier version (no control label) only when the new list keeps every recorded host, so a
- *   proxy rebuilt from the labels never allows more than the one `update` put in place.
- * - `"recreate"`: everything else. A change of network kind recreates, allowlist to open-public
+ * - `"swap"`: recreate only the egress proxy, for open-public to open-public (no list changes, so
+ *   the swap, which deletes the proxy first and cannot be fenced, applies nothing a stale holder
+ *   could widen).
+ * - `"recreate"`: everything else, an allowlist change on an instance of an earlier version (no
+ *   control label of this version) included: it is rebuilt fenced (device update fencing design
+ *   §10 step 4). A change of network kind recreates, allowlist to open-public
  *   too: the labels then say what the instance has, and `resume` can hold an open-public instance
  *   to `refuseOpenNetwork` by its labels.
  */
@@ -486,8 +549,7 @@ export function updateDecision(
   if (plan.mode === "open-public" || from.mode === "open-public") {
     return plan.mode === from.mode ? "swap" : "recreate";
   }
-  if (hasControl(labels)) return "apply";
-  return from.allowHosts.every((h) => plan.allowHosts.includes(h)) ? "swap" : "recreate";
+  return hasControl(labels) ? "apply" : "recreate";
 }
 
 /**
@@ -697,6 +759,11 @@ interface RunOpts {
   signal: AbortSignal;
   /** 超时 / 中止时杀进程（不给则只断开连接）。 */
   kill?: () => Promise<void>;
+  /**
+   * The handle whose instance the command must run in: checked against the container's fence
+   * label first (a replacement under the same name answers `SandboxGoneError`, §5.3).
+   */
+  incarnation?: SandboxHandle;
 }
 
 /** 容器还在但没在运行（exec 返回 409）：由契约层先启动再重试一次。 */
@@ -776,7 +843,7 @@ export function createDockerSandbox(
    * Drops the instance under `name`: container, egress proxy, internal network and the proxy's
    * config volume, which belongs to the instance (never the file system's volumes).
    */
-  const destroyByName = async (name: string, signal: AbortSignal) => {
+  const removeInstance = async (name: string, signal: AbortSignal) => {
     signal.throwIfAborted();
     const n = sandboxResourceNames(name);
     await Promise.all(
@@ -802,7 +869,7 @@ export function createDockerSandbox(
     signal.throwIfAborted();
     if (!NAME_RE.test(name)) throw new Error(`invalid sandbox name: ${name}`);
     const n = sandboxResourceNames(name);
-    await destroyByName(name, signal);
+    await removeInstance(name, signal);
     await Promise.all([
       removeWithRetry(`/volumes/${enc(n.workspace)}`, signal),
       removeWithRetry(`/volumes/${enc(n.skills)}`, signal),
@@ -1001,6 +1068,7 @@ export function createDockerSandbox(
     signal: AbortSignal,
     mayExist = false,
     control = false,
+    fence = 0,
   ) => {
     const n = sandboxResourceNames(name);
     const made = createContainer(
@@ -1013,12 +1081,14 @@ export function createDockerSandbox(
           test.egressTestHosts,
           egressDenied(),
           test.egressTestResolve,
+          fence,
         ),
         Labels: {
           ...baseLabels(name, "egress"),
           [LABEL_EGRESS_MODE]: mode,
           [LABEL_ALLOW]: JSON.stringify(allowHosts),
-          ...(control && { [LABEL_CONTROL]: "1" }),
+          [LABEL_FENCE]: String(fence),
+          ...(control && { [LABEL_CONTROL]: CONTROL_VERSION }),
         },
         HostConfig: {
           NetworkMode: cfg.network,
@@ -1074,7 +1144,7 @@ export function createDockerSandbox(
 
   /**
    * Whether the egress proxy image takes in-place list changes (its image label
-   * `dev.capybara.sandbox.egress-control=1`, set by egress-proxy/Dockerfile). A deployment's own
+   * `dev.capybara.sandbox.egress-control=2`, set by egress-proxy/Dockerfile). A deployment's own
    * older build lacks it: its instances are made without the control (the proxy swap and recreate
    * paths), never with a control the proxy cannot answer. The image is pulled when missing.
    */
@@ -1109,6 +1179,8 @@ export function createDockerSandbox(
     allowHosts: string[],
     signal: AbortSignal,
     control = false,
+    /** The instance's create-time token, for a proxy rebuilt without a config file (§5.2). */
+    fence = 0,
   ): Promise<boolean> => {
     const n = sandboxResourceNames(name);
     await ensureSharedNetwork(signal);
@@ -1120,7 +1192,7 @@ export function createDockerSandbox(
         State: { Running: boolean; Paused?: boolean };
         Config: { Labels: Record<string, string> | null };
       }>("GET", `/containers/${enc(n.egress)}/json`, { signal });
-      if (control && !hasControl(c.Config.Labels)) return false;
+      if (control && !hadControl(c.Config.Labels)) return false;
       if (c.State.Paused) await unpause(n.egress, signal);
       running = c.State.Running;
     } catch (e) {
@@ -1129,7 +1201,7 @@ export function createDockerSandbox(
       if (control && !(await egressConfOk(name, signal))) return false;
       // a concurrent auto-start may create it at the same moment: a name conflict is fine
       try {
-        return await createEgress(name, mode, allowHosts, signal, true, control);
+        return await createEgress(name, mode, allowHosts, signal, true, control, fence);
       } catch (e) {
         if (control && !signal.aborted && !(await egressRunning(name, signal))) return false;
         throw e;
@@ -1164,6 +1236,84 @@ export function createDockerSandbox(
     }
   };
 
+  /**
+   * Throws `SandboxGoneError` unless the sandbox container under `h.id` is the incarnation `h`
+   * names (its fence label, §5.3); a missing container is gone too.
+   */
+  const checkIncarnation = async (h: SandboxHandle, signal: AbortSignal): Promise<void> => {
+    let labels: Record<string, string> | null;
+    try {
+      const c = await api.json<{ Config: { Labels: Record<string, string> | null } }>(
+        "GET",
+        `/containers/${enc(h.id)}/json`,
+        { signal },
+      );
+      labels = c.Config.Labels;
+    } catch (e) {
+      if (isStatus(e, 404)) {
+        throw new SandboxGoneError(`sandbox container ${h.id} no longer exists`, { cause: e });
+      }
+      throw e;
+    }
+    if (!sameIncarnation(h, labels)) {
+      throw new SandboxGoneError(
+        `sandbox container ${h.id} was replaced (fence ${String(labelFence(labels))}, the handle names ${String(handleFence(h))})`,
+      );
+    }
+  };
+
+  /**
+   * The fence token the instance under `name` holds, as far as it can be read: the sandbox
+   * container's create label and, with `proxy`, its running proxy's own token (raised by each
+   * in-place apply); null when no instance runs there or none carries a token.
+   */
+  const instanceFence = async (
+    name: string,
+    signal: AbortSignal,
+    proxy: boolean,
+  ): Promise<number | null> => {
+    const n = sandboxResourceNames(name);
+    let best: number | null = null;
+    for (const c of [n.container, n.egress]) {
+      try {
+        const r = await api.json<{ Config: { Labels: Record<string, string> | null } }>(
+          "GET",
+          `/containers/${enc(c)}/json`,
+          { signal },
+        );
+        const f = labelFence(r.Config.Labels);
+        if (f !== null) best = Math.max(best ?? 0, f);
+      } catch (e) {
+        if (!isStatus(e, 404)) throw e;
+      }
+    }
+    if (proxy && (await egressRunning(name, signal))) {
+      // a proxy without this version's control answers no token (or no status): its labels count
+      const st = await egressControl(name, "status", undefined, signal).catch(() => null);
+      const f = st?.fence;
+      if (typeof f === "number" && Number.isSafeInteger(f)) best = Math.max(best ?? 0, f);
+    }
+    return best;
+  };
+
+  /** Refuses a lifecycle call whose token is lower than the instance's under `name`. */
+  const refuseStale = async (
+    name: string,
+    op: string,
+    token: number | undefined,
+    signal: AbortSignal,
+    proxy: boolean,
+  ): Promise<void> => {
+    if (token === undefined) return;
+    const current = await instanceFence(name, signal, proxy);
+    if (current !== null && current > token) {
+      throw new StaleFenceError(
+        `device-docker: the instance ${name} holds fence ${current}; ${op} carries ${token}`,
+        { current },
+      );
+    }
+  };
+
   // ---------- exec ----------
 
   /** The exec's environment: the system PATH unless the caller keeps the image's or sets one. */
@@ -1175,6 +1325,9 @@ export function createDockerSandbox(
   /** 在容器里跑一条命令（劫持连接收多路复用的输出）。容器不在抛 SandboxGoneError。 */
   async function run(container: string, o: RunOpts): Promise<RunResult> {
     o.signal.throwIfAborted();
+    if (o.incarnation !== undefined && handleFence(o.incarnation) !== undefined) {
+      await checkIncarnation(o.incarnation, o.signal);
+    }
     const startedAt = Date.now();
     let execId: string;
     const env = execEnv(o);
@@ -1385,7 +1538,7 @@ export function createDockerSandbox(
     o: Omit<RunOpts, "signal" | "kill">,
     signal: AbortSignal,
   ): Promise<RunResult> => {
-    const r = await autoStart(h, signal, () => run(h.id, { ...o, signal }));
+    const r = await autoStart(h, signal, () => run(h.id, { ...o, signal, incarnation: h }));
     if (r.aborted) throw abortReason(signal);
     return r;
   };
@@ -1457,7 +1610,7 @@ export function createDockerSandbox(
       user: EGRESS_USER,
       // the egress proxy's own image (nothing in the sandbox writes there)
       imagePath: true,
-      // apply: `{ config, ifDigest }` as one JSON line on stdin
+      // apply: `{ config, fence }` as one JSON line on stdin
       ...(op === "apply" && { stdin: Buffer.from(`${JSON.stringify(input)}\n`) }),
       maxOutputBytes: 64 * 1024,
       timeoutMs: EGRESS_APPLY_TIMEOUT_MS,
@@ -1470,6 +1623,13 @@ export function createDockerSandbox(
       reply = JSON.parse(out.slice(out.lastIndexOf("\n") + 1)) as Record<string, unknown>;
     } catch {
       reply = null;
+    }
+    if (reply?.code === "stale-fence") {
+      const current = typeof reply.fence === "number" ? reply.fence : undefined;
+      throw new StaleFenceError(
+        `device-docker: the egress proxy refused a stale ${op}: it holds fence ${String(current)}`,
+        current === undefined ? undefined : { current },
+      );
     }
     if (r.timedOut || r.exitCode !== 0 || reply === null || reply.ok !== true) {
       const why =
@@ -1497,28 +1657,29 @@ export function createDockerSandbox(
     labels: Record<string, string>,
     plan: InstancePlan,
     signal: AbortSignal,
+    token: number,
   ): Promise<"updated" | "recreate"> => {
     const from = labelNetwork(labels);
     if (from === null || from.mode !== "allowlist") return "recreate";
     // the proxy must run, rebuilt only from the config volume when lost (else recreate)
-    if (!(await ensureEgressRunning(h.id, "allowlist", from.allowHosts, signal, true))) {
+    if (
+      !(await ensureEgressRunning(
+        h.id,
+        "allowlist",
+        from.allowHosts,
+        signal,
+        true,
+        labelFence(labels) ?? 0,
+      ))
+    ) {
       return "recreate";
     }
     const sent = { mode: "allowlist", hosts: [...plan.allowHosts], deniedCidrs: egressDenied() };
-    // Compare and swap on the list read under this lease: an apply of a holder that lost the lease
-    // and lands after a newer holder's change is refused instead of overwriting it. It narrows the
-    // race, not closes it: a holder that lost the lease unnoticed and read the list after that
-    // change still applies (only a kernel fencing token would close it; `update` carries none).
-    const read = await egressControl(h.id, "status", undefined, signal);
-    if (typeof read.digest !== "string") {
-      throw new Error("device-docker: the egress proxy reported no digest");
-    }
-    const reply = await egressControl(
-      h.id,
-      "apply",
-      { config: sent, ifDigest: read.digest },
-      signal,
-    );
+    // The kernel's fence token orders the holders (device update fencing design §5.1): the proxy
+    // refuses a token lower than the one it applied last (`StaleFenceError`, nothing changed), and
+    // stores token and list in one step, so a holder that lost its lease never lands a list after
+    // a newer holder's.
+    const reply = await egressControl(h.id, "apply", { config: sent, fence: token }, signal);
     if (reply.digest !== egressAllowDigest(sent)) {
       throw new Error(
         "device-docker: the egress proxy acknowledged a different list than the one sent",
@@ -1548,10 +1709,12 @@ export function createDockerSandbox(
       throw e;
     }
     const labels = c.Config.Labels ?? {};
+    // a replacement under the same name is not the instance the handle names (§5.3)
+    if (!sameIncarnation(h, labels)) return "gone";
     // A container without this contract's labels resumes with no network (the kernel replaces it
     // on use, since its applied limits are unknown).
     const net = labelNetwork(labels) ?? { mode: "none", allowHosts: [] };
-    const control = hasControl(labels);
+    const control = hadControl(labels);
     // An open-public instance made before refuseOpenNetwork was turned on is not started again:
     // "gone" makes the kernel recreate it under the current rule (create then refuses or builds
     // the allowlist). Auto-start goes through here too, so exec answers SandboxGoneError.
@@ -1562,7 +1725,14 @@ export function createDockerSandbox(
     // never rebuilt from the create-time labels, which may be wider than the list last applied.
     if (
       net.mode !== "none" &&
-      !(await ensureEgressRunning(h.id, net.mode, net.allowHosts, signal, control))
+      !(await ensureEgressRunning(
+        h.id,
+        net.mode,
+        net.allowHosts,
+        signal,
+        control,
+        labelFence(labels) ?? 0,
+      ))
     )
       return "gone";
     try {
@@ -1613,6 +1783,7 @@ export function createDockerSandbox(
         timeoutMs: args.timeoutMs,
         signal: args.signal,
         kill: killer(h.id, ctl),
+        incarnation: h,
       }),
     );
     // The admission prefix refused before the command started: its only output is the refusal
@@ -1644,11 +1815,18 @@ export function createDockerSandbox(
           cwd: "/",
           imagePath: true,
           ...(o.kill && { kill: o.kill }),
+          incarnation: h,
         }),
       ),
     async runIfRunning(h, o) {
       try {
-        return await run(h.id, { ...o, user: userOf(o.user), cwd: "/", imagePath: true });
+        return await run(h.id, {
+          ...o,
+          user: userOf(o.user),
+          cwd: "/",
+          imagePath: true,
+          incarnation: h,
+        });
       } catch (e) {
         if (e instanceof NotRunningError) return "not-running";
         throw e;
@@ -1670,10 +1848,13 @@ export function createDockerSandbox(
         }
         throw e;
       }
+      if (!sameIncarnation(h, labels)) {
+        throw new SandboxGoneError(`sandbox container ${h.id} was replaced`);
+      }
       const net = labelNetwork(labels);
       // The labels hold the create-time list; an allowlist with the egress control may have been
       // changed in place since, so the list in force is the proxy's own.
-      if (net === null || net.mode !== "allowlist" || !hasControl(labels)) return net;
+      if (net === null || net.mode !== "allowlist" || !hadControl(labels)) return net;
       const status = () => egressControl(h.id, "status", undefined, signal);
       let reply: Record<string, unknown>;
       try {
@@ -1682,7 +1863,16 @@ export function createDockerSandbox(
         // a stopped or lost proxy: start only the proxy (rebuilt only from its volume), never
         // the sandbox container
         if (!(e instanceof NotRunningError) && !(e instanceof SandboxGoneError)) throw e;
-        if (!(await ensureEgressRunning(h.id, "allowlist", net.allowHosts, signal, true))) {
+        if (
+          !(await ensureEgressRunning(
+            h.id,
+            "allowlist",
+            net.allowHosts,
+            signal,
+            true,
+            labelFence(labels) ?? 0,
+          ))
+        ) {
           throw new SandboxGoneError(`the egress proxy of ${h.id} cannot be rebuilt`, { cause: e });
         }
         reply = await status();
@@ -1701,6 +1891,8 @@ export function createDockerSandbox(
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid)) {
         throw new Error("invalid operation control id");
       }
+      // never restarts a replacement under the same name (§5.3)
+      if (handleFence(h) !== undefined) await checkIncarnation(h, signal);
       await killOrRestart(
         h.id,
         ["/bin/sh", "-c", KILL_OPERATION_SCRIPT, "capybara-killop", uuid],
@@ -1822,7 +2014,7 @@ export function createDockerSandbox(
 
     destroyFileSystemByName,
 
-    async create({ name, image, limits, fileSystem, signal }) {
+    async create({ name, image, limits, fileSystem, signal, fence }) {
       signal.throwIfAborted();
       if (!NAME_RE.test(name)) throw new Error(`invalid sandbox name: ${name}`);
       if (!NAME_RE.test(fileSystem.id)) {
@@ -1844,8 +2036,13 @@ export function createDockerSandbox(
         );
       if (!(await checkFileSystem(fileSystem.id, signal)).ok) throw gone();
       // An old instance of the same name (the kernel exited before recording the handle...):
-      // replace the instance; the file system stays
-      await destroyByName(name, signal);
+      // replace the instance; the file system stays. Unless it carries a higher fence token than
+      // this call: then a newer holder made or updated it, and this create is stale (§5.2; a check
+      // then act, Docker has no conditional remove, so the handle's identity check closes the
+      // rest, §5.3). Without a token (an older kernel) the new instance is seeded with 0.
+      const token = tokenOf(fence);
+      await refuseStale(name, "create", token, signal, true);
+      await removeInstance(name, signal);
       try {
         let networkMode = "none";
         // the egress control, when the proxy image has it (an older own build of a deployment
@@ -1858,13 +2055,23 @@ export function createDockerSandbox(
           await ensureInternalNetwork(name, signal);
           control &&= await egressImageHasControl(signal);
           if (control) {
-            // the proxy's config volume (destroyByName above removed any earlier one)
+            // the proxy's config volume (removeInstance above removed any earlier one)
             await ensureVolume(
               { Name: n.egressConf, Labels: baseLabels(name, "egress-conf") },
               signal,
             );
           }
-          if (!(await createEgress(name, plan.mode, plan.allowHosts, signal, false, control))) {
+          if (
+            !(await createEgress(
+              name,
+              plan.mode,
+              plan.allowHosts,
+              signal,
+              false,
+              control,
+              token ?? 0,
+            ))
+          ) {
             throw new Error(`device-docker: the egress config volume ${n.egressConf} went away`);
           }
           networkMode = n.network;
@@ -1881,7 +2088,11 @@ export function createDockerSandbox(
             WorkingDir: "/workspace",
             Cmd: ["sleep", "infinity"],
             Env: sandboxEnv(name, plan.mode),
-            Labels: { ...baseLabels(name, "sandbox"), ...planLabels(plan, control) },
+            Labels: {
+              ...baseLabels(name, "sandbox"),
+              ...planLabels(plan, control),
+              [LABEL_FENCE]: String(token ?? 0),
+            },
             HostConfig: {
               Runtime: cfg.runtime,
               Init: true,
@@ -1914,7 +2125,7 @@ export function createDockerSandbox(
         // ones) and refuse
         const after = await checkFileSystem(fileSystem.id, signal);
         if (!after.ok) {
-          await destroyByName(name, signal);
+          await removeInstance(name, signal);
           await Promise.all(
             after.unlabelled.map((u) => removeWithRetry(`/volumes/${enc(u)}`, signal)),
           );
@@ -1926,17 +2137,18 @@ export function createDockerSandbox(
         // No cleanup when aborted: a new lock holder may already use the same name; leftovers go
         // with the next create or destroyByName. The cleanup drops the instance only.
         if (!signal.aborted) {
-          await destroyByName(name, AbortSignal.timeout(60_000)).catch(() => undefined);
+          await removeInstance(name, AbortSignal.timeout(60_000)).catch(() => undefined);
         }
         throw e;
       }
-      return { id: name };
+      // the handle names this incarnation (§5.3): every later call checks the container's label
+      return { id: name, fence: token ?? 0 } as SandboxHandle;
     },
 
     resume,
 
     // Called under the kernel's exclusive lease when the device's network changed
-    async update(h, limits, signal) {
+    async update(h, limits, signal, fence) {
       signal.throwIfAborted();
       checkLimits(limits);
       const plan = planInstance(limits, cfg.refuseOpenNetwork);
@@ -1951,15 +2163,23 @@ export function createDockerSandbox(
         throw e;
       }
       const labels = c.Config.Labels ?? {};
+      if (!sameIncarnation(h, labels)) {
+        throw new SandboxGoneError(`sandbox container ${h.id} was replaced`);
+      }
       // No network cannot be applied to a running proxy container in place (updateDecision agrees
       // for a `none` plan and for every container without this contract's labels).
       const decision = updateDecision(labels, plan);
       if (decision === "recreate") return "recreate";
       const n = sandboxResourceNames(h.id);
-      if (decision === "apply") return applyInPlace(h, c, labels, plan, signal);
+      if (decision === "apply") {
+        // without a token (an older kernel) freshness cannot be proven: recreate (§4.4)
+        const token = tokenOf(fence);
+        if (token === undefined) return "recreate";
+        return applyInPlace(h, c, labels, plan, signal, token);
+      }
       // Replace the egress proxy with the new mode and hosts; the container, its environment
       // and its internal network stay. Open connections through the old proxy end.
-      const control = hasControl(labels);
+      const control = hadControl(labels);
       await api
         .json("DELETE", `/containers/${enc(n.egress)}`, { query: { force: true }, signal })
         .catch(ignore(404));
@@ -1967,7 +2187,16 @@ export function createDockerSandbox(
       if (!(await ensureInternalNetwork(h.id, signal))) return "recreate";
       try {
         if (
-          !(await createEgress(h.id, proxyModeOf(plan), plan.allowHosts, signal, false, control))
+          !(await createEgress(
+            h.id,
+            proxyModeOf(plan),
+            plan.allowHosts,
+            signal,
+            false,
+            control,
+            // the caller's token too, so the stored token never falls behind an answered call
+            Math.max(labelFence(labels) ?? 0, tokenOf(fence) ?? 0),
+          ))
         ) {
           return "recreate";
         }
@@ -2003,17 +2232,28 @@ export function createDockerSandbox(
       }
     },
 
-    async destroy(h, signal) {
-      await destroyByName(h.id, signal);
+    // a stale holder never removes an instance a newer holder created (its create label, §5.2)
+    async destroy(h, signal, fence) {
+      await refuseStale(h.id, "destroy", tokenOf(fence), signal, true);
+      await removeInstance(h.id, signal);
     },
 
-    destroyByName,
+    async destroyByName(name, signal, fence) {
+      await refuseStale(name, "destroyByName", tokenOf(fence), signal, true);
+      await removeInstance(name, signal);
+    },
 
     async killAll(h, signal) {
       signal.throwIfAborted();
       // 先确认容器在跑（停了就启动；不在抛 SandboxGoneError），再杀；杀进程的 exec 起不来时重启容器
       await autoStart(h, signal, () =>
-        run(h.id, { cmd: ["true"], user: SANDBOX_USER, maxOutputBytes: 1024, signal }),
+        run(h.id, {
+          cmd: ["true"],
+          user: SANDBOX_USER,
+          maxOutputBytes: 1024,
+          signal,
+          incarnation: h,
+        }),
       );
       await killOrRestart(h.id, ["/bin/sh", "-c", KILL_ALL_SCRIPT, "capybara-killall"], signal);
     },
@@ -2027,7 +2267,13 @@ export function createDockerSandbox(
       // like killAll: the container must run first (started when stopped, SandboxGoneError when
       // missing); when the kill exec cannot start, the container restarts (siblings end too)
       await autoStart(h, signal, () =>
-        run(h.id, { cmd: ["true"], user: SANDBOX_USER, maxOutputBytes: 1024, signal }),
+        run(h.id, {
+          cmd: ["true"],
+          user: SANDBOX_USER,
+          maxOutputBytes: 1024,
+          signal,
+          incarnation: h,
+        }),
       );
       await killOrRestart(
         h.id,

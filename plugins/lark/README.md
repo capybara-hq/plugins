@@ -6,13 +6,13 @@ The official plugin for Lark (the international edition of Feishu, `open.larksui
   (no public callback URL needed) and sends messages through the OpenAPI; all replies and approval / question / connection / binding cards are rendered as interactive cards (JSON 2.0).
 
 - `identity-source@1` (web login): Lark OAuth authorization code + PKCE, deployment-level config.
-- `directory@1` (directory sync): walks the directory department by department, org-level config.
+- `directory@1` (directory sync): walks the directory department by department, config key `directory` (org-overridable).
 
 Identity key: `identities.source` = `lark:<tenant_key>`, `external_id` = the user's `open_id`; login, bot and directory sync all use the same key.
 
 > **Login, bot and directory sync must use the same Lark self-built app.** `open_id` is per app (the same person has a different `open_id`
-> in different apps), so switching apps breaks the identity match and one person becomes two accounts. Use the same `appId` in the deployment-level login config, in each org's channel connection and in the org-level
-> directory config. The plugin checks this: when the deployment has a login app configured, a channel connection of the same tenant (when validated, and before every long connection is established,
+> in different apps), so switching apps breaks the identity match and one person becomes two accounts. Use the same `appId` in the deployment-level login config, in each org's channel connection and in the
+> `directory` config. The plugin checks this: when the deployment has a login app configured, a channel connection of the same tenant (when validated, and before every long connection is established,
 > so a login app configured or changed later is also caught; the connection records the error and stops reconnecting) or a directory sync (on every page) that uses a different app is an error. It does not block only when the login app's
 > credentials themselves are invalid (10014 / 10015); transient errors such as rate limits and network failures are reported as errors and retried later. There can be only one login app, so Lark login serves only the tenant that app belongs to; orgs of other tenants can still use the bot
 > (click the binding card in IM to link an account).
@@ -161,8 +161,9 @@ Flow and choices (docs consulted 2026-10-20):
 
 ## Directory (directory)
 
-Use the same self-built app (see above). When enabling the `lark` plugin in the org settings, fill in the org-level config `appId` / `appSecret` (both may be left empty: an org that only uses the
-bot leaves them empty, and the directory is treated as not configured and does not sync).
+Use the same self-built app (see above). The credentials are the deployment key `directory` (`appId` / `appSecret`), which an org may override: an org saves its own app in
+the plugin's org settings (its copy), otherwise it follows the platform's value, and every org that follows the platform syncs that tenant's members. Both may be left empty: an
+org that only uses the bot leaves them empty, and the directory is treated as not configured and does not sync.
 
 1. Under **Permissions & Scopes** (权限管理), enable:
 
@@ -206,15 +207,11 @@ Behavior (docs: [Get the list of child departments](https://open.larksuite.com/d
 | `accountsUrl` | — | Web authorization page root URL; change it only in tests or when going through a proxy (default `https://accounts.larksuite.com`) |
 | `appId` | — | App ID of the self-built app used for web login (the same app as the bot and directory); leave empty if you only use the bot |
 | `appSecret` | — | That app's App Secret (secret) |
+| `directory.appId` | — | App ID of the self-built app used for the directory (the same app as the bot and login); leave empty if you only use the bot |
+| `directory.appSecret` | — | That app's App Secret (secret) |
 
-The deployment-level config lives under the kernel config `extensionConfig.lark`.
-
-## Org-level config
-
-| Field | Description |
-|---|---|
-| `appId` | App ID of the self-built app used for the directory (the same app as the bot and login); leave empty if you only use the bot |
-| `appSecret` | That app's App Secret (secret) |
+The deployment-level config lives under the kernel config `extensionConfig.lark`. `region`, `apiUrl`, `accountsUrl`, `appId` and `appSecret` are platform-only
+(the channel and login carry no org config); `directory` is org-overridable (an org saves its own copy in the plugin's org settings).
 
 ## Channel connection config
 

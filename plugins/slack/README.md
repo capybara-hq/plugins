@@ -62,7 +62,7 @@ Notes for operators:
   the manifest from the setup guide (or add the bot scope `files:write` under **OAuth & Permissions**)
   and **reinstall the app** to the workspace; the bot token stays the same. Until then the bot's
   replies still arrive and each delivered file is shown as a link.
-- The org must enable the `slack` plugin before it can create a connection (its org-level fields are
+- The org must enable the `slack` plugin before it can create a connection (its `directory` config, which an org may override, is
   optional and only for [directory sync](#directory-directory1)). The tokens are stored in the
   secret store, and the API only returns "set".
 - The app's name in the manifest is the connection's name; Slack caps it at 35 characters, so shorten it in
@@ -130,8 +130,9 @@ org membership comes from invitations or directory sync). Merging into an existi
 
 ## Directory (directory@1)
 
-When enabling the `slack` plugin in the org settings, fill in the org-level config `teamId` (the workspace id, `T…`) and `botToken` (`xoxb-…`; it may be the same bot token as a
-channel connection uses, but the config is stored separately and goes through the secret store). The bot token needs:
+The credentials are the deployment key `directory`: `teamId` (the workspace id, `T…`) and `botToken` (`xoxb-…`; it may be the same bot token as a channel connection
+uses, but the config is stored separately and goes through the secret store). An org may override it: an org saves its own in the plugin's org settings (its copy), otherwise it
+follows the platform's value, and every org that follows the platform syncs that workspace's members. The bot token needs:
 
 | scope | Purpose |
 |---|---|
@@ -320,15 +321,11 @@ Shown in the form with zh / en labels and help.
 | `openidUrl` | `https://slack.com/` | Root URL for the OIDC authorization page and JWKS; change it only in tests or when going through a proxy (the ID token's `iss` is fixed at `https://slack.com`) |
 | `clientId` | — | Client ID for Sign in with Slack; leave empty if you don't use login |
 | `clientSecret` | — | Client Secret for Sign in with Slack (secret, masked in logs); leave empty if you don't use login |
+| `directory.teamId` | — | Optional: the Slack workspace id (`T…`) for syncing members into the org; leave empty if you only chat with the bot |
+| `directory.botToken` | — | Optional, only for member sync (`xoxb-…`, secret); the tokens for chat go into the channel connection |
 
-The deployment-level config lives under the kernel config `extensionConfig.slack`.
-
-## Org-level config
-
-| Field | Description |
-|---|---|
-| `teamId` | Optional: the Slack workspace id (`T…`) for syncing members into the org; leave empty if you only chat with the bot |
-| `botToken` | Optional, only for member sync (`xoxb-…`, secret); the tokens for chat go into the channel connection |
+The deployment-level config lives under the kernel config `extensionConfig.slack`. `apiUrl`, `openidUrl`, `clientId` and `clientSecret` are platform-only (the channel and
+login carry no org config); `directory` is org-overridable (an org saves its own copy in the plugin's org settings).
 
 ## Icon
 

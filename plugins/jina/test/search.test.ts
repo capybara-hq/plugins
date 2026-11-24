@@ -1,4 +1,4 @@
-import { WebProviderError } from "@capybara-hq/plugin-sdk";
+import { NetDeniedError, WebProviderError } from "@capybara-hq/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createJinaSearch } from "../src/search.js";
 import { type FakeJina, startFakeJina } from "./fake-jina.js";
@@ -11,12 +11,18 @@ afterEach(async () => {
   await fake.stop();
 });
 
-const orgConfig = { apiKey: "k" };
+const config = () => ({ apiKey: "k", searchUrl: fake.url });
+const env = () => ({ net: { fetch: guardedFetch }, platform: config });
+const guardedCalls: string[] = [];
+const guardedFetch = ((url: string | URL) => {
+  guardedCalls.push(String(url));
+  throw new NetDeniedError("net.private_address", new URL(String(url)).hostname, "private");
+}) as unknown as typeof fetch;
 function run(extra: Record<string, unknown> = {}) {
-  return createJinaSearch({ searchUrl: fake.url }).search({
+  return createJinaSearch(env()).search({
     query: "capybara",
     maxResults: 10,
-    orgConfig,
+    config: config(),
     signal: new AbortController().signal,
     ...extra,
   });
@@ -128,9 +134,50 @@ describe("jina web-search", () => {
     expect(err.kind).toBe("auth");
   });
 
-  it("configured follows the org config", () => {
-    const p = createJinaSearch({ searchUrl: fake.url });
+  it("configured follows the effective config", () => {
+    const p = createJinaSearch(env());
     expect(p.configured?.({})).toBe(false);
     expect(p.configured?.({ apiKey: "k" })).toBe(true);
+  });
+
+  it("reads the key from the call's config, not the platform's", async () => {
+    fake.respond(ok([]));
+    await createJinaSearch({
+      net: { fetch: guardedFetch },
+      platform: () => ({ apiKey: "platform-key", searchUrl: fake.url }),
+    }).search({
+      query: "q",
+      maxResults: 1,
+      config: { apiKey: "org-key", searchUrl: fake.url },
+      orgId: "o1",
+      signal: new AbortController().signal,
+    });
+    expect(fake.requests[0]?.headers.authorization).toBe("Bearer org-key");
+  });
+
+  it("without a key in the config the call is an auth error", async () => {
+    const err = await run({ config: { searchUrl: fake.url } }).catch((e) => e);
+    expect(err).toMatchObject({ kind: "auth" });
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  it("an org searchUrl goes through the guarded client and a private host is refused", async () => {
+    guardedCalls.length = 0;
+    const err = await run({
+      config: { apiKey: "k", searchUrl: "http://10.0.0.5:9" },
+      orgId: "o1",
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(WebProviderError);
+    expect(err.kind).toBe("invalid");
+    expect(guardedCalls).toHaveLength(1);
+    expect(guardedCalls[0]).toContain("10.0.0.5");
+  });
+
+  it("the platform's own searchUrl bypasses the guarded client", async () => {
+    guardedCalls.length = 0;
+    fake.respond(ok([]));
+    await run({ orgId: "o1" });
+    expect(guardedCalls).toHaveLength(0);
+    expect(fake.requests).toHaveLength(1);
   });
 });

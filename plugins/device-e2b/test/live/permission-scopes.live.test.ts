@@ -33,6 +33,9 @@ import {
   RUNTIME_DIR,
 } from "../../src/runtime-source.js";
 
+/** The fence token every lifecycle call carries here (device update fencing). */
+const FENCE = { token: 1 };
+
 /**
  * Permission profiles on a real E2B template: `pnpm exec vitest run
  * plugins/device-e2b/test/live/permission-scopes.live.test.ts`
@@ -187,7 +190,7 @@ describe.skipIf(!READY)("device-e2b permission scopes (live)", { timeout: 300_00
     const fileSystem = await sbx.createFileSystem({ name, limits, signal: sig() });
     ownedId = fileSystem.id;
     console.info(`[e2b-live] owned VM id ${ownedId}`);
-    h = await sbx.create({ name, limits, fileSystem, signal: sig() });
+    h = await sbx.create({ fence: FENCE, name, limits, fileSystem, signal: sig() });
     expect(h.id).toBe(ownedId);
   });
 
@@ -268,7 +271,13 @@ describe.skipIf(!READY)("device-e2b permission scopes (live)", { timeout: 300_00
       signal: sig(),
     });
     console.info(`[e2b-live] conformance VM ${confName} id ${fileSystem.id}`);
-    const ch = await sbx.create({ name: confName, limits: confLimits, fileSystem, signal: sig() });
+    const ch = await sbx.create({
+      fence: FENCE,
+      name: confName,
+      limits: confLimits,
+      fileSystem,
+      signal: sig(),
+    });
     const run = (command: string, timeoutMs?: number) => shOn(ch, command, timeoutMs);
     try {
       await run("mkdir -p /workspace/perm-root /workspace/perm-sibling");

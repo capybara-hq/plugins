@@ -1,40 +1,35 @@
 import {
+  configUrlFetch,
   defineExtension,
   type ExtensionNet,
   type Logger,
   MODEL_PROVIDER_EXTENSION_POINT_V2,
   ModelError,
   type ModelProvider,
-  orgAccess,
   secret,
   ui,
 } from "@capybara-hq/plugin-sdk";
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import { z } from "zod";
 import { toModelError } from "./errors.js";
 import { listDeepSeekModels } from "./list.js";
 import { streamChat } from "./map-stream.js";
+import { isolatedOpenAI } from "./openai-client.js";
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
 
 /**
- * Deployment config. Both fields are org-overridable. The key is required, so a deployment without
- * one shows the provider as needing configuration rather than as failing to list its models. The
- * platform may leave it empty (the kernel's load gate makes required overridable fields optional
- * for the platform's copy): orgs following the platform then need configuration and are never
- * called, and an org copy brings its own key.
+ * Deployment config. Both fields are overridable by an org (the default).
+ * The key is required, so a deployment without one shows the provider as needing configuration
+ * rather than as failing to list its models. The platform may leave it empty (the kernel's load
+ * gate makes required overridable fields optional for the platform's copy): orgs following the
+ * platform then need configuration and are never called, and an org copy brings its own key.
  */
 const DeploymentConfig = z.object({
-  apiKey: orgAccess(
-    ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
-    "override",
-  ),
-  baseUrl: orgAccess(
-    ui(z.string().url().default(DEFAULT_BASE_URL), {
-      label: { zh: "接口地址", en: "API URL" },
-    }),
-    "override",
-  ),
+  apiKey: ui(secret(z.string().min(1)), { label: { zh: "API 密钥", en: "API key" } }),
+  baseUrl: ui(z.string().url().default(DEFAULT_BASE_URL), {
+    label: { zh: "接口地址", en: "API URL" },
+  }),
 });
 
 /** A call's config: the key may be absent (left to the orgs), `auth` before any request. */
@@ -56,8 +51,8 @@ export interface DeepSeekDefaults {
   netFetch: NetFetch;
   /**
    * The platform's base URL at the time of the call (`ctx.config` read when used); defaults to
-   * `baseUrl`. A per-call `baseUrl` equal to it is the platform's (set by the super admin) and keeps
-   * the global `fetch`.
+   * `baseUrl`. A per-call `baseUrl` equal to it is the platform's (set by the super admin) and
+   * keeps the global `fetch`.
    */
   platformBaseUrl?: (() => string | undefined) | undefined;
 }
@@ -70,8 +65,6 @@ interface Resolved {
   /** The global `fetch` for the platform's base URL, `ctx.net.fetch` for an org's own one. */
   fetch: FetchLike;
 }
-
-const sameUrl = (a: string, b: string) => a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
 
 /**
  * The key, endpoint and fetch of this call: the org's effective config (`opts.config`) when given,
@@ -102,17 +95,14 @@ function resolve(
   if (apiKey === undefined || apiKey === "") {
     throw new ModelError("auth", "DeepSeek: no API key is configured");
   }
+  // The platform's base URL keeps the global fetch; an org's own one goes through the kernel's
+  // network rules for that org (`ctx.net.fetch`).
   const platform = (defaults.platformBaseUrl ?? (() => defaults.baseUrl))() ?? DEFAULT_BASE_URL;
-  if (sameUrl(baseUrl, platform)) {
-    return { apiKey, baseUrl, fetch: (url, init) => fetch(url, init) };
-  }
-  // The org's own base URL: an org admin set it, so the kernel's network rules apply
-  const orgId = opts?.orgId;
-  return {
-    apiKey,
-    baseUrl,
-    fetch: (url, init) => defaults.netFetch(url, init, orgId !== undefined ? { orgId } : {}),
-  };
+  const guarded = configUrlFetch(
+    { fetch: defaults.netFetch },
+    { url: baseUrl, platform, orgId: opts?.orgId },
+  );
+  return { apiKey, baseUrl, fetch: (url, init) => guarded(url, init) };
 }
 
 /** The OpenAI SDK's fetch signature over a resolved fetch. */
@@ -138,14 +128,11 @@ export function createDeepSeekProvider(defaults: DeepSeekDefaults): ModelProvide
       let client: OpenAI;
       try {
         const { apiKey, baseUrl, fetch: f } = resolve(defaults, opts);
-        client = new OpenAI({
+        // No OPENAI_* env var is read (isolatedOpenAI): never send a host value to another service
+        client = isolatedOpenAI({
           baseURL: baseUrl,
           apiKey,
           fetch: sdkFetch(f),
-          // Do not read OPENAI_* env vars: never send OpenAI headers to another service
-          organization: null,
-          project: null,
-          adminAPIKey: null,
           // Retries belong to the kernel's degradation ladder
           maxRetries: 0,
         });
@@ -161,7 +148,7 @@ export function createDeepSeekProvider(defaults: DeepSeekDefaults): ModelProvide
 export default defineExtension({
   name: "deepseek",
   version: "0.1.0-rc.10",
-  sdk: "^0.1.0-rc.29",
+  sdk: "^0.1.0-rc.64",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
   // Default host; a changed baseUrl is display-only here, the platform does not intercept
   permissions: { network: ["api.deepseek.com"] },
