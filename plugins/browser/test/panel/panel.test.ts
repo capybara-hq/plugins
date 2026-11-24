@@ -48,6 +48,8 @@ interface Setup {
   fetchCalls: { url: string; body: unknown }[];
   host: unknown[];
   sock: () => FakeSocket;
+  /** Gives the stage a new size and fires the panel's ResizeObserver, as a layout change does. */
+  resizeStage: (width: number, height: number) => void;
 }
 
 function setup(
@@ -60,6 +62,8 @@ function setup(
     hosts?: () => Response;
     /** Storage throws, as in the opaque-origin sandboxed iframe. */
     noStorage?: boolean;
+    /** The iframe's viewport height (the stage is 400 px of it). */
+    innerHeight?: number;
   } = {},
 ): Setup {
   FakeSocket.all = [];
@@ -67,6 +71,14 @@ function setup(
   const win = dom.window as unknown as Window & typeof globalThis;
   Object.defineProperty(win, "innerWidth", { value: opts.width ?? 800, configurable: true });
   Object.defineProperty(win, "devicePixelRatio", { value: opts.dpr ?? 1, configurable: true });
+  Object.defineProperty(win, "innerHeight", { value: opts.innerHeight ?? 480, configurable: true });
+  const observers: (() => void)[] = [];
+  (win as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
+    constructor(private cb: () => void) {}
+    observe(): void {
+      observers.push(this.cb);
+    }
+  };
   if (opts.noStorage)
     for (const name of ["sessionStorage", "localStorage"])
       Object.defineProperty(win, name, {
@@ -90,7 +102,8 @@ function setup(
     return new Response("{}", { status: 200 });
   };
   const stage = dom.window.document.getElementById("stage") as HTMLElement;
-  stage.getBoundingClientRect = () => ({ left: 0, top: 0, width: 480, height: 400 }) as DOMRect;
+  let stageRect = { width: 480, height: 400 };
+  stage.getBoundingClientRect = () => ({ left: 0, top: 0, ...stageRect }) as DOMRect;
   mountPanel({
     window: win,
     fetch: fetchImpl as never,
@@ -117,8 +130,16 @@ function setup(
     fetchCalls,
     host,
     sock: () => FakeSocket.all[FakeSocket.all.length - 1] as FakeSocket,
+    resizeStage: (width, height) => {
+      stageRect = { width, height };
+      for (const cb of observers) cb();
+    },
   };
 }
+
+const resizes = (s: Setup) =>
+  s.host.filter((m) => (m as { type?: string }).type === "resize") as { height: number }[];
+const modes = (s: Setup) => s.host.filter((m) => (m as { type?: string }).type === "panel-mode");
 
 async function live(s: Setup, st: ViewerOut = state()): Promise<FakeSocket> {
   await vi.waitFor(() => expect(FakeSocket.all.length).toBeGreaterThan(0));
@@ -172,8 +193,7 @@ describe("panel", () => {
     const sock = await live(s);
     $(s, "takeover").click();
     expect(sock.sent).toContainEqual({ t: "takeover" });
-    expect(s.host).toContainEqual({ protocol: "capybara-embed/1", type: "panel-mode", full: true });
-    expect(s.host).toHaveLength(1);
+    expect(modes(s)).toEqual([{ protocol: "capybara-embed/1", type: "panel-mode", full: true }]);
   });
 
   it("Esc sends handback and panel-mode full=false", async () => {
@@ -399,17 +419,37 @@ describe("panel", () => {
     expect(sock3.sent).toContainEqual({ t: "nav", url: "https://cdn.test/page" });
   });
 
-  it("a 4404 is retried twice before the empty state", async () => {
+  it("a 4404 before any live view is the empty state at once, not a reconnect loop", async () => {
+    vi.useFakeTimers();
+    const s = setup({ locale: "zh" });
+    await vi.advanceTimersByTimeAsync(0);
+    s.sock().drop(4404);
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+    expect($(s, "empty-title").textContent).toBe("浏览器尚未运行");
+    expect($(s, "status").textContent).toBe("");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(FakeSocket.all).toHaveLength(1);
+  });
+
+  it("the empty state looks again quietly and shows the browser once it runs", async () => {
     vi.useFakeTimers();
     const s = setup();
     await vi.advanceTimersByTimeAsync(0);
     s.sock().drop(4404);
-    await vi.advanceTimersByTimeAsync(1_000);
-    s.sock().drop(4404);
-    await vi.advanceTimersByTimeAsync(3_000);
-    expect(FakeSocket.all).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(FakeSocket.all).toHaveLength(2);
+    // the look keeps the empty state up (no "Connecting…" with a blank frame)
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+    expect($(s, "status").textContent).toBe("");
     s.sock().drop(4404);
     expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(FakeSocket.all).toHaveLength(3);
+    const sock = s.sock();
+    sock.open();
+    sock.push(state());
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(true);
+    expect(($(s, "takeover") as HTMLElement).hidden).toBe(false);
   });
 
   it("the empty state looks for the browser every 10 s while visible, for 30 min at most", async () => {
@@ -515,6 +555,51 @@ describe("panel", () => {
     doc.dispatchEvent(new s.dom.window.Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(0);
     expect(FakeSocket.all.length).toBe(2);
+  });
+});
+
+describe("panel size", () => {
+  it("asks for the height of a 16:10 frame at the available width plus its bars", async () => {
+    // viewport 480, stage 400: 80 px of bars; a 480 px wide frame is 300 px tall
+    const s = setup({ innerHeight: 480 });
+    await live(s);
+    expect(resizes(s).at(-1)).toEqual({
+      protocol: "capybara-embed/1",
+      type: "resize",
+      height: 380,
+    });
+    // the host applies it: the stage is now exactly the frame, nothing more is asked
+    const n = resizes(s).length;
+    Object.defineProperty(s.dom.window, "innerHeight", { value: 380, configurable: true });
+    s.resizeStage(480, 300);
+    expect(resizes(s)).toHaveLength(n);
+  });
+
+  it("asks again when the width changes, within the host's range", async () => {
+    const s = setup({ innerHeight: 480 });
+    await live(s);
+    s.resizeStage(320, 400);
+    expect(resizes(s).at(-1)?.height).toBe(80 + 200);
+    s.resizeStage(16_000, 400);
+    expect(resizes(s).at(-1)?.height).toBe(4000);
+    s.resizeStage(16, 400);
+    expect(resizes(s).at(-1)?.height).toBe(120);
+  });
+
+  it("asks nothing in full mode, where the frame fills the box, and again after hand back", async () => {
+    const s = setup({ innerHeight: 480, dpr: 1 });
+    const sock = await live(s);
+    $(s, "takeover").click();
+    sock.push(state({ control: "user" }));
+    const n = resizes(s).length;
+    // the host fills the panel: 1000x700 letterboxes to 1000x625, the viewer size follows it
+    Object.defineProperty(s.dom.window, "innerHeight", { value: 780, configurable: true });
+    s.resizeStage(1000, 700);
+    expect(resizes(s)).toHaveLength(n);
+    expect(sock.sent.at(-1)).toEqual({ t: "resize", maxWidth: 1000, maxHeight: 625 });
+    expect($(s, "view").style.width).toBe("1000px");
+    $(s, "handback").click();
+    expect(resizes(s).at(-1)?.height).toBe(80 + 625);
   });
 });
 
