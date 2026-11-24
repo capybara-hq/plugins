@@ -1,5 +1,17 @@
 # @capybara-hq/plugin-deepseek
 
+## 0.1.0-rc.11
+
+### Patch Changes
+
+- fd77b82: The deployment config drops `orgAccess`: every field is org-overridable by default (unified plugin
+  config, core#720). An org's own base URL goes through `configUrlFetch`.
+  
+  The `openai` SDK client reads no `OPENAI_*` host environment variable: the key, admin key,
+  organization, project, webhook secret and base URL are always explicit, and `OPENAI_CUSTOM_HEADERS`
+  (which the SDK merges into every request, even over the key) is dropped, so no host value reaches
+  an org-chosen URL.
+
 ## 0.1.0-rc.10
 
 ### Minor Changes

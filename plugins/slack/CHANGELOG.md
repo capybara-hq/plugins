@@ -1,5 +1,20 @@
 # @capybara-hq/plugin-slack
 
+## 0.1.0-rc.15
+
+### Minor Changes
+
+- 1e67e0f: The directory credentials move from the org config into the overridable deployment key
+  `directory` (`{ teamId, botToken }`): an org saves its own as its copy, otherwise it follows the
+  platform's (every org that follows the platform syncs that workspace's members). `directory@1`
+  reads only `config.directory` of the org's effective config. `apiUrl`, `openidUrl` and the login
+  client `clientId` / `clientSecret` are platform-only. Needs the SDK release with `platformOnly`.
+
+### Patch Changes
+
+- 6cb229b: Connector template descriptions in English and Chinese (`{ en, zh }`, plugin-sdk 0.1.0-rc.65), so a
+  deployment shows each template's description in the page language.
+
 ## 0.1.0-rc.14
 
 ### Patch Changes

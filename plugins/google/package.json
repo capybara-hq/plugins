@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-google",
-  "version": "0.1.0-rc.2",
+  "version": "0.1.0-rc.3",
   "description": "Sign in with Google (identity-source@1 over OpenID Connect with PKCE, the hosted domain enforced on the verified ID token) and connector templates for Google Workspace (Gmail, Drive, Calendar, Sheets, Docs, Slides) and BigQuery",
   "license": "Apache-2.0",
   "repository": {

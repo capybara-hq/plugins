@@ -38,7 +38,7 @@ export {
  */
 export default defineExtension({
   name: "slack",
-  version: "0.1.0-rc.14",
+  version: "0.1.0-rc.15",
   sdk: "^0.1.0-rc.64",
   provides: [CHANNEL_EXTENSION_POINT, IDENTITY_SOURCE_EXTENSION_POINT, DIRECTORY_EXTENSION_POINT],
   permissions: {

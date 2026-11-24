@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-push-jpush",
-  "version": "0.1.0-rc.0",
+  "version": "0.1.0-rc.1",
   "description": "JPush (push-provider@1): push notifications to Android phones in mainland China through JPush and the Huawei, Honor, Xiaomi, OPPO and vivo vendor channels",
   "license": "Apache-2.0",
   "repository": {

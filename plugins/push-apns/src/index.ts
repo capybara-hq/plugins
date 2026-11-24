@@ -16,7 +16,7 @@ export { APPLE_ORIGINS, type ApnsNet, createApnsProvider, mapApnsAnswer } from "
  */
 export default defineExtension({
   name: "push-apns",
-  version: "0.1.0-rc.0",
+  version: "0.1.0-rc.1",
   sdk: "^0.1.0-rc.64",
   provides: [PUSH_PROVIDER_EXTENSION_POINT],
   permissions: {

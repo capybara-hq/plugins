@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-file-preview",
-  "version": "0.1.0-rc.3",
+  "version": "0.1.0-rc.4",
   "description": "Previews code, archives, spreadsheets, documents, PDFs and SVG files in the conversation; entries inside archives are previewed regardless of per-previewer settings",
   "license": "Apache-2.0",
   "repository": {

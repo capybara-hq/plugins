@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-push-fcm",
-  "version": "0.1.0-rc.0",
+  "version": "0.1.0-rc.1",
   "description": "Firebase Cloud Messaging push provider (push-provider@1 over the FCM HTTP v1 API with a service account)",
   "license": "Apache-2.0",
   "repository": {

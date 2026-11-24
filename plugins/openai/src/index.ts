@@ -273,7 +273,7 @@ type CallConfigValue = Partial<z.infer<typeof CallConfig>>;
 /** OpenAI 供应商插件：官方 SDK + 原生 Responses API。 */
 export default defineExtension({
   name: "openai",
-  version: "0.1.0-rc.11",
+  version: "0.1.0-rc.12",
   sdk: "^0.1.0-rc.64",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
   // 默认端点；部署配置 baseUrl 可改指向代理（只展示，平台不拦截）

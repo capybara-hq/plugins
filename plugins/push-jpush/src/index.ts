@@ -13,7 +13,7 @@ export { createCredentialsCheck, createJPushProvider, notifyIdOf } from "./jpush
  */
 export default defineExtension({
   name: "push-jpush",
-  version: "0.1.0-rc.0",
+  version: "0.1.0-rc.1",
   sdk: "^0.1.0-rc.64",
   provides: [PUSH_PROVIDER_EXTENSION_POINT],
   permissions: { network: ["api.jpush.cn"], setupChecks: ["jpush-credentials"] },

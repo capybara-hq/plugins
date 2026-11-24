@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "anthropic",
-      "version": "0.1.0-rc.9",
+      "version": "0.1.0-rc.10",
       "summary": {
         "en": "Anthropic model provider (model-provider@2) using the official SDK and the native Messages API"
       },
@@ -34,14 +34,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-anthropic",
-          "version": "0.1.0-rc.9",
-          "integrity": "sha512-tLrZk/37U/6OX4rFWFmqsAHpizWT6Q4lqeXtx8O0t1WmfiX9UR9osfuA+atwdGNTAlyIZx8bGEALrMEZPjtyBw=="
+          "version": "0.1.0-rc.10",
+          "integrity": "sha512-fOZuAzmJLRdHj/IwsVA71jyu45FmK3VSQYKlOZk6JYv6WbCX5cUrieduN+PGHwszFysQ4QxFj4XQ23QltQMh+g=="
         }
       }
     },
     {
       "name": "connector-mcp",
-      "version": "0.1.0-rc.11",
+      "version": "0.1.0-rc.12",
       "summary": {
         "en": "MCP connector (connector@1): tools and resources of remote MCP servers over Streamable HTTP"
       },
@@ -58,14 +58,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-connector-mcp",
-          "version": "0.1.0-rc.11",
-          "integrity": "sha512-n1V9BMlU5JVQfTUFoWsOXOi0huE8XTsbU9MULLXSESCrEc0a5RjgvhvoSuk3SXE4jxJoVV4WB6g2BVin8E/dMg=="
+          "version": "0.1.0-rc.12",
+          "integrity": "sha512-AMUljGAoaFN8NZo5A6vkAz+PYF0QooqBPCz+OThLHjFZhej1qhYkwNqDkQU8DQKpVLhQ/Z0dUg8OprSnGMtGsw=="
         }
       }
     },
     {
       "name": "connector-openapi",
-      "version": "0.1.0-rc.12",
+      "version": "0.1.0-rc.13",
       "summary": {
         "en": "OpenAPI connector (connector@1): one tool per operation of an OpenAPI 3.0 / 3.1 HTTP API"
       },
@@ -82,14 +82,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-connector-openapi",
-          "version": "0.1.0-rc.12",
-          "integrity": "sha512-qIYknFj7V6xSl4lbTYpSXpu8f+FFLAwWxOhJq9HzH3RSAAq80emp4WPdXbIoJ2nzfg2mXNs0lTkgCuR38oxhQw=="
+          "version": "0.1.0-rc.13",
+          "integrity": "sha512-3kI76wL9WL8dPkjLxpXliRzQzI66Xs2fp/mYT6t5svCobJpoan/b6X72h46TeDO9SsXiT+5X9licvRxwSWf6Sw=="
         }
       }
     },
     {
       "name": "lark",
-      "version": "0.1.0-rc.13",
+      "version": "0.1.0-rc.14",
       "summary": {
         "en": "Lark (channel@1 bot over the Lark long connection with interactive cards, identity-source@1 web login, directory@1)"
       },
@@ -102,12 +102,12 @@
       "permissions": {
         "keys": [
           "config.deployment.secret:appSecret",
+          "config.deployment.secret:directory.appSecret",
           "config.deployment:accountsUrl",
           "config.deployment:apiUrl",
           "config.deployment:appId",
+          "config.deployment:directory.appId",
           "config.deployment:region",
-          "config.org.secret:appSecret",
-          "config.org:appId",
           "permissions.network:accounts.larksuite.com",
           "permissions.network:open.larksuite.com",
           "provides:channel@1",
@@ -116,7 +116,7 @@
         ],
         "sensitive": [
           "config.deployment.secret:appSecret",
-          "config.org.secret:appSecret",
+          "config.deployment.secret:directory.appSecret",
           "provides:channel@1",
           "provides:directory@1",
           "provides:identity-source@1"
@@ -125,14 +125,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-lark",
-          "version": "0.1.0-rc.13",
-          "integrity": "sha512-fDAYVXwtciQA3gvDY4WNZ0rYBnkLn09h6OdGg7aVJWeO/t0a4aH8pHVn204eR6TosdDYmpEFv/2582qZnK3fsg=="
+          "version": "0.1.0-rc.14",
+          "integrity": "sha512-H+WUt/3hrevia8hIMdCpwjSiYIYEoWJ67VesStEsciUPNCzsibi2/GUcRMr8HGmYdFfOuXdVVBiOb7kOIS4MNQ=="
         }
       }
     },
     {
       "name": "object-store-s3",
-      "version": "0.1.0-rc.11",
+      "version": "0.1.0-rc.12",
       "summary": {
         "en": "Object storage (object-store@1) on any S3-compatible service (AWS S3, MinIO, Ceph, OSS, TOS, ...) using the official @aws-sdk/client-s3"
       },
@@ -162,14 +162,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-object-store-s3",
-          "version": "0.1.0-rc.11",
-          "integrity": "sha512-1wwQSxvlGVYc7ZxtTBNN7VPHjtoa6rvzx4x3Qir2I39ILh/D9FxhlgEoSGXZ//Gt7L7Mos/hIvs7//QGf/vZPg=="
+          "version": "0.1.0-rc.12",
+          "integrity": "sha512-hPKfoH25RbEB8aA/Feqwfvbs2OR6B/MrXfj1DngBWEhSYvBoPfcezEC+LJDr35nRmfzsnqLc+Ho9Y4pT02tcyw=="
         }
       }
     },
     {
       "name": "openai",
-      "version": "0.1.0-rc.11",
+      "version": "0.1.0-rc.12",
       "summary": {
         "en": "OpenAI model provider (model-provider@2) using the official SDK and the native Responses API"
       },
@@ -195,14 +195,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-openai",
-          "version": "0.1.0-rc.11",
-          "integrity": "sha512-vFV/CgyPyRdE2OJ2JO+esoDeJ2jP+6jMqIautSOHyCMvpWkrg3UGnUH1iBN1z1Dy0cp293ddwo2CZAmlS6FI7w=="
+          "version": "0.1.0-rc.12",
+          "integrity": "sha512-bh4ydAdf7cJwod2crmd6q9mbAFYULtoSXm/FAWf5xOUvwfYCo6OWY+JD5fQGNZQDuD+0MV3wQbvSpYBA2/poNQ=="
         }
       }
     },
     {
       "name": "openai-compatible",
-      "version": "0.1.0-rc.11",
+      "version": "0.1.0-rc.12",
       "summary": {
         "en": "Model provider (model-provider@2) for Chat Completions-compatible services (vLLM, DeepSeek, Qwen, ...) using the official openai SDK"
       },
@@ -223,14 +223,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-openai-compatible",
-          "version": "0.1.0-rc.11",
-          "integrity": "sha512-xhLYmzgzC6I8VAx/xzGSrW53On9hVT9aXrNJaeLYBMVr84lY765MZ6P6qt5hDhHIH13sxyfaCf+3FQ6muc4U/w=="
+          "version": "0.1.0-rc.12",
+          "integrity": "sha512-4bO5W4xw97s1SPCfgWunqNzCiCoUUE35YdGX9GX+0CJ8bBRLQDZi6XaYHvOt1qZ+zQdwh8gRl9ILavwn4prEEw=="
         }
       }
     },
     {
       "name": "slack",
-      "version": "0.1.0-rc.14",
+      "version": "0.1.0-rc.15",
       "summary": {
         "en": "Slack (channel@1 bot over Socket Mode with Block Kit cards, identity-source@1 Sign in with Slack, directory@1)"
       },
@@ -243,11 +243,11 @@
       "permissions": {
         "keys": [
           "config.deployment.secret:clientSecret",
+          "config.deployment.secret:directory.botToken",
           "config.deployment:apiUrl",
           "config.deployment:clientId",
+          "config.deployment:directory.teamId",
           "config.deployment:openidUrl",
-          "config.org.secret:botToken",
-          "config.org:teamId",
           "permissions.network:files.slack.com",
           "permissions.network:slack.com",
           "permissions.network:wss-primary.slack.com",
@@ -260,7 +260,7 @@
         ],
         "sensitive": [
           "config.deployment.secret:clientSecret",
-          "config.org.secret:botToken",
+          "config.deployment.secret:directory.botToken",
           "provides:channel@1",
           "provides:directory@1",
           "provides:identity-source@1"
@@ -269,14 +269,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-slack",
-          "version": "0.1.0-rc.14",
-          "integrity": "sha512-8bPioXkAKn8BIKnLlLlwT8qTGTmDurdzthrFX3IN1TJgNh2V4QBdtN1I6Gk0ojNiXUmUDgFPlwBt9+EK5NxbSA=="
+          "version": "0.1.0-rc.15",
+          "integrity": "sha512-RZUuxPbqmTdksJU7/nmdg+mBWMPA8uZhZGOS/+1T3zM2OX9VIjYr0y2F/ZMP6IvFCJWYC2yfCYdCJQPf+zpUXg=="
         }
       }
     },
     {
       "name": "todo",
-      "version": "0.1.0-rc.12",
+      "version": "0.1.0-rc.13",
       "summary": {
         "en": "Todo list tool for agents: plugin__todo__write keeps a per-conversation todo list in PostgreSQL"
       },
@@ -300,14 +300,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-todo",
-          "version": "0.1.0-rc.12",
-          "integrity": "sha512-tTQKRoBAlN3tz6eC0ZqFpfwwm0j/dte4ZJ6EOB8hSXzaQLagPIwutNsr3pTFA1xoFhFLKo13ZPdQbv8ONq06Ww=="
+          "version": "0.1.0-rc.13",
+          "integrity": "sha512-QApBFqo6PrFJlmR7Pokbkx6AmLZ8dIGApl+EneshGw6dpJbDYvyUaoRyvk2Os1pYyfQOTHnCc0FUEae5mrVj6g=="
         }
       }
     },
     {
       "name": "jina",
-      "version": "0.1.0-rc.9",
+      "version": "0.1.0-rc.10",
       "summary": {
         "en": "Web search and page reading (web-search@1, web-fetch@1) through Jina's search and reader APIs"
       },
@@ -319,27 +319,27 @@
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/jina#readme",
       "permissions": {
         "keys": [
+          "config.deployment.secret:apiKey",
           "config.deployment:readerUrl",
           "config.deployment:searchUrl",
-          "config.org.secret:apiKey",
           "permissions.network:r.jina.ai",
           "permissions.network:s.jina.ai",
           "provides:web-fetch@1",
           "provides:web-search@1"
         ],
-        "sensitive": ["config.org.secret:apiKey"]
+        "sensitive": ["config.deployment.secret:apiKey"]
       },
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-jina",
-          "version": "0.1.0-rc.9",
-          "integrity": "sha512-c0DFvKKQrO3qDkwAEBoBbFhDDfktucjWCIPyh+wRWGAbrXLwz69zX8C0f6MHI0YmlM68EW+NxVM3f1w8bDHOQg=="
+          "version": "0.1.0-rc.10",
+          "integrity": "sha512-Sxsg2qMz//QcZMqRCGvK7o8CqFDS5XMXpESmiyJasCoNYRE/cb/Q7v4XcSIc/WXccVTN9kWUBPJDU6c6gpiAjA=="
         }
       }
     },
     {
       "name": "ark",
-      "version": "0.1.0-rc.11",
+      "version": "0.1.0-rc.12",
       "summary": {
         "en": "Model provider (model-provider@2) for Volcengine Ark chat, embedding and image generation models",
         "zh": "火山方舟对话、嵌入与图片生成模型（model-provider@2）"
@@ -371,14 +371,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-ark",
-          "version": "0.1.0-rc.11",
-          "integrity": "sha512-rE0tPudbL0AjY9f6cTdM0wSFtyhWsKOaEFy6GOZ79wISw9F5Y0ap3RVaiaeW9c0lZPxKdhqIzi18xARu/A1jVQ=="
+          "version": "0.1.0-rc.12",
+          "integrity": "sha512-8yrnD2AKpsqT7RKrokyH95xW8z8un5z4c3rgsxtgW49kVZ9Y+rOpsf+mNGW/XM/rEATSvQTj3LMPDBGPPZdPyw=="
         }
       }
     },
     {
       "name": "bailian",
-      "version": "0.1.0-rc.10",
+      "version": "0.1.0-rc.11",
       "summary": {
         "en": "Model provider (model-provider@2) for Alibaba Cloud Model Studio (Bailian) chat, embedding and image generation models",
         "zh": "阿里云百炼对话、嵌入与图片生成模型（model-provider@2）"
@@ -415,14 +415,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-bailian",
-          "version": "0.1.0-rc.10",
-          "integrity": "sha512-yXDrvaJh3DtGg/hHpYFSJkoRxQdJCJQM6Y+mNLL1Cff53FraGYAZZi7ZIc1FnK9jFEp6nfHgnsuCJcvRmvpqqg=="
+          "version": "0.1.0-rc.11",
+          "integrity": "sha512-3LYmVw1KQL6qXYgU7XeymBvnRRZy8PM5OIP5CeUtypqMkBXHo1wR8leuwucLLLpRR5EgTJOWMdZNx5D99fp+rw=="
         }
       }
     },
     {
       "name": "deepseek",
-      "version": "0.1.0-rc.10",
+      "version": "0.1.0-rc.11",
       "summary": {
         "en": "Model provider (model-provider@2) for DeepSeek chat models through the Chat Completions API",
         "zh": "DeepSeek 对话模型（model-provider@2），通过 Chat Completions API 调用"
@@ -445,14 +445,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-deepseek",
-          "version": "0.1.0-rc.10",
-          "integrity": "sha512-sTlLjNWdGLTCFKJXYX0H9803zHq6ANU9TS/HG56McUqYxyay+/iWxbXhmP6h/8H4ditzxKLTcuerYNJLh6hxRw=="
+          "version": "0.1.0-rc.11",
+          "integrity": "sha512-AUgib6r+8sdNEu9Fs8NvatbYTe/eihW3Zo6zILzTIUxgCHRkvIJ/QKoWcH4O32gaiyvlsmYBocIlD3m0ntUhyA=="
         }
       }
     },
     {
       "name": "telegram",
-      "version": "0.1.0-rc.12",
+      "version": "0.1.0-rc.13",
       "summary": {
         "en": "Telegram (channel@1 bot over the Bot API: long polling or webhook, inline keyboard cards)",
         "zh": "Telegram 机器人渠道（channel@1，Bot API：长轮询或 webhook，内联键盘卡片）"
@@ -474,14 +474,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-telegram",
-          "version": "0.1.0-rc.12",
-          "integrity": "sha512-bFyaM7skrO7AKH2mQrwHO9zB80AwC7D0NiFiSwhjm1ogPXm4OmauafKWQmkQH1kz4V2zs5ahY6mdwR2V1BCSWQ=="
+          "version": "0.1.0-rc.13",
+          "integrity": "sha512-xgmSdDfkltDxF4/g9NSN0c07SvYH+VaZhSIHh8NZPLojmdHOl8XVJb5lxn6Bozj7PDJ4gAP6qy0POx+dwrEKQw=="
         }
       }
     },
     {
       "name": "theme-cyberpunk",
-      "version": "0.1.0-rc.15",
+      "version": "0.1.0-rc.16",
       "summary": {
         "en": "Cyberpunk theme and UI: neon yellow on deep blue-black, a run-state HUD, scanlines, a boot screen, a glitch CYBERBARA wordmark and opt-in synthesized sound",
         "zh": "赛博朋克主题与界面：深蓝黑底上的霓虹黄，运行状态 HUD、扫描线、启动画面、故障风 CYBERBARA 字标，以及可选的合成音效"
@@ -513,8 +513,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-theme-cyberpunk",
-          "version": "0.1.0-rc.15",
-          "integrity": "sha512-2SFiz9zySOBGSbnDUA5B6X7uMDTxZ9njII8VvRnEFIC/isc6bN7676DQx1QmxXGPGgXHNQa9TfPe58PW1iSu5A=="
+          "version": "0.1.0-rc.16",
+          "integrity": "sha512-nodG+1C4O1NRhmulsSS8qoEXdml9FjuIOmFbM6Zhz6BbeO4m6ev8Diq+EGcKadVL4pI8JG2aL5Yoqt6Q+ywdZg=="
         }
       }
     },
@@ -545,7 +545,7 @@
     },
     {
       "name": "github",
-      "version": "0.1.0-rc.3",
+      "version": "0.1.0-rc.4",
       "summary": {
         "en": "Agents work with GitHub as the connected person: issues, pull requests, reviews, repositories and Actions runs, through GitHub's remote MCP server. Each member connects with OAuth through a GitHub App (or OAuth App) the org admin registers",
         "zh": "智能体以连接者本人的身份使用 GitHub：issue、拉取请求、评审、仓库与 Actions 运行，经 GitHub 的远程 MCP 服务器。每位成员通过组织管理员注册的 GitHub App（或 OAuth App）用 OAuth 连接"
@@ -563,14 +563,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-github",
-          "version": "0.1.0-rc.3",
-          "integrity": "sha512-JBZLm1trUTUXiFMHuvMQfn+p1MchCcifx5TxImhh4vvo+jIrOM9BXOuRu9XWNThovUI6TXyFBBs1G1jte6MnPw=="
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-FmzackY+v4MaD9tfpFj+i3vg0H2zrnziNwmbM6P4AzNDRao9t8aTEWpHCmvEPPe+aTsl9caf5hjdZG13uSffKw=="
         }
       }
     },
     {
       "name": "memory",
-      "version": "0.1.0-rc.7",
+      "version": "0.1.0-rc.8",
       "summary": {
         "en": "Memory for agents: each agent remembers each member across conversations, with an index at run start, memory tools, hybrid search and a memory page",
         "zh": "智能体记忆：每个智能体跨会话记住每位成员，运行开始时给出记忆索引，提供记忆工具、混合检索和记忆页面"
@@ -618,14 +618,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-memory",
-          "version": "0.1.0-rc.7",
-          "integrity": "sha512-Guti4HZXBe4XsSkiGkx4+nNXCTlpW+EsW+tH0aNcmBmDONn0Df28HfrpWsMoWgF/S5Y5/n2KaheZhULU/PVMoA=="
+          "version": "0.1.0-rc.8",
+          "integrity": "sha512-4MFmuttW6ScKMhPfjQ0AnnXU/3vu1KiiA/iW4heJH1N4mW5pTiWHgZ6PAbClv+pXLnvMDNAMFR6gEbXWroGAbw=="
         }
       }
     },
     {
       "name": "file-preview",
-      "version": "0.1.0-rc.3",
+      "version": "0.1.0-rc.4",
       "summary": {
         "en": "Previews code, archives, spreadsheets, documents, PDFs and SVG files in the conversation; entries inside archives are previewed regardless of per-previewer settings",
         "zh": "在对话中预览代码、压缩包、表格、文档、PDF 和 SVG 文件；压缩包内的条目不受各预览器开关影响，一律可预览"
@@ -672,14 +672,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-file-preview",
-          "version": "0.1.0-rc.3",
-          "integrity": "sha512-4GMeq6gpjloCmTrEidiUHX5v6PN4oTfRDWcx+sLb5NlUoSk5DaJVVtJDc5oNDzow09OSm62DJchDOBJItLdwrA=="
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-TBIUsqB2ZNpKPc8ddBh9e2KdT9SV/+ZNSBYqrDRv8SazVmN3q7lgbVk5QaiLioI2EPt5Kfs4DSY+YIrKlzwCcA=="
         }
       }
     },
     {
       "name": "push-apns",
-      "version": "0.1.0-rc.0",
+      "version": "0.1.0-rc.1",
       "summary": {
         "en": "Apple Push Notification service (push-provider@1: token-based HTTP/2 delivery to iOS apps)",
         "zh": "Apple 推送通知服务（push-provider@1：基于令牌的 HTTP/2 推送，送达 iOS 应用）"
@@ -706,14 +706,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-push-apns",
-          "version": "0.1.0-rc.0",
-          "integrity": "sha512-6GW9hNjF0fF9uaVXgkMjRtsGKO2eluaXt7mipHqLnwT/g/S3XFARhyVlIUTs1FZ1SPaSVvB+coJmX5G4L9sbyg=="
+          "version": "0.1.0-rc.1",
+          "integrity": "sha512-tPHq30IQkglZnH8tThnb/2pCz5jia9UroFH2YqNPg8ApBfM9uoJUOLmK1Z7hG43FCwtK4Bna4o6bA0QkWKW+Zg=="
         }
       }
     },
     {
       "name": "push-fcm",
-      "version": "0.1.0-rc.0",
+      "version": "0.1.0-rc.1",
       "summary": {
         "en": "Firebase Cloud Messaging push provider (push-provider@1 over the FCM HTTP v1 API with a service account)",
         "zh": "Firebase Cloud Messaging 推送服务（push-provider@1，FCM HTTP v1 接口，使用服务账号）"
@@ -738,14 +738,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-push-fcm",
-          "version": "0.1.0-rc.0",
-          "integrity": "sha512-M2f3EKco41e1JvS05lsWsqrXA9LSqVdEQNMizkvjWxzcx9ccDmAUXSoK0+TLyE/bqjv39VQ1eSmbvqSQUdT7iQ=="
+          "version": "0.1.0-rc.1",
+          "integrity": "sha512-M9dD9o5HuM6tfH4Co+p9XhXDpQXG4gf9uUjU/sem4IXDBCpi3SInq6vMI3asHVKkDIsd9eiODqwCG6zsVA1i8w=="
         }
       }
     },
     {
       "name": "push-jpush",
-      "version": "0.1.0-rc.0",
+      "version": "0.1.0-rc.1",
       "summary": {
         "en": "JPush (push-provider@1): push notifications to Android phones in mainland China through JPush and the Huawei, Honor, Xiaomi, OPPO and vivo vendor channels",
         "zh": "极光推送（push-provider@1）：经极光及华为、荣耀、小米、OPPO、vivo 厂商通道，向中国大陆的 Android 手机发送推送通知"
@@ -778,14 +778,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-push-jpush",
-          "version": "0.1.0-rc.0",
-          "integrity": "sha512-1oICjXwtiRx/hwWvo8v4L8KIVlj5dmbPc01P4efFgGtY8Rfmn3aDRFVE+4+yVlj2iM+1a+DhHsIR2JVv1rDp8g=="
+          "version": "0.1.0-rc.1",
+          "integrity": "sha512-58KG6W2cLZ6+vZPcIE2lE+da3WMssIJXDnOKlwWuUWF5CZdSs/459bW8GxTiGSok8Pw8rDDWq+222513rOHjDw=="
         }
       }
     },
     {
       "name": "google",
-      "version": "0.1.0-rc.2",
+      "version": "0.1.0-rc.3",
       "summary": {
         "en": "Sign in with Google (OpenID Connect for Google Workspace accounts, hosted domain enforced on the verified ID token), plus connector templates for Gmail, Google Drive, Calendar, Sheets, Docs, Slides and BigQuery, each member connecting their own Google account",
         "zh": "使用 Google 登录（Google Workspace 账号通过 OpenID Connect 登录，托管域在校验过的 ID token 上强制检查），并提供 Gmail、Google Drive、Calendar、Sheets、Docs、Slides 和 BigQuery 的 connector 模板，每个成员连接自己的 Google 账号"
@@ -819,14 +819,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-google",
-          "version": "0.1.0-rc.2",
-          "integrity": "sha512-TQY8f9MqlkKfMLGggStghijvOJIsp8u/hp2T6shTS8oxDru58TYkLpZDyRz5UplFWiRL0PO85/GrVAKVXQaZCQ=="
+          "version": "0.1.0-rc.3",
+          "integrity": "sha512-vCFXVsVjnkwDAHCoelBV1NkUX7pw30YRiOZAxwIRsrlmpkjjvIvqXpNCNQTJOIcpfsbbKPOeovxcphMz9toSkQ=="
         }
       }
     },
     {
       "name": "device-docker",
-      "version": "0.1.0-rc.26",
+      "version": "0.1.0-rc.27",
       "summary": {
         "en": "Devices as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with their files on volumes kept until the device is deleted: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist",
         "zh": "以 Docker 容器（runc 或 gVisor runsc）承载设备，经 Docker socket 代理访问；文件保存在卷上，直到设备被删除。网络默认开放公网（拒绝回环、私有、链路本地与元数据地址），也可用主机白名单"
@@ -853,14 +853,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-docker",
-          "version": "0.1.0-rc.26",
-          "integrity": "sha512-lopV/CZM5mw08/WvV+wxhKQO5CeORB2SbhsDy1qYMYPtT+gidmgRTk//axGFlkh6iQnbEruQ3LhOIHzdvm+TJA=="
+          "version": "0.1.0-rc.27",
+          "integrity": "sha512-rnVMzzEA77UlhK1JfJrXCdBzwV5WL4FBZCUBYVciLFPxbPNa0g+jaQqEvxEr9Gq60AFhKigLg2Dz6nCEcaXk6g=="
         }
       }
     },
     {
       "name": "device-e2b",
-      "version": "0.1.0-rc.26",
+      "version": "0.1.0-rc.27",
       "summary": {
         "en": "Devices as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, an allowlist or the open internet with local ranges denied (E2B's metadata service stays reachable)",
         "zh": "以 E2B 沙箱承载设备（E2B 云或自托管）：暂停沙箱保留文件，从已发布镜像构建模板，网络为出站白名单或开放公网（拒绝私有、回环与链路本地地址；E2B 元数据端点仍可达，见 README）"
@@ -886,14 +886,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-e2b",
-          "version": "0.1.0-rc.26",
-          "integrity": "sha512-NAaN3/vydaaV7YhZuWPkGXhZSuXTbreoOmv/QIv3Oh3Ip2sNSnjCcHQN9x5NjrZXRc5baxfZYG++N1698bD+DQ=="
+          "version": "0.1.0-rc.27",
+          "integrity": "sha512-T8U1Wv15ulKwsTA/bUcURTUJJDwNcCUd0nQk9hoNiwO8nz8dMp+W2chB9rXTvfWDKQsMdzBw0GTw/YslG+RYsA=="
         }
       }
     },
     {
       "name": "device-local",
-      "version": "0.1.0-rc.7",
+      "version": "0.1.0-rc.8",
       "summary": {
         "en": "Devices on people's own computers: a machine connected with capybara-device serves the device over the dial-in channel, and its owner limits it there",
         "zh": "在自己的电脑上使用设备：用 capybara-device 连接的电脑通过拨入通道为设备服务，由电脑的所有者在本机限制它"
@@ -916,14 +916,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-local",
-          "version": "0.1.0-rc.7",
-          "integrity": "sha512-IGhfG42LMy8Rf95vHEjGKkEHHhASClFvPZZnLZAHjdHr6fqox6z2q1c4Kn1BRee2kSVT31AOw8hiTurfIXyalA=="
+          "version": "0.1.0-rc.8",
+          "integrity": "sha512-TA84YgBO3gpzZUumpR3ZdwFVa1Vytre9oaDWslFN9J3tE4ch3F1HdDKCstNgxhgogwHRLAyy6nwOIiGn7XXurw=="
         }
       }
     },
     {
       "name": "atlassian",
-      "version": "0.1.0-rc.1",
+      "version": "0.1.0-rc.2",
       "summary": {
         "en": "Agents work with Jira, Confluence and Bitbucket as the connected person, through Atlassian's remote MCP server (Atlassian Cloud). Each member connects their own Atlassian account with OAuth; the client is registered automatically, so the org admin enters nothing",
         "zh": "智能体以连接者本人的身份使用 Jira、Confluence 和 Bitbucket，经 Atlassian 的远程 MCP 服务器（Atlassian Cloud）。每位成员用 OAuth 连接自己的 Atlassian 账号；客户端自动注册，组织管理员无需填写任何内容"
@@ -941,8 +941,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-atlassian",
-          "version": "0.1.0-rc.1",
-          "integrity": "sha512-wi2ntiWlFvKYEDez8uxXd57oHTeR2mHvF4U9fwnokMdTCNdufNKCQUC/90YK15DR1vH3z2vDQksSh8JvQXrz7g=="
+          "version": "0.1.0-rc.2",
+          "integrity": "sha512-Zv6HQlFlcnMybltyCmzGboxQYc+3CdIMYOMHLMKDypZ3T8ZlR0YipYkXoRsDOw1Lm+AYq3N4m3aH+hO2/DSG6g=="
         }
       }
     }
