@@ -276,8 +276,11 @@ named process per device, started on an extension's behalf after the kernel's co
   workspace volume (so a files reset or device deletion removes it) and **outside the workspace**: no project root, Glob / Grep,
   share or delivery reaches a service's state (a browser profile's cookies). The image makes `/var/lib/capybara/svc` the sandbox
   user's (0700) and Docker copies that owner onto the empty volume at its first mount. An instance of an image from before device
-  services has no such directory (the mount point is root's): `ensureService` refuses with "this device's image predates device
-  services; reset the device's instance". Files are written without following links and only into regular files: every directory
+  services has no such directory (the mount point is root's): `ensureService` refuses ("This device's image predates
+  device services, or /var/lib/capybara/svc is not owned by the sandbox user …"): the device page has no action that recreates only
+  the instance, so the answer names the ways it happens (the instance recreated after a period without use, or the device deleted
+  and created again). A recreate on the current image over the same files restores it: the volume is still empty, so Docker
+  copies the image directory's owner onto it. Files are written without following links and only into regular files: every directory
   is opened `O_NOFOLLOW` below the state root and every file `O_NOFOLLOW | O_NONBLOCK` relative to its directory, then checked to be
   a regular file, so a link or a FIFO planted there (by the service itself or a command, both the sandbox user) fails the ensure at
   once instead of redirecting or blocking the write.

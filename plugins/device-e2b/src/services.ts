@@ -21,7 +21,7 @@ export const SERVICE_STATE_ROOT = "/var/lib/capybara/svc";
 
 /** The answer when the state root is missing or not the sandbox user's (an image before services). */
 export const SERVICE_IMAGE_TOO_OLD =
-  "this device's image predates device services; reset the device's instance";
+  "This device's image predates device services, or /var/lib/capybara/svc is not owned by the sandbox user. The instance must be recreated on the current image: that happens after a period without use, or delete the device and create it again.";
 
 /**
  * Where a service's runtime files live (pid record, socket, lock, log): /tmp, so nothing of a
@@ -82,7 +82,7 @@ export const SERVICE_MANAGER_SCRIPT = `import base64, fcntl, json, os, re, signa
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 STATE = ("/var/lib/capybara/svc", ())
-TOO_OLD = "this device's image predates device services; reset the device's instance"
+TOO_OLD = "This device's image predates device services, or /var/lib/capybara/svc is not owned by the sandbox user. The instance must be recreated on the current image: that happens after a period without use, or delete the device and create it again."
 RUN = ("/tmp", (".capybara-svc",))
 NODE = "/usr/local/bin/node"
 PATH = "/usr/local/bin:/usr/bin:/bin"

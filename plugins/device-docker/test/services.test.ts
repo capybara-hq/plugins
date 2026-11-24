@@ -146,6 +146,9 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
   afterAll(async () => {
     await cleanupTestResources(RUN);
     if (oldImageDir !== "") await rm(oldImageDir, { recursive: true, force: true });
+    if (images !== undefined) {
+      await docker("rmi", "-f", `${images.sandboxImage}-nosvc`).catch(() => undefined);
+    }
     await proxy?.stop();
     await images?.remove();
   }, 120_000);
@@ -329,6 +332,21 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
     });
     await expect(sbx.ensureService?.(h, echo("old"), sig())).rejects.toThrow(SERVICE_IMAGE_TOO_OLD);
     expect((await sbx.serviceStatus?.(h, "old", sig()))?.state).toBe("stopped");
+    // recreated on the current image over the same files, the instance runs services again (the
+    // state volume, still empty, takes the image directory's owner)
+    await sbx.destroy(h, sig(), FENCE);
+    const h2 = await sbx.create({
+      fence: FENCE,
+      name,
+      image: images.sandboxImage,
+      limits: limits(),
+      fileSystem,
+      signal: sig(),
+    });
+    expect((await sbx.ensureService?.(h2, echo("old"), sig()))?.state).toBe("running");
+    expect((await sh(h2, "stat -c '%u:%g %a' /var/lib/capybara/svc")).stdout).toBe(
+      "1000:1000 700\n",
+    );
   });
 
   it("never writes service files through a link planted in the state directory", async () => {
