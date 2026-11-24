@@ -170,7 +170,9 @@ function serviceFailure(error: { kind?: unknown; message?: unknown }, op: string
     case "denied":
       return new SandboxScopeDeniedError(message);
     case "invalid":
-      return new ToolError(`The connected machine refused the ${op} request: ${message}`);
+      return new ToolError(
+        `The connected machine refused the ${op} request: ${message} (check the request and retry)`,
+      );
     default:
       return new ToolError(`${ON_MACHINE_PREFIX}${message} (check the service and retry)`);
   }
