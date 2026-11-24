@@ -14,6 +14,7 @@ import type {
   Locator,
   Page,
   Request,
+  Response,
 } from "playwright-core";
 import {
   MAX_TABS,
@@ -133,6 +134,135 @@ const PROXY_PROBE_TIMEOUT_MS = 5_000;
 
 const REF_RE = /^(f\d+)?e\d+$/;
 const PROXY_FAILURE_RE = /ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED/;
+
+/** A document address without its fragment (a request's URL has none; a frame's may). */
+function docUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    u.hash = "";
+    return u.href;
+  } catch {
+    return raw;
+  }
+}
+
+/** What became of the navigation in flight that took over an aborted `goto`. */
+type TakenOver =
+  | { kind: "loaded"; response: Response | null }
+  | { kind: "failed"; url: string; error: string }
+  | { kind: "none" };
+
+/**
+ * Watches a page's main-frame navigations while one `goto` runs, to tell an abort that still
+ * shows the page asked for from a real failure: Chromium drops a navigation to an address whose
+ * navigation is already in flight (a tab restored at start, the address bar), and that one then
+ * redirects and loads (or fails).
+ */
+class NavWatch {
+  private readonly target: string;
+  /** The newest main-frame navigation request to the target address (redirects included). */
+  private lastOurs: Request | undefined;
+  /** The request of `lastOurs`'s chain whose document the main frame committed. */
+  private committedOurs: Request | undefined;
+  /** The request of `lastOurs`'s chain that failed. */
+  private failedOurs: Request | undefined;
+  private wake: (() => void) | undefined;
+  private readonly onRequest = (r: Request) => {
+    if (!r.isNavigationRequest() || r.frame() !== this.page.mainFrame()) return;
+    this.lastOurs = this.isOurs(r) ? r : undefined;
+    this.wake?.();
+  };
+  private readonly onNavigated = (f: unknown) => {
+    if (f !== this.page.mainFrame()) return;
+    const ours = this.lastOurs;
+    if (ours !== undefined && docUrl(this.page.mainFrame().url()) === docUrl(ours.url()))
+      this.committedOurs = ours;
+    this.wake?.();
+  };
+  private readonly onFailed = (r: Request) => {
+    if (r === this.lastOurs) this.failedOurs = r;
+    this.wake?.();
+  };
+  /** After the session's own `requestfinished` handler (registered first) settled the request. */
+  private readonly onFinished = (r: Request) => {
+    if (!r.isNavigationRequest() || r.frame() !== this.page.mainFrame()) return;
+    const wake = () => this.wake?.();
+    void r.response().then(wake, wake);
+  };
+
+  constructor(
+    private readonly page: Page,
+    url: string,
+    /** The main-frame navigation request in flight (not committed, failed or finished), if any. */
+    private readonly pending: () => Request | undefined,
+  ) {
+    this.target = docUrl(url);
+    // a navigation already in flight before this one (the one Chromium may keep)
+    const before = pending();
+    if (before !== undefined && this.isOurs(before)) this.lastOurs = before;
+    page.on("request", this.onRequest);
+    page.on("framenavigated", this.onNavigated);
+    page.on("requestfailed", this.onFailed);
+    page.on("requestfinished", this.onFinished);
+  }
+
+  private isOurs(r: Request): boolean {
+    let root = r;
+    for (let from = r.redirectedFrom(); from !== null; from = from.redirectedFrom()) root = from;
+    return docUrl(root.url()) === this.target;
+  }
+
+  /** Resolves on the next navigation event or after `ms`. */
+  private next(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(done, ms);
+      function done(): void {
+        clearTimeout(timer);
+        resolve();
+      }
+      this.wake = () => {
+        this.wake = undefined;
+        done();
+      };
+    });
+  }
+
+  /**
+   * After an abort: waits (until `deadline`, the navigation's own) while a navigation to the
+   * target address is in flight, then tells whether it loaded (its document committed; a script
+   * may have moved the page on since), failed, or none of ours took over.
+   */
+  async follow(deadline: number): Promise<TakenOver> {
+    for (let r = this.pending(); r !== undefined; r = this.pending()) {
+      if (!this.isOurs(r)) return { kind: "none" };
+      const left = deadline - Date.now();
+      if (left <= 0) return { kind: "none" };
+      await this.next(left);
+    }
+    const final = this.lastOurs;
+    if (final === undefined) return { kind: "none" };
+    if (this.failedOurs === final) {
+      return { kind: "failed", url: final.url(), error: final.failure()?.errorText ?? "" };
+    }
+    if (this.committedOurs !== final) return { kind: "none" };
+    const left = deadline - Date.now();
+    if (left <= 0) return { kind: "none" };
+    try {
+      await this.page.waitForLoadState("domcontentloaded", { timeout: left });
+    } catch {
+      return { kind: "none" };
+    }
+    return { kind: "loaded", response: await final.response().catch(() => null) };
+  }
+
+  dispose(): void {
+    this.page.off("request", this.onRequest);
+    this.page.off("framenavigated", this.onNavigated);
+    this.page.off("requestfailed", this.onFailed);
+    this.page.off("requestfinished", this.onFinished);
+    this.wake?.();
+  }
+}
 
 export interface JpegCapture {
   data: string;
@@ -281,6 +411,8 @@ export class BrowserSession {
   private readonly ids = new WeakMap<Page, string>();
   private readonly titles = new Map<string, string>();
   private readonly loadingTabs = new Set<string>();
+  /** Each page's main-frame navigation request in flight (until it commits, fails or finishes). */
+  private readonly pendingNavs = new WeakMap<Page, Request>();
   private readonly listeners = new Set<(e: SessionEvent) => void>();
   private readonly collectors = new Set<Collector>();
   private readonly probes = new Map<string, Promise<boolean>>();
@@ -397,14 +529,33 @@ export class BrowserSession {
         .catch(() => undefined)
         .finally(() => this.emit({ type: "state" }));
     };
+    const settle = (r: Request) => {
+      if (this.pendingNavs.get(page) === r) this.pendingNavs.delete(page);
+    };
+    // a redirect hop finishes too: its navigation goes on (the next hop's request follows);
+    // any other finish (a 204, a download, a 3xx without Location) ends it
+    page.on("requestfinished", (r) => {
+      if (this.pendingNavs.get(page) !== r) return;
+      void r.response().then(
+        (res) => {
+          const status = res?.status() ?? 0;
+          const redirects = status >= 300 && status < 400 && res?.headers().location;
+          if (!redirects) settle(r);
+        },
+        () => settle(r),
+      );
+    });
     page.on("request", (r) => {
       if (r.isNavigationRequest() && r.frame() === page.mainFrame()) {
+        this.pendingNavs.set(page, r);
         this.loadingTabs.add(id);
         this.emit({ type: "state" });
       }
     });
     page.on("framenavigated", (f) => {
-      if (f === page.mainFrame()) refresh();
+      if (f !== page.mainFrame()) return;
+      this.pendingNavs.delete(page);
+      refresh();
     });
     page.on("domcontentloaded", refresh);
     page.on("load", () => {
@@ -412,6 +563,7 @@ export class BrowserSession {
       refresh();
     });
     page.on("requestfailed", (r) => {
+      settle(r);
       const err = r.failure()?.errorText ?? "";
       if (r.isNavigationRequest() && r.frame() === page.mainFrame()) {
         this.loadingTabs.delete(id);
@@ -432,6 +584,7 @@ export class BrowserSession {
       this.emit({ type: "dialog", kind: "file", message: "" });
     });
     page.on("close", () => {
+      this.pendingNavs.delete(page);
       this.pages.delete(id);
       this.titles.delete(id);
       this.loadingTabs.delete(id);
@@ -839,6 +992,11 @@ export class BrowserSession {
     // registered first: Playwright may reject the navigation just before it emits the download
     const download = page.waitForEvent("download", { timeout: ACTION_TIMEOUT_MS });
     download.catch(() => undefined);
+    // The main frame's navigations while this one runs: another navigation to the same address
+    // (a tab restored at start, the address bar) aborts this one but still lands on its page.
+    // Following it shares the navigation's own deadline: an aborted navigate takes no longer.
+    const deadline = Date.now() + NAVIGATION_TIMEOUT_MS;
+    const watch = new NavWatch(page, url, () => this.pendingNavs.get(page));
     try {
       res = await page.goto(url, { waitUntil: "domcontentloaded" });
     } catch (e) {
@@ -849,7 +1007,17 @@ export class BrowserSession {
         return;
       }
       if (PROXY_FAILURE_RE.test(msg)) await this.checkBlocked(url);
-      throw e;
+      if (!msg.includes("net::ERR_ABORTED")) throw e;
+      const out = await watch.follow(deadline);
+      if (out.kind === "none") throw e;
+      if (out.kind === "failed") {
+        // the navigation that took over failed: that failure is this one's
+        if (PROXY_FAILURE_RE.test(out.error)) await this.checkBlocked(out.url);
+        throw new Error(`${out.error} at ${out.url}`);
+      }
+      res = out.response;
+    } finally {
+      watch.dispose();
     }
     // a plain-http request the proxy refuses loads its 403 page instead of failing
     if (res?.status() === 403 && (await this.checkBlocked(res.url()))) {

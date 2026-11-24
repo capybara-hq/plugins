@@ -13,10 +13,16 @@ const PROTOCOL = "capybara-embed/1";
 const ASPECT = VIEWPORT.width / VIEWPORT.height;
 /** The side view's frame budget; the expanded view (a takeover) may ask for the full viewport. */
 const SIDE_MAX_WIDTH = 640;
+/** The embed `resize` range the host clamps to. */
+const MIN_HEIGHT = 120;
+const MAX_HEIGHT = 4000;
 const HIDDEN_CLOSE_MS = 60_000;
 const COMPACT_BELOW = 600;
 const MOVE_INTERVAL_MS = 50;
-/** Backoff of the retries of a 4404 (the service restarting, e.g. after an allow) before "not running". */
+/**
+ * Backoff of the retries of a 4404 that follows a live view (the service restarting, e.g. after an
+ * allow) before "not running". A 4404 before any live view is "not running" at once.
+ */
 const RESTART_RETRY_MS = [1000, 3000] as const;
 /** The "not running" state looks for the browser this often while visible, for this long. */
 const EMPTY_POLL_MS = 10_000;
@@ -73,6 +79,10 @@ export interface PanelOptions {
   decode?: (jpeg: Uint8Array) => Promise<CanvasImageSource>;
 }
 
+interface Observer {
+  observe(el: Element): void;
+}
+
 type View = "connecting" | "live" | "empty" | "offline" | "error";
 
 export function mountPanel(opts: PanelOptions): void {
@@ -103,6 +113,16 @@ export function mountPanel(opts: PanelOptions): void {
   let retried401 = false;
   let attempts = 0;
   let restartRetries = 0;
+  /** The last connection showed the browser: a 4404 now may be a restart, retried before "not running". */
+  let wasLive = false;
+  /** This connection is a quiet look for the browser from "not running": it stays there until a state. */
+  let quiet = false;
+  /**
+   * The host shows this panel full (this panel asked for it on take over): the frame fills the box,
+   * no resize. The host sends no mode back, so it ends when the person's control ends by any path.
+   */
+  let full = false;
+  let postedHeight = 0;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let emptyTimer: ReturnType<typeof setTimeout> | undefined;
   let emptySince: number | undefined;
@@ -131,7 +151,15 @@ export function mountPanel(opts: PanelOptions): void {
     if (sock === null) return;
     sock.send(new TextEncoder().encode(JSON.stringify(msg)));
   }
-  const bridge = (full: boolean) => post({ protocol: PROTOCOL, type: "panel-mode", full });
+  function bridge(next: boolean): void {
+    full = next;
+    post({ protocol: PROTOCOL, type: "panel-mode", full: next });
+    if (!next) {
+      // back in the side panel: ask for its size again, even if it equals the last one asked
+      postedHeight = 0;
+      fitHeight();
+    }
+  }
 
   // ---- rendering ----
 
@@ -169,6 +197,10 @@ export function mountPanel(opts: PanelOptions): void {
     const el = $("status");
     el.setAttribute("data-control", control);
     let key: StringKey;
+    if (mode === "empty" || mode === "offline" || mode === "error") {
+      el.textContent = "";
+      return;
+    }
     if (mode === "connecting") key = "statusConnecting";
     else if (control === "user") key = compact() ? "statusUserElsewhere" : "takeoverHint";
     else if (lastState?.loading === true) key = "statusLoading";
@@ -246,7 +278,10 @@ export function mountPanel(opts: PanelOptions): void {
     $("handoff").hidden = pendingHandoff === null;
     $("handoff-message").textContent = pendingHandoff?.message ?? "";
     tabs = s.tabs;
+    const was = control;
     control = s.control;
+    // the take over ended elsewhere (another panel handed back, the agent resumed): leave full
+    if (full && was === "user" && control === "agent") bridge(false);
     const active = tabs.find((x) => x.active);
     if (doc.activeElement !== url) url.value = active?.url ?? "";
     renderTabs();
@@ -337,9 +372,35 @@ export function mountPanel(opts: PanelOptions): void {
     view.style.width = `${box.w}px`;
     view.style.height = `${box.h}px`;
     const dpr = win.devicePixelRatio || 1;
-    const cap = control === "user" ? VIEWPORT.width : SIDE_MAX_WIDTH;
+    const cap = control === "user" || full ? VIEWPORT.width : SIDE_MAX_WIDTH;
     const w = Math.max(1, Math.min(cap, Math.round(box.w * dpr)));
     return { w, h: Math.max(1, Math.round(w / ASPECT)) };
+  }
+
+  /**
+   * In the side panel the host sizes the iframe by the embed `resize` message: ask for the height
+   * that shows the 16:10 frame at the full available width, plus the panel's own bars. Full mode
+   * fills the panel instead (the frame is letterboxed in it), so nothing is asked there.
+   */
+  function fitHeight(): void {
+    if (full) return;
+    const st = stage.getBoundingClientRect();
+    const width = Math.max(0, Math.floor(st.width));
+    if (width === 0) return;
+    const chrome = Math.max(0, win.innerHeight - Math.max(0, st.height));
+    const height = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.ceil(chrome + width / ASPECT)));
+    if (height === postedHeight) return;
+    postedHeight = height;
+    post({ protocol: PROTOCOL, type: "resize", height });
+  }
+
+  /** The box changed (width, the host's new height, a strip shown or hidden). */
+  function onBoxChange(): void {
+    fitHeight();
+    if (sock === null || mode !== "live") return;
+    const { w, h } = layout();
+    if (sentSize !== `${w}x${h}`) sizeMessage("resize");
+    draw();
   }
 
   function sizeMessage(kind: "hello" | "resize"): void {
@@ -376,7 +437,10 @@ export function mountPanel(opts: PanelOptions): void {
 
   function show(next: View): void {
     mode = next;
-    if (next === "empty") armEmptyPoll();
+    if (next === "empty") {
+      wasLive = false;
+      armEmptyPoll();
+    }
     renderChrome();
   }
 
@@ -392,7 +456,7 @@ export function mountPanel(opts: PanelOptions): void {
       if (mode !== "empty" || emptySince === undefined) return;
       if (Date.now() - emptySince >= EMPTY_POLL_FOR_MS) return;
       if (doc.visibilityState === "hidden") armEmptyPoll();
-      else void connect();
+      else void connect(true);
     }, EMPTY_POLL_MS);
   }
 
@@ -410,10 +474,14 @@ export function mountPanel(opts: PanelOptions): void {
     }
   }
 
-  async function connect(): Promise<void> {
+  /** `lookOnly`: a look from "not running" that keeps showing it until the browser answers. */
+  async function connect(lookOnly = false): Promise<void> {
     stop();
     const mine = gen;
-    show("connecting");
+    quiet = lookOnly && mode === "empty";
+    // a quiet look keeps the next one armed: a handshake that hangs does not end the looking
+    if (quiet) armEmptyPoll();
+    else show("connecting");
     let ticketUrl: string;
     try {
       const res = await doFetch("stream-ticket", {
@@ -430,10 +498,10 @@ export function mountPanel(opts: PanelOptions): void {
       if (mine !== gen) return;
       const code = body.code ?? body.error?.code;
       if (code === "service_not_running") return show("empty");
-      if (!res.ok || typeof body.url !== "string") return show("offline");
+      if (!res.ok || typeof body.url !== "string") return show(quiet ? "empty" : "offline");
       ticketUrl = body.url;
     } catch {
-      if (mine === gen) show("offline");
+      if (mine === gen) show(quiet ? "empty" : "offline");
       return;
     }
     const ws = new SocketCtor(ticketUrl);
@@ -469,6 +537,8 @@ export function mountPanel(opts: PanelOptions): void {
     switch (msg.t) {
       case "state":
         mode = "live";
+        wasLive = true;
+        quiet = false;
         emptySince = undefined;
         applyState(msg);
         break;
@@ -489,13 +559,18 @@ export function mountPanel(opts: PanelOptions): void {
   function onClose(code: number): void {
     sock = null;
     lastState = null;
+    if (quiet && code !== 4401 && code !== 4409 && code !== 1009) {
+      // a quiet look that found no browser: still "not running", look again later
+      show("empty");
+      return;
+    }
     if (code === 4401 && !retried401) {
       retried401 = true;
-      void connect();
+      void connect(quiet);
     } else if (code === 4404) {
-      // The service is not running, or restarting (an allow restarts it on some devices): two
-      // tries with backoff before "not running".
-      const wait = RESTART_RETRY_MS[restartRetries];
+      // The service is not running, or (after a live view) restarting: an allow restarts it on
+      // some devices, so two tries with backoff before "not running".
+      const wait = wasLive ? RESTART_RETRY_MS[restartRetries] : undefined;
       if (wait === undefined) show("empty");
       else {
         restartRetries++;
@@ -682,13 +757,14 @@ export function mountPanel(opts: PanelOptions): void {
     if (e.key === "Escape" && interactive()) handback();
   });
   win.addEventListener("resize", () => {
+    onBoxChange();
     if (sock === null || mode !== "live") return;
-    const { w, h } = layout();
-    if (sentSize !== `${w}x${h}`) sizeMessage("resize");
     renderChrome();
     renderTabs();
-    draw();
   });
+  const Ro = (win as unknown as { ResizeObserver?: new (cb: () => void) => Observer })
+    .ResizeObserver;
+  if (Ro !== undefined) new Ro(onBoxChange).observe(stage);
   doc.addEventListener("visibilitychange", () => {
     if (doc.visibilityState === "hidden") {
       if (hiddenTimer === undefined) {
@@ -705,7 +781,8 @@ export function mountPanel(opts: PanelOptions): void {
       hiddenTimer = undefined;
       if (pausedForHidden) {
         pausedForHidden = false;
-        void connect();
+        // from "not running" this is a quiet look, not a "Connecting…" flash
+        void connect(true);
       }
     }
   });
@@ -723,6 +800,7 @@ export function mountPanel(opts: PanelOptions): void {
 
   setLabels();
   renderChrome();
+  fitHeight();
 
   win.addEventListener("message", (ev: MessageEvent) => {
     // only the host page speaks the embed protocol (not a page this frame may embed)
@@ -735,6 +813,8 @@ export function mountPanel(opts: PanelOptions): void {
       applyTheme(m.tokens, m.theme);
       setLabels();
       renderChrome();
+      postedHeight = 0;
+      fitHeight();
       if (!started) {
         started = true;
         void connect();

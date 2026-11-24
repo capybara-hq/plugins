@@ -71,9 +71,16 @@ A real browser in the person's device for agents (browser use spec,
   state. Take over is offered only in the live view; handing back with a pending handoff answers
   it Done.
 - 允许 allows the blocked host, then opens the blocked page (the blocked navigation, or the page
-  whose resource was refused), again on the next connection if the browser restarted. A 4404 is
-  retried twice (1 s, 3 s) before "not running", which looks for the browser every 10 s while
-  visible, for 30 minutes at most (a ticket never starts the service). A refused allow or answer
-  shows the kernel's reason.
+  whose resource was refused), again on the next connection if the browser restarted. A 4404
+  after a live view (a restart) is retried twice (1 s, 3 s) before "not running"; one before any
+  live view is "not running" at once. "Not running" looks for the browser quietly (it stays up
+  until the browser answers) every 10 s while visible, for 30 minutes at most (a ticket never
+  starts the service). A refused allow or answer shows the kernel's reason.
+- Size: in the side panel the page posts the embed `resize` (120–4000) for the 16:10 frame at the
+  available width plus its bars, again whenever its box changes; in full mode (asked for with
+  `panel-mode` on take over) the host fills the panel and the frame is letterboxed in it, with
+  the viewer's frame size following the shown size. The host sends no mode back, so full mode
+  ends with the person's control by any path (hand back here or elsewhere, the agent resuming),
+  and the side size is asked for again.
 - A dialog strip hides after 10 s or when the page changes; agent clicks flash once each; a lock
   shows a secure page. The panel listens only to messages from its host page.
