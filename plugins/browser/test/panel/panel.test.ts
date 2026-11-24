@@ -310,6 +310,46 @@ describe("panel", () => {
   });
 });
 
+describe("handoff banner", () => {
+  const handoff = { callId: "call-1", message: "Log in" };
+
+  it("shows the banner from state.handoff and hides it when absent", async () => {
+    const s = setup();
+    const sock = await live(s, state({ handoff }));
+    expect(($(s, "handoff") as HTMLElement).hidden).toBe(false);
+    expect($(s, "handoff-message").textContent).toBe("Log in");
+    sock.push(state());
+    expect(($(s, "handoff") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("done and cancel post handoff-answer", async () => {
+    const s = setup();
+    await live(s, state({ handoff }));
+    $(s, "handoff-done").click();
+    await vi.waitFor(() =>
+      expect(s.fetchCalls.find((c) => c.url === "handoff-answer")?.body).toEqual({
+        callId: "call-1",
+        done: true,
+      }),
+    );
+    $(s, "handoff-cancel").click();
+    await vi.waitFor(() =>
+      expect(s.fetchCalls.filter((c) => c.url === "handoff-answer")[1]?.body).toEqual({
+        callId: "call-1",
+        done: false,
+      }),
+    );
+  });
+
+  it("works in the compact size class", async () => {
+    const s = setup({ width: 500 });
+    await live(s, state({ handoff }));
+    expect(($(s, "handoff") as HTMLElement).hidden).toBe(false);
+    $(s, "handoff-done").click();
+    await vi.waitFor(() => expect(s.fetchCalls.some((c) => c.url === "handoff-answer")).toBe(true));
+  });
+});
+
 describe("i18n", () => {
   it("zh and en have the same keys; zh has no 企业 or Latin agent", () => {
     expect(Object.keys(STRINGS.zh).sort()).toEqual(Object.keys(STRINGS.en).sort());

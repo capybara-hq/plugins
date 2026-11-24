@@ -96,6 +96,7 @@ export function mountPanel(opts: PanelOptions): void {
   let hiddenTimer: ReturnType<typeof setTimeout> | undefined;
   let pausedForHidden = false;
   let blockedHost = "";
+  let pendingHandoff: { callId: string; message: string } | null = null;
   let sentSize = "";
   let lastMove = Number.NEGATIVE_INFINITY;
   let image: CanvasImageSource | null = null;
@@ -137,6 +138,9 @@ export function mountPanel(opts: PanelOptions): void {
     set("reconnect", "reconnect");
     set("blocked-label", "blocked");
     set("dialog-label", "dialog");
+    set("handoff-label", "handoff");
+    set("handoff-done", "handoffDone");
+    set("handoff-cancel", "handoffCancel");
     for (const [id, key] of [
       ["back", "back"],
       ["forward", "forward"],
@@ -232,6 +236,9 @@ export function mountPanel(opts: PanelOptions): void {
 
   function applyState(s: Extract<ViewerOut, { t: "state" }>): void {
     lastState = s;
+    pendingHandoff = s.handoff ?? null;
+    $("handoff").hidden = pendingHandoff === null;
+    $("handoff-message").textContent = pendingHandoff?.message ?? "";
     tabs = s.tabs;
     control = s.control;
     // Control went back to the agent (any viewer): this panel no longer holds a takeover.
@@ -451,6 +458,23 @@ export function mountPanel(opts: PanelOptions): void {
     send({ t: "nav", action: "reload" });
   }
 
+  async function answerHandoff(done: boolean): Promise<void> {
+    const h = pendingHandoff;
+    if (h === null) return;
+    try {
+      const res = await doFetch("handoff-answer", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ callId: h.callId, done }),
+        credentials: "omit",
+      });
+      if (!res.ok) return;
+    } catch {
+      return;
+    }
+    // The daemon clears state.handoff once the answer lands; the next state hides the banner.
+  }
+
   function onPointer(kind: "down" | "up" | "move", e: MouseEvent): void {
     if (compact()) return;
     if (kind === "move") {
@@ -476,6 +500,8 @@ export function mountPanel(opts: PanelOptions): void {
 
   $("takeover").addEventListener("click", takeover);
   $("handback").addEventListener("click", handback);
+  $("handoff-done").addEventListener("click", () => void answerHandoff(true));
+  $("handoff-cancel").addEventListener("click", () => void answerHandoff(false));
   $("allow").addEventListener("click", () => void allowHost());
   $("reconnect").addEventListener("click", () => {
     retried401 = false;

@@ -55,6 +55,7 @@ export const PANEL_HTML = `<!doctype html>
   <button type="button" id="takeover" class="primary"></button>
   <button type="button" id="handback" class="primary" hidden></button>
 </div>
+<div id="handoff" class="strip" hidden><p><span id="handoff-label"></span> <span id="handoff-message"></span></p><button type="button" id="handoff-done" class="primary"></button><button type="button" id="handoff-cancel"></button></div>
 <p id="status" role="status"></p>
 <div id="stage">
   <canvas id="view" tabindex="0"></canvas>
