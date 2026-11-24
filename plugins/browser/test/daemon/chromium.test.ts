@@ -1,9 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   chromiumLaunchPlan,
+  ensureChromium,
+  headlessShellPaths,
   headlessShellRevision,
   playwrightDownloadHosts,
 } from "../../daemon/chromium.js";
@@ -78,5 +80,28 @@ describe("chromium browsers directory", () => {
     expect(
       playwrightDownloadHosts({ PLAYWRIGHT_DOWNLOAD_HOST: "https://mirror.example.com/pw" }),
     ).toEqual(["mirror.example.com"]);
+  });
+});
+
+describe("chromium install", () => {
+  it("takes a headless shell as installed only with Playwright's marker, never its half-written files", async () => {
+    // its own browsers directory: playwright-core reads it once per test file's process
+    const dir = mkdtempSync(join(tmpdir(), "cbd-install-"));
+    try {
+      const { executable, marker } = await headlessShellPaths(dir);
+      // another daemon mid-install: it holds the registry's lock and has written the executable,
+      // not yet the rest nor the marker
+      mkdirSync(dirname(executable), { recursive: true });
+      writeFileSync(executable, "");
+      mkdirSync(join(dir, "__dirlock"));
+      const ensured = ensureChromium(dir).then((path) => ({ path, marker: existsSync(marker) }));
+      // that install finishes
+      await new Promise((r) => setImmediate(r));
+      writeFileSync(marker, "");
+      rmSync(join(dir, "__dirlock"), { recursive: true });
+      expect(await ensured).toEqual({ path: executable, marker: true });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
