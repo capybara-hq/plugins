@@ -1,15 +1,17 @@
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { MAX_SCREENSHOT_BYTES, MAX_TITLE_CHARS } from "../../daemon/actions.js";
+import { MAX_SCREENSHOT_BYTES, MAX_TITLE_CHARS, safeFileName } from "../../daemon/actions.js";
 import type { ViewerOut } from "../../daemon/protocol.js";
 import {
   openViewer,
@@ -36,6 +38,9 @@ let fx: Awaited<ReturnType<typeof startFixtureServer>>;
 let d: TestDaemon;
 let workspace: string;
 let outside: string;
+let releaseSlow: () => void = () => undefined;
+const link = (href: string, name: string) =>
+  `<!doctype html><title>Download</title><a href="${href}" download="${name}">Get</a>`;
 
 beforeAll(async () => {
   workspace = mkdtempSync(join(tmpdir(), "cbd-ws-"));
@@ -47,9 +52,36 @@ beforeAll(async () => {
       res.writeHead(200, { "content-type": "text/plain" }).end("hello download");
     },
     "/huge-title": HUGE_TITLE,
+    "/dl-endless": link("/endless", "big.bin"),
+    "/endless": (_req, res) => {
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-disposition": 'attachment; filename="big.bin"',
+      });
+      const chunk = Buffer.alloc(64 * 1024);
+      const pump = () => {
+        while (!res.destroyed && res.write(chunk)) {}
+        if (!res.destroyed) res.once("drain", pump);
+      };
+      pump();
+    },
+    "/dl-slow": link("/slow", "slow.bin"),
+    "/slow": (_req, res) => {
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-disposition": 'attachment; filename="slow.bin"',
+      });
+      // Chromium decides on a download after its first few KB
+      res.write(Buffer.alloc(4096, 97));
+      releaseSlow = () => res.end("b");
+    },
+    "/dl-dangle": link("/file.txt", "dangle.txt"),
     "/tall": TALL_NOISE,
   });
-  d = await startTestDaemon({ env: { CAPYBARA_SERVICE_WORKSPACE: workspace } });
+  d = await startTestDaemon({
+    env: { CAPYBARA_SERVICE_WORKSPACE: workspace, BROWSER_DOWNLOAD_MAX_BYTES: String(1024 * 1024) },
+    downloadWaitMs: 300,
+  });
 });
 
 afterAll(async () => {
@@ -59,6 +91,25 @@ afterAll(async () => {
   removeDir(workspace);
   removeDir(outside);
 });
+
+/** Collects reply texts until one contains `needle` (late notes ride later replies). */
+async function noteContaining(needle: string): Promise<string> {
+  let all = "";
+  await vi.waitFor(async () => {
+    const r = await request(d.socketPath, { op: "tabs", action: "list" });
+    all += r.ok ? (r.text ?? "") : "";
+    expect(all).toContain(needle);
+  });
+  return all;
+}
+
+async function clickDownload(page: string): Promise<string> {
+  await request(d.socketPath, { op: "navigate", url: `${fx.url}${page}` });
+  const ref = await refOf(/link "Get" \[ref=((?:f\d+)?e\d+)\]/);
+  const click = await request(d.socketPath, { op: "click", ref });
+  if (!click.ok) throw new Error(click.message);
+  return click.text ?? "";
+}
 
 async function refOf(label: RegExp): Promise<string> {
   const snap = await request(d.socketPath, { op: "snapshot" });
@@ -100,7 +151,7 @@ describe("browser daemon workspace and limits", () => {
   });
 
   it("saves downloads into the workspace downloads directory", async () => {
-    const dir = join(workspace, "downloads");
+    const dir = join(realpathSync(workspace), "downloads");
     const notes: string[] = [];
     for (const name of ["report.txt", "report (1).txt"]) {
       await request(d.socketPath, { op: "navigate", url: `${fx.url}/download` });
@@ -145,5 +196,63 @@ describe("browser daemon workspace and limits", () => {
     const bytes = Buffer.from(shot.image ?? "", "base64").length;
     expect(bytes).toBeGreaterThan(0);
     expect(bytes).toBeLessThanOrEqual(MAX_SCREENSHOT_BYTES);
+  });
+
+  it("an endless download is reported in progress, then cancelled at the size cap", async () => {
+    // the cancellation note rides the click's reply or a later one
+    const cancelled =
+      'The download of "big.bin" was cancelled: downloads in progress passed 1048576 bytes.';
+    const text = await clickDownload("/dl-endless");
+    if (!text.includes(cancelled)) await noteContaining(cancelled);
+    expect(existsSync(join(workspace, "downloads", "big.bin"))).toBe(false);
+  });
+
+  it("a slow download replies in progress and is named by a later reply", async () => {
+    // navigating to the file starts the download inside the request, so the reply waits for it
+    const nav = await request(d.socketPath, { op: "navigate", url: `${fx.url}/slow` });
+    if (!nav.ok) throw new Error(nav.message);
+    expect(nav.text).toContain('Download still in progress: "slow.bin"');
+    releaseSlow();
+    await vi.waitFor(() => expect(existsSync(join(workspace, "downloads", "slow.bin"))).toBe(true));
+    // a failing request does not swallow the late note
+    const failed = await request(d.socketPath, { op: "click", ref: "e99999" });
+    expect(failed.ok).toBe(false);
+    await noteContaining(
+      `Downloaded "slow.bin" to ${join(realpathSync(workspace), "downloads", "slow.bin")}.`,
+    );
+  });
+
+  it("a dangling link at the target name is not overwritten", async () => {
+    symlinkSync(join(outside, "missing"), join(workspace, "downloads", "dangle.txt"));
+    const text = await clickDownload("/dl-dangle");
+    const dir = join(realpathSync(workspace), "downloads");
+    const all = text.includes("dangle (1).txt") ? text : await noteContaining("dangle (1).txt");
+    expect(all).toContain(`to ${join(dir, "dangle (1).txt")}.`);
+    expect(existsSync(join(outside, "missing"))).toBe(false);
+  });
+
+  it("refuses a downloads directory that is a link", async () => {
+    renameSync(join(workspace, "downloads"), join(workspace, "downloads-old"));
+    symlinkSync(outside, join(workspace, "downloads"));
+    const text = await clickDownload("/download");
+    const all = text.includes("not a plain directory")
+      ? text
+      : await noteContaining("not a plain directory");
+    expect(all).toContain("is not a plain directory in the workspace");
+    expect(readdirSync(outside)).not.toContain("report.txt");
+  });
+});
+
+describe("download names", () => {
+  it("caps names at 200 UTF-8 bytes, keeping the extension and whole characters", () => {
+    const name = safeFileName(`${"文".repeat(150)}.pdf`);
+    expect(Buffer.byteLength(name)).toBeLessThanOrEqual(200);
+    expect(name.endsWith(".pdf")).toBe(true);
+    const emoji = safeFileName(`${"😀".repeat(80)}.txt`);
+    expect(Buffer.byteLength(emoji)).toBeLessThanOrEqual(200);
+    expect(emoji.endsWith(".txt")).toBe(true);
+    expect([...emoji.slice(0, -4)].every((c) => c === "😀")).toBe(true);
+    expect(safeFileName("../../etc/passwd")).toBe("passwd");
+    expect(safeFileName("...")).toBe("download");
   });
 });

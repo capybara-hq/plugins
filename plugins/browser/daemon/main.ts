@@ -5,7 +5,12 @@
 import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { encodeServiceMessage, ServiceMessageDecoder } from "@capybara-hq/plugin-sdk";
-import { ActionError, BrowserSession, TAKEN_OVER_MESSAGE } from "./actions.js";
+import {
+  ActionError,
+  BrowserSession,
+  DEFAULT_DOWNLOAD_MAX_BYTES,
+  TAKEN_OVER_MESSAGE,
+} from "./actions.js";
 import { chromiumLaunchPlan, launchChromium } from "./chromium.js";
 import {
   DEFAULT_FRAME_MAX_BYTES,
@@ -30,6 +35,8 @@ export interface DaemonOptions {
   idleMs?: number;
   /** Called when the daemon has been idle for its idle period. */
   onIdle?: () => void;
+  /** How long a reply waits for the downloads its action started (default 10 s). */
+  downloadWaitMs?: number;
   /** Called when Chromium exits without the daemon closing it. */
   onBrowserGone?: () => void;
 }
@@ -68,6 +75,13 @@ const REQUEST_OPS = new Set<string>([
   "wait",
   "screenshot",
 ]);
+
+/** The cap on downloads in progress from BROWSER_DOWNLOAD_MAX_BYTES, else the default. */
+export function downloadMaxBytes(env: Record<string, string | undefined>): number {
+  const raw = env.BROWSER_DOWNLOAD_MAX_BYTES;
+  const n = raw === undefined ? Number.NaN : Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_DOWNLOAD_MAX_BYTES;
+}
 
 /** The per-message cap of viewer frames from the environment, else the default. */
 export function frameMaxBytes(env: Record<string, string | undefined>): number {
@@ -135,6 +149,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       proxy: plan.proxy,
       clock,
       workspace: workspace === undefined || workspace === "" ? undefined : workspace,
+      downloadsTmp: plan.downloadsTmp,
+      downloadMaxBytes: downloadMaxBytes(opts.env),
+      ...(opts.downloadWaitMs === undefined ? {} : { downloadWaitMs: opts.downloadWaitMs }),
     });
   });
   const ready = browser.then(() => undefined);

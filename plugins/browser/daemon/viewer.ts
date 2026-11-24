@@ -58,6 +58,8 @@ export class ViewerSession {
   /** Serializes attach / detach / restart. */
   private chain: Promise<unknown> = Promise.resolve();
   private inputChain: Promise<void> = Promise.resolve();
+  /** Bumped on close and hand back: input queued before it is dropped, not replayed. */
+  private inputGen = 0;
   private seq = 0;
   private acked = 0;
   private lastSentAt = 0;
@@ -116,6 +118,7 @@ export class ViewerSession {
         this.state.takeover();
         return;
       case "handback":
+        this.inputGen++;
         this.state.handback();
         return;
       case "mouse":
@@ -152,7 +155,9 @@ export class ViewerSession {
 
   /** Runs viewer input in arrival order, apart from the screencast chain. */
   private input(fn: () => Promise<void>): void {
-    const run = this.inputChain.then(fn, fn);
+    const gen = this.inputGen;
+    const guarded = () => (gen === this.inputGen && !this.closed ? fn() : Promise.resolve());
+    const run = this.inputChain.then(guarded, guarded);
     this.inputChain = run.catch(() => undefined);
   }
 
@@ -160,6 +165,7 @@ export class ViewerSession {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.inputGen++;
     for (const u of this.unsubscribe.splice(0)) u();
     if (this.pumpTimer !== undefined) this.clock.cancel(this.pumpTimer);
     await this.serial(() => this.detach());

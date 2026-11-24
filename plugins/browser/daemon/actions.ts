@@ -3,7 +3,7 @@
 // dialogs). Takeover: main.ts refuses a request that arrives while the person holds control, and
 // run() checks again when a queued request leaves the queue (`takenOver`).
 
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { basename, extname, join, sep } from "node:path";
 import type { BrowserContext, CDPSession, Dialog, Download, Locator, Page } from "playwright-core";
@@ -39,7 +39,16 @@ interface Collector {
   blocked: Set<string>;
   notes: string[];
   pending: Promise<unknown>[];
+  /** Downloads that began during the request: waited for, at most `downloadWaitMs`. */
+  downloads: { name: string; done: Promise<void>; finished: boolean }[];
 }
+
+/** How long a reply waits for the downloads its action started. */
+export const DOWNLOAD_WAIT_MS = 10_000;
+/** The default cap on the bytes of downloads in progress (BROWSER_DOWNLOAD_MAX_BYTES). */
+export const DEFAULT_DOWNLOAD_MAX_BYTES = 200 * 1024 * 1024;
+const DOWNLOAD_POLL_MS = 250;
+const MAX_NAME_BYTES = 200;
 
 const ACTION_TIMEOUT_MS = 10_000;
 const NAVIGATION_TIMEOUT_MS = 30_000;
@@ -64,7 +73,23 @@ export function clip(s: string, max: number): string {
   return s.length <= max ? s : `${s.slice(0, Math.max(0, max - 1))}…`;
 }
 
-/** A file name safe to create in the downloads directory. */
+/** The longest prefix of `s` (whole code points) of at most `max` UTF-8 bytes. */
+function utf8Prefix(s: string, max: number): string {
+  let out = "";
+  let bytes = 0;
+  for (const ch of s) {
+    const n = Buffer.byteLength(ch);
+    if (bytes + n > max) break;
+    out += ch;
+    bytes += n;
+  }
+  return out;
+}
+
+/**
+ * A file name safe to create in the downloads directory: no path, control or reserved
+ * characters, no leading dots, at most 200 UTF-8 bytes with the extension kept.
+ */
 export function safeFileName(raw: string): string {
   const visible = [...raw]
     .map((ch) => {
@@ -75,9 +100,25 @@ export function safeFileName(raw: string): string {
   const name = basename(visible.replace(/\\/g, "/"))
     .replace(/[/:*?"<>|]/g, "_")
     .replace(/^\.+/, "")
-    .trim()
-    .slice(0, 200);
-  return name === "" ? "download" : name;
+    .trim();
+  if (name === "") return "download";
+  if (Buffer.byteLength(name) <= MAX_NAME_BYTES) return name;
+  let ext = extname(name);
+  if (Buffer.byteLength(ext) > 32) ext = "";
+  return (
+    utf8Prefix(name.slice(0, name.length - ext.length), MAX_NAME_BYTES - Buffer.byteLength(ext)) +
+    ext
+  );
+}
+
+/** Whether `path` names nothing at all (a dangling link is something). */
+function absent(path: string): boolean {
+  try {
+    lstatSync(path);
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 const PROXY_PROBE_TIMEOUT_MS = 5_000;
@@ -217,6 +258,12 @@ export class BrowserSession {
   private readonly clock: Clock;
   /** The device's workspace root (CAPYBARA_SERVICE_WORKSPACE): uploads and downloads stay in it. */
   private readonly workspace: string | undefined;
+  private readonly downloadsTmp: string | undefined;
+  private readonly downloadMaxBytes: number;
+  private readonly downloadWaitMs: number;
+  /** Downloads in progress, cancelled together when their bytes pass the cap. */
+  private readonly activeDownloads = new Set<Download>();
+  private downloadPoll: unknown;
   private readonly pages = new Map<string, Page>();
   private readonly ids = new WeakMap<Page, string>();
   private readonly titles = new Map<string, string>();
@@ -233,11 +280,22 @@ export class BrowserSession {
 
   constructor(
     ctx: BrowserContext,
-    opts: { proxy?: string | undefined; clock?: Clock; workspace?: string | undefined },
+    opts: {
+      proxy?: string | undefined;
+      clock?: Clock;
+      workspace?: string | undefined;
+      /** Playwright's directory for downloads in progress (launch option `downloadsPath`). */
+      downloadsTmp?: string | undefined;
+      downloadMaxBytes?: number;
+      downloadWaitMs?: number;
+    },
   ) {
     this.ctx = ctx;
     this.proxy = opts.proxy;
     this.workspace = opts.workspace;
+    this.downloadsTmp = opts.downloadsTmp;
+    this.downloadMaxBytes = opts.downloadMaxBytes ?? DEFAULT_DOWNLOAD_MAX_BYTES;
+    this.downloadWaitMs = opts.downloadWaitMs ?? DOWNLOAD_WAIT_MS;
     this.clock = opts.clock ?? systemClock;
     ctx.setDefaultTimeout(ACTION_TIMEOUT_MS);
     ctx.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
@@ -395,39 +453,113 @@ export class BrowserSession {
 
   /**
    * Saves a download into `<workspace>/downloads` under its suggested name (sanitized, numbered
-   * when taken); the requests in flight wait for it and name the saved path. Without a workspace
-   * the download is cancelled.
+   * when taken). A request in flight waits for it at most `downloadWaitMs`, then says it is still
+   * in progress; the result note then comes with a later reply. Downloads in progress are
+   * cancelled when together they pass `downloadMaxBytes`, so a page cannot fill the disk.
+   * Without a workspace the download is cancelled.
    */
   private onDownload(d: Download): void {
+    const shown = JSON.stringify(clip(d.suggestedFilename(), 300));
     const workspace = this.workspace;
     if (workspace === undefined) {
       d.cancel().catch(() => undefined);
-      this.note("The page started a download, which was cancelled: the device has no workspace.");
+      this.note(
+        `The page started a download (${shown}), which was cancelled: the device has no workspace.`,
+      );
       return;
     }
-    const dir = join(workspace, "downloads");
-    const name = safeFileName(d.suggestedFilename());
-    const ext = extname(name);
-    const stem = name.slice(0, name.length - ext.length);
-    const save = (async () => {
-      mkdirSync(dir, { recursive: true });
-      let target = join(dir, name);
-      for (let i = 1; existsSync(target) || this.reservedDownloads.has(target); i++) {
-        target = join(dir, `${stem} (${i})${ext}`);
-      }
-      this.reservedDownloads.add(target);
+    this.activeDownloads.add(d);
+    this.pollDownloads();
+    const entry = { name: shown, done: Promise.resolve(), finished: false };
+    entry.done = (async () => {
+      let target: string | undefined;
       try {
+        const failure = await d.failure();
+        if (failure !== null) {
+          if (failure !== "canceled") this.note(`The download of ${shown} failed: ${failure}.`);
+          return;
+        }
+        const tmp = await d.path();
+        if (statSync(tmp).size > this.downloadMaxBytes) {
+          this.note(
+            `The download of ${shown} was not saved: it is larger than ${this.downloadMaxBytes} bytes.`,
+          );
+          return;
+        }
+        target = this.downloadTarget(workspace, safeFileName(d.suggestedFilename()));
         await d.saveAs(target);
-        this.note(`Downloaded ${JSON.stringify(d.suggestedFilename())} to ${target}.`);
+        this.note(`Downloaded ${shown} to ${target}.`);
       } catch (e) {
         this.note(
-          `The download of ${JSON.stringify(d.suggestedFilename())} failed: ${firstLine(e)}`,
+          `The download of ${shown} was not saved: ${e instanceof ActionError ? e.message : firstLine(e)}`,
         );
       } finally {
-        this.reservedDownloads.delete(target);
+        if (target !== undefined) this.reservedDownloads.delete(target);
+        this.activeDownloads.delete(d);
+        entry.finished = true;
       }
     })();
-    for (const c of this.collectors) c.pending.push(save);
+    for (const c of this.collectors) c.downloads.push(entry);
+  }
+
+  /** A free path in `<workspace>/downloads`, refusing a downloads directory that is a link. */
+  private downloadTarget(workspace: string, name: string): string {
+    const root = realpathSync(workspace);
+    const dir = join(root, "downloads");
+    mkdirSync(dir, { recursive: true });
+    const st = lstatSync(dir);
+    if (!st.isDirectory() || st.isSymbolicLink() || realpathSync(dir) !== dir) {
+      throw new ActionError(
+        "failed",
+        `${dir} is not a plain directory in the workspace; remove it so downloads can be saved.`,
+      );
+    }
+    const ext = extname(name);
+    const stem = name.slice(0, name.length - ext.length);
+    let target = join(dir, name);
+    for (let i = 1; !absent(target) || this.reservedDownloads.has(target); i++) {
+      target = join(dir, `${stem} (${i})${ext}`);
+    }
+    this.reservedDownloads.add(target);
+    return target;
+  }
+
+  /**
+   * While downloads run, sums the bytes of Playwright's in-progress files and cancels every
+   * running download once the sum passes the cap.
+   */
+  private pollDownloads(): void {
+    if (this.downloadPoll !== undefined || this.activeDownloads.size === 0) return;
+    this.downloadPoll = this.clock.schedule(() => {
+      this.downloadPoll = undefined;
+      if (this.activeDownloads.size === 0) return;
+      let bytes = 0;
+      const dir = this.downloadsTmp;
+      if (dir !== undefined) {
+        try {
+          for (const f of readdirSync(dir)) {
+            try {
+              bytes += statSync(join(dir, f)).size;
+            } catch {
+              // finished and moved meanwhile
+            }
+          }
+        } catch {
+          // not created yet
+        }
+      }
+      if (bytes > this.downloadMaxBytes) {
+        for (const d of this.activeDownloads) {
+          this.note(
+            `The download of ${JSON.stringify(clip(d.suggestedFilename(), 300))} was cancelled: downloads in progress passed ${this.downloadMaxBytes} bytes.`,
+          );
+          d.cancel().catch(() => undefined);
+        }
+        this.activeDownloads.clear();
+        return;
+      }
+      this.pollDownloads();
+    }, DOWNLOAD_POLL_MS);
   }
 
   /** The real path of an upload, refused unless it is inside the workspace. */
@@ -496,7 +628,10 @@ export class BrowserSession {
    * finish (stopping it halfway would leave the page in an unknown state).
    */
   async run(req: ToolRequest, opts: { takenOver?: () => boolean } = {}): Promise<ToolReply> {
-    const c: Collector = { blocked: new Set(), notes: this.unreported.splice(0), pending: [] };
+    // Notes that arrived with no request in flight ride the next reply, whichever conversation of
+    // the device sends it (they are all the owner's); a failed request puts them back.
+    const late = this.unreported.splice(0);
+    const c: Collector = { blocked: new Set(), notes: [...late], pending: [], downloads: [] };
     this.collectors.add(c);
     let reply: ToolReply;
     try {
@@ -508,6 +643,9 @@ export class BrowserSession {
             return this.exec(req);
           }));
       await this.settleProbes(c);
+      await this.settleDownloads(c);
+      // from here on, notes go to later replies (none is lost between this one and the next)
+      this.collectors.delete(c);
       const page = await this.activePage();
       const text = [...c.notes, ...(out.text === undefined ? [] : [out.text])].join("\n");
       reply = {
@@ -529,11 +667,34 @@ export class BrowserSession {
         message = `The device's network settings block ${[...c.blocked].join(", ")}. Ask the user to allow the host in the browser panel, then retry.`;
       }
       reply = { ok: false, error: code, message, blockedHosts: [...c.blocked] };
+      this.unreported.unshift(...late);
     } finally {
       this.collectors.delete(c);
     }
     this.emit({ type: "state" });
     return reply;
+  }
+
+  /**
+   * Waits for the request's downloads at most `downloadWaitMs`; those still running are noted as
+   * in progress (their result note comes later).
+   */
+  private async settleDownloads(c: Collector): Promise<void> {
+    if (c.downloads.length === 0) return;
+    let timer: unknown;
+    await Promise.race([
+      Promise.allSettled(c.downloads.map((x) => x.done)),
+      new Promise<void>((r) => {
+        timer = this.clock.schedule(r, this.downloadWaitMs);
+      }),
+    ]);
+    this.clock.cancel(timer);
+    for (const x of c.downloads) {
+      if (!x.finished)
+        c.notes.push(
+          `Download still in progress: ${x.name}; a later reply says where it was saved.`,
+        );
+    }
   }
 
   private async settleProbes(c: Collector): Promise<void> {
@@ -626,10 +787,18 @@ export class BrowserSession {
 
   private async goto(page: Page, url: string): Promise<void> {
     let res: Awaited<ReturnType<Page["goto"]>>;
+    // registered first: Playwright may reject the navigation just before it emits the download
+    const download = page.waitForEvent("download", { timeout: ACTION_TIMEOUT_MS });
+    download.catch(() => undefined);
     try {
       res = await page.goto(url, { waitUntil: "domcontentloaded" });
     } catch (e) {
       const msg = firstLine(e);
+      // a URL that is a file download: it is saved and reported (onDownload), not an error
+      if (msg.includes("Download is starting")) {
+        await download.catch(() => undefined);
+        return;
+      }
       if (PROXY_FAILURE_RE.test(msg)) await this.checkBlocked(url);
       throw e;
     }
@@ -903,6 +1072,7 @@ export class BrowserSession {
   /** Closes the browser (flushes the profile). */
   async close(): Promise<void> {
     this.listeners.clear();
+    if (this.downloadPoll !== undefined) this.clock.cancel(this.downloadPoll);
     await this.ctx.close().catch(() => undefined);
   }
 }

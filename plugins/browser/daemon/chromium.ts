@@ -11,6 +11,8 @@ import { VIEWPORT } from "./protocol.js";
 export interface LaunchPlan {
   browsersPath: string;
   profileDir: string;
+  /** Where Chromium writes downloads in progress (saved into the workspace when done). */
+  downloadsTmp: string;
   /** Extra Chromium flags (Playwright adds --headless and --remote-debugging-pipe itself). */
   args: string[];
   /** The proxy Chromium uses, when the device's environment names one (credentials included). */
@@ -70,6 +72,7 @@ export function chromiumLaunchPlan(opts: {
   return {
     browsersPath: opts.browsersPath ?? join(opts.stateDir, "browsers"),
     profileDir: join(opts.stateDir, "profile"),
+    downloadsTmp: join(opts.stateDir, "downloads-tmp"),
     args,
     proxy,
     ...(proxyAuth === undefined ? {} : { proxyAuth }),
@@ -132,6 +135,7 @@ export async function launchChromium(plan: LaunchPlan): Promise<BrowserContext> 
     viewport: { ...VIEWPORT },
     // downloads are saved into the workspace by the session (actions.ts)
     acceptDownloads: true,
+    downloadsPath: plan.downloadsTmp,
     ...(plan.proxyAuth === undefined ? {} : { proxy: plan.proxyAuth }),
   });
 }
