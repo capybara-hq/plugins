@@ -63,7 +63,10 @@ export class ViewerSession {
   private seq = 0;
   private acked = 0;
   private lastSentAt = 0;
-  private pendingAck: { cdp: CDPSession; sessionId: number } | undefined;
+  /** A screencast frame waiting for room (viewer acks, transport, rate cap); acked once sent. */
+  private pending:
+    | { cdp: CDPSession; sessionId: number; data: string; width: number; height: number }
+    | undefined;
   private pumpTimer: unknown;
   private draining = false;
   private stateQueued = false;
@@ -306,7 +309,7 @@ export class ViewerSession {
     const cdp = this.cdp;
     this.cdp = undefined;
     this.page = undefined;
-    this.pendingAck = undefined;
+    this.pending = undefined;
     if (cdp === undefined) return;
     await cdp.send("Page.stopScreencast").catch(() => undefined);
     await cdp.detach().catch(() => undefined);
@@ -334,17 +337,17 @@ export class ViewerSession {
       return;
     }
     const { width, height } = jpegSize(bytes);
-    this.sendFrame(f.data, width, height);
-    this.pendingAck = { cdp, sessionId: f.sessionId };
+    this.pending = { cdp, sessionId: f.sessionId, data: f.data, width, height };
     this.pump();
   }
 
   /**
-   * Acks the held screencast frame (letting Chromium send the next) once the viewer has room for
-   * it, the transport is not backed up and the rate cap allows.
+   * Sends the held screencast frame and acks it (letting Chromium send the next) once the viewer
+   * has room for it, the transport is not backed up and the rate cap allows: a frame never follows
+   * the previous one sooner than 1000 / VIEWER_MAX_FPS ms, the first after an attach included.
    */
   private pump(): void {
-    const pending = this.pendingAck;
+    const pending = this.pending;
     if (pending === undefined || this.closed || this.draining) return;
     if (this.seq - this.acked >= VIEWER_UNACKED_FRAMES) return;
     const wait = this.lastSentAt + 1000 / VIEWER_MAX_FPS - this.clock.now();
@@ -357,7 +360,9 @@ export class ViewerSession {
       }
       return;
     }
-    this.pendingAck = undefined;
+    this.pending = undefined;
+    if (this.cdp !== pending.cdp) return;
+    this.sendFrame(pending.data, pending.width, pending.height);
     pending.cdp
       .send("Page.screencastFrameAck", { sessionId: pending.sessionId })
       .catch(() => undefined);

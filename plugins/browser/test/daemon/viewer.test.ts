@@ -157,12 +157,16 @@ describe("browser daemon viewer", () => {
     await request(d.socketPath, { op: "navigate", url: `${fx.url}/anim` });
     const v = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 });
     await v.next(isFrame);
-    const from = v.messages.length;
-    await new Promise((r) => setTimeout(r, 2000));
-    const frames = v.messages.slice(from).filter(isFrame).length;
-    expect(frames).toBeGreaterThan(2);
-    // 5 per second over 2 s, one of slack for the timing of the window
-    expect(frames).toBeLessThanOrEqual(11);
+    // the page changes every animation frame; the daemon still sends at most one per 200 ms
+    // (a loaded machine only makes them slower, so the gaps are the property, not a count)
+    const at: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      await v.after(isFrame);
+      at.push(performance.now());
+    }
+    const gaps = at.slice(1).map((t, i) => t - (at[i] as number));
+    // 200 ms apart when sent; arrival jitter on the local socket stays well below 50 ms
+    for (const g of gaps) expect(g).toBeGreaterThanOrEqual(150);
     await v.close();
   });
 
