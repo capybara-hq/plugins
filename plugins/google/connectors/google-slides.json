@@ -3,7 +3,10 @@
     "zh": "Google 幻灯片",
     "en": "Google Slides"
   },
-  "description": "Read presentations, slides and thumbnails and edit presentations as the connected person, through Google's Slides MCP server (Google Workspace Developer Preview). Each member connects their own Google account; an org admin enters the OAuth client of the company's Google Cloud project.",
+  "description": {
+    "en": "Read presentations, slides and thumbnails and edit presentations as the connected person, through Google's Slides MCP server (Google Workspace Developer Preview). Each member connects their own Google account; an org admin enters the OAuth client of the company's Google Cloud project.",
+    "zh": "经由 Google 的 Slides MCP 服务器（Google Workspace 开发者预览版），以连接者本人的身份读取演示文稿、幻灯片和缩略图，编辑演示文稿。每位成员连接自己的 Google 账号；组织管理员填入公司 Google Cloud 项目的 OAuth 客户端。"
+  },
   "icon": "./icons/google-slides.svg",
   "defaultEnabled": false,
   "template": {

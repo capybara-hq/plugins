@@ -132,13 +132,23 @@ describe.each(TEMPLATES)("guides/%s-oauth.md", (template, name) => {
 });
 
 describe("guides/bitbucket-oauth.md", () => {
-  it("states the workspace link and that OAuth access is unconfirmed", () => {
+  it("states the workspace link and no longer doubts OAuth access", () => {
     for (const locale of ["en", "zh"] as const) {
       const text = prose(render("bitbucket-oauth", "admin", locale));
       expect(text).toContain(
         locale === "en" ? "linked to an Atlassian organization" : "关联到 Atlassian 组织",
       );
-      expect(text).toContain(locale === "en" ? "not been confirmed" : "还没有在真实工作区上验证过");
+      expect(text).not.toMatch(/API token|off by default|默认关闭|not been confirmed|验证过/);
+    }
+  });
+});
+
+describe("guides/confluence-oauth.md", () => {
+  it("says the site must have Confluence and that a Jira-only site answers 404", () => {
+    for (const locale of ["en", "zh"] as const) {
+      const text = prose(render("confluence-oauth", "admin", locale));
+      expect(text).toContain(locale === "en" ? "must have Confluence" : "必须开通了 Confluence");
+      expect(text).toContain("404");
     }
   });
 });

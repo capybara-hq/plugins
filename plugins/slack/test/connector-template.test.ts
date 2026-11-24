@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 const root = new URL("../", import.meta.url);
 const read = (p: string) => readFileSync(new URL(p, root), "utf8");
 const file = JSON.parse(read("connectors/slack.json")) as {
+  description: { en: string; zh: string };
   defaultEnabled?: boolean;
   icon?: string;
   template: {
@@ -97,6 +98,15 @@ describe("connectors/slack.json", () => {
     const parsed = parseConnectorTemplateFile(file);
     expect("errors" in parsed ? parsed.errors : []).toEqual([]);
     expect(validateConnectorTemplate(file.template)).toEqual([]);
+  });
+
+  it("describes itself in English and Chinese, in the platform's terms", () => {
+    const { description } = file;
+    expect(Object.keys(description).sort()).toEqual(["en", "zh"]);
+    expect(description.en.length).toBeGreaterThan(0);
+    expect(description.zh).toMatch(/[\u4e00-\u9fff]/);
+    expect(description.zh).not.toContain("企业");
+    expect(description.zh).not.toMatch(/\bagents?\b/i);
   });
 
   it("starts switched off in every org (an org on slack only for the bot needs no OAuth client)", () => {

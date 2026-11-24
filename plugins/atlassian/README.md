@@ -10,7 +10,7 @@ remote MCP server.
 |---|---|---|---|
 | `jira` | `read:jira:agent-interface`, `write:jira:agent-interface`, `search:jira:agent-interface` | 50 (33 / 17) | on |
 | `confluence` | `read:confluence:agent-interface`, `write:confluence:agent-interface`, `search:confluence:agent-interface` | 75 (32 / 43) | on |
-| `bitbucket` | `read:bitbucket:agent-interface`, `write:bitbucket:agent-interface` | 45 (30 / 15) | off |
+| `bitbucket` | `read:bitbucket:agent-interface`, `write:bitbucket:agent-interface` | 45 (30 / 15) | on |
 
 Every template also requests `read:me`, `read:account` and `offline_access` (the refresh token).
 A member's Jira token therefore cannot reach Confluence or Bitbucket, and the reverse. The
@@ -56,10 +56,15 @@ name is `[A-Za-z]` only, so every tool key is valid. Some tools consume Rovo cre
 
 ## Bitbucket
 
-The `bitbucket` template is off by default. Atlassian offers the Bitbucket tools only for a
-Bitbucket Cloud workspace linked to an Atlassian organization, and Atlassian's documents disagree
-on whether these tools accept OAuth or only an API token. The template has not been checked
-against a live workspace yet.
+Atlassian offers the Bitbucket tools only for a Bitbucket Cloud workspace linked to an Atlassian
+organization. With that link in place, OAuth works: a live test on 2026-11-24 listed the
+workspace, its repositories and pull requests, so the template is on by default.
+
+## Confluence and Jira on the site
+
+The Atlassian site a member connects to must have the product. On a site with only Jira,
+connecting the `confluence` template succeeds but every Confluence tool answers 404; adding
+Confluence to the site in Atlassian Administration fixes it without reconnecting.
 
 ## Setup guides
 

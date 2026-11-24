@@ -3,7 +3,10 @@
     "zh": "BigQuery",
     "en": "BigQuery"
   },
-  "description": "Explore datasets and tables and run SQL in the projects the connected person can use, through Google's BigQuery MCP server; read-only queries run directly, other SQL asks first. Each member connects their own Google account; an org admin enters the OAuth client of the company's Google Cloud project; members need BigQuery roles in the projects they query.",
+  "description": {
+    "en": "Explore datasets and tables and run SQL in the projects the connected person can use, through Google's BigQuery MCP server; read-only queries run directly, other SQL asks first. Each member connects their own Google account; an org admin enters the OAuth client of the company's Google Cloud project; members need BigQuery roles in the projects they query.",
+    "zh": "经由 Google 的 BigQuery MCP 服务器，在连接者本人有权使用的项目中浏览数据集和表并运行 SQL；只读查询直接执行，其他 SQL 先征求同意。每位成员连接自己的 Google 账号；组织管理员填入公司 Google Cloud 项目的 OAuth 客户端；成员需要在所查询的项目中拥有 BigQuery 角色。"
+  },
   "icon": "./icons/bigquery.svg",
   "defaultEnabled": false,
   "template": {

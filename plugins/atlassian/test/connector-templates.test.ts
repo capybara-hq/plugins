@@ -18,7 +18,7 @@ const read = (p: string) => readFileSync(new URL(p, root), "utf8");
 type Policy = "allow" | "ask" | "deny";
 interface TemplateFile {
   displayName: { zh: string; en: string };
-  description: string;
+  description: { en: string; zh: string };
   defaultEnabled?: boolean;
   icon?: string;
   template: {
@@ -67,7 +67,7 @@ const TEMPLATES: [string, string, string[], string[], boolean][] = [
     "Bitbucket",
     ["read:bitbucket:agent-interface", "write:bitbucket:agent-interface"],
     ["read_bitbucket", "write_bitbucket"],
-    false,
+    true,
   ],
 ];
 
@@ -151,6 +151,15 @@ describe.each(TEMPLATES)("connectors/%s.json", (id, name, scopes, groups, on) =>
     expect([...u.searchParams.entries()]).toEqual([["tools", "all"]]);
     expect(file.displayName).toEqual({ zh: name, en: name });
     expect(file.defaultEnabled).toBe(on ? undefined : false);
+  });
+
+  it("describes itself in English and Chinese, in the platform's terms", () => {
+    const { description } = load(id);
+    expect(Object.keys(description).sort()).toEqual(["en", "zh"]);
+    expect(description.en.length).toBeGreaterThan(0);
+    expect(description.zh).toMatch(/[\u4e00-\u9fff]/);
+    expect(description.zh).not.toContain("企业");
+    expect(description.zh).not.toMatch(/\bagents?\b/i);
   });
 
   it("ships its own product icon (svg, at most 64 KiB)", () => {

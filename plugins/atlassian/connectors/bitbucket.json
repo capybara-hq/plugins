@@ -3,9 +3,11 @@
     "zh": "Bitbucket",
     "en": "Bitbucket"
   },
-  "description": "Read Bitbucket Cloud repositories, pull requests, pipelines and deployments, and create or review pull requests, as the connected person, through Atlassian's remote MCP server. The Bitbucket workspace must be linked to an Atlassian organization. Off by default: OAuth access to the Bitbucket tools is not yet confirmed.",
+  "description": {
+    "en": "Read Bitbucket Cloud repositories, pull requests, pipelines and deployments, and create or review pull requests, as the connected person, through Atlassian's remote MCP server (Atlassian Cloud). Each member connects their own Atlassian account with OAuth; the client is registered automatically, so no admin setup is needed in Capybara. The Bitbucket workspace must be linked to an Atlassian organization.",
+    "zh": "经由 Atlassian 的远程 MCP 服务器（Atlassian Cloud），以连接者本人的身份读取 Bitbucket Cloud 的仓库、拉取请求、流水线和部署，并创建或评审拉取请求。每位成员用 OAuth 连接自己的 Atlassian 账号；客户端自动注册，无需在 Capybara 里做任何管理员设置。Bitbucket 工作区必须已关联到 Atlassian 组织。"
+  },
   "icon": "./icons/bitbucket.svg",
-  "defaultEnabled": false,
   "template": {
     "plugin": "connector-mcp",
     "pluginVersion": "^0.1.0-rc.1",

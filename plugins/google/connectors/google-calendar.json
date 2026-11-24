@@ -3,7 +3,10 @@
     "zh": "Google 日历",
     "en": "Google Calendar"
   },
-  "description": "Find and read events and free time, create, change and answer events as the connected person, through Google's Calendar MCP server (Google Workspace Developer Preview). Each member connects their own Google account; an org admin enters the OAuth client of the company's Google Cloud project.",
+  "description": {
+    "en": "Find and read events and free time, create, change and answer events as the connected person, through Google's Calendar MCP server (Google Workspace Developer Preview). Each member connects their own Google account; an org admin enters the OAuth client of the company's Google Cloud project.",
+    "zh": "经由 Google 的 Calendar MCP 服务器（Google Workspace 开发者预览版），以连接者本人的身份查找和阅读日程与空闲时间，创建、修改和答复日程。每位成员连接自己的 Google 账号；组织管理员填入公司 Google Cloud 项目的 OAuth 客户端。"
+  },
   "icon": "./icons/google-calendar.svg",
   "defaultEnabled": false,
   "template": {
