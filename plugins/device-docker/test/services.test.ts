@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   DeviceProvider,
   DeviceServiceSpec,
@@ -10,7 +12,7 @@ import type {
 import { DEVICE_SERVICE_ECHO_SCRIPT, runDeviceServiceConformance } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDockerSandbox } from "../src/index.js";
-import { SOCKET_RELAY_SOURCE, serviceStateDir } from "../src/services.js";
+import { SERVICE_IMAGE_TOO_OLD, serviceStateDir } from "../src/services.js";
 import {
   buildTestImages,
   cleanupTestResources,
@@ -74,6 +76,9 @@ createServer((conn) => {
 }).listen(process.env.CAPYBARA_SERVICE_SOCKET);
 `;
 
+/** A build context for an image like the published ones before device services. */
+let oldImageDir = "";
+
 /** Polls `cond` (a wait condition, not a fixed sleep). */
 const waitFor = async (cond: () => Promise<boolean>, ms = 30_000) => {
   const end = Date.now() + ms;
@@ -83,17 +88,7 @@ const waitFor = async (cond: () => Promise<boolean>, ms = 30_000) => {
   }
 };
 
-describe("the socket relay", () => {
-  it("ships in the image byte for byte as the providers run it", async () => {
-    const file = await readFile(
-      new URL("../image/capybara-socket-relay.mjs", import.meta.url),
-      "utf8",
-    );
-    expect(file).toBe(SOCKET_RELAY_SOURCE);
-  });
-});
-
-describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 180_000 }, () => {
+describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }, () => {
   let images: TestImages;
   let proxy: SocketProxy;
   const netName = `capybara-sandbox-test-${RUN}`;
@@ -140,11 +135,17 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 180_000 }
       },
       { labels: { [TEST_LABEL]: RUN } },
     );
+    oldImageDir = await mkdtemp(join(tmpdir(), "capybara-nosvc-"));
+    await writeFile(
+      join(oldImageDir, "Dockerfile"),
+      "ARG BASE\nFROM $BASE\nUSER 0:0\nRUN rm -rf /var/lib/capybara\nUSER 1000:1000\n",
+    );
     // a cold run builds the sandbox image (about 1.5 GB) once, shared by the files
   }, 1_200_000);
 
   afterAll(async () => {
     await cleanupTestResources(RUN);
+    if (oldImageDir !== "") await rm(oldImageDir, { recursive: true, force: true });
     await proxy?.stop();
     await images?.remove();
   }, 120_000);
@@ -255,11 +256,19 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 180_000 }
       sig(),
     );
     expect(status?.stateDir).toBe(serviceStateDir("files"));
-    expect(status?.stateDir.startsWith("/workspace/")).toBe(true);
+    // outside the workspace: no project root, Glob / Grep, share or delivery reaches it
+    expect(status?.stateDir.startsWith("/var/lib/capybara/svc/")).toBe(true);
+    expect((await sh(h, "ls -A /workspace")).stdout).not.toMatch(/capybara/);
     // the service writes its state directory, and only the files it was given land there
     expect((await sh(h, `cd ${status?.stateDir} && ls -A && id -u`)).stdout).toBe(
       "data\necho.mjs\n1000\n",
     );
+    const note = () =>
+      sbx.readFile(h, `${status?.stateDir}/data/note.txt`, { maxBytes: 100, signal: sig() });
+    // a suspension keeps them
+    await sbx.suspend(h, sig());
+    expect(await sbx.resume(h, sig())).toBe("resumed");
+    expect(dec.decode((await note())?.data)).toBe("kept");
     // a new instance on the same files sees them
     await sbx.destroy(h, sig(), FENCE);
     const h2 = await sbx.create({
@@ -276,6 +285,50 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 180_000 }
     });
     expect(dec.decode(r?.data)).toBe("kept");
     expect((await sbx.serviceStatus?.(h2, "files", sig()))?.state).toBe("stopped");
+    // the device's files go with their state volume
+    expect(await docker("volume", "ls", "-q", "--filter", `name=^${name}-svc$`)).toBe(
+      `${name}-svc\n`,
+    );
+    await sbx.destroyFileSystem(fileSystem, sig());
+    expect(await docker("volume", "ls", "-q", "--filter", `name=^${name}-svc$`)).toBe("");
+  });
+
+  it("never blocks on a FIFO planted in the state directory", async () => {
+    const { h } = await create();
+    const dir = serviceStateDir("fifo");
+    expect((await sh(h, `mkdir -p ${dir}/data && mkfifo ${dir}/data/x.txt`)).exitCode).toBe(0);
+    const t0 = Date.now();
+    await expect(
+      sbx.ensureService?.(h, echo("fifo", { "data/x.txt": enc.encode("no") }), sig()),
+    ).rejects.toThrow(/special file|regular file|No such device/i);
+    expect(Date.now() - t0).toBeLessThan(20_000);
+    expect((await sbx.serviceStatus?.(h, "fifo", sig()))?.state).toBe("stopped");
+  });
+
+  it("refuses services on an instance whose image predates them", async () => {
+    // the published images before device services have no /var/lib/capybara/svc
+    const old = `${images.sandboxImage}-nosvc`;
+    await docker(
+      "build",
+      "-q",
+      "-t",
+      old,
+      "--build-arg",
+      `BASE=${images.sandboxImage}`,
+      oldImageDir,
+    );
+    const name = `cap-${randomUUID()}`;
+    const fileSystem = await sbx.createFileSystem({ name, limits: limits(), signal: sig() });
+    const h = await sbx.create({
+      fence: FENCE,
+      name,
+      image: old,
+      limits: limits(),
+      fileSystem,
+      signal: sig(),
+    });
+    await expect(sbx.ensureService?.(h, echo("old"), sig())).rejects.toThrow(SERVICE_IMAGE_TOO_OLD);
+    expect((await sbx.serviceStatus?.(h, "old", sig()))?.state).toBe("stopped");
   });
 
   it("never writes service files through a link planted in the state directory", async () => {

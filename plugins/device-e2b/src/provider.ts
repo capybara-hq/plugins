@@ -62,11 +62,10 @@ import {
   managerArgv,
   managerRequest,
   parseManagerReply,
+  relayArgv,
   relayRequest,
   relayStream,
-  SERVICE_NODE,
-  SOCKET_RELAY_SOURCE,
-  serviceSocketPath,
+  SERVICE_STATE_ROOT,
   serviceStateDir,
 } from "./services.js";
 
@@ -172,6 +171,8 @@ const SERVICE_MANAGER_TIMEOUT_MS = 90_000;
  * still pauses it once nobody uses the device.
  */
 const STREAM_TIMEOUT_SECONDS = 3600;
+/** How long a relay closed before envd named it is waited for, to kill it by pid. */
+const RELAY_PID_WAIT_MS = 15_000;
 /** 中止 / 超时杀掉命令后，最多再等输出流结束这么久（毫秒），之后直接断开。 */
 const KILL_GRACE_MS = 3000;
 /** 读文件时额外留给 stderr 的字节。 */
@@ -1524,6 +1525,7 @@ export function createE2BSandbox(
     const [cmd, ...args] = managerArgv(op, name) as [string, ...string[]];
     const t = o.start ? await attach(h.id, signal) : await targetIfRunning(h.id, signal);
     if (t === undefined) return stoppedService(name);
+    if (o.start) await ensureStateRoot(t, signal);
     let r: RunResult;
     try {
       r = await run(t, {
@@ -1550,6 +1552,33 @@ export function createE2BSandbox(
   };
 
   /**
+   * Makes the service state root on a VM whose template predates it (an E2B file system keeps
+   * the template it was made from): as root, owned by the sandbox user, 0700. `/var/lib` is
+   * root's, so nothing the sandbox user planted can redirect it. An existing root is left as is
+   * (the manager refuses one that is not the sandbox user's).
+   */
+  const ensureStateRoot = async (t: EnvdTarget, signal: AbortSignal) => {
+    const r = await run(t, {
+      user: ROOT_USER,
+      cmd: "/bin/sh",
+      args: [
+        "-c",
+        '[ -e "$1" ] && exit 0; umask 022; mkdir -p "$(dirname "$1")" && mkdir -m 0700 "$1" && chown 1000:1000 "$1"',
+        "capybara-svc-root",
+        SERVICE_STATE_ROOT,
+      ],
+      cwd: "/",
+      maxOutputBytes: STDERR_ROOM,
+      timeoutMs: 30_000,
+      signal,
+    });
+    if (r.aborted) throw abortReason(signal);
+    if (r.exitCode !== 0) {
+      throw new Error(`device-e2b: cannot make ${SERVICE_STATE_ROOT}: ${stderrOf(r)}`);
+    }
+  };
+
+  /**
    * Starts the socket relay to the service's socket (`node -e <relay>`, inline: an E2B file
    * system keeps the template it was made from, which may predate the relay in the image) as an
    * envd process with stdin kept open: `SendInput` carries our framed messages, its stdout the
@@ -1564,7 +1593,7 @@ export function createE2BSandbox(
     minSeconds?: number,
   ) => {
     signal.throwIfAborted();
-    const socketPath = serviceSocketPath(name);
+    const [cmd, ...args] = relayArgv(name);
     const running = await targetIfRunning(h.id, signal);
     if (running === undefined) {
       throw new Error(`device service ${name} is not running: the instance is paused`);
@@ -1574,12 +1603,23 @@ export function createE2BSandbox(
     const conn = new AbortController();
     let pid: number | undefined;
     let closing = false;
-    let resolvePid!: (p: number) => void;
+    // the relay's pid, once envd names it (undefined when its stream ends without one)
+    let resolveStarted!: (p: number | undefined) => void;
+    const started = new Promise<number | undefined>((res) => {
+      resolveStarted = res;
+    });
     let rejectPid!: (e: Error) => void;
-    const pidKnown = new Promise<number>((res, rej) => {
-      resolvePid = res;
+    const closedBeforeStart = new Promise<never>((_, rej) => {
       rejectPid = rej;
     });
+    closedBeforeStart.catch(() => undefined);
+    const pidKnown = Promise.race([
+      started.then((p) => {
+        if (p === undefined) throw new Error(`device service ${name}: the relay did not start`);
+        return p;
+      }),
+      closedBeforeStart,
+    ]);
     pidKnown.catch(() => undefined);
     const killRelay = (p: number) =>
       void envdKill(t, p, AbortSignal.timeout(15_000)).catch(() => undefined);
@@ -1597,9 +1637,21 @@ export function createE2BSandbox(
       close: () => {
         if (closing) return;
         closing = true;
-        if (pid !== undefined) killRelay(pid);
         rejectPid(new Error(`device service ${name}: the stream is closed`));
-        conn.abort();
+        if (pid !== undefined) {
+          killRelay(pid);
+          conn.abort();
+          return;
+        }
+        // Not started yet: keep envd's stream until it names the process (cutting it first would
+        // leave a relay nobody can name), bounded; the manager's stop sweeps any that escape.
+        void Promise.race([
+          started,
+          new Promise<undefined>((r) => after(RELAY_PID_WAIT_MS, () => r(undefined))),
+        ]).then((p) => {
+          if (p !== undefined) killRelay(p);
+          conn.abort();
+        });
       },
     });
     const onAbort = () => opened.stream.close("aborted while opening");
@@ -1612,21 +1664,16 @@ export function createE2BSandbox(
       t,
       SANDBOX_USER,
       {
-        cmd: SERVICE_NODE,
-        args: ["--input-type=module", "-e", SOCKET_RELAY_SOURCE, socketPath],
+        cmd,
+        args,
         envs: { PATH: systemPath },
         cwd: "/",
       },
       (e) => {
         if ("start" in e) {
           pid = e.start.pid;
-          if (pid === undefined) {
-            opened.sink.ended("E2B started the relay without a pid");
-            return;
-          }
-          // closed before envd named the process: kill it now
-          if (closing) killRelay(pid);
-          else resolvePid(pid);
+          resolveStarted(pid);
+          if (pid === undefined) opened.sink.ended("E2B started the relay without a pid");
         } else if ("data" in e) {
           if (e.data.stdout) opened.sink.stdout(Buffer.from(e.data.stdout, "base64"));
           if (e.data.stderr) opened.sink.stderr(Buffer.from(e.data.stderr, "base64"));
@@ -1635,13 +1682,18 @@ export function createE2BSandbox(
       conn.signal,
       true,
     ).then(
-      () => opened.sink.ended(),
-      (e: unknown) =>
+      () => {
+        resolveStarted(undefined);
+        opened.sink.ended();
+      },
+      (e: unknown) => {
+        resolveStarted(undefined);
         opened.sink.ended(
           closing
             ? undefined
             : `the relay stream failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 300)}`,
-        ),
+        );
+      },
     );
     return opened;
   };

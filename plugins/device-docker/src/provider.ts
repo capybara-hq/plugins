@@ -44,11 +44,10 @@ import {
   managerArgv,
   managerRequest,
   parseManagerReply,
-  RELAY_PATH,
+  relayArgv,
   relayRequest,
   relayStream,
-  SERVICE_NODE,
-  serviceSocketPath,
+  SERVICE_STATE_ROOT,
   serviceStateDir,
 } from "./services.js";
 
@@ -291,6 +290,8 @@ export function sandboxResourceNames(name: string) {
     network: `${name}-net`,
     workspace: `${name}-workspace`,
     skills: `${name}-skills`,
+    /** Device service state (src/services.ts), mounted at SERVICE_STATE_ROOT. */
+    svc: `${name}-svc`,
   };
 }
 
@@ -892,6 +893,7 @@ export function createDockerSandbox(
     await Promise.all([
       removeWithRetry(`/volumes/${enc(n.workspace)}`, signal),
       removeWithRetry(`/volumes/${enc(n.skills)}`, signal),
+      removeWithRetry(`/volumes/${enc(n.svc)}`, signal),
     ]);
   };
 
@@ -1991,7 +1993,6 @@ export function createDockerSandbox(
    */
   const openRelay = async (h: SandboxHandle, name: string, signal: AbortSignal) => {
     signal.throwIfAborted();
-    const socketPath = serviceSocketPath(name);
     const notRunning = (cause: unknown) =>
       new Error(`device service ${name} is not running: the instance is stopped`, { cause });
     if (handleFence(h) !== undefined) await checkIncarnation(h, signal);
@@ -2003,7 +2004,8 @@ export function createDockerSandbox(
           AttachStdout: true,
           AttachStderr: true,
           Tty: false,
-          Cmd: [SERVICE_NODE, RELAY_PATH, socketPath],
+          // inline: an instance made from an older image runs it as well
+          Cmd: relayArgv(name),
           User: SANDBOX_USER,
           Env: [`PATH=${SYSTEM_PATH}`],
           WorkingDir: "/",
@@ -2142,6 +2144,7 @@ export function createDockerSandbox(
         signal,
       );
       await ensureVolume({ Name: n.skills, Labels: baseLabels(name, "skills") }, signal);
+      await ensureVolume({ Name: n.svc, Labels: baseLabels(name, "svc") }, signal);
       return { id: name };
     },
 
@@ -2172,6 +2175,9 @@ export function createDockerSandbox(
           `sandbox file system ${fileSystem.id} is gone (volume ${v.workspace} or ${v.skills} missing)`,
         );
       if (!(await checkFileSystem(fileSystem.id, signal)).ok) throw gone();
+      // the service state volume belongs to the file system as well; one made before device
+      // services has none yet: made here (empty, like a device that never ran a service)
+      await ensureVolume({ Name: v.svc, Labels: baseLabels(fileSystem.id, "svc") }, signal);
       // An old instance of the same name (the kernel exited before recording the handle...):
       // replace the instance; the file system stays. Unless it carries a higher fence token than
       // this call: then a newer holder made or updated it, and this create is stale (§5.2; a check
@@ -2251,6 +2257,10 @@ export function createDockerSandbox(
                 // Writable mount of the same volume: only root can enter it (/opt/capybara is
                 // 0700), and the plugin writes skills through it.
                 { Type: "volume", Source: v.skills, Target: "/opt/capybara/skills" },
+                // Device service state, outside the workspace (no project, share or Glob reaches
+                // it); the image's directory there is the sandbox user's, and Docker copies its
+                // owner onto the empty volume at the first mount.
+                { Type: "volume", Source: v.svc, Target: SERVICE_STATE_ROOT },
               ],
             },
           },

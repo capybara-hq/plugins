@@ -11,10 +11,17 @@ import {
 } from "@capybara-hq/plugin-sdk";
 
 /**
- * Where a device's service state directories live: on the device's persistent workspace (kept
- * with its files, never in /tmp), in a hidden directory that the project scan never offers.
+ * Where a device's service state directories live: persistent with the device's files but outside
+ * the workspace, so no project root, Glob / Grep, share or delivery ever reaches a service's state
+ * (a browser profile's cookies). Docker: the device's own `<name>-svc` volume mounted here; E2B:
+ * a directory on the VM's disk. Owned by the sandbox user (the image makes it; device-e2b creates
+ * it as root on a VM whose template predates it).
  */
-export const SERVICE_STATE_ROOT = "/workspace/.capybara/svc";
+export const SERVICE_STATE_ROOT = "/var/lib/capybara/svc";
+
+/** The answer when the state root is missing or not the sandbox user's (an image before services). */
+export const SERVICE_IMAGE_TOO_OLD =
+  "this device's image predates device services; reset the device's instance";
 
 /**
  * Where a service's runtime files live (pid record, socket, lock, log): /tmp, so nothing of a
@@ -55,8 +62,9 @@ export const SERVICE_NODE = "/usr/local/bin/node";
  *
  * - `ensure` takes the service's lock (flock in its run directory), keeps a running service as it
  *   is, answers `stopped` for `ifRunning`; otherwise writes the files into the state directory
- *   without following any link (every directory opened `O_NOFOLLOW` from `/workspace` down, each
- *   file opened `O_NOFOLLOW` relative to its directory), starts `node <stateDir>/<entry> <args>`
+ *   without following any link (every directory opened `O_NOFOLLOW` below the state root, each
+ *   file opened `O_NOFOLLOW | O_NONBLOCK` relative to its directory and accepted only when it is a
+ *   regular file, so a planted FIFO cannot block it), starts `node <stateDir>/<entry> <args>`
  *   in a new session with the state directory as its working directory, and waits until the
  *   service listens on its socket (or exits, reported with the tail of its log).
  * - A pid record counts only while its process is alive with the recorded start time on the
@@ -65,17 +73,21 @@ export const SERVICE_NODE = "/usr/local/bin/node";
  *   with `PATH` set to root-owned directories, the spec's `env`, and the socket and state
  *   variables. Nothing restarts a service that exited: the next `ensure` (reviewed again by the
  *   kernel) does.
+ * - A state root that is missing or not the sandbox user's (an image before device services)
+ *   answers {@link SERVICE_IMAGE_TOO_OLD}.
  * - `stop` sends SIGTERM to the service's process group, waits up to 5 s, then SIGKILLs every
  *   process left in its session.
  */
 export const SERVICE_MANAGER_SCRIPT = `import base64, fcntl, json, os, re, signal, stat, sys, time
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-STATE = ("/workspace", (".capybara", "svc"))
+STATE = ("/var/lib/capybara/svc", ())
+TOO_OLD = "this device's image predates device services; reset the device's instance"
 RUN = ("/tmp", (".capybara-svc",))
 NODE = "/usr/local/bin/node"
 PATH = "/usr/local/bin:/usr/bin:/bin"
 DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+FILE = os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
 READY_S = 30
 STOP_S = 5
 
@@ -130,7 +142,7 @@ def read_record(rfd):
     if rfd is None:
         return None
     try:
-        fd = os.open("pid", os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=rfd)
+        fd = open_reg("pid", os.O_RDONLY, rfd)
     except OSError:
         return None
     with os.fdopen(fd) as f:
@@ -145,7 +157,7 @@ def read_record(rfd):
     return rec
 
 def status(name, rec):
-    state_dir = "%s/%s/%s" % (STATE[0], "/".join(STATE[1]), name)
+    state_dir = "%s/%s" % (STATE[0], name)
     if rec is None:
         return {"name": name, "state": "stopped", "startedAt": None, "stateDir": state_dir}
     return {"name": name, "state": "running", "startedAt": rec["at"], "stateDir": state_dir}
@@ -172,7 +184,7 @@ def opendirs_at(fd, name, create):
         return os.open(name, DIR, dir_fd=fd)
 
 def lock(rfd):
-    fd = os.open("lock", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=rfd)
+    fd = open_reg("lock", os.O_WRONLY | os.O_CREAT, rfd)
     end = time.monotonic() + 60
     while True:
         try:
@@ -189,6 +201,14 @@ def unlink(rfd, name):
     except FileNotFoundError:
         pass
 
+def open_reg(name, flags, dir_fd, mode=0o600):
+    # never blocks on a planted FIFO, never follows a link, and only a regular file is accepted
+    fd = os.open(name, flags | FILE, mode, dir_fd=dir_fd)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise OSError(22, "not a regular file", name)
+    return fd
+
 def session_pids(sid):
     out = []
     for e in os.listdir("/proc"):
@@ -204,6 +224,23 @@ def kill(pid, sig):
         os.kill(pid, sig)
     except (ProcessLookupError, PermissionError):
         pass
+
+def kill_relays(name):
+    # relays left connected to this service's socket (a provider that lost one before it knew
+    # its pid): their command line names the relay and ends with the socket path
+    sock = ("%s/%s/%s/sock" % (RUN[0], RUN[1][0], name)).encode()
+    for e in os.listdir("/proc"):
+        if not e.isdigit() or int(e) == os.getpid():
+            continue
+        try:
+            with open("/proc/%s/cmdline" % e, "rb") as f:
+                argv = f.read().split(b"\\0")
+        except OSError:
+            continue
+        if argv and argv[-1] == b"":
+            argv = argv[:-1]
+        if len(argv) >= 2 and argv[-1] == sock and any(b"capybara-socket-relay" in a for a in argv):
+            kill(int(e), signal.SIGKILL)
 
 def stop_record(rec):
     pid = rec["pid"]
@@ -249,16 +286,16 @@ def write_files(sfd, files):
                 nfd = opendirs_at(fd, p, True)
                 os.close(fd)
                 fd = nfd
-            out = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=fd)
+            out = open_reg(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, fd)
             os.close(fd)
         except OSError as e:
-            fail("cannot write service file %s: %s (a link or a non-directory is in the way)" % (json.dumps(rel), e.strerror))
+            fail("cannot write service file %s: %s (a link, a non-directory or a special file is in the way)" % (json.dumps(rel), e.strerror))
         with os.fdopen(out, "wb") as f:
             f.write(base64.b64decode(b64))
 
 def log_tail(rfd):
     try:
-        fd = os.open("log", os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=rfd)
+        fd = open_reg("log", os.O_RDONLY, rfd)
     except OSError:
         return ""
     with os.fdopen(fd, "rb") as f:
@@ -284,15 +321,26 @@ def ensure(name, req):
     if not isinstance(env, dict) or not all(isinstance(k, str) and KEY_RE.match(k) and isinstance(v, str) and "\\0" not in v for k, v in env.items()):
         fail("invalid service environment")
     try:
-        sfd = opendirs(STATE[0], STATE[1] + (name,), True)
+        root = os.open(STATE[0], DIR)
+    except OSError:
+        fail(TOO_OLD)
+    rst = os.fstat(root)
+    if rst.st_uid != os.getuid() or not os.access(STATE[0], os.W_OK):
+        fail(TOO_OLD)
+    try:
+        sfd = opendirs_at(root, name, True)
     except OSError as e:
         fail("cannot open the service state directory: %s (a link or a non-directory is in the way)" % e.strerror)
+    os.close(root)
     write_files(sfd, files)
     state_dir = status(name, None)["stateDir"]
     sock = "%s/%s/%s/sock" % (RUN[0], RUN[1][0], name)
     unlink(rfd, "sock")
     unlink(rfd, "pid")
-    logfd = os.open("log", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=rfd)
+    unlink(rfd, "log")
+    logfd = open_reg("log", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, rfd)
+    # the service's output must not be non-blocking
+    os.set_blocking(logfd, True)
     penv = {k: v for k, v in os.environ.items() if not k.startswith("CAPYBARA_")}
     penv.update(env)
     penv.update({"PATH": PATH, "CAPYBARA_SERVICE_SOCKET": sock, "CAPYBARA_SERVICE_STATE": state_dir})
@@ -314,7 +362,8 @@ def ensure(name, req):
     rec = {"pid": pid, "start": start_ticks(pid), "boot": boot_id(),
            "at": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(at)) + ".%03dZ" % (int(at * 1000) % 1000)}
     tmp = "pid.%d" % pid
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=rfd)
+    fd = open_reg(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, rfd)
+    os.set_blocking(fd, True)
     with os.fdopen(fd, "w") as f:
         json.dump(rec, f)
     os.rename(tmp, "pid", src_dir_fd=rfd, dst_dir_fd=rfd)
@@ -343,6 +392,7 @@ def stop(name):
     rec = read_record(rfd)
     if rec is not None:
         stop_record(rec)
+    kill_relays(name)
     unlink(rfd, "pid")
     unlink(rfd, "sock")
     answer(status(name, None))
@@ -436,8 +486,8 @@ export function parseManagerReply(
  * for byte (the provider and the service speak the framed service protocol through it). It exits
  * when either side closes: the socket's end ends stdout; the end of stdin (the provider went away)
  * destroys the connection. A failed connect (the service is not running) exits 3 with the reason on
- * stderr. Shipped in device-docker's image as /usr/local/bin/capybara-socket-relay; device-e2b runs
- * it inline (`node -e`), since an E2B file system keeps the template it was made from.
+ * stderr. Both providers run it inline ({@link relayArgv}), so it works on every instance, whatever
+ * image or template it was made from.
  */
 export const SOCKET_RELAY_SOURCE = `// capybara-socket-relay <socket>: one connection to a device service's unix socket, relayed over
 // stdin / stdout byte for byte (device-docker / device-e2b src/services.ts, SOCKET_RELAY_SOURCE).
@@ -469,8 +519,10 @@ sock.on("close", () => {
 process.stdout.on("error", () => process.exit(0));
 `;
 
-/** The relay's command line in an image that ships it (device-docker). */
-export const RELAY_PATH = "/usr/local/bin/capybara-socket-relay";
+/** The relay's command line for one service: inline, on the image's Node. */
+export function relayArgv(name: string): [string, ...string[]] {
+  return [SERVICE_NODE, "--input-type=module", "-e", SOCKET_RELAY_SOURCE, serviceSocketPath(name)];
+}
 
 /** What a provider's transport gives {@link openRelay}: one running relay process. */
 export interface RelayTransport {
@@ -491,8 +543,15 @@ export interface RelaySink {
   ended(why?: string): void;
 }
 
-/** Messages queued unread before the relay's output is paused. */
-const HIGH_WATER = 64;
+/** Bytes of unread messages above which the relay's output is paused (resumed at half). */
+export const RELAY_HIGH_WATER_BYTES = 8 * 1024 * 1024;
+/**
+ * Bytes of unread messages at which a stream whose transport cannot pause (E2B) is closed: its
+ * reader fell behind, and queueing more would only grow the provider's memory.
+ */
+export const RELAY_HARD_CAP_BYTES = 24 * 1024 * 1024;
+/** The close reason when a reader fell behind the hard cap. */
+export const RELAY_FELL_BEHIND = "the viewer fell behind; reopen the view";
 
 /**
  * A {@link DeviceStream} over a relay: `ready` resolves once the relay connected to the service's
@@ -507,6 +566,7 @@ export function relayStream(
   const queue: Uint8Array[] = [];
   let waiting: ((r: IteratorResult<Uint8Array>) => void) | null = null;
   let paused = false;
+  let queuedBytes = 0;
   let isReady = false;
   let stderr = "";
   let reason: string | null = null;
@@ -553,9 +613,14 @@ export function relayStream(
         if (w) {
           waiting = null;
           w({ value: m, done: false });
-        } else queue.push(m);
+        } else {
+          queue.push(m);
+          queuedBytes += m.byteLength;
+        }
       }
-      if (!paused && queue.length >= HIGH_WATER && io.pause) {
+      if (io.pause === undefined) {
+        if (queuedBytes >= RELAY_HARD_CAP_BYTES) finish(RELAY_FELL_BEHIND);
+      } else if (!paused && queuedBytes > RELAY_HIGH_WATER_BYTES) {
         paused = true;
         io.pause();
       }
@@ -577,7 +642,8 @@ export function relayStream(
   const next = (): Promise<IteratorResult<Uint8Array>> => {
     const m = queue.shift();
     if (m !== undefined) {
-      if (paused && queue.length < HIGH_WATER / 4) {
+      queuedBytes -= m.byteLength;
+      if (paused && queuedBytes <= RELAY_HIGH_WATER_BYTES / 2) {
         paused = false;
         io.resume?.();
       }

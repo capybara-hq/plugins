@@ -270,17 +270,21 @@ as device-docker's (README "Device services and streams" there; `src/services.ts
   stream ended (verified live 2026-11-24). A normal ensure connects (resumes) a paused VM; an `ifRunning` ensure, `serviceStatus`,
   `stopService`, requests and streams never resume one (a paused VM answers stopped / not running: pausing without memory ended
   every process).
-- **State directory**: `/workspace/.capybara/svc/<name>` on the VM's disk (the device's file system). Runtime files under
+- **State directory**: `/var/lib/capybara/svc/<name>` on the VM's disk (the device's file system, so it goes with a files reset),
+  outside the workspace (no project, Glob / Grep, share or delivery reaches it). The template from the published image has the
+  directory; a VM made from an older template gets it on the first normal ensure, made as root (`mkdir -m 0700`, owned by the
+  sandbox user; `/var/lib` is root's, so nothing the sandbox user planted redirects it). Runtime files under
   `/tmp/.capybara-svc/<name>/`; `/tmp` is on the VM's disk here, so a pid record counts only while its process runs with the
   recorded start time on the recorded boot (a cold start after a pause changes the boot id).
 - **Network**: the VM's (E2B applies the egress rules to the whole VM and `update` changes them in place), so an `ifRunning`
   ensure after an allowlist change has nothing to re-apply.
-- **Requests and streams**: the relay runs inline (`node --input-type=module -e <SOCKET_RELAY_SOURCE> <socket>`): an E2B file
-  system keeps the template it was made from, which may predate the relay in the image. It is an envd process with stdin kept
-  open; each message is one `SendInput` call (sent in order), the service's messages arrive on its stdout. Closing kills the relay
-  by pid (`SendSignal`; cutting envd's stream does not end a process), which drops its connection to the service. Opening a stream
-  extends the VM's timeout to at least an hour (the kernel's idle suspension still pauses it); a request does not extend it.
-  There is no backpressure towards envd: the service's messages queue in the provider while nobody reads them.
+- **Requests and streams**: the relay runs inline (`node --input-type=module -e <SOCKET_RELAY_SOURCE> <socket>`), an envd process
+  with stdin kept open; each message is one `SendInput` call (sent in order), the service's messages arrive on its stdout.
+  Closing kills the relay by pid (`SendSignal`; cutting envd's stream does not end a process); a relay closed before envd named it
+  keeps its stream up to 15 s until the pid arrives, and `stopService` kills any relay still connected to the service. envd's
+  stream cannot be paused, so a stream whose reader leaves 24 MiB of messages unread is closed ("the viewer fell behind; reopen
+  the view"). Opening a stream extends the VM's timeout to at least an hour (the kernel's idle suspension still pauses it); a
+  request does not extend it.
 
 ## Permission profiles (operation contract)
 
