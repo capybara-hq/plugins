@@ -3,7 +3,10 @@
     "zh": "Confluence",
     "en": "Confluence"
   },
-  "description": "Read, search, create and edit Confluence pages, blog posts, comments and spaces as the connected person, through Atlassian's remote MCP server (Atlassian Cloud). Each member connects their own Atlassian account with OAuth; the client is registered automatically, so no admin setup is needed in Capybara.",
+  "description": {
+    "en": "Read, search, create and edit Confluence pages, blog posts, comments and spaces as the connected person, through Atlassian's remote MCP server (Atlassian Cloud). Each member connects their own Atlassian account with OAuth; the client is registered automatically, so no admin setup is needed in Capybara.",
+    "zh": "经由 Atlassian 的远程 MCP 服务器（Atlassian Cloud），以连接者本人的身份读取、搜索、创建和编辑 Confluence 页面、博客文章、评论和空间。每位成员用 OAuth 连接自己的 Atlassian 账号；客户端自动注册，无需在 Capybara 里做任何管理员设置。"
+  },
   "icon": "./icons/confluence.svg",
   "template": {
     "plugin": "connector-mcp",

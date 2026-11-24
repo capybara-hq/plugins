@@ -15,6 +15,7 @@ const read = (p: string) => readFileSync(new URL(p, root), "utf8");
 type Policy = "allow" | "ask" | "deny";
 interface TemplateFile {
   displayName: { zh: string; en: string };
+  description: { en: string; zh: string };
   defaultEnabled?: boolean;
   icon?: string;
   template: {
@@ -114,6 +115,15 @@ describe("connectors/github.json", () => {
       expect(file.icon).toBe("./icon.svg");
     });
   }
+
+  it("describes itself in English and Chinese, in the platform's terms", () => {
+    const { description } = oauth;
+    expect(Object.keys(description).sort()).toEqual(["en", "zh"]);
+    expect(description.en.length).toBeGreaterThan(0);
+    expect(description.zh).toMatch(/[\u4e00-\u9fff]/);
+    expect(description.zh).not.toContain("企业");
+    expect(description.zh).not.toMatch(/\bagents?\b/i);
+  });
 
   it("github: per-person OAuth with MCP discovery and a manually entered client (no DCR at GitHub)", () => {
     expect(oauth.template.auth).toEqual({

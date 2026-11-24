@@ -20,7 +20,7 @@ const read = (p: string) => readFileSync(new URL(p, root), "utf8");
 type Policy = "allow" | "ask" | "deny";
 interface TemplateFile {
   displayName: { zh: string; en: string };
-  description: string;
+  description: { en: string; zh: string };
   defaultEnabled?: boolean;
   icon?: string;
   template: {
@@ -190,6 +190,15 @@ describe.each(TEMPLATES)("connectors/%s.json", (id, endpoint, scopes, [zh, en]) 
     expect(file.icon).toBe(`./icons/${id}.svg`);
     expect(existsSync(new URL(`icons/${id}.svg`, root))).toBe(true);
     expect(fixture(id).endpoint).toBe(endpoint);
+  });
+
+  it("describes itself in English and Chinese, in the platform's terms", () => {
+    const { description } = load(id);
+    expect(Object.keys(description).sort()).toEqual(["en", "zh"]);
+    expect(description.en.length).toBeGreaterThan(0);
+    expect(description.zh).toMatch(/[\u4e00-\u9fff]/);
+    expect(description.zh).not.toContain("企业");
+    expect(description.zh).not.toMatch(/\bagents?\b/i);
   });
 
   it("the auth preset is exactly per-person OAuth with Google's endpoints and offline access", () => {
