@@ -272,6 +272,11 @@ export class BrowserSession {
   /** Downloads in progress, cancelled together when their bytes pass the cap. */
   private readonly activeDownloads = new Set<Download>();
   private downloadPoll: unknown;
+  /**
+   * Files of downloads cancelled at the cap: Playwright removes them later, and until then they
+   * do not count toward the cap of the downloads that follow.
+   */
+  private readonly cancelledTmp = new Set<string>();
   private readonly pages = new Map<string, Page>();
   private readonly ids = new WeakMap<Page, string>();
   private readonly titles = new Map<string, string>();
@@ -557,21 +562,26 @@ export class BrowserSession {
       this.downloadPoll = undefined;
       if (this.activeDownloads.size === 0) return;
       let bytes = 0;
+      let names: string[] = [];
       const dir = this.downloadsTmp;
       if (dir !== undefined) {
         try {
-          for (const f of readdirSync(dir)) {
-            try {
-              bytes += statSync(join(dir, f)).size;
-            } catch {
-              // finished and moved meanwhile
-            }
-          }
+          names = readdirSync(dir);
         } catch {
           // not created yet
         }
+        for (const f of this.cancelledTmp) if (!names.includes(f)) this.cancelledTmp.delete(f);
+        for (const f of names) {
+          if (this.cancelledTmp.has(f)) continue;
+          try {
+            bytes += statSync(join(dir, f)).size;
+          } catch {
+            // finished and moved meanwhile
+          }
+        }
       }
       if (bytes > this.downloadMaxBytes) {
+        for (const f of names) this.cancelledTmp.add(f);
         for (const d of this.activeDownloads) {
           this.note(
             `The download of ${JSON.stringify(clip(d.suggestedFilename(), 300))} was cancelled: downloads in progress passed ${this.downloadMaxBytes} bytes.`,
