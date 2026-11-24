@@ -11,6 +11,7 @@ import {
   isSandboxScopeDeniedError,
   isSandboxScopeValidationError,
   isSandboxWorkUnsettledError,
+  isStaleFenceError,
   type ProjectPathRefusedError,
   type SandboxExecutionRef,
   SandboxPermissionUnsupportedError,
@@ -884,5 +885,109 @@ describe("lifecycle", () => {
     await expect(s.provider.suspend(h, AbortSignal.abort(new Error("lease lost")))).rejects.toThrow(
       "lease lost",
     );
+  });
+});
+
+describe("update (device update fencing)", () => {
+  const WIDER = {
+    ...LIMITS,
+    network: { kind: "allowlist" as const, hosts: ["example.com", "example.org"] },
+  };
+
+  it("stores a widening with the raised token and answers updated, without a machine call", async () => {
+    const s = setup();
+    const h = await created(s);
+    expect(s.rows.get(DEVICE)).toMatchObject({ limits: LIMITS, fenceToken: FENCE.token });
+    expect(await s.provider.update?.(h, WIDER, signal(), { token: 3 })).toBe("updated");
+    expect(s.rows.get(DEVICE)).toMatchObject({ limits: WIDER, fenceToken: 3 });
+    expect(s.dial.sent).toEqual([]);
+    // the same limits again with the same token: safe, still updated
+    expect(await s.provider.update?.(h, WIDER, signal(), { token: 3 })).toBe("updated");
+  });
+
+  it("refuses a token lower than the stored one and changes nothing", async () => {
+    const s = setup();
+    const h = await created(s);
+    await s.provider.update?.(h, WIDER, signal(), { token: 5 });
+    const before = structuredClone(s.rows.get(DEVICE));
+    const e = await rejection(
+      s.provider.update?.(h, { ...LIMITS, network: { kind: "open-public", hosts: [] } }, signal(), {
+        token: 4,
+      }) as Promise<unknown>,
+    );
+    expect(isStaleFenceError(e)).toBe(true);
+    expect((e as { current?: number }).current).toBe(5);
+    expect(s.rows.get(DEVICE)).toEqual(before);
+  });
+
+  it("answers recreate for a narrowing or a resource change, keeping the limits but raising the token", async () => {
+    const s = setup();
+    const h = await created(s);
+    const narrower = { ...LIMITS, network: { kind: "allowlist" as const, hosts: [] } };
+    expect(await s.provider.update?.(h, narrower, signal(), { token: 2 })).toBe("recreate");
+    expect(s.rows.get(DEVICE)).toMatchObject({ limits: LIMITS, fenceToken: 2 });
+    expect(await s.provider.update?.(h, { ...LIMITS, cpu: 4 }, signal(), { token: 2 })).toBe(
+      "recreate",
+    );
+    // the token a recreate answer stored still refuses an older holder
+    expect(
+      isStaleFenceError(
+        await rejection(s.provider.update?.(h, WIDER, signal(), FENCE) as Promise<unknown>),
+      ),
+    ).toBe(true);
+  });
+
+  it("answers recreate without a fence (an older kernel) and gone for a replaced generation", async () => {
+    const s = setup();
+    const h = await created(s);
+    expect(
+      await s.provider.update?.(h, WIDER, signal(), undefined as unknown as { token: number }),
+    ).toBe("recreate");
+    expect(s.rows.get(DEVICE)?.limits).toEqual(LIMITS);
+    await created(s);
+    expect(
+      isSandboxGoneError(
+        await rejection(s.provider.update?.(h, WIDER, signal(), FENCE) as Promise<unknown>),
+      ),
+    ).toBe(true);
+  });
+
+  it("create and destroy refuse a stale holder, leaving the machine and the binding alone", async () => {
+    const s = setup();
+    const h = await created(s);
+    await s.provider.update?.(h, WIDER, signal(), { token: 7 });
+    const before = structuredClone(s.rows.get(DEVICE));
+    const stale = { token: 6 };
+    expect(
+      isStaleFenceError(
+        await rejection(
+          s.provider.create({
+            fence: stale,
+            name: `cap-device-${DEVICE}`,
+            limits: LIMITS,
+            fileSystem: { id: DEVICE },
+            signal: signal(),
+          }),
+        ),
+      ),
+    ).toBe(true);
+    expect(isStaleFenceError(await rejection(s.provider.destroy(h, signal(), stale)))).toBe(true);
+    expect(s.dial.sent).toEqual([]);
+    expect(s.rows.get(DEVICE)).toEqual(before);
+    // the current holder (equal token) passes
+    await s.provider.destroy(h, signal(), { token: 7 });
+    expect(s.dial.ops()).toEqual(["create"]);
+  });
+
+  it("resume and escalated commands use the stored limits, not the handle's", async () => {
+    const s = setup();
+    const h = await created(s);
+    await s.provider.update?.(h, WIDER, signal(), { token: 2 });
+    expect(await s.provider.resume(h, signal())).toBe("resumed");
+    expect(s.dial.sent[0]).toMatchObject({ op: "create", args: { limits: WIDER } });
+    const scope = scopeOf({ network: { kind: "environment" }, filesystem: { kind: "device" } });
+    const op = await s.provider.operation?.(h, scope, signal());
+    await op?.exec({ command: "true", timeoutMs: 100, maxOutputBytes: 10, signal: signal() });
+    expect(s.dial.sent.at(-1)?.args.limits).toEqual(WIDER);
   });
 });

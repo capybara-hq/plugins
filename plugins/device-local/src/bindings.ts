@@ -58,8 +58,16 @@ const requestOf = (b: Binding): BindInstanceRequest => ({
  * the machine's side (a re-login), so nothing here needs to know which machine is signed in.
  */
 export interface InstanceBindings {
-  /** Commits the next generation of the device and binds it; resolves the installed binding. */
-  bindNew(deviceId: string, signal: AbortSignal): Promise<Binding>;
+  /**
+   * Commits the next generation of the device and binds it; resolves the installed binding.
+   * `seed`: the generation's create-time limits and the create's fence token, stored with it (a
+   * current binding holding a higher token refuses the commit with `StaleFenceError`).
+   */
+  bindNew(
+    deviceId: string,
+    signal: AbortSignal,
+    seed?: Pick<Binding, "limits" | "fenceToken">,
+  ): Promise<Binding>;
   /**
    * Re-sends the binding of `generation` and verifies the machine still holds it with the same
    * runtime. `gone` when it can never hold again: the device's binding is another generation, the
@@ -111,7 +119,7 @@ export function createInstanceBindings(
   };
 
   return {
-    async bindNew(deviceId, signal) {
+    async bindNew(deviceId, signal, seed) {
       signal.throwIfAborted();
       const current = await store.binding(deviceId);
       const previous = current?.generation ?? null;
@@ -122,6 +130,8 @@ export function createInstanceBindings(
         bindingId: randomUUID(),
         previousGeneration: previous,
         status: "awaiting-device",
+        ...(seed?.limits && { limits: seed.limits }),
+        ...(seed?.fenceToken !== undefined && { fenceToken: seed.fenceToken }),
       };
       if (!(await store.commitBinding(binding, previous)))
         throw new InstanceBindingError(

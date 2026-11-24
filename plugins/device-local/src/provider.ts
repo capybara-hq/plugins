@@ -20,6 +20,7 @@ import {
   SandboxPermissionUnsupportedError,
   type SandboxPreparation,
   type SandboxRoots,
+  StaleFenceError,
   ToolError,
   validateAllowHost,
 } from "@capybara-hq/plugin-sdk";
@@ -76,8 +77,10 @@ const NAME_PREFIX = "cap-device-";
 
 /**
  * The handle of a device's instance on its machine: the device id (one instance per device), the
- * roots the machine reported at `create`, the org's limits the kernel created it with (resources
- * and the outer network, sent with every command), and the generation bound at `create`.
+ * roots the machine reported at `create`, the org's limits the kernel created it with, and the
+ * generation bound at `create`. The limits in force are the binding's stored ones (`update`
+ * replaces them; the kernel keeps the handle as `create` returned it): `limits` here only stands
+ * for a binding row that stores none.
  */
 export interface LocalDeviceHandle extends SandboxHandle {
   roots: SandboxRoots;
@@ -244,9 +247,10 @@ export function createDeviceLocalProvider(
     if (!l) return;
     try {
       // an older handle never ends the live generation's work: only the device's bound one
-      if ((await store.binding(l.id))?.generation !== l.generation) return;
+      const b = await store.binding(l.id);
+      if (b?.generation !== l.generation) return;
       if (!(await ctx.dialIn.online(l.id))) return;
-      await machineCreate(l.id, l.limits, signal);
+      await machineCreate(l.id, b.limits ?? l.limits, signal);
     } catch (e) {
       if (signal.aborted) throw e;
       if (!isDeviceOfflineError(e))
@@ -273,7 +277,29 @@ export function createDeviceLocalProvider(
       throw new SandboxGoneError(
         "The machine restarted without this instance's binding (for example after an upgrade)",
       );
-    return l;
+    // the limits in force: the binding's, which `update` replaces
+    return b.limits ? { ...l, limits: b.limits } : l;
+  };
+
+  /** The limits the handle's generation enforces now: its binding's, else the handle's own. */
+  const limitsInForce = async (l: LocalDeviceHandle): Promise<SandboxLimits> => {
+    const b = await store.binding(l.id);
+    return b?.generation === l.generation && b.limits ? b.limits : l.limits;
+  };
+
+  /** Refuses a lifecycle call whose fence token is lower than the device's stored one. */
+  const assertFence = async (
+    deviceId: string,
+    fence: { token: number } | null | undefined,
+    op: string,
+  ): Promise<void> => {
+    if (fence === null || fence === undefined) return;
+    const held = (await store.binding(deviceId))?.fenceToken;
+    if (held !== undefined && held > fence.token)
+      throw new StaleFenceError(
+        `device-local: the device ${deviceId} holds fence ${held}; ${op} carries ${fence.token}`,
+        { current: held },
+      );
   };
 
   /** The scoped native methods of one operation, relayed under `prefix` with their scope. */
@@ -386,12 +412,11 @@ export function createDeviceLocalProvider(
 
     operation: async (h, input, signal) => {
       const scope = parseSandboxOperationScope(input);
-      await assertLive(h);
+      const l = await assertLive(h);
       const methods = native(h, scope, "", signal);
       return {
         ...methods,
         exec: async (args) => {
-          const l = requireLocal(h);
           const { signal: callSignal, ...rest } = args;
           const limits = commandLimits(l, scope);
           const combined = AbortSignal.any([signal, callSignal]);
@@ -456,9 +481,32 @@ export function createDeviceLocalProvider(
       const id = args.fileSystem.id;
       if (deviceIdOfName(args.name) !== id)
         throw new Error(`instance ${args.name} does not belong to file system ${id}`);
+      // a stale holder replaces nothing (checked again atomically when the binding commits);
+      // without a fence (an older kernel) the new generation starts at 0
+      const fenceToken = args.fence?.token ?? 0;
+      await assertFence(id, args.fence, "create");
       const roots = await machineCreate(id, args.limits, args.signal);
-      const binding = await bindings.bindNew(id, args.signal);
+      const binding = await bindings.bindNew(id, args.signal, { limits: args.limits, fenceToken });
       return { id, roots, limits: args.limits, generation: binding.generation };
+    },
+
+    /**
+     * Applies new limits to the running generation without recreating it, a store write only:
+     * every command already carries its operation's network, and the next `ensureService` sends
+     * the stored network, on which the machine restarts a running service started with another.
+     * A widening (same resources, every enforced host still allowed) is stored and `updated`; a
+     * narrowing, a resource change or a call without a fence (an older kernel) answers `recreate`,
+     * since a running service or escalated command could still reach a removed host. A token lower
+     * than the stored one is refused with `StaleFenceError`, checked and stored in one step.
+     */
+    async update(h, limits, signal, fence) {
+      signal.throwIfAborted();
+      const l = requireLocal(h);
+      if (fence === undefined) return "recreate";
+      const answer = await store.updateLimits(l.id, l.generation, limits, fence.token, l.limits);
+      if (answer === "gone")
+        throw new SandboxGoneError("The device's machine no longer holds this instance generation");
+      return answer;
     },
 
     /**
@@ -474,7 +522,7 @@ export function createDeviceLocalProvider(
       if (!(await ctx.dialIn.online(l.id))) throw new DeviceOfflineError(l.id);
       const current = await store.binding(l.id);
       if (current?.generation !== l.generation) return "gone";
-      const roots = await machineCreate(l.id, l.limits, signal);
+      const roots = await machineCreate(l.id, current.limits ?? l.limits, signal);
       if (!sameRoots(roots, l.roots)) return "gone";
       return (await bindings.rebind(l.id, l.generation, signal)) === "bound" ? "resumed" : "gone";
     },
@@ -483,7 +531,12 @@ export function createDeviceLocalProvider(
       await endGenerationWork(h, signal, "suspend");
     },
 
-    async destroy(h, signal) {
+    async destroy(h, signal, fence) {
+      signal.throwIfAborted();
+      const l = localHandle(h);
+      // a stale holder never ends the work of the generation a newer holder uses
+      if (l && (await store.binding(l.id))?.generation === l.generation)
+        await assertFence(l.id, fence, "destroy");
       await endGenerationWork(h, signal, "destroy");
     },
 
@@ -505,13 +558,15 @@ export function createDeviceLocalProvider(
     },
 
     /**
-     * Starts the service on the machine (or finds it running) with the device's current network
-     * limits, which the machine compares with the running service's and restarts it on a change.
+     * Starts the service on the machine (or finds it running) with the network the generation
+     * enforces now (the binding's limits, which `update` replaces), which the machine compares
+     * with the running service's and restarts it on a change (from the spec it launched).
      * `ifRunning` starts nothing: a stopped service answers `stopped`.
      */
     async ensureService(h, spec, signal, o) {
       const l = requireLocal(h);
-      const network = { kind: l.limits.network.kind, hosts: [...l.limits.network.hosts] };
+      const inForce = (await limitsInForce(l)).network;
+      const network = { kind: inForce.kind, hosts: [...inForce.hosts] };
       const opts = { deadlineMs: SERVICE_OP_DEADLINE_MS, signal };
       // ifRunning finds a running service by its name: nothing to start, so no files and no retry.
       if (o?.ifRunning)
