@@ -1,0 +1,42 @@
+{
+  "name": "@capybara-hq/plugin-browser",
+  "version": "0.1.0-rc.0",
+  "description": "A real browser in the person's device for agents: navigate, read and act on pages through tools, with a live view in the conversation and takeover by the person",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/capybara-hq/plugins.git",
+    "directory": "plugins/browser"
+  },
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/browser#readme",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "@capybara-hq/source": "./src/index.ts",
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "dist-daemon",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "build:daemon": "tsx daemon/build.ts"
+  },
+  "dependencies": {
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.69"
+  },
+  "devDependencies": {
+    "@capybara-hq/plugin-model-fake": "^0.1.0-rc.52",
+    "@capybara-hq/testing": "^0.1.0-rc.38",
+    "esbuild": "^0.28.2",
+    "jsdom": "^30.1.3",
+    "playwright-core": "1.65.1"
+  }
+}

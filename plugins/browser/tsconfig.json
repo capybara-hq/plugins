@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "rootDir": ".", "outDir": "dist", "types": ["node"] },
+  "include": ["src", "daemon"],
+  "exclude": ["src/panel", "daemon/build.ts"]
+}
