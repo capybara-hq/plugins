@@ -14,7 +14,7 @@ A real browser in the person's device for agents (browser use spec,
 - `pnpm --filter @capybara-hq/plugin-browser build:ui` (run by the repository's `pnpm build:ui`
   before pack, marketplace and release) writes `ui/`, the plugin-root directory the packer ships
   as is (`dist/` is replaced by the extension bundle): `ui/service/` (the daemon's service files,
-  as `build:daemon`) and `ui/panel.js` (the panel, `src/panel/entry.ts` bundled as an iife).
+  as `build:daemon`) and `ui/panel.js` (the panel, `ui-src/panel/entry.ts` bundled as an iife).
 
 ## The extension (`src/`)
 

@@ -204,13 +204,32 @@ describe("browser tools", () => {
     const f = fake();
     f.fail(new DeviceAccessError("no_device", "kernel text"));
     await expect(f.run("browser_snapshot", {})).rejects.toThrow(
-      new ToolError("This conversation has no device; pick a device for the conversation first."),
+      new ToolError(
+        "This conversation has no device; ask the user to pick a device for the conversation first.",
+      ),
     );
     const g = fake();
     g.fail(new DeviceAccessError("capability_missing", "kernel text"));
     const e = await g.run("browser_snapshot", {}).catch((x: unknown) => x);
     expect(e).toBeInstanceOf(ToolError);
     expect((e as Error).message).toMatch(/device/);
+  });
+
+  it("an unrecognised failure is a generic retryable error, the cause logged only", async () => {
+    const f = fake(() => {
+      throw new Error("ECONNRESET 10.0.0.7:6379");
+    });
+    const warned: unknown[] = [];
+    f.deps.log = { warn: (_m, meta) => void warned.push(meta) };
+    const e = await f.run("browser_snapshot", {}).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ToolError);
+    expect((e as Error).message).toBe(
+      "The browser service in the device failed; retry, and ask the user to check the device if it keeps failing.",
+    );
+    expect(JSON.stringify(warned)).not.toBe("[]");
+    const g = fake();
+    g.fail(new ToolError("The device service browser was not started: denied. Ask the user."));
+    await expect(g.run("browser_snapshot", {})).rejects.toThrow(/was not started/);
   });
 
   it("screenshot returns an image block", async () => {
@@ -309,9 +328,41 @@ describe("browser_handoff", () => {
     for (const answer of [null, { done: false }]) {
       await expect(
         f.run("browser_handoff", { message: "m" }, call({ resume: { state: {}, answer } })),
-      ).rejects.toThrow(new ToolError("The user cancelled the handoff."));
+      ).rejects.toThrow(
+        new ToolError(
+          "The user cancelled the handoff; ask the user how to continue, or try another approach.",
+        ),
+      );
     }
     expect(f.requests.map((q) => q.op)).toEqual(["handoff_clear", "handoff_clear"]);
+  });
+
+  it("a failed clear keeps the person's answer, unless the call was aborted", async () => {
+    const boom = (req: ToolRequest): ToolReply => {
+      if (req.op === "handoff_clear") throw new Error("relay dropped");
+      return { ok: true, page: PAGE, blockedHosts: [], text: "tree" };
+    };
+    const f = fake(boom);
+    const r = await f.run(
+      "browser_handoff",
+      { message: "m" },
+      call({ resume: { state: {}, answer: { done: true } } }),
+    );
+    expect(textOf(r)).toContain("tree");
+    const g = fake(boom);
+    await expect(
+      g.run("browser_handoff", { message: "m" }, call({ resume: { state: {}, answer: null } })),
+    ).rejects.toThrow(/cancelled the handoff/);
+    const aborted = new AbortController();
+    aborted.abort();
+    const h = fake(boom);
+    await expect(
+      h.run(
+        "browser_handoff",
+        { message: "m" },
+        call({ signal: aborted.signal, resume: { state: {}, answer: { done: true } } }),
+      ),
+    ).rejects.toThrow("relay dropped");
   });
 
   it("handoff refuses a non-owner", async () => {

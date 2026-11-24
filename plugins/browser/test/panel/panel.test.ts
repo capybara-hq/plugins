@@ -1,9 +1,9 @@
 import { JSDOM } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ViewerIn, ViewerOut } from "../../daemon/protocol.js";
-import { STRINGS, t } from "../../src/panel/i18n.js";
-import { PANEL_HTML } from "../../src/panel/page.js";
-import { letterbox, mapPoint, mountPanel } from "../../src/panel/panel.js";
+import { STRINGS, t } from "../../ui-src/panel/i18n.js";
+import { PANEL_HTML } from "../../ui-src/panel/page.js";
+import { letterbox, mapPoint, mountPanel } from "../../ui-src/panel/panel.js";
 
 class FakeSocket {
   static all: FakeSocket[] = [];
@@ -51,7 +51,12 @@ interface Setup {
 }
 
 function setup(
-  opts: { locale?: "zh" | "en"; width?: number; ticket?: () => Response } = {},
+  opts: {
+    locale?: "zh" | "en";
+    width?: number;
+    ticket?: () => Response;
+    answer?: () => Response;
+  } = {},
 ): Setup {
   FakeSocket.all = [];
   const dom = new JSDOM(PANEL_HTML, { url: "https://app.test/plugin-ui/browser/browser" });
@@ -67,6 +72,7 @@ function setup(
         new Response(JSON.stringify({ url: "wss://app.test/ws?t=1" }), { status: 200 })
       );
     }
+    if (url === "handoff-answer" && opts.answer) return opts.answer();
     return new Response("{}", { status: 200 });
   };
   const stage = dom.window.document.getElementById("stage") as HTMLElement;
@@ -341,6 +347,29 @@ describe("handoff banner", () => {
     );
   });
 
+  it("hides the banner when the question is gone (404) and shows nothing else", async () => {
+    const s = setup({
+      answer: () =>
+        new Response(JSON.stringify({ error: { code: "question.not_found", message: "x" } }), {
+          status: 404,
+        }),
+    });
+    const sock = await live(s, state({ handoff }));
+    $(s, "handoff-done").click();
+    await vi.waitFor(() => expect(($(s, "handoff") as HTMLElement).hidden).toBe(true));
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(true);
+    expect(sock.sent.some((m) => m.t === "handback")).toBe(false);
+  });
+
+  it("keeps the banner when the answer fails otherwise", async () => {
+    const s = setup({ answer: () => new Response("{}", { status: 500 }) });
+    await live(s, state({ handoff }));
+    $(s, "handoff-done").click();
+    await vi.waitFor(() => expect(s.fetchCalls.some((c) => c.url === "handoff-answer")).toBe(true));
+    await new Promise((r) => queueMicrotask(() => r(undefined)));
+    expect(($(s, "handoff") as HTMLElement).hidden).toBe(false);
+  });
+
   it("works in the compact size class", async () => {
     const s = setup({ width: 500 });
     await live(s, state({ handoff }));
@@ -366,7 +395,7 @@ describe("i18n", () => {
       const s = setup({ locale });
       await live(s);
       const doc = s.dom.window.document;
-      const known = new Set(Object.values(STRINGS[locale]));
+      const known = new Set<string>(Object.values(STRINGS[locale]));
       const texts: string[] = [];
       for (const el of Array.from(
         doc.querySelectorAll("button, label, p, span, [aria-label], [title], input"),

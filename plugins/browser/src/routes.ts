@@ -8,8 +8,8 @@
 // shows its "not running" state. `service_not_running` is the code reserved for that state in a
 // ticket answer, should the kernel ever report it at mint time.
 import type { DeviceAccessCtx, RouteCaller } from "@capybara-hq/plugin-sdk";
+import { PANEL_HTML } from "../ui-src/panel/page.js";
 import { SERVICE } from "./browser.js";
-import { PANEL_HTML } from "./panel/page.js";
 
 /** What the routes need: the kernel's device access and the built panel script. */
 export interface RouteDeps {
@@ -22,7 +22,9 @@ type Handler = (req: Request, caller: RouteCaller) => Promise<Response>;
 
 /** The most hosts one allow may add (the panel sends one). */
 const MAX_HOSTS = 20;
-const HOST_RE = /^[A-Za-z0-9.-]{1,253}$/;
+/** A DNS name: labels of 1-63 letters, digits and inner hyphens (the kernel validates again). */
+const HOST_RE =
+  /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
 const CALL_ID_MAX = 200;
 
 /** Defense in depth if the kernel's /plugins is ever reached without the web proxy. */
@@ -57,10 +59,16 @@ function statusOf(code: string): number {
   return 409;
 }
 
-/** A refusal with a `code` (DeviceAccessError, the kernel's API errors) as an error body. */
+/** The kernel's refusals whose message is meant for the caller. */
+const isRefusalName = (name: string) => name === "DeviceAccessError" || name === "ApiError";
+
+/**
+ * A kernel refusal (DeviceAccessError, ApiError, matched by name) as an error body with its code
+ * and message; anything else is rethrown (the kernel answers it without echoing the message).
+ */
 function refusal(e: unknown): Response {
   const code = (e as { code?: unknown } | null)?.code;
-  if (!(e instanceof Error) || typeof code !== "string") throw e;
+  if (!(e instanceof Error) || !isRefusalName(e.name) || typeof code !== "string") throw e;
   return error(statusOf(code), code, e.message);
 }
 

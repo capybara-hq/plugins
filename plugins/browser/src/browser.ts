@@ -9,7 +9,7 @@ import {
   type ToolResult,
 } from "@capybara-hq/plugin-sdk";
 import type { ToolErrorCode, ToolReply, ToolRequest } from "../daemon/protocol.js";
-import { NO_DEVICE_MESSAGE, NOT_OWNER_MESSAGE, TAKEN_OVER_MESSAGE } from "./messages.js";
+import { NOT_OWNER_MESSAGE, TAKEN_OVER_MESSAGE } from "./messages.js";
 
 export { NOT_OWNER_MESSAGE, TAKEN_OVER_MESSAGE };
 
@@ -21,6 +21,8 @@ export interface BrowserDeps {
   deviceAccess: Pick<DeviceAccessCtx, "ensureService" | "request" | "reportBlockedHosts">;
   /** The daemon's service spec (its files are read once per extension instance). */
   serviceSpec: () => Promise<DeviceServiceSpec>;
+  /** Where the cause of an unrecognised failure goes (never to the model). */
+  log?: { warn(msg: string, meta?: Record<string, unknown>): void };
 }
 
 /** The longest a daemon request may take, beyond an action's own wait. */
@@ -46,7 +48,9 @@ function deviceAccessCode(e: unknown): string | undefined {
 export function deviceAccessToolError(e: unknown): unknown {
   switch (deviceAccessCode(e)) {
     case "no_device":
-      return new ToolError(NO_DEVICE_MESSAGE);
+      return new ToolError(
+        "This conversation has no device; ask the user to pick a device for the conversation first.",
+      );
     case "provider_unavailable":
       return new ToolError(
         "The conversation's device is unavailable (its provider is not loaded or not on in this org); ask the user to check the device.",
@@ -103,6 +107,22 @@ function parseReply(bytes: Uint8Array): ToolReply {
 }
 
 /**
+ * What a failed `ensureService` / `request` throws: a DeviceAccessError as its actionable text, a
+ * ToolError (the kernel's own, e.g. the command review's refusal) as is, an abort as is, and
+ * anything else as a generic retryable error (the cause goes to the log only).
+ */
+function failure(deps: BrowserDeps, call: ToolCallContext, e: unknown): unknown {
+  const mapped = deviceAccessToolError(e);
+  if (mapped !== e) return mapped;
+  if (e instanceof ToolError || (e instanceof Error && e.name === "ToolError")) return e;
+  if (call.signal.aborted) return e;
+  deps.log?.warn("browser service call failed", { err: e });
+  return new ToolError(
+    "The browser service in the device failed; retry, and ask the user to check the device if it keeps failing.",
+  );
+}
+
+/**
  * One request to the daemon for a tool call: owner check, `ensureService`, `request`, then the
  * refused hosts to `reportBlockedHosts` (on success and failure alike). Resolves the ok reply;
  * a failure reply or a device access refusal throws an actionable ToolError.
@@ -122,7 +142,7 @@ export async function runRequest(
       await deps.deviceAccess.request(call, { service: SERVICE, body, timeoutMs }),
     );
   } catch (e) {
-    throw deviceAccessToolError(e);
+    throw failure(deps, call, e);
   }
   const hosts = Array.isArray(reply.blockedHosts)
     ? reply.blockedHosts.filter((h): h is string => typeof h === "string" && h !== "")

@@ -69,7 +69,7 @@ export default defineExtension({
       answerHandoff: (...a: Parameters<typeof ctx.deviceAccess.answerHandoff>) =>
         ctx.deviceAccess.answerHandoff(...a),
     };
-    const deps = { deviceAccess, serviceSpec: serviceSpecLoader() };
+    const deps = { deviceAccess, serviceSpec: serviceSpecLoader(), log: ctx.log };
     registerBrowserTools(ctx, deps);
     registerHandoffTool(ctx, deps);
     registerRoutes(ctx, { deviceAccess, panelScript: panelScriptLoader() });

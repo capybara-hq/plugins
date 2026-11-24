@@ -82,6 +82,15 @@ describe("browser routes", () => {
       exp: 9999999999,
     };
     const { conversationId: _drop, ...noConv } = conv as Extract<RouteCaller, { scope: "org" }>;
+    const share: RouteCaller = {
+      access: "embed",
+      scope: "share",
+      orgId: "org",
+      shareId: "s1",
+      contribution: "browser",
+      exp: 9999999999,
+      config: {},
+    };
     for (const key of [
       "POST /ui/stream-ticket",
       "POST /ui/network-hosts",
@@ -92,6 +101,9 @@ describe("browser routes", () => {
       ).toBe(403);
       expect(
         (await s.hit(key, { hosts: ["a.example"], callId: "c", done: true }, noConv)).status,
+      ).toBe(403);
+      expect(
+        (await s.hit(key, { hosts: ["a.example"], callId: "c", done: true }, share)).status,
       ).toBe(403);
     }
     expect(s.calls).toEqual([]);
@@ -126,6 +138,8 @@ describe("browser routes", () => {
   it("invalid bodies answer 400", async () => {
     const s = setup();
     expect((await s.hit("POST /ui/network-hosts", { hosts: [] }, conv)).status).toBe(400);
+    for (const bad of ["a..b", "-a.example", "a-.example", "a_b.example", `${"x".repeat(64)}.com`])
+      expect((await s.hit("POST /ui/network-hosts", { hosts: [bad] }, conv)).status, bad).toBe(400);
     expect((await s.hit("POST /ui/handoff-answer", { callId: "c" }, conv)).status).toBe(400);
     expect(s.calls).toEqual([]);
   });
@@ -139,6 +153,15 @@ describe("browser routes", () => {
     const res = await s.hit("POST /ui/stream-ticket", {}, conv);
     expect(res.status).toBe(403);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe("not_owner");
+  });
+
+  it("other errors are rethrown, never echoed", async () => {
+    const s = setup({
+      async streamTicket() {
+        throw Object.assign(new Error("db password=hunter2"), { code: "ECONNREFUSED" });
+      },
+    });
+    await expect(s.hit("POST /ui/stream-ticket", {}, conv)).rejects.toThrow("hunter2");
   });
 
   it("serves the panel page and script as public GETs", async () => {

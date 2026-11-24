@@ -291,7 +291,8 @@ const WAIT: ToolSpec = {
   title: "Wait",
   description:
     "Wait until a text appears on the page, an element ref appears, a navigation finishes, or " +
-    "the time cap passes (at most 60000 ms). Use it after an action that loads content slowly, " +
+    "the time cap passes (at most 60000 ms; call it again to wait longer). Use it after an " +
+    "action that loads content slowly, " +
     "or while the user controls the browser. To have the user do something in the browser, use " +
     "browser_handoff instead.",
   inputSchema: {

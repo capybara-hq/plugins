@@ -1,7 +1,7 @@
 // Builds what the plugin ships under ui/ (the plugin-root directory the packer copies as is;
 // dist/ is replaced by the extension bundle):
 // - ui/service/: the daemon's service files (daemon/build.ts), sent to the device on start;
-// - ui/panel.js: the panel's browser bundle (src/panel/entry.ts, iife), served at /ui/panel.js.
+// - ui/panel.js: the panel's browser bundle (ui-src/panel/entry.ts, iife), served at /ui/panel.js.
 // Run by `pnpm build:ui` (the repository runs it before pack, marketplace and release).
 
 import { mkdirSync } from "node:fs";
@@ -16,7 +16,7 @@ export async function buildUi(outDir = join(here, "ui")): Promise<void> {
   mkdirSync(outDir, { recursive: true });
   await buildDaemon(join(outDir, "service"));
   await build({
-    entryPoints: [join(here, "src", "panel", "entry.ts")],
+    entryPoints: [join(here, "ui-src", "panel", "entry.ts")],
     outfile: join(outDir, "panel.js"),
     bundle: true,
     platform: "browser",

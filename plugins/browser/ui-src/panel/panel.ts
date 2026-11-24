@@ -468,6 +468,15 @@ export function mountPanel(opts: PanelOptions): void {
         body: JSON.stringify({ callId: h.callId, done }),
         credentials: "omit",
       });
+      if (res.status === 404) {
+        // The question is gone (the run was cancelled or already answered): only the banner was
+        // stale. Hide it here; the daemon drops its notice on the next agent request.
+        if (pendingHandoff?.callId === h.callId) {
+          pendingHandoff = null;
+          $("handoff").hidden = true;
+        }
+        return;
+      }
       if (!res.ok) return;
     } catch {
       return;

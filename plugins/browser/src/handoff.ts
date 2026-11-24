@@ -11,7 +11,6 @@ import {
 import { HANDOFF_MAX_CHARS } from "../daemon/protocol.js";
 import { assertOwner, type BrowserDeps, runRequest, toResult } from "./browser.js";
 import { HANDOFF_FORM } from "./i18n.js";
-import { HANDOFF_CANCELLED_MESSAGE } from "./messages.js";
 
 /** The longest handoff message (the question card's title and the panel banner). */
 const MESSAGE_MAX = Math.min(2000, HANDOFF_MAX_CHARS);
@@ -77,7 +76,10 @@ export function handoffHandler(deps: BrowserDeps): ToolHandler {
       },
     );
     const answer = call.resume.answer;
-    if (answer === null || answer.done !== true) throw new ToolError(HANDOFF_CANCELLED_MESSAGE);
+    if (answer === null || answer.done !== true)
+      throw new ToolError(
+        "The user cancelled the handoff; ask the user how to continue, or try another approach.",
+      );
     return toResult(await runRequest(deps, call, { op: "snapshot" }));
   };
 }
