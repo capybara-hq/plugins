@@ -204,14 +204,46 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     if (current !== undefined) return current;
     if (closing) return Promise.reject(new Error("The browser daemon is stopping."));
     const starting: Promise<BrowserSession> = launch(plan).then(async (ctx) => {
+      let pid: number | undefined;
+      let failed = false;
+      try {
+        return await sessionOn(
+          ctx,
+          (id) => {
+            pid = id;
+          },
+          () => failed,
+        );
+      } catch (e) {
+        // Chromium runs but the session could not be set up: close it (killed after the grace)
+        // and fail this launch with the original error; the next caller launches again
+        failed = true;
+        await closeOrKill(ctx.close(), () => pid);
+        throw e;
+      }
+    });
+    current = starting;
+    starting.catch(() => {
+      if (current === starting) current = undefined;
+      if (running?.launch === starting) running = undefined;
+    });
+    return starting;
+
+    /** The session on a launched browser: process id, close watch, tabs restored, saves. */
+    async function sessionOn(
+      ctx: BrowserContext,
+      setPid: (pid: number | undefined) => void,
+      failed: () => boolean,
+    ): Promise<BrowserSession> {
       // before the process id lookup: a Chromium that exits during it is still reported
       let gone = false;
       ctx.on("close", () => {
         gone = true;
         if (running?.launch === starting) running = undefined;
-        if (!closing) opts.onBrowserGone?.();
+        if (!closing && !failed()) opts.onBrowserGone?.();
       });
       const pid = await within(browserProcessId(ctx), BROWSER_CLOSE_GRACE_MS);
+      setPid(pid);
       if (!gone) running = { launch: starting, pid };
       const workspace = opts.env[SERVICE_WORKSPACE_ENV];
       const session = new BrowserSession(ctx, {
@@ -234,13 +266,28 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         state.onChange(save);
       }
       return session;
-    });
-    current = starting;
-    starting.catch(() => {
-      if (current === starting) current = undefined;
-      if (running?.launch === starting) running = undefined;
-    });
-    return starting;
+    }
+  }
+
+  /**
+   * Waits for a closing browser at most the grace, then kills it by its process id (when known)
+   * and waits at most one more grace: neither a stop nor a failed launch hangs on Chromium.
+   */
+  async function closeOrKill(
+    closingBrowser: Promise<unknown>,
+    pid: () => number | undefined,
+  ): Promise<void> {
+    const done = closingBrowser.then(
+      () => true,
+      () => true,
+    );
+    if ((await within(done, closeGraceMs)) === true) return;
+    const id = pid();
+    if (id === undefined) return;
+    killChromium(id);
+    // Playwright sees the process exit and finishes the close; a process that does not die
+    // (D state) is left to the service's exit, where Playwright kills its group
+    await within(done, closeGraceMs);
   }
 
   /** The failure reply of a launch that failed, with the download hosts the proxy refuses. */
@@ -278,20 +325,13 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   async function stopBrowser(): Promise<void> {
     const starting = current;
     if (starting === undefined) return;
-    const closed = starting.then(
-      (session) => session.close(),
-      () => undefined,
+    await closeOrKill(
+      starting.then(
+        (session) => session.close(),
+        () => undefined,
+      ),
+      () => (running?.launch === starting ? running.pid : undefined),
     );
-    const inTime = await within(
-      closed.then(() => true),
-      closeGraceMs,
-    );
-    const pid = running?.launch === starting ? running.pid : undefined;
-    if (inTime === true || pid === undefined) return;
-    killChromium(pid);
-    // Playwright sees the process exit and finishes the close; a process that does not die
-    // (D state) is left to the service's exit, where Playwright kills its group
-    await within(closed, closeGraceMs);
   }
 
   const ready = browser().then(() => undefined);

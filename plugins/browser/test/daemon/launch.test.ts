@@ -56,6 +56,15 @@ async function daemonWith(opts: Partial<Parameters<typeof startDaemon>[0]>): Pro
   return { daemon, socketPath, stateDir };
 }
 
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 describe("browser daemon: Chromium that cannot start", () => {
   it("answers with the cause, keeps running and launches again on the next request", async () => {
     let calls = 0;
@@ -74,6 +83,45 @@ describe("browser daemon: Chromium that cannot start", () => {
     const second = await request(socketPath, { op: "snapshot" });
     expect(second).toMatchObject({ ok: true });
     expect(calls).toBe(3);
+  });
+
+  it("closes a Chromium whose session cannot be set up, fails with the cause and launches again", async () => {
+    let calls = 0;
+    let gone = 0;
+    const pids: number[] = [];
+    const { daemon, socketPath } = await daemonWith({
+      // closing the failed launch's browser is not a Chromium that went away
+      onBrowserGone: () => gone++,
+      launch: async (plan) => {
+        calls++;
+        const real = await launchChromium(plan);
+        const pid = await browserProcessId(real);
+        if (pid !== undefined) pids.push(pid);
+        if (calls > 1) return real;
+        // Chromium runs, but setting up the session on it fails
+        return new Proxy(real, {
+          get: (target, key) => {
+            if (key === "setDefaultTimeout")
+              return () => {
+                throw new Error("session setup failed");
+              };
+            const v = Reflect.get(target, key, target);
+            return typeof v === "function" ? v.bind(target) : v;
+          },
+        });
+      },
+    });
+    cleanup.push(() => {
+      for (const pid of pids) if (alive(pid)) process.kill(pid, "SIGKILL");
+    });
+    await expect(daemon.ready).rejects.toThrow("session setup failed");
+    // that Chromium is closed, not left running beside the next one
+    expect(pids).toHaveLength(1);
+    expect(alive(pids[0] as number)).toBe(false);
+    const next = await request(socketPath, { op: "snapshot" });
+    expect(next).toMatchObject({ ok: true });
+    expect(calls).toBe(2);
+    expect(gone).toBe(0);
   });
 
   it("reports Playwright's download hosts the device's proxy refuses", async () => {
@@ -98,15 +146,6 @@ describe("browser daemon: Chromium that cannot start", () => {
     expect(r.ok ? "" : r.message.startsWith(DOWNLOAD_BLOCKED_PREFIX)).toBe(true);
   });
 });
-
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 describe("browser daemon: stop", () => {
   it("kills a Chromium that does not close instead of waiting for it", async () => {
@@ -172,13 +211,29 @@ describe("browser daemon: stop", () => {
     });
     writeFileSync(join(stateDir, "session.json"), session);
     let opened = 0;
+    // resolves with the daemon's close of that browser, which ends once Chromium has exited
+    let closedByDaemon!: (done: Promise<void>) => void;
+    const closing = new Promise<Promise<void>>((r) => {
+      closedByDaemon = r;
+    });
     let finish: (() => void) | undefined;
     const launched = new Promise<BrowserContext>((resolve) => {
       finish = () =>
         resolve(
-          launchChromium(plan).then((ctx) => {
-            ctx.on("page", () => opened++);
-            return ctx;
+          launchChromium(plan).then((real) => {
+            real.on("page", () => opened++);
+            return new Proxy(real, {
+              get: (target, key) => {
+                if (key === "close")
+                  return () => {
+                    const done = target.close();
+                    closedByDaemon(done);
+                    return done;
+                  };
+                const v = Reflect.get(target, key, target);
+                return typeof v === "function" ? v.bind(target) : v;
+              },
+            });
           }),
         );
     });
@@ -195,11 +250,7 @@ describe("browser daemon: stop", () => {
     // the launch (an install, say) is still running: the stop does not wait for it
     await daemon.close();
     finish?.();
-    const ctx = await launched;
-    await new Promise<void>((r) => {
-      if (ctx.browser()?.isConnected() === false) r();
-      else ctx.once("close", () => r());
-    });
+    await await closing;
     // no tab restored, and the session file not written back
     expect(opened).toBe(0);
     expect(readFileSync(join(stateDir, "session.json"), "utf8")).toBe(session);
