@@ -893,7 +893,7 @@
     },
     {
       "name": "device-local",
-      "version": "0.1.0-rc.9",
+      "version": "0.1.0-rc.10",
       "summary": {
         "en": "Devices on people's own computers: a machine connected with capybara-device serves the device over the dial-in channel, and its owner limits it there",
         "zh": "在自己的电脑上使用设备：用 capybara-device 连接的电脑通过拨入通道为设备服务，由电脑的所有者在本机限制它"
@@ -916,8 +916,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-local",
-          "version": "0.1.0-rc.9",
-          "integrity": "sha512-sOjOsA5bSZsbsNLzxRIsFhgZig0YNnfBIPIgQ4YbVXYT5lAEt3OTzLsOJr2SxsnxkvmGV95nHFJOTMEGRn2K4Q=="
+          "version": "0.1.0-rc.10",
+          "integrity": "sha512-f33WI+WifA/5jNjsWiuuPsrvRR/TD3qizXY2GkW4IVKZGHuMoznoxQu+znEYjsQl7b0ZxuuBzcTgHI9oGIFhRg=="
         }
       }
     },
@@ -948,7 +948,7 @@
     },
     {
       "name": "browser",
-      "version": "0.1.0-rc.3",
+      "version": "0.1.0-rc.4",
       "summary": {
         "en": "A real browser in the conversation owner's device for agents: navigate, read and act on pages through tools, with a live view in the conversation panel and takeover by the person",
         "zh": "在对话所有者的设备中为智能体运行真实浏览器：通过工具打开、读取和操作网页，在对话面板中实时查看，并可由本人接管"
@@ -1012,8 +1012,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-browser",
-          "version": "0.1.0-rc.3",
-          "integrity": "sha512-ozoVWC93z6Kqkyzzor4Rk+R3b3lSxr5RjNf+7OOc/UjkFZU9x6q5GZT5YF/magmVqUaJJt3V3keWZR/gNkSDmQ=="
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-0gtu9QNdoSdLwUjrQch1g9qy3yGN7G7QqF74tkdAh/mbdaBRo1gneXMmU4jYDI/OB0cFO+ZLsA9mErh1G2mxBQ=="
         }
       }
     }

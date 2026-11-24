@@ -1,5 +1,14 @@
 # @capybara-hq/plugin-device-local
 
+## 0.1.0-rc.10
+
+### Patch Changes
+
+- 1b49dd8: device-local implements `update`: a widened network (the browser panel's 允许) is stored with the
+  instance generation, fenced by the kernel's token, and the next service ensure sends it, so the
+  machine restarts a running browser with the new network instead of the kernel recreating the
+  instance and stopping every service. A narrowing still recreates.
+
 ## 0.1.0-rc.9
 
 ### Patch Changes
