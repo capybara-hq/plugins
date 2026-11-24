@@ -1,3 +1,4 @@
+import { type SandboxLimits, validateAllowHost } from "@capybara-hq/plugin-sdk";
 import {
   type DeviceFeature,
   type DeviceRuntimeIdentity,
@@ -52,9 +53,47 @@ function installedOf(r: Row): InstalledBinding | undefined {
   }
 }
 
+const isCount = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
+
+/**
+ * Stored limits, or undefined when they are not complete valid ones (the handle's create-time
+ * limits then stand, which the kernel gave the generation).
+ */
+function limitsOf(v: unknown): SandboxLimits | undefined {
+  const o = json(v) as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") return undefined;
+  const n = o.network as Record<string, unknown> | null;
+  if (
+    !isCount(o.cpu) ||
+    !isCount(o.memoryMb) ||
+    !isCount(o.diskMb) ||
+    !n ||
+    typeof n !== "object" ||
+    (n.kind !== "open-public" && n.kind !== "allowlist") ||
+    !Array.isArray(n.hosts) ||
+    !n.hosts.every((h) => typeof h === "string" && validateAllowHost(h).length === 0)
+  )
+    return undefined;
+  return {
+    cpu: o.cpu,
+    memoryMb: o.memoryMb,
+    diskMb: o.diskMb,
+    network: { kind: n.kind, hosts: [...(n.hosts as string[])] },
+  };
+}
+
+/** A stored fence token (pg returns bigint as a string), or undefined. */
+function tokenOf(v: unknown): number | undefined {
+  if (v === null || v === undefined) return undefined;
+  const t = Number(v);
+  return Number.isSafeInteger(t) && t >= 0 ? t : undefined;
+}
+
 function bindingOf(r: Row | undefined): Binding | null {
   if (!r) return null;
   const installed = r.status === "installed" ? installedOf(r) : undefined;
+  const limits = limitsOf(r.limits);
+  const fenceToken = tokenOf(r.fence_token);
   return {
     deviceId: String(r.device_id),
     instanceId: String(r.instance_id),
@@ -65,6 +104,8 @@ function bindingOf(r: Row | undefined): Binding | null {
     status: installed ? "installed" : "awaiting-device",
     ...(installed && { installed }),
     ...(installed && r.unattested === true && { unattested: true as const }),
+    ...(limits && { limits }),
+    ...(fenceToken !== undefined && { fenceToken }),
   };
 }
 
@@ -174,6 +215,8 @@ async function writeBinding(db: Db, b: Binding): Promise<void> {
     permission_support: b.installed ? JSON.stringify(b.installed.permissionSupport) : null,
     owner_ceiling: b.installed ? JSON.stringify(b.installed.ownerCeiling) : null,
     unattested: b.unattested === true,
+    limits: b.limits === undefined ? null : JSON.stringify(b.limits),
+    fence_token: b.fenceToken ?? null,
     updated_at: sql`now()`,
   };
   const { device_id: _key, ...update } = values;

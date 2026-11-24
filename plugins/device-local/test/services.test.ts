@@ -92,7 +92,7 @@ function setup(opts: { oldMachine?: boolean; codeDir?: unknown } = {}) {
   const dial = fakeDialIn((req) => m.answer(req.body as Body));
   const { store } = memoryStore();
   const provider = createDeviceLocalProvider({ dialIn: dial.channel, log: fakeLog().log }, store);
-  return { m, dial, provider };
+  return { m, dial, provider, store };
 }
 
 const SPEC = {
@@ -304,6 +304,42 @@ describe("device-local services", () => {
       expect((e as Error).message).toMatch(message);
       expect((e as Error).name + (e as Error).constructor.name).toMatch(name);
     }
+  });
+
+  it("after update, an ensure sends the stored network, so the machine restarts a running service", async () => {
+    const { m, provider, store } = setup();
+    // the handle's generation, committed by its create with the create's limits and fence token
+    await store.commitBinding(
+      {
+        deviceId: DEVICE,
+        instanceId: DEVICE,
+        generation: HANDLE.generation,
+        bindingId: "b-1",
+        previousGeneration: null,
+        status: "awaiting-device",
+        limits: LIMITS,
+        fenceToken: 1,
+      },
+      null,
+    );
+    await provider.ensureService?.(HANDLE, SPEC, signal());
+    const wider = { kind: "allowlist" as const, hosts: ["example.com", "example.org"] };
+    expect(
+      await provider.update?.(HANDLE, { ...LIMITS, network: wider }, signal(), { token: 2 }),
+    ).toBe("updated");
+    m.requests.length = 0;
+    // the kernel's refresh right after the panel's allow: an ifRunning ensure on the same handle
+    await provider.ensureService?.(HANDLE, SPEC, signal(), { ifRunning: true });
+    expect(m.requests).toEqual([
+      { op: "service.ensure", spec: { name: "echo" }, network: wider, ifRunning: true },
+    ]);
+    // a stale holder's update changes nothing the next ensure sends
+    await expect(provider.update?.(HANDLE, LIMITS, signal(), { token: 1 })).rejects.toMatchObject({
+      staleFence: true,
+    });
+    m.requests.length = 0;
+    await provider.ensureService?.(HANDLE, SPEC, signal());
+    expect(m.requests[0]).toMatchObject({ network: wider });
   });
 
   it("passes the device service conformance", async () => {

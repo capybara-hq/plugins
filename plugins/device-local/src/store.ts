@@ -1,4 +1,9 @@
-import type { SandboxPermissionSupport, SandboxRoots } from "@capybara-hq/plugin-sdk";
+import {
+  type SandboxLimits,
+  type SandboxPermissionSupport,
+  type SandboxRoots,
+  StaleFenceError,
+} from "@capybara-hq/plugin-sdk";
 import type {
   DeviceFeature,
   DeviceOwnerCeiling,
@@ -39,6 +44,18 @@ export interface Binding {
    * again, so the instance is gone. Cleared when a binding answer installs it again.
    */
   unattested?: true;
+  /**
+   * The limits the generation enforces now: those of its `create`, replaced by every `update`
+   * that answered `updated`. Absent on a row written before limits were stored (the handle's
+   * create-time limits then stand).
+   */
+  limits?: SandboxLimits;
+  /**
+   * The highest fence token a lifecycle call of the device carried (`create` seeds it, `update`
+   * raises it): a call with a lower token is a stale holder's and is refused. Absent on a row
+   * written before tokens were stored (nothing to compare).
+   */
+  fenceToken?: number;
 }
 
 /**
@@ -124,7 +141,10 @@ export interface DeviceChange<T> {
 export interface DeviceRows {
   /** Both rows, without a lock. */
   read(deviceId: string): Promise<DeviceState>;
-  /** Reads under the device's lock, applies `fn` (pure, synchronous) and writes what it returns. */
+  /**
+   * Reads under the device's lock, applies `fn` (pure, synchronous) and writes what it returns.
+   * A throwing `fn` writes nothing and rejects with its error.
+   */
   change<T>(deviceId: string, fn: (s: DeviceState) => DeviceChange<T>): Promise<T>;
   /** The connection of `deviceId` in `orgId`, claiming a row whose org is not known yet. */
   connectionOf(deviceId: string, orgId: string): Promise<Connection | null>;
@@ -142,9 +162,33 @@ export interface DeviceLocalStore {
   /**
    * Commits a new `awaiting-device` binding in place of the current one, only while the current
    * binding's generation is still `expectedGeneration` (null: no binding yet). Returns false, and
-   * writes nothing, when another commit came first.
+   * writes nothing, when another commit came first. With `fence` (the create's token), throws
+   * {@link StaleFenceError}, writing nothing, when the current binding holds a higher token;
+   * without one (a create from an older kernel that sends no fence) nothing is compared.
    */
-  commitBinding(binding: Binding, expectedGeneration: string | null): Promise<boolean>;
+  commitBinding(
+    binding: Binding,
+    expectedGeneration: string | null,
+    fence?: number,
+  ): Promise<boolean>;
+  /**
+   * `update` of the instance generation `generation` (device update fencing): in one atomic step,
+   * refuses a token lower than the stored one ({@link StaleFenceError}), then raises the stored
+   * token and, when the network of `limits` allows at least what the generation enforces
+   * (`current` when the row stores none), stores them and answers `updated`. Resources never
+   * decide it: they reach the commands sent from then on and instances created afterwards, so a
+   * resource change alone does not restart anything. A narrower network keeps the stored limits
+   * and answers `recreate`: a running service or escalated command could still reach a removed
+   * host. `gone` (nothing written) when the device's binding is another
+   * generation.
+   */
+  updateLimits(
+    deviceId: string,
+    generation: string,
+    limits: SandboxLimits,
+    token: number,
+    current: SandboxLimits,
+  ): Promise<"updated" | "recreate" | "gone">;
   /**
    * Marks the binding of exactly `generation` and `bindingId` installed with what the machine
    * attested (again, on a resume that re-verified it), and applies the owner ceiling the answer
@@ -169,6 +213,31 @@ export interface DeviceLocalStore {
   forget(deviceId: string): Promise<void>;
 }
 
+/** Throws {@link StaleFenceError} when `held` is higher than `token` (equal: the same holder). */
+function assertFresh(deviceId: string, held: number | undefined, token: number, op: string): void {
+  if (held !== undefined && held > token)
+    throw new StaleFenceError(
+      `device-local: the device ${deviceId} holds fence ${held}; ${op} carries ${token}`,
+      { current: held },
+    );
+}
+
+const hostKey = (h: string): string => {
+  const l = h.toLowerCase();
+  return l.endsWith(".") ? l.slice(0, -1) : l;
+};
+
+/** Whether `next` allows every host `prev` allows (open-public allows every public host). */
+export function networkCovers(
+  next: SandboxLimits["network"],
+  prev: SandboxLimits["network"],
+): boolean {
+  if (next.kind === "open-public") return true;
+  if (prev.kind === "open-public") return false;
+  const allowed = new Set(next.hosts.map(hostKey));
+  return prev.hosts.every((h) => allowed.has(hostKey(h)));
+}
+
 /** The store over `rows` (PG in production, memory in unit tests): the binding rules live here. */
 export function storeOver(
   rows: DeviceRows,
@@ -176,12 +245,28 @@ export function storeOver(
 ): DeviceLocalStore {
   return {
     binding: async (deviceId) => (await rows.read(deviceId)).binding,
-    commitBinding: (binding, expectedGeneration) =>
-      rows.change(binding.deviceId, (s) =>
-        (s.binding?.generation ?? null) === expectedGeneration
+    commitBinding: (binding, expectedGeneration, fence) =>
+      rows.change(binding.deviceId, (s) => {
+        if (fence !== undefined)
+          assertFresh(binding.deviceId, s.binding?.fenceToken, fence, "create");
+        return (s.binding?.generation ?? null) === expectedGeneration
           ? { result: true, binding }
-          : { result: false },
-      ),
+          : { result: false };
+      }),
+    updateLimits: (deviceId, generation, limits, token, current) =>
+      rows.change(deviceId, (s) => {
+        const b = s.binding;
+        assertFresh(deviceId, b?.fenceToken, token, "update");
+        if (b?.generation !== generation) return { result: "gone" as const };
+        const enforced = b.limits ?? current;
+        const widens = networkCovers(limits.network, enforced.network);
+        const binding: Binding = {
+          ...b,
+          fenceToken: token,
+          ...(widens && { limits: structuredClone(limits) }),
+        };
+        return { result: widens ? ("updated" as const) : ("recreate" as const), binding };
+      }),
     installBinding: (deviceId, generation, bindingId, installed, via) =>
       rows.change(deviceId, (s) => {
         const b = s.binding;

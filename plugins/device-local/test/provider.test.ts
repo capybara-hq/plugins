@@ -11,6 +11,7 @@ import {
   isSandboxScopeDeniedError,
   isSandboxScopeValidationError,
   isSandboxWorkUnsettledError,
+  isStaleFenceError,
   type ProjectPathRefusedError,
   type SandboxExecutionRef,
   SandboxPermissionUnsupportedError,
@@ -884,5 +885,169 @@ describe("lifecycle", () => {
     await expect(s.provider.suspend(h, AbortSignal.abort(new Error("lease lost")))).rejects.toThrow(
       "lease lost",
     );
+  });
+});
+
+describe("update (device update fencing)", () => {
+  const WIDER = {
+    ...LIMITS,
+    network: { kind: "allowlist" as const, hosts: ["example.com", "example.org"] },
+  };
+
+  it("stores a widening with the raised token and answers updated, without a machine call", async () => {
+    const s = setup();
+    const h = await created(s);
+    expect(s.rows.get(DEVICE)).toMatchObject({ limits: LIMITS, fenceToken: FENCE.token });
+    expect(await s.provider.update?.(h, WIDER, signal(), { token: 3 })).toBe("updated");
+    expect(s.rows.get(DEVICE)).toMatchObject({ limits: WIDER, fenceToken: 3 });
+    expect(s.dial.sent).toEqual([]);
+    // the same limits again with the same token: safe, still updated
+    expect(await s.provider.update?.(h, WIDER, signal(), { token: 3 })).toBe("updated");
+  });
+
+  it("refuses a token lower than the stored one and changes nothing", async () => {
+    const s = setup();
+    const h = await created(s);
+    await s.provider.update?.(h, WIDER, signal(), { token: 5 });
+    const before = structuredClone(s.rows.get(DEVICE));
+    const e = await rejection(
+      s.provider.update?.(h, { ...LIMITS, network: { kind: "open-public", hosts: [] } }, signal(), {
+        token: 4,
+      }) as Promise<unknown>,
+    );
+    expect(isStaleFenceError(e)).toBe(true);
+    expect((e as { current?: number }).current).toBe(5);
+    expect(s.rows.get(DEVICE)).toEqual(before);
+  });
+
+  it("answers recreate for a narrowing, keeping the limits but raising the token", async () => {
+    const s = setup();
+    const h = await created(s);
+    const narrower = { ...LIMITS, network: { kind: "allowlist" as const, hosts: [] } };
+    expect(await s.provider.update?.(h, narrower, signal(), { token: 2 })).toBe("recreate");
+    expect(s.rows.get(DEVICE)).toMatchObject({ limits: LIMITS, fenceToken: 2 });
+    // the token a recreate answer stored still refuses an older holder
+    expect(
+      isStaleFenceError(
+        await rejection(s.provider.update?.(h, WIDER, signal(), FENCE) as Promise<unknown>),
+      ),
+    ).toBe(true);
+  });
+
+  it("decides on the network alone: a widening with new resources is updated and stores them", async () => {
+    const s = setup();
+    const h = await created(s);
+    const resized = { ...WIDER, cpu: 4, memoryMb: 4096 };
+    expect(await s.provider.update?.(h, resized, signal(), { token: 2 })).toBe("updated");
+    expect(s.rows.get(DEVICE)?.limits).toEqual(resized);
+    // resources alone, same network: updated too
+    expect(await s.provider.update?.(h, { ...resized, cpu: 1 }, signal(), { token: 2 })).toBe(
+      "updated",
+    );
+  });
+
+  it("allowlist to open-public is a widening; open-public to an allowlist recreates", async () => {
+    const s = setup();
+    const h = await created(s);
+    const open = { ...LIMITS, network: { kind: "open-public" as const, hosts: [] } };
+    expect(await s.provider.update?.(h, open, signal(), { token: 2 })).toBe("updated");
+    expect(s.rows.get(DEVICE)?.limits).toEqual(open);
+    expect(await s.provider.update?.(h, WIDER, signal(), { token: 2 })).toBe("recreate");
+    expect(s.rows.get(DEVICE)?.limits).toEqual(open);
+  });
+
+  it("a create without a fence (an older kernel) compares nothing and stores 0", async () => {
+    const s = setup();
+    const h = await created(s);
+    await s.provider.update?.(h, WIDER, signal(), { token: 9 });
+    const next = (await s.provider.create({
+      fence: undefined as unknown as { token: number },
+      name: `cap-device-${DEVICE}`,
+      limits: LIMITS,
+      fileSystem: { id: DEVICE },
+      signal: signal(),
+    })) as LocalDeviceHandle;
+    expect(s.rows.get(DEVICE)).toMatchObject({
+      generation: next.generation,
+      limits: LIMITS,
+      fenceToken: 0,
+    });
+  });
+
+  it("answers recreate without a fence (an older kernel) and gone for a replaced generation", async () => {
+    const s = setup();
+    const h = await created(s);
+    expect(
+      await s.provider.update?.(h, WIDER, signal(), undefined as unknown as { token: number }),
+    ).toBe("recreate");
+    expect(s.rows.get(DEVICE)?.limits).toEqual(LIMITS);
+    await created(s);
+    expect(
+      isSandboxGoneError(
+        await rejection(s.provider.update?.(h, WIDER, signal(), FENCE) as Promise<unknown>),
+      ),
+    ).toBe(true);
+  });
+
+  it("create and destroy refuse a stale holder, leaving the machine and the binding alone", async () => {
+    const s = setup();
+    const h = await created(s);
+    await s.provider.update?.(h, WIDER, signal(), { token: 7 });
+    const before = structuredClone(s.rows.get(DEVICE));
+    const stale = { token: 6 };
+    expect(
+      isStaleFenceError(
+        await rejection(
+          s.provider.create({
+            fence: stale,
+            name: `cap-device-${DEVICE}`,
+            limits: LIMITS,
+            fileSystem: { id: DEVICE },
+            signal: signal(),
+          }),
+        ),
+      ),
+    ).toBe(true);
+    expect(isStaleFenceError(await rejection(s.provider.destroy(h, signal(), stale)))).toBe(true);
+    expect(s.dial.sent).toEqual([]);
+    expect(s.rows.get(DEVICE)).toEqual(before);
+    // the current holder (equal token) passes
+    await s.provider.destroy(h, signal(), { token: 7 });
+    expect(s.dial.ops()).toEqual(["create"]);
+  });
+
+  it("resume, escalated commands and background starts use the stored limits, not the handle's", async () => {
+    const s = setup(
+      machine({
+        backgroundStart: () => ({
+          ok: true,
+          result: {
+            executionId: "exec-1",
+            operationId: "operation-1",
+            instanceId: DEVICE,
+            instanceGeneration: "1",
+          },
+        }),
+      }),
+    );
+    const h = await created(s);
+    await s.provider.update?.(h, WIDER, signal(), { token: 2 });
+    expect(await s.provider.resume(h, signal())).toBe("resumed");
+    expect(s.dial.sent[0]).toMatchObject({ op: "create", args: { limits: WIDER } });
+    const scope = scopeOf({ network: { kind: "environment" }, filesystem: { kind: "device" } });
+    const op = await s.provider.operation?.(h, scope, signal());
+    await op?.exec({ command: "true", timeoutMs: 100, maxOutputBytes: 10, signal: signal() });
+    expect(s.dial.sent.at(-1)?.args.limits).toEqual(WIDER);
+    await s.provider.background?.start(h, scope, {
+      command: "sleep 1",
+      timeoutMs: 1000,
+      maxOutputBytes: 1000,
+      signal: signal(),
+      taskId: "task-1",
+      outputPath: `${ROOTS.workspace}/task.out`,
+      retainUntilMs: scope.admitBeforeMs + 1000,
+      instanceGeneration: h.generation,
+    });
+    expect(s.dial.sent.at(-1)).toMatchObject({ op: "backgroundStart", args: { limits: WIDER } });
   });
 });

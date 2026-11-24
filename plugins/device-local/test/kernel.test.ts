@@ -22,7 +22,7 @@ import {
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { pgRows, revisionOf, storeOver } from "../src/index.js";
-import { OWNER_CEILING, ROOTS, SUPPORT } from "./fakes.js";
+import { LIMITS, OWNER_CEILING, ROOTS, SUPPORT } from "./fakes.js";
 
 /**
  * device-local in one in-process kernel (api, worker and gateway roles): a fake machine speaking
@@ -370,5 +370,40 @@ describe("the PG store (the plugin's migrated schema)", () => {
 
     await store.forget("pg-dev");
     expect(await store.state("pg-dev")).toEqual({ connection: null, binding: null });
+  });
+
+  it("stores the generation's limits and fence token, refusing a stale update atomically", async () => {
+    const store = storeOver(pgRows(raw.withSchema("plugin_device_local")));
+    const wider = {
+      ...LIMITS,
+      network: { kind: "allowlist" as const, hosts: ["example.com", "example.org"] },
+    };
+    expect(
+      await store.commitBinding(
+        { ...binding("200", null), limits: LIMITS, fenceToken: 4 },
+        null,
+        4,
+      ),
+    ).toBe(true);
+    expect(await store.binding("pg-dev")).toMatchObject({ limits: LIMITS, fenceToken: 4 });
+    // two updates race: the higher token wins whatever the order, the lower one is refused
+    const results = await Promise.allSettled([
+      store.updateLimits("pg-dev", "200", wider, 6, LIMITS),
+      store.updateLimits("pg-dev", "200", wider, 5, LIMITS),
+    ]);
+    expect(results[0]).toEqual({ status: "fulfilled", value: "updated" });
+    expect((await store.binding("pg-dev"))?.fenceToken).toBe(6);
+    expect(await store.binding("pg-dev")).toMatchObject({ limits: wider });
+    await expect(store.updateLimits("pg-dev", "200", LIMITS, 5, LIMITS)).rejects.toMatchObject({
+      staleFence: true,
+      current: 6,
+    });
+    // a create of a stale holder commits nothing
+    await expect(
+      store.commitBinding({ ...binding("201", "200"), fenceToken: 5 }, "200", 5),
+    ).rejects.toMatchObject({ staleFence: true });
+    expect((await store.binding("pg-dev"))?.generation).toBe("200");
+    expect(await store.updateLimits("pg-dev", "199", wider, 7, LIMITS)).toBe("gone");
+    await store.forget("pg-dev");
   });
 });
