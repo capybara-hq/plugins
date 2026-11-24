@@ -5,7 +5,14 @@ import { act, createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import extension from "../src/client.js";
 import { RunHud, ticker } from "../src/hud.js";
-import { button, FakeAudioContext, installRicherDesign, row } from "./fake-design.js";
+import {
+  button,
+  description,
+  FakeAudioContext,
+  installRicherDesign,
+  row,
+  switchNamed,
+} from "./fake-design.js";
 
 const conversationId = "conv_0001abcdef";
 const SLOT = "conversation.properties.section";
@@ -127,27 +134,51 @@ describe("run HUD", () => {
     expect(row("Approvals")).toBe("1");
   });
 
-  it("keeps sound off by default; the toggle stores the choice and plays a confirmation", () => {
+  it("keeps sound off by default; the switch stores the choice and plays a confirmation", () => {
     renderHud({});
     expect(localStorage.getItem(SOUND)).toBeNull();
-    act(() => button("Sound: off").click());
+    const sw = () => switchNamed("Sound");
+    expect(sw().getAttribute("aria-checked")).toBe("false");
+    expect(description(sw())).toContain("Short synthesized cues");
+    act(() => sw().click());
     expect(localStorage.getItem(SOUND)).toBe("on");
-    expect(button("Sound: on")).toBeDefined();
+    expect(sw().getAttribute("aria-checked")).toBe("true");
     expect(FakeAudioContext.contexts).toBe(1);
-    act(() => button("Sound: on").click());
+    act(() => sw().click());
     expect(localStorage.getItem(SOUND)).toBeNull();
-    expect(button("Sound: off")).toBeDefined();
+    expect(sw().getAttribute("aria-checked")).toBe("false");
     expect(FakeAudioContext.contexts).toBe(1);
   });
 
-  it("reads the stored toggle, and stays silent under reduced motion", () => {
+  it("has no sound button and keeps the hints in tooltips, not in the panel text", () => {
+    renderHud({});
+    expect(() => button("Sound:")).toThrow();
+    const counts = "Runs, tools and approvals: seen live in this browser tab.";
+    const tips = [...document.querySelectorAll("[data-tooltip]")].map((e) =>
+      e.getAttribute("data-tooltip"),
+    );
+    expect(tips).toContain(counts);
+    expect(tips.some((t) => t?.startsWith("Short synthesized cues"))).toBe(true);
+    // the footnote is only in the tooltip (and the info icon's label), never shown as text
+    expect(document.body.textContent).not.toContain(counts);
+    // the Tools row reads as before
+    expect(row("Tools")).toBe("—");
+  });
+
+  it("reads the stored switch, and stays silent under reduced motion", () => {
     localStorage.setItem(SOUND, "on");
     renderHud({ reducedMotion: true });
-    expect(button("Sound: on")).toBeDefined();
-    expect(document.body.textContent).toContain("Muted while your system asks for reduced motion.");
-    act(() => button("Sound: on").click());
-    act(() => button("Sound: off").click());
+    const sw = () => switchNamed("Sound");
+    expect(sw().getAttribute("aria-checked")).toBe("true");
+    expect(description(sw())).toContain("Muted while your system asks for reduced motion.");
+    act(() => sw().click());
+    act(() => sw().click());
     expect(FakeAudioContext.contexts).toBe(0);
+  });
+
+  it("shows no Reconnect while the view has not failed", () => {
+    renderHud({});
+    expect(() => button("Reconnect")).toThrow();
   });
 
   it("uses the viewer's language, the role included", () => {

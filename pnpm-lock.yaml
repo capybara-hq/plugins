@@ -6,6 +6,7 @@ settings:
 
 overrides:
   '@capybara-hq/plugin-sdk': 0.1.0-rc.65
+  '@capybara-hq/plugin-client': 0.1.0-rc.9
   '@capybara-hq/kernel': 0.1.0-rc.79
   '@capybara-hq/testing': 0.1.0-rc.38
 
@@ -372,8 +373,8 @@ importers:
         version: 0.29.8
     devDependencies:
       '@capybara-hq/plugin-client':
-        specifier: ^0.1.0-rc.5
-        version: 0.1.0-rc.5(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        specifier: 0.1.0-rc.9
+        version: 0.1.0-rc.9(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@capybara-hq/plugin-model-fake':
         specifier: ^0.1.0-rc.28
         version: 0.1.0-rc.28(@capybara-hq/plugin-sdk@0.1.0-rc.65)(zod@4.6.7)
@@ -559,8 +560,8 @@ importers:
   plugins/theme-cyberpunk:
     devDependencies:
       '@capybara-hq/plugin-client':
-        specifier: ^0.1.0-rc.4
-        version: 0.1.0-rc.5(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        specifier: 0.1.0-rc.9
+        version: 0.1.0-rc.9(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@capybara-hq/plugin-sdk':
         specifier: 0.1.0-rc.65
         version: 0.1.0-rc.65
@@ -815,8 +816,8 @@ packages:
     resolution: {integrity: sha512-qgafcnC8dU0ycX8tTfXmnN0yfFGKxIWXZlLdzbIFLXSJpy+Pjk8pVUPqnNW16zxgjinIzegQEwVrw4ADI0SqGA==}
     engines: {node: '>=24'}
 
-  '@capybara-hq/plugin-client@0.1.0-rc.5':
-    resolution: {integrity: sha512-K4DTR84TLkwGVHROouv2RvC7GO/kbL+2k/g/lCBVdviKUdxCotUnRaSxevAbUT+u4blNUdxnCzGsiEjvMaDQAg==}
+  '@capybara-hq/plugin-client@0.1.0-rc.9':
+    resolution: {integrity: sha512-kBuBxSZUloOGSVTg02M2UxBfvrOEhOv5eekzTFDJNv9jIb962KeV5EzBi2UajF9p0wbMnS88wLvisvZ4gTdbhA==}
     peerDependencies:
       react: ^19.3.1
       react-dom: ^19.3.1
@@ -5431,7 +5432,7 @@ snapshots:
       - utf-8-validate
       - ws
 
-  '@capybara-hq/plugin-client@0.1.0-rc.5(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+  '@capybara-hq/plugin-client@0.1.0-rc.9(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
       react: 19.3.1
     optionalDependencies:

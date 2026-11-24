@@ -26,7 +26,7 @@ palette, the properties sheet below 1100 px and the sidebar drawer. The componen
 
 | Contribution | Slot | What it does |
 |---|---|---|
-| `run-hud` | `conversation.properties.section` (after the context section) | The run state in the viewer's language (zh 待命 / 运行中 / 等待输入 / 故障, en STANDBY / RUNNING / AWAITING INPUT / FAULT) with a `T+MM:SS.s` ticker of the run's time and an equalizer-style signal meter; the viewer's role (localized) and the last uplink time from its server view; the runs, tool calls and approvals of the conversation seen live in this browser tab (counted by the extension's listeners from the page's first load, kept in session client storage; "—" until it has seen one, since earlier history is not counted); and the sound toggle |
+| `run-hud` | `conversation.properties.section` (after the context section) | The run state in the viewer's language (zh 待命 / 运行中 / 等待输入 / 故障, en STANDBY / RUNNING / AWAITING INPUT / FAULT) with a `T+MM:SS.s` ticker of the run's time and an equalizer-style signal meter; the viewer's role (localized) and the last uplink time from its server view; the runs, tool calls and approvals of the conversation seen live in this browser tab (counted by the extension's listeners from the page's first load, kept in session client storage; "—" until it has seen one, since earlier history is not counted); and the **Sound** switch at the right of the status row (the counts' note is the tooltip of the info icon after Tools). The layout uses design `Stack`s, so it reads well without the theme; the colours, the dot and the meter show only while the theme is active. Needs `@capybara-hq/plugin-client` 0.1.0-rc.9 (Switch, the info and volume icons) |
 | `scanlines` | `shell.overlay` | Static CRT scanlines and a very light vignette over the workspace |
 | `boot` | `shell.overlay` | A short opaque terminal boot screen (boot lines with a right-aligned status column, then a progress bar), once per sign-in, about two seconds, ending like a CRT switching off |
 | `brand` | `shell.brand` (replaceable) | The neon mark (the theme logo through the design `Logo`) and a glitch `CYBERBARA` wordmark in the full sidebar and the drawer, in place of the built-in row; the built-in mark with a flicker in the rail |
@@ -76,8 +76,8 @@ applied on install; an admin applies it in one step (below).
 
 Short cues synthesized with the Web Audio API (no audio files): run started, run finished (an error
 buzz when aborted), run failed (the error buzz), approval requested, tool finished (a tick, or the
-error buzz for a failed tool). Sound is **off by default**; the HUD's **Sound: off / on** button
-turns it on for this browser (stored with `useClientStorage`, key `cap-ext:theme-cyberpunk:sound`)
+error buzz for a failed tool). Sound is **off by default**; the **Sound** switch at the right of
+the HUD's status row turns it on for this browser (stored with `useClientStorage`, key `cap-ext:theme-cyberpunk:sound`)
 and plays a short confirmation. One cue plays at a time (a burst of events, such as the catch-up of
 a revisited conversation, plays once), nothing plays before the page's first click or key press,
 and every audio context is closed when its cue ends or when the browser does not let it start.
@@ -221,7 +221,7 @@ fonts are under the SIL Open Font License 1.1, whose full text ships next to the
   止，不随运行变化。
 
 全部装饰只在选用本主题时生效；换成别的主题后，品牌位与欢迎区回到内置样式。音效用 Web Audio 合成，
-**默认关闭**，在 HUD 里点“音效：关 / 开”开启（只对本浏览器生效）。系统开启“减少动态效果”时不播放
+**默认关闭**，打开 HUD 状态行右端的“音效”开关（只对本浏览器生效）。系统开启“减少动态效果”时不播放
 启动画面与运行动效、停止所有动画（颜色与线条保留），也不播放音效。覆盖层只做装饰，不接收鼠标事件，
 启动画面约两秒后自动结束，可点“跳过”或按 Esc 立即结束。
 
