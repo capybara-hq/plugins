@@ -51,6 +51,10 @@ export const MAX_TABS = 10;
  */
 export const HANDOFF_KEEPALIVE_MS = 24 * 60 * 60_000;
 
+/** How a blocked reply starts when the proxy refused Playwright's browser download hosts. */
+export const DOWNLOAD_BLOCKED_PREFIX =
+  "The browser could not be downloaded into the device: its network settings block ";
+
 /** The failure reply's message when a reply does not fit in one service message. */
 export const REPLY_TOO_LARGE_MESSAGE =
   "The reply was too large to send; ask for less (a smaller maxBytes).";

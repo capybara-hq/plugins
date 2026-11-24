@@ -70,13 +70,20 @@ export class SessionFile {
     };
   }
 
-  /** Writes the session soon (coalesced): the tabs' URLs and the pending handoff. */
-  save(session: BrowserSession, handoff: { callId: string; message: string } | undefined): void {
+  /**
+   * Writes the session soon (coalesced): the tabs' URLs and the pending handoff, both read when
+   * the write runs.
+   */
+  save(
+    session: BrowserSession,
+    handoffNow: () => { callId: string; message: string } | undefined,
+  ): void {
     if (this.queued || this.forgotten) return;
     this.queued = true;
     queueMicrotask(() => {
       this.queued = false;
       if (this.forgotten) return;
+      const handoff = handoffNow();
       const all = session.tabs();
       const kept = all.filter((t) => /^https?:\/\//i.test(t.url));
       const active = Math.max(
@@ -104,7 +111,10 @@ export class SessionFile {
     rmSync(this.file, { force: true });
   }
 
-  /** Opens the saved tabs in a browser that has only its first blank tab. */
+  /**
+   * Opens the saved tabs in a browser that has only its first blank tab. The navigations are
+   * started, not awaited: the first request after a restart does not wait for every page to load.
+   */
   async restoreTabs(session: BrowserSession, saved: SavedSession): Promise<void> {
     if (saved.tabs.length === 0) return;
     const ids: string[] = [];
@@ -112,7 +122,7 @@ export class SessionFile {
       try {
         const page = i === 0 ? await session.activePage() : await session.openTab();
         ids.push(session.tabIdOf(page));
-        await session.viewerNav({ url: normalizeUrl(url) });
+        void session.viewerNav({ url: normalizeUrl(url) });
       } catch {
         // a tab that cannot open is left out
       }

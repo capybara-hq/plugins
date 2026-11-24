@@ -21,6 +21,7 @@ import {
 } from "./chromium.js";
 import {
   DEFAULT_FRAME_MAX_BYTES,
+  DOWNLOAD_BLOCKED_PREFIX,
   REPLY_TOO_LARGE_MESSAGE,
   type ToolReply,
   type ToolRequest,
@@ -191,7 +192,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         restored = true;
         if (saved !== undefined) await sessionFile.restoreTabs(session, saved);
       }
-      const save = () => sessionFile.save(session, state.handoff);
+      const save = () => sessionFile.save(session, () => state.handoff);
       session.on(save);
       state.onChange(save);
       return session;
@@ -221,7 +222,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       return {
         ok: false,
         error: "blocked",
-        message: `The browser could not be downloaded into the device: its network settings block ${refused.join(", ")}.`,
+        message: `${DOWNLOAD_BLOCKED_PREFIX}${refused.join(", ")}.`,
         blockedHosts: refused,
       };
     return fail(

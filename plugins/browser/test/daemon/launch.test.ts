@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { launchChromium } from "../../daemon/chromium.js";
 import { type Daemon, startDaemon } from "../../daemon/main.js";
+import { DOWNLOAD_BLOCKED_PREFIX } from "../../daemon/protocol.js";
 import {
   openViewer,
   removeDir,
@@ -93,6 +94,7 @@ describe("browser daemon: Chromium that cannot start", () => {
       error: "blocked",
       blockedHosts: ["cdn.playwright.dev", "playwright.download.prss.microsoft.com"],
     });
+    expect(r.ok ? "" : r.message.startsWith(DOWNLOAD_BLOCKED_PREFIX)).toBe(true);
   });
 });
 

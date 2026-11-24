@@ -241,8 +241,6 @@ export function mountPanel(opts: PanelOptions): void {
   }
 
   function applyState(s: Extract<ViewerOut, { t: "state" }>): void {
-    const first = lastState === null;
-    const controlChanged = !first && s.control !== control;
     lastState = s;
     pendingHandoff = s.handoff ?? null;
     $("handoff").hidden = pendingHandoff === null;
@@ -253,8 +251,12 @@ export function mountPanel(opts: PanelOptions): void {
     if (doc.activeElement !== url) url.value = active?.url ?? "";
     renderTabs();
     renderChrome();
-    // the frame budget follows control: the full viewport while the person drives
-    if (controlChanged && sock !== null) sizeMessage("resize");
+    // the frame budget follows control (the full viewport while the person drives): the hello
+    // was sized before this connection's first state, so compare with what was sent
+    if (sock !== null) {
+      const { w, h } = layout();
+      if (`${w}x${h}` !== sentSize) sizeMessage("resize");
+    }
     // a dialog strip goes with the page that showed it
     if (dialogUrl !== undefined && active?.url !== dialogUrl) hideDialog();
     reopenAllowed(active?.url);

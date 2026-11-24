@@ -15,7 +15,12 @@ import {
   validateToolSpec,
 } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
-import { REPLY_TOO_LARGE_MESSAGE, type ToolReply, type ToolRequest } from "../daemon/protocol.js";
+import {
+  DOWNLOAD_BLOCKED_PREFIX,
+  REPLY_TOO_LARGE_MESSAGE,
+  type ToolReply,
+  type ToolRequest,
+} from "../daemon/protocol.js";
 import { type BrowserDeps, NOT_OWNER_MESSAGE, TAKEN_OVER_MESSAGE } from "../src/browser.js";
 import { registerHandoffTool } from "../src/handoff.js";
 import { serviceSpecLoader } from "../src/service.js";
@@ -266,6 +271,20 @@ describe("browser tools", () => {
     expect((e as Error).message).toBe(
       "The device's network settings block x.test. The user is asked to allow the host; if they decline, use another site.",
     );
+  });
+
+  it("a refused browser download host gets its own next step", async () => {
+    const f = fake(() => ({
+      ok: false,
+      error: "blocked",
+      message: `${DOWNLOAD_BLOCKED_PREFIX}cdn.playwright.dev.`,
+      blockedHosts: ["cdn.playwright.dev"],
+    }));
+    const e = await f.run("browser_snapshot", {}).catch((x: unknown) => x);
+    expect((e as Error).message).toBe(
+      `${DOWNLOAD_BLOCKED_PREFIX}cdn.playwright.dev. Ask the user to allow these hosts so the browser can be installed, then retry.`,
+    );
+    expect((e as Error).message).not.toMatch(/another site/);
   });
 
   it("a service start that fails has its own text", async () => {

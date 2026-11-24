@@ -8,7 +8,12 @@ import {
   ToolError,
   type ToolResult,
 } from "@capybara-hq/plugin-sdk";
-import type { ToolErrorCode, ToolReply, ToolRequest } from "../daemon/protocol.js";
+import {
+  DOWNLOAD_BLOCKED_PREFIX,
+  type ToolErrorCode,
+  type ToolReply,
+  type ToolRequest,
+} from "../daemon/protocol.js";
 import { NOT_OWNER_MESSAGE, TAKEN_OVER_MESSAGE } from "./messages.js";
 
 export { NOT_OWNER_MESSAGE, TAKEN_OVER_MESSAGE };
@@ -86,6 +91,11 @@ function daemonToolError(code: ToolErrorCode, message: string): ToolError {
         `${message} Check the page with browser_snapshot, then retry or call browser_wait.`,
       );
     case "blocked":
+      // the browser's own download was refused: allowing it is the only way on
+      if (message.startsWith(DOWNLOAD_BLOCKED_PREFIX))
+        return new ToolError(
+          `${message} Ask the user to allow these hosts so the browser can be installed, then retry.`,
+        );
       // the one next step after a refused host, whatever refused it (the daemon's messages give
       // none): the kernel raises the network ask from the reported hosts and reruns once allowed
       return new ToolError(

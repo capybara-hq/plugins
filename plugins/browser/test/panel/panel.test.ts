@@ -227,6 +227,22 @@ describe("panel", () => {
     expect(sock.sent.at(-1)).toEqual({ t: "resize", maxWidth: 640, maxHeight: 400 });
   });
 
+  it("a fresh mount mid-takeover asks for the full-viewport cap on the first state", async () => {
+    const s = setup({ dpr: 2 });
+    const sock = await live(s, state({ control: "user" }));
+    expect(sock.sent[0]).toEqual({ t: "hello", maxWidth: 640, maxHeight: 400 });
+    expect(sock.sent).toContainEqual({ t: "resize", maxWidth: 960, maxHeight: 600 });
+    // a reconnect (new socket, no state yet) does the same
+    sock.drop(1012);
+    await vi.waitFor(() => expect(FakeSocket.all.length).toBe(2));
+    const sock2 = s.sock();
+    sock2.open();
+    sock2.push(state({ control: "user" }));
+    // the last size this connection asked for is the full-viewport one (hello or resize)
+    const sized = sock2.sent.filter((m) => m.t === "hello" || m.t === "resize").at(-1);
+    expect(sized).toMatchObject({ maxWidth: 960, maxHeight: 600 });
+  });
+
   it("does not drive the page while the agent holds control", async () => {
     const s = setup();
     const sock = await live(s);
