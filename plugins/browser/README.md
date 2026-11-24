@@ -46,7 +46,8 @@ A real browser in the person's device for agents (browser use spec,
 - Chromium starts on the daemon's first start. A launch that fails (no download, a refused
   network) does not stop the daemon: every request answers the cause and launches again. When the
   device's proxy refuses Playwright's download hosts (`cdn.playwright.dev`,
-  `playwright.download.prss.microsoft.com`, or `PLAYWRIGHT_DOWNLOAD_HOST`), the reply lists them
+  `playwright.download.prss.microsoft.com`, `storage.googleapis.com` where the CDN redirects the
+  headless shell, or `PLAYWRIGHT_DOWNLOAD_HOST`), the reply lists them
   as blocked hosts, so the person is asked to allow them. A `PLAYWRIGHT_BROWSERS_PATH` in the
   device's environment that already holds this build's headless shell revision is used as is
   (a read-only image cache); otherwise the browser is installed into `<state>/browsers`.

@@ -97,9 +97,10 @@ function daemonToolError(code: ToolErrorCode, message: string): ToolError {
           `${message} Ask the user to allow these hosts so the browser can be installed, then retry.`,
         );
       // the one next step after a refused host, whatever refused it (the daemon's messages give
-      // none): the kernel raises the network ask from the reported hosts and reruns once allowed
+      // none): the kernel raises the network ask from the reported hosts when the device's own
+      // list can take them (and reruns once allowed), and its network note says which
       return new ToolError(
-        `${message} The user is asked to allow the host; if they decline, use another site.`,
+        `${message} The network note says whether the host can be allowed from this conversation; if it is not allowed, use another site.`,
       );
     default:
       return new ToolError(`${message} Check the page with browser_snapshot before retrying.`);

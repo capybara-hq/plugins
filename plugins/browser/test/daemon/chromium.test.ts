@@ -74,6 +74,7 @@ describe("chromium browsers directory", () => {
     expect(playwrightDownloadHosts({})).toEqual([
       "cdn.playwright.dev",
       "playwright.download.prss.microsoft.com",
+      "storage.googleapis.com",
     ]);
     expect(
       playwrightDownloadHosts({ PLAYWRIGHT_DOWNLOAD_HOST: "https://mirror.example.com/pw" }),
