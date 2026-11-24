@@ -2,8 +2,9 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { BrowserContext } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
-import { launchChromium } from "../../daemon/chromium.js";
+import { browserProcessId, launchChromium } from "../../daemon/chromium.js";
 import { type Daemon, startDaemon } from "../../daemon/main.js";
 import { DOWNLOAD_BLOCKED_PREFIX } from "../../daemon/protocol.js";
 import {
@@ -71,7 +72,7 @@ describe("browser daemon: Chromium that cannot start", () => {
     expect(first).toMatchObject({ ok: false, error: "failed" });
     expect(first.ok ? "" : first.message).toContain("no chromium here");
     const second = await request(socketPath, { op: "snapshot" });
-    expect(second.ok).toBe(true);
+    expect(second).toMatchObject({ ok: true });
     expect(calls).toBe(3);
   });
 
@@ -95,6 +96,39 @@ describe("browser daemon: Chromium that cannot start", () => {
       blockedHosts: ["cdn.playwright.dev", "playwright.download.prss.microsoft.com"],
     });
     expect(r.ok ? "" : r.message.startsWith(DOWNLOAD_BLOCKED_PREFIX)).toBe(true);
+  });
+});
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+describe("browser daemon: stop", () => {
+  it("kills a Chromium that does not close instead of waiting for it", async () => {
+    let ctx: BrowserContext | undefined;
+    const { daemon } = await daemonWith({
+      browserCloseGraceMs: 300,
+      launch: async (plan) => {
+        ctx = await launchChromium(plan);
+        return ctx;
+      },
+    });
+    await daemon.ready;
+    if (ctx === undefined) throw new Error("not launched");
+    const pid = await browserProcessId(ctx);
+    if (pid === undefined) throw new Error("no browser process id");
+    cleanup.push(() => {
+      if (alive(pid)) process.kill(pid, "SIGKILL");
+    });
+    // a browser that no longer answers (Playwright would wait 180 s before killing it)
+    process.kill(pid, "SIGSTOP");
+    await daemon.close();
+    expect(alive(pid)).toBe(false);
   });
 });
 
