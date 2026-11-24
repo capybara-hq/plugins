@@ -9,14 +9,13 @@ import {
   type ToolResult,
 } from "@capybara-hq/plugin-sdk";
 import type { ToolErrorCode, ToolReply, ToolRequest } from "../daemon/protocol.js";
-import {
-  BLOCKED_NEXT_STEP,
-  NOT_OWNER_MESSAGE,
-  START_FAILED_MESSAGE,
-  TAKEN_OVER_MESSAGE,
-} from "./messages.js";
+import { NOT_OWNER_MESSAGE, TAKEN_OVER_MESSAGE } from "./messages.js";
 
-export { BLOCKED_NEXT_STEP, NOT_OWNER_MESSAGE, START_FAILED_MESSAGE, TAKEN_OVER_MESSAGE };
+export { NOT_OWNER_MESSAGE, TAKEN_OVER_MESSAGE };
+
+/** A service start (ensureService) that failed for a reason the kernel gave no text for. */
+export const START_FAILED_MESSAGE =
+  "The browser could not start in the device; retry, and ask the user to check the device if it keeps failing.";
 
 /** The service name, declared in `permissions.deviceAccess.services`. */
 export const SERVICE = "browser";
@@ -87,7 +86,11 @@ function daemonToolError(code: ToolErrorCode, message: string): ToolError {
         `${message} Check the page with browser_snapshot, then retry or call browser_wait.`,
       );
     case "blocked":
-      return new ToolError(`${message} ${BLOCKED_NEXT_STEP}`);
+      // the one next step after a refused host, whatever refused it (the daemon's messages give
+      // none): the kernel raises the network ask from the reported hosts and reruns once allowed
+      return new ToolError(
+        `${message} The user is asked to allow the host; if they decline, use another site.`,
+      );
     default:
       return new ToolError(`${message} Check the page with browser_snapshot before retrying.`);
   }
@@ -122,10 +125,9 @@ function failure(deps: BrowserDeps, call: ToolCallContext, e: unknown, starting:
   deps.log?.warn(starting ? "browser service start failed" : "browser service call failed", {
     err: e,
   });
+  if (starting) return new ToolError(START_FAILED_MESSAGE);
   return new ToolError(
-    starting
-      ? START_FAILED_MESSAGE
-      : "The browser service in the device failed; retry, and ask the user to check the device if it keeps failing.",
+    "The browser service in the device failed; retry, and ask the user to check the device if it keeps failing.",
   );
 }
 

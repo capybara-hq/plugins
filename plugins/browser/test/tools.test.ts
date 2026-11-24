@@ -16,12 +16,7 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { REPLY_TOO_LARGE_MESSAGE, type ToolReply, type ToolRequest } from "../daemon/protocol.js";
-import {
-  BLOCKED_NEXT_STEP,
-  type BrowserDeps,
-  NOT_OWNER_MESSAGE,
-  TAKEN_OVER_MESSAGE,
-} from "../src/browser.js";
+import { type BrowserDeps, NOT_OWNER_MESSAGE, TAKEN_OVER_MESSAGE } from "../src/browser.js";
 import { registerHandoffTool } from "../src/handoff.js";
 import { serviceSpecLoader } from "../src/service.js";
 import { registerBrowserTools, SCREENSHOT_MAX_BYTES } from "../src/tools.js";
@@ -269,7 +264,7 @@ describe("browser tools", () => {
     }));
     const e = await f.run("browser_navigate", { url: "https://x.test" }).catch((x: unknown) => x);
     expect((e as Error).message).toBe(
-      `The device's network settings block x.test. ${BLOCKED_NEXT_STEP}`,
+      "The device's network settings block x.test. The user is asked to allow the host; if they decline, use another site.",
     );
   });
 

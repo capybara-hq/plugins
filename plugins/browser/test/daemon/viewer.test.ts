@@ -194,7 +194,7 @@ describe("browser daemon viewer", () => {
       if (!list.ok) throw new Error(list.message);
       const ids = (list.text ?? "").split("\n").map((l) => l.split(/[: ]/)[0] ?? "");
       if (ids.length <= 1) break;
-      await request(d.socketPath, { op: "tabs", action: "close", tabId: ids[0] });
+      await request(d.socketPath, { op: "tabs", action: "close", tabId: ids[0] ?? "" });
     }
   });
 

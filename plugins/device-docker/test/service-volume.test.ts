@@ -69,6 +69,7 @@ function provider(endpoint: string, volumeDriver?: string) {
     endpoint,
     network: "cap-test",
     egressProxyImage: "egress:test",
+    runtime: "runc",
     ...(volumeDriver !== undefined && { volumeDriver }),
   });
 }
