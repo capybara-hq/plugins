@@ -78,6 +78,8 @@ A real browser in the person's device for agents (browser use spec,
 - Size: in the side panel the page posts the embed `resize` (120–4000) for the 16:10 frame at the
   available width plus its bars, again whenever its box changes; in full mode (asked for with
   `panel-mode` on take over) the host fills the panel and the frame is letterboxed in it, with
-  the viewer's frame size following the shown size.
+  the viewer's frame size following the shown size. The host sends no mode back, so full mode
+  ends with the person's control by any path (hand back here or elsewhere, the agent resuming),
+  and the side size is asked for again.
 - A dialog strip hides after 10 s or when the page changes; agent clicks flash once each; a lock
   shows a secure page. The panel listens only to messages from its host page.

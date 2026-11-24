@@ -117,7 +117,10 @@ export function mountPanel(opts: PanelOptions): void {
   let wasLive = false;
   /** This connection is a quiet look for the browser from "not running": it stays there until a state. */
   let quiet = false;
-  /** The host shows this panel full (this panel asked for it): the frame fills the box, no resize. */
+  /**
+   * The host shows this panel full (this panel asked for it on take over): the frame fills the box,
+   * no resize. The host sends no mode back, so it ends when the person's control ends by any path.
+   */
   let full = false;
   let postedHeight = 0;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -151,7 +154,11 @@ export function mountPanel(opts: PanelOptions): void {
   function bridge(next: boolean): void {
     full = next;
     post({ protocol: PROTOCOL, type: "panel-mode", full: next });
-    if (!next) fitHeight();
+    if (!next) {
+      // back in the side panel: ask for its size again, even if it equals the last one asked
+      postedHeight = 0;
+      fitHeight();
+    }
   }
 
   // ---- rendering ----
@@ -271,7 +278,10 @@ export function mountPanel(opts: PanelOptions): void {
     $("handoff").hidden = pendingHandoff === null;
     $("handoff-message").textContent = pendingHandoff?.message ?? "";
     tabs = s.tabs;
+    const was = control;
     control = s.control;
+    // the take over ended elsewhere (another panel handed back, the agent resumed): leave full
+    if (full && was === "user" && control === "agent") bridge(false);
     const active = tabs.find((x) => x.active);
     if (doc.activeElement !== url) url.value = active?.url ?? "";
     renderTabs();
@@ -469,7 +479,9 @@ export function mountPanel(opts: PanelOptions): void {
     stop();
     const mine = gen;
     quiet = lookOnly && mode === "empty";
-    if (!quiet) show("connecting");
+    // a quiet look keeps the next one armed: a handshake that hangs does not end the looking
+    if (quiet) armEmptyPoll();
+    else show("connecting");
     let ticketUrl: string;
     try {
       const res = await doFetch("stream-ticket", {
@@ -547,14 +559,14 @@ export function mountPanel(opts: PanelOptions): void {
   function onClose(code: number): void {
     sock = null;
     lastState = null;
-    if (quiet) {
+    if (quiet && code !== 4401 && code !== 4409 && code !== 1009) {
       // a quiet look that found no browser: still "not running", look again later
       show("empty");
       return;
     }
     if (code === 4401 && !retried401) {
       retried401 = true;
-      void connect();
+      void connect(quiet);
     } else if (code === 4404) {
       // The service is not running, or (after a live view) restarting: an allow restarts it on
       // some devices, so two tries with backoff before "not running".
@@ -769,7 +781,8 @@ export function mountPanel(opts: PanelOptions): void {
       hiddenTimer = undefined;
       if (pausedForHidden) {
         pausedForHidden = false;
-        void connect();
+        // from "not running" this is a quiet look, not a "Connecting…" flash
+        void connect(true);
       }
     }
   });

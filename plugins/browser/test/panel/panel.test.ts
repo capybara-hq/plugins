@@ -205,7 +205,7 @@ describe("panel", () => {
       new s.dom.window.KeyboardEvent("keydown", { key: "Escape" }),
     );
     expect(sock.sent).toContainEqual({ t: "handback" });
-    expect(s.host.at(-1)).toEqual({
+    expect(modes(s).at(-1)).toEqual({
       protocol: "capybara-embed/1",
       type: "panel-mode",
       full: false,
@@ -230,7 +230,7 @@ describe("panel", () => {
       new s.dom.window.KeyboardEvent("keydown", { key: "Escape" }),
     );
     expect(sock.sent).toContainEqual({ t: "handback" });
-    expect(s.host.at(-1)).toEqual({
+    expect(modes(s).at(-1)).toEqual({
       protocol: "capybara-embed/1",
       type: "panel-mode",
       full: false,
@@ -475,6 +475,53 @@ describe("panel", () => {
     expect(atEnd).toBeLessThanOrEqual(2 + (30 * 60) / 10);
   });
 
+  it("a quiet look that hangs does not end the looking", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    await vi.advanceTimersByTimeAsync(0);
+    s.sock().drop(4404);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(FakeSocket.all).toHaveLength(2);
+    // the second socket never opens nor closes; the next look replaces it
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(FakeSocket.all).toHaveLength(3);
+    expect((FakeSocket.all[1] as FakeSocket).closed).toBe(true);
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("a quiet look retries a 4401 with a new ticket and shows a 4409 as offline", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    await vi.advanceTimersByTimeAsync(0);
+    s.sock().drop(4404);
+    await vi.advanceTimersByTimeAsync(10_000);
+    s.sock().drop(4401);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeSocket.all).toHaveLength(3);
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+    expect($(s, "status").textContent).toBe("");
+    s.sock().drop(4409);
+    expect($(s, "empty-title").textContent).toBe(t("en", "offlineTitle"));
+  });
+
+  it("coming back from a hidden tab in the empty state looks quietly", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    await vi.advanceTimersByTimeAsync(0);
+    s.sock().drop(4404);
+    const doc = s.dom.window.document;
+    let vis = "hidden";
+    Object.defineProperty(doc, "visibilityState", { get: () => vis, configurable: true });
+    doc.dispatchEvent(new s.dom.window.Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(61_000);
+    vis = "visible";
+    doc.dispatchEvent(new s.dom.window.Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeSocket.all).toHaveLength(2);
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+    expect($(s, "status").textContent).toBe("");
+  });
+
   it("shows why an allow was refused", async () => {
     const s = setup({
       hosts: () =>
@@ -600,6 +647,28 @@ describe("panel size", () => {
     expect($(s, "view").style.width).toBe("1000px");
     $(s, "handback").click();
     expect(resizes(s).at(-1)?.height).toBe(80 + 625);
+  });
+
+  it("leaves full mode when the take over ends elsewhere and asks for its size again", async () => {
+    const s = setup({ innerHeight: 480 });
+    const sock = await live(s);
+    const before = resizes(s).length;
+    $(s, "takeover").click();
+    sock.push(state({ control: "user" }));
+    // another panel handed back: control returns to the agent without this panel's hand back
+    sock.push(state({ control: "agent" }));
+    expect(modes(s).at(-1)).toEqual({
+      protocol: "capybara-embed/1",
+      type: "panel-mode",
+      full: false,
+    });
+    // posted again although the height is the one asked before
+    expect(resizes(s)).toHaveLength(before + 1);
+    expect(resizes(s).at(-1)?.height).toBe(380);
+    // a state of the agent before the take over lands does not leave full mode
+    $(s, "takeover").click();
+    sock.push(state({ control: "agent" }));
+    expect(modes(s).at(-1)).toMatchObject({ full: true });
   });
 });
 
