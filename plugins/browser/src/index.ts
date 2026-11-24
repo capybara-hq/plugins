@@ -12,7 +12,7 @@ import { registerBrowserTools } from "./tools.js";
  */
 export default defineExtension({
   name: "browser",
-  version: "0.1.0-rc.0",
+  version: "0.1.0-rc.1",
   sdk: "^0.1.0-rc.69",
   provides: [],
   ui: [
