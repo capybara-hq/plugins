@@ -150,8 +150,9 @@ describe.skipIf(!READY)("device-e2b services (live)", { timeout: 240_000 }, () =
     for (let i = 0; i < 50; i++) await s.send(enc.encode(`m${i}`));
     await reading;
     expect(got).toEqual(Array.from({ length: 50 }, (_, i) => `m${i}`));
+    // leaving the for-await loop (the iterator's return()) closes the stream
     s.close("done");
-    expect(await s.closed).toEqual({ reason: "done" });
+    expect(await s.closed).toEqual({ reason: "the reader stopped reading" });
     await waitFor(async () => (await relays()) === "0");
   });
 
