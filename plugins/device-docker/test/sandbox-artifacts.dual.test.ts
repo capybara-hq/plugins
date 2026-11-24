@@ -337,12 +337,16 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
     const c2 = await containerOf(deviceId);
     expect(c2.State.Running).toBe(true);
     const row2 = await instanceRow(deviceId);
-    // the device's file system: the two volumes
+    // the device's file system: its three volumes (workspace, skills, service state)
     const volumes = (await docker("volume", "ls", "-q", "--filter", `name=cap-device-${deviceId}-`))
       .split("\n")
       .filter((v) => v !== "")
       .sort();
-    expect(volumes).toEqual([`cap-device-${deviceId}-skills`, `cap-device-${deviceId}-workspace`]);
+    expect(volumes).toEqual([
+      `cap-device-${deviceId}-skills`,
+      `cap-device-${deviceId}-svc`,
+      `cap-device-${deviceId}-workspace`,
+    ]);
 
     // ---- 3. 交付产物 → artifact_created → 下载 ----
     await send(1, convId, "Deliver", {

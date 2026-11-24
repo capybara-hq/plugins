@@ -8,6 +8,7 @@ import {
   type DeviceRef,
   type DeviceReport,
   type DeviceReportLimit,
+  type DeviceServiceStatus,
   type ExecResult,
   FileSystemGoneError,
   type Logger,
@@ -39,6 +40,17 @@ import {
 } from "./listing.js";
 import { createOperations, type OperationTransport, refusedFrame } from "./operations.js";
 import { OPERATION_AGENT } from "./runtime-source.js";
+import {
+  isFilesNeeded,
+  managerArgv,
+  managerRequest,
+  parseManagerReply,
+  relayArgv,
+  relayRequest,
+  relayStream,
+  SERVICE_STATE_ROOT,
+  serviceStateDir,
+} from "./services.js";
 
 /** The images published with a given device-docker version (the plugins repo's image workflow). */
 export function publishedImages(version: string): { sandbox: string; egress: string } {
@@ -68,6 +80,11 @@ export type DockerSandboxProvider = DeviceProvider &
       | "browse"
       | "revokeOperation"
       | "background"
+      | "ensureService"
+      | "stopService"
+      | "serviceStatus"
+      | "serviceRequest"
+      | "openStream"
     >
   > & {
     readonly limitsApplyAt: "instance";
@@ -179,6 +196,8 @@ export interface DockerSandboxTestOptions {
    * write instead (deterministic interception tests: steal, then write back).
    */
   interceptBackgroundStdin?: (taskId: string, stdin: Uint8Array) => Promise<Uint8Array>;
+  /** Sees the size of every request written to the service manager's stdin (R27 tests). */
+  onServiceManagerStdin?: (name: string, bytes: number) => void;
 }
 
 /** The sandbox user (the image's `sandbox`): commands and file operations run as it. */
@@ -251,6 +270,10 @@ const EGRESS_CONTROL_DIR = "/run/egress";
 const EGRESS_USER = "node";
 /** How long one in-place list change may take (the proxy's own deadline is 30 s too). */
 const EGRESS_APPLY_TIMEOUT_MS = 30_000;
+/** The manager answered a digest-only start with "send the files" (R27). */
+const FILES_NEEDED = "files-needed" as const;
+/** The service manager's time limit: writing the files, then up to 30 s until the service listens. */
+const SERVICE_MANAGER_TIMEOUT_MS = 90_000;
 
 /**
  * Container / volume / network names: `create`'s and `createFileSystem`'s name
@@ -264,6 +287,9 @@ const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * its internal network (handle id = the container name); the file system is the two volumes
  * (handle id = the name they were made under). The kernel uses one name for both.
  */
+/** The largest service state volume under `volumeDriver`, in MB (a smaller disk caps it lower). */
+export const SERVICE_DISK_MB_MAX = 2048;
+
 export function sandboxResourceNames(name: string) {
   return {
     container: name,
@@ -272,6 +298,8 @@ export function sandboxResourceNames(name: string) {
     network: `${name}-net`,
     workspace: `${name}-workspace`,
     skills: `${name}-skills`,
+    /** Device service state (src/services.ts), mounted at SERVICE_STATE_ROOT. */
+    svc: `${name}-svc`,
   };
 }
 
@@ -873,6 +901,7 @@ export function createDockerSandbox(
     await Promise.all([
       removeWithRetry(`/volumes/${enc(n.workspace)}`, signal),
       removeWithRetry(`/volumes/${enc(n.skills)}`, signal),
+      removeWithRetry(`/volumes/${enc(n.svc)}`, signal),
     ]);
   };
 
@@ -913,18 +942,34 @@ export function createDockerSandbox(
   };
 
   /** Creates a volume unless one of that name exists already (idempotent by name). */
+  /** Creates the volume unless it exists; true when this call made it. */
   const ensureVolume = async (
     body: { Name: string } & Record<string, unknown>,
     signal: AbortSignal,
-  ) => {
+  ): Promise<boolean> => {
     try {
       await api.json("GET", `/volumes/${enc(body.Name)}`, { signal });
-      return;
+      return false;
     } catch (e) {
       if (!isStatus(e, 404)) throw e;
     }
     await postCreate("/volumes/create", { body, signal });
+    return true;
   };
+
+  /**
+   * The service state volume's create body: under `volumeDriver` the workspace volume's driver with
+   * a size of {@link SERVICE_DISK_MB_MAX} MB at most (never more than the device's disk), so a
+   * service cannot fill the host's disk; without it a plain local volume, like the workspace's.
+   */
+  const svcVolume = (fsName: string, limits: SandboxLimits) => ({
+    Name: sandboxResourceNames(fsName).svc,
+    Labels: baseLabels(fsName, "svc"),
+    ...(cfg.volumeDriver !== undefined && {
+      Driver: cfg.volumeDriver,
+      DriverOpts: { size: `${Math.min(limits.diskMb, SERVICE_DISK_MB_MAX)}M` },
+    }),
+  });
 
   const pull = async (image: string, signal: AbortSignal) => {
     await api.json("POST", "/images/create", { query: { fromImage: image }, signal });
@@ -1912,6 +1957,134 @@ export function createDockerSandbox(
     network: { openPublic: !cfg.refuseOpenNetwork },
   });
 
+  // ---------- device services (browser use spec §5-6, src/services.ts) ----------
+
+  const stoppedService = (name: string): DeviceServiceStatus => ({
+    name,
+    state: "stopped",
+    startedAt: null,
+    stateDir: serviceStateDir(name),
+  });
+
+  /**
+   * Runs the service manager in the container as the sandbox user. `start` starts a stopped
+   * container first (a normal ensure); otherwise a stopped container answers `stopped` (its
+   * processes died with it) and is left stopped.
+   */
+  const manage = async (
+    h: SandboxHandle,
+    op: "status" | "ensure" | "stop",
+    name: string,
+    signal: AbortSignal,
+    o: { stdin?: Uint8Array; start?: boolean } = {},
+  ): Promise<DeviceServiceStatus | typeof FILES_NEEDED> => {
+    signal.throwIfAborted();
+    if (o.stdin) test.onServiceManagerStdin?.(name, o.stdin.byteLength);
+    const go = () =>
+      run(h.id, {
+        cmd: managerArgv(op, name),
+        user: SANDBOX_USER,
+        cwd: "/",
+        ...(o.stdin && { stdin: o.stdin }),
+        maxOutputBytes: 64 * 1024,
+        timeoutMs: SERVICE_MANAGER_TIMEOUT_MS,
+        signal,
+        incarnation: h,
+      });
+    let r: RunResult;
+    if (o.start) r = await autoStart(h, signal, go);
+    else {
+      try {
+        r = await go();
+      } catch (e) {
+        if (e instanceof NotRunningError) return stoppedService(name);
+        throw e;
+      }
+    }
+    if (r.aborted) throw abortReason(signal);
+    const reply = {
+      exitCode: r.exitCode,
+      stdout: r.stdout.toString("utf8"),
+      stderr: stderrOf(r),
+      timedOut: r.timedOut,
+    };
+    if (op === "ensure" && isFilesNeeded(reply)) return FILES_NEEDED;
+    return parseManagerReply(name, reply);
+  };
+
+  /** `manage` for the calls that never ask for files (status, stop, an `ifRunning` ensure). */
+  const manageStatus = async (...a: Parameters<typeof manage>): Promise<DeviceServiceStatus> => {
+    const s = await manage(...a);
+    if (s === FILES_NEEDED) throw new Error(`device service ${a[2]}: unexpected files request`);
+    return s;
+  };
+
+  /**
+   * Starts the socket relay to the service's socket (an exec as the sandbox user with stdin
+   * attached) and returns a relay stream over the hijacked connection: stdin carries our framed
+   * messages, the demultiplexed stdout the service's, stderr the relay's `ready` or its reason.
+   * A stopped container is not started: the service died with it.
+   */
+  const openRelay = async (h: SandboxHandle, name: string, signal: AbortSignal) => {
+    signal.throwIfAborted();
+    const notRunning = (cause: unknown) =>
+      new Error(`device service ${name} is not running: the instance is stopped`, { cause });
+    if (handleFence(h) !== undefined) await checkIncarnation(h, signal);
+    let execId: string;
+    try {
+      const r = await api.json<{ Id: string }>("POST", `/containers/${enc(h.id)}/exec`, {
+        body: {
+          AttachStdin: true,
+          AttachStdout: true,
+          AttachStderr: true,
+          Tty: false,
+          // inline: an instance made from an older image runs it as well
+          Cmd: relayArgv(name),
+          User: SANDBOX_USER,
+          Env: [`PATH=${SYSTEM_PATH}`],
+          WorkingDir: "/",
+        },
+        signal,
+      });
+      execId = r.Id;
+    } catch (e) {
+      if (isStatus(e, 404)) {
+        throw new SandboxGoneError(`sandbox container ${h.id} no longer exists`, { cause: e });
+      }
+      if (isStatus(e, 409)) throw notRunning(e);
+      throw e;
+    }
+    let socket: Duplex;
+    try {
+      socket = await api.hijack(`/exec/${execId}/start`, { Detach: false, Tty: false }, signal);
+    } catch (e) {
+      if (isStatus(e, 404)) {
+        throw new SandboxGoneError(`sandbox container ${h.id} no longer exists`, { cause: e });
+      }
+      if (isStatus(e, 409)) throw notRunning(e);
+      throw e;
+    }
+    const opened = relayStream(name, {
+      write: (bytes) =>
+        new Promise<void>((resolve, reject) => {
+          socket.write(bytes, (e) => (e ? reject(e) : resolve()));
+        }),
+      // the exec's stdin closes with the connection, and the relay then drops its connection
+      // to the service and exits
+      close: () => socket.destroy(),
+      pause: () => socket.pause(),
+      resume: () => socket.resume(),
+    });
+    const demux = new StreamDemuxer((kind, data) =>
+      kind === 1 ? opened.sink.stdout(data) : opened.sink.stderr(data),
+    );
+    socket.on("data", (c: Buffer) => demux.push(c));
+    socket.on("error", (e) => opened.sink.ended(`the relay connection failed: ${e.message}`));
+    socket.on("end", () => socket.destroy());
+    socket.on("close", () => opened.sink.ended());
+    return opened;
+  };
+
   /**
    * The device report: what the container is, no home, the cpu / memory / disk the instance was
    * created with (read from the container and its workspace volume; none without an instance),
@@ -1993,7 +2166,7 @@ export function createDockerSandbox(
       checkLimits(limits);
       const n = sandboxResourceNames(name);
       // an existing file system of this name is returned as it is (never replaced)
-      await ensureVolume(
+      const made = await ensureVolume(
         {
           Name: n.workspace,
           Labels: baseLabels(name, "workspace"),
@@ -2005,6 +2178,10 @@ export function createDockerSandbox(
         signal,
       );
       await ensureVolume({ Name: n.skills, Labels: baseLabels(name, "skills") }, signal);
+      // A new workspace is a new file system: a service volume left from a lost one of the same
+      // name (its workspace removed behind the plugin's back) holds stale state and goes first.
+      if (made) await removeWithRetry(`/volumes/${enc(n.svc)}`, signal);
+      await ensureVolume(svcVolume(name, limits), signal);
       return { id: name };
     },
 
@@ -2035,6 +2212,9 @@ export function createDockerSandbox(
           `sandbox file system ${fileSystem.id} is gone (volume ${v.workspace} or ${v.skills} missing)`,
         );
       if (!(await checkFileSystem(fileSystem.id, signal)).ok) throw gone();
+      // the service state volume belongs to the file system as well; one made before device
+      // services has none yet: made here (empty, like a device that never ran a service)
+      await ensureVolume(svcVolume(fileSystem.id, limits), signal);
       // An old instance of the same name (the kernel exited before recording the handle...):
       // replace the instance; the file system stays. Unless it carries a higher fence token than
       // this call: then a newer holder made or updated it, and this create is stale (§5.2; a check
@@ -2114,6 +2294,10 @@ export function createDockerSandbox(
                 // Writable mount of the same volume: only root can enter it (/opt/capybara is
                 // 0700), and the plugin writes skills through it.
                 { Type: "volume", Source: v.skills, Target: "/opt/capybara/skills" },
+                // Device service state, outside the workspace (no project, share or Glob reaches
+                // it); the image's directory there is the sandbox user's, and Docker copies its
+                // owner onto the empty volume at the first mount.
+                { Type: "volume", Source: v.svc, Target: SERVICE_STATE_ROOT },
               ],
             },
           },
@@ -2364,6 +2548,77 @@ export function createDockerSandbox(
       const b = checkListPath(base);
       const r = await listOp(h, "scan", b, 0, opts.signal);
       return finishScan(b, r, NO_PYTHON);
+    },
+
+    /**
+     * A device service: a process the manager starts detached in its own session as the sandbox
+     * user, its state directory on the device's service state volume (`<name>-svc`). Its network is the instance's: the
+     * manager hands it the container's egress proxy variables (`HTTPS_PROXY` / `HTTP_PROXY`, so a
+     * browser's `--proxy-server` reaches the proxy), and the egress proxy enforces the device's
+     * allowlist live (an in-place apply swaps the list and closes every connection the new list
+     * does not cover; a change of kind recreates the container, and the service with it). So an
+     * `ifRunning` ensure after an allowlist change has nothing to re-apply.
+     */
+    async ensureService(h, spec, signal, opts) {
+      if (opts?.ifRunning === true) {
+        return manageStatus(h, "ensure", spec.name, signal, {
+          stdin: managerRequest(spec, { ifRunning: true }),
+        });
+      }
+      // digest first (R27): the files cross only when the state directory does not hold them
+      const first = await manage(h, "ensure", spec.name, signal, {
+        stdin: managerRequest(spec),
+        start: true,
+      });
+      if (first !== FILES_NEEDED) return first;
+      return manageStatus(h, "ensure", spec.name, signal, {
+        stdin: managerRequest(spec, { withFiles: true }),
+        start: true,
+      });
+    },
+
+    async stopService(h, name, signal) {
+      await manageStatus(h, "stop", name, signal);
+    },
+
+    async serviceStatus(h, name, signal) {
+      return manageStatus(h, "status", name, signal);
+    },
+
+    async serviceRequest(h, name, body, opts) {
+      opts.signal.throwIfAborted();
+      const limit = AbortSignal.any([opts.signal, AbortSignal.timeout(opts.timeoutMs)]);
+      let opened: Awaited<ReturnType<typeof openRelay>>;
+      try {
+        opened = await openRelay(h, name, limit);
+      } catch (e) {
+        opts.signal.throwIfAborted();
+        if (limit.aborted) {
+          throw new Error(
+            `device service ${name} did not answer within ${String(opts.timeoutMs)} ms`,
+          );
+        }
+        throw e;
+      }
+      return relayRequest(name, opened, body, opts);
+    },
+
+    async openStream(h, target, signal) {
+      const opened = await openRelay(h, target.service, signal);
+      const onAbort = () => opened.stream.close("aborted while opening");
+      signal.addEventListener("abort", onAbort, { once: true });
+      try {
+        await opened.ready;
+        signal.throwIfAborted();
+        await opened.stream.send(new TextEncoder().encode(JSON.stringify({ kind: "stream" })));
+      } catch (e) {
+        opened.stream.close("open failed");
+        signal.throwIfAborted();
+        throw e;
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+      return opened.stream;
     },
 
     // The operation contract (operations.ts): fresh immutable scopes per invocation.

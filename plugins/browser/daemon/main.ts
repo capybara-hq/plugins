@@ -1,0 +1,422 @@
+// The browser daemon (spec §5): a device service listening on its unix socket. A request
+// connection carries one tool request and gets one reply; a stream connection is one viewer.
+// Takeover is decided here, for every conversation of the device at once (§9, §10).
+
+import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { createServer, type Server, type Socket } from "node:net";
+import { encodeServiceMessage, ServiceMessageDecoder } from "@capybara-hq/plugin-sdk";
+import type { BrowserContext } from "playwright-core";
+import {
+  ActionError,
+  BrowserSession,
+  DEFAULT_DOWNLOAD_MAX_BYTES,
+  proxyRefuses,
+  TAKEN_OVER_MESSAGE,
+} from "./actions.js";
+import {
+  chromiumLaunchPlan,
+  type LaunchPlan,
+  launchChromium,
+  playwrightDownloadHosts,
+} from "./chromium.js";
+import {
+  DEFAULT_FRAME_MAX_BYTES,
+  DOWNLOAD_BLOCKED_PREFIX,
+  REPLY_TOO_LARGE_MESSAGE,
+  type ToolReply,
+  type ToolRequest,
+  type ViewerIn,
+} from "./protocol.js";
+import { SessionFile } from "./session-file.js";
+import { type Clock, DaemonState, systemClock } from "./state.js";
+import { ViewerSession } from "./viewer.js";
+
+export interface DaemonOptions {
+  /** The unix socket to listen on (`CAPYBARA_SERVICE_SOCKET`). */
+  socketPath: string;
+  /** The service state directory (`CAPYBARA_SERVICE_STATE`): profile and browsers live here. */
+  stateDir: string;
+  /** The process environment (proxy variables, BROWSER_FRAME_MAX_BYTES). */
+  env: Record<string, string | undefined>;
+  platform?: NodeJS.Platform;
+  /** Where Chromium is installed; default `<stateDir>/browsers` (tests share one download). */
+  browsersPath?: string;
+  clock?: Clock;
+  idleMs?: number;
+  /** Called when the daemon has been idle for its idle period. */
+  onIdle?: () => void;
+  /** How long a reply waits for the downloads its action started (default 10 s). */
+  downloadWaitMs?: number;
+  /** Called when Chromium exits without the daemon closing it. */
+  onBrowserGone?: () => void;
+  /** Installs and launches Chromium (default: launchChromium); tests make it fail. */
+  launch?: (plan: LaunchPlan) => Promise<BrowserContext>;
+}
+
+export interface Daemon {
+  /**
+   * Resolves once Chromium runs; rejects when its first launch fails. The daemon keeps running
+   * then: every request answers the cause and launches Chromium again.
+   */
+  ready: Promise<void>;
+  state: DaemonState;
+  close(): Promise<void>;
+}
+
+export { TAKEN_OVER_MESSAGE };
+
+/** Names the device's workspace root; the provider sets it for every service (ruling R26). */
+export const SERVICE_WORKSPACE_ENV = "CAPYBARA_SERVICE_WORKSPACE";
+
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+// capybara:allow-module-state read-only constant (device service process, not the kernel)
+const REQUEST_OPS = new Set<string>([
+  "handoff_notice",
+  "handoff_clear",
+  "navigate",
+  "tabs",
+  "snapshot",
+  "click",
+  "hover",
+  "type",
+  "select",
+  "press",
+  "scroll",
+  "upload",
+  "click_at",
+  "type_at",
+  "wait",
+  "screenshot",
+]);
+
+/** The cap on downloads in progress from BROWSER_DOWNLOAD_MAX_BYTES, else the default. */
+export function downloadMaxBytes(env: Record<string, string | undefined>): number {
+  const raw = env.BROWSER_DOWNLOAD_MAX_BYTES;
+  const n = raw === undefined ? Number.NaN : Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_DOWNLOAD_MAX_BYTES;
+}
+
+/** The per-message cap of viewer frames from the environment, else the default. */
+export function frameMaxBytes(env: Record<string, string | undefined>): number {
+  const raw = env.BROWSER_FRAME_MAX_BYTES;
+  const n = raw === undefined ? Number.NaN : Number(raw);
+  return Number.isInteger(n) && n >= 4096 ? Math.min(n, 4 * 1024 * 1024) : DEFAULT_FRAME_MAX_BYTES;
+}
+
+function parse(raw: Uint8Array): unknown {
+  try {
+    return JSON.parse(dec.decode(raw));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Writes one message; false when the socket is gone or backed up. A message above the service
+ * message limit is not sent (`tooLarge` is called): encodeServiceMessage throws a RangeError for it.
+ */
+function write(sock: Socket, value: unknown, tooLarge?: () => void): boolean {
+  if (sock.destroyed) return false;
+  let framed: Uint8Array;
+  try {
+    framed = encodeServiceMessage(enc.encode(JSON.stringify(value)));
+  } catch (e) {
+    if (!(e instanceof RangeError)) throw e;
+    tooLarge?.();
+    return false;
+  }
+  return sock.write(framed);
+}
+
+const fail = (message: string): ToolReply => ({
+  ok: false,
+  error: "failed",
+  message,
+  blockedHosts: [],
+});
+
+export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
+  const clock = opts.clock ?? systemClock;
+  const frameCap = frameMaxBytes(opts.env);
+  const plan = chromiumLaunchPlan({
+    stateDir: opts.stateDir,
+    env: opts.env,
+    platform: opts.platform ?? process.platform,
+    ...(opts.browsersPath === undefined ? {} : { browsersPath: opts.browsersPath }),
+  });
+  mkdirSync(opts.stateDir, { recursive: true });
+
+  let closing = false;
+  const sessionFile = new SessionFile(opts.stateDir, clock);
+  const saved = sessionFile.read();
+  const state = new DaemonState({
+    clock,
+    ...(opts.idleMs === undefined ? {} : { idleMs: opts.idleMs }),
+    onIdle: () => {
+      // an idle stop ends the session for good: nothing to restore at the next start
+      sessionFile.forget();
+      opts.onIdle?.();
+    },
+  });
+  // A daemon restarted moments ago (a network change restarts the service) gets its pending
+  // handoff back: the person's question is still open in the conversation.
+  if (saved?.handoff !== undefined)
+    state.noticeHandoff(saved.handoff.callId, saved.handoff.message);
+
+  const launch = opts.launch ?? launchChromium;
+  let current: Promise<BrowserSession> | undefined;
+  let restored = false;
+
+  /**
+   * The running browser, launched on first use. A failed launch is not kept: the next caller
+   * launches again (a download the network refused may be allowed by then).
+   */
+  function browser(): Promise<BrowserSession> {
+    if (current !== undefined) return current;
+    const starting = launch(plan).then(async (ctx) => {
+      ctx.on("close", () => {
+        if (!closing) opts.onBrowserGone?.();
+      });
+      const workspace = opts.env[SERVICE_WORKSPACE_ENV];
+      const session = new BrowserSession(ctx, {
+        proxy: plan.proxy,
+        clock,
+        workspace: workspace === undefined || workspace === "" ? undefined : workspace,
+        downloadsTmp: plan.downloadsTmp,
+        downloadMaxBytes: downloadMaxBytes(opts.env),
+        ...(opts.downloadWaitMs === undefined ? {} : { downloadWaitMs: opts.downloadWaitMs }),
+      });
+      if (!restored) {
+        restored = true;
+        if (saved !== undefined) await sessionFile.restoreTabs(session, saved);
+      }
+      const save = () => sessionFile.save(session, () => state.handoff);
+      session.on(save);
+      state.onChange(save);
+      return session;
+    });
+    current = starting;
+    starting.catch(() => {
+      if (current === starting) current = undefined;
+    });
+    return starting;
+  }
+
+  /** The failure reply of a launch that failed, with the download hosts the proxy refuses. */
+  async function launchFailure(e: unknown): Promise<ToolReply> {
+    const cause = e instanceof Error ? e.message.split("\n")[0] : String(e);
+    const proxy = plan.proxy;
+    const refused =
+      proxy === undefined
+        ? []
+        : (
+            await Promise.all(
+              playwrightDownloadHosts(opts.env).map(async (h) =>
+                (await proxyRefuses(proxy, h, 443)) ? h : undefined,
+              ),
+            )
+          ).filter((h): h is string => h !== undefined);
+    if (refused.length > 0)
+      return {
+        ok: false,
+        error: "blocked",
+        message: `${DOWNLOAD_BLOCKED_PREFIX}${refused.join(", ")}.`,
+        blockedHosts: refused,
+      };
+    return fail(
+      `The browser could not start in the device: ${cause}. The next browser call tries again.`,
+    );
+  }
+
+  const ready = browser().then(() => undefined);
+  ready.catch(() => undefined);
+
+  /** Handoff bookkeeping from the plugin server: not agent input, so allowed during a takeover. */
+  async function handoffOp(
+    req: Extract<ToolRequest, { op: "handoff_notice" | "handoff_clear" }>,
+  ): Promise<ToolReply> {
+    if (typeof req.callId !== "string" || req.callId === "")
+      return fail("The handoff needs a callId.");
+    if (req.op === "handoff_notice") {
+      if (typeof req.message !== "string") return fail("The handoff notice needs a message.");
+      state.noticeHandoff(req.callId, req.message);
+    } else {
+      state.clearHandoff(req.callId);
+      // the person answered Done: they are finished with the browser, so a takeover they still
+      // hold ends here and the snapshot the plugin asks for next is not refused
+      if (req.handback === true) state.handback();
+    }
+    let session: BrowserSession;
+    try {
+      session = await browser();
+    } catch (e) {
+      return launchFailure(e);
+    }
+    return { ok: true, page: await session.pageInfo(await session.activePage()), blockedHosts: [] };
+  }
+
+  async function handleRequest(raw: unknown): Promise<ToolReply> {
+    if (
+      typeof raw !== "object" ||
+      raw === null ||
+      !REQUEST_OPS.has(String((raw as { op?: unknown }).op))
+    ) {
+      return fail("Unknown browser request.");
+    }
+    const req = raw as ToolRequest;
+    if (req.op === "handoff_notice" || req.op === "handoff_clear") return handoffOp(req);
+    // A browser tool call after a handoff notice means that run moved on: a run aborted while
+    // waiting never sends handoff_clear, so the notice would stay up. (Any conversation of the
+    // device clears it; they are all the owner's.)
+    state.dropHandoff();
+    if (state.control === "user" && req.op !== "wait") {
+      return { ok: false, error: "taken_over", message: TAKEN_OVER_MESSAGE, blockedHosts: [] };
+    }
+    let session: BrowserSession;
+    try {
+      session = await browser();
+    } catch (e) {
+      return launchFailure(e);
+    }
+    const reply = await session.run(req, { takenOver: () => state.control === "user" });
+    if (reply.ok) {
+      const since = state.takeHandbackNote();
+      if (since !== undefined) reply.userControlledSince = since;
+    }
+    return reply;
+  }
+
+  const sockets = new Set<Socket>();
+
+  function onConnection(sock: Socket): void {
+    sockets.add(sock);
+    const decoder = new ServiceMessageDecoder();
+    let kind: "request" | "stream" | undefined;
+    let handled = false;
+    let viewer: ViewerSession | undefined;
+    // set when this connection counted itself as a viewer: every open is balanced by one close,
+    // also when the socket closes before Chromium is ready and no ViewerSession exists
+    let opened = false;
+    let viewerChain: Promise<void> = Promise.resolve();
+
+    const end = () => {
+      sockets.delete(sock);
+      if (viewer !== undefined) {
+        const v = viewer;
+        viewer = undefined;
+        void v.close();
+      }
+      if (opened) {
+        opened = false;
+        state.viewerClosed();
+      }
+    };
+    sock.on("close", end);
+    sock.on("error", () => sock.destroy());
+
+    const onMessage = (raw: Uint8Array) => {
+      if (kind === undefined) {
+        const first = parse(raw) as { kind?: unknown } | undefined;
+        if (first?.kind === "request") kind = "request";
+        else if (first?.kind === "stream") {
+          kind = "stream";
+          opened = true;
+          state.viewerOpened();
+          browser().then(
+            (session) => {
+              if (sock.destroyed) return;
+              viewer = new ViewerSession({
+                browser: session,
+                state,
+                clock,
+                frameMaxBytes: frameCap,
+                transport: {
+                  send: (m) => {
+                    // a message above the service limit is dropped, never thrown
+                    let dropped = false;
+                    const ok = write(sock, m, () => {
+                      dropped = true;
+                    });
+                    return ok || dropped || sock.destroyed;
+                  },
+                  whenDrained: () => new Promise((r) => sock.once("drain", () => r())),
+                },
+              });
+              // messages that arrived while Chromium was starting were queued on the chain
+            },
+            () => sock.destroy(),
+          );
+        } else sock.destroy();
+        return;
+      }
+      if (kind === "request") {
+        if (handled) return;
+        handled = true;
+        state.requestStarted();
+        handleRequest(parse(raw))
+          .catch((e) => fail(e instanceof ActionError ? e.message : String(e)))
+          .then((reply) => {
+            write(sock, reply, () => write(sock, fail(REPLY_TOO_LARGE_MESSAGE), () => undefined));
+            sock.end();
+          })
+          .catch(() => sock.destroy())
+          .finally(() => state.requestEnded());
+        return;
+      }
+      const msg = parse(raw) as ViewerIn | undefined;
+      if (msg === undefined || typeof msg !== "object" || typeof msg.t !== "string") return;
+      // the browser this stream opened with; a failed launch leaves no viewer (input is dropped)
+      viewerChain = viewerChain
+        .then(() => current)
+        .then(() => viewer?.handle(msg))
+        .catch(() => undefined);
+    };
+
+    sock.on("data", (chunk: Buffer) => {
+      let msgs: Uint8Array[];
+      try {
+        msgs = decoder.push(chunk);
+      } catch {
+        sock.destroy();
+        return;
+      }
+      for (const m of msgs) onMessage(m);
+    });
+  }
+
+  if (existsSync(opts.socketPath)) unlinkSync(opts.socketPath);
+  const server: Server = createServer(onConnection);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(opts.socketPath, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  chmodSync(opts.socketPath, 0o600);
+
+  return {
+    ready,
+    state,
+    async close() {
+      if (closing) return;
+      closing = true;
+      state.dispose();
+      await new Promise<void>((r) => {
+        server.close(() => r());
+        for (const s of sockets) s.destroy();
+      });
+      const session = await current?.catch(() => undefined);
+      await session?.close();
+      if (existsSync(opts.socketPath)) {
+        try {
+          unlinkSync(opts.socketPath);
+        } catch {
+          // already gone
+        }
+      }
+    },
+  };
+}

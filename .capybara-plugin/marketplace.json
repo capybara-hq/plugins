@@ -945,6 +945,77 @@
           "integrity": "sha512-Zv6HQlFlcnMybltyCmzGboxQYc+3CdIMYOMHLMKDypZ3T8ZlR0YipYkXoRsDOw1Lm+AYq3N4m3aH+hO2/DSG6g=="
         }
       }
+    },
+    {
+      "name": "browser",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "A real browser in the conversation owner's device for agents: navigate, read and act on pages through tools, with a live view in the conversation panel and takeover by the person",
+        "zh": "在对话所有者的设备中为智能体运行真实浏览器：通过工具打开、读取和操作网页，在对话面板中实时查看，并可由本人接管"
+      },
+      "displayName": {
+        "zh": "浏览器",
+        "en": "Browser"
+      },
+      "icon": "./plugins/browser/icon.svg",
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/browser#readme",
+      "permissions": {
+        "keys": [
+          "permissions.deviceaccess:browser",
+          "permissions.http.embed:POST /ui/handoff-answer",
+          "permissions.http.embed:POST /ui/network-hosts",
+          "permissions.http.embed:POST /ui/stream-ticket",
+          "permissions.http.public:GET /ui/browser",
+          "permissions.http.public:GET /ui/panel.js",
+          "permissions.tools:browser_click",
+          "permissions.tools:browser_click_at",
+          "permissions.tools:browser_handoff",
+          "permissions.tools:browser_hover",
+          "permissions.tools:browser_navigate",
+          "permissions.tools:browser_press",
+          "permissions.tools:browser_screenshot",
+          "permissions.tools:browser_scroll",
+          "permissions.tools:browser_select",
+          "permissions.tools:browser_snapshot",
+          "permissions.tools:browser_tabs",
+          "permissions.tools:browser_type",
+          "permissions.tools:browser_type_at",
+          "permissions.tools:browser_upload",
+          "permissions.tools:browser_wait",
+          "ui.embed:browser"
+        ],
+        "sensitive": [
+          "permissions.deviceaccess:browser",
+          "permissions.http.embed:POST /ui/handoff-answer",
+          "permissions.http.embed:POST /ui/network-hosts",
+          "permissions.http.embed:POST /ui/stream-ticket",
+          "permissions.http.public:GET /ui/browser",
+          "permissions.http.public:GET /ui/panel.js",
+          "permissions.tools:browser_click",
+          "permissions.tools:browser_click_at",
+          "permissions.tools:browser_handoff",
+          "permissions.tools:browser_hover",
+          "permissions.tools:browser_navigate",
+          "permissions.tools:browser_press",
+          "permissions.tools:browser_screenshot",
+          "permissions.tools:browser_scroll",
+          "permissions.tools:browser_select",
+          "permissions.tools:browser_snapshot",
+          "permissions.tools:browser_tabs",
+          "permissions.tools:browser_type",
+          "permissions.tools:browser_type_at",
+          "permissions.tools:browser_upload",
+          "permissions.tools:browser_wait",
+          "ui.embed:browser"
+        ]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-browser",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-zUXU2ywuOCiiOGjdY9hYwFrkeZTxxMWWRmC/dkVInkbPvNhnyYQLOAD6fVetBlRaOzcO1FJXS41bWN9gyFeitg=="
+        }
+      }
     }
   ]
 }

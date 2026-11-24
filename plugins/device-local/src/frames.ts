@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   type DialInChannel,
   FileSystemGoneError,
@@ -133,4 +134,108 @@ export function failureOf(
     default:
       return new ToolError(`${ON_MACHINE_PREFIX}${message} (check the path or command and retry)`);
   }
+}
+
+/** How long the machine may take to start, stop or read a service (a start spawns a process). */
+export const SERVICE_OP_DEADLINE_MS = 60_000;
+
+/**
+ * The service op bodies sent beside the protocol 6 operations (capybara-device's `service.*` ops):
+ * file and request bodies travel as standard base64.
+ */
+export type ServiceBody =
+  | {
+      /** `ifRunning`: the name only; the machine starts nothing and needs no files. */
+      op: "service.ensure";
+      spec: { name: string };
+      network: { kind: "open-public" | "allowlist"; hosts: string[] };
+      ifRunning: true;
+    }
+  | {
+      op: "service.ensure";
+      spec: {
+        name: string;
+        entry: string;
+        args: string[];
+        files?: Record<string, string>;
+        env?: Record<string, string>;
+      };
+      /** `sha256:` + hex over the files ({@link filesDigestOf}); sent with or without `files`. */
+      filesDigest?: string;
+      network: { kind: "open-public" | "allowlist"; hosts: string[] };
+    }
+  | { op: "service.stop"; name: string }
+  | { op: "service.status"; name: string }
+  | { op: "service.request"; name: string; body: string; timeoutMs: number };
+
+/** A machine's `invalid` or `files_needed` answer to a service op, with its kind. */
+export class ServiceOpRefusedError extends ToolError {
+  constructor(
+    message: string,
+    readonly refusal: "invalid" | "files_needed",
+  ) {
+    super(message);
+  }
+}
+
+/** `sha256:` + hex of the files sorted by path: path, NUL, byte length, NUL, bytes. */
+export function filesDigestOf(files: Record<string, Uint8Array>): string {
+  const h = createHash("sha256");
+  for (const path of Object.keys(files).sort()) {
+    const data = files[path] as Uint8Array;
+    h.update(`${path}\0${data.byteLength}\0`);
+    h.update(data);
+  }
+  return `sha256:${h.digest("hex")}`;
+}
+
+/** A machine's typed failure of a service op as the SDK error the kernel knows. */
+function serviceFailure(error: { kind?: unknown; message?: unknown }, op: string): Error {
+  const message = typeof error.message === "string" ? error.message : "no message";
+  switch (error.kind) {
+    case "unsupported":
+      return new SandboxPermissionUnsupportedError(
+        `${message} (update capybara-device on that machine to use device services)`,
+      );
+    case "denied":
+      return new SandboxScopeDeniedError(message);
+    case "files_needed":
+      return new ServiceOpRefusedError(
+        `The connected machine needs the service files for ${op} (retry with the files)`,
+        "files_needed",
+      );
+    case "invalid":
+      return new ServiceOpRefusedError(
+        `The connected machine refused the ${op} request: ${message} (check the request and retry)`,
+        "invalid",
+      );
+    default:
+      return new ToolError(`${ON_MACHINE_PREFIX}${message} (check the service and retry)`);
+  }
+}
+
+/**
+ * One service op on the device's machine through `ctx.dialIn`, resolving the `result` of its
+ * answer. Channel errors (`DeviceOfflineError`, aborts, timeouts) reach the caller unchanged; a
+ * typed failure maps by {@link serviceFailure}; an answer that is no `{ ok }` body is a `ToolError`.
+ */
+export async function serviceCall(
+  dialIn: Pick<DialInChannel, "request">,
+  deviceId: string,
+  body: ServiceBody,
+  opts: { deadlineMs: number; signal: AbortSignal },
+): Promise<unknown> {
+  const raw = await dialIn.request(deviceId, body, {
+    timeoutMs: opts.deadlineMs,
+    signal: opts.signal,
+  });
+  const res = raw as { ok?: unknown; result?: unknown; error?: unknown } | null;
+  if (typeof res !== "object" || res === null || typeof res.ok !== "boolean")
+    throw invalidAnswer(body.op, "not a response body");
+  if (!res.ok) {
+    const e = res.error;
+    if (typeof e !== "object" || e === null) throw invalidAnswer(body.op, "no error body");
+    throw serviceFailure(e, body.op);
+  }
+  return res.result;
 }

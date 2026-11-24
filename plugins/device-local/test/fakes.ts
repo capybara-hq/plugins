@@ -1,4 +1,5 @@
 import type {
+  DeviceStream,
   DialInChannel,
   SandboxLimits,
   SandboxOperationScope,
@@ -25,6 +26,8 @@ export interface SentRequest {
   deviceId: string;
   op: DeviceOperation;
   args: Record<string, unknown>;
+  /** The whole relayed body (service ops have no `args`). */
+  body: unknown;
   timeoutMs: number;
   signal: AbortSignal | undefined;
 }
@@ -42,7 +45,17 @@ export function fakeDialIn(
     online: boolean;
     answer: typeof answer;
     capacity: number | null | (() => never);
-  } = { online: true, answer, capacity: 16 * 1024 * 1024 };
+    /** What `openStream` does; default: throws (no stream expected). */
+    openStream: (deviceId: string, body: unknown) => Promise<DeviceStream>;
+  } = {
+    online: true,
+    answer,
+    capacity: 16 * 1024 * 1024,
+    openStream: async () => {
+      throw new Error("openStream not expected");
+    },
+  };
+  const streams: { deviceId: string; body: unknown; signal: AbortSignal }[] = [];
   const channel: DialInChannel = {
     async request(deviceId, frame, opts) {
       const body = frame as { op: DeviceOperation; args: Record<string, unknown> };
@@ -50,6 +63,7 @@ export function fakeDialIn(
         deviceId,
         op: body.op,
         args: body.args,
+        body: frame,
         timeoutMs: opts.timeoutMs,
         signal: opts.signal,
       };
@@ -65,8 +79,12 @@ export function fakeDialIn(
       return c === null ? null : { maxFrameBytes: c };
     },
     async stop() {},
+    async openStream(deviceId, body, opts) {
+      streams.push({ deviceId, body, signal: opts.signal });
+      return await state.openStream(deviceId, body);
+    },
   };
-  return { channel, sent, state, ops: () => sent.map((r) => r.op) };
+  return { channel, sent, streams, state, ops: () => sent.map((r) => r.op) };
 }
 
 /** A silent `ctx.log` that keeps what was warned. */

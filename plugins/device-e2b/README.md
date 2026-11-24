@@ -260,6 +260,44 @@ configuration at once, with no restart: running commands keep running, new conne
 **Command time limit**: a single command runs at most `sandbox.limits.maxCommandSeconds`, and no more than the time left in the run it belongs to (`runtime.maxRunSeconds`,
 default 900 seconds, Ruling M20); to run long commands, raise `runtime.maxRunSeconds` to at least `maxCommandSeconds`.
 
+## Device services and streams
+
+`ensureService` / `stopService` / `serviceStatus` / `serviceRequest` / `openStream` (core's browser use design §5–6), the same
+as device-docker's (README "Device services and streams" there; `src/services.ts` is that plugin's file byte for byte), over envd:
+
+- **Process**: the service manager (`python3 -I`) runs as the `sandbox` user through `process.Process/Start`, the request on
+  stdin (`SendInput`). It forks `node <stateDir>/<entry> <args>` into its own session; envd keeps it running after the manager's
+  stream ended (verified live 2026-11-24). A normal ensure connects (resumes) a paused VM; an `ifRunning` ensure, `serviceStatus`,
+  `stopService`, requests and streams never resume one (a paused VM answers stopped / not running: pausing without memory ended
+  every process).
+- **State directory**: `/var/lib/capybara/svc/<name>` on the VM's disk (the device's file system, so it goes with a files reset),
+  outside the workspace (no project, Glob / Grep, share or delivery reaches it). The template from the published image has the
+  directory; a VM made from an older template gets it on the first normal ensure, made as root (`mkdir -m 0700`, owned by the
+  sandbox user; `/var/lib` is root's, so nothing the sandbox user planted redirects it). Runtime files under
+  `/tmp/.capybara-svc/<name>/`; `/tmp` is on the VM's disk here, so a pid record counts only while its process runs with the
+  recorded start time on the recorded boot (a cold start after a pause changes the boot id). The service's code stays in its
+  state directory (no separate `codeDir`: same user, nothing to protect); files a newer version no longer ships stay there until
+  the service removes them or the device's files are reset.
+- **Files, digest first**: a start sends the files' digest (sha256 over the files in path order: path, NUL, byte length, NUL,
+  bytes) and their paths, never the files; the manager starts from the files in the state directory when its `.files-digest`
+  record matches and the files there still hash to it, and otherwise answers "files needed", after which the provider sends the
+  files (checked against the digest, written, the record replaced by a temp file and rename). A restart of an unchanged service
+  therefore moves no file bytes. The service's environment also names the device's workspace root
+  (`CAPYBARA_SERVICE_WORKSPACE=/workspace`).
+- **Network**: the VM's (E2B applies the egress rules to the whole VM and `update` changes them in place), so an `ifRunning`
+  ensure after an allowlist change has nothing to re-apply.
+- **Requests and streams**: the relay runs inline (`node --input-type=module -e <SOCKET_RELAY_SOURCE> <socket>`), an envd process
+  with stdin kept open; each message is one `SendInput` call (sent in order), the service's messages arrive on its stdout.
+  Closing kills the relay by pid (`SendSignal`; cutting envd's stream does not end a process); a relay closed before envd named it
+  keeps its stream up to 15 s until the pid arrives, and `stopService` kills any relay still connected to the service. envd's
+  stream cannot be paused, so a stream whose reader leaves 24 MiB of messages unread is closed ("the viewer fell behind; reopen
+  the view"). Opening a stream extends the VM's timeout to at least an hour (the kernel's idle suspension still pauses it); a
+  request does not extend it.
+- **Residual (relay)**: a relay is killed by pid when its stream closes. A kernel replica that dies mid-stream never sends that
+  kill, and envd keeps a process whose stream ended, so its relay stays connected to the service (idle, holding one connection)
+  until `stopService`, a pause or the VM's end; the relay has no idle timeout of its own (a keepalive would have to pass through
+  the service protocol).
+
 ## Permission profiles (operation contract)
 
 The provider implements the permission operation contract of `device-provider@1`: `permissionSupport`, a

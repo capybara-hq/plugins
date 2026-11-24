@@ -11,6 +11,7 @@
   "exclude": [
     "node_modules",
     "**/dist",
+    "plugins/browser/test/panel",
     "plugins/file-preview/test",
     "plugins/memory/test",
     "plugins/theme-cyberpunk/test"

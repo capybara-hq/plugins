@@ -29,6 +29,11 @@
 #   missing), /bin/bash and sleep. Changing any of this needs a new pin in core
 #   (`pnpm gen:device-image-pin <version>`); spec
 #   docs/superpowers/specs/2026-11-23-docker-device-without-host-python-design.md in core;
+# - device services (src/services.ts): the provider runs its service manager with /usr/bin/python3
+#   (standard library only, Linux /proc) and every service and the inline socket relay with
+#   /usr/local/bin/node; state directories live under /var/lib/capybara/svc (owned by the sandbox
+#   user, 0700; device-docker mounts the device's `<name>-svc` volume there, Docker copying the
+#   owner onto it), runtime files under /tmp/.capybara-svc;
 # - one image for every sandbox mode (`auto` / `sandbox`): what a mode may do is set by policy (the
 #   sandbox tool policy and the egress network), not by missing binaries. It carries Node 22
 #   (official tarball, SHA256 pinned per architecture), pnpm (global, so
@@ -84,7 +89,10 @@ RUN groupadd --gid 1000 sandbox \
   && mkdir -p /workspace /skills /opt/capybara/skills \
   && chown 1000:1000 /workspace \
   && chmod 0755 /skills /opt/capybara/skills \
-  && chmod 0700 /opt/capybara
+  && chmod 0700 /opt/capybara \
+  && mkdir -p /var/lib/capybara/svc \
+  && chown 1000:1000 /var/lib/capybara/svc \
+  && chmod 0700 /var/lib/capybara/svc
 
 # ssh host keys of the common git hosts, so `git clone git@github.com:…` through the egress proxy's
 # SOCKS listener does not stop at "Host key verification failed". Copied from the hosts' own publications

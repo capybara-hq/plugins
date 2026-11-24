@@ -11,7 +11,13 @@ import { reportFor, supportFor } from "./report.js";
 import { storeOver } from "./store.js";
 
 export { createInstanceBindings, InstanceBindingError, nextGeneration } from "./bindings.js";
-export { failureOf, machineCall, ON_MACHINE_PREFIX, POLICY_REFUSAL_PREFIX } from "./frames.js";
+export {
+  failureOf,
+  filesDigestOf,
+  machineCall,
+  ON_MACHINE_PREFIX,
+  POLICY_REFUSAL_PREFIX,
+} from "./frames.js";
 export { createDialInHandler, decideHello, type HelloRefusal } from "./hello.js";
 export {
   applyOwnerReport,

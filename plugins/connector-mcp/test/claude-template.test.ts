@@ -21,7 +21,7 @@ import {
   type TestS3,
   testKernelConfig,
 } from "@capybara-hq/testing";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 /**
  * A Claude Code plugin's remote MCP server becomes a connector template for connector-mcp (spec
@@ -91,7 +91,8 @@ beforeAll(async () => {
           allowInsecureLoopback: true,
           allowedHosts: ["127.0.0.1"],
         },
-        roles: ["api"],
+        // worker: the connector tool list is a `cap-connector-tools` job owed through the outbox
+        roles: ["api", "worker"],
       },
     ),
     { resolveFrom: PLUGIN_DIR },
@@ -169,22 +170,36 @@ describe("a translated Claude Code MCP server with connector-mcp", () => {
     expect(confirmed.statusCode, confirmed.body).toBe(201);
     const itemId = confirmed.json().item.id as string;
 
-    // the template's bearer is personal: the installer's own credential lists the tools
+    // install collects no configuration; the template's bearer is personal, so the connector is
+    // created ready and lists its tools on the installer's first own credential
     const installed = await admin({
       method: "POST",
       url: `/api/v1/orgs/${orgId}/catalog/${itemId}/install`,
-      payload: { connectors: { "bearer-api": { credential: { token: TOKEN } } } },
+      payload: {},
     });
     expect(installed.statusCode, installed.body).toBe(201);
     const list = await admin({ method: "GET", url: `/api/v1/orgs/${orgId}/connectors` });
     expect(list.statusCode, list.body).toBe(200);
     const [connector] = list.json().connectors as { id: string; connector: string }[];
     expect(connector?.connector).toBe("mcp");
-    const got = await admin({
-      method: "GET",
-      url: `/api/v1/orgs/${orgId}/connectors/${connector?.id}`,
+    const credential = await admin({
+      method: "PUT",
+      url: `/api/v1/orgs/${orgId}/connectors/${connector?.id}/credentials/me`,
+      payload: { token: TOKEN },
     });
-    expect(got.statusCode, got.body).toBe(200);
+    expect(credential.statusCode, credential.body).toBe(204);
+    const got = await vi.waitFor(
+      async () => {
+        const res = await admin({
+          method: "GET",
+          url: `/api/v1/orgs/${orgId}/connectors/${connector?.id}`,
+        });
+        expect(res.statusCode, res.body).toBe(200);
+        expect(res.json().connector.tools.length).toBeGreaterThan(0);
+        return res;
+      },
+      { timeout: 4_000, interval: 50 },
+    );
     const tools = (got.json().connector.tools as { name: string; defaultPolicy: string }[]).map(
       (t) => [t.name, t.defaultPolicy],
     );

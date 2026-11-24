@@ -113,10 +113,18 @@ export interface OperationTransport {
  * Write roots that contain (or lie inside) the provider's records or control files, and read
  * roots inside the records, are refused: defence in depth beside the root-owned record directory
  * (`/skills/.capybara-ops` on the skills volume) and the Full wrapper's `/tmp/.capybara-exec-*`
- * control files. The agent applies the same rule when it pins roots.
+ * control files. The agent applies the same rule to those when it pins roots. Device services'
+ * state (`SERVICE_STATE_ROOT`: a browser profile with its cookies) and their relay sockets
+ * (`SERVICE_RUN_ROOT`) are no root of an operation either, read or write; they are refused here.
  */
 // capybara:allow-module-state read-only list of reserved paths, never mutated
-const PROTECTED = Object.freeze(["/tmp/.capybara-exec-", "/skills/.capybara-ops", "/opt/capybara"]);
+const PROTECTED = Object.freeze([
+  "/tmp/.capybara-exec-",
+  "/skills/.capybara-ops",
+  "/opt/capybara",
+  "/var/lib/capybara/svc",
+  "/tmp/.capybara-svc",
+]);
 
 export function protectedRoot(path: string, write: boolean): boolean {
   const p = posix.normalize(path);

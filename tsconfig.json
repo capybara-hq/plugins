@@ -11,6 +11,12 @@
       "path": "plugins/bailian"
     },
     {
+      "path": "plugins/browser"
+    },
+    {
+      "path": "plugins/browser/test/panel"
+    },
+    {
       "path": "plugins/connector-mcp"
     },
     {

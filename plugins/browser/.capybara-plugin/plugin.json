@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "browser",
+  "displayName": {
+    "zh": "浏览器",
+    "en": "Browser"
+  },
+  "version": "0.1.0-rc.0",
+  "publisher": "Capybara",
+  "icon": "./icon.svg",
+  "description": {
+    "en": "A real browser in the conversation owner's device for agents: navigate, read and act on pages through tools, with a live view in the conversation panel and takeover by the person",
+    "zh": "在对话所有者的设备中为智能体运行真实浏览器：通过工具打开、读取和操作网页，在对话面板中实时查看，并可由本人接管"
+  },
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/browser#readme"
+}

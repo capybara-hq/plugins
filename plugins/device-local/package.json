@@ -29,10 +29,10 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.61",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.70",
     "kysely": "^0.29.8"
   },
   "devDependencies": {
-    "@capybara-hq/testing": "^0.1.0-rc.35"
+    "@capybara-hq/testing": "^0.1.0-rc.40"
   }
 }
