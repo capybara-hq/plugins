@@ -207,6 +207,25 @@ describe("browser daemon handoff notice", () => {
   });
 });
 
+describe("browser daemon handoff after an aborted run", () => {
+  it("the next agent tool request drops a handoff that was never cleared", async () => {
+    const v = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 });
+    await v.next(isState);
+    const shown = v.after((m) => isState(m) && m.handoff?.callId === "aborted");
+    await request(d.socketPath, { op: "handoff_notice", callId: "aborted", message: "Solve it" });
+    await shown;
+    // another handoff op leaves it
+    await request(d.socketPath, { op: "handoff_clear", callId: "other" });
+    expect(d.daemon.state.handoff?.callId).toBe("aborted");
+    const dropped = v.after((m) => isState(m) && m.handoff === undefined);
+    const snap = await request(d.socketPath, { op: "snapshot" });
+    expect(snap.ok).toBe(true);
+    await dropped;
+    expect(d.daemon.state.handoff).toBeUndefined();
+    await v.close();
+  });
+});
+
 describe("browser daemon viewer before Chromium is ready", () => {
   it("a stream closed before ready leaves no viewer counted", async () => {
     const { mkdtempSync } = await import("node:fs");

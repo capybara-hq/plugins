@@ -495,6 +495,9 @@ export class BrowserSession {
         );
       } finally {
         if (target !== undefined) this.reservedDownloads.delete(target);
+        // Playwright keeps the artifact in downloadsPath until deleted: saved, too large, failed
+        // or cancelled, it goes now (else saved downloads double disk use and count to the cap)
+        await d.delete().catch(() => undefined);
         this.activeDownloads.delete(d);
         entry.finished = true;
       }

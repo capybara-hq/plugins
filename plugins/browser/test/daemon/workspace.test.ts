@@ -76,6 +76,11 @@ beforeAll(async () => {
       releaseSlow = () => res.end("b");
     },
     "/dl-dangle": link("/file.txt", "dangle.txt"),
+    "/dl-big": link("/big", "big2.bin"),
+    "/big": (_req, res) => {
+      res.writeHead(200, { "content-type": "application/octet-stream" });
+      res.end(Buffer.alloc(2 * 1024 * 1024));
+    },
     "/tall": TALL_NOISE,
   });
   d = await startTestDaemon({
@@ -240,6 +245,40 @@ describe("browser daemon workspace and limits", () => {
       : await noteContaining("not a plain directory");
     expect(all).toContain("is not a plain directory in the workspace");
     expect(readdirSync(outside)).not.toContain("report.txt");
+  });
+});
+
+describe("download leftovers", () => {
+  const tmpEmpty = () =>
+    vi.waitFor(() => {
+      let left: string[] = [];
+      try {
+        left = readdirSync(join(d.stateDir, "downloads-tmp"));
+      } catch {
+        left = [];
+      }
+      expect(left).toEqual([]);
+    });
+
+  it("leaves no artifact in downloads-tmp after a save", async () => {
+    renameSync(join(workspace, "downloads"), join(workspace, "downloads-link"));
+    const text = await clickDownload("/download");
+    if (!text.includes("Downloaded")) await noteContaining("Downloaded");
+    await tmpEmpty();
+  });
+
+  it("leaves no artifact in downloads-tmp after a download over the cap", async () => {
+    const text = await clickDownload("/dl-big");
+    if (!/big2\.bin.*(not saved|cancelled)/.test(text)) {
+      let all = "";
+      await vi.waitFor(async () => {
+        const r = await request(d.socketPath, { op: "tabs", action: "list" });
+        all += r.ok ? (r.text ?? "") : "";
+        expect(all).toMatch(/big2\.bin.*(not saved|cancelled)/);
+      });
+    }
+    expect(existsSync(join(workspace, "downloads", "big2.bin"))).toBe(false);
+    await tmpEmpty();
   });
 });
 

@@ -188,6 +188,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     }
     const req = raw as ToolRequest;
     if (req.op === "handoff_notice" || req.op === "handoff_clear") return handoffOp(req);
+    // A browser tool call after a handoff notice means that run moved on: a run aborted while
+    // waiting never sends handoff_clear, so the notice would stay up. (Any conversation of the
+    // device clears it; they are all the owner's.)
+    state.dropHandoff();
     if (state.control === "user" && req.op !== "wait") {
       return { ok: false, error: "taken_over", message: TAKEN_OVER_MESSAGE, blockedHosts: [] };
     }

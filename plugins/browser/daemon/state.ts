@@ -97,6 +97,16 @@ export class DaemonState {
     this.emit();
   }
 
+  /**
+   * Drops the pending handoff whatever its callId: the next agent tool request means its run has
+   * moved on (an aborted run never sends handoff_clear).
+   */
+  dropHandoff(): void {
+    if (this.pendingHandoff === undefined) return;
+    this.pendingHandoff = undefined;
+    this.emit();
+  }
+
   takeover(): void {
     if (this.since !== undefined) return;
     this.since = this.clock.now();
