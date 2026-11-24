@@ -1013,7 +1013,7 @@
         "npm": {
           "package": "@capybara-hq/plugin-browser",
           "version": "0.1.0-rc.0",
-          "integrity": "sha512-h/ABV9GENvVOvQVf4ydYiw+KKVcsi76ihkjAojJ+v+Tx+Fd1xA+/SoqEF3xsPYePES4U70TKtVLlR/gungM7PQ=="
+          "integrity": "sha512-chOTqAKZYOyBdpVPwa3RFPCaWgZ5N1Glw/sN2sTHlJki1r5xuB/8c0IjNPj6nioJydnrg7yqKAEzf6d8uxibDQ=="
         }
       }
     }

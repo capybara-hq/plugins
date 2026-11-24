@@ -175,3 +175,21 @@ describe("browser routes", () => {
     expect(await js.text()).toBe("/* panel */");
   });
 });
+
+describe("manifest", () => {
+  it("declares the panel embed with the globe icon and the device service", async () => {
+    const ext = (await import("../src/index.js")).default;
+    expect(ext.ui).toEqual([
+      {
+        id: "browser",
+        title: { zh: "浏览器", en: "Browser" },
+        slot: "conversation.panel",
+        kind: "embed",
+        path: "/ui/browser",
+        icon: "globe",
+      },
+    ]);
+    expect(ext.permissions?.deviceAccess).toEqual({ services: ["browser"] });
+    expect(ext.permissions?.ui).toEqual({ embeds: ["browser"] });
+  });
+});

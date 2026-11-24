@@ -22,7 +22,7 @@ export default defineExtension({
       slot: "conversation.panel",
       kind: "embed",
       path: "/ui/browser",
-      // the plan's "globe" is not in the SDK's UI_ICONS yet (a core change); default icon until then
+      icon: "globe",
     },
   ],
   permissions: {
