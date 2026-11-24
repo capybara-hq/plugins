@@ -14,4 +14,5 @@ overrides:
   "@capybara-hq/plugin-client": 0.1.0-rc.9
   # one kernel and test kit that match it: an older kernel imports SDK exports R3 removed
   "@capybara-hq/kernel": file:./.local-core/capybara-hq-kernel-0.1.0-rc.84.tgz
+  "@capybara-hq/plugin-tools": file:./.local-core/capybara-hq-plugin-tools-0.1.0-rc.23.tgz
   "@capybara-hq/testing": file:./.local-core/capybara-hq-testing-0.1.0-rc.38.tgz
