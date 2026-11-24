@@ -1,6 +1,7 @@
 import {
   DeviceOfflineError,
   type DeviceProvider,
+  type DeviceServiceStatus,
   type ExecResult,
   type ExtensionContext,
   type FileSystemHandle,
@@ -24,7 +25,13 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import type { BackgroundReadOutputResult } from "@capybara-hq/plugin-sdk/device-protocol";
 import { createInstanceBindings } from "./bindings.js";
-import { EXEC_DEADLINE_MARGIN_MS, machineCall, OP_DEADLINE_MS } from "./frames.js";
+import {
+  EXEC_DEADLINE_MARGIN_MS,
+  machineCall,
+  OP_DEADLINE_MS,
+  SERVICE_OP_DEADLINE_MS,
+  serviceCall,
+} from "./frames.js";
 import type { DeviceLocalStore } from "./store.js";
 
 export { EXEC_DEADLINE_MARGIN_MS, OP_DEADLINE_MS } from "./frames.js";
@@ -143,6 +150,23 @@ export function commandLimits(h: LocalDeviceHandle, scope: SandboxOperationScope
           ? { kind: "allowlist", hosts: [] }
           : { kind: h.limits.network.kind, hosts: [...h.limits.network.hosts] };
   return { cpu, memoryMb, diskMb, network };
+}
+
+/** A service status answer, checked before anything uses it. */
+function statusOf(v: unknown): DeviceServiceStatus {
+  const s = v as Partial<DeviceServiceStatus> | null;
+  if (
+    typeof s !== "object" ||
+    s === null ||
+    typeof s.name !== "string" ||
+    (s.state !== "running" && s.state !== "stopped") ||
+    (s.startedAt !== null && typeof s.startedAt !== "string") ||
+    typeof s.stateDir !== "string"
+  )
+    throw new ToolError(
+      "The connected machine sent an invalid service status; update capybara-device on that machine and retry",
+    );
+  return { name: s.name, state: s.state, startedAt: s.startedAt, stateDir: s.stateDir };
 }
 
 /** The handle as a local one, or the kernel rebuilds the instance (a handle it cannot use). */
@@ -465,6 +489,78 @@ export function createDeviceLocalProvider(
 
     async killTagged(_h, _tags, signal) {
       signal.throwIfAborted();
+    },
+
+    /**
+     * Starts the service on the machine (or finds it running) with the device's current network
+     * limits, which the machine compares with the running service's and restarts it on a change.
+     * `ifRunning` starts nothing: a stopped service answers `stopped`.
+     */
+    async ensureService(h, spec, signal, o) {
+      const l = requireLocal(h);
+      const files: Record<string, string> = {};
+      for (const [path, data] of Object.entries(spec.files)) files[path] = b64Of(data);
+      return statusOf(
+        await serviceCall(
+          ctx.dialIn,
+          l.id,
+          {
+            op: "service.ensure",
+            spec: {
+              name: spec.name,
+              entry: spec.entry,
+              args: spec.args,
+              files,
+              ...(spec.env && { env: spec.env }),
+            },
+            network: { kind: l.limits.network.kind, hosts: [...l.limits.network.hosts] },
+            ...(o?.ifRunning && { ifRunning: true }),
+          },
+          { deadlineMs: SERVICE_OP_DEADLINE_MS, signal },
+        ),
+      );
+    },
+
+    async stopService(h, name, signal) {
+      const l = requireLocal(h);
+      await serviceCall(
+        ctx.dialIn,
+        l.id,
+        { op: "service.stop", name },
+        { deadlineMs: SERVICE_OP_DEADLINE_MS, signal },
+      );
+    },
+
+    async serviceStatus(h, name, signal) {
+      const l = requireLocal(h);
+      return statusOf(
+        await serviceCall(
+          ctx.dialIn,
+          l.id,
+          { op: "service.status", name },
+          { deadlineMs: OP_DEADLINE_MS, signal },
+        ),
+      );
+    },
+
+    async serviceRequest(h, name, body, o) {
+      const l = requireLocal(h);
+      const result = (await serviceCall(
+        ctx.dialIn,
+        l.id,
+        { op: "service.request", name, body: b64Of(body), timeoutMs: o.timeoutMs },
+        { deadlineMs: o.timeoutMs + EXEC_DEADLINE_MARGIN_MS, signal: o.signal },
+      )) as { body?: unknown } | null;
+      if (typeof result?.body !== "string")
+        throw new ToolError(
+          "The connected machine sent an invalid answer to service.request; update capybara-device on that machine and retry",
+        );
+      return bytesOf(result.body);
+    },
+
+    async openStream(h, target, signal) {
+      const l = requireLocal(h);
+      return await ctx.dialIn.openStream(l.id, { service: target.service }, { signal });
     },
 
     exec: refuseRaw("exec"),

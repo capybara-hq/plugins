@@ -134,3 +134,70 @@ export function failureOf(
       return new ToolError(`${ON_MACHINE_PREFIX}${message} (check the path or command and retry)`);
   }
 }
+
+/** How long the machine may take to start, stop or read a service (a start spawns a process). */
+export const SERVICE_OP_DEADLINE_MS = 60_000;
+
+/**
+ * The service op bodies sent beside the protocol 6 operations (capybara-device's `service.*` ops):
+ * file and request bodies travel as standard base64.
+ */
+export type ServiceBody =
+  | {
+      op: "service.ensure";
+      spec: {
+        name: string;
+        entry: string;
+        args: string[];
+        files: Record<string, string>;
+        env?: Record<string, string>;
+      };
+      network: { kind: "open-public" | "allowlist"; hosts: string[] };
+      ifRunning?: boolean;
+    }
+  | { op: "service.stop"; name: string }
+  | { op: "service.status"; name: string }
+  | { op: "service.request"; name: string; body: string; timeoutMs: number };
+
+/** A machine's typed failure of a service op as the SDK error the kernel knows. */
+function serviceFailure(error: { kind?: unknown; message?: unknown }, op: string): Error {
+  const message = typeof error.message === "string" ? error.message : "no message";
+  switch (error.kind) {
+    case "unsupported":
+      return new SandboxPermissionUnsupportedError(
+        `${message} (update capybara-device on that machine to use device services)`,
+      );
+    case "denied":
+      return new SandboxScopeDeniedError(message);
+    case "invalid":
+      return new ToolError(`The connected machine refused the ${op} request: ${message}`);
+    default:
+      return new ToolError(`${ON_MACHINE_PREFIX}${message} (check the service and retry)`);
+  }
+}
+
+/**
+ * One service op on the device's machine through `ctx.dialIn`, resolving the `result` of its
+ * answer. Channel errors (`DeviceOfflineError`, aborts, timeouts) reach the caller unchanged; a
+ * typed failure maps by {@link serviceFailure}; an answer that is no `{ ok }` body is a `ToolError`.
+ */
+export async function serviceCall(
+  dialIn: Pick<DialInChannel, "request">,
+  deviceId: string,
+  body: ServiceBody,
+  opts: { deadlineMs: number; signal: AbortSignal },
+): Promise<unknown> {
+  const raw = await dialIn.request(deviceId, body, {
+    timeoutMs: opts.deadlineMs,
+    signal: opts.signal,
+  });
+  const res = raw as { ok?: unknown; result?: unknown; error?: unknown } | null;
+  if (typeof res !== "object" || res === null || typeof res.ok !== "boolean")
+    throw invalidAnswer(body.op, "not a response body");
+  if (!res.ok) {
+    const e = res.error;
+    if (typeof e !== "object" || e === null) throw invalidAnswer(body.op, "no error body");
+    throw serviceFailure(e, body.op);
+  }
+  return res.result;
+}
