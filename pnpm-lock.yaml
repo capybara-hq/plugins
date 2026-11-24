@@ -836,7 +836,7 @@ packages:
     hasBin: true
 
   '@capybara-hq/kernel@file:.local-core/capybara-hq-kernel-0.1.0-rc.84.tgz':
-    resolution: {integrity: sha512-ATCrSTiq7ytsvduwKpHPqfskpnNWxq27skDtev8x52+oY0wWeiNGLADfrUmVhtUbIYCqyLnJnLGRr+EvYKGLkQ==, tarball: file:.local-core/capybara-hq-kernel-0.1.0-rc.84.tgz}
+    resolution: {integrity: sha512-oDBZ1RuJLDHyf7V+lKOQKbOq+OI0PDLJ9k1phnfnORo9JN0HO2yMZoRx59U1Lv0LDbzoW4vDRBqOy4biUB/MSQ==, tarball: file:.local-core/capybara-hq-kernel-0.1.0-rc.84.tgz}
     version: 0.1.0-rc.84
     engines: {node: '>=24'}
 
@@ -878,7 +878,7 @@ packages:
       zod: ^4.6.7
 
   '@capybara-hq/plugin-sdk@file:.local-core/capybara-hq-plugin-sdk-0.1.0-rc.69.tgz':
-    resolution: {integrity: sha512-Ch8EBZBDpYZR2z0+FozbwnvOksF4SpHlTiuFC1pu9qrzrRGogn0OHRYh1NELp5zhgSimBDurWKp52pI8WNNX+g==, tarball: file:.local-core/capybara-hq-plugin-sdk-0.1.0-rc.69.tgz}
+    resolution: {integrity: sha512-zOCGyDJr+06QILyiLhR4+6CuKXYAgj525HF7SaeJElZbB1jESTLzqzjEGyky5E4COpRVWF6WIdjy8+lykq+dgA==, tarball: file:.local-core/capybara-hq-plugin-sdk-0.1.0-rc.69.tgz}
     version: 0.1.0-rc.69
 
   '@capybara-hq/plugin-tools@0.1.0-rc.23':
@@ -893,7 +893,7 @@ packages:
     hasBin: true
 
   '@capybara-hq/testing@file:.local-core/capybara-hq-testing-0.1.0-rc.38.tgz':
-    resolution: {integrity: sha512-oHBIJ9egt0BuKoK7Ur+yuInIhRbSRLgTR9MWLUpxuZaoblqUwfYRyg6FUcyhOWtTjVv1j8uQmYsRxYFRI8+97w==, tarball: file:.local-core/capybara-hq-testing-0.1.0-rc.38.tgz}
+    resolution: {integrity: sha512-3NGuCmZ1jt6+lAFcXqD9h514HsByZh33jtTrWnfyo9VbEdEEwFGZOW6XxcVUFvbvcxuzCF7nx19/Zs3u7gr1AQ==, tarball: file:.local-core/capybara-hq-testing-0.1.0-rc.38.tgz}
     version: 0.1.0-rc.38
     engines: {node: '>=24'}
     peerDependencies:
