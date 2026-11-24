@@ -493,17 +493,11 @@
 
   /* ---------- Run HUD (component run-hud) ---------- */
 
+  /* The layout is the component's design Stacks; the theme adds the rail, colours and the meter. */
   & .cx-theme-cyberpunk-hud {
-    display: grid;
-    gap: 10px;
     padding-left: 10px;
     border-left: 2px solid var(--cx-theme-cyberpunk-hud);
     font-family: var(--cb-font);
-  }
-  & .cx-theme-cyberpunk-hud-status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
   }
   & .cx-theme-cyberpunk-hud-dot {
     width: 8px;
@@ -519,12 +513,20 @@
     text-shadow: 0 0 6px color-mix(in srgb, var(--cx-theme-cyberpunk-hud) 45%, transparent);
   }
   & .cx-theme-cyberpunk-hud-ticker {
-    margin-left: auto;
     color: var(--cx-theme-cyberpunk-hud);
     font-size: 11px;
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.06em;
     opacity: 0.85;
+  }
+  & .cx-theme-cyberpunk-hud-sound-label {
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+  }
+  & .cx-theme-cyberpunk-hud-info {
+    display: inline-flex;
+    cursor: help;
   }
   /* The signal meter: equalizer bars (scaled, never resized). */
   & .cx-theme-cyberpunk-hud-meter {

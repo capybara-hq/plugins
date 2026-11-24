@@ -2,8 +2,9 @@ import { createElement, type ReactNode } from "react";
 
 /**
  * Richer stand-ins for the design components than the fake host's (which render only
- * `children`): a clickable Button and a KeyValue that shows its rows, so tests can press the
- * sound toggle and read the HUD values. They replace entries in the host global that
+ * `children`, except its `role="switch"` Switch, kept here): a clickable Button, a KeyValue that
+ * shows its rows and a Tooltip that keeps its text in `data-tooltip`, so tests can press buttons,
+ * read the HUD values and the hints. They replace entries in the host global that
  * `@capybara-hq/plugin-client` reads on every render (client extensions spec §9.4), so call this
  * after `renderWithFakeHost` and rerender; the fake host restores the global on unmount.
  */
@@ -26,6 +27,15 @@ export function installRicherDesign(): void {
       createElement(
         "button",
         { type: "button", "data-fake-design": "Button", onClick, title },
+        children,
+      ),
+    Tooltip: ({ content, children }: { content: ReactNode; children?: ReactNode }) =>
+      createElement(
+        "span",
+        {
+          "data-fake-design": "Tooltip",
+          "data-tooltip": typeof content === "string" ? content : undefined,
+        },
         children,
       ),
     KeyValue: ({ rows }: { rows: { k: ReactNode; v: ReactNode }[] }) =>
@@ -51,6 +61,24 @@ export function row(key: string): string | null {
       return r.querySelector("dd")?.textContent ?? null;
   }
   return null;
+}
+
+/** The switch (the fake host's `role="switch"` stand-in) whose accessible name is `label`. */
+export function switchNamed(label: string): HTMLButtonElement {
+  const s = [...document.querySelectorAll<HTMLButtonElement>('[role="switch"]')].find(
+    (x) => x.getAttribute("aria-label") === label,
+  );
+  if (s === undefined) throw new Error(`no switch "${label}"`);
+  return s;
+}
+
+/** The text of the element(s) `el`'s aria-describedby names. */
+export function description(el: Element): string {
+  return (el.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/)
+    .map((id) => (id === "" ? "" : (document.getElementById(id)?.textContent ?? "")))
+    .join(" ")
+    .trim();
 }
 
 /** The fake design Button whose text starts with `text`. */
