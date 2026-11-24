@@ -275,7 +275,9 @@ as device-docker's (README "Device services and streams" there; `src/services.ts
   directory; a VM made from an older template gets it on the first normal ensure, made as root (`mkdir -m 0700`, owned by the
   sandbox user; `/var/lib` is root's, so nothing the sandbox user planted redirects it). Runtime files under
   `/tmp/.capybara-svc/<name>/`; `/tmp` is on the VM's disk here, so a pid record counts only while its process runs with the
-  recorded start time on the recorded boot (a cold start after a pause changes the boot id).
+  recorded start time on the recorded boot (a cold start after a pause changes the boot id). The service's code stays in its
+  state directory (no separate `codeDir`: same user, nothing to protect); files a newer version no longer ships stay there until
+  the service removes them or the device's files are reset.
 - **Files, digest first**: a start sends the files' digest (sha256 over the files in path order: path, NUL, byte length, NUL,
   bytes) and their paths, never the files; the manager starts from the files in the state directory when its `.files-digest`
   record matches and the files there still hash to it, and otherwise answers "files needed", after which the provider sends the
@@ -291,6 +293,10 @@ as device-docker's (README "Device services and streams" there; `src/services.ts
   stream cannot be paused, so a stream whose reader leaves 24 MiB of messages unread is closed ("the viewer fell behind; reopen
   the view"). Opening a stream extends the VM's timeout to at least an hour (the kernel's idle suspension still pauses it); a
   request does not extend it.
+- **Residual (relay)**: a relay is killed by pid when its stream closes. A kernel replica that dies mid-stream never sends that
+  kill, and envd keeps a process whose stream ended, so its relay stays connected to the service (idle, holding one connection)
+  until `stopService`, a pause or the VM's end; the relay has no idle timeout of its own (a keepalive would have to pass through
+  the service protocol).
 
 ## Permission profiles (operation contract)
 

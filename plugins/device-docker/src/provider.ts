@@ -287,6 +287,9 @@ const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * its internal network (handle id = the container name); the file system is the two volumes
  * (handle id = the name they were made under). The kernel uses one name for both.
  */
+/** The largest service state volume under `volumeDriver`, in MB (a smaller disk caps it lower). */
+export const SERVICE_DISK_MB_MAX = 2048;
+
 export function sandboxResourceNames(name: string) {
   return {
     container: name,
@@ -939,18 +942,34 @@ export function createDockerSandbox(
   };
 
   /** Creates a volume unless one of that name exists already (idempotent by name). */
+  /** Creates the volume unless it exists; true when this call made it. */
   const ensureVolume = async (
     body: { Name: string } & Record<string, unknown>,
     signal: AbortSignal,
-  ) => {
+  ): Promise<boolean> => {
     try {
       await api.json("GET", `/volumes/${enc(body.Name)}`, { signal });
-      return;
+      return false;
     } catch (e) {
       if (!isStatus(e, 404)) throw e;
     }
     await postCreate("/volumes/create", { body, signal });
+    return true;
   };
+
+  /**
+   * The service state volume's create body: under `volumeDriver` the workspace volume's driver with
+   * a size of {@link SERVICE_DISK_MB_MAX} MB at most (never more than the device's disk), so a
+   * service cannot fill the host's disk; without it a plain local volume, like the workspace's.
+   */
+  const svcVolume = (fsName: string, limits: SandboxLimits) => ({
+    Name: sandboxResourceNames(fsName).svc,
+    Labels: baseLabels(fsName, "svc"),
+    ...(cfg.volumeDriver !== undefined && {
+      Driver: cfg.volumeDriver,
+      DriverOpts: { size: `${Math.min(limits.diskMb, SERVICE_DISK_MB_MAX)}M` },
+    }),
+  });
 
   const pull = async (image: string, signal: AbortSignal) => {
     await api.json("POST", "/images/create", { query: { fromImage: image }, signal });
@@ -2147,7 +2166,7 @@ export function createDockerSandbox(
       checkLimits(limits);
       const n = sandboxResourceNames(name);
       // an existing file system of this name is returned as it is (never replaced)
-      await ensureVolume(
+      const made = await ensureVolume(
         {
           Name: n.workspace,
           Labels: baseLabels(name, "workspace"),
@@ -2159,7 +2178,10 @@ export function createDockerSandbox(
         signal,
       );
       await ensureVolume({ Name: n.skills, Labels: baseLabels(name, "skills") }, signal);
-      await ensureVolume({ Name: n.svc, Labels: baseLabels(name, "svc") }, signal);
+      // A new workspace is a new file system: a service volume left from a lost one of the same
+      // name (its workspace removed behind the plugin's back) holds stale state and goes first.
+      if (made) await removeWithRetry(`/volumes/${enc(n.svc)}`, signal);
+      await ensureVolume(svcVolume(name, limits), signal);
       return { id: name };
     },
 
@@ -2192,7 +2214,7 @@ export function createDockerSandbox(
       if (!(await checkFileSystem(fileSystem.id, signal)).ok) throw gone();
       // the service state volume belongs to the file system as well; one made before device
       // services has none yet: made here (empty, like a device that never ran a service)
-      await ensureVolume({ Name: v.svc, Labels: baseLabels(fileSystem.id, "svc") }, signal);
+      await ensureVolume(svcVolume(fileSystem.id, limits), signal);
       // An old instance of the same name (the kernel exited before recording the handle...):
       // replace the instance; the file system stays. Unless it carries a higher fence token than
       // this call: then a newer holder made or updated it, and this create is stale (§5.2; a check
@@ -2530,7 +2552,7 @@ export function createDockerSandbox(
 
     /**
      * A device service: a process the manager starts detached in its own session as the sandbox
-     * user, its state directory on the workspace volume. Its network is the instance's: the
+     * user, its state directory on the device's service state volume (`<name>-svc`). Its network is the instance's: the
      * manager hands it the container's egress proxy variables (`HTTPS_PROXY` / `HTTP_PROXY`, so a
      * browser's `--proxy-server` reaches the proxy), and the egress proxy enforces the device's
      * allowlist live (an in-place apply swaps the list and closes every connection the new list

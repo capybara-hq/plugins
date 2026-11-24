@@ -29,7 +29,7 @@ const FENCE = { token: 1 };
 
 /**
  * Device services on real Docker (browser use spec §5–6): one long-lived named process per device
- * with its state directory on the workspace volume, requests and streams through the in-image
+ * with its state directory on its service state volume, requests and streams through the in-image
  * socket relay. Skipped without Docker.
  */
 

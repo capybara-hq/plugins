@@ -78,3 +78,27 @@ describe("relay stream backpressure", () => {
     expect(calls).toEqual([]);
   });
 });
+
+describe("relay stream messages iterator", () => {
+  it("return() closes the stream", async () => {
+    const { io, calls } = transport(true);
+    const { sink, stream } = relayStream("svc", io);
+    sink.stderr(new TextEncoder().encode("ready\n"));
+    sink.stdout(frame(1));
+    for await (const _ of stream.messages) break;
+    expect(calls).toEqual(["close"]);
+    expect(await stream.closed).toEqual({ reason: "the reader stopped reading" });
+  });
+
+  it("rejects a second next() while one is waiting", async () => {
+    const { io } = transport(true);
+    const { sink, stream } = relayStream("svc", io);
+    sink.stderr(new TextEncoder().encode("ready\n"));
+    const it = stream.messages[Symbol.asyncIterator]();
+    const first = it.next();
+    await expect(it.next()).rejects.toThrow(/one reader/);
+    sink.stdout(frame(3));
+    expect((await first).value).toHaveLength(3);
+    stream.close("done");
+  });
+});

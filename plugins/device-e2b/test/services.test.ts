@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import type {
   DeviceProvider,
   DeviceServiceSpec,
@@ -82,17 +81,6 @@ const waitFor = async (cond: () => Promise<boolean>, ms = 30_000) => {
     await new Promise((r) => setTimeout(r, 200));
   }
 };
-
-describe("device-e2b services: shared code", () => {
-  it("uses device-docker's services.ts byte for byte", async () => {
-    const own = await readFile(new URL("../src/services.ts", import.meta.url), "utf8");
-    const docker = await readFile(
-      new URL("../../device-docker/src/services.ts", import.meta.url),
-      "utf8",
-    );
-    expect(own).toBe(docker);
-  });
-});
 
 describe.skipIf(!READY)("device-e2b services (live)", { timeout: 240_000 }, () => {
   let sbx: DeviceProvider;

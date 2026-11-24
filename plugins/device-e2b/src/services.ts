@@ -1,5 +1,6 @@
 // Device services (browser use spec §5–6), shared by device-docker and device-e2b: this file is
-// identical in both plugins (device-e2b's test/services.test.ts compares them byte for byte).
+// identical in both plugins (tools/checks/test/shared-device-services.test.ts compares them byte
+// for byte; edit one and copy it to the other).
 import { createHash } from "node:crypto";
 import {
   DEVICE_SERVICE_MAX_MESSAGE,
@@ -272,13 +273,13 @@ def read_request():
     if len(head) != 4:
         fail("missing request")
     n = int.from_bytes(head, "big")
-    data = b""
+    data = bytearray()
     while len(data) < n:
         chunk = sys.stdin.buffer.read(n - len(data))
         if not chunk:
             fail("truncated request")
         data += chunk
-    return json.loads(data)
+    return json.loads(bytes(data))
 
 def segments(rel):
     parts = rel.split("/")
@@ -287,7 +288,8 @@ def segments(rel):
     return parts
 
 def write_files(sfd, files):
-    for rel, b64 in sorted(files.items()):
+    # files: path -> bytes, decoded once by the caller
+    for rel, data in sorted(files.items()):
         parts = segments(rel)
         try:
             fd = os.dup(sfd)
@@ -300,7 +302,7 @@ def write_files(sfd, files):
         except OSError as e:
             fail("cannot write service file %s: %s (a link, a non-directory or a special file is in the way)" % (json.dumps(rel), e.strerror))
         with os.fdopen(out, "wb") as f:
-            f.write(base64.b64decode(b64))
+            f.write(data)
 
 def files_digest(items):
     # sha256 over (path, bytes) in the given order: path, NUL, byte length, NUL, bytes
@@ -402,7 +404,7 @@ def ensure(name, req):
             fail("the service files do not match their digest")
         # no stale record may vouch for a half-written set
         unlink(sfd, DIGEST_FILE)
-        write_files(sfd, files)
+        write_files(sfd, decoded)
         record_digest(sfd, digest)
     state_dir = status(name, None)["stateDir"]
     sock = "%s/%s/%s/sock" % (RUN[0], RUN[1][0], name)
@@ -559,15 +561,6 @@ export function isFilesNeeded(r: { exitCode: number | null; stdout: string }): b
     return false;
   }
 }
-
-/**
- * The environment variable naming the device's workspace root for a service (R26). A local
- * constant until the SDK's `DEVICE_SERVICE_WORKSPACE_ENV` (same name) is released.
- */
-export const DEVICE_SERVICE_WORKSPACE_ENV = "CAPYBARA_SERVICE_WORKSPACE";
-
-/** The device's workspace root a service is told about (both providers). */
-export const SERVICE_WORKSPACE = "/workspace";
 
 /** Parses the manager's answer; `{error}`, a failed exit or an unreadable answer throws. */
 export function parseManagerReply(
@@ -774,6 +767,9 @@ export function relayStream(
       return Promise.resolve({ value: m, done: false });
     }
     if (reason !== null) return Promise.resolve({ value: undefined, done: true });
+    // one reader: a second waiting next() would leave the first one hanging forever
+    if (waiting !== null)
+      return Promise.reject(new Error(`device service ${name}: the stream has one reader`));
     return new Promise((r) => {
       waiting = r;
     });
@@ -799,7 +795,11 @@ export function relayStream(
     messages: {
       [Symbol.asyncIterator]: () => ({
         next,
-        return: async () => ({ value: undefined, done: true }),
+        // a reader that stops (break, throw) is done with the stream: the relay ends with it
+        return: async () => {
+          finish("the reader stopped reading");
+          return { value: undefined, done: true };
+        },
       }),
     },
     close(why) {
