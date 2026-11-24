@@ -27,9 +27,11 @@ import type { BackgroundReadOutputResult } from "@capybara-hq/plugin-sdk/device-
 import { createInstanceBindings } from "./bindings.js";
 import {
   EXEC_DEADLINE_MARGIN_MS,
+  filesDigestOf,
   machineCall,
   OP_DEADLINE_MS,
   SERVICE_OP_DEADLINE_MS,
+  ServiceOpRefusedError,
   serviceCall,
 } from "./frames.js";
 import type { DeviceLocalStore } from "./store.js";
@@ -500,25 +502,40 @@ export function createDeviceLocalProvider(
       const l = requireLocal(h);
       const files: Record<string, string> = {};
       for (const [path, data] of Object.entries(spec.files)) files[path] = b64Of(data);
-      return statusOf(
-        await serviceCall(
-          ctx.dialIn,
-          l.id,
-          {
-            op: "service.ensure",
-            spec: {
-              name: spec.name,
-              entry: spec.entry,
-              args: spec.args,
-              files,
-              ...(spec.env && { env: spec.env }),
+      const filesDigest = filesDigestOf(spec.files);
+      const base = {
+        op: "service.ensure" as const,
+        network: { kind: l.limits.network.kind, hosts: [...l.limits.network.hosts] },
+        ...(o?.ifRunning && { ifRunning: true as const }),
+      };
+      const send = async (withFiles: boolean) =>
+        statusOf(
+          await serviceCall(
+            ctx.dialIn,
+            l.id,
+            {
+              ...base,
+              spec: {
+                name: spec.name,
+                entry: spec.entry,
+                args: spec.args,
+                ...(withFiles && { files }),
+                ...(spec.env && { env: spec.env }),
+              },
+              filesDigest,
             },
-            network: { kind: l.limits.network.kind, hosts: [...l.limits.network.hosts] },
-            ...(o?.ifRunning && { ifRunning: true }),
-          },
-          { deadlineMs: SERVICE_OP_DEADLINE_MS, signal },
-        ),
-      );
+            { deadlineMs: SERVICE_OP_DEADLINE_MS, signal },
+          ),
+        );
+      // The digest goes first, so a machine that holds these files starts without them crossing
+      // the relay (`files_needed` asks for them); an older machine, which does not know the digest
+      // and answers `invalid`, gets the files once.
+      try {
+        return await send(false);
+      } catch (e) {
+        if (e instanceof ServiceOpRefusedError) return await send(true);
+        throw e;
+      }
     },
 
     async stopService(h, name, signal) {

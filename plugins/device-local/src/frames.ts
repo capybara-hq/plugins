@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   type DialInChannel,
   FileSystemGoneError,
@@ -149,15 +150,38 @@ export type ServiceBody =
         name: string;
         entry: string;
         args: string[];
-        files: Record<string, string>;
+        files?: Record<string, string>;
         env?: Record<string, string>;
       };
+      /** `sha256:` + hex over the files ({@link filesDigestOf}); sent with or without `files`. */
+      filesDigest?: string;
       network: { kind: "open-public" | "allowlist"; hosts: string[] };
       ifRunning?: boolean;
     }
   | { op: "service.stop"; name: string }
   | { op: "service.status"; name: string }
   | { op: "service.request"; name: string; body: string; timeoutMs: number };
+
+/** A machine's `invalid` or `files_needed` answer to a service op, with its kind. */
+export class ServiceOpRefusedError extends ToolError {
+  constructor(
+    message: string,
+    readonly refusal: "invalid" | "files_needed",
+  ) {
+    super(message);
+  }
+}
+
+/** `sha256:` + hex of the files sorted by path: path, NUL, byte length, NUL, bytes. */
+export function filesDigestOf(files: Record<string, Uint8Array>): string {
+  const h = createHash("sha256");
+  for (const path of Object.keys(files).sort()) {
+    const data = files[path] as Uint8Array;
+    h.update(`${path}\0${data.byteLength}\0`);
+    h.update(data);
+  }
+  return `sha256:${h.digest("hex")}`;
+}
 
 /** A machine's typed failure of a service op as the SDK error the kernel knows. */
 function serviceFailure(error: { kind?: unknown; message?: unknown }, op: string): Error {
@@ -169,9 +193,15 @@ function serviceFailure(error: { kind?: unknown; message?: unknown }, op: string
       );
     case "denied":
       return new SandboxScopeDeniedError(message);
+    case "files_needed":
+      return new ServiceOpRefusedError(
+        `The connected machine needs the service files for ${op} (retry with the files)`,
+        "files_needed",
+      );
     case "invalid":
-      return new ToolError(
+      return new ServiceOpRefusedError(
         `The connected machine refused the ${op} request: ${message} (check the request and retry)`,
+        "invalid",
       );
     default:
       return new ToolError(`${ON_MACHINE_PREFIX}${message} (check the service and retry)`);

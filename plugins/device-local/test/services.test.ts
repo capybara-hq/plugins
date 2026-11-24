@@ -1,7 +1,7 @@
 import { DeviceOfflineError, type DeviceStream } from "@capybara-hq/plugin-sdk";
 import { runDeviceServiceConformance } from "@capybara-hq/testing";
 import { describe, expect, it } from "vitest";
-import { createDeviceLocalProvider, type LocalDeviceHandle } from "../src/index.js";
+import { createDeviceLocalProvider, filesDigestOf, type LocalDeviceHandle } from "../src/index.js";
 import { fakeDialIn, fakeLog, LIMITS, memoryStore, ROOTS, rejection, signal } from "./fakes.js";
 
 const DEVICE = "dev-1";
@@ -11,7 +11,8 @@ const STATE_DIR = "/home/me/capybara-device/dev-1/services/echo";
 type Body = Record<string, unknown>;
 
 /** An in-memory machine for the service ops: a service is "running" with the files it was given. */
-function serviceMachine() {
+function serviceMachine(opts: { oldMachine?: boolean } = {}) {
+  const digests = new Set<string>();
   const running = new Map<string, { startedAt: string; network: unknown }>();
   const requests: Body[] = [];
   const answer = (body: Body) => {
@@ -27,7 +28,16 @@ function serviceMachine() {
     };
     switch (body.op) {
       case "service.ensure": {
-        const spec = body.spec as { name: string };
+        const spec = body.spec as { name: string; files?: Record<string, string> };
+        if (opts.oldMachine && !spec.files)
+          return { ok: false, error: { kind: "invalid", message: "spec.files must be an object" } };
+        const digest = body.filesDigest as string | undefined;
+        if (!opts.oldMachine && !running.has(spec.name) && body.ifRunning !== true) {
+          if (spec.files) {
+            if (digest) digests.add(digest);
+          } else if (!digest || !digests.has(digest))
+            return { ok: false, error: { kind: "files_needed", message: "send the files" } };
+        }
         if (!running.has(spec.name) && body.ifRunning !== true)
           running.set(spec.name, { startedAt: new Date().toISOString(), network: body.network });
         return { ok: true, result: status(spec.name) };
@@ -46,11 +56,11 @@ function serviceMachine() {
         return { ok: false, error: { kind: "invalid", message: "unknown" } };
     }
   };
-  return { answer, requests, running };
+  return { answer, requests, running, digests };
 }
 
-function setup() {
-  const m = serviceMachine();
+function setup(opts: { oldMachine?: boolean } = {}) {
+  const m = serviceMachine(opts);
   const dial = fakeDialIn((req) => m.answer(req.body as Body));
   const { store } = memoryStore();
   const provider = createDeviceLocalProvider({ dialIn: dial.channel, log: fakeLog().log }, store);
@@ -71,7 +81,9 @@ describe("device-local services", () => {
     const { m, provider } = setup();
     const status = await provider.ensureService?.(HANDLE, SPEC, signal());
     expect(status).toMatchObject({ name: "echo", state: "running", stateDir: STATE_DIR });
-    expect(m.requests[0]).toEqual({
+    expect(m.requests).toHaveLength(2);
+    expect(m.requests[0]).not.toHaveProperty("spec.files");
+    expect(m.requests[1]).toEqual({
       op: "service.ensure",
       spec: {
         name: "echo",
@@ -80,8 +92,36 @@ describe("device-local services", () => {
         files: { "echo.mjs": "AQID" },
         env: { A: "b" },
       },
+      filesDigest: filesDigestOf(SPEC.files),
       network: { kind: "allowlist", hosts: ["example.com"] },
     });
+  });
+
+  it("a digest hit starts without sending files", async () => {
+    const { m, provider } = setup();
+    await provider.ensureService?.(HANDLE, SPEC, signal());
+    await provider.stopService?.(HANDLE, "echo", signal());
+    m.requests.length = 0;
+    const status = await provider.ensureService?.(HANDLE, SPEC, signal());
+    expect(status?.state).toBe("running");
+    expect(m.requests).toHaveLength(1);
+    expect(m.requests[0]).toMatchObject({ filesDigest: filesDigestOf(SPEC.files) });
+    expect(m.requests[0]).not.toHaveProperty("spec.files");
+  });
+
+  it("the digest covers paths and bytes, sorted by path", () => {
+    const a = filesDigestOf({ b: new Uint8Array([1]), a: new Uint8Array([2]) });
+    expect(a).toBe(filesDigestOf({ a: new Uint8Array([2]), b: new Uint8Array([1]) }));
+    expect(a).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(a).not.toBe(filesDigestOf({ a: new Uint8Array([1]), b: new Uint8Array([2]) }));
+  });
+
+  it("an old machine's invalid answer to the files-less ensure is retried once with files", async () => {
+    const { m, provider } = setup({ oldMachine: true });
+    const status = await provider.ensureService?.(HANDLE, SPEC, signal());
+    expect(status?.state).toBe("running");
+    expect(m.requests).toHaveLength(2);
+    expect(m.requests[1]).toHaveProperty("spec.files");
   });
 
   it("ensureService with ifRunning forwards the flag and starts nothing", async () => {
@@ -113,6 +153,7 @@ describe("device-local services", () => {
     expect((await provider.serviceStatus?.(HANDLE, "echo", signal()))?.state).toBe("running");
     await provider.stopService?.(HANDLE, "echo", signal());
     expect(m.requests.map((r) => r.op)).toEqual([
+      "service.ensure",
       "service.ensure",
       "service.status",
       "service.stop",
