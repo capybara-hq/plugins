@@ -74,7 +74,8 @@ export function playwrightDownloadHosts(env: Record<string, string | undefined>)
       return [];
     }
   }
-  return ["cdn.playwright.dev", "playwright.download.prss.microsoft.com"];
+  // the CDN redirects Chrome for Testing builds (the headless shell) to Google's storage
+  return ["cdn.playwright.dev", "playwright.download.prss.microsoft.com", "storage.googleapis.com"];
 }
 
 /**

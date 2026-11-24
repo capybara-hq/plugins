@@ -141,7 +141,11 @@ describe("browser daemon: Chromium that cannot start", () => {
     expect(r).toMatchObject({
       ok: false,
       error: "blocked",
-      blockedHosts: ["cdn.playwright.dev", "playwright.download.prss.microsoft.com"],
+      blockedHosts: [
+        "cdn.playwright.dev",
+        "playwright.download.prss.microsoft.com",
+        "storage.googleapis.com",
+      ],
     });
     expect(r.ok ? "" : r.message.startsWith(DOWNLOAD_BLOCKED_PREFIX)).toBe(true);
   });

@@ -269,7 +269,7 @@ describe("browser tools", () => {
     }));
     const e = await f.run("browser_navigate", { url: "https://x.test" }).catch((x: unknown) => x);
     expect((e as Error).message).toBe(
-      "The device's network settings block x.test. The user is asked to allow the host; if they decline, use another site.",
+      "The device's network settings block x.test. The network note says whether the host can be allowed from this conversation; if it is not allowed, use another site.",
     );
   });
 
