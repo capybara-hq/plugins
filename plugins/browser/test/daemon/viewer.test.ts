@@ -2,7 +2,7 @@ import { connect } from "node:net";
 import { encodeServiceMessage } from "@capybara-hq/plugin-sdk";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { startDaemon } from "../../daemon/main.js";
-import { HANDOFF_MAX_CHARS, type ViewerOut } from "../../daemon/protocol.js";
+import { HANDOFF_MAX_CHARS, MAX_TABS, type ViewerOut } from "../../daemon/protocol.js";
 import {
   jpegSize,
   openViewer,
@@ -20,6 +20,11 @@ u(); addEventListener("resize", u);</script>`;
 const ALERT = `<!doctype html><title>Alert</title>
 <button onclick="alert('hello from fixture')">Alert</button>`;
 const BUTTON = `<!doctype html><title>Button</title><button>Press</button>`;
+const ANIM = `<!doctype html><title>Anim</title><div id=b style="width:300px;height:200px"></div>
+<script>let n = 0; (function f() { b.style.background = "hsl(" + (n++ % 360) + ",80%,50%)";
+requestAnimationFrame(f); })();</script>`;
+const POPUPS = `<!doctype html><title>Popups</title>
+<button onclick="for (let i = 0; i < 3; i++) window.open('about:blank#' + i)">Open</button>`;
 
 type Frame = Extract<ViewerOut, { t: "frame" }>;
 type State = Extract<ViewerOut, { t: "state" }>;
@@ -37,6 +42,8 @@ beforeAll(async () => {
     "/size": SIZE,
     "/alert": ALERT,
     "/button": BUTTON,
+    "/anim": ANIM,
+    "/popups": POPUPS,
     "/slow": (_req, res) => {
       releaseSlow = () => res.writeHead(200, { "content-type": "text/html" }).end(BUTTON);
       slowHit();
@@ -137,7 +144,58 @@ describe("browser daemon viewer", () => {
     const r = await request(d.socketPath, { op: "click_at", x: 30, y: 20 });
     expect(r.ok).toBe(true);
     expect(await clicked).toMatchObject({ lastClick: { x: 30, y: 20 } });
+    const seq = ((await clicked) as State).lastClick?.seq ?? 0;
+    expect(seq).toBeGreaterThan(0);
+    // every agent click gets a new sequence number, so a viewer flashes only new clicks
+    const again = v.after((m) => isState(m) && (m.lastClick?.seq ?? 0) > seq);
+    expect((await request(d.socketPath, { op: "click_at", x: 30, y: 20 })).ok).toBe(true);
+    expect(((await again) as State).lastClick).toEqual({ x: 30, y: 20, seq: seq + 1 });
     await v.close();
+  });
+
+  it("caps a viewer at 5 frames per second on an animated page", async () => {
+    await request(d.socketPath, { op: "navigate", url: `${fx.url}/anim` });
+    const v = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 });
+    await v.next(isFrame);
+    const from = v.messages.length;
+    await new Promise((r) => setTimeout(r, 2000));
+    const frames = v.messages.slice(from).filter(isFrame).length;
+    expect(frames).toBeGreaterThan(2);
+    // 5 per second over 2 s, one of slack for the timing of the window
+    expect(frames).toBeLessThanOrEqual(11);
+    await v.close();
+  });
+
+  it("popups count toward the tab limit; extras are closed with a note", async () => {
+    await request(d.socketPath, { op: "navigate", url: `${fx.url}/button` });
+    for (;;) {
+      const list = await request(d.socketPath, { op: "tabs", action: "list" });
+      if (!list.ok) throw new Error(list.message);
+      if ((list.text ?? "").split("\n").length >= MAX_TABS - 1) break;
+      await request(d.socketPath, { op: "tabs", action: "open" });
+    }
+    await request(d.socketPath, { op: "navigate", url: `${fx.url}/popups` });
+    const snap = await request(d.socketPath, { op: "snapshot" });
+    if (!snap.ok) throw new Error(snap.message);
+    const ref = snap.text?.match(/button "Open" \[ref=((?:f\d+)?e\d+)\]/)?.[1] ?? "";
+    const r = await request(d.socketPath, { op: "click", ref });
+    if (!r.ok) throw new Error(r.message);
+    await vi.waitFor(async () => {
+      const list = await request(d.socketPath, { op: "tabs", action: "list" });
+      if (!list.ok) throw new Error(list.message);
+      expect((list.text ?? "").split("\n")).toHaveLength(MAX_TABS);
+    });
+    const later = await request(d.socketPath, { op: "snapshot" });
+    const notes = `${r.ok ? (r.text ?? "") : ""}\n${later.ok ? (later.text ?? "") : ""}`;
+    expect(notes).toMatch(/popup.*closed/i);
+    // back to one tab for the tests after this one
+    for (;;) {
+      const list = await request(d.socketPath, { op: "tabs", action: "list" });
+      if (!list.ok) throw new Error(list.message);
+      const ids = (list.text ?? "").split("\n").map((l) => l.split(/[: ]/)[0] ?? "");
+      if (ids.length <= 1) break;
+      await request(d.socketPath, { op: "tabs", action: "close", tabId: ids[0] });
+    }
   });
 
   it("a request queued behind a slow one is refused when a takeover begins meanwhile", async () => {
@@ -204,6 +262,40 @@ describe("browser daemon handoff notice", () => {
     await back;
     await v.close();
     await v2.close();
+  });
+});
+
+describe("browser daemon handoff answered during a takeover", () => {
+  it("handoff_clear with handback ends the takeover before the snapshot", async () => {
+    const v = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 });
+    await v.next(isState);
+    const taken = v.after((m) => isState(m) && m.control === "user");
+    v.send({ t: "takeover" });
+    await taken;
+    await request(d.socketPath, { op: "handoff_notice", callId: "hb", message: "Sign in" });
+    const back = v.after((m) => isState(m) && m.control === "agent" && m.handoff === undefined);
+    expect(
+      await request(d.socketPath, { op: "handoff_clear", callId: "hb", handback: true }),
+    ).toMatchObject({ ok: true });
+    await back;
+    const snap = await request(d.socketPath, { op: "snapshot" });
+    expect(snap.ok && typeof snap.userControlledSince === "string").toBe(true);
+    await v.close();
+  });
+
+  it("a clear without handback leaves the takeover", async () => {
+    const v = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 });
+    await v.next(isState);
+    const taken = v.after((m) => isState(m) && m.control === "user");
+    v.send({ t: "takeover" });
+    await taken;
+    await request(d.socketPath, { op: "handoff_notice", callId: "nb", message: "Sign in" });
+    await request(d.socketPath, { op: "handoff_clear", callId: "nb" });
+    expect(d.daemon.state.control).toBe("user");
+    const back = v.after((m) => isState(m) && m.control === "agent");
+    v.send({ t: "handback" });
+    await back;
+    await v.close();
   });
 });
 

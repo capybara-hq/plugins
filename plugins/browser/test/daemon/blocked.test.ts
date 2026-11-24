@@ -67,6 +67,21 @@ describe("browser daemon blocked hosts", () => {
     });
   });
 
+  it("an address-bar navigation the proxy refuses during a takeover reaches the viewer", async () => {
+    const v = await openViewer(d.socketPath, { maxWidth: 480, maxHeight: 300 });
+    await v.next((m) => m.t === "state");
+    const taken = v.after((m) => m.t === "state" && m.control === "user");
+    v.send({ t: "takeover" });
+    await taken;
+    const blocked = v.after((m) => m.t === "blocked");
+    v.send({ t: "nav", url: "https://blocked.test/typed" });
+    expect(await blocked).toMatchObject({ t: "blocked", host: "blocked.test" });
+    const back = v.after((m) => m.t === "state" && m.control === "agent");
+    v.send({ t: "handback" });
+    await back;
+    await v.close();
+  });
+
   it("a plain http navigation the proxy refuses is reported too", async () => {
     const r = await request(d.socketPath, { op: "navigate", url: "http://blocked.test/x" });
     expect(r).toMatchObject({ ok: false, error: "blocked", blockedHosts: ["blocked.test"] });

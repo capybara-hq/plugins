@@ -2,7 +2,12 @@
 // viewer stream of the device reaches, so it alone decides who controls the browser. Timers are
 // allowed here: the daemon runs inside the device, not in the kernel.
 
-import { HANDOFF_MAX_CHARS, IDLE_STOP_MS, TAKEOVER_GRACE_MS } from "./protocol.js";
+import {
+  HANDOFF_KEEPALIVE_MS,
+  HANDOFF_MAX_CHARS,
+  IDLE_STOP_MS,
+  TAKEOVER_GRACE_MS,
+} from "./protocol.js";
 
 /** Time source and timers (injected in tests). */
 export interface Clock {
@@ -45,6 +50,8 @@ export class DaemonState {
   private graceTimer: unknown;
   private disposed = false;
   private pendingHandoff: { callId: string; message: string } | undefined;
+  /** When the first notice of the pending handoff arrived (the keepalive counts from it). */
+  private handoffSince: number | undefined;
 
   constructor(opts: DaemonStateOptions) {
     this.clock = opts.clock ?? systemClock;
@@ -87,24 +94,33 @@ export class DaemonState {
     const m =
       message.length <= HANDOFF_MAX_CHARS ? message : `${message.slice(0, HANDOFF_MAX_CHARS - 1)}…`;
     this.pendingHandoff = { callId, message: m };
+    this.handoffSince ??= this.clock.now();
     this.emit();
+    this.armIdle();
   }
 
   /** Clears the pending handoff when it is `callId`'s; a stale clear changes nothing. */
   clearHandoff(callId: string): void {
     if (this.pendingHandoff?.callId !== callId) return;
-    this.pendingHandoff = undefined;
-    this.emit();
+    this.endHandoff();
   }
 
   /**
    * Drops the pending handoff whatever its callId: the next agent tool request means its run has
-   * moved on (an aborted run never sends handoff_clear).
+   * moved on (an aborted run never sends handoff_clear). This is device-wide on purpose: a tool
+   * call from any conversation of the device drops it, since they are all the owner's
+   * conversations and the browser is one.
    */
   dropHandoff(): void {
     if (this.pendingHandoff === undefined) return;
+    this.endHandoff();
+  }
+
+  private endHandoff(): void {
     this.pendingHandoff = undefined;
+    this.handoffSince = undefined;
     this.emit();
+    this.armIdle();
   }
 
   takeover(): void {
@@ -177,14 +193,25 @@ export class DaemonState {
     this.graceTimer = undefined;
   }
 
-  /** (Re)starts the idle countdown when nothing is in use; stops it otherwise. */
+  /**
+   * (Re)starts the idle countdown when nothing is in use; stops it otherwise. A pending handoff
+   * keeps the daemon running until {@link HANDOFF_KEEPALIVE_MS} after its notice (the person is
+   * still to answer it); the device's idle suspension may still stop the device sooner.
+   */
   private armIdle(): void {
     if (this.idleTimer !== undefined) this.clock.cancel(this.idleTimer);
     this.idleTimer = undefined;
     if (this.disposed || this.viewers > 0 || this.inflight > 0) return;
-    this.idleTimer = this.clock.schedule(() => {
-      this.idleTimer = undefined;
-      this.onIdle();
-    }, this.idleMs);
+    const keepalive =
+      this.handoffSince === undefined
+        ? 0
+        : this.handoffSince + HANDOFF_KEEPALIVE_MS - this.clock.now();
+    this.idleTimer = this.clock.schedule(
+      () => {
+        this.idleTimer = undefined;
+        this.onIdle();
+      },
+      Math.max(this.idleMs, keepalive),
+    );
   }
 }

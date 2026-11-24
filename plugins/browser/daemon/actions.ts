@@ -276,7 +276,9 @@ export class BrowserSession {
   private nextId = 1;
   private active: string | undefined;
   private queue: Promise<unknown> = Promise.resolve();
-  lastClick: { x: number; y: number } | undefined;
+  /** The agent's latest click; `seq` grows with every click (viewers flash only new ones). */
+  lastClick: { x: number; y: number; seq: number } | undefined;
+  private clickSeq = 0;
 
   constructor(
     ctx: BrowserContext,
@@ -300,6 +302,15 @@ export class BrowserSession {
     ctx.setDefaultTimeout(ACTION_TIMEOUT_MS);
     ctx.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
     ctx.on("page", (p) => {
+      // A popup counts toward MAX_TABS like any tab (openTab refuses before it opens one): one
+      // past the limit is closed at once and the agent told.
+      if (!this.ids.has(p) && this.pages.size >= MAX_TABS) {
+        p.close().catch(() => undefined);
+        this.note(
+          `The page opened a popup, but the browser keeps at most ${MAX_TABS} tabs, so the popup was closed; close a tab and retry if it was needed.`,
+        );
+        return;
+      }
       this.track(p);
       // a popup the page opened comes to the front, as in a desktop browser
       this.active = this.ids.get(p);
@@ -667,7 +678,8 @@ export class BrowserSession {
       }
       if (c.blocked.size > 0 && code !== "no_such_ref" && code !== "taken_over") {
         code = "blocked";
-        message = `The device's network settings block ${[...c.blocked].join(", ")}. Ask the user to allow the host in the browser panel, then retry.`;
+        // the plugin server adds the one next step (the network ask), so no advice here
+        message = `The device's network settings block ${[...c.blocked].join(", ")}.`;
       }
       reply = { ok: false, error: code, message, blockedHosts: [...c.blocked] };
       this.unreported.unshift(...late);
@@ -788,6 +800,10 @@ export class BrowserSession {
     }
   }
 
+  private markClick(x: number, y: number): void {
+    this.lastClick = { x, y, seq: ++this.clickSeq };
+  }
+
   private async goto(page: Page, url: string): Promise<void> {
     let res: Awaited<ReturnType<Page["goto"]>>;
     // registered first: Playwright may reject the navigation just before it emits the download
@@ -849,7 +865,7 @@ export class BrowserSession {
           return {};
         }
         const at = await this.centerOf(loc);
-        if (at !== undefined) this.lastClick = at;
+        if (at !== undefined) this.markClick(at.x, at.y);
         await this.settled(page, () => loc.click());
         return {};
       }
@@ -896,7 +912,7 @@ export class BrowserSession {
       case "type_at": {
         const page = await this.activePage();
         this.checkPoint(req.x, req.y);
-        this.lastClick = { x: Math.round(req.x), y: Math.round(req.y) };
+        this.markClick(Math.round(req.x), Math.round(req.y));
         await this.settled(page, () => page.mouse.click(req.x, req.y));
         if (req.op === "type_at") await page.keyboard.type(req.text);
         return {};

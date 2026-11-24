@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { IDLE_STOP_MS, TAKEOVER_GRACE_MS } from "../../daemon/protocol.js";
+import { HANDOFF_KEEPALIVE_MS, IDLE_STOP_MS, TAKEOVER_GRACE_MS } from "../../daemon/protocol.js";
 import { type Clock, DaemonState } from "../../daemon/state.js";
 
 class FakeClock implements Clock {
@@ -95,5 +95,29 @@ describe("daemon state", () => {
     expect(state.control).toBe("agent");
     expect(state.userControlledSince).toBeUndefined();
     expect(changes).toBe(2);
+  });
+});
+
+describe("daemon state: a pending handoff", () => {
+  it("keeps the daemon alive, at most 24 h", () => {
+    const { clock, state, idle } = make();
+    state.noticeHandoff("c1", "Sign in");
+    clock.advance(IDLE_STOP_MS * 4);
+    expect(idle()).toBe(0);
+    clock.advance(HANDOFF_KEEPALIVE_MS - IDLE_STOP_MS * 4 - 1);
+    expect(idle()).toBe(0);
+    clock.advance(1);
+    expect(idle()).toBe(1);
+  });
+
+  it("idles as usual once the handoff is cleared", () => {
+    const { clock, state, idle } = make();
+    state.noticeHandoff("c1", "Sign in");
+    clock.advance(IDLE_STOP_MS * 2);
+    state.clearHandoff("c1");
+    clock.advance(IDLE_STOP_MS - 1);
+    expect(idle()).toBe(0);
+    clock.advance(1);
+    expect(idle()).toBe(1);
   });
 });

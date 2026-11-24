@@ -3,8 +3,10 @@
 // playwright-core's registry, launched with the profile `<state>/profile` (launchPersistentContext,
 // the only way Playwright takes a user data directory) over a CDP pipe, never a debugging port.
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { BrowserContext } from "playwright-core";
 import { VIEWPORT } from "./protocol.js";
 
@@ -30,13 +32,81 @@ function envValue(env: Record<string, string | undefined>, name: string): string
   return v === undefined || v === "" ? undefined : v;
 }
 
-/** The launch for a state directory and environment (pure). */
-export function chromiumLaunchPlan(opts: {
-  stateDir: string;
-  env: Record<string, string | undefined>;
-  platform: NodeJS.Platform;
-  browsersPath?: string;
-}): LaunchPlan {
+/**
+ * The revision of chromium-headless-shell this build's playwright-core installs (its
+ * browsers.json): next to the bundle (`vendor/playwright-core/`), else the installed package.
+ */
+export function headlessShellRevision(): string | undefined {
+  const candidates = [new URL("./vendor/playwright-core/browsers.json", import.meta.url)];
+  try {
+    const pkg = createRequire(import.meta.url).resolve("playwright-core/package.json");
+    candidates.push(new URL(`file://${join(dirname(pkg), "browsers.json")}`));
+  } catch {
+    // not installed beside the source either
+  }
+  for (const file of candidates) {
+    try {
+      const json = JSON.parse(readFileSync(fileURLToPath(file), "utf8")) as {
+        browsers?: { name?: unknown; revision?: unknown }[];
+      };
+      const rev = json.browsers?.find((b) => b.name === "chromium-headless-shell")?.revision;
+      if (typeof rev === "string" && rev !== "") return rev;
+    } catch {
+      // try the next one
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The hosts Playwright downloads Chromium from: the configured mirror
+ * (PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST / PLAYWRIGHT_DOWNLOAD_HOST), else its CDN and fallback. A
+ * device whose network refuses them cannot install the browser; the daemon reports them as
+ * blocked hosts, so the person is asked to allow them.
+ */
+export function playwrightDownloadHosts(env: Record<string, string | undefined>): string[] {
+  const custom =
+    envValue(env, "PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST") ?? envValue(env, "PLAYWRIGHT_DOWNLOAD_HOST");
+  if (custom !== undefined) {
+    try {
+      return [new URL(custom.includes("://") ? custom : `https://${custom}`).hostname];
+    } catch {
+      return [];
+    }
+  }
+  return ["cdn.playwright.dev", "playwright.download.prss.microsoft.com"];
+}
+
+/**
+ * Where the browsers live: a PLAYWRIGHT_BROWSERS_PATH from the device's environment (a read-only
+ * cache in the image) when it already holds this revision's headless shell, so nothing is
+ * downloaded; otherwise the state directory, where the daemon installs it on first start.
+ */
+function browsersPathFor(
+  stateDir: string,
+  env: Record<string, string | undefined>,
+  revision: string | undefined,
+): string {
+  const cache = envValue(env, "PLAYWRIGHT_BROWSERS_PATH");
+  if (
+    cache !== undefined &&
+    revision !== undefined &&
+    existsSync(join(cache, `chromium_headless_shell-${revision}`))
+  )
+    return cache;
+  return join(stateDir, "browsers");
+}
+
+/** The launch for a state directory and environment (pure apart from the browsers cache check). */
+export function chromiumLaunchPlan(
+  opts: {
+    stateDir: string;
+    env: Record<string, string | undefined>;
+    platform: NodeJS.Platform;
+    browsersPath?: string;
+  },
+  revision: string | undefined = headlessShellRevision(),
+): LaunchPlan {
   const args = ["--headless", "--use-mock-keychain"];
   // macOS: chrome-headless-shell in one process (the local sandbox does not run the full browser's
   // helper processes); spike: stable for navigation, input, screencast and tabs.
@@ -70,7 +140,7 @@ export function chromiumLaunchPlan(opts: {
     }
   }
   return {
-    browsersPath: opts.browsersPath ?? join(opts.stateDir, "browsers"),
+    browsersPath: opts.browsersPath ?? browsersPathFor(opts.stateDir, opts.env, revision),
     profileDir: join(opts.stateDir, "profile"),
     downloadsTmp: join(opts.stateDir, "downloads-tmp"),
     args,

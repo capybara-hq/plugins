@@ -36,9 +36,11 @@ async function main(): Promise<void> {
   process.stderr.write(`browser daemon: listening on ${socketPath}\n`);
   daemon.ready.then(
     () => process.stderr.write("browser daemon: Chromium is running\n"),
+    // the daemon stays up: every request answers the cause and launches Chromium again
     (e: unknown) => {
-      process.stderr.write(`browser daemon: Chromium could not start: ${String(e)}\n`);
-      stop(1, "no Chromium");
+      process.stderr.write(
+        `browser daemon: Chromium could not start (retried on use): ${String(e)}\n`,
+      );
     },
   );
 }

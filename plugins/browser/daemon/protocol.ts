@@ -42,8 +42,18 @@ export const DEFAULT_FRAME_MAX_BYTES = 256 * 1024;
 /** The longest handoff message the daemon keeps. */
 export const HANDOFF_MAX_CHARS = 4096;
 
-/** The most tabs the browser keeps open. */
+/** The most tabs the browser keeps open (popups count too). */
 export const MAX_TABS = 10;
+
+/**
+ * The longest a pending handoff keeps an otherwise idle daemon running (the person may take a
+ * while to sign in). The device's own idle suspension can still end it sooner.
+ */
+export const HANDOFF_KEEPALIVE_MS = 24 * 60 * 60_000;
+
+/** The failure reply's message when a reply does not fit in one service message. */
+export const REPLY_TOO_LARGE_MESSAGE =
+  "The reply was too large to send; ask for less (a smaller maxBytes).";
 
 export type ToolRequest =
   | { op: "navigate"; url?: string; action?: "back" | "forward" | "reload" }
@@ -62,10 +72,11 @@ export type ToolRequest =
   /**
    * The plugin server's handoff bookkeeping (not agent input, so allowed during a takeover): the
    * daemon keeps at most one pending handoff, the latest notice wins, and a clear removes it only
-   * when its callId matches. Viewers see it in `state.handoff`.
+   * when its callId matches. Viewers see it in `state.handoff`. `handback` (the person answered
+   * Done) also ends a takeover, so the request that follows is not refused as taken over.
    */
   | { op: "handoff_notice"; callId: string; message: string }
-  | { op: "handoff_clear"; callId: string };
+  | { op: "handoff_clear"; callId: string; handback?: boolean };
 
 export type ToolErrorCode = "taken_over" | "no_such_ref" | "timeout" | "blocked" | "failed";
 
@@ -116,7 +127,8 @@ export type ViewerOut =
       loading: boolean;
       secure: boolean;
       control: "agent" | "user";
-      lastClick?: { x: number; y: number };
+      /** The agent's latest click; `seq` grows with every click, so a viewer flashes only new ones. */
+      lastClick?: { x: number; y: number; seq: number };
       /** The pending handoff question, if any (message at most HANDOFF_MAX_CHARS). */
       handoff?: { callId: string; message: string };
     }
