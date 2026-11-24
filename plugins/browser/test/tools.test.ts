@@ -15,11 +15,16 @@ import {
   validateToolSpec,
 } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
-import type { ToolReply, ToolRequest } from "../daemon/protocol.js";
-import { type BrowserDeps, NOT_OWNER_MESSAGE, TAKEN_OVER_MESSAGE } from "../src/browser.js";
+import { REPLY_TOO_LARGE_MESSAGE, type ToolReply, type ToolRequest } from "../daemon/protocol.js";
+import {
+  BLOCKED_NEXT_STEP,
+  type BrowserDeps,
+  NOT_OWNER_MESSAGE,
+  TAKEN_OVER_MESSAGE,
+} from "../src/browser.js";
 import { registerHandoffTool } from "../src/handoff.js";
 import { serviceSpecLoader } from "../src/service.js";
-import { registerBrowserTools } from "../src/tools.js";
+import { registerBrowserTools, SCREENSHOT_MAX_BYTES } from "../src/tools.js";
 
 const SPEC: DeviceServiceSpec = {
   name: "browser",
@@ -232,6 +237,52 @@ describe("browser tools", () => {
     await expect(g.run("browser_snapshot", {})).rejects.toThrow(/was not started/);
   });
 
+  it("screenshot retries once with half the bytes when the reply was too large", async () => {
+    const sizes: number[] = [];
+    const f = fake((req) => {
+      if (req.op !== "screenshot") return { ok: true, page: PAGE, blockedHosts: [] };
+      sizes.push(req.maxBytes);
+      return sizes.length === 1
+        ? { ok: false, error: "failed", message: REPLY_TOO_LARGE_MESSAGE, blockedHosts: [] }
+        : { ok: true, page: PAGE, blockedHosts: [], image: "AAAA" };
+    });
+    const r = (await f.run("browser_screenshot", {})) as ToolResult;
+    expect(r.content).toContainEqual({ type: "image", mimeType: "image/jpeg", data: "AAAA" });
+    expect(sizes).toEqual([SCREENSHOT_MAX_BYTES, SCREENSHOT_MAX_BYTES / 2]);
+    // once only
+    const g = fake(() => ({
+      ok: false,
+      error: "failed",
+      message: REPLY_TOO_LARGE_MESSAGE,
+      blockedHosts: [],
+    }));
+    await expect(g.run("browser_screenshot", {})).rejects.toThrow(/too large/);
+    expect(g.requests).toHaveLength(2);
+  });
+
+  it("a blocked host gets one next step", async () => {
+    const f = fake(() => ({
+      ok: false,
+      error: "blocked",
+      message: "The device's network settings block x.test.",
+      blockedHosts: ["x.test"],
+    }));
+    const e = await f.run("browser_navigate", { url: "https://x.test" }).catch((x: unknown) => x);
+    expect((e as Error).message).toBe(
+      `The device's network settings block x.test. ${BLOCKED_NEXT_STEP}`,
+    );
+  });
+
+  it("a service start that fails has its own text", async () => {
+    const f = fake();
+    f.fail(new Error("spawn failed"));
+    const e = await f.run("browser_snapshot", {}).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ToolError);
+    expect((e as Error).message).toBe(
+      "The browser could not start in the device; retry, and ask the user to check the device if it keeps failing.",
+    );
+  });
+
   it("screenshot returns an image block", async () => {
     const f = fake(() => ({
       ok: true,
@@ -318,7 +369,8 @@ describe("browser_handoff", () => {
       call({ resume: { state: first.state, answer: { done: true } } }),
     );
     expect(f.requests.slice(1).map((q) => q.op)).toEqual(["handoff_clear", "snapshot"]);
-    expect(f.requests[1]).toEqual({ op: "handoff_clear", callId: "call-1" });
+    // Done hands the browser back (a takeover the person still holds ends before the snapshot)
+    expect(f.requests[1]).toEqual({ op: "handoff_clear", callId: "call-1", handback: true });
     expect(textOf(r)).toContain("https://example.com/");
     expect(textOf(r)).toContain("[ref=e1]");
   });
@@ -335,6 +387,8 @@ describe("browser_handoff", () => {
       );
     }
     expect(f.requests.map((q) => q.op)).toEqual(["handoff_clear", "handoff_clear"]);
+    // a cancel leaves a takeover as it is
+    for (const q of f.requests) expect(q).toEqual({ op: "handoff_clear", callId: "call-1" });
   });
 
   it("a failed clear keeps the person's answer, unless the call was aborted", async () => {

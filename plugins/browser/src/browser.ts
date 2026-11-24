@@ -9,9 +9,14 @@ import {
   type ToolResult,
 } from "@capybara-hq/plugin-sdk";
 import type { ToolErrorCode, ToolReply, ToolRequest } from "../daemon/protocol.js";
-import { NOT_OWNER_MESSAGE, TAKEN_OVER_MESSAGE } from "./messages.js";
+import {
+  BLOCKED_NEXT_STEP,
+  NOT_OWNER_MESSAGE,
+  START_FAILED_MESSAGE,
+  TAKEN_OVER_MESSAGE,
+} from "./messages.js";
 
-export { NOT_OWNER_MESSAGE, TAKEN_OVER_MESSAGE };
+export { BLOCKED_NEXT_STEP, NOT_OWNER_MESSAGE, START_FAILED_MESSAGE, TAKEN_OVER_MESSAGE };
 
 /** The service name, declared in `permissions.deviceAccess.services`. */
 export const SERVICE = "browser";
@@ -82,9 +87,7 @@ function daemonToolError(code: ToolErrorCode, message: string): ToolError {
         `${message} Check the page with browser_snapshot, then retry or call browser_wait.`,
       );
     case "blocked":
-      return new ToolError(
-        `${message} The user is asked to allow the host; if they decline, use another site.`,
-      );
+      return new ToolError(`${message} ${BLOCKED_NEXT_STEP}`);
     default:
       return new ToolError(`${message} Check the page with browser_snapshot before retrying.`);
   }
@@ -111,14 +114,18 @@ function parseReply(bytes: Uint8Array): ToolReply {
  * ToolError (the kernel's own, e.g. the command review's refusal) as is, an abort as is, and
  * anything else as a generic retryable error (the cause goes to the log only).
  */
-function failure(deps: BrowserDeps, call: ToolCallContext, e: unknown): unknown {
+function failure(deps: BrowserDeps, call: ToolCallContext, e: unknown, starting: boolean): unknown {
   const mapped = deviceAccessToolError(e);
   if (mapped !== e) return mapped;
   if (e instanceof ToolError || (e instanceof Error && e.name === "ToolError")) return e;
   if (call.signal.aborted) return e;
-  deps.log?.warn("browser service call failed", { err: e });
+  deps.log?.warn(starting ? "browser service start failed" : "browser service call failed", {
+    err: e,
+  });
   return new ToolError(
-    "The browser service in the device failed; retry, and ask the user to check the device if it keeps failing.",
+    starting
+      ? START_FAILED_MESSAGE
+      : "The browser service in the device failed; retry, and ask the user to check the device if it keeps failing.",
   );
 }
 
@@ -137,12 +144,16 @@ export async function runRequest(
   let reply: ToolReply;
   try {
     await deps.deviceAccess.ensureService(call, await deps.serviceSpec());
+  } catch (e) {
+    throw failure(deps, call, e, true);
+  }
+  try {
     const body = new TextEncoder().encode(JSON.stringify(req));
     reply = parseReply(
       await deps.deviceAccess.request(call, { service: SERVICE, body, timeoutMs }),
     );
   } catch (e) {
-    throw failure(deps, call, e);
+    throw failure(deps, call, e, false);
   }
   const hosts = Array.isArray(reply.blockedHosts)
     ? reply.blockedHosts.filter((h): h is string => typeof h === "string" && h !== "")

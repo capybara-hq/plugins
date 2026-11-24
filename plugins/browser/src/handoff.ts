@@ -70,13 +70,18 @@ export function handoffHandler(deps: BrowserDeps): ToolHandler {
     // the banner goes either way; a failed clear never hides the person's answer (a device that
     // is gone fails the snapshot below with its own error)
     assertOwner(call);
-    await runRequest(deps, call, { op: "handoff_clear", callId: call.callId }).catch(
-      (e: unknown) => {
-        if (!(e instanceof ToolError)) throw e;
-      },
-    );
     const answer = call.resume.answer;
-    if (answer === null || answer.done !== true)
+    const done = answer !== null && answer.done === true;
+    // Done also hands the browser back: a takeover the person still holds would refuse the
+    // snapshot below (and Done means they are finished with the browser)
+    await runRequest(deps, call, {
+      op: "handoff_clear",
+      callId: call.callId,
+      ...(done ? { handback: true } : {}),
+    }).catch((e: unknown) => {
+      if (!(e instanceof ToolError)) throw e;
+    });
+    if (!done)
       throw new ToolError(
         "The user cancelled the handoff; ask the user how to continue, or try another approach.",
       );

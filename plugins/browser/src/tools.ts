@@ -3,7 +3,7 @@
 // declare `ask`, so the conversation's permission profile decides.
 import { ToolError, type ToolHandler, type ToolSpec } from "@capybara-hq/plugin-sdk";
 import type { ToolRequest } from "../daemon/protocol.js";
-import { VIEWPORT } from "../daemon/protocol.js";
+import { REPLY_TOO_LARGE_MESSAGE, VIEWPORT } from "../daemon/protocol.js";
 import { type BrowserDeps, REQUEST_TIMEOUT_MS, runRequest, toResult } from "./browser.js";
 
 /**
@@ -383,16 +383,26 @@ export function registerBrowserTools(
     SNAPSHOT,
     handler(deps, () => ({ op: "snapshot" })),
   );
-  ctx.tools.register(
-    SCREENSHOT,
-    handler(deps, (i) =>
-      defined({
-        op: "screenshot" as const,
-        fullPage: i.fullPage === true ? true : undefined,
-        maxBytes: SCREENSHOT_MAX_BYTES,
-      }),
-    ),
-  );
+  ctx.tools.register(SCREENSHOT, async (input, call) => {
+    const i = obj(input);
+    const shot = (maxBytes: number) =>
+      runRequest(
+        deps,
+        call,
+        defined({
+          op: "screenshot" as const,
+          fullPage: i.fullPage === true ? true : undefined,
+          maxBytes,
+        }),
+      );
+    try {
+      return toResult(await shot(SCREENSHOT_MAX_BYTES));
+    } catch (e) {
+      // a reply that did not fit the service message: once more at half the size
+      if (!(e instanceof ToolError) || !e.message.startsWith(REPLY_TOO_LARGE_MESSAGE)) throw e;
+      return toResult(await shot(Math.floor(SCREENSHOT_MAX_BYTES / 2)));
+    }
+  });
   ctx.tools.register(
     CLICK,
     handler(deps, (i) => ({
