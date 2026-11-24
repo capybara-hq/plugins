@@ -1,5 +1,13 @@
 # @capybara-hq/plugin-browser
 
+## 0.1.0-rc.3
+
+### Patch Changes
+
+- 939f780: The headless shell download host list includes `storage.googleapis.com`, where the Playwright CDN
+  redirects it, so a device allowlist that refuses it gets the ask instead of a bare "Failed to
+  download"; a blocked host's next step no longer claims the user is always asked.
+
 ## 0.1.0-rc.2
 
 ### Patch Changes
