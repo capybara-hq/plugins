@@ -1,19 +1,28 @@
 import { DeviceOfflineError, type DeviceStream } from "@capybara-hq/plugin-sdk";
-import { runDeviceServiceConformance } from "@capybara-hq/testing";
+import { DEVICE_SERVICE_ARGV_PROBE, runDeviceServiceConformance } from "@capybara-hq/testing";
 import { describe, expect, it } from "vitest";
 import { createDeviceLocalProvider, filesDigestOf, type LocalDeviceHandle } from "../src/index.js";
 import { fakeDialIn, fakeLog, LIMITS, memoryStore, ROOTS, rejection, signal } from "./fakes.js";
 
 const DEVICE = "dev-1";
 const HANDLE: LocalDeviceHandle = { id: DEVICE, roots: ROOTS, limits: LIMITS, generation: "1" };
-const STATE_DIR = "/home/me/capybara-device/dev-1/services/echo";
+const DEVICE_DIR = "/home/me/capybara-device/dev-1";
+const STATE_DIR = `${DEVICE_DIR}/services/echo`;
 
 type Body = Record<string, unknown>;
 
-/** An in-memory machine for the service ops: a service is "running" with the files it was given. */
+/**
+ * An in-memory machine for the service ops, shaped like capybara-device's supervisor: a service is
+ * "running" with the files it was given; every status names its state directory
+ * (`<deviceDir>/services/<name>`) and its read-only code directory (`<deviceDir>/svc-files/<name>`),
+ * and the entry runs from the code directory (the conformance argv probe answers that path).
+ * `codeDir` overrides the reported code directory (invalid answers).
+ */
 function serviceMachine(opts: { oldMachine?: boolean; codeDir?: unknown } = {}) {
   const digests = new Set<string>();
-  const running = new Map<string, { startedAt: string; network: unknown }>();
+  const running = new Map<string, { startedAt: string; network: unknown; entry: string }>();
+  const codeDirOf = (name: string): unknown =>
+    opts.codeDir !== undefined ? opts.codeDir : `${DEVICE_DIR}/svc-files/${name}`;
   const requests: Body[] = [];
   const answer = (body: Body) => {
     requests.push(body);
@@ -23,13 +32,13 @@ function serviceMachine(opts: { oldMachine?: boolean; codeDir?: unknown } = {}) 
         name,
         state: r ? "running" : "stopped",
         startedAt: r?.startedAt ?? null,
-        stateDir: STATE_DIR,
-        ...(opts.codeDir !== undefined && { codeDir: opts.codeDir }),
+        stateDir: `${DEVICE_DIR}/services/${name}`,
+        codeDir: codeDirOf(name),
       };
     };
     switch (body.op) {
       case "service.ensure": {
-        const spec = body.spec as { name: string; files?: Record<string, string> };
+        const spec = body.spec as { name: string; entry?: string; files?: Record<string, string> };
         // Like capybara-device: an ifRunning ensure carries only the name and starts nothing.
         if (body.ifRunning === true) {
           if (Object.keys(spec).join() !== "name" || "filesDigest" in body)
@@ -49,7 +58,11 @@ function serviceMachine(opts: { oldMachine?: boolean; codeDir?: unknown } = {}) 
             return { ok: false, error: { kind: "files_needed", message: "send the files" } };
         }
         if (!running.has(spec.name) && body.ifRunning !== true)
-          running.set(spec.name, { startedAt: new Date().toISOString(), network: body.network });
+          running.set(spec.name, {
+            startedAt: new Date().toISOString(),
+            network: body.network,
+            entry: spec.entry ?? "",
+          });
         return { ok: true, result: status(spec.name) };
       }
       case "service.stop":
@@ -58,8 +71,13 @@ function serviceMachine(opts: { oldMachine?: boolean; codeDir?: unknown } = {}) 
       case "service.status":
         return { ok: true, result: status(body.name as string) };
       case "service.request": {
-        if (!running.has(body.name as string))
-          return { ok: false, error: { kind: "error", message: "service is not running" } };
+        const r = running.get(body.name as string);
+        if (!r) return { ok: false, error: { kind: "error", message: "service is not running" } };
+        const asked = Buffer.from(body.body as string, "base64").toString("utf8");
+        if (asked === DEVICE_SERVICE_ARGV_PROBE) {
+          const argv1 = `${String(codeDirOf(body.name as string))}/${r.entry}`;
+          return { ok: true, result: { body: Buffer.from(argv1).toString("base64") } };
+        }
         return { ok: true, result: { body: body.body } };
       }
       default:
