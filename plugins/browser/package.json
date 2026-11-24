@@ -22,11 +22,13 @@
   },
   "files": [
     "dist",
+    "ui",
     "README.md"
   ],
   "scripts": {
     "build": "tsc -b",
-    "build:daemon": "tsx daemon/build.ts"
+    "build:daemon": "tsx daemon/build.ts",
+    "build:ui": "tsx build-ui.ts"
   },
   "dependencies": {
     "@capybara-hq/plugin-sdk": "^0.1.0-rc.69"
