@@ -195,6 +195,9 @@ const sameFile = (a: { dev: number; ino: number }, b: { dev: number; ino: number
 const REF_RE = /^(f\d+)?e\d+$/;
 const PROXY_FAILURE_RE = /ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED/;
 
+/** Playwright's error for a navigation another one to a network error page interrupted. */
+const ERROR_PAGE_INTERRUPT_RE = /is interrupted by another navigation to "chrome-error:/;
+
 /** Whether `e` is Playwright's timeout. */
 const isTimeout = (e: unknown) => e instanceof Error && e.name === "TimeoutError";
 
@@ -1306,7 +1309,17 @@ export class BrowserSession {
     const deadline = Date.now() + this.navigationTimeoutMs;
     const watch = new NavWatch(page, url, () => this.pendingNavs.get(page));
     try {
-      res = await page.goto(url, { waitUntil: "domcontentloaded" });
+      try {
+        res = await page.goto(url, { waitUntil: "domcontentloaded" });
+      } catch (e) {
+        // the error page of the tab's previous failed navigation commits late (Linux full
+        // build): it interrupts this one before it started, so this one runs again once
+        if (!ERROR_PAGE_INTERRUPT_RE.test(firstLine(e))) throw e;
+        res = await page.goto(url, {
+          waitUntil: "domcontentloaded",
+          timeout: Math.max(1, deadline - Date.now()),
+        });
+      }
     } catch (e) {
       const msg = firstLine(e);
       // a URL that is a file download: it is saved and reported (onDownload), not an error

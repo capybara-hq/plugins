@@ -135,6 +135,8 @@ describe("browser daemon unreachable pages", () => {
   });
 
   it("a page answered with 204 says so at once instead of an abort", async () => {
+    // right after the failed navigation of the test before: on the Linux build its error page
+    // commits late and must not interrupt this navigation
     const before = await request(d.socketPath, { op: "navigate", url: `${fx.url}/page` });
     expect(before.ok ? "ok" : before.message).toBe("ok");
     const r = await request(d.socketPath, { op: "navigate", url: `${fx.url}/empty` });
