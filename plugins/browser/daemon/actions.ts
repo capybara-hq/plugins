@@ -212,6 +212,10 @@ const sameFile = (a: { dev: number; ino: number }, b: { dev: number; ino: number
 const REF_RE = /^(f\d+)?e\d+$/;
 const PROXY_FAILURE_RE = /ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED/;
 
+/** A wait for a page event in a conversation that has no tab (wait never opens one). */
+export const NO_TAB_TO_WAIT_ON =
+  "This conversation has no browser tab to wait on; call browser_navigate to open a page first.";
+
 /** Playwright's error for a navigation that a network error page's late commit interrupted. */
 const ERROR_PAGE_INTERRUPT_RE = /is interrupted by another navigation to "chrome-error:/;
 
@@ -668,12 +672,15 @@ export class BrowserSession {
   /** Tabs being opened by the session (not yet tracked): they count toward the device cap. */
   private reserved = 0;
   /**
-   * Tabs of an idle-closed conversation whose close is under way: no conversation owns, claims,
-   * adopts or lists them any more.
+   * Tabs whose close is under way (an idle-closed conversation's, an evicted one): no
+   * conversation owns, claims, adopts or lists them any more, and the device cap leaves them out.
    */
   private readonly closing = new Set<string>();
   /** When an agent request last acted on each tab (the eviction's least recently used tab). */
   private readonly tabUsedAt = new Map<string, number>();
+  /** When each tab went to its owner (the next active tab after a loss is the newest). */
+  private readonly gainedAt = new Map<string, number>();
+  private gainSeq = 0;
   /** Order of the conversations' last acting requests (a viewer's default shown tab). */
   private readonly actedSeq = new Map<string, number>();
   private actSeq = 0;
@@ -720,7 +727,7 @@ export class BrowserSession {
         void this.allocate(async () => {
           const id = this.ids.get(p);
           if (id === undefined || this.owners.has(id) || p.isClosed()) return;
-          if (this.pages.size > MAX_TABS) await p.close().catch(() => undefined);
+          if (this.live().length > MAX_TABS) await p.close().catch(() => undefined);
         });
       });
     });
@@ -831,6 +838,7 @@ export class BrowserSession {
   private assign(tabId: string, to: TabOwner): TabOwner | undefined {
     const before = this.owners.get(tabId);
     this.owners.set(tabId, to);
+    this.gainedAt.set(tabId, ++this.gainSeq);
     if (before !== undefined && before.owner !== to.owner) this.activeMovedOff(before.owner, tabId);
     return before;
   }
@@ -841,12 +849,24 @@ export class BrowserSession {
    */
   private activeMovedOff(conversationId: string, tabId: string): void {
     if (this.activeOf.get(conversationId) !== tabId) return;
-    const next = this.tabsOf(conversationId)
-      .filter((id) => id !== tabId)
-      .at(-1);
+    const next = this.newestTabOf(conversationId, tabId);
     if (next === undefined) this.activeOf.delete(conversationId);
     else this.activeOf.set(conversationId, next);
     this.emit({ type: "active", conversationId });
+  }
+
+  /**
+   * The conversation's tab it gained last (opened, claimed, adopted or restored), besides
+   * `except`.
+   */
+  private newestTabOf(conversationId: string, except?: string): string | undefined {
+    let best: string | undefined;
+    for (const id of this.tabsOf(conversationId)) {
+      if (id === except) continue;
+      if (best === undefined || (this.gainedAt.get(id) ?? 0) > (this.gainedAt.get(best) ?? 0))
+        best = id;
+    }
+    return best;
   }
 
   /** Runs a tab allocation (claim, open, eviction) one at a time across conversations. */
@@ -864,7 +884,7 @@ export class BrowserSession {
   async pageFor(conversationId: string, root: string): Promise<Page> {
     const cur = this.currentPage(conversationId);
     if (cur !== undefined) return cur;
-    const own = this.tabsOf(conversationId).at(-1);
+    const own = this.newestTabOf(conversationId);
     if (own !== undefined) {
       this.setActive(conversationId, own);
       const page = this.pageById(own);
@@ -875,13 +895,16 @@ export class BrowserSession {
       claim = this.allocate(async () => {
         // an adopt beside the queue may have given the conversation a tab meanwhile
         const now =
-          this.currentPage(conversationId) ?? this.pageById(this.tabsOf(conversationId).at(-1));
+          this.currentPage(conversationId) ?? this.pageById(this.newestTabOf(conversationId));
         if (now !== undefined) {
           this.setActive(conversationId, this.tabIdOf(now));
           return now;
         }
+        // only the start's blank tab: another unowned tab may show a former owner's page
         const unowned = this.live().find(
-          ([id]) => !this.owners.has(id) && !this.usage.tabParked(id),
+          ([id, p]) =>
+            isStartBlank({ owner: this.owners.get(id)?.owner, url: p.url() }) &&
+            !this.usage.tabParked(id),
         );
         if (unowned !== undefined) {
           const [id, page] = unowned;
@@ -909,7 +932,7 @@ export class BrowserSession {
   private async openLocked(conversationId: string, root: string): Promise<Page> {
     const own = this.countOf(conversationId);
     if (own >= MAX_TABS_PER_CONVERSATION) throw new ActionError("failed", CONVERSATION_CAP_MESSAGE);
-    if (this.pages.size + this.reserved >= MAX_TABS && !(await this.evict(conversationId)))
+    if (this.live().length + this.reserved >= MAX_TABS && !(await this.evict(conversationId)))
       throw new ActionError("failed", deviceCapMessage(own));
     this.reserved++;
     let page: Page;
@@ -937,7 +960,7 @@ export class BrowserSession {
     const live = this.live().filter(([id]) => !this.usage.tabParked(id));
     const unowned = live.find(([id]) => !this.owners.has(id));
     if (unowned !== undefined) {
-      await unowned[1].close().catch(() => undefined);
+      await this.closeEvicted(unowned[0], unowned[1]);
       return true;
     }
     const owners = new Set<string>();
@@ -966,9 +989,20 @@ export class BrowserSession {
         )[0] ?? [];
     if (tabId === undefined || page === undefined) return false;
     const title = clip(this.titles.get(tabId) ?? "", OTHER_TITLE_CHARS) || "no title";
-    await page.close().catch(() => undefined);
+    await this.closeEvicted(tabId, page);
     this.noteTo(victim, tabEvicted(tabId, title));
     return true;
+  }
+
+  /**
+   * Closes an evicted tab, closing from the start: no request or adopt reaches it while its close
+   * runs (the close handler forgets it; a tab that would not close is kept as it was).
+   */
+  private async closeEvicted(tabId: string, page: Page): Promise<void> {
+    this.closing.add(tabId);
+    await page.close().catch(() => {
+      this.closing.delete(tabId);
+    });
   }
 
   /**
@@ -1164,6 +1198,7 @@ export class BrowserSession {
       this.favicons.delete(id);
       this.docStatus.delete(id);
       this.tabUsedAt.delete(id);
+      this.gainedAt.delete(id);
       this.clicks.delete(id);
       const o = this.owners.get(id);
       this.owners.delete(id);
@@ -1201,7 +1236,7 @@ export class BrowserSession {
     // the device cap is checked in the allocation chain, where no tab of the session's own is
     // half opened (a page opening there is not yet in `pages`)
     void this.allocate(async () => {
-      if (popup.isClosed() || this.pages.size <= MAX_TABS) return;
+      if (popup.isClosed() || this.live().length <= MAX_TABS) return;
       if (!(await this.evict(o.owner))) closeIt(`the browser keeps at most ${MAX_TABS} tabs`);
     });
   }
@@ -1909,7 +1944,9 @@ export class BrowserSession {
       if (!ERROR_PAGE_INTERRUPT_RE.test(firstLine(e))) throw e;
       const out = await watch.follow(deadline);
       if (out.kind === "loaded") return out.response;
-      if (out.kind === "failed") throw new Error(`${out.error} at ${out.url}`);
+      // aborted: the error page took the frame from it, so it runs again; a real net error is its own
+      if (out.kind === "failed" && !out.error.includes("net::ERR_ABORTED"))
+        throw new Error(`${out.error} at ${out.url}`);
       return page.goto(url, {
         waitUntil: "domcontentloaded",
         timeout: Math.max(1, deadline - Date.now()),
@@ -2127,7 +2164,8 @@ export class BrowserSession {
         return {};
       }
       case "wait":
-        return this.waitOp(req, await activePage());
+        // never claims or opens a tab (it also runs while the person holds control)
+        return this.waitOp(req, this.currentPage(conv));
       case "screenshot": {
         const page = await activePage();
         const maxBytes = Math.min(MAX_SCREENSHOT_BYTES, Math.floor(req.maxBytes));
@@ -2274,12 +2312,18 @@ export class BrowserSession {
 
   private async waitOp(
     req: Extract<ToolRequest, { op: "wait" }>,
-    page: Page,
+    page: Page | undefined,
   ): Promise<{ text?: string }> {
     const asked = Number(req.timeoutMs);
     const timeout = Number.isFinite(asked)
       ? Math.max(0, Math.min(MAX_WAIT_MS, Math.floor(asked)))
       : DEFAULT_WAIT_MS;
+    if (page === undefined) {
+      if (req.text !== undefined || req.ref !== undefined || req.navigation === true)
+        throw new ActionError("failed", NO_TAB_TO_WAIT_ON);
+      await new Promise<void>((r) => this.clock.schedule(r, timeout));
+      return {};
+    }
     if (req.text !== undefined) {
       await page
         .getByText(req.text)

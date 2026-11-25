@@ -162,9 +162,10 @@ shared by every conversation, the tabs are not.
 
 - **Owned per conversation.** Every tab belongs to one conversation, which alone acts on it, and
   each conversation has its own active tab and its own action queue. A conversation's first acting
-  call takes the unowned blank tab if there is one, else opens a new tab; `tabs list`, `adopt` and
-  the handoff bookkeeping never open one. A popup belongs to the owner of the page that opened it.
-  `switch` and `close` take only the conversation's own tabs.
+  call takes the browser's blank start tab if it is free, else opens a new tab (never another
+  unowned page); `tabs list`, `adopt`, `wait` and the handoff bookkeeping never open one. When a
+  conversation loses its active tab, the tab it gained last becomes active. A popup belongs to the
+  owner of the page that opened it. `switch` and `close` take only the conversation's own tabs.
 - **Seen per task tree.** A conversation and its sub-agent conversations form a tree whose root is
   the conversation the person looks at. `tabs list` shows the conversation's own tabs, then the
   tree's other tabs, then other trees' tabs (titles cut to 120 characters, URLs without query or
