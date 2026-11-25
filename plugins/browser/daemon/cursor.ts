@@ -72,16 +72,10 @@ export class CursorResolver {
     let px = x;
     let py = y;
     for (let depth = 0; depth <= MAX_DEPTH; depth++) {
-      const hit = (await cdp.send("DOM.getNodeForLocation", {
-        x: Math.round(px),
-        y: Math.round(py),
-        includeUserAgentShadowDOM: false,
-        ignorePointerEventsNone: true,
-      })) as { backendNodeId: number; frameId?: string };
-      const frameId = hit.frameId ?? (await this.mainFrameId(cdp));
-      // the point in the hit node's own frame: an in-process frame's owner box is the offset
-      const offset = await this.frameOffset(cdp, frameId);
-      const answer = await this.run(cdp, frameId, hit.backendNodeId, px - offset.x, py - offset.y);
+      // like Chromium's own hit test, `pointer-events: none` elements are skipped (an overlay
+      // over a link shows the link's cursor); in-process frames are entered by the hit test
+      const hit = await this.hitTest(cdp, px, py);
+      const answer = await this.answerAt(cdp, hit, px, py);
       if (answer.cursor !== undefined) return toViewerCursor(answer.cursor);
       if (!answer.frame || depth === MAX_DEPTH) return "default";
       // an out-of-process frame: enter it through its own session
@@ -97,6 +91,32 @@ export class CursorResolver {
       py = py - top;
     }
     return "default";
+  }
+
+  private async hitTest(
+    cdp: CDPSession,
+    x: number,
+    y: number,
+  ): Promise<{ backendNodeId: number; frameId?: string }> {
+    return (await cdp.send("DOM.getNodeForLocation", {
+      x: Math.round(x),
+      y: Math.round(y),
+      includeUserAgentShadowDOM: false,
+      ignorePointerEventsNone: false,
+    })) as { backendNodeId: number; frameId?: string };
+  }
+
+  /** The answer for a hit node, at the point in the node's own frame. */
+  private async answerAt(
+    cdp: CDPSession,
+    hit: { backendNodeId: number; frameId?: string },
+    x: number,
+    y: number,
+  ): Promise<Answer> {
+    const frameId = hit.frameId ?? (await this.mainFrameId(cdp));
+    // an in-process frame's owner box is the offset of its viewport
+    const offset = await this.frameOffset(cdp, frameId);
+    return this.run(cdp, frameId, hit.backendNodeId, x - offset.x, y - offset.y);
   }
 
   private async run(

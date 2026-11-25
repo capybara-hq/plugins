@@ -28,6 +28,8 @@ const page = (crossOrigin: string) => `<!doctype html><title>t0</title>
 <div id=host class=abs style="left:300px;top:300px;width:200px;height:60px"></div>
 <p class=abs style="left:600px;top:0;width:400px;margin:0">Plain text paragraph here</p>
 <div class=abs style="left:600px;top:400px;width:300px;height:100px"></div>
+<a class=abs href="#under" style="left:1000px;top:0;display:block;width:200px;height:50px">under</a>
+<div class=abs style="left:1000px;top:0;width:200px;height:50px;pointer-events:none;cursor:wait"></div>
 <iframe class=abs src="${crossOrigin}/inner" style="left:0;top:500px;width:400px;height:200px;border:0"></iframe>
 <script>
 let moves = 0, clicks = 0;
@@ -246,6 +248,8 @@ describe("browser daemon viewer input", () => {
     await expectCursor(100, 330, "grab"); // cursor: grab
     await expectCursor(400, 330, "pointer"); // a link in an open shadow root
     await expectCursor(620, 10, "text"); // text
+    // a pointer-events: none overlay over a link: Chromium shows the link's cursor
+    await expectCursor(1050, 25, "pointer");
     await expectCursor(700, 450, "default"); // nothing
     await expectCursor(100, 600, "pointer"); // a link in a cross-origin frame
     v.send({ t: "handback" });
