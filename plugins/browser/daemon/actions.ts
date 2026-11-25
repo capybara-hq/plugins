@@ -195,8 +195,8 @@ const sameFile = (a: { dev: number; ino: number }, b: { dev: number; ino: number
 const REF_RE = /^(f\d+)?e\d+$/;
 const PROXY_FAILURE_RE = /ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED/;
 
-/** Playwright's error for a navigation another one to a network error page interrupted. */
-const ERROR_PAGE_INTERRUPT_RE = /is interrupted by another navigation to "chrome-error:/;
+/** The longest a failed navigation waits for its error page to commit. */
+const ERROR_PAGE_WAIT_MS = 2_000;
 
 /** Whether `e` is Playwright's timeout. */
 const isTimeout = (e: unknown) => e instanceof Error && e.name === "TimeoutError";
@@ -1309,17 +1309,7 @@ export class BrowserSession {
     const deadline = Date.now() + this.navigationTimeoutMs;
     const watch = new NavWatch(page, url, () => this.pendingNavs.get(page));
     try {
-      try {
-        res = await page.goto(url, { waitUntil: "domcontentloaded" });
-      } catch (e) {
-        // the error page of the tab's previous failed navigation commits late (Linux full
-        // build): it interrupts this one before it started, so this one runs again once
-        if (!ERROR_PAGE_INTERRUPT_RE.test(firstLine(e))) throw e;
-        res = await page.goto(url, {
-          waitUntil: "domcontentloaded",
-          timeout: Math.max(1, deadline - Date.now()),
-        });
-      }
+      res = await page.goto(url, { waitUntil: "domcontentloaded" });
     } catch (e) {
       const msg = firstLine(e);
       // a URL that is a file download: it is saved and reported (onDownload), not an error
@@ -1328,7 +1318,7 @@ export class BrowserSession {
         return;
       }
       if (isTimeout(e)) throw await this.navigationTimedOut(page, url);
-      if (!msg.includes("net::ERR_ABORTED")) throw await this.navigationFailed(e, url, msg);
+      if (!msg.includes("net::ERR_ABORTED")) throw await this.navigationFailed(page, e, url, msg);
       const out = await watch.follow(deadline);
       if (out.kind !== "loaded") {
         const status = await watch.emptyAnswer();
@@ -1342,6 +1332,7 @@ export class BrowserSession {
       if (out.kind === "failed") {
         // the navigation that took over failed: that failure is this one's
         throw await this.navigationFailed(
+          page,
           new Error(`${out.error} at ${out.url}`),
           out.url,
           out.error,
@@ -1366,10 +1357,16 @@ export class BrowserSession {
    * refuses is reported as blocked (`run` turns `original` into the blocked reply); any other net
    * error is `unreachable`, saying what the device's network answered when it went through it.
    */
-  private async navigationFailed(original: unknown, url: string, error: string): Promise<unknown> {
+  private async navigationFailed(
+    page: Page,
+    original: unknown,
+    url: string,
+    error: string,
+  ): Promise<unknown> {
     const net = /net::(ERR_[A-Z_]+)/.exec(error)?.[1];
     // an abort is not the site's failure: another navigation replaced this one
     if (net === undefined || net === "ERR_ABORTED") return original;
+    await this.errorPageCommitted(page);
     if (PROXY_FAILURE_RE.test(error)) {
       if (await this.checkBlocked(url)) return original;
       const detail = await this.networkDetail(url);
@@ -1383,6 +1380,21 @@ export class BrowserSession {
       "unreachable",
       `${url} could not be loaded (net::${net})${meaning === undefined ? "." : `: ${meaning}.`}`,
     );
+  }
+
+  /**
+   * Waits (at most {@link ERROR_PAGE_WAIT_MS}) for the error page of the main frame's failed
+   * navigation: Chromium commits it after Playwright reported the failure (the Linux full build
+   * shows it), and a navigation started before that commit is interrupted by it.
+   */
+  private async errorPageCommitted(page: Page): Promise<void> {
+    if (page.isClosed() || page.mainFrame().url().startsWith("chrome-error:")) return;
+    await page
+      .waitForEvent("framenavigated", {
+        predicate: (f) => f === page.mainFrame() && f.url().startsWith("chrome-error:"),
+        timeout: ERROR_PAGE_WAIT_MS,
+      })
+      .catch(() => undefined);
   }
 
   /**
