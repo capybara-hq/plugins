@@ -7,8 +7,8 @@ describe("device-docker protected roots", () => {
       "/var/lib/capybara/svc",
       "/var/lib/capybara/svc/browser",
       "/var/lib/capybara/svc/browser/profile/Cookies",
-      "/tmp/.capybara-svc",
-      "/tmp/.capybara-svc/browser.sock",
+      "/run/capybara-svc",
+      "/run/capybara-svc/browser.browser/sock",
     ]) {
       expect(protectedRoot(path, false), path).toBe(true);
       expect(protectedRoot(path, true), path).toBe(true);
@@ -21,6 +21,6 @@ describe("device-docker protected roots", () => {
   it("keeps ordinary roots", () => {
     expect(protectedRoot("/workspace", true)).toBe(false);
     expect(protectedRoot("/var/lib/capybara/svcx", false)).toBe(false);
-    expect(protectedRoot("/tmp/.capybara-svcx", false)).toBe(false);
+    expect(protectedRoot("/run/capybara-svcx", false)).toBe(false);
   });
 });

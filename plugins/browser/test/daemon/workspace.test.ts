@@ -1,5 +1,6 @@
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -52,6 +53,7 @@ beforeAll(async () => {
   fx = await startFixtureServer({
     "/upload": UPLOAD,
     "/download": DOWNLOAD,
+    "/download-planted": link("/file.txt", "planted.txt"),
     "/file.txt": (_req, res) => {
       res.writeHead(200, { "content-type": "text/plain" }).end("hello download");
     },
@@ -148,7 +150,9 @@ describe("browser daemon workspace and limits", () => {
     symlinkSync(join(outside, "secret.txt"), join(workspace, "link.txt"));
     await request(d.socketPath, { op: "navigate", url: `${fx.url}/upload` });
     const ref = await refOf(/button "File" \[ref=((?:f\d+)?e\d+)\]/);
-    for (const path of [join(outside, "secret.txt"), join(workspace, "link.txt")]) {
+    // a directory link inside the workspace leading out of it
+    symlinkSync(outside, join(workspace, "dirlink"));
+    for (const path of [join(outside, "secret.txt"), join(workspace, "dirlink", "secret.txt")]) {
       const r = await request(d.socketPath, { op: "upload", ref, path });
       expect(r).toMatchObject({ ok: false, error: "failed" });
       if (!r.ok) {
@@ -157,6 +161,27 @@ describe("browser daemon workspace and limits", () => {
         );
       }
     }
+    // a link is never followed: the bytes are read here, never a path Chromium opens later
+    const link = await request(d.socketPath, {
+      op: "upload",
+      ref,
+      path: join(workspace, "link.txt"),
+    });
+    expect(link).toMatchObject({ ok: false, error: "failed" });
+    if (!link.ok) expect(link.message).toMatch(/is a symbolic link/);
+  });
+
+  it("never saves a download through a link planted in the downloads directory", async () => {
+    const dir = join(realpathSync(workspace), "downloads");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(outside, "profile-state"), "private");
+    symlinkSync(join(outside, "profile-state"), join(dir, "planted.txt"));
+    await request(d.socketPath, { op: "navigate", url: `${fx.url}/download-planted` });
+    const ref = await refOf(/link "Get" \[ref=((?:f\d+)?e\d+)\]/);
+    const click = await request(d.socketPath, { op: "click", ref });
+    if (!click.ok) throw new Error(click.message);
+    await vi.waitFor(() => expect(existsSync(join(dir, "planted (1).txt"))).toBe(true), WAIT);
+    expect(readFileSync(join(outside, "profile-state"), "utf8")).toBe("private");
   });
 
   it("saves downloads into the workspace downloads directory", async () => {

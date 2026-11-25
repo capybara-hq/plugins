@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BrowserContext } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { browserProcessId, launchChromium } from "../../daemon/chromium.js";
+import { BrowserInstalledError, browserProcessId, launchChromium } from "../../daemon/chromium.js";
 import { type Daemon, startDaemon } from "../../daemon/main.js";
 import { DOWNLOAD_BLOCKED_PREFIX } from "../../daemon/protocol.js";
 import {
@@ -64,6 +64,30 @@ function alive(pid: number): boolean {
     return false;
   }
 }
+
+describe("browser daemon: a browser just installed into the install directory", () => {
+  it("answers restart once the install is sealed and asks to exit after the reply", async () => {
+    let sealed = 0;
+    let release!: () => void;
+    const installing = new Promise<void>((r) => {
+      release = r;
+    });
+    const { daemon, socketPath } = await daemonWith({
+      launch: async () => {
+        await installing;
+        throw new BrowserInstalledError();
+      },
+      onSealed: () => sealed++,
+    });
+    // a tool request waits on the install the start began
+    const pending = request(socketPath, { op: "snapshot" });
+    release();
+    await expect(daemon.ready).rejects.toBeInstanceOf(BrowserInstalledError);
+    expect(await pending).toMatchObject({ ok: false, error: "restart" });
+    // the reply is out: the daemon asks to exit (the next start runs the sealed browser)
+    await expect.poll(() => sealed).toBeGreaterThan(0);
+  });
+});
 
 describe("browser daemon: Chromium that cannot start", () => {
   it("answers with the cause, keeps running and launches again on the next request", async () => {

@@ -3,7 +3,20 @@
 // dialogs). Takeover: main.ts refuses a request that arrives while the person holds control, and
 // run() checks again when a queued request leaves the queue (`takenOver`).
 
-import { lstatSync, mkdirSync, readdirSync, realpathSync, statSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsc,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readSync,
+  realpathSync,
+  statSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
 import { request as httpRequest } from "node:http";
 import { basename, extname, join, sep } from "node:path";
 import type {
@@ -25,6 +38,7 @@ import {
 } from "./protocol.js";
 import { takeSnapshot } from "./snapshot.js";
 import { type Clock, systemClock } from "./state.js";
+import { isVerificationPage, type TabBlocker, VERIFICATION_NOTE } from "./verification.js";
 
 /** Something the viewers follow. */
 export type SessionEvent =
@@ -120,17 +134,57 @@ export function safeFileName(raw: string): string {
   );
 }
 
-/** Whether `path` names nothing at all (a dangling link is something). */
-function absent(path: string): boolean {
+/** Copies the file at `source` into the open descriptor `out`. */
+function copyInto(source: string, out: number): void {
+  const src = openSync(source, fsc.O_RDONLY | fsc.O_NOFOLLOW);
   try {
-    lstatSync(path);
-    return false;
-  } catch {
-    return true;
+    const buf = Buffer.alloc(1024 * 1024);
+    for (;;) {
+      const n = readSync(src, buf, 0, buf.length, null);
+      if (n === 0) break;
+      let w = 0;
+      while (w < n) w += writeSync(out, buf, w, n - w);
+    }
+  } finally {
+    closeSync(src);
   }
 }
 
 const PROXY_PROBE_TIMEOUT_MS = 5_000;
+
+/** The largest file an upload reads (Playwright takes uploads from memory). */
+export const UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
+
+/** Upload types by extension (the page may check it); anything else is octet-stream. */
+const UPLOAD_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".pdf": "application/pdf",
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+  ".csv": "text/csv",
+  ".json": "application/json",
+  ".html": "text/html",
+  ".zip": "application/zip",
+  ".mp4": "video/mp4",
+  ".mp3": "audio/mpeg",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+};
+
+/** Whether `real` is `root` or lies beneath it. */
+function within(real: string, root: string): boolean {
+  return real === root || real.startsWith(root.endsWith(sep) ? root : root + sep);
+}
+
+/** Whether two stats are the same file. */
+const sameFile = (a: { dev: number; ino: number }, b: { dev: number; ino: number }) =>
+  a.dev === b.dev && a.ino === b.ino;
 
 const REF_RE = /^(f\d+)?e\d+$/;
 const PROXY_FAILURE_RE = /ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED/;
@@ -388,6 +442,8 @@ export interface TabInfo {
   id: string;
   title: string;
   url: string;
+  /** Set while the tab shows a verification page (bot check, CAPTCHA); cleared when it changes. */
+  blocker?: TabBlocker;
 }
 
 export class BrowserSession {
@@ -411,6 +467,10 @@ export class BrowserSession {
   private readonly ids = new WeakMap<Page, string>();
   private readonly titles = new Map<string, string>();
   private readonly loadingTabs = new Set<string>();
+  /** Tabs showing a verification page, by tab id (cleared on every main-frame navigation). */
+  private readonly blockers = new Map<string, TabBlocker>();
+  /** The status of each tab's current document (main-frame response), by tab id. */
+  private readonly docStatus = new Map<string, number>();
   /** Each page's main-frame navigation request in flight (until it commits, fails or finishes). */
   private readonly pendingNavs = new WeakMap<Page, Request>();
   private readonly listeners = new Set<(e: SessionEvent) => void>();
@@ -494,12 +554,16 @@ export class BrowserSession {
   }
 
   tabs(): (TabInfo & { active: boolean })[] {
-    return [...this.pages.entries()].map(([id, p]) => ({
-      id,
-      title: clip(this.titles.get(id) ?? "", MAX_TITLE_CHARS),
-      url: clip(p.url(), MAX_URL_CHARS),
-      active: id === this.active,
-    }));
+    return [...this.pages.entries()].map(([id, p]) => {
+      const blocker = this.blockers.get(id);
+      return {
+        id,
+        title: clip(this.titles.get(id) ?? "", MAX_TITLE_CHARS),
+        url: clip(p.url(), MAX_URL_CHARS),
+        active: id === this.active,
+        ...(blocker === undefined ? {} : { blocker }),
+      };
+    });
   }
 
   /** Whether the active tab is loading a document. */
@@ -527,6 +591,7 @@ export class BrowserSession {
         .title()
         .then((t) => this.titles.set(id, t))
         .catch(() => undefined)
+        .then(() => this.checkVerification(page, id))
         .finally(() => this.emit({ type: "state" }));
     };
     const settle = (r: Request) => {
@@ -555,6 +620,8 @@ export class BrowserSession {
     page.on("framenavigated", (f) => {
       if (f !== page.mainFrame()) return;
       this.pendingNavs.delete(page);
+      // a new document: a verification shown before is gone (refresh looks at the new one)
+      this.blockers.delete(id);
       refresh();
     });
     page.on("domcontentloaded", refresh);
@@ -573,6 +640,8 @@ export class BrowserSession {
         this.checkBlocked(r.url(), this.pageToOpen(page, r));
     });
     page.on("response", (r) => {
+      if (r.request().isNavigationRequest() && r.frame() === page.mainFrame())
+        this.docStatus.set(id, r.status());
       if (this.proxy !== undefined && r.status() === 403 && r.url().startsWith("http:")) {
         this.checkBlocked(r.url(), this.pageToOpen(page, r.request()));
       }
@@ -588,6 +657,8 @@ export class BrowserSession {
       this.pages.delete(id);
       this.titles.delete(id);
       this.loadingTabs.delete(id);
+      this.blockers.delete(id);
+      this.docStatus.delete(id);
       if (this.active === id) {
         const next = [...this.pages.keys()].at(-1);
         this.active = next;
@@ -619,7 +690,7 @@ export class BrowserSession {
    * Adds a note to the replies of the requests in flight; with none in flight (a download that
    * finished after its click replied, a dialog the person caused) the next reply carries it.
    */
-  private note(text: string): void {
+  note(text: string): void {
     const n = clip(text, MAX_DIALOG_CHARS + 200);
     if (this.collectors.size === 0) {
       this.unreported.push(n);
@@ -664,8 +735,7 @@ export class BrowserSession {
           );
           return;
         }
-        target = this.downloadTarget(workspace, safeFileName(d.suggestedFilename()));
-        await d.saveAs(target);
+        target = this.saveDownload(workspace, safeFileName(d.suggestedFilename()), tmp);
         this.note(`Downloaded ${shown} to ${target}.`);
       } catch (e) {
         this.note(
@@ -683,8 +753,65 @@ export class BrowserSession {
     for (const c of this.collectors) c.downloads.push(entry);
   }
 
-  /** A free path in `<workspace>/downloads`, refusing a downloads directory that is a link. */
-  private downloadTarget(workspace: string, name: string): string {
+  /**
+   * Copies a finished download from Playwright's private file into `<workspace>/downloads` and
+   * returns where. The agent owns that directory, so the target is never written through a path
+   * it could have swapped: each candidate is created exclusively without following a link
+   * (`O_CREAT | O_EXCL | O_NOFOLLOW`), then checked to be the file the resolved path inside the
+   * downloads directory names before any byte is written; a mismatch (a directory swapped for a
+   * link meanwhile) writes nothing, removes the empty file it made (only while that name still
+   * is the file it opened) and fails.
+   */
+  private saveDownload(workspace: string, name: string, source: string): string {
+    const dir = this.downloadsDir(workspace);
+    const dirStat = lstatSync(dir);
+    const ext = extname(name);
+    const stem = name.slice(0, name.length - ext.length);
+    for (let i = 0; i < 1000; i++) {
+      const target = join(dir, i === 0 ? name : `${stem} (${i})${ext}`);
+      if (this.reservedDownloads.has(target)) continue;
+      let out: number;
+      try {
+        out = openSync(target, fsc.O_WRONLY | fsc.O_CREAT | fsc.O_EXCL | fsc.O_NOFOLLOW, 0o664);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "EEXIST") continue;
+        throw e;
+      }
+      this.reservedDownloads.add(target);
+      try {
+        let real: string;
+        try {
+          real = realpathSync(target);
+        } catch {
+          real = "";
+        }
+        const opened = fstatSync(out);
+        const placed = real !== "" && within(real, dir) && sameFile(opened, statSync(real));
+        if (!placed || !sameFile(dirStat, lstatSync(dir))) {
+          // the file landed where a swapped link pointed: take back exactly that empty file
+          try {
+            if (real !== "" && sameFile(opened, lstatSync(real)) && opened.size === 0)
+              unlinkSync(real);
+          } catch {
+            // gone or changed again: never remove anything else
+          }
+          throw new ActionError(
+            "failed",
+            `${dir} changed while the download was saved; nothing was written. Retry the download.`,
+          );
+        }
+        copyInto(source, out);
+        return target;
+      } finally {
+        closeSync(out);
+        this.reservedDownloads.delete(target);
+      }
+    }
+    throw new ActionError("failed", `No free name for ${name} in ${dir}; remove old downloads.`);
+  }
+
+  /** `<workspace>/downloads` resolved, refusing one that is a link or not a directory. */
+  private downloadsDir(workspace: string): string {
     const root = realpathSync(workspace);
     const dir = join(root, "downloads");
     mkdirSync(dir, { recursive: true });
@@ -695,14 +822,7 @@ export class BrowserSession {
         `${dir} is not a plain directory in the workspace; remove it so downloads can be saved.`,
       );
     }
-    const ext = extname(name);
-    const stem = name.slice(0, name.length - ext.length);
-    let target = join(dir, name);
-    for (let i = 1; !absent(target) || this.reservedDownloads.has(target); i++) {
-      target = join(dir, `${stem} (${i})${ext}`);
-    }
-    this.reservedDownloads.add(target);
-    return target;
+    return dir;
   }
 
   /**
@@ -748,29 +868,72 @@ export class BrowserSession {
     }, DOWNLOAD_POLL_MS);
   }
 
-  /** The real path of an upload, refused unless it is inside the workspace. */
-  private uploadPath(path: string): string {
+  /**
+   * An upload's bytes, read here and handed to Chromium from memory (never a path Chromium would
+   * open later, after the agent could have swapped it for a link to the service's own files):
+   * opened without following a final link, then accepted only when the resolved path lies in the
+   * workspace and names the very file opened (an intermediate link swapped in either way shows as
+   * another file), a regular file of at most {@link UPLOAD_MAX_BYTES}.
+   */
+  private readUpload(path: string): { name: string; mimeType: string; buffer: Buffer } {
+    const root = this.uploadRoot();
+    let fd: number;
+    try {
+      fd = openSync(path, fsc.O_RDONLY | fsc.O_NOFOLLOW | fsc.O_NONBLOCK);
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      throw new ActionError(
+        "failed",
+        code === "ELOOP"
+          ? `${path} is a symbolic link; upload the file it points to by its own path in the workspace.`
+          : `No readable file at ${path}; give the absolute path of a file in the workspace (${root}).`,
+      );
+    }
+    try {
+      const opened = fstatSync(fd);
+      let real = "";
+      try {
+        real = realpathSync(path);
+      } catch {
+        real = "";
+      }
+      if (!within(real, root) || !sameFile(opened, statSync(real)))
+        throw new ActionError(
+          "failed",
+          `Upload paths must be inside the workspace (${root}); copy the file there first.`,
+        );
+      if (!opened.isFile())
+        throw new ActionError("failed", `${path} is not a regular file; upload a file.`);
+      if (opened.size > UPLOAD_MAX_BYTES)
+        throw new ActionError(
+          "failed",
+          `${path} is larger than ${UPLOAD_MAX_BYTES} bytes, the most an upload takes.`,
+        );
+      const buffer = Buffer.alloc(opened.size);
+      let off = 0;
+      while (off < buffer.length) {
+        const n = readSync(fd, buffer, off, buffer.length - off, off);
+        if (n === 0) break;
+        off += n;
+      }
+      const name = basename(real);
+      return {
+        name,
+        mimeType: UPLOAD_TYPES[extname(name).toLowerCase()] ?? "application/octet-stream",
+        buffer: buffer.subarray(0, off),
+      };
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  /** The resolved workspace uploads come from. */
+  private uploadRoot(): string {
     const workspace = this.workspace;
     if (workspace === undefined) {
       throw new ActionError("failed", "Uploads are unavailable: the device has no workspace.");
     }
-    const root = realpathSync(workspace);
-    let real: string;
-    try {
-      real = realpathSync(path);
-    } catch {
-      throw new ActionError(
-        "failed",
-        `No file at ${path}; give the absolute path of a file in the workspace (${root}).`,
-      );
-    }
-    if (real !== root && !real.startsWith(root.endsWith(sep) ? root : root + sep)) {
-      throw new ActionError(
-        "failed",
-        `Upload paths must be inside the workspace (${root}); copy the file there first.`,
-      );
-    }
-    return real;
+    return realpathSync(workspace);
   }
 
   /**
@@ -844,7 +1007,13 @@ export class BrowserSession {
       // from here on, notes go to later replies (none is lost between this one and the next)
       this.collectors.delete(c);
       const page = await this.activePage();
-      const text = [...c.notes, ...(out.text === undefined ? [] : [out.text])].join("\n");
+      // a verification page goes to the person, said first so the agent hands off
+      const verifying = await this.checkVerification(page, this.tabIdOf(page));
+      const text = [
+        ...(verifying ? [VERIFICATION_NOTE] : []),
+        ...c.notes,
+        ...(out.text === undefined ? [] : [out.text]),
+      ].join("\n");
       reply = {
         ok: true,
         page: await this.pageInfo(page),
@@ -900,6 +1069,28 @@ export class BrowserSession {
       const all = c.pending.splice(0);
       await Promise.allSettled(all);
     }
+  }
+
+  /**
+   * Looks at the tab's page now and records or clears its verification blocker; true when it
+   * shows a verification page.
+   */
+  private async checkVerification(page: Page, id: string): Promise<boolean> {
+    if (id === "") return false;
+    const blocked = await isVerificationPage(page, this.docStatus.get(id));
+    if (this.pages.get(id) !== page) return false;
+    const before = this.blockers.get(id);
+    if (blocked) {
+      const url = clip(page.url(), MAX_URL_CHARS);
+      if (before?.url !== url) {
+        this.blockers.set(id, { kind: "verification", url });
+        this.emit({ type: "state" });
+      }
+    } else if (before !== undefined) {
+      this.blockers.delete(id);
+      this.emit({ type: "state" });
+    }
+    return blocked;
   }
 
   async pageInfo(page: Page): Promise<{ url: string; title: string; tabId: string }> {
@@ -1101,9 +1292,9 @@ export class BrowserSession {
       }
       case "upload": {
         const page = await this.activePage();
-        const path = this.uploadPath(req.path);
+        const file = this.readUpload(req.path);
         const loc = await this.locate(page, req.ref);
-        await loc.setInputFiles(path);
+        await loc.setInputFiles(file);
         return {};
       }
       case "click_at":

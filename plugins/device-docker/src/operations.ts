@@ -123,7 +123,7 @@ const PROTECTED = Object.freeze([
   "/skills/.capybara-ops",
   "/opt/capybara",
   "/var/lib/capybara/svc",
-  "/tmp/.capybara-svc",
+  "/run/capybara-svc",
 ]);
 
 export function protectedRoot(path: string, write: boolean): boolean {

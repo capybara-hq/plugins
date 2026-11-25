@@ -34,6 +34,16 @@ export interface BrowserDeps {
   log?: { warn(msg: string, meta?: Record<string, unknown>): void };
 }
 
+/**
+ * What the model is told when the daemon still restarts after a fresh browser install (its start
+ * and request kept racing the old process's exit).
+ */
+export const RESTARTING_MESSAGE =
+  "The browser was just installed in the device and its service is restarting; call the tool again.";
+
+/** How many times one tool call starts the service again after a fresh browser install. */
+export const RESTART_ATTEMPTS = 3;
+
 /** The longest a daemon request may take, beyond an action's own wait. */
 export const REQUEST_TIMEOUT_MS = 90_000;
 
@@ -145,7 +155,10 @@ function failure(deps: BrowserDeps, call: ToolCallContext, e: unknown, starting:
 /**
  * One request to the daemon for a tool call: owner check, `ensureService`, `request`, then the
  * refused hosts to `reportBlockedHosts` (on success and failure alike). Resolves the ok reply;
- * a failure reply or a device access refusal throws an actionable ToolError.
+ * a failure reply or a device access refusal throws an actionable ToolError. A `restart` reply
+ * (the daemon installed the browser into the provider's install directory and sealed it, then
+ * exits: capybara-hq/plugins#209) starts the service again, reviewed like every start, at most
+ * {@link RESTART_ATTEMPTS} times; a request failing while the old process exits counts as one.
  */
 export async function runRequest(
   deps: BrowserDeps,
@@ -155,18 +168,30 @@ export async function runRequest(
 ): Promise<OkReply> {
   assertOwner(call);
   let reply: ToolReply;
-  try {
-    await deps.deviceAccess.ensureService(call, await deps.serviceSpec());
-  } catch (e) {
-    throw failure(deps, call, e, true);
-  }
-  try {
-    const body = new TextEncoder().encode(JSON.stringify(req));
-    reply = parseReply(
-      await deps.deviceAccess.request(call, { service: SERVICE, body, timeoutMs }),
-    );
-  } catch (e) {
-    throw failure(deps, call, e, false);
+  // set once the daemon answered `restart`: it is exiting, the next start runs the sealed browser
+  let restarting = false;
+  for (let restarts = 0; ; restarts++) {
+    try {
+      await deps.deviceAccess.ensureService(call, await deps.serviceSpec());
+    } catch (e) {
+      throw failure(deps, call, e, true);
+    }
+    try {
+      const body = new TextEncoder().encode(JSON.stringify(req));
+      reply = parseReply(
+        await deps.deviceAccess.request(call, { service: SERVICE, body, timeoutMs }),
+      );
+    } catch (e) {
+      // the sealed daemon may still be exiting: its socket is gone before its process
+      if (restarting && !call.signal.aborted) {
+        if (restarts < RESTART_ATTEMPTS) continue;
+        throw new ToolError(RESTARTING_MESSAGE);
+      }
+      throw failure(deps, call, e, false);
+    }
+    if (reply.ok || reply.error !== "restart") break;
+    if (restarts >= RESTART_ATTEMPTS) throw new ToolError(RESTARTING_MESSAGE);
+    restarting = true;
   }
   const hosts = Array.isArray(reply.blockedHosts)
     ? reply.blockedHosts.filter((h): h is string => typeof h === "string" && h !== "")

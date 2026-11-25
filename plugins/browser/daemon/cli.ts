@@ -32,6 +32,8 @@ async function main(): Promise<void> {
     env: process.env,
     onIdle: () => stop(0, "idle"),
     onBrowserGone: () => stop(1, "Chromium exited"),
+    // installed and sealed: the next start runs the browser read only
+    onSealed: () => stop(0, "browser installed and sealed; restart to run it"),
   });
   process.stderr.write(`browser daemon: listening on ${socketPath}\n`);
   daemon.ready.then(

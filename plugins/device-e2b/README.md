@@ -265,18 +265,27 @@ default 900 seconds, Ruling M20); to run long commands, raise `runtime.maxRunSec
 `ensureService` / `stopService` / `serviceStatus` / `serviceRequest` / `openStream` (core's browser use design §5–6), the same
 as device-docker's (README "Device services and streams" there; `src/services.ts` is that plugin's file byte for byte), over envd:
 
-- **Process**: the service manager (`python3 -I`) runs as the `sandbox` user through `process.Process/Start`, the request on
+- **Isolation (plugins#210)**: the manager, every service and the relay run as `capybara-svc` (uid / gid 1100: not 1001, which
+  E2B gives its own `user`), never the sandbox user, as on device-docker. Before every normal ensure the provider, as root, makes
+  that user on a VM whose template predates it, and makes `/var/lib/capybara/svc` and `/run/capybara-svc` that user's (0700); a
+  state root left from before (the sandbox user's: readable by agent commands) is removed, so a person logs in again once. An
+  `ifRunning` ensure, status or stop on such a VM answers stopped. Verified live (2026-11-25, `test/services.test.ts`): an agent
+  command can neither read the state, list the roots, connect to the socket nor signal or inspect the process.
+- **Browser (plugins#209)**: a template built from the published image has the pinned Chromium in `/opt/capybara-browsers`
+  (read only); a VM from an older template has none, and the browser refuses to start there (never installing where it could
+  rewrite itself) with an answer asking the person to delete the device and create it again. The setup also kills the
+  services the sandbox user ran before isolation.
+- **Process**: the service manager (`python3 -I`) runs as `capybara-svc` through `process.Process/Start`, the request on
   stdin (`SendInput`). It forks `node <stateDir>/<entry> <args>` into its own session; envd keeps it running after the manager's
   stream ended (verified live 2026-11-24). A normal ensure connects (resumes) a paused VM; an `ifRunning` ensure, `serviceStatus`,
   `stopService`, requests and streams never resume one (a paused VM answers stopped / not running: pausing without memory ended
   every process).
-- **State directory**: `/var/lib/capybara/svc/<name>` on the VM's disk (the device's file system, so it goes with a files reset),
+- **State directory**: `/var/lib/capybara/svc/<id>` on the VM's disk (the device's file system, so it goes with a files reset),
   outside the workspace (no project, Glob / Grep, share or delivery reaches it). The template from the published image has the
-  directory; a VM made from an older template gets it on the first normal ensure, made as root (`mkdir -m 0700`, owned by the
-  sandbox user; `/var/lib` is root's, so nothing the sandbox user planted redirects it). Runtime files under
-  `/tmp/.capybara-svc/<name>/`; `/tmp` is on the VM's disk here, so a pid record counts only while its process runs with the
+  directory; a VM made from an older template gets it on the first normal ensure (see Isolation). Runtime files under
+  `/run/capybara-svc/<id>/` (a tmpfs on E2B VMs), so a pid record counts only while its process runs with the
   recorded start time on the recorded boot (a cold start after a pause changes the boot id). The service's code stays in its
-  state directory (no separate `codeDir`: same user, nothing to protect); files a newer version no longer ships stay there until
+  state directory (no separate `codeDir`: agent commands cannot reach it, and a start re-hashes it); files a newer version no longer ships stay there until
   the service removes them or the device's files are reset.
 - **Files, digest first**: a start sends the files' digest (sha256 over the files in path order: path, NUL, byte length, NUL,
   bytes) and their paths, never the files; the manager starts from the files in the state directory when its `.files-digest`

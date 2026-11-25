@@ -21,7 +21,13 @@ import {
   type ToolReply,
   type ToolRequest,
 } from "../daemon/protocol.js";
-import { type BrowserDeps, NOT_OWNER_MESSAGE, TAKEN_OVER_MESSAGE } from "../src/browser.js";
+import {
+  type BrowserDeps,
+  NOT_OWNER_MESSAGE,
+  RESTART_ATTEMPTS,
+  RESTARTING_MESSAGE,
+  TAKEN_OVER_MESSAGE,
+} from "../src/browser.js";
 import { registerHandoffTool } from "../src/handoff.js";
 import { serviceSpecLoader } from "../src/service.js";
 import { registerBrowserTools, SCREENSHOT_MAX_BYTES } from "../src/tools.js";
@@ -44,6 +50,8 @@ function fake(
   const requests: ToolRequest[] = [];
   const reported: { hosts: string[]; url?: string | undefined }[] = [];
   let failWith: Error | undefined;
+  /** Requests that throw instead of answering (the daemon's socket gone), by request index. */
+  const requestFailures = new Map<number, Error>();
   const deps: BrowserDeps = {
     deviceAccess: {
       async ensureService(_call, spec) {
@@ -60,6 +68,8 @@ function fake(
         const body = JSON.parse(new TextDecoder().decode(req.body)) as ToolRequest;
         log.push(`request:${req.service}:${body.op}`);
         requests.push(body);
+        const failure = requestFailures.get(requests.length - 1);
+        if (failure) throw failure;
         return new TextEncoder().encode(JSON.stringify(answer(body)));
       },
       reportBlockedHosts(_call, hosts, opts) {
@@ -84,6 +94,9 @@ function fake(
     tools,
     fail: (e: Error) => {
       failWith = e;
+    },
+    failRequest: (index: number, e: Error) => {
+      requestFailures.set(index, e);
     },
     run: (name: string, input: unknown, c: ToolCallContext = call()) => {
       const t = tools.get(name);
@@ -146,6 +159,41 @@ describe("browser tools", () => {
       "Browser tools only run for the conversation's owner on their own device.",
     );
     expect(f.log).toEqual([]);
+  });
+
+  it("a restart reply starts the service again and retries the request", async () => {
+    // the daemon installed the browser into the install directory, sealed it and exits
+    let n = 0;
+    const f = fake(() =>
+      n++ === 0
+        ? { ok: false, error: "restart", message: "installed", blockedHosts: [] }
+        : { ok: true, page: PAGE, blockedHosts: [] },
+    );
+    // the old process's socket is gone before its process: the next request fails meanwhile
+    f.failRequest(1, new Error("device service browser.browser is not running"));
+    const r = await f.run("browser_snapshot", {});
+    expect(textOf(r)).toContain("Example");
+    expect(f.log).toEqual([
+      "ensure:browser",
+      "request:browser:snapshot",
+      "ensure:browser",
+      "request:browser:snapshot",
+      "ensure:browser",
+      "request:browser:snapshot",
+    ]);
+  });
+
+  it("a daemon that keeps asking for a restart ends in an actionable error", async () => {
+    const f = fake(() => ({ ok: false, error: "restart", message: "installed", blockedHosts: [] }));
+    await expect(f.run("browser_snapshot", {})).rejects.toThrow(new ToolError(RESTARTING_MESSAGE));
+    expect(f.log.filter((l) => l.startsWith("ensure"))).toHaveLength(RESTART_ATTEMPTS + 1);
+  });
+
+  it("a failed request without a restart is not retried", async () => {
+    const f = fake();
+    f.failRequest(0, new Error("boom"));
+    await expect(f.run("browser_snapshot", {})).rejects.toBeInstanceOf(ToolError);
+    expect(f.log).toEqual(["ensure:browser", "request:browser:snapshot"]);
   });
 
   it("blocked hosts are reported to deviceAccess", async () => {

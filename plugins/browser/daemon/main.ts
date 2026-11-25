@@ -14,13 +14,16 @@ import {
   TAKEN_OVER_MESSAGE,
 } from "./actions.js";
 import {
+  BrowserInstalledError,
   browserProcessId,
+  browserRevision,
   chromiumLaunchPlan,
   killChromium,
   type LaunchPlan,
   launchChromium,
   playwrightDownloadHosts,
   processAlive,
+  shippedRevisionNote,
 } from "./chromium.js";
 import { restoreCookies, saveCookies } from "./cookie-file.js";
 import {
@@ -57,7 +60,17 @@ export interface DaemonOptions {
   browserCloseGraceMs?: number;
   /** Installs and launches Chromium (default: launchChromium); tests make it fail. */
   launch?: (plan: LaunchPlan) => Promise<BrowserContext>;
+  /**
+   * Called once the first start installed the browser into the provider's install directory and
+   * sealed it ({@link BrowserInstalledError}): the process should exit, so the next start (the
+   * plugin asks for it) runs the browser read only. Called after the requests waiting on that
+   * launch got their `restart` reply, or after {@link SEALED_EXIT_GRACE_MS} when none was waiting.
+   */
+  onSealed?: () => void;
 }
+
+/** How long a daemon that sealed its install with no request waiting stays before it exits. */
+export const SEALED_EXIT_GRACE_MS = 2_000;
 
 export interface Daemon {
   /**
@@ -264,6 +277,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         downloadMaxBytes: downloadMaxBytes(opts.env),
         ...(opts.downloadWaitMs === undefined ? {} : { downloadWaitMs: opts.downloadWaitMs }),
       });
+      // a shipped browser of another revision runs: the next tool result says so
+      if (plan.shippedDir !== undefined)
+        session.note(shippedRevisionNote(plan.shippedDir, browserRevision(plan.build)));
       // A launch that finishes after a stop only gets closed (stopBrowser): no tabs restored and
       // no saves, which would write back the session file an idle stop just forgot.
       if (!closing) await restoreCookies(ctx, opts.stateDir);
@@ -303,6 +319,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
 
   /** The failure reply of a launch that failed, with the download hosts the proxy refuses. */
   async function launchFailure(e: unknown): Promise<ToolReply> {
+    // installed and sealed: this process may not run it; the plugin starts the service again
+    if (e instanceof BrowserInstalledError)
+      return { ok: false, error: "restart", message: e.message, blockedHosts: [] };
+    // no read-only place for the browser: no download would help
+    if (plan.unavailable !== undefined) return fail(plan.unavailable);
     const cause = e instanceof Error ? e.message.split("\n")[0] : String(e);
     const proxy = plan.proxy;
     const refused =
@@ -362,7 +383,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   }
 
   const ready = browser().then(() => undefined);
-  ready.catch(() => undefined);
+  ready.catch((e: unknown) => {
+    // the start installed and sealed the browser: exit once the requests waiting on it answered
+    // (each restart reply ends the process as well), or soon when none was waiting
+    if (e instanceof BrowserInstalledError)
+      clock.schedule(() => opts.onSealed?.(), SEALED_EXIT_GRACE_MS);
+  });
 
   /** Handoff bookkeeping from the plugin server: not agent input, so allowed during a takeover. */
   async function handoffOp(
@@ -496,6 +522,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
           .then((reply) => {
             write(sock, reply, () => write(sock, fail(REPLY_TOO_LARGE_MESSAGE), () => undefined));
             sock.end();
+            // a restart reply: this process exits once the reply is out
+            if (!reply.ok && reply.error === "restart") sock.once("close", () => opts.onSealed?.());
           })
           .catch(() => sock.destroy())
           .finally(() => state.requestEnded());

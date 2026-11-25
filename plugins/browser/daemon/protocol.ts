@@ -188,7 +188,17 @@ export type ToolRequest =
   | { op: "handoff_notice"; callId: string; message: string }
   | { op: "handoff_clear"; callId: string; handback?: boolean };
 
-export type ToolErrorCode = "taken_over" | "no_such_ref" | "timeout" | "blocked" | "failed";
+/**
+ * Why a request failed. `restart`: the browser was just installed into the provider's install
+ * directory and sealed; the daemon exits and the plugin starts the service again.
+ */
+export type ToolErrorCode =
+  | "taken_over"
+  | "no_such_ref"
+  | "timeout"
+  | "blocked"
+  | "failed"
+  | "restart";
 
 export type ToolReply =
   | {
@@ -229,6 +239,12 @@ export interface ViewerTab {
   title: string;
   url: string;
   active: boolean;
+  /**
+   * Set while the tab shows a verification page (a bot check or CAPTCHA): the panel offers the
+   * person to complete it ("需要你完成验证 · 去验证"); cleared once the tab's page changes. A
+   * stable field: the panel builds on `kind` and `url`.
+   */
+  blocker?: { kind: "verification"; url: string };
 }
 
 /** The JSON viewer messages (frames are binary, {@link encodeFrame}). */

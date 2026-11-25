@@ -12,7 +12,13 @@ import type {
 import { DEVICE_SERVICE_ECHO_SCRIPT, runDeviceServiceConformance } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDockerSandbox } from "../src/index.js";
-import { SERVICE_IMAGE_TOO_OLD, serviceStateDir } from "../src/services.js";
+import {
+  SERVICE_BROWSERS_PATH,
+  SERVICE_IMAGE_TOO_OLD,
+  SERVICE_USER,
+  serviceSocketPath,
+  serviceStateDir,
+} from "../src/services.js";
 import {
   buildTestImages,
   cleanupTestResources,
@@ -120,6 +126,18 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
     });
     return r;
   };
+  /**
+   * A command as the service user (what a service itself, compromised or not, can do): through
+   * the docker CLI, outside the provider, which never runs commands as that user.
+   */
+  const svcSh = async (h: SandboxHandle, command: string) => {
+    try {
+      const stdout = await docker("exec", "-u", SERVICE_USER, h.id, "sh", "-c", command);
+      return { stdout, exitCode: 0 };
+    } catch (e) {
+      return { stdout: "", exitCode: 1, stderr: String((e as { stderr?: unknown }).stderr ?? e) };
+    }
+  };
   const relays = async (h: SandboxHandle) =>
     (await sh(h, "pgrep -fc '[c]apybara-socket-relay' || true")).stdout.trim();
 
@@ -144,7 +162,7 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
     oldImageDir = await mkdtemp(join(tmpdir(), "capybara-nosvc-"));
     await writeFile(
       join(oldImageDir, "Dockerfile"),
-      "ARG BASE\nFROM $BASE\nUSER 0:0\nRUN rm -rf /var/lib/capybara\nUSER 1000:1000\n",
+      "ARG BASE\nFROM $BASE\nUSER 0:0\nRUN rm -rf /var/lib/capybara && userdel capybara-svc\nUSER 1000:1000\n",
     );
     // a cold run builds the sandbox image (about 1.5 GB) once, shared by the files
   }, 1_200_000);
@@ -170,14 +188,14 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
 
   it("service survives across exec calls and stops on suspend", async () => {
     const { h } = await create();
-    const started = await sbx.ensureService?.(h, echo("keep"), sig());
+    const started = await sbx.ensureService?.(h, echo("tx.keep"), sig());
     expect(started?.state).toBe("running");
     // ordinary commands, a killAll and a killTagged leave the service alone
     expect((await sh(h, "echo hi")).stdout).toBe("hi\n");
     await sbx.killAll(h, sig());
     await sbx.killTagged(h, ["svc-test"], sig());
-    expect(await sbx.serviceStatus?.(h, "keep", sig())).toEqual(started);
-    const answer = await sbx.serviceRequest?.(h, "keep", enc.encode("still here"), {
+    expect(await sbx.serviceStatus?.(h, "tx.keep", sig())).toEqual(started);
+    const answer = await sbx.serviceRequest?.(h, "tx.keep", enc.encode("still here"), {
       timeoutMs: 10_000,
       signal: sig(),
     });
@@ -186,27 +204,33 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
     await sbx.suspend(h, sig());
     expect(await sbx.resume(h, sig())).toBe("resumed");
     // the process died with the instance; no pid file claims otherwise
-    const after = await sbx.serviceStatus?.(h, "keep", sig());
+    const after = await sbx.serviceStatus?.(h, "tx.keep", sig());
     expect(after).toEqual({ ...started, state: "stopped", startedAt: null });
     await expect(
-      sbx.serviceRequest?.(h, "keep", enc.encode("x"), { timeoutMs: 5_000, signal: sig() }),
+      sbx.serviceRequest?.(h, "tx.keep", enc.encode("x"), { timeoutMs: 5_000, signal: sig() }),
     ).rejects.toThrow(/not running/);
     // a normal ensure starts it again
-    const again = await sbx.ensureService?.(h, echo("keep"), sig());
+    const again = await sbx.ensureService?.(h, echo("tx.keep"), sig());
     expect(again?.state).toBe("running");
   });
 
   it("serviceRequest round-trips an echo service", async () => {
     const { h } = await create();
-    await sbx.ensureService?.(h, echo("echo"), sig());
+    await sbx.ensureService?.(h, echo("tx.echo"), sig());
     const big = new Uint8Array(3 * 1024 * 1024).map((_, i) => i % 251);
-    const answer = await sbx.serviceRequest?.(h, "echo", big, { timeoutMs: 30_000, signal: sig() });
+    const answer = await sbx.serviceRequest?.(h, "tx.echo", big, {
+      timeoutMs: 30_000,
+      signal: sig(),
+    });
     expect(answer?.byteLength).toBe(big.byteLength);
     expect(Buffer.from(answer ?? []).equals(Buffer.from(big))).toBe(true);
     // requests run concurrently on their own connections
     const many = await Promise.all(
       Array.from({ length: 5 }, (_, i) =>
-        sbx.serviceRequest?.(h, "echo", enc.encode(`r${i}`), { timeoutMs: 10_000, signal: sig() }),
+        sbx.serviceRequest?.(h, "tx.echo", enc.encode(`r${i}`), {
+          timeoutMs: 10_000,
+          signal: sig(),
+        }),
       ),
     );
     expect(many.map((m) => dec.decode(m))).toEqual(["r0", "r1", "r2", "r3", "r4"]);
@@ -216,10 +240,10 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
 
   it("openStream relays 50 messages", async () => {
     const { h } = await create();
-    await sbx.ensureService?.(h, echo("stream"), sig());
+    await sbx.ensureService?.(h, echo("tx.stream"), sig());
     const open = sbx.openStream;
     if (open === undefined) throw new Error("device-docker offers no openStream");
-    const s = await open.call(sbx, h, { service: "stream" }, sig());
+    const s = await open.call(sbx, h, { service: "tx.stream" }, sig());
     const got: string[] = [];
     const reading = (async () => {
       for await (const m of s.messages) {
@@ -235,7 +259,7 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
     expect(await s.closed).toEqual({ reason: "the reader stopped reading" });
     // closing our side ends the relay in the container
     await waitFor(async () => (await relays(h)) === "0");
-    await expect(open.call(sbx, h, { service: "nothing-here" }, sig())).rejects.toThrow(
+    await expect(open.call(sbx, h, { service: "tx.nothing-here" }, sig())).rejects.toThrow(
       /not running/,
     );
   });
@@ -244,10 +268,10 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
     const { h } = await create();
     await sbx.ensureService?.(
       h,
-      { ...echo("oneshot"), entry: "one.mjs", files: { "one.mjs": enc.encode(ONE_SHOT) } },
+      { ...echo("tx.oneshot"), entry: "one.mjs", files: { "one.mjs": enc.encode(ONE_SHOT) } },
       sig(),
     );
-    const s = await sbx.openStream?.(h, { service: "oneshot" }, sig());
+    const s = await sbx.openStream?.(h, { service: "tx.oneshot" }, sig());
     if (s === undefined) throw new Error("no stream");
     await s.send(enc.encode("only"));
     const got: string[] = [];
@@ -262,40 +286,40 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
     const { h } = await create();
     const MIB = 1024 * 1024;
     const filler = (seed: number) => new Uint8Array(2 * MIB).map((_, i) => (i * seed) % 251);
-    const spec = (seed: number) => echo("digest", { "lib/filler.bin": filler(seed) });
+    const spec = (seed: number) => echo("tx.digest", { "lib/filler.bin": filler(seed) });
     const started = await sbx.ensureService?.(h, spec(7), sig());
     expect(started?.state).toBe("running");
     // the first start: a digest-only ask, then the files (the 2 MiB filler as base64)
-    const [ask, files, ...rest] = sentFor("digest");
+    const [ask, files, ...rest] = sentFor("tx.digest");
     expect(rest).toEqual([]);
     expect(ask).toBeLessThan(4096);
     expect(files).toBeGreaterThan(2 * MIB);
     // a second start after a stop: the digest alone, no file crosses
-    await sbx.stopService?.(h, "digest", sig());
+    await sbx.stopService?.(h, "tx.digest", sig());
     sent.length = 0;
     expect((await sbx.ensureService?.(h, spec(7), sig()))?.state).toBe("running");
-    expect(sentFor("digest")).toHaveLength(1);
-    expect(sentFor("digest")[0]).toBeLessThan(4096);
+    expect(sentFor("tx.digest")).toHaveLength(1);
+    expect(sentFor("tx.digest")[0]).toBeLessThan(4096);
     // a running service is found without any files either
     expect((await sbx.ensureService?.(h, spec(7), sig()))?.state).toBe("running");
-    expect(sentFor("digest")).toHaveLength(2);
-    expect(sentFor("digest")[1]).toBeLessThan(4096);
+    expect(sentFor("tx.digest")).toHaveLength(2);
+    expect(sentFor("tx.digest")[1]).toBeLessThan(4096);
     // changed files: files_needed, then the new files, written
-    await sbx.stopService?.(h, "digest", sig());
+    await sbx.stopService?.(h, "tx.digest", sig());
     sent.length = 0;
     expect((await sbx.ensureService?.(h, spec(11), sig()))?.state).toBe("running");
-    expect(sentFor("digest")).toHaveLength(2);
-    expect(sentFor("digest")[1]).toBeGreaterThan(2 * MIB);
-    const dir = serviceStateDir("digest");
+    expect(sentFor("tx.digest")).toHaveLength(2);
+    expect(sentFor("tx.digest")[1]).toBeGreaterThan(2 * MIB);
+    const dir = serviceStateDir("tx.digest");
     const sum = async () =>
-      (await sh(h, `sha256sum ${dir}/lib/filler.bin | cut -d' ' -f1`)).stdout.trim();
+      (await svcSh(h, `sha256sum ${dir}/lib/filler.bin | cut -d' ' -f1`)).stdout.trim();
     expect(await sum()).toBe(createHash("sha256").update(filler(11)).digest("hex"));
     // a file changed in the state directory since is a miss as well: the files are sent again
-    await sbx.stopService?.(h, "digest", sig());
-    expect((await sh(h, `printf x >> ${dir}/lib/filler.bin`)).exitCode).toBe(0);
+    await sbx.stopService?.(h, "tx.digest", sig());
+    expect((await svcSh(h, `printf x >> ${dir}/lib/filler.bin`)).exitCode).toBe(0);
     sent.length = 0;
     expect((await sbx.ensureService?.(h, spec(11), sig()))?.state).toBe("running");
-    expect(sentFor("digest")).toHaveLength(2);
+    expect(sentFor("tx.digest")).toHaveLength(2);
     expect(await sum()).toBe(createHash("sha256").update(filler(11)).digest("hex"));
   });
 
@@ -303,23 +327,23 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
     const { name, fileSystem, h } = await create();
     const status = await sbx.ensureService?.(
       h,
-      echo("files", { "data/note.txt": enc.encode("kept") }),
+      echo("tx.files", { "data/note.txt": enc.encode("kept") }),
       sig(),
     );
-    expect(status?.stateDir).toBe(serviceStateDir("files"));
+    expect(status?.stateDir).toBe(serviceStateDir("tx.files"));
     // outside the workspace: no project root, Glob / Grep, share or delivery reaches it
     expect(status?.stateDir.startsWith("/var/lib/capybara/svc/")).toBe(true);
     expect((await sh(h, "ls -A /workspace")).stdout).not.toMatch(/capybara/);
-    // only the files it was given land there, with their digest record
-    expect((await sh(h, `cd ${status?.stateDir} && ls -A && id -u`)).stdout).toBe(
-      ".files-digest\ndata\necho.mjs\n1000\n",
+    // only the files it was given land there, with their digest record, the service user's
+    expect((await svcSh(h, `cd ${status?.stateDir} && ls -A && stat -c %u .`)).stdout).toBe(
+      ".files-digest\ndata\necho.mjs\n1100\n",
     );
-    const note = () =>
-      sbx.readFile(h, `${status?.stateDir}/data/note.txt`, { maxBytes: 100, signal: sig() });
+    const note = async (on: SandboxHandle) =>
+      (await svcSh(on, `cat ${status?.stateDir}/data/note.txt`)).stdout;
     // a suspension keeps them
     await sbx.suspend(h, sig());
     expect(await sbx.resume(h, sig())).toBe("resumed");
-    expect(dec.decode((await note())?.data)).toBe("kept");
+    expect(await note(h)).toBe("kept");
     // a new instance on the same files sees them
     await sbx.destroy(h, sig(), FENCE);
     const h2 = await sbx.create({
@@ -330,34 +354,31 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
       fileSystem,
       signal: sig(),
     });
-    const r = await sbx.readFile(h2, `${status?.stateDir}/data/note.txt`, {
-      maxBytes: 100,
-      signal: sig(),
-    });
-    expect(dec.decode(r?.data)).toBe("kept");
-    expect((await sbx.serviceStatus?.(h2, "files", sig()))?.state).toBe("stopped");
+    expect(await note(h2)).toBe("kept");
+    expect((await sbx.serviceStatus?.(h2, "tx.files", sig()))?.state).toBe("stopped");
     // the device's files go with their state volume
-    expect(await docker("volume", "ls", "-q", "--filter", `name=^${name}-svc$`)).toBe(
-      `${name}-svc\n`,
+    expect(await docker("volume", "ls", "-q", "--filter", `name=^${name}-services$`)).toBe(
+      `${name}-services\n`,
     );
     await sbx.destroyFileSystem(fileSystem, sig());
-    expect(await docker("volume", "ls", "-q", "--filter", `name=^${name}-svc$`)).toBe("");
+    expect(await docker("volume", "ls", "-q", "--filter", `name=^${name}-services$`)).toBe("");
   });
 
   it("never blocks on a FIFO planted in the state directory", async () => {
     const { h } = await create();
-    const dir = serviceStateDir("fifo");
-    expect((await sh(h, `mkdir -p ${dir}/data && mkfifo ${dir}/data/x.txt`)).exitCode).toBe(0);
+    const dir = serviceStateDir("tx.fifo");
+    // planted by the service itself (agent commands cannot enter its state directory)
+    expect((await svcSh(h, `mkdir -p ${dir}/data && mkfifo ${dir}/data/x.txt`)).exitCode).toBe(0);
     const t0 = Date.now();
     await expect(
-      sbx.ensureService?.(h, echo("fifo", { "data/x.txt": enc.encode("no") }), sig()),
+      sbx.ensureService?.(h, echo("tx.fifo", { "data/x.txt": enc.encode("no") }), sig()),
     ).rejects.toThrow(/special file|regular file|No such device/i);
     expect(Date.now() - t0).toBeLessThan(20_000);
-    expect((await sbx.serviceStatus?.(h, "fifo", sig()))?.state).toBe("stopped");
+    expect((await sbx.serviceStatus?.(h, "tx.fifo", sig()))?.state).toBe("stopped");
   });
 
   it("refuses services on an instance whose image predates them", async () => {
-    // the published images before device services have no /var/lib/capybara/svc
+    // the published images before isolated device services have no capybara-svc user
     const old = `${images.sandboxImage}-nosvc`;
     await docker(
       "build",
@@ -378,8 +399,10 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
       fileSystem,
       signal: sig(),
     });
-    await expect(sbx.ensureService?.(h, echo("old"), sig())).rejects.toThrow(SERVICE_IMAGE_TOO_OLD);
-    expect((await sbx.serviceStatus?.(h, "old", sig()))?.state).toBe("stopped");
+    await expect(sbx.ensureService?.(h, echo("tx.old"), sig())).rejects.toThrow(
+      SERVICE_IMAGE_TOO_OLD,
+    );
+    expect((await sbx.serviceStatus?.(h, "tx.old", sig()))?.state).toBe("stopped");
     // recreated on the current image over the same files, the instance runs services again (the
     // state volume, still empty, takes the image directory's owner)
     await sbx.destroy(h, sig(), FENCE);
@@ -391,23 +414,25 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
       fileSystem,
       signal: sig(),
     });
-    expect((await sbx.ensureService?.(h2, echo("old"), sig()))?.state).toBe("running");
+    expect((await sbx.ensureService?.(h2, echo("tx.old"), sig()))?.state).toBe("running");
     expect((await sh(h2, "stat -c '%u:%g %a' /var/lib/capybara/svc")).stdout).toBe(
-      "1000:1000 700\n",
+      "1100:1100 700\n",
     );
   });
 
   it("never writes service files through a link planted in the state directory", async () => {
     const { h } = await create();
-    const dir = serviceStateDir("planted");
+    const dir = serviceStateDir("tx.planted");
+    // planted by the service itself (agent commands cannot enter its state directory)
     expect(
-      (await sh(h, `mkdir -p ${dir} /tmp/elsewhere && ln -s /tmp/elsewhere ${dir}/data`)).exitCode,
+      (await svcSh(h, `mkdir -p ${dir} /tmp/elsewhere && ln -s /tmp/elsewhere ${dir}/data`))
+        .exitCode,
     ).toBe(0);
     await expect(
-      sbx.ensureService?.(h, echo("planted", { "data/x.txt": enc.encode("no") }), sig()),
+      sbx.ensureService?.(h, echo("tx.planted", { "data/x.txt": enc.encode("no") }), sig()),
     ).rejects.toThrow(/link|not a directory/i);
-    expect((await sh(h, "ls -A /tmp/elsewhere")).stdout).toBe("");
-    expect((await sbx.serviceStatus?.(h, "planted", sig()))?.state).toBe("stopped");
+    expect((await svcSh(h, "ls -A /tmp/elsewhere")).stdout).toBe("");
+    expect((await sbx.serviceStatus?.(h, "tx.planted", sig()))?.state).toBe("stopped");
   });
 
   it("gives the service the device's egress proxy in its environment", async () => {
@@ -433,7 +458,7 @@ createServer(() => {}).listen(process.env.CAPYBARA_SERVICE_SOCKET);
     const s = await sbx.ensureService?.(
       h,
       {
-        name: "env",
+        name: "tx.env",
         runtime: "node",
         entry: "env.mjs",
         args: ["--flag"],
@@ -442,17 +467,88 @@ createServer(() => {}).listen(process.env.CAPYBARA_SERVICE_SOCKET);
       },
       sig(),
     );
-    const raw = await sbx.readFile(h, `${s?.stateDir}/env.json`, {
-      maxBytes: 64_000,
-      signal: sig(),
-    });
-    const env = JSON.parse(dec.decode(raw?.data)) as Record<string, string>;
+    const env = JSON.parse((await svcSh(h, `cat ${s?.stateDir}/env.json`)).stdout) as Record<
+      string,
+      string
+    >;
     expect(env.HTTPS_PROXY).toMatch(/^http:\/\/.+-egress:3128$/);
     expect(env.HTTP_PROXY).toBe(env.HTTPS_PROXY);
     expect(env.FOO).toBe("bar");
     expect(env.CAPYBARA_SERVICE_STATE).toBe(s?.stateDir);
-    expect(env.CAPYBARA_SERVICE_SOCKET).toMatch(/^\/tmp\//);
+    expect(env.CAPYBARA_SERVICE_SOCKET).toBe(serviceSocketPath("tx.env"));
     expect(env.PATH).toBe("/usr/local/bin:/usr/bin:/bin");
     expect(env.CAPYBARA_SERVICE_WORKSPACE).toBe("/workspace");
+    // its own home, caches and temporary files; the image's read-only browsers
+    expect(env.HOME).toBe(s?.stateDir);
+    expect(env.XDG_CACHE_HOME).toBe(`${s?.stateDir}/.cache`);
+    expect(env.TMPDIR).toBe("/run/capybara-svc/tx.env/tmp");
+    expect(env.PLAYWRIGHT_BROWSERS_PATH).toBe(SERVICE_BROWSERS_PATH);
+    // nothing names a path the agent can write (its caches in the workspace)
+    for (const [k, v] of Object.entries(env))
+      if (k !== "CAPYBARA_SERVICE_WORKSPACE")
+        expect(`${k}=${v}`).not.toMatch(/(^|[=:])\/workspace(\/|:|$)/);
+  });
+
+  it("an agent command can neither read a service's state nor reach its socket or process", async () => {
+    const { h } = await create();
+    const id = "browser.browser";
+    const status = await sbx.ensureService?.(
+      h,
+      echo(id, { "profile/Cookies": enc.encode("session=secret") }),
+      sig(),
+    );
+    expect(status?.state).toBe("running");
+    const dir = serviceStateDir(id);
+    // the service runs as its own user
+    const pid = (
+      await svcSh(h, `pgrep -u ${SERVICE_USER} -f '${dir}/echo.mjs' | head -n1`)
+    ).stdout.trim();
+    expect(pid).toMatch(/^\d+$/);
+    expect((await sh(h, `stat -c %u /proc/${pid}`)).stdout).toBe("1100\n");
+    // the agent (the sandbox user) is refused the state, the run root, the socket and the process
+    const agent = await sh(
+      h,
+      [
+        `cat ${dir}/profile/Cookies`,
+        `ls ${dir}`,
+        "ls /var/lib/capybara/svc",
+        `ls /run/capybara-svc`,
+        `node -e 'require("net").connect(process.argv[1]).on("connect",()=>process.exit(0)).on("error",(e)=>{console.log(e.code);process.exit(1)})' ${serviceSocketPath(id)}`,
+        `kill -0 ${pid}`,
+        `cat /proc/${pid}/environ`,
+        `ls /proc/${pid}/cwd/`,
+      ]
+        .map(
+          (c) =>
+            `if ${c} >/dev/null 2>&1; then echo "OPEN: ${c.slice(0, 40)}"; else echo refused; fi`,
+        )
+        .join("; "),
+    );
+    expect(agent.stdout.trim().split("\n")).toEqual(Array(8).fill("refused"));
+    // nor can it plant anything in the service's areas
+    expect((await sh(h, `mkdir /run/capybara-svc/x || touch ${dir}/x`)).exitCode).not.toBe(0);
+    // the service itself still answers
+    const answer = await sbx.serviceRequest?.(h, id, enc.encode("ok"), {
+      timeoutMs: 10_000,
+      signal: sig(),
+    });
+    expect(dec.decode(answer)).toBe("ok");
+  });
+
+  it("the image ships the pinned Chromium read only for services", async () => {
+    const { h } = await create();
+    const ls = await svcSh(
+      h,
+      `ls ${SERVICE_BROWSERS_PATH} && test ! -w ${SERVICE_BROWSERS_PATH} && stat -c %u ${SERVICE_BROWSERS_PATH}`,
+    );
+    expect(ls.exitCode).toBe(0);
+    expect(ls.stdout).toMatch(/^chromium-\d+\n/m);
+    expect(ls.stdout.trim().split("\n").at(-1)).toBe("0");
+    // the downloads directory a service saves into is made for it, the agent's group kept
+    await sbx.ensureService?.(h, echo("tx.downloads"), sig());
+    expect((await sh(h, "stat -c '%u %a' /workspace/downloads")).stdout).toBe("1000 2777\n");
+    expect(
+      (await svcSh(h, "touch /workspace/downloads/f && stat -c %g /workspace/downloads/f")).stdout,
+    ).toBe("1000\n");
   });
 });

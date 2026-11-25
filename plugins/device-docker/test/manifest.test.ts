@@ -268,6 +268,7 @@ describe("refuseOpenNetwork on resume and auto-start (stub Docker API, no Docker
   const openLabels = {
     "dev.capybara.sandbox.network": "open-public",
     "dev.capybara.sandbox.allow-hosts": "[]",
+    "dev.capybara.sandbox.services": "2",
   };
   const sig = () => AbortSignal.timeout(5000);
 
@@ -298,6 +299,15 @@ describe("refuseOpenNetwork on resume and auto-start (stub Docker API, no Docker
     expect(seen.some((s) => s.endsWith("/start"))).toBe(false);
   });
 
+  it("an instance made before isolated device services (no services label) resumes as gone", async () => {
+    labels = {
+      "dev.capybara.sandbox.network": "allowlist",
+      "dev.capybara.sandbox.allow-hosts": '["pypi.org"]',
+    };
+    seen.length = 0;
+    expect(await sbxWith(false).resume({ id: ID }, sig())).toBe("gone");
+  });
+
   it("without refuseOpenNetwork, or with an allowlist label, resume goes on (reaches Docker)", async () => {
     for (const [refuse, l] of [
       [false, openLabels],
@@ -306,6 +316,7 @@ describe("refuseOpenNetwork on resume and auto-start (stub Docker API, no Docker
         {
           "dev.capybara.sandbox.network": "allowlist",
           "dev.capybara.sandbox.allow-hosts": '["pypi.org"]',
+          "dev.capybara.sandbox.services": "2",
         },
       ],
     ] as const) {
