@@ -62,17 +62,53 @@ A real browser in the person's device for agents (browser use spec,
 - A `handoff_clear` with `handback` (the person answered Done) also ends a takeover. Dropping a
   handoff on the next agent request is device-wide: every conversation of the device is the
   owner's.
+- Viewer input (mouse, keys, text, address bar, tabs) is applied only while the person holds
+  control: a viewer in the watch state is read-only and its input is dropped on arrival, and input
+  still queued when control returns to the agent is dropped too (input already running, a
+  navigation or a long paste, finishes). Keys and buttons the person still holds are released
+  when control returns to the agent or the viewer ends, so the agent never inherits a held Shift
+  or a drag. Mouse moves are coalesced (the newest position wins while one waits). After a move,
+  click or scroll the daemon answers the page's cursor under the pointer (`cursor`, only when it
+  changed), off the input queue (the newest position wins, an answer later than 200 ms is
+  dropped) and without page code: CDP hit-tests the point (`DOM.getNodeForLocation`, through
+  shadow roots and in-process frames) and a function in an isolated world reads the computed
+  `cursor`, resolving `auto` as Chromium does (an I-beam over editable fields and text);
+  out-of-process frames are entered through their own session (at most 20 frames looked at,
+  3 levels).
+- Frames are binary messages (`encodeFrame`: tag, seq, width, height, JPEG); every other message is
+  JSON. Pacing (`daemon/viewer-pacing.ts`): the daemon pings each viewer every second (the path's
+  own round trip) and compares each frame's ack round trip with it. While frames take longer than
+  120 ms over it (a click would wait that long behind them on the slowest hop), it lowers the JPEG
+  quality (60, 45, 35, 25) and then the scale (down to half), allows only one frame in flight, and
+  steps back up after six quick frames. At most 15 frames per second; only the newest frame waits
+  (a stale one is replaced), and Chromium encodes the next frame at most every 500 ms while one
+  waits. JSON messages (state, cursor, pings, dialogs) never wait behind a held frame.
 
 ## The panel (`ui-src/panel/`)
 
 - Every viewer is the owner's: any non-compact panel is interactive (keys, pointer, Esc) while the
-  person holds control, whichever panel took it, and asks for full-viewport frames then. Nothing
-  is kept in storage (the sandboxed iframe has none); a remount rebuilds from the daemon's first
-  state. Take over is offered only in the live view; handing back with a pending handoff answers
-  it Done.
-- 允许 allows the blocked host, then opens the blocked page (the blocked navigation, or the page
-  whose resource was refused), again on the next connection if the browser restarted. A 4404
-  after a live view (a restart) is retried twice (1 s, 3 s) before "not running"; one before any
+  person holds control, whichever panel took it, and may ask for frames up to the full viewport
+  then. In the watch state the panel is read-only (no pointer, keys, address bar, tabs or
+  navigation; the cursor is the arrow). Nothing is kept in storage (the sandboxed iframe has none);
+  a remount rebuilds from the daemon's first state. Take over is offered only in the live view;
+  handing back with a pending handoff answers it Done.
+- Takeover input (`ui-src/panel/input.ts`): button and wheel events at once, moves coalesced to the
+  newest position at most every 33 ms (hover effects, menus and tooltips render in the stream), a
+  drag reported until the button is released wherever that happens; the page's cursor from the
+  daemon on the picture (known keywords only); a press indicator at the pointer from mousedown until
+  the first frame after the release (1 s at most). A visually hidden textarea holds the focus while
+  driving: keys go as `down` / `up` (Esc hands back), IME composition (Chinese input) as one `char`
+  at `compositionend`, paste as `char` with the clipboard text (Cmd/Ctrl+V itself is not sent;
+  text is cut at 10 000 code points). Losing the window or the focus sends `up` for held keys and
+  the held button; the sink gives up the focus when control returns to the agent.
+- Frame size: the picture's CSS box times the device pixel ratio capped at 1.25, within 640 px wide
+  in the side view and the full viewport while the person drives; the daemon may send smaller
+  frames on a slow link (see the pacing above).
+- 允许 allows the blocked host; while the person drives it then opens the blocked page (the blocked
+  navigation, or the page whose resource was refused), again on the next connection if the browser
+  restarted, taking over again first (a restarted daemon starts with the agent in control); a hand
+  back cancels that reopen. A 4404 after a live view (a restart) is retried twice (1 s, 3 s)
+  before "not running"; one before any
   live view is "not running" at once. "Not running" looks for the browser quietly (it stays up
   until the browser answers) every 10 s while visible, for 30 minutes at most (a ticket never
   starts the service). A refused allow or answer shows the kernel's reason.
