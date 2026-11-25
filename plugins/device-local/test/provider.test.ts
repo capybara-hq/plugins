@@ -800,6 +800,19 @@ describe("lifecycle", () => {
     expect(await s.provider.resume(h, signal())).toBe("gone");
   });
 
+  it("resume answers gone at once, with no machine round trip, when the machine came back without the binding", async () => {
+    const s = setup();
+    const h = await created(s);
+    const b = s.rows.get(DEVICE);
+    if (!b) throw new Error("no binding");
+    // a hello that did not attest the installed generation (the program restarted unbound, e.g.
+    // upgraded to another runtime) marked it unattested
+    s.rows.set(DEVICE, { ...b, unattested: true });
+    const before = s.dial.sent.length;
+    expect(await s.provider.resume(h, signal())).toBe("gone");
+    expect(s.dial.sent.length).toBe(before);
+  });
+
   it("resume keeps transient binding failures as errors", async () => {
     let failure: unknown;
     const m = machine();
