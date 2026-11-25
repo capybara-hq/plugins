@@ -19,6 +19,7 @@ import {
   type BrowserSession,
   captureFitting,
   clip,
+  isStartBlank,
   jpegSize,
   type SessionEvent,
 } from "./actions.js";
@@ -293,7 +294,11 @@ export class ViewerSession {
    */
   private async openOwnTab(): Promise<Page | undefined> {
     try {
-      const page = await this.browser.openTab(this.conv, this.root);
+      // the conversation's first tab may be the unowned blank one, as for the tool's open
+      const page =
+        this.browser.countOf(this.conv) === 0
+          ? await this.browser.pageFor(this.conv, this.root)
+          : await this.browser.openTab(this.conv, this.root);
       this.state.concern(this.conv);
       this.choice = undefined;
       this.queueState();
@@ -333,6 +338,7 @@ export class ViewerSession {
       return;
     }
     if (result === "in_use") this.send({ t: "notice", code: "tab_in_use" });
+    else if (result === "cap") this.send({ t: "notice", code: "tab_cap" });
     else if (result === "ok") {
       this.choice = undefined;
       this.queueState();
@@ -665,7 +671,7 @@ export class ViewerSession {
       tabs,
       ...(this.shown === undefined ? {} : { shown: this.shown }),
       otherTabs: all
-        .filter((t) => t.root !== this.root)
+        .filter((t) => t.root !== this.root && !isStartBlank(t))
         .map((t) => ({ id: t.id, title: t.title, url: t.url })),
       loading: this.browser.isLoading(this.shown),
       secure: shownTab?.url.startsWith("https:") ?? false,

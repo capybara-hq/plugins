@@ -158,6 +158,11 @@ export class DaemonState {
     return [...this.conversations.keys()];
   }
 
+  /** Whether the daemon keeps state for the conversation. */
+  known(conversationId: string): boolean {
+    return this.conversations.has(conversationId);
+  }
+
   /** The root of a conversation's tree, when the daemon knows the conversation. */
   rootOf(conversationId: string): string | undefined {
     return this.conversations.get(conversationId)?.root;

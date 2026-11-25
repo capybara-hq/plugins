@@ -322,7 +322,7 @@ export type ViewerIn =
    * tab. `close` (control only): closes a tab of the tree. `adopt` (also in the watch state):
    * moves a tab of another tree (or an unowned one) to the viewer's conversation, as the tool's
    * adopt does; a tab of the viewer's own tree is ignored; refused while its owner is in use, which
-   * answers `{ t: "notice", code: "tab_in_use" }`.
+   * answers `{ t: "notice", code: "tab_in_use" }`, or at the conversation's cap (`tab_cap`).
    */
   | { t: "tab"; action: "open" | "switch" | "close" | "adopt"; tabId?: string }
   /**
@@ -427,5 +427,8 @@ export type ViewerOut =
   | { t: "ping"; id: number }
   /** The page's cursor at the pointer, sent after a move when it changed (takeover only). */
   | { t: "cursor"; cursor: ViewerCursor }
-  /** A viewer `adopt` was refused: the tab's owner is using it right now. */
-  | { t: "notice"; code: "tab_in_use" };
+  /**
+   * A viewer `adopt` was refused: `tab_in_use`, the tab's owner is using it right now; `tab_cap`,
+   * the viewer's conversation already owns MAX_TABS_PER_CONVERSATION tabs.
+   */
+  | { t: "notice"; code: "tab_in_use" | "tab_cap" };

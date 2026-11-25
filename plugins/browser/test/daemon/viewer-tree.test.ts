@@ -1,5 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import type { ToolReply, ViewerOut } from "../../daemon/protocol.js";
+import {
+  MAX_TABS_PER_CONVERSATION,
+  type ToolReply,
+  type ViewerOut,
+} from "../../daemon/protocol.js";
 import {
   conv,
   openViewer,
@@ -118,6 +122,21 @@ describe("what a viewer sees", () => {
     expect(st.handoffs).toEqual([]);
   });
 
+  it("a fresh browser's blank start tab is nobody's: no other-conversations entry", async () => {
+    const d = await startTestDaemon();
+    daemons.push(d);
+    const v = await viewer(d, ROOT);
+    const st = (await v.next(isState)) as State;
+    expect(st).toMatchObject({ tabs: [], otherTabs: [] });
+    expect(st.shown).toBeUndefined();
+    // the person's first tab is that blank tab, claimed like the tool's first open
+    await takeOver(v);
+    const opened = v.after((m) => isState(m) && m.tabs.length === 1);
+    v.send({ t: "tab", action: "open" });
+    expect(await opened).toMatchObject({ tabs: [{ id: "t1", group: "own" }], otherTabs: [] });
+    await handBack(v);
+  });
+
   it("the empty state when the tree owns no tab: no other tree's page is shown", async () => {
     const d = await tree();
     const v = await viewer(d, conv("fresh"));
@@ -169,23 +188,74 @@ describe("what a viewer sees", () => {
 describe("what a viewer does", () => {
   it("a watching viewer adopts another tree's tab; its switch is dropped", async () => {
     const d = await tree();
+    // the root's second tab, t4, is its active one
+    ok(await request(d.socketPath, { op: "tabs", action: "open", url: `${fx.url}/s2` }, ROOT));
     const v = await viewer(d, ROOT);
-    await v.next((m) => isState(m) && m.shown === "t1");
-    v.send({ t: "tab", action: "switch", tabId: "t2" });
+    await v.next((m) => isState(m) && m.shown === "t4");
+    // applied, this switch would make t1 the root's active (and shown) tab
+    v.send({ t: "tab", action: "switch", tabId: "t1" });
     // a viewer adopt of a tab of its own tree is ignored
     v.send({ t: "tab", action: "adopt", tabId: "t2" });
+    // a state sent after both (another conversation's request ends with one)
+    const after = v.after(isState);
+    ok(await request(d.socketPath, { op: "tabs", action: "list" }, OTHER));
+    expect(await after).toMatchObject({ shown: "t4" });
+    expect(ok(await request(d.socketPath, { op: "tabs", action: "list" }, ROOT)).page?.tabId).toBe(
+      "t4",
+    );
     const moved = v.after((m) => isState(m) && m.tabs.some((t) => t.id === "t3"));
     v.send({ t: "tab", action: "adopt", tabId: "t3" });
     const st = (await moved) as State;
     expect(st.tabs).toMatchObject([
       { id: "t1", group: "own" },
       { id: "t3", group: "own", active: true },
+      { id: "t4", group: "own" },
       { id: "t2", group: "sub1" },
     ]);
     expect(st.otherTabs).toEqual([]);
     expect(ok(await request(d.socketPath, { op: "snapshot" }, SUB)).page?.tabId).toBe("t2");
     const other = ok(await request(d.socketPath, { op: "tabs", action: "list" }, OTHER));
     expect(other.text).toContain("Tab t3 (O) was moved to another conversation.");
+  });
+
+  it("a viewer adopt at its conversation's tab cap answers the tab_cap notice", async () => {
+    const d = await tree();
+    while (
+      ownTabIds(ok(await request(d.socketPath, { op: "tabs", action: "list" }, ROOT)).text).length <
+      MAX_TABS_PER_CONVERSATION
+    )
+      ok(await request(d.socketPath, { op: "tabs", action: "open" }, ROOT));
+    const v = await viewer(d, ROOT);
+    await v.next(isState);
+    const notice = v.after((m) => m.t === "notice");
+    v.send({ t: "tab", action: "adopt", tabId: "t3" });
+    expect(await notice).toEqual({ t: "notice", code: "tab_cap" });
+  });
+
+  it("the person's use of a tab tells a conversation that had none when the takeover began", async () => {
+    const d = await tree();
+    const FRESH = conv("fresh");
+    const v = await viewer(d, ROOT);
+    await v.next(isState);
+    await takeOver(v);
+    // another panel moves the other tree's tab to a fresh conversation, and the person types there
+    const vf = await viewer(d, FRESH);
+    const moved = vf.after((m) => isState(m) && m.shown === "t3");
+    vf.send({ t: "tab", action: "adopt", tabId: "t3" });
+    await moved;
+    const navigated = vf.after(
+      (m) => isState(m) && m.tabs.some((t) => t.id === "t3" && t.url === `${fx.url}/r`),
+    );
+    vf.send({ t: "nav", url: `${fx.url}/r` });
+    await navigated;
+    await handBack(v);
+    const fresh = ok(await request(d.socketPath, { op: "snapshot" }, FRESH));
+    expect(typeof fresh.userControlledSince).toBe("string");
+    // a conversation with no tab then and no tab used is not told
+    const bystander = ok(
+      await request(d.socketPath, { op: "tabs", action: "list" }, conv("bystander")),
+    );
+    expect(bystander.userControlledSince).toBeUndefined();
   });
 
   it("a refused adopt answers the tab_in_use notice", async () => {

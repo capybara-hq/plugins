@@ -534,6 +534,8 @@ export interface TabUsage {
   tabClosed(tabId: string): void;
   /** The conversation gained a tab (adopt, a person's tab, a restore). */
   seen(conversationId: string, root: string): void;
+  /** Whether the daemon keeps state for the conversation (it has not idle closed). */
+  known(conversationId: string): boolean;
 }
 
 /** Usage for a session without a daemon state: nobody busy, everybody idle for good. */
@@ -545,7 +547,16 @@ const NO_USAGE: TabUsage = {
   tabParked: () => false,
   tabClosed: () => undefined,
   seen: () => undefined,
+  known: () => true,
 };
+
+/**
+ * Whether a tab is the unowned blank tab Chromium starts with (or one a conversation left): it is
+ * nobody's page, so neither tab lists nor viewers' other-conversation menus show it.
+ */
+export function isStartBlank(tab: { owner?: string | undefined; url: string }): boolean {
+  return tab.owner === undefined && tab.url === "about:blank";
+}
 
 /** Titles of other conversations' tabs in a tab list are cut to this (outside text, kept short). */
 export const OTHER_TITLE_CHARS = 120;
@@ -653,6 +664,11 @@ export class BrowserSession {
   private allocChain: Promise<unknown> = Promise.resolve();
   /** Tabs being opened by the session (not yet tracked): they count toward the device cap. */
   private reserved = 0;
+  /**
+   * Tabs of an idle-closed conversation whose close is under way: no conversation owns, claims,
+   * adopts or lists them any more.
+   */
+  private readonly closing = new Set<string>();
   /** When an agent request last acted on each tab (the eviction's least recently used tab). */
   private readonly tabUsedAt = new Map<string, number>();
   /** Order of the conversations' last acting requests (a viewer's default shown tab). */
@@ -696,10 +712,13 @@ export class BrowserSession {
       this.emit({ type: "state" });
       // A popup is attributed by its opener's `popup` event, emitted right after this one. A page
       // nobody opened (the browser's own) stays unowned; past the device cap it is closed.
+      // Checked in the allocation chain: no tab of the session's own is half opened there.
       queueMicrotask(() => {
-        const id = this.ids.get(p);
-        if (id === undefined || this.owners.has(id) || p.isClosed()) return;
-        if (this.pages.size > MAX_TABS + this.reserved) p.close().catch(() => undefined);
+        void this.allocate(async () => {
+          const id = this.ids.get(p);
+          if (id === undefined || this.owners.has(id) || p.isClosed()) return;
+          if (this.pages.size > MAX_TABS) await p.close().catch(() => undefined);
+        });
       });
     });
     for (const p of ctx.pages()) this.track(p);
@@ -718,10 +737,17 @@ export class BrowserSession {
     return this.ids.get(page) ?? "";
   }
 
-  /** The live page of a tab, if it is open. */
+  /** The live page of a tab, if it is open (and not closing). */
   pageById(tabId: string | undefined): Page | undefined {
     const page = tabId === undefined ? undefined : this.pages.get(tabId);
-    return page === undefined || page.isClosed() ? undefined : page;
+    return page === undefined || page.isClosed() || this.closing.has(tabId as string)
+      ? undefined
+      : page;
+  }
+
+  /** The open tabs that are not closing, in tab order. */
+  private live(): [string, Page][] {
+    return [...this.pages.entries()].filter(([id, p]) => !p.isClosed() && !this.closing.has(id));
   }
 
   /** A tab's owner, if it has one. */
@@ -736,7 +762,9 @@ export class BrowserSession {
 
   /** The conversation's tabs in tab order. */
   tabsOf(conversationId: string): string[] {
-    return [...this.pages.keys()].filter((id) => this.owners.get(id)?.owner === conversationId);
+    return this.live()
+      .map(([id]) => id)
+      .filter((id) => this.owners.get(id)?.owner === conversationId);
   }
 
   /** How many tabs the conversation owns. */
@@ -771,7 +799,7 @@ export class BrowserSession {
   }
 
   tabs(): (TabInfo & { owner?: string; root?: string; active: boolean })[] {
-    return [...this.pages.entries()].map(([id, p]) => {
+    return this.live().map(([id, p]) => {
       const blocker = this.blockers.get(id);
       const icon = this.favicons.get(id)?.data;
       const o = this.owners.get(id);
@@ -842,8 +870,15 @@ export class BrowserSession {
     let claim = this.claiming.get(conversationId);
     if (claim === undefined) {
       claim = this.allocate(async () => {
-        const unowned = [...this.pages.entries()].find(
-          ([id, p]) => !p.isClosed() && !this.owners.has(id) && !this.usage.tabParked(id),
+        // an adopt beside the queue may have given the conversation a tab meanwhile
+        const now =
+          this.currentPage(conversationId) ?? this.pageById(this.tabsOf(conversationId).at(-1));
+        if (now !== undefined) {
+          this.setActive(conversationId, this.tabIdOf(now));
+          return now;
+        }
+        const unowned = this.live().find(
+          ([id]) => !this.owners.has(id) && !this.usage.tabParked(id),
         );
         if (unowned !== undefined) {
           const [id, page] = unowned;
@@ -896,9 +931,7 @@ export class BrowserSession {
    * a park pins are skipped. Its owner is told. False when no tab qualifies.
    */
   private async evict(forConversation: string): Promise<boolean> {
-    const live = [...this.pages.entries()].filter(
-      ([id, p]) => !p.isClosed() && !this.usage.tabParked(id),
-    );
+    const live = this.live().filter(([id]) => !this.usage.tabParked(id));
     const unowned = live.find(([id]) => !this.owners.has(id));
     if (unowned !== undefined) {
       await unowned[1].close().catch(() => undefined);
@@ -921,7 +954,7 @@ export class BrowserSession {
     )[0];
     if (victim === undefined) return false;
     const active = this.activeOf.get(victim);
-    const used = (id: string) => this.tabUsedAt.get(id) ?? Number.NEGATIVE_INFINITY;
+    const used = (id: string) => this.tabUsedAt.get(id) ?? 0;
     const [tabId, page] =
       live
         .filter(([id]) => this.owners.get(id)?.owner === victim)
@@ -968,8 +1001,8 @@ export class BrowserSession {
    */
   async restoreTab(owner: TabOwner, url: string): Promise<string> {
     const page = await this.allocate(async () => {
-      const blank = [...this.pages.entries()].find(
-        ([id, p]) => !p.isClosed() && !this.owners.has(id) && p.url() === "about:blank",
+      const blank = this.live().find(([id, p]) =>
+        isStartBlank({ owner: this.owners.get(id)?.owner, url: p.url() }),
       );
       if (blank !== undefined) {
         this.assign(blank[0], owner);
@@ -1006,6 +1039,11 @@ export class BrowserSession {
    */
   async closeConversation(conversationId: string): Promise<void> {
     const ids = this.tabsOf(conversationId).filter((id) => !this.usage.tabParked(id));
+    // from now on these tabs are nobody's: a request arriving before they closed gets a new tab
+    for (const id of ids) {
+      this.closing.add(id);
+      this.owners.delete(id);
+    }
     this.activeOf.delete(conversationId);
     this.queues.delete(this.queueKey(conversationId));
     this.unreported.delete(conversationId);
@@ -1016,7 +1054,10 @@ export class BrowserSession {
         this.pages
           .get(id)
           ?.close()
-          .catch(() => undefined),
+          .catch(() => {
+            // a tab that would not close stays, unowned
+            this.closing.delete(id);
+          }),
       ),
     );
     this.emit({ type: "state" });
@@ -1113,6 +1154,7 @@ export class BrowserSession {
     page.on("close", () => {
       this.pendingNavs.delete(page);
       this.pages.delete(id);
+      this.closing.delete(id);
       this.titles.delete(id);
       this.loadingTabs.delete(id);
       this.blockers.delete(id);
@@ -1153,12 +1195,12 @@ export class BrowserSession {
     this.activeOf.set(o.owner, id);
     this.emit({ type: "active", conversationId: o.owner });
     this.emit({ type: "state" });
-    if (this.pages.size > MAX_TABS + this.reserved) {
-      void this.allocate(async () => {
-        if (popup.isClosed() || this.pages.size <= MAX_TABS + this.reserved) return;
-        if (!(await this.evict(o.owner))) closeIt(`the browser keeps at most ${MAX_TABS} tabs`);
-      });
-    }
+    // the device cap is checked in the allocation chain, where no tab of the session's own is
+    // half opened (a page opening there is not yet in `pages`)
+    void this.allocate(async () => {
+      if (popup.isClosed() || this.pages.size <= MAX_TABS) return;
+      if (!(await this.evict(o.owner))) closeIt(`the browser keeps at most ${MAX_TABS} tabs`);
+    });
   }
 
   private onDialog(page: Page, d: Dialog): void {
@@ -1201,6 +1243,8 @@ export class BrowserSession {
    */
   noteTo(conversationId: string | undefined, text: string): void {
     if (conversationId === undefined) return;
+    // a conversation that idle closed and owns nothing has no next reply to carry it
+    if (this.countOf(conversationId) === 0 && !this.usage.known(conversationId)) return;
     const n = clip(text, MAX_DIALOG_CHARS + 200);
     let delivered = false;
     for (const c of this.collectors) {
@@ -2140,8 +2184,7 @@ export class BrowserSession {
     const own: string[] = [];
     const tree: string[] = [];
     const device: string[] = [];
-    for (const [id, p] of [...this.pages.entries()]) {
-      if (p.isClosed()) continue;
+    for (const [id, p] of this.live()) {
       const o = this.owners.get(id);
       if (o?.owner === conversationId) {
         const info = await this.pageInfo(p);
@@ -2149,15 +2192,14 @@ export class BrowserSession {
         own.push(`${id}${active}: ${info.title || "(no title)"} ${info.url}`);
         continue;
       }
-      if (o === undefined && p.url() === "about:blank") continue;
+      if (isStartBlank({ owner: o?.owner, url: p.url() })) continue;
       const title = clip(this.titles.get(id) ?? "", OTHER_TITLE_CHARS) || "(no title)";
       const line = `${id}: ${title} ${bareUrl(clip(p.url(), MAX_URL_CHARS))}`;
       if (o !== undefined && o.root === root) tree.push(line);
       else device.push(line);
     }
     const lines = [...own];
-    if (tree.length > 0)
-      lines.push("Tabs of other conversations in this task (you cannot use these):", ...tree);
+    if (tree.length > 0) lines.push("Tabs of other conversations in this task:", ...tree);
     if (device.length > 0) lines.push("Tabs of other conversations on this device:", ...device);
     if (tree.length + device.length > 0)
       lines.push(
@@ -2168,8 +2210,8 @@ export class BrowserSession {
   }
 
   tabById(tabId: string | undefined): Page {
-    const page = tabId === undefined ? undefined : this.pages.get(tabId);
-    if (page === undefined || page.isClosed()) {
+    const page = this.pageById(tabId);
+    if (page === undefined) {
       throw new ActionError(
         "failed",
         `No tab ${JSON.stringify(tabId ?? "")}; list the tabs to see their ids.`,

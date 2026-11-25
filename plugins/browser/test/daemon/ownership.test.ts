@@ -167,7 +167,7 @@ describe("tabs owned per conversation", () => {
     const list = ok(await request(d.socketPath, { op: "tabs", action: "list" }, root)).text ?? "";
     expect(list.split("\n")).toEqual([
       `t1 (active): A ${fx.url}/a`,
-      "Tabs of other conversations in this task (you cannot use these):",
+      "Tabs of other conversations in this task:",
       `t2: ${"T".repeat(119)}… ${fx.url}/long`,
       "Tabs of other conversations on this device:",
       `t3: B ${fx.url}/b`,
@@ -195,8 +195,10 @@ describe("tabs owned per conversation", () => {
     const d = await daemon();
     await request(d.socketPath, { op: "navigate", url: `${fx.url}/popups` }, A);
     await request(d.socketPath, { op: "snapshot" }, B);
-    // B has a request in flight while A's page opens its popups
-    const bWaits = request(d.socketPath, { op: "wait", text: "never there", timeoutMs: 3000 }, B);
+    // B has a request in flight while A's page opens its popups (a navigation held open)
+    const arrived = held();
+    const bWaits = request(d.socketPath, { op: "navigate", url: `${fx.url}/slow` }, B);
+    const res = await arrived;
     ok(await request(d.socketPath, { op: "click_at", x: 10, y: 10 }, A));
     await vi.waitFor(async () => expect(await ownTabs(d, A)).toHaveLength(2));
     // the popup is A's active tab now: go back to the opener for the button
@@ -206,7 +208,9 @@ describe("tabs owned per conversation", () => {
     expect(await ownTabs(d, B)).toEqual(["t2"]);
     const a = ok(await request(d.socketPath, { op: "snapshot" }, A));
     expect(a.page?.url).toBe(`${fx.url}/c`);
-    await bWaits;
+    expect(d.daemon.state.busy("b")).toBe(true);
+    res.writeHead(200, { "content-type": "text/html" }).end("<title>Slow</title>");
+    expect(ok(await bWaits).page?.tabId).toBe("t2");
   });
 });
 
@@ -330,6 +334,44 @@ describe("caps and eviction", () => {
   });
 });
 
+describe("popups at the device cap", () => {
+  /** A owns five tabs with the popups page active, B five tabs: the device is full. */
+  async function full(clock: ShiftClock): Promise<TestDaemon> {
+    const d = await daemon(clock);
+    while ((await ownTabs(d, A)).length < 5)
+      ok(await request(d.socketPath, { op: "tabs", action: "open" }, A));
+    ok(await request(d.socketPath, { op: "navigate", url: `${fx.url}/popups` }, A));
+    while ((await ownTabs(d, B)).length < 5)
+      ok(await request(d.socketPath, { op: "tabs", action: "open" }, B));
+    return d;
+  }
+
+  it("closes the popup with a note when no tab can be evicted", async () => {
+    const d = await full(new ShiftClock());
+    const r = ok(await request(d.socketPath, { op: "click_at", x: 10, y: 10 }, A));
+    let notes = r.text ?? "";
+    await vi.waitFor(async () => {
+      notes += ok(await request(d.socketPath, { op: "tabs", action: "list" }, A)).text ?? "";
+      expect(notes).toContain(
+        `the browser keeps at most ${MAX_TABS} tabs, so the popup was closed`,
+      );
+    });
+    expect(await ownTabs(d, A)).toHaveLength(5);
+    expect(await ownTabs(d, B)).toHaveLength(5);
+  });
+
+  it("evicts an idle owner's tab to keep the popup", async () => {
+    const clock = new ShiftClock();
+    const d = await full(clock);
+    clock.advance(EVICT_MIN_IDLE_MS);
+    ok(await request(d.socketPath, { op: "click_at", x: 10, y: 10 }, A));
+    await vi.waitFor(async () => expect(await ownTabs(d, A)).toHaveLength(6));
+    const b = ok(await request(d.socketPath, { op: "tabs", action: "list" }, B));
+    expect(ownTabIds(b.text)).toHaveLength(4);
+    expect(b.text).toContain("was closed to make room for another conversation.");
+  });
+});
+
 describe("handoffs per conversation", () => {
   it("a request drops only its own conversation's pending handoff", async () => {
     const d = await daemon();
@@ -388,6 +430,22 @@ describe("idle close", () => {
       const r = ok(await request(d.socketPath, { op: "tabs", action: "list" }, conv("z")));
       expect(r.text).toBe("No browser tabs are open.");
     });
+  });
+
+  it("a request arriving while the idle close runs gets a new tab, not a closing one", async () => {
+    const clock = new ShiftClock();
+    const d = await daemon(clock);
+    ok(await request(d.socketPath, { op: "navigate", url: `${fx.url}/a` }, A));
+    ok(await request(d.socketPath, { op: "navigate", url: `${fx.url}/b` }, B));
+    clock.advance(CONVERSATION_IDLE_MS);
+    // sent in the same tick as the idle close, before its tabs finished closing
+    const [nav, adopt] = await Promise.all([
+      request(d.socketPath, { op: "navigate", url: `${fx.url}/c` }, A),
+      request(d.socketPath, { op: "tabs", action: "adopt", tabId: "t2" }, conv("z")),
+    ]);
+    expect(ok(nav).page).toMatchObject({ url: `${fx.url}/c` });
+    expect(ok(nav).page?.tabId).not.toBe("t1");
+    expect(adopt).toMatchObject({ ok: false, message: expect.stringMatching(/^No tab "t2"/) });
   });
 
   it("closes a finished sub-agent's tab while the root's panel stays open", async () => {
