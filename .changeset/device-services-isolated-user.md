@@ -10,3 +10,5 @@ the socket relay as `capybara-svc` (uid 1100), with its state under `/var/lib/ca
 service's socket or process. Services are keyed by their id `<extension>.<name>` (core#817). The sandbox image ships the browser
 plugin's pinned Chromium (full build) read only in `/opt/capybara-browsers` (plugins#209); device-docker moves service state to a
 new `<name>-services` volume and removes the old `-svc` one; device-e2b prepares the user on VMs from older templates.
+device-docker recreates (answers `gone` on resume for) instances made before isolated services; device-e2b kills the old services
+on VMs from older templates; device-local answers a machine older than service ids with "update capybara-device".

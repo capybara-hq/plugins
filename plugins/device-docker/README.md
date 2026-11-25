@@ -271,11 +271,17 @@ Services are keyed by their id `<extension>.<name>` (the kernel namespaces every
   are that user's, 0700, so an agent command can neither read a service's state (a browser profile with its cookies), nor reach
   its socket, nor signal or inspect its process (`/proc/<pid>/environ`, `cwd`); `test/services.test.ts` proves each. The service
   writes only its own directories and `/workspace/downloads`, which the provider makes (as the sandbox user, mode 2777, setgid) so
-  what it saves stays the agent's group. Its environment drops every variable naming a workspace path (the agent's caches) and
-  gets its own `HOME`, XDG directories and `TMPDIR`.
+  what it saves stays the agent's group; any user in the device can write that directory, so a service saves there only into files
+  it creates exclusively and checks (the browser does). Its environment drops every variable naming a workspace path (the agent's
+  caches) and gets its own `HOME`, XDG directories and `TMPDIR`. Every service of a device shares that one user: services are not
+  isolated from each other (extensions are full trust; one service is declared today).
+- **Upgrade**: an instance made before isolated services (no `dev.capybara.sandbox.services=2` label) answers `gone` on resume,
+  so the kernel recreates it on the same files and the current image, ending its old services; a running one that a start finds
+  without the service user gets its old services (the sandbox user's) killed and the "predates" answer.
 - **Browser (plugins#209)**: the image ships the browser plugin's Chromium (Playwright's full build, pinned to its
   playwright-core: `tools/checks/test/browser-pin.test.ts`) in `/opt/capybara-browsers`, root-owned and read only; services get it
-  as `PLAYWRIGHT_BROWSERS_PATH`, so no service runs a browser it or an agent command could replace. About 412 MB unpacked
+  as `PLAYWRIGHT_BROWSERS_PATH`, so no service runs a browser it or an agent command could replace (an image pinned to another
+  revision still serves its own, read only; without one the browser refuses to start). About 412 MB unpacked
   (linux arm64), +0.43 GB on the image; the first launch in a device takes about 0.2 s (nothing is downloaded).
 
 - **Process**: the provider runs its service manager (`src/services.ts`, `python3 -I`, standard library, shared byte for byte with

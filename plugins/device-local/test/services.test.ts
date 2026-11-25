@@ -18,7 +18,7 @@ type Body = Record<string, unknown>;
  * and the entry runs from the code directory (the conformance argv probe answers that path).
  * `codeDir` overrides the reported code directory (invalid answers).
  */
-function serviceMachine(opts: { oldMachine?: boolean; codeDir?: unknown } = {}) {
+function serviceMachine(opts: { oldMachine?: boolean; preIds?: boolean; codeDir?: unknown } = {}) {
   const digests = new Set<string>();
   const running = new Map<string, { startedAt: string; network: unknown; entry: string }>();
   const codeDirOf = (name: string): unknown =>
@@ -48,6 +48,15 @@ function serviceMachine(opts: { oldMachine?: boolean; codeDir?: unknown } = {}) 
             };
           return { ok: true, result: status(spec.name) };
         }
+        // a capybara-device from before service ids refuses one by its old name rule
+        if (opts.preIds)
+          return {
+            ok: false,
+            error: {
+              kind: "invalid",
+              message: `Invalid device service name "${spec.name}": 1 to 32 characters, a lower-case letter then letters, digits and -`,
+            },
+          };
         if (opts.oldMachine && !spec.files)
           return { ok: false, error: { kind: "invalid", message: "spec.files must be an object" } };
         const digest = body.filesDigest as string | undefined;
@@ -87,7 +96,7 @@ function serviceMachine(opts: { oldMachine?: boolean; codeDir?: unknown } = {}) 
   return { answer, requests, running, digests };
 }
 
-function setup(opts: { oldMachine?: boolean; codeDir?: unknown } = {}) {
+function setup(opts: { oldMachine?: boolean; preIds?: boolean; codeDir?: unknown } = {}) {
   const m = serviceMachine(opts);
   const dial = fakeDialIn((req) => m.answer(req.body as Body));
   const { store } = memoryStore();
@@ -105,6 +114,16 @@ const SPEC = {
 };
 
 describe("device-local services", () => {
+  it("a machine from before service ids answers an actionable update, not a retry", async () => {
+    const { m, provider } = setup({ preIds: true });
+    await expect(provider.ensureService?.(HANDLE, SPEC, signal())).rejects.toMatchObject({
+      name: "SandboxPermissionUnsupportedError",
+      message: expect.stringMatching(/update capybara-device on that machine/),
+    });
+    // refused once, never retried with the files
+    expect(m.requests).toHaveLength(1);
+  });
+
   it("ensureService sends service.ensure with base64 files and the device network", async () => {
     const { m, provider } = setup();
     const status = await provider.ensureService?.(HANDLE, SPEC, signal());

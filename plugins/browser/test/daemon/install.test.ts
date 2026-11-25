@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   BrowserInstalledError,
   browserPaths,
@@ -16,17 +16,31 @@ describe("chromium in the provider's install directory (plugins#209)", () => {
     const dir = mkdtempSync(join(tmpdir(), "cbd-seal-"));
     try {
       const { executable, marker } = await browserPaths(dir);
-      // installed already (the download itself is Playwright's): only the seal is new
+      // something left a complete-looking "install" there (an older version, a compromised run)
       mkdirSync(dirname(executable), { recursive: true });
-      writeFileSync(executable, "");
+      writeFileSync(executable, "planted");
       writeFileSync(marker, "");
+      // Playwright's installer (a download), stood in for: it is asked to install afresh
+      const mod = (await import("playwright-core/lib/coreBundle")) as {
+        registry?: { registry: { install: (...a: unknown[]) => Promise<void> } };
+        default?: { registry: { registry: { install: (...a: unknown[]) => Promise<void> } } };
+      };
+      const registry = (mod.registry ?? mod.default?.registry)?.registry;
+      if (registry === undefined) throw new Error("no registry");
+      const install = vi.spyOn(registry, "install").mockImplementation(async () => {
+        writeFileSync(executable, "fresh");
+        writeFileSync(marker, "");
+      });
       const plan = chromiumLaunchPlan({
         stateDir: "/s",
         env: { CAPYBARA_SERVICE_INSTALL: dir },
         platform: process.platform,
       });
       await expect(launchChromium(plan)).rejects.toBeInstanceOf(BrowserInstalledError);
+      expect(install).toHaveBeenCalledWith(expect.anything(), { gc: false, force: true });
+      expect(readFileSync(executable, "utf8")).toBe("fresh");
       expect(existsSync(join(dir, ".sealed"))).toBe(true);
+      install.mockRestore();
       // sealed but incomplete: never installed into again (it is read only for the service)
       rmSync(executable);
       const sealed = chromiumLaunchPlan({

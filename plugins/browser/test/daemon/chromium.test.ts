@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  BROWSER_UNAVAILABLE_MESSAGE,
   browserPaths,
   browserRevision,
   chromeUserAgent,
@@ -84,14 +85,14 @@ describe("chromium browsers directory", () => {
     try {
       const env = { PLAYWRIGHT_BROWSERS_PATH: cache };
       const plan = () => chromiumLaunchPlan({ stateDir: "/s", env, platform: "linux" });
-      // empty: the state directory's own download
-      expect(plan().browsersPath).toBe("/s/browsers");
+      // empty: no read-only browser, and none is installed where the service could rewrite it
+      expect(plan()).toMatchObject({ unavailable: BROWSER_UNAVAILABLE_MESSAGE });
       const rev = browserRevision("chromium");
       expect(rev).toMatch(/^\d+$/);
       mkdirSync(join(cache, "chromium-1"));
       mkdirSync(join(cache, `chromium-${rev}`));
       // writable by this process: something it (or an agent command) could replace, never used
-      expect(plan().browsersPath).toBe("/s/browsers");
+      expect(plan()).toMatchObject({ unavailable: BROWSER_UNAVAILABLE_MESSAGE });
       chmodSync(cache, 0o555);
       expect(
         chromiumLaunchPlan(
@@ -102,13 +103,13 @@ describe("chromium browsers directory", () => {
         browsersPath: cache,
         shipped: true,
       });
-      // another revision: not usable, so not used
+      // another revision: the newest one shipped runs (read only), never a writable install
       expect(
         chromiumLaunchPlan(
           { stateDir: "/s", env, platform: "linux" },
           { revision: "2", version: "2" },
-        ).browsersPath,
-      ).toBe("/s/browsers");
+        ),
+      ).toMatchObject({ browsersPath: cache, shipped: true, shippedDir: `chromium-${rev}` });
       // this build's revision, read from playwright-core
       expect(plan().browsersPath).toBe(cache);
       // a cache in the workspace is the agent's, never trusted

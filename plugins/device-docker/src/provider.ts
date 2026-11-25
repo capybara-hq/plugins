@@ -257,6 +257,14 @@ const LABEL_EGRESS_MODE = "dev.capybara.sandbox.mode";
  */
 const LABEL_CONTROL = "dev.capybara.sandbox.egress-control";
 /**
+ * The device services generation an instance was made for: `2` = services as their own user
+ * (plugins#210). An instance without it (made before) answers `gone` on resume, so the kernel
+ * recreates it on the same files and the current image; its old services (the sandbox user's,
+ * readable by agent commands) end with it.
+ */
+const LABEL_SERVICES = "dev.capybara.sandbox.services";
+const SERVICES_VERSION = "2";
+/**
  * The egress control version this provider speaks: `2` adds the kernel's fence token to every
  * apply (device update fencing design §5.1, §10 step 4). An instance (or proxy image) carrying
  * an earlier value is treated like one without the control: an allowlist change recreates it,
@@ -1771,6 +1779,8 @@ export function createDockerSandbox(
     const labels = c.Config.Labels ?? {};
     // a replacement under the same name is not the instance the handle names (§5.3)
     if (!sameIncarnation(h, labels)) return "gone";
+    // made before services ran as their own user: recreated on the current image (LABEL_SERVICES)
+    if (labels[LABEL_SERVICES] !== SERVICES_VERSION) return "gone";
     // A container without this contract's labels resumes with no network (the kernel replaces it
     // on use, since its applied limits are unknown).
     const net = labelNetwork(labels) ?? { mode: "none", allowHosts: [] };
@@ -2020,7 +2030,10 @@ export function createDockerSandbox(
           incarnation: h,
         });
       } catch (e) {
-        if (noServiceUser(e)) throw new Error(SERVICE_IMAGE_TOO_OLD, { cause: e });
+        if (noServiceUser(e)) {
+          await stopLegacyServices(h, signal);
+          throw new Error(SERVICE_IMAGE_TOO_OLD, { cause: e });
+        }
         throw e;
       }
     };
@@ -2046,6 +2059,23 @@ export function createDockerSandbox(
     if (r.exitCode !== 0 && noServiceUser(reply.stderr)) throw new Error(SERVICE_IMAGE_TOO_OLD);
     if (op === "ensure" && isFilesNeeded(reply)) return FILES_NEEDED;
     return parseManagerReply(name, reply);
+  };
+
+  /**
+   * Ends the services an image from before isolated services ran as the sandbox user (their
+   * profile is readable by agent commands, and no provider call reaches them any more): every
+   * process of that user whose command line names the old state or run root. Best effort.
+   */
+  const stopLegacyServices = async (h: SandboxHandle, signal: AbortSignal) => {
+    await run(h.id, {
+      cmd: ["/bin/sh", "-c", LEGACY_SERVICES_KILL, "capybara-legacy-services"],
+      user: SANDBOX_USER,
+      cwd: "/",
+      maxOutputBytes: STDERR_ROOM,
+      timeoutMs: 15_000,
+      signal,
+      incarnation: h,
+    }).catch(() => undefined);
   };
 
   /** `manage` for the calls that never ask for files (status, stop, an `ifRunning` ensure). */
@@ -2310,6 +2340,7 @@ export function createDockerSandbox(
             Labels: {
               ...baseLabels(name, "sandbox"),
               ...planLabels(plan, control),
+              [LABEL_SERVICES]: SERVICES_VERSION,
               [LABEL_FENCE]: String(token ?? 0),
             },
             HostConfig: {
@@ -2676,6 +2707,10 @@ export function createDockerSandbox(
     background: operations.background,
   };
 }
+
+/** Kills the sandbox user's pre-isolation services and relays (`pkill`, procps). */
+const LEGACY_SERVICES_KILL =
+  "pkill -9 -u 1000 -f '[/]var/lib/capybara/svc/|[/]tmp/[.]capybara-svc/' >/dev/null 2>&1; exit 0";
 
 /**
  * Docker could not run an exec as the service user: the container's image predates it (Docker

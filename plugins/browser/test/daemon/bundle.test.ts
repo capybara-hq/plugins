@@ -1,13 +1,15 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildDaemon } from "../../daemon/build.js";
+import { ensureChromium } from "../../daemon/chromium.js";
 import { removeDir, request, startFixtureServer, TEST_BROWSERS } from "./helpers.js";
 
 let out: string;
 let stateDir: string;
+let cache: string;
 let child: ChildProcess | undefined;
 let fx: Awaited<ReturnType<typeof startFixtureServer>>;
 
@@ -16,9 +18,14 @@ beforeAll(async () => {
   stateDir = mkdtempSync(join(tmpdir(), "cbd-"));
   fx = await startFixtureServer({ "/": "<!doctype html><title>Bundled</title><h1>hello</h1>" });
   await buildDaemon(out);
-  // the shared download stands in for <state>/browsers
+  // the shared download stands in for a device's read-only browsers cache: a directory the daemon
+  // cannot write, linking the downloaded revisions
   mkdirSync(TEST_BROWSERS, { recursive: true });
-  symlinkSync(TEST_BROWSERS, join(stateDir, "browsers"));
+  await ensureChromium(TEST_BROWSERS);
+  cache = mkdtempSync(join(tmpdir(), "cbd-cache-"));
+  for (const name of readdirSync(TEST_BROWSERS))
+    symlinkSync(join(TEST_BROWSERS, name), join(cache, name));
+  chmodSync(cache, 0o555);
 });
 
 afterAll(async () => {
@@ -30,6 +37,8 @@ afterAll(async () => {
   await fx?.close();
   removeDir(out);
   removeDir(stateDir);
+  chmodSync(cache, 0o755);
+  removeDir(cache);
 });
 
 describe("bundled daemon", () => {
@@ -41,6 +50,7 @@ describe("bundled daemon", () => {
         PATH: process.env.PATH ?? "",
         CAPYBARA_SERVICE_SOCKET: socketPath,
         CAPYBARA_SERVICE_STATE: stateDir,
+        PLAYWRIGHT_BROWSERS_PATH: cache,
       },
       stdio: ["ignore", "ignore", "pipe"],
     });

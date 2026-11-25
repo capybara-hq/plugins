@@ -173,8 +173,8 @@ const MAX_TIMEOUT_SECONDS = 86_400;
 const TIMEOUT_MARGIN_SECONDS = 120;
 /**
  * Prepares isolated device services on a VM, as root (`$1` the state root, `$2` the run root):
- * makes the service user when the template predates it (its uid must be free), then both roots
- * as directories of that user, 0700. A state root that is not that user's directory (the sandbox
+ * makes the service user when the template predates it (its uid must be free), ends the services
+ * the sandbox user ran before isolation, then makes both roots directories of that user, 0700. A state root that is not that user's directory (the sandbox
  * user's from before isolation, or anything planted) is removed first; `rm -rf` never follows a
  * link.
  */
@@ -189,6 +189,8 @@ fi
 [ "$(id -u ${SERVICE_USER})" = ${SERVICE_UID} ] || { echo "${SERVICE_USER} is not uid ${SERVICE_UID}" >&2; exit 5; }
 umask 022
 mkdir -p -- "$(dirname -- "$1")"
+# services from before isolation ran as the sandbox user: end them (and their relays) first
+pkill -9 -u 1000 -f '[/]var/lib/capybara/svc/|[/]tmp/[.]capybara-svc/' >/dev/null 2>&1 || true
 for d in "$1" "$2"; do
   if [ -L "$d" ] || { [ -e "$d" ] && { [ ! -d "$d" ] || [ "$(stat -c %u -- "$d")" != ${SERVICE_UID} ]; }; }; then
     rm -rf -- "$d"

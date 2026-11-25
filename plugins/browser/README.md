@@ -54,10 +54,19 @@ A real browser in the person's device for agents (browser use spec,
   could write once it runs): the provider's install directory `CAPYBARA_SERVICE_INSTALL`
   (device-local) is filled on the first start, sealed with `.sealed`, and the daemon answers
   `restart` and exits, so every later start runs it read only (the plugin starts the service again
-  within the same tool call); else a `PLAYWRIGHT_BROWSERS_PATH` the daemon cannot write, outside
-  the workspace, holding this build's revision (device-docker / device-e2b ship it in
-  `/opt/capybara-browsers`, pinned to this package's playwright-core); else `<state>/browsers`
-  (an image without the pinned browser).
+  within the same tool call; an unsealed directory is always installed afresh, never trusted as
+  found); else a `PLAYWRIGHT_BROWSERS_PATH` the daemon cannot write, outside the workspace
+  (device-docker / device-e2b ship it in `/opt/capybara-browsers`, pinned to this package's
+  playwright-core): this build's revision, else the newest revision of the build there. Nothing
+  else: without such a place the browser does not start and says how to get one (update
+  capybara-device; recreate a cloud device on the current image). It never installs where it
+  could rewrite the browser itself.
+- Uploads are read by the daemon (opened without following a final link, accepted only when the
+  resolved path lies in the workspace and names the very file opened) and handed to Chromium from
+  memory, at most 50 MiB; downloads are copied from Playwright's private file into an exclusively
+  created file in `<workspace>/downloads`, checked to be that directory's own before any byte is
+  written. So a link the agent plants in the workspace never makes the service read or write its
+  own profile.
 - A launch that fails (no download, a refused network) does not stop the daemon: every request
   answers the cause and launches again. When the device's proxy refuses Playwright's download
   hosts (`cdn.playwright.dev`, `playwright.download.prss.microsoft.com`, `storage.googleapis.com`

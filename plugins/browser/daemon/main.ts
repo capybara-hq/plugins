@@ -310,6 +310,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     // installed and sealed: this process may not run it; the plugin starts the service again
     if (e instanceof BrowserInstalledError)
       return { ok: false, error: "restart", message: e.message, blockedHosts: [] };
+    // no read-only place for the browser: no download would help
+    if (plan.unavailable !== undefined) return fail(plan.unavailable);
     const cause = e instanceof Error ? e.message.split("\n")[0] : String(e);
     const proxy = plan.proxy;
     const refused =

@@ -272,8 +272,9 @@ as device-docker's (README "Device services and streams" there; `src/services.ts
   `ifRunning` ensure, status or stop on such a VM answers stopped. Verified live (2026-11-25, `test/services.test.ts`): an agent
   command can neither read the state, list the roots, connect to the socket nor signal or inspect the process.
 - **Browser (plugins#209)**: a template built from the published image has the pinned Chromium in `/opt/capybara-browsers`
-  (read only); a VM from an older template has none, and the browser installs into its state directory (writable by
-  `capybara-svc` only, never by agent commands) until the device is made again.
+  (read only); a VM from an older template has none, and the browser refuses to start there (never installing where it could
+  rewrite itself) with an answer asking the person to delete the device and create it again. The setup also kills the
+  services the sandbox user ran before isolation.
 - **Process**: the service manager (`python3 -I`) runs as `capybara-svc` through `process.Process/Start`, the request on
   stdin (`SendInput`). It forks `node <stateDir>/<entry> <args>` into its own session; envd keeps it running after the manager's
   stream ended (verified live 2026-11-24). A normal ensure connects (resumes) a paused VM; an `ifRunning` ensure, `serviceStatus`,

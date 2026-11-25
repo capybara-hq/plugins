@@ -189,6 +189,9 @@ export function filesDigestOf(files: Record<string, Uint8Array>): string {
   return `sha256:${h.digest("hex")}`;
 }
 
+/** How a capybara-device from before service ids refuses one ("Invalid device service name"). */
+export const OLD_SERVICE_NAME_REFUSAL = /Invalid device service name\b/;
+
 /** A machine's typed failure of a service op as the SDK error the kernel knows. */
 function serviceFailure(error: { kind?: unknown; message?: unknown }, op: string): Error {
   const message = typeof error.message === "string" ? error.message : "no message";
@@ -205,6 +208,12 @@ function serviceFailure(error: { kind?: unknown; message?: unknown }, op: string
         "files_needed",
       );
     case "invalid":
+      // a machine from before service ids (core#817) refuses `<extension>.<name>` by the old
+      // name rule: only an update helps, never a retry
+      if (OLD_SERVICE_NAME_REFUSAL.test(message))
+        return new SandboxPermissionUnsupportedError(
+          "The connected machine runs a capybara-device that predates device service ids; update capybara-device on that machine, then retry",
+        );
       return new ServiceOpRefusedError(
         `The connected machine refused the ${op} request: ${message} (check the request and retry)`,
         "invalid",

@@ -7,11 +7,21 @@
 //   through playwright-core's registry on the first start, sealed, and the daemon restarts, so
 //   every later start runs it read only;
 // - a browsers cache the device ships (PLAYWRIGHT_BROWSERS_PATH: device-docker / device-e2b's
-//   image) that this process cannot write and that lies outside the workspace, when it holds
-//   this build's revision;
-// - else `<state>/browsers`, installed on the first start (an image without the pinned browser).
+//   image) that this process cannot write and that lies outside the workspace: this build's
+//   revision, else the newest revision of the same build there (an image pinned to another
+//   playwright-core release: the browser still runs, read only);
+// - else nothing: the launch fails with BROWSER_UNAVAILABLE_MESSAGE (never a browser installed
+//   where the service could rewrite it).
 
-import { accessSync, constants, existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  accessSync,
+  constants,
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,6 +59,13 @@ export interface LaunchPlan {
   install?: { sealed: boolean };
   /** The browsers are a read-only cache the device ships: launched, never installed into. */
   shipped?: boolean;
+  /**
+   * The shipped cache's revision directory when it is not this build's revision (an image pinned
+   * to another playwright-core release): its executable is launched by path.
+   */
+  shippedDir?: string;
+  /** No read-only place for the browser: the launch fails with this text. */
+  unavailable?: string;
   profileDir: string;
   /** Where Chromium writes downloads in progress (saved into the workspace when done). */
   downloadsTmp: string;
@@ -143,6 +160,10 @@ export function playwrightDownloadHosts(env: Record<string, string | undefined>)
   return ["cdn.playwright.dev", "playwright.download.prss.microsoft.com", "storage.googleapis.com"];
 }
 
+/** Why the browser cannot start when the device offers no read-only place for it. */
+export const BROWSER_UNAVAILABLE_MESSAGE =
+  "This device offers the browser no place it cannot rewrite: on a local device, update capybara-device on that machine; on a cloud device, its image predates the pinned browser, so ask the user to delete the device and create it again (or wait until it is recreated after a period without use).";
+
 /** Names the provider's install directory (the SDK's DEVICE_SERVICE_INSTALL_ENV). */
 export const SERVICE_INSTALL_ENV = "CAPYBARA_SERVICE_INSTALL";
 /** The file that seals it (the SDK's DEVICE_SERVICE_INSTALL_SEAL). */
@@ -182,7 +203,7 @@ function browsersPathFor(
   env: Record<string, string | undefined>,
   revision: string | undefined,
   build: ChromiumBuild,
-): { browsersPath: string; install?: { sealed: boolean }; shipped?: boolean } {
+): Pick<LaunchPlan, "browsersPath" | "install" | "shipped" | "shippedDir" | "unavailable"> {
   const install = envValue(env, SERVICE_INSTALL_ENV);
   if (install !== undefined && isAbsolute(install)) {
     let sealed = false;
@@ -198,13 +219,31 @@ function browsersPathFor(
   if (
     cache !== undefined &&
     isAbsolute(cache) &&
-    revision !== undefined &&
     (workspace === undefined || !inside(cache, workspace)) &&
-    readOnlyForUs(cache) &&
-    existsSync(join(cache, `${BUILD_DIR[build]}-${revision}`))
-  )
-    return { browsersPath: cache, shipped: true };
-  return { browsersPath: join(stateDir, "browsers") };
+    readOnlyForUs(cache)
+  ) {
+    if (revision !== undefined && existsSync(join(cache, `${BUILD_DIR[build]}-${revision}`)))
+      return { browsersPath: cache, shipped: true };
+    const newest = shippedRevisions(cache, build).at(-1);
+    if (newest !== undefined) return { browsersPath: cache, shipped: true, shippedDir: newest };
+  }
+  return { browsersPath: join(stateDir, "browsers"), unavailable: BROWSER_UNAVAILABLE_MESSAGE };
+}
+
+/** The revision directories of `build` in `cache`, oldest first. */
+function shippedRevisions(cache: string, build: ChromiumBuild): string[] {
+  const re = new RegExp(`^${BUILD_DIR[build]}-(\\d+)$`);
+  let names: string[];
+  try {
+    names = readdirSync(cache);
+  } catch {
+    return [];
+  }
+  return names
+    .map((n) => ({ n, rev: Number(re.exec(n)?.[1] ?? Number.NaN) }))
+    .filter((x) => Number.isFinite(x.rev))
+    .sort((a, b) => a.rev - b.rev)
+    .map((x) => x.n);
 }
 
 /** The launch for a state directory and environment (pure apart from the browsers cache check). */
@@ -339,19 +378,21 @@ export async function ensureChromium(
   browsersPath: string,
   install = true,
   build: ChromiumBuild = chromiumBuild(process.platform),
+  /** Install even over a complete install: one this process did not make is never trusted. */
+  fresh = false,
 ): Promise<string> {
   const { registry, exe, executablePath, directory } = await registryBrowser(browsersPath, build);
   // Installed means Playwright's marker: another process installing into the same directory has
   // the executable on disk long before the rest (still being written: spawn ETXTBSY).
   const marked = existsSync(join(directory, "INSTALLATION_COMPLETE"));
-  if (marked && existsSync(executablePath)) return executablePath;
+  if (!fresh && marked && existsSync(executablePath)) return executablePath;
   if (!install)
     throw new Error(
       `the browser in ${browsersPath} is incomplete and read only for the browser service; delete the device and create it again`,
     );
   // The registry's lock makes this wait for an install already running, which it then finds
   // done. A marked install without its executable (removed since) is installed again.
-  await registry.install([exe], { gc: false, force: marked });
+  await registry.install([exe], { gc: false, force: marked || fresh });
   if (!existsSync(executablePath)) {
     throw new Error("the Chromium download finished without an executable");
   }
@@ -364,16 +405,22 @@ export async function ensureChromium(
  * launching: a browser runs only from a place this process can no longer write.
  */
 export async function launchChromium(plan: LaunchPlan): Promise<BrowserContext> {
+  if (plan.unavailable !== undefined) throw new Error(plan.unavailable);
   if (plan.install?.sealed === false) {
-    await ensureChromium(plan.browsersPath, true, plan.build);
+    // unsealed: whatever is there was not installed by this process (the provider empties it at
+    // every unsealed start, this is the second line), so it is installed afresh before the seal
+    await ensureChromium(plan.browsersPath, true, plan.build, true);
     sealInstall(plan.browsersPath);
     throw new BrowserInstalledError();
   }
-  const executablePath = await ensureChromium(
-    plan.browsersPath,
-    plan.install === undefined && plan.shipped !== true,
-    plan.build,
-  );
+  const executablePath =
+    plan.shippedDir === undefined
+      ? await ensureChromium(
+          plan.browsersPath,
+          plan.install === undefined && plan.shipped !== true,
+          plan.build,
+        )
+      : await shippedExecutable(plan.browsersPath, plan.shippedDir, plan.build);
   const pw = await loadPlaywright(plan.browsersPath);
   return pw.chromium.launchPersistentContext(plan.profileDir, {
     headless: true,
@@ -385,6 +432,25 @@ export async function launchChromium(plan: LaunchPlan): Promise<BrowserContext> 
     downloadsPath: plan.downloadsTmp,
     ...(plan.proxyAuth === undefined ? {} : { proxy: plan.proxyAuth }),
   });
+}
+
+/**
+ * The executable in another revision directory of a shipped cache: the same place inside it as
+ * this build's revision would have (the layout depends on the build and platform, not on the
+ * revision). Throws when it is missing.
+ */
+async function shippedExecutable(
+  cache: string,
+  dir: string,
+  build: ChromiumBuild,
+): Promise<string> {
+  const { executablePath, directory } = await registryBrowser(cache, build);
+  const path = join(cache, dir, relative(directory, executablePath));
+  if (!existsSync(path))
+    throw new Error(
+      `the browser shipped in ${join(cache, dir)} has no executable; ${BROWSER_UNAVAILABLE_MESSAGE}`,
+    );
+  return path;
 }
 
 /** Seals the provider's install directory (an existing seal stays as it is). */

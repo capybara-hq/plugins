@@ -26,14 +26,32 @@ const TITLE_RE =
 /** Main-document statuses a site answers automated traffic with (418: DuckDuckGo, 429: rate limit). */
 export const VERIFICATION_STATUSES = new Set([418, 429]);
 
-/** Runs in the page (a string: the daemon compiles without the DOM types): a visible widget. */
-const WIDGET_PROBE = `(() => {
-  const visible = (e) => { const r = e.getBoundingClientRect(); return r.width > 20 && r.height > 20; };
-  const frames = [...document.querySelectorAll("iframe")].filter((f) =>
-    /recaptcha|hcaptcha|challenges\\.cloudflare\\.com|turnstile|geetest|captcha/i.test(f.src));
-  if (frames.some(visible)) return true;
-  return [...document.querySelectorAll("[id*=captcha i], [class*=captcha i]")].some(visible);
-})()`;
+/**
+ * CAPTCHA widgets: an iframe of a CAPTCHA provider, an element whose id or class names a captcha.
+ * Queried through locators (Playwright's isolated utility world), so the page neither sees the
+ * probe nor can answer it from its own scripts.
+ */
+const WIDGET_SELECTOR = [
+  ...["recaptcha", "hcaptcha", "challenges.cloudflare.com", "turnstile", "geetest", "captcha"].map(
+    (s) => `iframe[src*="${s}" i]`,
+  ),
+  '[id*="captcha" i]',
+  '[class*="captcha" i]',
+].join(", ");
+
+/** The most widget candidates looked at per page. */
+const MAX_WIDGETS = 10;
+
+/** Whether the page shows a CAPTCHA widget larger than a sliver. */
+async function hasWidget(page: Page): Promise<boolean> {
+  const found = page.locator(WIDGET_SELECTOR);
+  const n = Math.min(await found.count(), MAX_WIDGETS);
+  for (let i = 0; i < n; i++) {
+    const box = await found.nth(i).boundingBox();
+    if (box !== null && box.width > 20 && box.height > 20) return true;
+  }
+  return false;
+}
 
 /** Whether `url` and `title` alone mark a verification page. */
 export function looksLikeVerification(url: string, title: string): boolean {
@@ -58,7 +76,7 @@ export async function isVerificationPage(page: Page, status?: number): Promise<b
     const url = page.url();
     if (!/^https?:/.test(url)) return false;
     if (looksLikeVerification(url, await page.title())) return true;
-    return (await page.evaluate(WIDGET_PROBE)) === true;
+    return await hasWidget(page);
   } catch {
     return false;
   }

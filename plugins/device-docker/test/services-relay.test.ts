@@ -1,4 +1,4 @@
-import { encodeServiceMessage } from "@capybara-hq/plugin-sdk";
+import { DEVICE_SERVICE_ID_RE, encodeServiceMessage } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import {
   RELAY_FELL_BEHIND,
@@ -6,6 +6,7 @@ import {
   RELAY_HIGH_WATER_BYTES,
   type RelayTransport,
   relayStream,
+  SERVICE_MANAGER_SCRIPT,
 } from "../src/services.js";
 
 /**
@@ -100,5 +101,12 @@ describe("relay stream messages iterator", () => {
     sink.stdout(frame(3));
     expect((await first).value).toHaveLength(3);
     stream.close("done");
+  });
+});
+
+describe("the service manager's id rule", () => {
+  it("is the SDK's DEVICE_SERVICE_ID_RE, character for character", () => {
+    const m = /NAME_RE = re\.compile\(r"([^"]+)"\)/.exec(SERVICE_MANAGER_SCRIPT);
+    expect(m?.[1]).toBe(DEVICE_SERVICE_ID_RE.source);
   });
 });
