@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -320,6 +321,33 @@ describe("browser daemon: stop", () => {
     // no tab restored, and the session file not written back
     expect(opened).toBe(0);
     expect(readFileSync(join(stateDir, "session.json"), "utf8")).toBe(session);
+  });
+});
+
+describe("browser daemon: background tabs", () => {
+  it("keeps Playwright's switches that let background tabs render (no default args dropped)", async () => {
+    let ctx: BrowserContext | undefined;
+    const { daemon } = await daemonWith({
+      launch: async (plan) => {
+        ctx = await launchChromium(plan);
+        return ctx;
+      },
+    });
+    await daemon.ready;
+    if (ctx === undefined) throw new Error("no browser");
+    const pid = await browserProcessId(ctx);
+    if (pid === undefined) throw new Error("no browser process id");
+    // the browser process's own command line (Playwright adds its defaults to it)
+    const args = execFileSync("ps", ["-ww", "-o", "args=", "-p", String(pid)], {
+      encoding: "utf8",
+    }).split(/\s+/);
+    // another conversation's tab keeps rendering and screencasting while it is not in front
+    for (const sw of [
+      "--disable-background-timer-throttling",
+      "--disable-renderer-backgrounding",
+      "--disable-backgrounding-occluded-windows",
+    ])
+      expect(args).toContain(sw);
   });
 });
 

@@ -208,7 +208,7 @@ describe("browser daemon workspace and limits", () => {
     const v = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 });
     const nav = await request(d.socketPath, { op: "navigate", url: `${fx.url}/huge-title` });
     if (!nav.ok) throw new Error(nav.message);
-    expect(nav.page.title.length).toBeLessThanOrEqual(MAX_TITLE_CHARS);
+    expect(nav.page?.title.length).toBeLessThanOrEqual(MAX_TITLE_CHARS);
     const list = await request(d.socketPath, { op: "tabs", action: "list" });
     if (!list.ok) throw new Error(list.message);
     expect(list.text?.length ?? 0).toBeLessThan(20_000);

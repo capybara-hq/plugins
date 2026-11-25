@@ -278,6 +278,19 @@ describe("browser tools", () => {
     ).toBe(true);
   });
 
+  it("the user-control note is kept when the reply has no page (the person closed its tabs)", async () => {
+    const f = fake(() => ({
+      ok: true,
+      blockedHosts: [],
+      userControlledSince: "2026-11-24T10:00:00.000Z",
+      tabs: { open: 0, max: 6 },
+    }));
+    const r = await f.run("browser_tabs", { action: "list" });
+    expect(textOf(r)).toBe(
+      `The user controlled the browser from 2026-11-24T10:00:00.000Z.\n${NO_TAB_MESSAGE}\nTabs open in this conversation: 0 of 6.`,
+    );
+  });
+
   it("daemon errors become actionable ToolErrors", async () => {
     const f = fake(() => ({
       ok: false,
