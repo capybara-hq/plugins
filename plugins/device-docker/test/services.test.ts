@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,6 +14,8 @@ import { DEVICE_SERVICE_ECHO_SCRIPT, runDeviceServiceConformance } from "@capyba
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDockerSandbox } from "../src/index.js";
 import {
+  managerArgv,
+  managerRequest,
   SERVICE_BROWSERS_PATH,
   SERVICE_IMAGE_TOO_OLD,
   SERVICE_USER,
@@ -586,5 +589,38 @@ createServer(() => {}).listen(process.env.CAPYBARA_SERVICE_SOCKET);
     expect(
       (await svcSh(h, "touch /workspace/downloads/f && stat -c %g /workspace/downloads/f")).stdout,
     ).toBe("1000\n");
+  });
+
+  it("an ifRunning ensure on a VM without the run root yet answers stopped (E2B's fresh /run)", async () => {
+    // the shared manager as device-e2b runs it on a new VM: /run is an empty tmpfs (the image's
+    // /run/capybara-svc hidden), made only by the provider's setup before a start
+    const req = managerRequest(echo("tx.fresh"), { ifRunning: true });
+    const out = await new Promise<string>((resolve, reject) => {
+      const p = spawn(
+        "docker",
+        [
+          "run",
+          "--rm",
+          "-i",
+          "--tmpfs",
+          "/run",
+          "--user",
+          SERVICE_USER,
+          "--entrypoint",
+          "",
+          images.sandboxImage,
+          ...managerArgv("ensure", "tx.fresh"),
+        ],
+        { stdio: ["pipe", "pipe", "inherit"] },
+      );
+      let buf = "";
+      p.stdout.on("data", (c: Buffer) => {
+        buf += c.toString();
+      });
+      p.on("error", reject);
+      p.on("close", () => resolve(buf));
+      p.stdin.end(Buffer.from(req));
+    });
+    expect(JSON.parse(out.trim())).toMatchObject({ name: "tx.fresh", state: "stopped" });
   });
 });

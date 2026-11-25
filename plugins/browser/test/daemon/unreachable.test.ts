@@ -160,3 +160,36 @@ describe("browser daemon unreachable pages", () => {
     );
   });
 });
+
+describe("browser daemon with the device's proxy down", () => {
+  let down: TestDaemon;
+  let closedPort: number;
+
+  beforeAll(async () => {
+    // a port nobody listens on: the device's network proxy is not up
+    const probe = createTcpServer();
+    await new Promise<void>((r) => probe.listen(0, "127.0.0.1", r));
+    const addr = probe.address();
+    if (addr === null || typeof addr === "string") throw new Error("no address");
+    closedPort = addr.port;
+    await new Promise<void>((r) => probe.close(() => r()));
+    const url = `http://user:secret@127.0.0.1:${closedPort}`;
+    down = await startTestDaemon({
+      env: { HTTPS_PROXY: url, HTTP_PROXY: url },
+      navigationTimeoutMs: NAV_TIMEOUT_MS,
+    });
+  });
+
+  afterAll(async () => {
+    await down?.stop();
+    if (down) removeDir(down.stateDir);
+  });
+
+  it("says the device's network proxy is not reachable, not that the address is wrong", async () => {
+    const r = await request(down.socketPath, { op: "navigate", url: "https://example.test/" });
+    expect(r).toMatchObject({ ok: false, error: "network_unavailable", blockedHosts: [] });
+    expect(r.ok ? "" : r.message).toBe(
+      "https://example.test/ could not be loaded (net::ERR_PROXY_CONNECTION_FAILED): the device's network proxy is not reachable, so no page loads on the device right now; this is not a problem of the address.",
+    );
+  });
+});

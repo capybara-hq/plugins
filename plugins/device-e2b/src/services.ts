@@ -126,8 +126,9 @@ export const SERVICE_NODE = "/usr/local/bin/node";
  *   downloads stays writable for the agent's group. Nothing restarts a service that exited: the
  *   next `ensure` (reviewed again by the kernel) does.
  * - A state root or run root that is missing or not {@link SERVICE_USER}'s, private (an image
- *   before isolated device services) answers {@link SERVICE_IMAGE_TOO_OLD} on a start; a status or
- *   stop there answers stopped.
+ *   before isolated device services) answers {@link SERVICE_IMAGE_TOO_OLD} on a start; a status, an
+ *   `ifRunning` ensure or a stop there answers stopped (E2B makes the run root only before a start:
+ *   its /run is a fresh tmpfs at every boot, so a new VM has none until then).
  * - `stop` sends SIGTERM to the service's process group, waits up to 5 s, then SIGKILLs every
  *   process left in its session.
  */
@@ -409,6 +410,11 @@ def names_workspace(value):
     return any(p == WORKSPACE or p.startswith(WORKSPACE + "/") for p in value.split(":"))
 
 def ensure(name, req):
+    if req.get("ifRunning") is True:
+        # reads only: on a VM whose run root is not made yet (E2B mounts a fresh /run at boot, the
+        # provider makes it before a start) nothing runs, so the service is stopped
+        rfd = rundir(name, False)
+        answer(status(name, read_record(rfd)))
     rfd = rundir(name, True)
     st = os.fstat(rfd)
     if st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077:

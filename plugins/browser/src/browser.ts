@@ -168,6 +168,11 @@ function daemonToolError(code: ToolErrorCode, message: string, tail: string): To
       return new ToolError(
         `${message} Check the page with browser_snapshot, then retry or call browser_wait.${tail}`,
       );
+    case "network_unavailable":
+      // the device's network, not the address: other addresses fail the same way meanwhile
+      return new ToolError(
+        `${message} Retry after a while; if it keeps failing, ask the user to check the device's network.`,
+      );
     case "unreachable":
       // the daemon's message names the host and what the device's network answered for it
       return new ToolError(`${message} Check the address before retrying.${tail}`);
