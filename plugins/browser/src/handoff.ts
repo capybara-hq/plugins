@@ -1,7 +1,8 @@
 // browser_handoff (browser use spec §9): the agent asks the person to do something in the browser
-// (sign in, solve a challenge). Phase 1: the kernel shows the question card in the conversation,
-// and the daemon's handoff notice gives every open panel a banner with 完成 / 取消 that answers it
-// through /ui/handoff-answer. The wait is the kernel's resumable InputRequired.
+// (sign in, solve a challenge). The kernel shows the question card in the conversation and opens
+// the browser panel on the person's conversation page (`InputRequired.open`), and the daemon's
+// handoff notice gives every open panel a banner with 完成 / 取消 that answers it through
+// /ui/handoff-answer. The wait is the kernel's resumable InputRequired.
 import {
   type InputRequired,
   ToolError,
@@ -11,6 +12,9 @@ import {
 import { HANDOFF_MAX_CHARS } from "../daemon/protocol.js";
 import { assertOwner, type BrowserDeps, runRequest, TOOL_TIMEOUT_MS, toResult } from "./browser.js";
 import { HANDOFF_FORM } from "./i18n.js";
+
+/** The browser panel (the `conversation.panel` contribution in the manifest). */
+const PANEL = "browser";
 
 /** The longest handoff message (the question card's title and the panel banner). */
 const MESSAGE_MAX = Math.min(2000, HANDOFF_MAX_CHARS);
@@ -65,6 +69,8 @@ export function handoffHandler(deps: BrowserDeps): ToolHandler {
           ],
         },
         state: { handoff: 1 },
+        // the person's conversation page opens the panel, where they do it
+        open: { contribution: PANEL },
       };
       return asked;
     }
