@@ -548,6 +548,8 @@ export class BrowserSession {
   private nextId = 1;
   private active: string | undefined;
   private queue: Promise<unknown> = Promise.resolve();
+  /** The blank tab {@link activePage} is opening because none was left. */
+  private opening: Promise<Page> | undefined;
   /** The agent's latest click; `seq` grows with every click (viewers flash only new ones). */
   lastClick: { x: number; y: number; seq: number } | undefined;
   private clickSeq = 0;
@@ -604,7 +606,11 @@ export class BrowserSession {
     return () => this.listeners.delete(fn);
   }
 
-  /** The active tab, opening a blank one when none is left. */
+  /**
+   * The active tab, opening a blank one when none is left. Callers that find no tab at the same
+   * time (two quick closes of the last tabs, a viewer's frame and a request) share that one
+   * opening, so the last close leaves exactly one blank tab.
+   */
   async activePage(): Promise<Page> {
     const cur = this.active === undefined ? undefined : this.pages.get(this.active);
     if (cur !== undefined && !cur.isClosed()) return cur;
@@ -613,10 +619,21 @@ export class BrowserSession {
       this.active = this.ids.get(first);
       return first;
     }
-    const p = await this.ctx.newPage();
-    this.track(p);
-    this.active = this.ids.get(p);
-    return p;
+    this.opening ??= this.ctx.newPage().then(
+      (p) => {
+        this.opening = undefined;
+        this.track(p);
+        this.active = this.ids.get(p);
+        this.emit({ type: "active" });
+        this.emit({ type: "state" });
+        return p;
+      },
+      (e: unknown) => {
+        this.opening = undefined;
+        throw e;
+      },
+    );
+    return this.opening;
   }
 
   tabIdOf(page: Page): string {
