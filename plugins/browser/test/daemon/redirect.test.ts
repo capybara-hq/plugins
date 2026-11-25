@@ -176,9 +176,9 @@ describe("navigate through redirects", () => {
     // the navigation in flight redirects to a port nobody listens on
     first.writeHead(302, { location: "http://127.0.0.1:1/" }).end();
     const r = await nav;
-    expect(r).toMatchObject({ ok: false, error: "failed" });
+    expect(r).toMatchObject({ ok: false, error: "unreachable" });
     if (!r.ok) {
-      expect(r.message).toMatch(/^net::ERR_\w+ at /);
+      expect(r.message).toMatch(/^http:\/\/127\.0\.0\.1:1\/ could not be loaded \(net::ERR_\w+\)/);
       expect(r.message).not.toContain("ERR_ABORTED");
     }
     await v.close();

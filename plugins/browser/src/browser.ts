@@ -44,6 +44,34 @@ export const RESTARTING_MESSAGE =
 /** How many times one tool call starts the service again after a fresh browser install. */
 export const RESTART_ATTEMPTS = 3;
 
+/**
+ * How long one tool call waits, after a `restart` reply, for the old daemon process to exit and
+ * a new one to answer (the old one closes Playwright and its socket first).
+ */
+export const RESTART_WAIT_MS = 30_000;
+
+/** The pauses between the checks of that wait: they grow from the first to the last. */
+const RESTART_PAUSE_FIRST_MS = 100;
+const RESTART_PAUSE_MAX_MS = 1_000;
+
+/**
+ * Abortable pause within one call: resolves after `ms` or when the signal aborts. Extensions may
+ * not use setTimeout (plugin-timer rule), so `AbortSignal.timeout` does the timing; both listeners
+ * are removed at the end.
+ */
+const pause = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    if (signal.aborted) return resolve();
+    const timer = AbortSignal.timeout(ms);
+    const done = () => {
+      signal.removeEventListener("abort", done);
+      timer.removeEventListener("abort", done);
+      resolve();
+    };
+    signal.addEventListener("abort", done, { once: true });
+    timer.addEventListener("abort", done, { once: true });
+  });
+
 /** The longest a daemon request may take, beyond an action's own wait. */
 export const REQUEST_TIMEOUT_MS = 90_000;
 
@@ -108,6 +136,9 @@ function daemonToolError(code: ToolErrorCode, message: string): ToolError {
       return new ToolError(
         `${message} Check the page with browser_snapshot, then retry or call browser_wait.`,
       );
+    case "unreachable":
+      // the daemon's message names the host and what the device's network answered for it
+      return new ToolError(`${message} Check the address before retrying.`);
     case "blocked":
       // the browser's own download was refused: allowing it is the only way on
       if (message.startsWith(DOWNLOAD_BLOCKED_PREFIX))
@@ -166,7 +197,9 @@ function failure(deps: BrowserDeps, call: ToolCallContext, e: unknown, starting:
  * a failure reply or a device access refusal throws an actionable ToolError. A `restart` reply
  * (the daemon installed the browser into the provider's install directory and sealed it, then
  * exits: capybara-hq/plugins#209) starts the service again, reviewed like every start, at most
- * {@link RESTART_ATTEMPTS} times; a request failing while the old process exits counts as one.
+ * {@link RESTART_ATTEMPTS} times, all in this call: while `ensureService` still reports the old
+ * process (its start time) no request goes to it, and a request failing while the new one comes
+ * up is retried, both with growing pauses for at most {@link RESTART_WAIT_MS}.
  */
 export async function runRequest(
   deps: BrowserDeps,
@@ -176,13 +209,30 @@ export async function runRequest(
 ): Promise<OkReply> {
   assertOwner(call);
   let reply: ToolReply;
-  // set once the daemon answered `restart`: it is exiting, the next start runs the sealed browser
-  let restarting = false;
-  for (let restarts = 0; ; restarts++) {
+  // set once the daemon answered `restart`: the start time of the process that is exiting (the
+  // next start runs the sealed browser), and when this call stops waiting for that
+  let exiting: { startedAt: string | null } | undefined;
+  let waitUntil = 0;
+  let pauseMs = RESTART_PAUSE_FIRST_MS;
+  const waitMore = async () => {
+    if (call.signal.aborted || Date.now() + pauseMs > waitUntil) return false;
+    await pause(pauseMs, call.signal);
+    pauseMs = Math.min(pauseMs * 2, RESTART_PAUSE_MAX_MS);
+    return !call.signal.aborted;
+  };
+  for (let restarts = 0; ; ) {
+    let startedAt: string | null;
     try {
-      await deps.deviceAccess.ensureService(call, await deps.serviceSpec());
+      ({ startedAt } = await deps.deviceAccess.ensureService(call, await deps.serviceSpec()));
     } catch (e) {
       throw failure(deps, call, e, true);
+    }
+    // the old process is still running (it closes its browser first): it would only answer
+    // `restart` again or drop the request, so wait for it to go
+    if (exiting !== undefined && startedAt !== null && startedAt === exiting.startedAt) {
+      if (await waitMore()) continue;
+      if (call.signal.aborted) throw failure(deps, call, call.signal.reason, true);
+      throw new ToolError(RESTARTING_MESSAGE);
     }
     try {
       const body = new TextEncoder().encode(JSON.stringify(req));
@@ -190,16 +240,19 @@ export async function runRequest(
         await deps.deviceAccess.request(call, { service: SERVICE, body, timeoutMs }),
       );
     } catch (e) {
-      // the sealed daemon may still be exiting: its socket is gone before its process
-      if (restarting && !call.signal.aborted) {
-        if (restarts < RESTART_ATTEMPTS) continue;
-        throw new ToolError(RESTARTING_MESSAGE);
+      // the sealed daemon may still be exiting, or the new one not yet listening
+      if (exiting !== undefined && !call.signal.aborted) {
+        if (await waitMore()) continue;
+        if (!call.signal.aborted) throw new ToolError(RESTARTING_MESSAGE);
       }
       throw failure(deps, call, e, false);
     }
     if (reply.ok || reply.error !== "restart") break;
     if (restarts >= RESTART_ATTEMPTS) throw new ToolError(RESTARTING_MESSAGE);
-    restarting = true;
+    restarts++;
+    exiting = { startedAt };
+    waitUntil = Date.now() + RESTART_WAIT_MS;
+    pauseMs = RESTART_PAUSE_FIRST_MS;
   }
   const hosts = Array.isArray(reply.blockedHosts)
     ? reply.blockedHosts.filter((h): h is string => typeof h === "string" && h !== "")

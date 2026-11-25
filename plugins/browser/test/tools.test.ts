@@ -47,7 +47,10 @@ const PAGE = { url: "https://example.com/", title: "Example", tabId: "t1" };
 /** A fake ctx.deviceAccess whose service answers `answer(req)`; it records every call. */
 function fake(
   answer: (req: ToolRequest) => ToolReply = () => ({ ok: true, page: PAGE, blockedHosts: [] }),
+  /** The service process's start time each ensureService reports, by call (the last repeats). */
+  starts: string[] = ["2026-11-24T00:00:00Z"],
 ) {
+  let ensures = 0;
   const log: string[] = [];
   const requests: ToolRequest[] = [];
   const reported: { hosts: string[]; url?: string | undefined }[] = [];
@@ -59,12 +62,8 @@ function fake(
       async ensureService(_call, spec) {
         log.push(`ensure:${spec.name}`);
         if (failWith) throw failWith;
-        return {
-          name: spec.name,
-          state: "running",
-          startedAt: "2026-11-24T00:00:00Z",
-          stateDir: "/s",
-        };
+        const startedAt = starts[Math.min(ensures++, starts.length - 1)] ?? null;
+        return { name: spec.name, state: "running", startedAt, stateDir: "/s" };
       },
       async request(_call, req) {
         const body = JSON.parse(new TextDecoder().decode(req.body)) as ToolRequest;
@@ -163,15 +162,39 @@ describe("browser tools", () => {
     expect(f.log).toEqual([]);
   });
 
-  it("a restart reply starts the service again and retries the request", async () => {
-    // the daemon installed the browser into the install directory, sealed it and exits
+  it("a restart reply waits for the old process to exit, starts the service again and retries", async () => {
+    // the daemon installed the browser into the install directory, sealed it and exits; the
+    // device reports the old process (its start time) until it is gone, so the next two ensures
+    // find it still running and no request goes to it
     let n = 0;
-    const f = fake(() =>
-      n++ === 0
-        ? { ok: false, error: "restart", message: "installed", blockedHosts: [] }
-        : { ok: true, page: PAGE, blockedHosts: [] },
+    const f = fake(
+      () =>
+        n++ === 0
+          ? { ok: false, error: "restart", message: "installed", blockedHosts: [] }
+          : { ok: true, page: PAGE, blockedHosts: [] },
+      ["T1", "T1", "T1", "T2"],
     );
-    // the old process's socket is gone before its process: the next request fails meanwhile
+    const r = await f.run("browser_snapshot", {});
+    expect(textOf(r)).toContain("Example");
+    expect(f.log).toEqual([
+      "ensure:browser",
+      "request:browser:snapshot",
+      "ensure:browser",
+      "ensure:browser",
+      "ensure:browser",
+      "request:browser:snapshot",
+    ]);
+  });
+
+  it("a request failing while the new process starts is retried in the same call", async () => {
+    let n = 0;
+    const f = fake(
+      () =>
+        n++ === 0
+          ? { ok: false, error: "restart", message: "installed", blockedHosts: [] }
+          : { ok: true, page: PAGE, blockedHosts: [] },
+      ["T1", "T2"],
+    );
     f.failRequest(1, new Error("device service browser.browser is not running"));
     const r = await f.run("browser_snapshot", {});
     expect(textOf(r)).toContain("Example");
@@ -186,7 +209,10 @@ describe("browser tools", () => {
   });
 
   it("a daemon that keeps asking for a restart ends in an actionable error", async () => {
-    const f = fake(() => ({ ok: false, error: "restart", message: "installed", blockedHosts: [] }));
+    const f = fake(
+      () => ({ ok: false, error: "restart", message: "installed", blockedHosts: [] }),
+      ["T1", "T2", "T3", "T4", "T5", "T6"],
+    );
     await expect(f.run("browser_snapshot", {})).rejects.toThrow(new ToolError(RESTARTING_MESSAGE));
     expect(f.log.filter((l) => l.startsWith("ensure"))).toHaveLength(RESTART_ATTEMPTS + 1);
   });
@@ -253,6 +279,15 @@ describe("browser tools", () => {
     expect(e).toBeInstanceOf(ToolError);
     expect((e as Error).message).toContain("No element e9.");
     expect((e as Error).message).toContain("browser_snapshot");
+  });
+
+  it("an unreachable page is said as the daemon found it", async () => {
+    const message =
+      "https://down.test/ could not be loaded (net::ERR_TUNNEL_CONNECTION_FAILED): the device's network could not connect to down.test:443 (the name did not resolve, or the host refused or did not answer the connection).";
+    const f = fake(() => ({ ok: false, error: "unreachable", message, blockedHosts: [] }));
+    await expect(f.run("browser_navigate", { url: "https://down.test/" })).rejects.toThrow(
+      new ToolError(`${message} Check the address before retrying.`),
+    );
   });
 
   it("device access refusals map to actionable text", async () => {

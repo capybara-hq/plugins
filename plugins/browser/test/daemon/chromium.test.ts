@@ -3,10 +3,12 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -21,6 +23,17 @@ import {
   playwrightDownloadHosts,
   shippedRevisionNote,
 } from "../../daemon/chromium.js";
+
+/** The features Playwright's own launch disables (read from the playwright-core it ships). */
+function playwrightDisabledFeatures(): string[] {
+  const require = createRequire(import.meta.url);
+  const bundle = readFileSync(
+    join(dirname(require.resolve("playwright-core/package.json")), "lib", "coreBundle.js"),
+    "utf8",
+  );
+  const list = /disabledFeatures = \[([\s\S]*?)\]/.exec(bundle)?.[1] ?? "";
+  return [...list.matchAll(/^\s*"([A-Za-z0-9]+)",?\s*$/gm)].map((m) => m[1] ?? "");
+}
 
 describe("chromium launch plan", () => {
   it("keeps the profile and browsers in the state directory and passes the proxy", () => {
@@ -84,6 +97,28 @@ describe("chromium launch plan", () => {
     expect(shell.build).toBe("chromium-headless-shell");
     expect(shell.args).toContain("--single-process");
     expect(shell.args.some((a) => a.startsWith("--proxy-server"))).toBe(false);
+  });
+
+  it("disables the ACCEPT_CH frame and keeps every feature Playwright disables", () => {
+    // Chromium takes only the last --disable-features flag, and Playwright passes its own first:
+    // ours must carry Playwright's list as well. The ACCEPT_CH frame restarts a request on its
+    // connection (www.google.com sends it), and under Playwright's proxy-credential interception
+    // the restarted navigation is lost: it hangs at about:blank until the timeout.
+    const plan = chromiumLaunchPlan({ stateDir: "/s", env: {}, platform: "darwin" });
+    const flags = plan.args.filter((a) => a.startsWith("--disable-features="));
+    expect(flags).toHaveLength(1);
+    const features = (flags[0] ?? "").slice("--disable-features=".length).split(",");
+    expect(features).toContain("AcceptCHFrame");
+    const playwright = playwrightDisabledFeatures();
+    expect(playwright.length).toBeGreaterThan(5);
+    expect(features).toEqual(expect.arrayContaining(playwright));
+  });
+
+  it("keeps a network error page from reloading itself", () => {
+    for (const platform of ["darwin", "linux"] as const) {
+      const plan = chromiumLaunchPlan({ stateDir: "/s", env: {}, platform });
+      expect(plan.args).toContain("--disable-auto-reload");
+    }
   });
 
   it("gives proxy credentials to Playwright, not to the flag", () => {

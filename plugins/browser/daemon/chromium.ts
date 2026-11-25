@@ -282,6 +282,42 @@ function shippedRevisions(cache: string, build: ChromiumBuild): string[] {
     .map((x) => x.n);
 }
 
+/**
+ * The features Playwright 1.65's own launch disables (its `chromiumSwitches`). Chromium takes only
+ * the last `--disable-features` flag and ours comes after Playwright's, so ours repeats its list
+ * (a test compares it with the playwright-core in use).
+ */
+// capybara:allow-module-state read-only constant (device service process, not the kernel)
+const PLAYWRIGHT_DISABLED_FEATURES = [
+  "AvoidUnnecessaryBeforeUnloadCheckSync",
+  "DestroyProfileOnBrowserClose",
+  "HttpsUpgrades",
+  "HttpsFirstBalancedModeAutoEnable",
+  "LensOverlay",
+  "MediaRouter",
+  "PaintHolding",
+  "ThirdPartyStoragePartitioning",
+  "AvoidCorsURLLoaderRestartOnRedirect",
+  "TcpPortRandomizationWin",
+  "OptimizationHints",
+  "NetworkTimeServiceQuerying",
+  "AimEnabled",
+  "PreconnectToSearch",
+  "msForceBrowserSignIn",
+  "msEdgeUpdateLaunchServicesPreferredVersion",
+];
+
+/**
+ * The features this daemon disables besides Playwright's. `AcceptCHFrame`: a server's ACCEPT_CH
+ * frame (sent in the TLS handshake, as www.google.com does) makes Chromium restart the request
+ * with the client hints it asks for, and while Playwright intercepts requests to answer the
+ * device proxy's credential challenge the restarted navigation is lost: the tab stays at
+ * about:blank until the navigation times out. Without the frame the hints follow from the
+ * response's Accept-CH header, as in a browser that never saw the site.
+ */
+// capybara:allow-module-state read-only constant (device service process, not the kernel)
+const DISABLED_FEATURES = [...PLAYWRIGHT_DISABLED_FEATURES, "AcceptCHFrame"];
+
 /** The launch for a state directory and environment (pure apart from the browsers cache check). */
 export function chromiumLaunchPlan(
   opts: {
@@ -302,6 +338,10 @@ export function chromiumLaunchPlan(
     "--use-mock-keychain",
     `--window-size=${VIEWPORT.width},${VIEWPORT.height}`,
     `--user-agent=${chromeUserAgent(opts.platform, release?.version ?? "")}`,
+    `--disable-features=${DISABLED_FEATURES.join(",")}`,
+    // Chrome reloads a network error page by itself (after 1 s, then backing off): that reload
+    // aborts the agent's next navigation in the tab and asks the proxy for the failed host again
+    "--disable-auto-reload",
   ];
   if (build === "chromium-headless-shell") args.push("--single-process");
   // macOS: Crashpad would write under ~/Library (outside the service's roots), and Chromium takes
