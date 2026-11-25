@@ -33,7 +33,7 @@ import type {
   Request,
   Response,
 } from "playwright-core";
-import { fetchIcon, iconDataUrl, iconUrlOf } from "./favicon.js";
+import { fetchIcon, iconForPanel, iconUrlOf } from "./favicon.js";
 import {
   EVICT_MIN_IDLE_MS,
   MAX_TABS,
@@ -613,8 +613,10 @@ export interface TabInfo {
   url: string;
   /** Set while the tab shows a verification page (bot check, CAPTCHA); cleared when it changes. */
   blocker?: TabBlocker;
-  /** The tab's site icon as a `data:image/...` URL, once fetched (the panel shows a placeholder). */
+  /** The tab's site icon as a `data:image/...` URL, once fetched (the panel shows a glyph). */
   favicon?: string;
+  /** The tab is loading a document (the panel's icon slot spins). */
+  loading?: true;
 }
 
 export class BrowserSession {
@@ -821,6 +823,7 @@ export class BrowserSession {
         ...(o === undefined ? {} : { owner: o.owner, root: o.root }),
         ...(blocker === undefined ? {} : { blocker }),
         ...(icon === undefined || icon === null ? {} : { favicon: icon }),
+        ...(this.loadingTabs.has(id) ? { loading: true as const } : {}),
       };
     });
   }
@@ -1752,7 +1755,7 @@ export class BrowserSession {
       let data: string | null = null;
       try {
         const bytes = await fetchIcon(cdp, url);
-        data = bytes === null ? null : iconDataUrl(bytes);
+        data = bytes === null ? null : await iconForPanel(cdp, bytes);
       } finally {
         await cdp.detach().catch(() => undefined);
       }
