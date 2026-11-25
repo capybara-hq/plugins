@@ -367,9 +367,11 @@ export interface ViewerTab {
   /**
    * The site's icon as a `data:image/(png|x-icon|gif|jpeg|webp|svg+xml);base64,…` URL (at most
    * FAVICON_MAX_BYTES of image), fetched by the browser through the device's network rules;
-   * absent until known or when the site has none (the panel shows a placeholder).
+   * absent until known or when the site has none (the panel shows a globe glyph).
    */
   favicon?: string;
+  /** Set while the tab loads a document: the panel's icon slot shows a small spinner. */
+  loading?: true;
 }
 
 /** A tab of another conversation tree as a viewer sees it: no per-tab detail beyond this. */

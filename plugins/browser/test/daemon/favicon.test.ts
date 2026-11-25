@@ -18,6 +18,33 @@ const PNG = Buffer.from(
 );
 const ICO = Buffer.concat([Buffer.from([0, 0, 1, 0, 1, 0]), Buffer.alloc(32)]);
 
+/**
+ * www.baidu.com's favicon shape: one 64x64 32-bit BMP entry, 16958 bytes, over the 8 KiB cap
+ * (the page declares it as `<link rel="shortcut icon" href="https://www.baidu.com/favicon.ico">`).
+ */
+function bigIco(): Buffer {
+  const n = 64;
+  const bmp = Buffer.alloc(40 + n * n * 4 + n * (n / 8));
+  bmp.writeUInt32LE(40, 0);
+  bmp.writeInt32LE(n, 4);
+  bmp.writeInt32LE(n * 2, 8);
+  bmp.writeUInt16LE(1, 12);
+  bmp.writeUInt16LE(32, 14);
+  for (let i = 0; i < n * n; i++) bmp.writeUInt32LE(0xff2932e1, 40 + i * 4); // opaque blue-ish
+  const head = Buffer.alloc(22);
+  head.writeUInt16LE(0, 0);
+  head.writeUInt16LE(1, 2);
+  head.writeUInt16LE(1, 4);
+  head.writeUInt8(n, 6);
+  head.writeUInt8(n, 7);
+  head.writeUInt16LE(1, 10);
+  head.writeUInt16LE(32, 12);
+  head.writeUInt32LE(bmp.length, 14);
+  head.writeUInt32LE(22, 18);
+  return Buffer.concat([head, bmp]);
+}
+const BIG_ICO = bigIco();
+
 describe("icon bytes", () => {
   it("are sniffed by their leading bytes, never by the server's type", () => {
     expect(sniffIcon(PNG)).toBe("image/png");
@@ -49,6 +76,18 @@ beforeAll(async () => {
       res.writeHead(200, { "content-type": "image/png" }).end(PNG);
     },
     "/fallback": "<!doctype html><title>Fallback</title><p>no link</p>",
+    "/baidu": (req, res) => {
+      // the page declares its icon by an absolute address, as www.baidu.com does
+      const origin = `http://${req.headers.host}`;
+      res
+        .writeHead(200, { "content-type": "text/html" })
+        .end(
+          `<!doctype html><title>百度一下，你就知道</title><link rel="shortcut icon" href="${origin}/big.ico" type="image/x-icon" /><link rel="icon" sizes="any" mask href="${origin}/big.ico">`,
+        );
+    },
+    "/big.ico": (_req, res) => {
+      res.writeHead(200, { "content-type": "image/x-icon" }).end(BIG_ICO);
+    },
     "/favicon.ico": (_req, res) => {
       res.writeHead(200, { "content-type": "image/x-icon" }).end(ICO);
     },
@@ -66,13 +105,32 @@ const iconOf = (m: ViewerMsg) =>
   m.t === "state" ? m.tabs.find((t) => t.active)?.favicon : undefined;
 
 describe("tab favicons", () => {
+  it("an icon over the cap (a 64 px 32-bit ICO, as www.baidu.com's) is drawn into a small PNG", async () => {
+    expect(BIG_ICO.length).toBe(16958);
+    expect(BIG_ICO.length).toBeGreaterThan(FAVICON_MAX_BYTES);
+    const viewer = await openViewer(d.socketPath, { maxWidth: 480, maxHeight: 300 });
+    try {
+      const nav = await request(d.socketPath, { op: "navigate", url: `${fx.url}/baidu` });
+      expect(nav.ok).toBe(true);
+      const icon = iconOf(await viewer.next((m) => iconOf(m) !== undefined));
+      expect(icon?.startsWith("data:image/png;base64,")).toBe(true);
+      expect(isIconDataUrl(icon)).toBe(true);
+      const png = Buffer.from((icon ?? "").split(",")[1] ?? "", "base64");
+      // a 32x32 PNG (IHDR width and height)
+      expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([32, 32]);
+    } finally {
+      await viewer.close();
+    }
+  });
+
   it("the page's declared icon reaches the viewer state as a data URL", async () => {
     const viewer = await openViewer(d.socketPath, { maxWidth: 480, maxHeight: 300 });
     try {
       const nav = await request(d.socketPath, { op: "navigate", url: `${fx.url}/declared` });
       expect(nav.ok).toBe(true);
-      const icon = iconOf(await viewer.next((m) => iconOf(m) !== undefined));
-      expect(icon).toBe(`data:image/png;base64,${PNG.toString("base64")}`);
+      const want = `data:image/png;base64,${PNG.toString("base64")}`;
+      const icon = iconOf(await viewer.next((m) => iconOf(m) === want));
+      expect(icon).toBe(want);
     } finally {
       await viewer.close();
     }
