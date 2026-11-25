@@ -195,6 +195,9 @@ const sameFile = (a: { dev: number; ino: number }, b: { dev: number; ino: number
 const REF_RE = /^(f\d+)?e\d+$/;
 const PROXY_FAILURE_RE = /ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED/;
 
+/** Playwright's error for a navigation that a late network error page interrupted. */
+const ERROR_PAGE_INTERRUPT_RE = /is interrupted by another navigation to "chrome-error:/;
+
 /** The longest a failed navigation waits for its error page to commit. */
 const ERROR_PAGE_WAIT_MS = 2_000;
 
@@ -1325,8 +1328,19 @@ export class BrowserSession {
     // Following it shares the navigation's own deadline: an aborted navigate takes no longer.
     const deadline = Date.now() + this.navigationTimeoutMs;
     const watch = new NavWatch(page, url, () => this.pendingNavs.get(page));
+    const left = () => ({
+      waitUntil: "domcontentloaded" as const,
+      timeout: Math.max(1, deadline - Date.now()),
+    });
     try {
-      res = await page.goto(url, { waitUntil: "domcontentloaded" });
+      try {
+        res = await page.goto(url, { waitUntil: "domcontentloaded" });
+      } catch (e) {
+        // the device's network changed under the navigation (an interface came or went): Chromium
+        // drops it, and once more is the browser's own answer
+        if (!firstLine(e).includes("net::ERR_NETWORK_CHANGED")) throw e;
+        res = await page.goto(url, left());
+      }
     } catch (e) {
       const msg = firstLine(e);
       // a URL that is a file download: it is saved and reported (onDownload), not an error
@@ -1335,8 +1349,21 @@ export class BrowserSession {
         return;
       }
       if (isTimeout(e)) throw await this.navigationTimedOut(page, url);
-      if (!msg.includes("net::ERR_ABORTED")) throw await this.navigationFailed(page, e, url, msg);
-      const out = await watch.follow(deadline);
+      // the error page of the tab's earlier failed navigation committed late (Linux full build):
+      // this navigation goes on behind it, so it is followed like one another took over
+      const lateErrorPage = ERROR_PAGE_INTERRUPT_RE.test(msg);
+      if (!msg.includes("net::ERR_ABORTED") && !lateErrorPage)
+        throw await this.navigationFailed(page, e, url, msg);
+      let out = await watch.follow(deadline);
+      if (out.kind === "none" && lateErrorPage) {
+        try {
+          res = await page.goto(url, left());
+          out = { kind: "loaded", response: res };
+        } catch (again) {
+          if (isTimeout(again)) throw await this.navigationTimedOut(page, url);
+          throw await this.navigationFailed(page, again, url, firstLine(again));
+        }
+      }
       if (out.kind !== "loaded") {
         const status = await watch.emptyAnswer();
         if (status !== undefined)
