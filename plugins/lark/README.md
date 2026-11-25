@@ -131,6 +131,10 @@ still drops a redelivery that arrives across a mode switch.
 
 ## Web login (identity-source)
 
+The super admin's page of the extension shows these steps as the platform setup guide `lark-sign-in`
+([`guides/lark-sign-in.md`](./guides/lark-sign-in.md), Chinese
+[`guides/lark-sign-in.zh.md`](./guides/lark-sign-in.zh.md)) with the callback URL filled in.
+
 Use the same self-built app (see above):
 
 1. Under **Development Config → Security Settings → Redirect URLs** (开发配置 → 安全设置 → 重定向 URL), add `<http.publicUrl>/api/v1/auth/sso/lark/callback` (for example

@@ -105,6 +105,10 @@ still drops a redelivery that arrives across a mode switch.
 
 [Sign in with Slack](https://docs.slack.dev/authentication/sign-in-with-slack/) is based on OpenID Connect.
 
+The super admin's page of the extension shows these steps as the platform setup guide `slack-sign-in`
+([`guides/slack-sign-in.md`](./guides/slack-sign-in.md), Chinese
+[`guides/slack-sign-in.zh.md`](./guides/slack-sign-in.zh.md)) with the callback URL filled in.
+
 1. The setup guide's manifest already lists the callback; otherwise, in the app settings, add
    `<http.publicUrl>/api/v1/auth/sso/slack/callback` under **OAuth & Permissions → Redirect URLs** (for example `https://capybara.example.com/api/v1/auth/sso/slack/callback`;
    the `redirect_uri` the kernel sends must equal it or be a sub-path of it).
