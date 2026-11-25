@@ -34,6 +34,10 @@ export async function startTestDaemon(
     stateDir,
     env: {},
     browsersPath: TEST_BROWSERS,
+    // A stop waits for Chromium to close and flush the profile, however long a loaded machine
+    // takes: the daemon's default grace (3 s) kills it, which loses what was not yet written (a
+    // cookie, a half-committed Cookies file). Tests that need the kill pass their own grace.
+    browserCloseGraceMs: 60_000,
     ...opts,
   });
   await daemon.ready;
