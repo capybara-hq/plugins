@@ -219,11 +219,6 @@ export const NO_TAB_TO_WAIT_ON =
 /** Playwright's error for a navigation that a network error page's late commit interrupted. */
 const ERROR_PAGE_INTERRUPT_RE = /is interrupted by another navigation to "chrome-error:/;
 
-/** How often a navigation runs while the device's network keeps changing under it. */
-const NETWORK_CHANGED_ATTEMPTS = 5;
-/** The pause before a navigation the network change dropped runs again. */
-const NETWORK_CHANGED_PAUSE_MS = 250;
-
 /** The longest a failed navigation waits for its error page to commit. */
 const ERROR_PAGE_WAIT_MS = 2_000;
 
@@ -1895,23 +1890,7 @@ export class BrowserSession {
     const deadline = Date.now() + this.navigationTimeoutMs;
     const watch = new NavWatch(page, url, () => this.pendingNavs.get(page));
     try {
-      // the device's network changed under the navigation (an interface came or went): Chromium
-      // drops it, so it runs again, a few times while the changes go on, within its own deadline
-      for (let attempt = 1; ; attempt++) {
-        try {
-          res = await this.gotoPastLateErrorPage(page, url, watch, deadline);
-          break;
-        } catch (e) {
-          const changed = firstLine(e).includes("net::ERR_NETWORK_CHANGED");
-          if (
-            !changed ||
-            attempt >= NETWORK_CHANGED_ATTEMPTS ||
-            Date.now() + NETWORK_CHANGED_PAUSE_MS >= deadline
-          )
-            throw e;
-          await new Promise<void>((r) => this.clock.schedule(r, NETWORK_CHANGED_PAUSE_MS));
-        }
-      }
+      res = await this.gotoPastLateErrorPage(page, url, watch, deadline);
     } catch (e) {
       const msg = firstLine(e);
       // a URL that is a file download: it is saved and reported (onDownload), not an error
