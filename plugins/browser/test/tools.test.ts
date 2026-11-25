@@ -304,6 +304,17 @@ describe("browser tools", () => {
     expect((e as Error).message).toContain("browser_snapshot");
   });
 
+  it("the device's network being down is said with its own next step", async () => {
+    const message =
+      "https://a.test/ could not be loaded (net::ERR_PROXY_CONNECTION_FAILED): the device's network proxy is not reachable, so no page loads on the device right now; this is not a problem of the address.";
+    const f = fake(() => ({ ok: false, error: "network_unavailable", message, blockedHosts: [] }));
+    await expect(f.run("browser_navigate", { url: "https://a.test/" })).rejects.toThrow(
+      new ToolError(
+        `${message} Retry after a while; if it keeps failing, ask the user to check the device's network.`,
+      ),
+    );
+  });
+
   it("an unreachable page is said as the daemon found it", async () => {
     const message =
       "https://down.test/ could not be loaded (net::ERR_TUNNEL_CONNECTION_FAILED): the device's network could not connect to down.test:443 (the name did not resolve, or the host refused or did not answer the connection).";

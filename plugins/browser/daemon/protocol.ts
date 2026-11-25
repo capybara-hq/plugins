@@ -255,7 +255,8 @@ export type ToolRequest = ToolOp & RequestConversation;
  * directory and sealed; the daemon exits and the plugin starts the service again. `unreachable`:
  * a navigation could not load its page (a net error, or no page within the navigation's time,
  * after which the navigation was stopped); the message names the host and what the device's
- * network answered for it.
+ * network answered for it. `network_unavailable`: the device's network proxy itself cannot be
+ * reached (the device's network is down or being set up), whatever the address.
  */
 export type ToolErrorCode =
   | "taken_over"
@@ -263,6 +264,7 @@ export type ToolErrorCode =
   | "timeout"
   | "blocked"
   | "unreachable"
+  | "network_unavailable"
   | "failed"
   | "restart";
 
