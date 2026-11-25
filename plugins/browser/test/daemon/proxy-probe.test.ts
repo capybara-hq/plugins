@@ -15,14 +15,20 @@ describe("proxy probe", () => {
   it("a proxy nobody listens on is down", async () => {
     const l = await listener(() => undefined);
     await l.close();
-    expect(await probeProxy(`http://127.0.0.1:${l.port}`, "a.test", 443)).toBe("proxy_down");
+    expect(await probeProxy(`http://127.0.0.1:${l.port}`, "a.test", 443)).toEqual({
+      verdict: "proxy_down",
+      reason: "",
+    });
   });
 
   it("a proxy that took the connection and then reset it is not down", async () => {
     // a proxy dropping the client when its upstream fails, instead of answering 502
     const l = await listener((sock) => sock.resetAndDestroy());
     try {
-      expect(await probeProxy(`http://127.0.0.1:${l.port}`, "a.test", 443)).toBe("unknown");
+      expect(await probeProxy(`http://127.0.0.1:${l.port}`, "a.test", 443)).toEqual({
+        verdict: "unknown",
+        reason: "",
+      });
     } finally {
       await l.close();
     }
