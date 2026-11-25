@@ -59,6 +59,15 @@ A real browser in the person's device for agents (browser use spec,
   10 minutes of the last write (a provider that restarts the service for a network change, see
   device-local) reopens them; an idle stop removes the file. The profile keeps cookies and storage
   on its own.
+- `<state>/cookies.json` holds the persistent cookies from the moment a stop begins until the next
+  start has merged the ones the profile lacks (then it is removed, so a logout while the browser
+  ran is never undone by an old file). It exists because the service's kill (2 s after SIGTERM)
+  can land while a loaded Chromium is still writing its Cookies file. It lives in the service
+  state directory, outside every workspace and project (core `packages/device`), mode 0600, and
+  holds what Chromium's own `profile/Default/Cookies` holds there. That file is not protected
+  either: the daemon runs Chromium with `--use-mock-keychain`, so its values are only obfuscated
+  with a key every Chromium shares (observed: `encrypted_value` of 51 bytes, readable by anyone
+  who can read the directory). The JSON therefore adds no exposure.
 - A `handoff_clear` with `handback` (the person answered Done) also ends a takeover. Dropping a
   handoff on the next agent request is device-wide: every conversation of the device is the
   owner's.

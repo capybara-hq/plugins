@@ -3,9 +3,13 @@
 // Cookies file. The device service gets SERVICE_STOP_GRACE_MS (2 s, core packages/device) between
 // SIGTERM and SIGKILL, and a loaded machine can spend all of it closing Chromium; the kill then
 // lands mid-commit and the profile has no cookie. Chromium's profile stays the source of truth:
-// at the next start only cookies the profile lacks are added back, never a changed one.
+// at the next start only cookies the profile lacks are added back, never a changed one, and the
+// file is removed. The file lives in the service state directory (outside every workspace and
+// project, core packages/device supervisor) and holds what Chromium's own Cookies file holds
+// there; that file's values are only obfuscated (the daemon runs with --use-mock-keychain), so
+// the JSON adds no exposure.
 
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { BrowserContext } from "playwright-core";
 
@@ -26,7 +30,11 @@ export async function saveCookies(ctx: BrowserContext, stateDir: string): Promis
   }
 }
 
-/** Adds the saved cookies the profile does not have; never throws. */
+/**
+ * Adds the saved cookies the profile does not have, then removes the file: it exists only between
+ * a stop and the next start, so it always reflects the last stop and a logout while the browser
+ * ran can never be undone by an old file. Never throws.
+ */
 export async function restoreCookies(ctx: BrowserContext, stateDir: string): Promise<void> {
   try {
     const saved = JSON.parse(readFileSync(join(stateDir, "cookies.json"), "utf8")) as unknown;
@@ -46,5 +54,7 @@ export async function restoreCookies(ctx: BrowserContext, stateDir: string): Pro
     if (missing.length > 0) await ctx.addCookies(missing);
   } catch {
     // no file, or one that does not parse: nothing to add back
+  } finally {
+    rmSync(join(stateDir, "cookies.json"), { force: true });
   }
 }

@@ -339,11 +339,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     // read before the close: the browser's close event drops `running`
     const r = running?.launch === starting ? running : undefined;
     const pid = r?.pid;
+    // first, and outside the close grace: the service's SIGKILL can land in the middle of
+    // Chromium's own write
+    if (r !== undefined) await within(saveCookies(r.ctx, opts.stateDir), COOKIE_SAVE_MS);
     await closeOrKill(
       starting.then(
         async (session) => {
-          // first: the service's SIGKILL can land in the middle of Chromium's own write
-          if (r !== undefined) await within(saveCookies(r.ctx, opts.stateDir), COOKIE_SAVE_MS);
           await session.close();
           // Playwright may report the close before the process is done flushing the profile
           // (cookies): a restart on the same profile must not start before the process is gone
