@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BrowserContext } from "playwright-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { browserProcessId, launchChromium } from "../../daemon/chromium.js";
 import { type Daemon, startDaemon } from "../../daemon/main.js";
 import { DOWNLOAD_BLOCKED_PREFIX } from "../../daemon/protocol.js";
@@ -171,7 +171,9 @@ describe("browser daemon: stop", () => {
     // a browser that no longer answers (Playwright would wait 180 s before killing it)
     process.kill(pid, "SIGSTOP");
     await daemon.close();
-    expect(alive(pid)).toBe(false);
+    // the stop gives up after its grace, which a loaded machine can use up before the killed
+    // process is reaped: wait for the exit itself
+    await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 20_000 });
   });
 
   it("waits for the browser's process to be gone, not only for the close to be reported", async () => {
