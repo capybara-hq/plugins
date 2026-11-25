@@ -456,7 +456,7 @@ export function mountPanel(opts: PanelOptions): void {
 
   function applyState(s: Extract<ViewerOut, { t: "state" }>): void {
     lastState = s;
-    pendingHandoff = s.handoffs.at(-1) ?? null;
+    pendingHandoff = s.handoffs?.at(-1) ?? null;
     $("handoff").hidden = pendingHandoff === null;
     $("handoff-message").textContent = pendingHandoff?.message ?? "";
     tabs = s.tabs;
