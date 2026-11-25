@@ -215,8 +215,10 @@ describe.skipIf(!READY)("device-e2b services (live)", { timeout: 240_000 }, () =
     await sbx.killTagged(h, ["svc-live"], sig());
     expect(await sbx.serviceStatus?.(h, "tx.keep", sig())).toEqual(started);
     await sbx.suspend(h, sig());
+    // a stopped service names no files
+    const { filesDigest: _running, ...stopped } = (started ?? {}) as { filesDigest?: string };
     expect(await sbx.serviceStatus?.(h, "tx.keep", sig())).toEqual({
-      ...started,
+      ...stopped,
       state: "stopped",
       startedAt: null,
     });
@@ -253,6 +255,21 @@ describe.skipIf(!READY)("device-e2b services (live)", { timeout: 240_000 }, () =
     expect((await sbx.ensureService?.(h, spec(11), sig()))?.state).toBe("running");
     expect(sentFor("tx.digest")).toHaveLength(2);
     expect(sentFor("tx.digest")[1]).toBeGreaterThan(MIB);
+  });
+
+  it("a running service on other files (an upgraded extension) is restarted on them", async () => {
+    const v1 = echo("tx.roll");
+    const v2 = echo("tx.roll", { "lib/v2.txt": enc.encode("v2") });
+    // the SDK in this package's range does not type filesDigest yet (capybara-hq/core#875)
+    type Status = { filesDigest?: string; startedAt?: string | null; state?: string };
+    const first = (await sbx.ensureService?.(h, v1, sig())) as Status | undefined;
+    expect(first?.filesDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(await sbx.ensureService?.(h, v1, sig())).toEqual(first);
+    const second = (await sbx.ensureService?.(h, v2, sig())) as Status | undefined;
+    expect(second?.state).toBe("running");
+    expect(second?.filesDigest).not.toBe(first?.filesDigest);
+    expect(second?.startedAt).not.toBe(first?.startedAt);
+    await sbx.stopService?.(h, "tx.roll", sig());
   });
 
   it("an agent command can neither read a service's state nor reach its socket or process", async () => {
