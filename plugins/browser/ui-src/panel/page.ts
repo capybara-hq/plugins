@@ -83,7 +83,12 @@ export const PANEL_HTML = `<!doctype html>
   .row { flex: none; display: flex; align-items: center; padding: 0 12px; }
 
   /* tab strip */
-  #tabs { height: 32px; align-items: stretch; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+  #tabs { height: 32px; align-items: stretch; gap: 4px; }
+  #tablist { flex: 1 1 auto; min-width: 0; display: flex; align-items: stretch; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+  /* a group of the tree's other conversations: a quiet label before its tabs, set apart by space */
+  #tablist .group { flex: none; align-self: center; margin-left: 12px; padding: 0 2px; font-size: var(--cb-type-micro-size, 11px); line-height: var(--cb-type-micro-line, 14px); color: var(--cb-muted, #5E5E5A); white-space: nowrap; }
+  #others { align-self: center; height: 24px; padding: 0 8px; font-size: var(--cb-type-micro-size, 11px); color: var(--cb-muted, #5E5E5A); }
+  #others[aria-expanded="true"] { background: var(--cb-hover, rgba(26,26,24,.04)); }
   .tab { display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 64px; max-width: 200px; padding: 0 10px; color: var(--cb-muted, #5E5E5A); }
   .tab[data-active="true"] { color: var(--cb-ink, #1A1A18); font-weight: 500; box-shadow: inset 0 -2px 0 var(--cb-accent, #CC4609); padding-right: 6px; }
   .fav { width: 14px; height: 14px; border-radius: 3px; flex: none; background: var(--cb-line-soft, #E8E7E2); }
@@ -93,7 +98,7 @@ export const PANEL_HTML = `<!doctype html>
   .tab .label:hover:not(:disabled) { background: transparent; }
   .tab .label:disabled { color: inherit; }
   .tab .x { width: 20px; min-width: 20px; height: 20px; border-radius: 4px; color: var(--cb-muted, #5E5E5A); }
-  #tabs .add { align-self: center; color: var(--cb-muted, #5E5E5A); }
+  #tablist .add { align-self: center; color: var(--cb-muted, #5E5E5A); }
 
   /* toolbar */
   #bar { height: 44px; gap: 4px; }
@@ -160,6 +165,10 @@ export const PANEL_HTML = `<!doctype html>
   .menu { position: absolute; z-index: 2; min-width: 180px; max-width: calc(100% - 24px); max-height: 60%; overflow: auto; padding: 4px; border-radius: var(--cb-radius-md, 8px); background: var(--cb-raised, #fff); box-shadow: var(--cb-shadow-float, 0 8px 24px rgba(26,26,24,.08)), 0 0 0 1px var(--cb-line-soft, #E8E7E2); }
   .menu button { display: flex; width: 100%; justify-content: flex-start; gap: 8px; padding: 0 8px; text-align: left; overflow: hidden; text-overflow: ellipsis; }
   .menu button[aria-current="true"] { font-weight: 600; }
+  .menu .heading { margin: 0; padding: 6px 8px 2px; font-size: var(--cb-type-micro-size, 11px); line-height: var(--cb-type-micro-line, 14px); color: var(--cb-muted, #5E5E5A); }
+  .menu .heading:not(:first-child) { margin-top: 4px; }
+  .menu button .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .menu button .hint { flex: none; margin-left: 8px; color: var(--cb-accent, #CC4609); }
 
   /* the skeleton: the panel's own shape, quietly pulsing */
   .bone { display: block; flex: none; border-radius: 2px; background: var(--bone); animation: pulse 1.6s ease-in-out infinite; }
@@ -184,7 +193,7 @@ export const PANEL_HTML = `<!doctype html>
   </div>
 </div>
 <div id="app" class="layer" data-loading>
-  <div id="tabs" class="row" role="tablist"></div>
+  <div id="tabs" class="row"><div id="tablist" role="tablist"></div><button type="button" id="others" aria-haspopup="menu" hidden></button></div>
   <div id="bar" class="row">
     <button type="button" id="back">${ICONS.back}</button>
     <button type="button" id="forward">${ICONS.forward}</button>
@@ -212,6 +221,7 @@ export const PANEL_HTML = `<!doctype html>
   <h2 id="empty-title"></h2>
   <p id="empty-body"></p>
   <button type="button" id="reconnect" class="secondary"></button>
+  <button type="button" id="empty-others" class="secondary" aria-haspopup="menu" hidden></button>
 </div>
 <div id="menu" class="menu" role="menu" hidden></div>
 <script src="panel.js"></script>

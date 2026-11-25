@@ -41,6 +41,12 @@ export const STRINGS = {
     fileDialog: "The page opened a file chooser; the agent can pick a file with its upload tool.",
     allowFailed: "Could not allow the host:",
     answerFailed: "Could not send your answer:",
+    subTask: "Sub-task",
+    otherConversations: "Other conversations",
+    moveHere: "Move here",
+    tabInUse: "Another conversation is using this tab; try again shortly",
+    treeEmptyTitle: "The agent has not opened a page in this conversation yet",
+    treeEmptyBody: "Its pages show here as it opens them.",
   },
   zh: {
     title: "浏览器",
@@ -81,6 +87,12 @@ export const STRINGS = {
     fileDialog: "页面打开了文件选择框；智能体可以用上传工具选择文件。",
     allowFailed: "无法允许该主机：",
     answerFailed: "无法发送你的回答：",
+    subTask: "子任务",
+    otherConversations: "其他对话",
+    moveHere: "移到此对话",
+    tabInUse: "该标签页正被其他对话使用，请稍后再试",
+    treeEmptyTitle: "智能体尚未在此对话中打开网页",
+    treeEmptyBody: "它打开的网页会显示在这里。",
   },
 } as const;
 

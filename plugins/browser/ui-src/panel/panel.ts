@@ -9,7 +9,19 @@
 // person holds control, whichever panel took it; in the watch state (the agent drives) the panel
 // is read-only, and the daemon drops input anyway. Takeover input (pointer, cursor, keys, IME,
 // paste) lives in input.ts.
-import type { ViewerFrame, ViewerIn, ViewerOut, ViewerTab } from "../../daemon/protocol.js";
+//
+// Tabs are owned per conversation (tab ownership spec §5): the strip shows the tabs of this
+// conversation's tree (its own first, then one "Sub-task" group per sub-agent conversation), and
+// the shown tab is this viewer's own choice, which a click changes also in the watch state. Other
+// trees' tabs are listed under "Other conversations", each movable here ("Move here", an adopt).
+import type {
+  ViewerFrame,
+  ViewerHandoff,
+  ViewerIn,
+  ViewerOtherTab,
+  ViewerOut,
+  ViewerTab,
+} from "../../daemon/protocol.js";
 import { decodeFrame, isIconDataUrl, VIEWPORT } from "../../daemon/protocol.js";
 import { type Locale, type StringKey, t } from "./i18n.js";
 import { mountInput } from "./input.js";
@@ -88,6 +100,16 @@ export interface PanelOptions {
   decode?: (jpeg: Uint8Array) => Promise<CanvasImageSource>;
 }
 
+/** A menu entry: a button (`run`), or a heading that groups the buttons after it. */
+interface MenuItem {
+  label: string;
+  /** A short action word after the label (the other conversations' "Move here"). */
+  hint?: string;
+  current?: boolean;
+  heading?: boolean;
+  run?(): void;
+}
+
 interface Observer {
   observe(el: Element): void;
 }
@@ -117,6 +139,7 @@ export function mountPanel(opts: PanelOptions): void {
   let sock: Socket | null = null;
   let mode: View = "connecting";
   let tabs: ViewerTab[] = [];
+  let otherTabs: ViewerOtherTab[] = [];
   let control: "agent" | "user" = "agent";
   let lastState: Extract<ViewerOut, { t: "state" }> | null = null;
   let retried401 = false;
@@ -146,11 +169,12 @@ export function mountPanel(opts: PanelOptions): void {
   let pausedForHidden = false;
   let blockedHost = "";
   let blockedUrl = "";
-  let pendingHandoff: { callId: string; message: string } | null = null;
+  /** The newest pending handoff of the tree (the banner's; its answer echoes its conversation). */
+  let pendingHandoff: ViewerHandoff | null = null;
   let sentSize = "";
   let image: CanvasImageSource | null = null;
   /** The layer the panel shows now (see `renderLoading`). */
-  let shown: "idle" | "skeleton" | "app" = "skeleton";
+  let layer: "idle" | "skeleton" | "app" = "skeleton";
 
   /**
    * Watch only on a phone (the host's compact size class, a pushed page): the device's screen,
@@ -163,6 +187,8 @@ export function mountPanel(opts: PanelOptions): void {
   const text = (key: StringKey) => t(locale, key);
   /** The person drives the page from this panel: any non-compact panel while they hold control. */
   const interactive = (): boolean => !compact() && control === "user";
+  /** The browser runs but this conversation's tree owns no tab: the tree's empty state. */
+  const treeEmpty = (): boolean => mode === "live" && lastState !== null && tabs.length === 0;
 
   function send(msg: ViewerIn): void {
     if (sock === null) return;
@@ -283,7 +309,6 @@ export function mountPanel(opts: PanelOptions): void {
     for (const id of ["back", "forward", "reload"])
       ($(id) as HTMLButtonElement).disabled = readOnly;
     ($("more") as HTMLButtonElement).disabled = readOnly;
-    ($("tabsbtn") as HTMLButtonElement).disabled = readOnly;
     url.readOnly = readOnly;
     input.sync();
     $("lock").hidden = !isLive || lastState?.secure !== true;
@@ -293,8 +318,13 @@ export function mountPanel(opts: PanelOptions): void {
       empty: ["emptyTitle", "emptyBody"],
       offline: ["offlineTitle", "offlineBody"],
       error: ["errorTitle", "errorBody"],
+      tree: ["treeEmptyTitle", "treeEmptyBody"],
     };
-    const k = keys[mode];
+    const k = keys[treeEmpty() ? "tree" : mode];
+    // the tree's empty state lists other conversations' pages (to move one here), never shows one
+    const emptyOthers = $("empty-others");
+    emptyOthers.hidden = !treeEmpty() || otherTabs.length === 0;
+    emptyOthers.textContent = othersLabel();
     if (k !== undefined) {
       $("empty-title").textContent = text(k[0]);
       $("empty-body").textContent = text(k[1]);
@@ -312,16 +342,17 @@ export function mountPanel(opts: PanelOptions): void {
    * - `skeleton`: a connection on its way (or live without its first frame yet);
    * - `app`: the live panel, once the browser's state and its first frame are there.
    * A browser that comes up from the idle state (a quiet look found it) keeps the idle state until
-   * its first frame and then switches once to the live panel, as from the skeleton.
+   * its first frame and then switches once to the live panel, as from the skeleton; so does a tree
+   * that gets its first tab while its empty state shows (an idle layer too).
    */
   function renderLoading(): void {
-    const idleMode = mode === "empty" || mode === "offline" || mode === "error";
+    const idleMode = mode === "empty" || mode === "offline" || mode === "error" || treeEmpty();
     let next: "idle" | "skeleton" | "app";
     if (idleMode) next = "idle";
     else if (mode === "live" && image !== null) next = "app";
-    else if (mode === "live" && shown === "idle") next = "idle";
+    else if (mode === "live" && layer === "idle") next = "idle";
     else next = "skeleton";
-    shown = next;
+    layer = next;
     $("app").toggleAttribute("data-loading", next === "skeleton");
     $("app").toggleAttribute("data-idle", next === "idle");
     $("skeleton").hidden = next !== "skeleton";
@@ -330,14 +361,27 @@ export function mountPanel(opts: PanelOptions): void {
   }
 
   function renderTabs(): void {
-    const box = $("tabs");
+    const box = $("tablist");
     box.textContent = "";
     const watchOnly = !interactive();
+    const subs = subGroups();
+    let group = "own";
     for (const tab of tabs) {
+      if (tab.group !== group) {
+        group = tab.group;
+        if (group !== "own") {
+          const label = doc.createElement("span");
+          label.className = "group";
+          label.setAttribute("role", "presentation");
+          label.textContent = groupLabel(group, subs);
+          box.appendChild(label);
+        }
+      }
       const el = doc.createElement("div");
       el.className = "tab";
       el.setAttribute("role", "tab");
       el.setAttribute("data-active", String(tab.active));
+      el.setAttribute("data-group", tab.group);
       el.setAttribute("aria-selected", String(tab.active));
       el.appendChild(favOf(tab));
       const label = doc.createElement("button");
@@ -345,8 +389,8 @@ export function mountPanel(opts: PanelOptions): void {
       label.className = "label";
       label.textContent = tabName(tab);
       label.title = tabName(tab);
-      label.disabled = watchOnly;
-      label.addEventListener("click", () => send({ t: "tab", action: "switch", tabId: tab.id }));
+      // like browser tabs: a click shows the tab, also while only watching
+      label.addEventListener("click", () => pickTab(tab));
       el.appendChild(label);
       // close only while the person is in control (the design's take over state)
       if (!watchOnly && tab.active && control === "user") {
@@ -369,6 +413,9 @@ export function mountPanel(opts: PanelOptions): void {
       add.addEventListener("click", () => send({ t: "tab", action: "open" }));
       box.appendChild(add);
     }
+    const others = $("others");
+    others.hidden = otherTabs.length === 0;
+    others.textContent = othersLabel();
     // narrow panels: one button for the tabs and the address
     const active = tabs.find((x) => x.active);
     $("tabsbtn").querySelector(".fav")?.replaceWith(favOf(active));
@@ -376,6 +423,37 @@ export function mountPanel(opts: PanelOptions): void {
       active === undefined ? "" : hostOf(active.url) || tabName(active);
     $("tabsbtn-count").textContent = String(tabs.length);
     $("tabsbtn").setAttribute("aria-label", `${text("tabs")}: ${tabs.length}`);
+  }
+
+  /**
+   * A tab of the tree chosen in the strip or the tabs menu. In control it is a `switch` (for a
+   * tab of this conversation it also becomes its active tab); while watching it changes only this
+   * viewer's shown tab (`show`, allowed in the watch state). The daemon's next state marks it.
+   */
+  function pickTab(tab: ViewerTab): void {
+    if (interactive()) send({ t: "tab", action: "switch", tabId: tab.id });
+    else if (!tab.active) send({ t: "show", tabId: tab.id });
+  }
+
+  /** The tree's other groups in strip order. */
+  const subGroups = (): string[] => [
+    ...new Set(tabs.map((x) => x.group).filter((g) => g !== "own")),
+  ];
+  /** "Sub-task", numbered only when the tree has more than one (no conversation names). */
+  const groupLabel = (group: string, subs: string[]): string =>
+    subs.length > 1 ? `${text("subTask")} ${subs.indexOf(group) + 1}` : text("subTask");
+  const othersLabel = (): string => `${text("otherConversations")} (${otherTabs.length})`;
+
+  /** The other conversations' tabs as menu entries, each moved here on a click (an adopt). */
+  function otherItems(): MenuItem[] {
+    return otherTabs.map((tab) => ({
+      label: tab.title !== "" ? tab.title : tab.url === "about:blank" ? text("newTab") : tab.url,
+      hint: text("moveHere"),
+      run: () => send({ t: "tab", action: "adopt", tabId: tab.id }),
+    }));
+  }
+  function openOthers(anchor: HTMLElement): void {
+    openMenu(anchor, [{ label: othersLabel(), heading: true }, ...otherItems()]);
   }
 
   // a blank tab (about:blank, the tab left after the last one closed) reads as a new tab
@@ -423,43 +501,68 @@ export function mountPanel(opts: PanelOptions): void {
 
   // ---- menus (narrow panels) ----
 
-  function openMenu(
-    anchor: HTMLElement,
-    items: { label: string; current?: boolean; run(): void }[],
-  ): void {
+  function openMenu(anchor: HTMLElement, items: MenuItem[]): void {
     const menu = $("menu");
     menu.textContent = "";
     for (const it of items) {
+      if (it.heading === true || it.run === undefined) {
+        const h = doc.createElement("p");
+        h.className = "heading";
+        h.setAttribute("role", "presentation");
+        h.textContent = it.label;
+        menu.appendChild(h);
+        continue;
+      }
+      const run = it.run;
       const b = doc.createElement("button");
       b.type = "button";
       b.setAttribute("role", "menuitem");
-      b.textContent = it.label;
+      const name = doc.createElement("span");
+      name.className = "name";
+      name.textContent = it.label;
+      b.appendChild(name);
+      if (it.hint !== undefined) {
+        const hint = doc.createElement("span");
+        hint.className = "hint";
+        hint.textContent = it.hint;
+        b.appendChild(hint);
+      }
       if (it.current) b.setAttribute("aria-current", "true");
       b.addEventListener("click", () => {
         closeMenu();
-        it.run();
+        run();
       });
       menu.appendChild(b);
     }
     const r = anchor.getBoundingClientRect();
     menu.style.top = `${Math.round(r.bottom + 4)}px`;
-    menu.style.right = `${Math.max(12, Math.round(win.innerWidth - r.right))}px`;
+    // right-aligned with its anchor, moved right only as far as its width needs to stay inside
+    // the panel (a narrow panel's anchor, or the centred button of the empty state)
+    menu.style.maxWidth = `${Math.max(0, win.innerWidth - 24)}px`;
+    menu.style.right = "12px";
     menu.hidden = false;
+    const width = menu.getBoundingClientRect().width;
+    const right = Math.max(12, Math.round(win.innerWidth - r.right));
+    menu.style.right = `${Math.max(12, Math.min(right, Math.round(win.innerWidth - 12 - width)))}px`;
     anchor.setAttribute("aria-expanded", "true");
-    (menu.firstElementChild as HTMLElement | null)?.focus();
+    (menu.querySelector("button") as HTMLElement | null)?.focus();
   }
   function closeMenu(): void {
     $("menu").hidden = true;
-    $("tabsbtn").removeAttribute("aria-expanded");
-    $("more").removeAttribute("aria-expanded");
+    for (const id of ["tabsbtn", "more", "others", "empty-others"])
+      $(id).removeAttribute("aria-expanded");
   }
 
   function applyState(s: Extract<ViewerOut, { t: "state" }>): void {
     lastState = s;
-    pendingHandoff = s.handoffs?.at(-1) ?? null;
+    // the banner shows the tree's newest handoff (a sub-agent's too)
+    pendingHandoff = s.handoffs.at(-1) ?? null;
     $("handoff").hidden = pendingHandoff === null;
     $("handoff-message").textContent = pendingHandoff?.message ?? "";
     tabs = s.tabs;
+    otherTabs = s.otherTabs;
+    // the tree lost its last tab: its next first tab starts from the idle layer, not a stale frame
+    if (tabs.length === 0) image = null;
     const was = control;
     control = s.control;
     // the take over ended elsewhere (another panel handed back, the agent resumed): leave full
@@ -594,14 +697,17 @@ export function mountPanel(opts: PanelOptions): void {
   }
 
   async function onFrame(m: ViewerFrame): Promise<void> {
-    try {
-      const first = image === null;
-      image = await decode(m.jpeg);
-      if (first) renderLoading();
-      draw();
-      input.frame();
-    } catch {
-      // A frame that fails to decode is skipped; the ack below keeps the stream moving.
+    // the tree's empty state shows no page (a frame of a tab shown before is stale)
+    if (!treeEmpty()) {
+      try {
+        const first = image === null;
+        image = await decode(m.jpeg);
+        if (first) renderLoading();
+        draw();
+        input.frame();
+      } catch {
+        // A frame that fails to decode is skipped; the ack below keeps the stream moving.
+      }
     }
     send({ t: "frame-ack", seq: m.seq });
   }
@@ -741,6 +847,10 @@ export function mountPanel(opts: PanelOptions): void {
       case "dialog":
         showDialog(msg);
         break;
+      case "notice":
+        // a refused "Move here": the tab's conversation is using it right now
+        if (msg.code === "tab_in_use") notice("tabInUse", "");
+        break;
     }
   }
 
@@ -848,13 +958,18 @@ export function mountPanel(opts: PanelOptions): void {
       const res = await doFetch("handoff-answer", {
         method: "POST",
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify({ callId: h.callId, done }),
+        // the handoff's own conversation (a sub-agent's when it asked): the kernel looks the
+        // question up by it and the callId, which is unique only within its run
+        body: JSON.stringify({ callId: h.callId, done, handoffConversationId: h.conversationId }),
         credentials: "omit",
       });
       if (res.status === 404) {
         // The question is gone (the run was cancelled or already answered): only the banner was
         // stale. Hide it here; the daemon drops its notice on the next agent request.
-        if (pendingHandoff?.callId === h.callId) {
+        if (
+          pendingHandoff?.callId === h.callId &&
+          pendingHandoff.conversationId === h.conversationId
+        ) {
           pendingHandoff = null;
           $("handoff").hidden = true;
         }
@@ -876,16 +991,25 @@ export function mountPanel(opts: PanelOptions): void {
   $("takeover").addEventListener("click", takeover);
   $("verify-go").addEventListener("click", takeover);
   $("tabsbtn").addEventListener("click", (e) => {
-    if (!interactive()) return;
-    openMenu(e.currentTarget as HTMLElement, [
-      ...tabs.map((tab) => ({
-        label: tabName(tab),
-        current: tab.active,
-        run: () => send({ t: "tab", action: "switch", tabId: tab.id }),
-      })),
-      { label: text("newTab"), run: () => send({ t: "tab", action: "open" }) },
-    ]);
+    // the tree's tabs by group (a pick shows the tab, also while watching), a new tab while in
+    // control, then the other conversations' tabs to move here
+    const items: MenuItem[] = [];
+    const subs = subGroups();
+    let group = "own";
+    for (const tab of tabs) {
+      if (tab.group !== group) {
+        group = tab.group;
+        if (group !== "own") items.push({ label: groupLabel(group, subs), heading: true });
+      }
+      items.push({ label: tabName(tab), current: tab.active, run: () => pickTab(tab) });
+    }
+    if (interactive())
+      items.push({ label: text("newTab"), run: () => send({ t: "tab", action: "open" }) });
+    if (otherTabs.length > 0) items.push({ label: othersLabel(), heading: true }, ...otherItems());
+    if (items.length > 0) openMenu(e.currentTarget as HTMLElement, items);
   });
+  $("others").addEventListener("click", (e) => openOthers(e.currentTarget as HTMLElement));
+  $("empty-others").addEventListener("click", (e) => openOthers(e.currentTarget as HTMLElement));
   $("more").addEventListener("click", (e) => {
     openMenu(e.currentTarget as HTMLElement, [
       { label: text("forward"), run: () => send({ t: "nav", action: "forward" }) },
@@ -895,7 +1019,7 @@ export function mountPanel(opts: PanelOptions): void {
   doc.addEventListener("mousedown", (e) => {
     const m = $("menu");
     if (m.hidden || m.contains(e.target as Node)) return;
-    if ((e.target as Element | null)?.closest?.("#tabsbtn, #more")) return;
+    if ((e.target as Element | null)?.closest?.("#tabsbtn, #more, #others, #empty-others")) return;
     closeMenu();
   });
   $("handback").addEventListener("click", handback);
