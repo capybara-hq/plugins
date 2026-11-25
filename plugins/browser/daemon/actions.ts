@@ -14,6 +14,7 @@ import {
   readSync,
   realpathSync,
   statSync,
+  unlinkSync,
   writeSync,
 } from "node:fs";
 import { request as httpRequest } from "node:http";
@@ -689,7 +690,7 @@ export class BrowserSession {
    * Adds a note to the replies of the requests in flight; with none in flight (a download that
    * finished after its click replied, a dialog the person caused) the next reply carries it.
    */
-  private note(text: string): void {
+  note(text: string): void {
     const n = clip(text, MAX_DIALOG_CHARS + 200);
     if (this.collectors.size === 0) {
       this.unreported.push(n);
@@ -758,10 +759,12 @@ export class BrowserSession {
    * it could have swapped: each candidate is created exclusively without following a link
    * (`O_CREAT | O_EXCL | O_NOFOLLOW`), then checked to be the file the resolved path inside the
    * downloads directory names before any byte is written; a mismatch (a directory swapped for a
-   * link meanwhile) writes nothing and fails (an empty file may stay where the swap pointed).
+   * link meanwhile) writes nothing, removes the empty file it made (only while that name still
+   * is the file it opened) and fails.
    */
   private saveDownload(workspace: string, name: string, source: string): string {
     const dir = this.downloadsDir(workspace);
+    const dirStat = lstatSync(dir);
     const ext = extname(name);
     const stem = name.slice(0, name.length - ext.length);
     for (let i = 0; i < 1000; i++) {
@@ -782,11 +785,21 @@ export class BrowserSession {
         } catch {
           real = "";
         }
-        if (!within(real, dir) || !sameFile(fstatSync(out), statSync(real)))
+        const opened = fstatSync(out);
+        const placed = real !== "" && within(real, dir) && sameFile(opened, statSync(real));
+        if (!placed || !sameFile(dirStat, lstatSync(dir))) {
+          // the file landed where a swapped link pointed: take back exactly that empty file
+          try {
+            if (real !== "" && sameFile(opened, lstatSync(real)) && opened.size === 0)
+              unlinkSync(real);
+          } catch {
+            // gone or changed again: never remove anything else
+          }
           throw new ActionError(
             "failed",
             `${dir} changed while the download was saved; nothing was written. Retry the download.`,
           );
+        }
         copyInto(source, out);
         return target;
       } finally {

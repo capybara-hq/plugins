@@ -160,6 +160,17 @@ export function playwrightDownloadHosts(env: Record<string, string | undefined>)
   return ["cdn.playwright.dev", "playwright.download.prss.microsoft.com", "storage.googleapis.com"];
 }
 
+/**
+ * How far (in Playwright browser revisions, one per Chromium roll) a shipped browser may be from
+ * this build's own and still run: about two months of rolls.
+ */
+export const MAX_REVISION_SKEW = 10;
+
+/** The note a tool result carries while the browser runs a shipped revision not its own. */
+export function shippedRevisionNote(dir: string, revision: string | undefined): string {
+  return `The browser runs ${dir} from the device image, not ${revision === undefined ? "this plugin's" : `revision ${revision}`}: ask the user to recreate the device on the current image when convenient.`;
+}
+
 /** Why the browser cannot start when the device offers no read-only place for it. */
 export const BROWSER_UNAVAILABLE_MESSAGE =
   "This device offers the browser no place it cannot rewrite: on a local device, update capybara-device on that machine; on a cloud device, its image predates the pinned browser, so ask the user to delete the device and create it again (or wait until it is recreated after a period without use).";
@@ -224,7 +235,15 @@ function browsersPathFor(
   ) {
     if (revision !== undefined && existsSync(join(cache, `${BUILD_DIR[build]}-${revision}`)))
       return { browsersPath: cache, shipped: true };
-    const newest = shippedRevisions(cache, build).at(-1);
+    // another revision only within MAX_REVISION_SKEW of this build's: an image far behind would
+    // run an outdated browser, one far ahead a protocol this playwright-core may not speak
+    const near = shippedRevisions(cache, build).filter(
+      (d) =>
+        revision !== undefined &&
+        Math.abs(Number(d.slice(BUILD_DIR[build].length + 1)) - Number(revision)) <=
+          MAX_REVISION_SKEW,
+    );
+    const newest = near.at(-1);
     if (newest !== undefined) return { browsersPath: cache, shipped: true, shippedDir: newest };
   }
   return { browsersPath: join(stateDir, "browsers"), unavailable: BROWSER_UNAVAILABLE_MESSAGE };

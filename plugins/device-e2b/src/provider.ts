@@ -189,8 +189,11 @@ fi
 [ "$(id -u ${SERVICE_USER})" = ${SERVICE_UID} ] || { echo "${SERVICE_USER} is not uid ${SERVICE_UID}" >&2; exit 5; }
 umask 022
 mkdir -p -- "$(dirname -- "$1")"
-# services from before isolation ran as the sandbox user: end them (and their relays) first
-pkill -9 -u 1000 -f '[/]var/lib/capybara/svc/|[/]tmp/[.]capybara-svc/' >/dev/null 2>&1 || true
+# a state root from before isolation (the sandbox user's): end the services and relays the sandbox
+# user ran from it first; on a migrated VM nothing is killed
+if [ -d "$1" ] && [ ! -L "$1" ] && [ "$(stat -c %u -- "$1")" != ${SERVICE_UID} ]; then
+  pkill -9 -u 1000 -f '[/]var/lib/capybara/svc/|[/]tmp/[.]capybara-svc/' >/dev/null 2>&1 || true
+fi
 for d in "$1" "$2"; do
   if [ -L "$d" ] || { [ -e "$d" ] && { [ ! -d "$d" ] || [ "$(stat -c %u -- "$d")" != ${SERVICE_UID} ]; }; }; then
     rm -rf -- "$d"
