@@ -16,8 +16,22 @@ import { HANDOFF_FORM } from "./i18n.js";
 /** The browser panel (the `conversation.panel` contribution in the manifest). */
 const PANEL = "browser";
 
-/** The longest handoff message (the question card's title and the panel banner). */
+/** The longest handoff message (the question card's body and the panel banner). */
 const MESSAGE_MAX = Math.min(2000, HANDOFF_MAX_CHARS);
+/** The reason's start in the question's title (the full reason is the body). */
+const SHORT_MAX = 40;
+
+/** The reason's first sentence or line, at most SHORT_MAX characters (an ellipsis when cut). */
+export function shortReason(message: string): string {
+  const first =
+    message
+      .trim()
+      .split(/(?<=[。！？.!?])\s*|\n/u)[0]
+      ?.trim() ?? "";
+  const chars = Array.from(first);
+  if (chars.length <= SHORT_MAX) return first.replace(/[。.]$/u, "");
+  return `${chars.slice(0, SHORT_MAX - 1).join("")}…`;
+}
 
 const HANDOFF: ToolSpec = {
   name: "browser_handoff",
@@ -57,14 +71,22 @@ export function handoffHandler(deps: BrowserDeps): ToolHandler {
       const asked: InputRequired = {
         kind: "input_required",
         form: {
-          title: message,
+          title: {
+            zh: `${HANDOFF_FORM.titlePrefix.zh}${shortReason(message)}`,
+            en: `${HANDOFF_FORM.titlePrefix.en}${shortReason(message)}`,
+          },
+          body: message,
           fields: [
             {
               key: "done",
               label: HANDOFF_FORM.label,
-              description: HANDOFF_FORM.description,
               schema: { type: "boolean" },
               required: true,
+              // two buttons (完成 primary, 取消), the same answer the panel's banner sends
+              choices: [
+                { value: true, label: HANDOFF_FORM.done },
+                { value: false, label: HANDOFF_FORM.cancel },
+              ],
             },
           ],
         },

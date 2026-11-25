@@ -30,7 +30,7 @@ import {
   TAKEN_OVER_MESSAGE,
   TOOL_TIMEOUT_MS,
 } from "../src/browser.js";
-import { registerHandoffTool } from "../src/handoff.js";
+import { registerHandoffTool, shortReason } from "../src/handoff.js";
 import { serviceSpecLoader } from "../src/service.js";
 import { registerBrowserTools, SCREENSHOT_MAX_BYTES } from "../src/tools.js";
 
@@ -113,6 +113,7 @@ const call = (over: Partial<ToolCallContext> = {}): ToolCallContext => ({
   ownerAccountId: "acc",
   agentId: "agent",
   conversationId: "conv",
+  rootConversationId: "conv",
   callId: "call-1",
   signal: new AbortController().signal,
   ...over,
@@ -453,6 +454,16 @@ describe("browser tools", () => {
 });
 
 describe("browser_handoff", () => {
+  it("the title takes the reason's first sentence, cut at 40 characters", () => {
+    expect(shortReason("请登录百度账号。登录后点完成。")).toBe("请登录百度账号");
+    expect(shortReason("Sign in.\nThen continue")).toBe("Sign in");
+    const long =
+      "百度首页上已经弹出登录框（标签页 t1，左侧二维码 + 右侧「账号登录 / 短信登录」），登录必须由你本人完成";
+    const s = shortReason(long);
+    expect(Array.from(s)).toHaveLength(40);
+    expect(s.endsWith("…")).toBe(true);
+  });
+
   it("handoff returns InputRequired then resumes with the page state", async () => {
     const f = fake((req) =>
       req.op === "snapshot"
@@ -462,11 +473,22 @@ describe("browser_handoff", () => {
     const first = (await f.run("browser_handoff", { message: "Please sign in." })) as InputRequired;
     expect(first.kind).toBe("input_required");
     expect(validateInputForm(first.form)).toEqual([]);
-    expect(first.form.title).toBe("Please sign in.");
+    // a short fixed title with the reason's start; the agent's full reason is the body
+    expect(first.form.title).toEqual({
+      zh: "请在浏览器中完成：Please sign in",
+      en: "Finish in the browser: Please sign in",
+    });
+    expect(first.form.body).toBe("Please sign in.");
     const field = first.form.fields[0];
     expect(field?.key).toBe("done");
     expect(field?.schema).toEqual({ type: "boolean" });
+    expect(field?.required).toBe(true);
     expect(field?.label).toEqual({ zh: "完成", en: "Done" });
+    // two buttons on { done }: 完成 first (primary), 取消; the panel banner answers the same
+    expect(field?.choices).toEqual([
+      { value: true, label: { zh: "完成", en: "Done" } },
+      { value: false, label: { zh: "取消", en: "Cancel" } },
+    ]);
     // the person's conversation page opens the browser panel (a panel of this extension)
     expect(first.open).toEqual({ contribution: "browser" });
     expect(f.requests).toEqual([

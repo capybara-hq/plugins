@@ -129,10 +129,19 @@ describe("browser routes", () => {
           conversationId: "conv",
           accountId: "acc",
           callId: "call-1",
+          // the panel's conversation unless the panel names the one that raised it
+          handoffConversationId: "conv",
           done: true,
         },
       },
     ]);
+  });
+
+  it("handoff-answer passes the raising conversation the panel echoes (a sub-agent's)", async () => {
+    const s = setup();
+    const body = { callId: "call-1", done: false, handoffConversationId: "child" };
+    expect((await s.hit("POST /ui/handoff-answer", body, conv)).status).toBe(200);
+    expect(s.calls[0]?.arg).toMatchObject({ handoffConversationId: "child", done: false });
   });
 
   it("invalid bodies answer 400", async () => {
@@ -141,6 +150,15 @@ describe("browser routes", () => {
     for (const bad of ["a..b", "-a.example", "a-.example", "a_b.example", `${"x".repeat(64)}.com`])
       expect((await s.hit("POST /ui/network-hosts", { hosts: [bad] }, conv)).status, bad).toBe(400);
     expect((await s.hit("POST /ui/handoff-answer", { callId: "c" }, conv)).status).toBe(400);
+    expect(
+      (
+        await s.hit(
+          "POST /ui/handoff-answer",
+          { callId: "c", done: true, handoffConversationId: 7 },
+          conv,
+        )
+      ).status,
+    ).toBe(400);
     expect(s.calls).toEqual([]);
   });
 
