@@ -386,6 +386,29 @@ export function sandboxEnv(name: string, mode: EgressMode): string[] {
 }
 
 /**
+ * The proxy variables of {@link sandboxEnv} for one command, with the credentials
+ * `capybara:<tag>` that make the egress proxy record the command's refusals under its operation
+ * tag (egress-proxy/proxy.mjs `operationTag`; the proxy authenticates nobody). `GIT_SSH_COMMAND`
+ * (SOCKS, which carries no tag) stays the instance's.
+ */
+export function taggedProxyEnv(name: string, tag: string): Record<string, string> {
+  const proxy = `http://capybara:${tag}@${sandboxResourceNames(name).egress}:${PROXY_PORT}`;
+  const env: Record<string, string> = {};
+  for (const key of [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "GRPC_PROXY",
+    "grpc_proxy",
+  ])
+    env[key] = proxy;
+  return env;
+}
+
+/**
  * The egress proxy container's environment (egress-proxy/proxy.mjs) for a mode and host list,
  * plus the deployment's denied ranges (both modes).
  */
@@ -1723,7 +1746,7 @@ export function createDockerSandbox(
    */
   const egressControl = async (
     name: string,
-    op: "apply" | "status",
+    op: "apply" | "status" | "refusals",
     input: unknown,
     signal: AbortSignal,
   ): Promise<Record<string, unknown>> => {
@@ -1732,8 +1755,8 @@ export function createDockerSandbox(
       user: EGRESS_USER,
       // the egress proxy's own image (nothing in the sandbox writes there)
       imagePath: true,
-      // apply: `{ config, fence }` as one JSON line on stdin
-      ...(op === "apply" && { stdin: Buffer.from(`${JSON.stringify(input)}\n`) }),
+      // apply: `{ config, fence }`, refusals: `{ tag }` as one JSON line on stdin
+      ...(op !== "status" && { stdin: Buffer.from(`${JSON.stringify(input)}\n`) }),
       maxOutputBytes: 64 * 1024,
       timeoutMs: EGRESS_APPLY_TIMEOUT_MS,
       signal,
@@ -1957,6 +1980,10 @@ export function createDockerSandbox(
       }
     },
     execFull: (h, args, ctl, prefix, nonce) => execWith(h, args, ctl, prefix, nonce),
+    taggedProxyEnv: (h, tag) => taggedProxyEnv(h.id, tag),
+    async takeRefusals(h, tag, signal) {
+      return (await egressControl(h.id, "refusals", { tag }, signal)).refusals;
+    },
     async appliedNetwork(h, signal) {
       let labels: Record<string, string>;
       try {

@@ -53,6 +53,10 @@ export interface EgressState {
   /** The highest fence token applied (or the start token). */
   readonly fence: number;
   admit(host: string, client: Socket, closed?: import("node:events").EventEmitter): EgressEntry;
+  /** Records a refusal for the operation `tag`; no tag or no reason records nothing. */
+  recordRefusal(tag: string | null, host: string, port: number, reason: string | undefined): void;
+  /** The refusals recorded for `tag`, oldest first, then forgotten. */
+  takeRefusals(tag: string): EgressRefusal[];
   keep(entry: EgressEntry, up: Socket): boolean;
   /**
    * Under the fence token `fence`: refuses a missing or invalid token, throws {@link StaleFence}
@@ -104,6 +108,24 @@ export const FAKE_IP_DNS: {
 };
 /** The refusal when a fake-IP answer could not be resolved through encrypted DNS. */
 export const FAKE_IP_REFUSAL: string;
+/** A refusal recorded for an operation (see `operationTag`). */
+export interface EgressRefusal {
+  /** Normalized; an IPv6 literal bracketed. */
+  host: string;
+  port: number;
+  /** One of {@link REFUSAL_REASONS}. */
+  reason: string;
+}
+/** The reasons a refusal names (the status phrase), in the SDK's sandbox proxy vocabulary. */
+export const REFUSAL_REASONS: Readonly<{
+  malformed: string;
+  literal: string;
+  resolved: string;
+  offList: string;
+  fakeIp: string;
+}>;
+/** The operation tag of a `Proxy-Authorization` header (`capybara:<32 hex>`), or null. */
+export function operationTag(header: unknown): string | null;
 export interface EncryptedDns {
   resolve(name: string): Promise<string[]>;
 }
