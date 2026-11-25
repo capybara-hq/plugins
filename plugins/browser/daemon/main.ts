@@ -38,6 +38,7 @@ import {
   MAX_TABS_PER_CONVERSATION,
   NO_CONVERSATION_MESSAGE,
   REPLY_TOO_LARGE_MESSAGE,
+  ROLL_CHECK_REQUEST,
   type ToolReply,
   type ToolRequest,
   type ViewerIn,
@@ -160,6 +161,22 @@ function parse(raw: Uint8Array): unknown {
  * Writes one message; false when the socket is gone or backed up. A message above the service
  * message limit is not sent (`tooLarge` is called): encodeServiceMessage throws a RangeError for it.
  */
+/**
+ * How long a pending handoff answers the roll check busy: a handoff nobody ends (its run was
+ * stopped, its conversation never uses the browser again) stays parked, and must not keep an
+ * upgraded plugin's service from restarting for good.
+ */
+export const HANDOFF_HOLDS_ROLL_MS = 30 * 60_000;
+
+/** Whether a request body is the kernel's roll check ({@link ROLL_CHECK_REQUEST}). */
+function isRollCheck(body: unknown): boolean {
+  return (
+    typeof body === "object" &&
+    body !== null &&
+    (body as { capybara?: unknown }).capybara === JSON.parse(ROLL_CHECK_REQUEST).capybara
+  );
+}
+
 function write(sock: Socket, value: unknown, tooLarge?: () => void): boolean {
   if (sock.destroyed) return false;
   let framed: Uint8Array;
@@ -602,8 +619,22 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       if (kind === "request") {
         if (handled) return;
         handled = true;
+        const body = parse(raw);
+        // the kernel's roll check: answered from the control state alone (no browser start, no
+        // activity), busy while a restart would lose what the person is doing
+        if (isRollCheck(body)) {
+          const reason =
+            state.control === "user"
+              ? "the person holds control of the browser"
+              : state.handoffs().some((h) => clock.now() - h.since < HANDOFF_HOLDS_ROLL_MS)
+                ? "a handoff to the person is pending"
+                : undefined;
+          write(sock, reason === undefined ? { busy: false } : { busy: true, reason });
+          sock.end();
+          return;
+        }
         state.requestStarted();
-        handleRequest(parse(raw))
+        handleRequest(body)
           .catch((e): ToolReply => fail(e instanceof ActionError ? e.message : String(e)))
           .then((reply) => {
             write(sock, reply, () => write(sock, fail(REPLY_TOO_LARGE_MESSAGE), () => undefined));

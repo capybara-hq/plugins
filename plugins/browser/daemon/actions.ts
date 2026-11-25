@@ -98,7 +98,7 @@ const LOAD_GRACE_MS = 5_000;
  * The longest a reply waits on a query of a page besides the action (its title, the verification
  * check): a page whose navigation hangs keeps such queries waiting.
  */
-const PAGE_QUERY_MS = 2_000;
+const PAGE_QUERY_MS = 1_000;
 const MAX_WAIT_MS = 60_000;
 /**
  * The largest screenshot, decoded: its base64 plus the reply's JSON stays below the device service
@@ -222,6 +222,9 @@ export const NO_TAB_TO_WAIT_ON =
 
 /** Playwright's error for a navigation that a network error page's late commit interrupted. */
 const ERROR_PAGE_INTERRUPT_RE = /is interrupted by another navigation to "chrome-error:/;
+
+/** How often a navigation runs while the device's network keeps changing under it. */
+const NETWORK_CHANGED_ATTEMPTS = 4;
 
 /** The longest a failed navigation waits for its error page to commit. */
 const ERROR_PAGE_WAIT_MS = 2_000;
@@ -1193,7 +1196,12 @@ export class BrowserSession {
         this.loadingTabs.delete(id);
         this.emit({ type: "state" });
       }
-      if (this.proxy !== undefined && PROXY_FAILURE_RE.test(err))
+      // a request the device's network change dropped may have been a refused one: the proxy is
+      // asked about its host too (a network change hides the tunnel's answer)
+      if (
+        this.proxy !== undefined &&
+        (PROXY_FAILURE_RE.test(err) || err.includes("ERR_NETWORK_CHANGED"))
+      )
         this.checkBlocked(page, r.url(), this.pageToOpen(page, r));
     });
     page.on("response", (r) => {
@@ -1695,8 +1703,12 @@ export class BrowserSession {
         this.actedSeq.set(conv, ++this.actSeq);
       }
       // a verification page goes to the person, said first so the agent hands off
+      // (not for the tab list or adopt, which run beside a navigation and only read the tabs)
       const verifying =
-        page === undefined ? false : await this.checkVerification(page, this.tabIdOf(page));
+        page === undefined ||
+        (req.op === "tabs" && (req.action === "list" || req.action === "adopt"))
+          ? false
+          : await this.checkVerification(page, this.tabIdOf(page));
       const text = [
         ...(verifying ? [VERIFICATION_NOTE] : []),
         ...c.notes,
@@ -1909,7 +1921,7 @@ export class BrowserSession {
     const deadline = Date.now() + this.navigationTimeoutMs;
     const watch = new NavWatch(page, url, () => this.pendingNavs.get(page));
     try {
-      res = await this.gotoPastLateErrorPage(page, url, watch, deadline);
+      res = await this.gotoPastNetworkChange(page, url, watch, deadline);
     } catch (e) {
       const msg = firstLine(e);
       // a URL that is a file download: it is saved and reported (onDownload), not an error
@@ -1950,6 +1962,35 @@ export class BrowserSession {
       );
     }
     await page.waitForLoadState("load", { timeout: LOAD_GRACE_MS }).catch(() => undefined);
+  }
+
+  /**
+   * `goto` past a change of the device's network (an interface came or went: Wi-Fi, a VPN, a
+   * container network): Chromium answers net::ERR_NETWORK_CHANGED and may keep or restart the
+   * navigation itself, so it is followed first (like one another navigation took over) and run
+   * again only when none goes on, at most {@link NETWORK_CHANGED_ATTEMPTS} times, within the
+   * navigation's deadline.
+   */
+  private async gotoPastNetworkChange(
+    page: Page,
+    url: string,
+    watch: NavWatch,
+    deadline: number,
+  ): Promise<Awaited<ReturnType<Page["goto"]>>> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.gotoPastLateErrorPage(page, url, watch, deadline);
+      } catch (e) {
+        if (!firstLine(e).includes("net::ERR_NETWORK_CHANGED")) throw e;
+        const out = await watch.follow(deadline);
+        if (out.kind === "loaded") return out.response;
+        // only a navigation the network change itself dropped runs again: an abort may be a
+        // download or another navigation taking over, never fetched again
+        if (out.kind === "failed" && !out.error.includes("ERR_NETWORK_CHANGED"))
+          throw new Error(`${out.error} at ${out.url}`);
+        if (attempt >= NETWORK_CHANGED_ATTEMPTS || Date.now() >= deadline) throw e;
+      }
+    }
   }
 
   /**

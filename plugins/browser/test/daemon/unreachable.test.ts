@@ -61,13 +61,18 @@ async function startProxy(hangPort: number): Promise<{ url: string; server: Serv
 }
 
 let hang: TcpServer;
+/** Resolved at the hanging listener's next connection (a navigation to hang.test in flight). */
+const hangWaiters: (() => void)[] = [];
+const nextHangConnection = () => new Promise<void>((r) => hangWaiters.push(r));
 let proxy: Awaited<ReturnType<typeof startProxy>>;
 let fx: Awaited<ReturnType<typeof startFixtureServer>>;
 let d: TestDaemon;
 
 beforeAll(async () => {
   // accepts every connection and never answers (a TLS handshake that never completes)
-  hang = createTcpServer(() => undefined);
+  hang = createTcpServer(() => {
+    for (const w of hangWaiters.splice(0)) w();
+  });
   await new Promise<void>((r) => hang.listen(0, "127.0.0.1", r));
   const addr = hang.address();
   if (addr === null || typeof addr === "string") throw new Error("no address");
@@ -99,29 +104,38 @@ describe("browser daemon unreachable pages", () => {
     });
     const r = await request(d.socketPath, { op: "navigate", url: "https://hang.test/" });
     expect(r).toMatchObject({ ok: false, error: "unreachable" });
-    expect(r.ok ? "" : r.message).toBe(
-      `https://hang.test/ did not load within 3 s: hang.test accepted the connection through the device's network but sent no page in that time. The navigation was stopped; the tab shows ${fx.url}/page.`,
+    // the tab shows the page before, or the error page of an attempt a network change dropped
+    // (Linux runners change interfaces while containers start; the navigation then runs again)
+    const shown = new RegExp(
+      `^https://hang\\.test/ did not load within 3 s: hang\\.test accepted the connection through the device's network but sent no page in that time\\. The navigation was stopped; the tab shows (${fx.url.replace(/[.]/g, "\\.")}/page|chrome-error://chromewebdata/)\\.$`,
     );
+    expect(r.ok ? "" : r.message).toMatch(shown);
     // the navigation no longer holds the page: a snapshot and the tab list answer at once
     const started = Date.now();
     const snap = await request(d.socketPath, { op: "snapshot" });
-    expect(snap).toMatchObject({ ok: true, page: { url: `${fx.url}/page` } });
-    expect(snap.ok ? snap.text : "").toContain("before");
+    expect(snap).toMatchObject({ ok: true });
+    if (snap.ok && snap.page?.url === `${fx.url}/page`) expect(snap.text).toContain("before");
     const tabs = await request(d.socketPath, { op: "tabs", action: "list" });
     expect(tabs).toMatchObject({ ok: true });
     expect(Date.now() - started).toBeLessThan(NAV_TIMEOUT_MS);
   });
 
   it("the tab list answers while a navigation is still in flight", async () => {
-    const nav = request(d.socketPath, { op: "navigate", url: "https://hang.test/again" });
-    let navDone = false;
-    void nav.then(() => {
-      navDone = true;
-    });
+    const inFlight = nextHangConnection();
+    const order: string[] = [];
+    const nav = request(d.socketPath, { op: "navigate", url: "https://hang.test/again" }).then(
+      (r) => {
+        order.push("navigate");
+        return r;
+      },
+    );
+    // the navigation reached the listener that never answers: it runs until its timeout
+    await inFlight;
     const tabs = await request(d.socketPath, { op: "tabs", action: "list" });
+    order.push("tabs");
     expect(tabs).toMatchObject({ ok: true });
-    expect(navDone).toBe(false);
     expect(await nav).toMatchObject({ ok: false, error: "unreachable" });
+    expect(order).toEqual(["tabs", "navigate"]);
   });
 
   it("a host the device's network cannot connect to fails at once, naming it", async () => {

@@ -208,7 +208,9 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
     expect(await sbx.resume(h, sig())).toBe("resumed");
     // the process died with the instance; no pid file claims otherwise
     const after = await sbx.serviceStatus?.(h, "tx.keep", sig());
-    expect(after).toEqual({ ...started, state: "stopped", startedAt: null });
+    // a stopped service names no files
+    const { filesDigest: _running, ...stopped } = (started ?? {}) as { filesDigest?: string };
+    expect(after).toEqual({ ...stopped, state: "stopped", startedAt: null });
     await expect(
       sbx.serviceRequest?.(h, "tx.keep", enc.encode("x"), { timeoutMs: 5_000, signal: sig() }),
     ).rejects.toThrow(/not running/);
@@ -324,6 +326,40 @@ describe.skipIf(!dockerAvailable)("device-docker services", { timeout: 120_000 }
     expect((await sbx.ensureService?.(h, spec(11), sig()))?.state).toBe("running");
     expect(sentFor("tx.digest")).toHaveLength(2);
     expect(await sum()).toBe(createHash("sha256").update(filler(11)).digest("hex"));
+  });
+
+  it("a running service on other files (an upgraded extension) is restarted on them", async () => {
+    const { h } = await create();
+    const v1 = echo("tx.roll");
+    const v2 = echo("tx.roll", { "lib/v2.txt": enc.encode("v2") });
+    const digestOf = (spec: DeviceServiceSpec) => {
+      const hash = createHash("sha256");
+      for (const p of Object.keys(spec.files).sort()) {
+        const data = spec.files[p] as Uint8Array;
+        hash.update(`${p}\0${String(data.byteLength)}\0`);
+        hash.update(data);
+      }
+      return `sha256:${hash.digest("hex")}`;
+    };
+    const first = await sbx.ensureService?.(h, v1, sig());
+    expect(first).toMatchObject({ state: "running", filesDigest: digestOf(v1) });
+    // the status and an ifRunning look name the files it runs
+    expect(await sbx.serviceStatus?.(h, "tx.roll", sig())).toMatchObject({
+      filesDigest: digestOf(v1),
+    });
+    // the same files: kept
+    expect(await sbx.ensureService?.(h, v1, sig())).toEqual(first);
+    // other files: the old process stops, the new files start
+    const second = await sbx.ensureService?.(h, v2, sig());
+    expect(second).toMatchObject({ state: "running", filesDigest: digestOf(v2) });
+    expect(second?.startedAt).not.toBe(first?.startedAt);
+    const dir = serviceStateDir("tx.roll");
+    expect((await svcSh(h, `cat ${dir}/lib/v2.txt`)).stdout).toBe("v2");
+    const answer = await sbx.serviceRequest?.(h, "tx.roll", enc.encode("ping"), {
+      timeoutMs: 10_000,
+      signal: sig(),
+    });
+    expect(dec.decode(answer)).toBe("ping");
   });
 
   it("service files land on the persistent volume", async () => {

@@ -131,3 +131,15 @@ The extension implements only primitives. **No scheduling, timers or state table
 - **Dual-replica through a real kernel**: `plugins/device-docker/test/sandbox-artifacts.dual.test.ts` (real Docker; takeover after killing the executing replica, recovery after suspension; it reads the device's `cap-device-<id>` instance and volumes); `@capybara-hq/testing` exports the kernel texts and keys to assert on (`SANDBOX_STARTED_NOTICE`, `SANDBOX_RESTARTED_NOTICE`, `SANDBOX_LOCK_TTL_MS`, `SANDBOX_SUSPEND_JOB`). Concurrent holders: `plugins/device-docker/test/concurrent.test.ts`.
 - Every provider covers at least: gone versus ordinary errors, abort (before the call / in flight), a timeout killing the whole process group, auto-start, killAll, same-name replacement, **destroy keeps files** (a new instance sees them), **`FileSystemGoneError` on a removed file system** (and no empty file system made), **`destroyFileSystemByName` removes legacy names** (`cap-<conversationId>` layouts, a second call succeeds), `createFileSystem` idempotent by name, a `/skills` write through a symlink being rejected, `list` / `scan` (if implemented: the contract cases above, both modes), both network kinds (open-public with private ranges refused, allowlist with an empty list, and `update`, if implemented: for Docker, `test/network-in-place.test.ts` covers the in-place cases on real Docker and `test/egress-proxy-control.test.ts` the proxy's control and connection registry), and output truncation at a UTF-8 boundary.
 - Run from the repository root: `pnpm exec vitest run plugins/device-docker`.
+
+## Device services and rolls
+
+- A running service's status carries `filesDigest`: the SDK's digest of the files it was started
+  from (`sha256:` + hex over each path, NUL, byte length, NUL, bytes in path order), checked in
+  tests against `DEVICE_SERVICE_FILES_DIGEST_VECTOR`. A full `ensureService` keeps a running
+  service on the same files and, on other files (an upgraded extension), stops it only once the
+  new files are stored or were sent and checked, then starts it on them. A stopped status carries
+  no digest.
+- The kernel asks a running service the roll check (`{"capybara":"roll-check"}`) before a roll; a
+  `{"busy":true}` answer holds it for a while. A service must ignore a request body it does not
+  know (answer an error, act on nothing): the roll check reaches every service.
