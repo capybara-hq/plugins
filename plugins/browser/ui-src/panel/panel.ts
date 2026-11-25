@@ -10,7 +10,7 @@
 // is read-only, and the daemon drops input anyway. Takeover input (pointer, cursor, keys, IME,
 // paste) lives in input.ts.
 import type { ViewerFrame, ViewerIn, ViewerOut, ViewerTab } from "../../daemon/protocol.js";
-import { decodeFrame, VIEWPORT } from "../../daemon/protocol.js";
+import { decodeFrame, isIconDataUrl, VIEWPORT } from "../../daemon/protocol.js";
 import { type Locale, type StringKey, t } from "./i18n.js";
 import { mountInput } from "./input.js";
 import { ICONS } from "./page.js";
@@ -339,9 +339,7 @@ export function mountPanel(opts: PanelOptions): void {
       el.setAttribute("role", "tab");
       el.setAttribute("data-active", String(tab.active));
       el.setAttribute("aria-selected", String(tab.active));
-      const fav = doc.createElement("span");
-      fav.className = "fav";
-      el.appendChild(fav);
+      el.appendChild(favOf(tab));
       const label = doc.createElement("button");
       label.type = "button";
       label.className = "label";
@@ -373,6 +371,7 @@ export function mountPanel(opts: PanelOptions): void {
     }
     // narrow panels: one button for the tabs and the address
     const active = tabs.find((x) => x.active);
+    $("tabsbtn").querySelector(".fav")?.replaceWith(favOf(active));
     $("tabsbtn-name").textContent =
       active === undefined ? "" : hostOf(active.url) || tabName(active);
     $("tabsbtn-count").textContent = String(tabs.length);
@@ -380,6 +379,21 @@ export function mountPanel(opts: PanelOptions): void {
   }
 
   const tabName = (tab: ViewerTab): string => (tab.title === "" ? tab.url : tab.title);
+  /** The tab's site icon (the daemon's data URL), or the placeholder square. */
+  function favOf(tab: ViewerTab | undefined): HTMLElement {
+    if (tab !== undefined && isIconDataUrl(tab.favicon)) {
+      const img = doc.createElement("img");
+      img.className = "fav";
+      img.alt = "";
+      img.src = tab.favicon;
+      // an icon the browser cannot draw falls back to the placeholder
+      img.addEventListener("error", () => img.replaceWith(favOf(undefined)), { once: true });
+      return img;
+    }
+    const fav = doc.createElement("span");
+    fav.className = "fav";
+    return fav;
+  }
   function hostOf(u: string): string {
     try {
       return new URL(u).host;

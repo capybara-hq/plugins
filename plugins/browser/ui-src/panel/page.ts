@@ -87,7 +87,8 @@ export const PANEL_HTML = `<!doctype html>
   .tab { display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 64px; max-width: 200px; padding: 0 10px; color: var(--cb-muted, #5E5E5A); }
   .tab[data-active="true"] { color: var(--cb-ink, #1A1A18); font-weight: 500; box-shadow: inset 0 -2px 0 var(--cb-accent, #CC4609); padding-right: 6px; }
   .fav { width: 14px; height: 14px; border-radius: 3px; flex: none; background: var(--cb-line-soft, #E8E7E2); }
-  .tab[data-active="true"] .fav { background: var(--cb-line, #D9D8D2); }
+  img.fav { background: none; object-fit: contain; }
+  .tab[data-active="true"] span.fav { background: var(--cb-line, #D9D8D2); }
   .tab .label { flex: 1; min-width: 0; display: block; height: auto; text-align: left; overflow: hidden; text-overflow: ellipsis; font-weight: inherit; }
   .tab .label:hover:not(:disabled) { background: transparent; }
   .tab .label:disabled { color: inherit; }

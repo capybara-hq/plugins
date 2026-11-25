@@ -1037,6 +1037,33 @@ describe("design states", () => {
     expect(sock.sent).toContainEqual({ t: "takeover" });
   });
 
+  it("tabs show the site's icon, and the placeholder without a usable one", async () => {
+    const s = setup();
+    const png =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+    await live(
+      s,
+      state({
+        tabs: [
+          { id: "t1", title: "A", url: "https://a.example/", active: true, favicon: png },
+          { id: "t2", title: "B", url: "https://b.example/", active: false },
+          {
+            id: "t3",
+            title: "C",
+            url: "https://c.example/",
+            active: false,
+            favicon: "javascript:alert(1)",
+          },
+        ],
+      }),
+    );
+    const favs = Array.from($(s, "tabs").querySelectorAll(".tab .fav"));
+    expect(favs.map((f) => f.tagName)).toEqual(["IMG", "SPAN", "SPAN"]);
+    expect((favs[0] as HTMLImageElement).getAttribute("src")).toBe(png);
+    // the narrow tabs button shows the active tab's icon too
+    expect($(s, "tabsbtn").querySelector("img.fav")?.getAttribute("src")).toBe(png);
+  });
+
   it("only the active tab's blocker shows the verify strip", async () => {
     const s = setup();
     const url = "https://search.example.com/verify";
