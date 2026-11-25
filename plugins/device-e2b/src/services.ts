@@ -96,11 +96,14 @@ export const SERVICE_NODE = "/usr/local/bin/node";
 /**
  * The service manager, run as {@link SERVICE_USER} by the provider: `python3 -I -c <script> <op>
  * <id>` with `op` one of `status`, `ensure` (request on stdin: a 4-byte big-endian length, then
- * JSON) and `stop`. It answers one JSON line: a status `{state, startedAt, stateDir}`, or
+ * JSON) and `stop`. It answers one JSON line: a status `{state, startedAt, stateDir}` (and
+ * `filesDigest`, `sha256:<digest>`, for a running service started from recorded files), or
  * `{error}` with exit code 1.
  *
- * - `ensure` takes the service's lock (flock in its run directory), keeps a running service as it
- *   is, answers `stopped` for `ifRunning`; otherwise writes the files into the state directory
+ * - `ensure` takes the service's lock (flock in its run directory), answers the status for
+ *   `ifRunning`, keeps a running service started from the same files' digest, and stops one
+ *   started from other files (an upgraded extension) once the new files are there or were sent
+ *   and checked, then starts it on them; otherwise writes the files into the state directory
  *   without following any link (every directory opened `O_NOFOLLOW` below the state root, each
  *   file opened `O_NOFOLLOW | O_NONBLOCK` relative to its directory and accepted only when it is a
  *   regular file, so a planted FIFO cannot block it), starts `node <stateDir>/<entry> <args>`
@@ -196,7 +199,11 @@ def status(name, rec):
     state_dir = "%s/%s" % (STATE[0], name)
     if rec is None:
         return {"name": name, "state": "stopped", "startedAt": None, "stateDir": state_dir}
-    return {"name": name, "state": "running", "startedAt": rec["at"], "stateDir": state_dir}
+    st = {"name": name, "state": "running", "startedAt": rec["at"], "stateDir": state_dir}
+    # the files it was started from, as the SDK names them (an upgraded extension rolls it)
+    if isinstance(rec.get("digest"), str) and DIGEST_RE.match(rec["digest"]):
+        st["filesDigest"] = "sha256:" + rec["digest"]
+    return st
 
 def private_dir(path):
     # a directory of this user that nobody else may enter, opened without following a link; None
@@ -408,7 +415,11 @@ def ensure(name, req):
         fail("the service run directory is not private to the service user")
     lock(rfd)
     rec = read_record(rfd)
-    if rec is not None or req.get("ifRunning") is True:
+    if req.get("ifRunning") is True:
+        answer(status(name, rec))
+    # a running service on the same files is kept; on other files (an upgraded extension) it is
+    # stopped and started on them below, once they are here (filesNeeded first stops nothing)
+    if rec is not None and rec.get("digest") == req.get("digest"):
         answer(status(name, rec))
     entry, args, env, files = req.get("entry"), req.get("args"), req.get("env") or {}, req.get("files")
     digest, paths = req.get("digest"), req.get("paths")
@@ -436,6 +447,7 @@ def ensure(name, req):
     except OSError as e:
         fail("cannot open the service state directory: %s (a link or a non-directory is in the way)" % e.strerror)
     os.close(root)
+    decoded = None
     if files is None:
         # digest first: start from the files already there, or ask for them
         if not stored_matches(sfd, paths, digest):
@@ -444,6 +456,12 @@ def ensure(name, req):
         decoded = {rel: base64.b64decode(files[rel]) for rel in paths}
         if files_digest([(rel, decoded[rel]) for rel in paths]) != digest:
             fail("the service files do not match their digest")
+    if rec is not None:
+        # the old process goes (gracefully) before its files are replaced: nothing above failed
+        stop_record(rec)
+        kill_relays(name)
+        unlink(rfd, "pid")
+    if decoded is not None:
         # no stale record may vouch for a half-written set
         unlink(sfd, DIGEST_FILE)
         write_files(sfd, decoded)
@@ -482,7 +500,7 @@ def ensure(name, req):
         except BaseException as e:
             os.write(2, ("cannot start the service: %s\\n" % e).encode())
         os._exit(127)
-    rec = {"pid": pid, "start": start_ticks(pid), "boot": boot_id(),
+    rec = {"pid": pid, "start": start_ticks(pid), "boot": boot_id(), "digest": digest,
            "at": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(at)) + ".%03dZ" % (int(at * 1000) % 1000)}
     tmp = "pid.%d" % pid
     fd = open_reg(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, rfd)
@@ -634,7 +652,7 @@ export function parseManagerReply(
             : r.stderr.trim().slice(0, 500) || `exit code ${String(r.exitCode)}`;
     throw new Error(`device service ${name}: ${why}`);
   }
-  const { state, startedAt, stateDir } = reply;
+  const { state, startedAt, stateDir, filesDigest } = reply;
   if (
     reply.name !== name ||
     (state !== "running" && state !== "stopped") ||
@@ -643,7 +661,18 @@ export function parseManagerReply(
   ) {
     throw new Error(`device service ${name}: the service manager answered an unreadable status`);
   }
-  return { name, state, startedAt, stateDir };
+  // the files a running service was started from: the kernel rolls one on other files
+  return {
+    name,
+    state,
+    startedAt,
+    stateDir,
+    ...(state === "running" &&
+    typeof filesDigest === "string" &&
+    /^sha256:[0-9a-f]{64}$/.test(filesDigest)
+      ? { filesDigest }
+      : {}),
+  };
 }
 
 /**

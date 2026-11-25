@@ -163,6 +163,20 @@ describe("device-local services", () => {
   });
 
   it("the digest covers paths and bytes, sorted by path", () => {
+    // the SDK's pinned vector (DEVICE_SERVICE_FILES_DIGEST_VECTOR, capybara-hq/core#879), copied
+    // until this package's SDK range has it and filesDigestOf becomes the SDK's function
+    const vector = {
+      "main.js": "console.log(1)\n",
+      "lib/a.js": "export const a = 1;\n",
+      empty: "",
+    };
+    expect(
+      filesDigestOf(
+        Object.fromEntries(
+          Object.entries(vector).map(([k, v]) => [k, new TextEncoder().encode(v)]),
+        ),
+      ),
+    ).toBe("sha256:7b3959ff2e10237b9f1a255bbecb5dacebd31422fe734b2867403e42913432a5");
     const a = filesDigestOf({ b: new Uint8Array([1]), a: new Uint8Array([2]) });
     expect(a).toBe(filesDigestOf({ a: new Uint8Array([2]), b: new Uint8Array([1]) }));
     expect(a).toMatch(/^sha256:[0-9a-f]{64}$/);

@@ -25,6 +25,13 @@
 // - Viewer key input: `down` / `up` carry a key name (KeyboardEvent.key); a printable key's `down`
 //   types its character. `char` inserts text (IME composition, paste); never send both for one key.
 
+/**
+ * The kernel's roll check (the SDK's `DEVICE_SERVICE_ROLL_CHECK`): asked before the service is
+ * restarted on an upgraded plugin's files. The daemon answers `{ busy, reason? }`, busy while the
+ * person holds control or a handoff waits, so the restart waits for a later call.
+ */
+export const ROLL_CHECK_REQUEST = '{"capybara":"roll-check"}';
+
 /** The fixed viewport; viewers never change it (§8). */
 export const VIEWPORT = { width: 1280, height: 800 } as const;
 
