@@ -11,8 +11,8 @@ import {
 import {
   DOWNLOAD_BLOCKED_PREFIX,
   type ToolErrorCode,
+  type ToolOp,
   type ToolReply,
-  type ToolRequest,
 } from "../daemon/protocol.js";
 import { NOT_OWNER_MESSAGE, TAKEN_OVER_MESSAGE } from "./messages.js";
 
@@ -204,7 +204,7 @@ function failure(deps: BrowserDeps, call: ToolCallContext, e: unknown, starting:
 export async function runRequest(
   deps: BrowserDeps,
   call: ToolCallContext,
-  req: ToolRequest,
+  req: ToolOp,
   timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<OkReply> {
   assertOwner(call);
@@ -258,13 +258,17 @@ export async function runRequest(
     ? reply.blockedHosts.filter((h): h is string => typeof h === "string" && h !== "")
     : [];
   if (hosts.length > 0)
-    deps.deviceAccess.reportBlockedHosts(call, hosts, reply.ok ? { url: reply.page.url } : {});
+    deps.deviceAccess.reportBlockedHosts(
+      call,
+      hosts,
+      reply.ok && reply.page !== undefined ? { url: reply.page.url } : {},
+    );
   if (!reply.ok) throw daemonToolError(reply.error, reply.message);
   return reply;
 }
 
 /** The page line every result starts with (after the takeover note, if any). */
-function pageLine(page: OkReply["page"]): string {
+function pageLine(page: NonNullable<OkReply["page"]>): string {
   return `Page: ${page.title === "" ? "(no title)" : page.title} - ${page.url} (tab ${page.tabId})`;
 }
 
@@ -274,11 +278,11 @@ function pageLine(page: OkReply["page"]): string {
  */
 export function toResult(reply: OkReply): ToolResult {
   const lines: string[] = [];
-  if (reply.userControlledSince !== undefined)
+  if (reply.userControlledSince !== undefined && reply.page !== undefined)
     lines.push(
       `The user controlled the browser from ${reply.userControlledSince}; now at ${reply.page.url} (${reply.page.title}).`,
     );
-  lines.push(pageLine(reply.page));
+  if (reply.page !== undefined) lines.push(pageLine(reply.page));
   if (reply.text !== undefined && reply.text !== "") lines.push(reply.text);
   return {
     content: [

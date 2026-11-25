@@ -1,7 +1,11 @@
-// The browser session (spec §5, §9): the tabs of the one Chromium of the device, the agent's
+// The browser session (spec §5, §9): the tabs of the one Chromium of the device, the agents'
 // actions on them, and the events viewers follow (tab and navigation state, blocked hosts,
 // dialogs). Takeover: main.ts refuses a request that arrives while the person holds control, and
 // run() checks again when a queued request leaves the queue (`takenOver`).
+//
+// Tabs are owned per conversation (tab ownership spec §4): every tab records its owner and the
+// root of the owner's tree, or is unowned; each conversation has its own active tab and its own
+// action queue. Notes, refused hosts, dialogs and clicks belong to the owner of their page.
 
 import {
   closeSync,
@@ -31,8 +35,11 @@ import type {
 } from "playwright-core";
 import { fetchIcon, iconDataUrl, iconUrlOf } from "./favicon.js";
 import {
+  EVICT_MIN_IDLE_MS,
   MAX_TABS,
+  MAX_TABS_PER_CONVERSATION,
   type ToolErrorCode,
+  type ToolOp,
   type ToolReply,
   type ToolRequest,
   VIEWPORT,
@@ -41,12 +48,20 @@ import { takeSnapshot } from "./snapshot.js";
 import { type Clock, systemClock } from "./state.js";
 import { isVerificationPage, type TabBlocker, VERIFICATION_NOTE } from "./verification.js";
 
-/** Something the viewers follow. */
+/**
+ * Something the viewers follow. `active`: a conversation's active tab changed. `blocked` and
+ * `dialog` carry the root of the page owner's tree (events of unowned pages are not sent).
+ */
 export type SessionEvent =
   | { type: "state" }
-  | { type: "active" }
-  | { type: "blocked"; host: string; url: string }
-  | { type: "dialog"; kind: "alert" | "confirm" | "prompt" | "file"; message: string };
+  | { type: "active"; conversationId: string }
+  | { type: "blocked"; host: string; url: string; root: string }
+  | {
+      type: "dialog";
+      kind: "alert" | "confirm" | "prompt" | "file";
+      message: string;
+      root: string;
+    };
 
 /** A failure with the code the tool reply carries. */
 export class ActionError extends Error {
@@ -60,6 +75,8 @@ export class ActionError extends Error {
 
 /** What happened in the browser while one request ran. */
 interface Collector {
+  /** The request's conversation: only events of its pages land here. */
+  conv: string;
   blocked: Set<string>;
   notes: string[];
   pending: Promise<unknown>[];
@@ -497,6 +514,81 @@ export function normalizeUrl(raw: string): string {
 const firstLine = (e: unknown) =>
   (e instanceof Error ? e.message : String(e)).split("\n")[0]?.replace(/^[a-zA-Z.]+: /, "") ?? "";
 
+/** A tab's owner: the conversation that acts on it and the root of its tree. */
+export interface TabOwner {
+  owner: string;
+  root: string;
+}
+
+/**
+ * What the session asks about conversations (DaemonState answers it): whether one is in use, a
+ * viewer pins it, how long it has been idle, and the tab parks.
+ */
+export interface TabUsage {
+  /** A request in flight or a conversation park. */
+  busy(conversationId: string): boolean;
+  pinned(conversationId: string): boolean;
+  idleFor(conversationId: string): number;
+  lastActiveAt(conversationId: string): number;
+  tabParked(tabId: string): boolean;
+  tabClosed(tabId: string): void;
+  /** The conversation gained a tab (adopt, a person's tab, a restore). */
+  seen(conversationId: string, root: string): void;
+}
+
+/** Usage for a session without a daemon state: nobody busy, everybody idle for good. */
+const NO_USAGE: TabUsage = {
+  busy: () => false,
+  pinned: () => false,
+  idleFor: () => Number.POSITIVE_INFINITY,
+  lastActiveAt: () => Number.NEGATIVE_INFINITY,
+  tabParked: () => false,
+  tabClosed: () => undefined,
+  seen: () => undefined,
+};
+
+/** Titles of other conversations' tabs in a tab list are cut to this (outside text, kept short). */
+export const OTHER_TITLE_CHARS = 120;
+
+/** The refusal of a switch or close of another conversation's tab. */
+export const notYourTab = (id: string) =>
+  `Tab ${id} belongs to another conversation; call browser_tabs with action adopt and tabId ${id} first if the user asked you to use it.`;
+/** The refusal of an adopt while the tab's owner is in use. */
+export const tabInUse = (id: string) =>
+  `Tab ${id} is in use by another conversation right now; retry shortly or open your own tab.`;
+/** The note to a conversation whose tab another one adopted. */
+export const tabMoved = (id: string, title: string) =>
+  `Tab ${id} (${title}) was moved to another conversation.`;
+/** The note to a conversation whose tab the device cap closed. */
+export const tabEvicted = (id: string, title: string) =>
+  `Tab ${id} (${title}) was closed to make room for another conversation.`;
+/** The refusal at the per-conversation cap. */
+export const CONVERSATION_CAP_MESSAGE = `This conversation has ${MAX_TABS_PER_CONVERSATION} tabs open, the most one conversation keeps; close one first.`;
+/** The refusal at the device cap when nothing could be evicted. */
+export const deviceCapMessage = (own: number) =>
+  own > 0
+    ? `The browser has ${MAX_TABS} tabs open, the most it keeps (${own} ${own === 1 ? "is" : "are"} this conversation's); close one of yours first.`
+    : `Other conversations hold all ${MAX_TABS} tabs of the browser; retry later or ask the user to close one in the browser panel.`;
+
+/** A URL without its query and fragment (other conversations' tabs in a list). */
+export function bareUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    u.search = "";
+    u.hash = "";
+    return u.href;
+  } catch {
+    return raw.replace(/[?#].*$/s, "");
+  }
+}
+
+/** The operations that act on the conversation's active tab (they get one when it has none). */
+export function isActing(req: ToolOp): boolean {
+  if (req.op === "handoff_notice" || req.op === "handoff_clear") return false;
+  if (req.op === "tabs") return req.action !== "list" && req.action !== "adopt";
+  return true;
+}
+
 export interface TabInfo {
   id: string;
   title: string;
@@ -544,14 +636,31 @@ export class BrowserSession {
   private readonly collectors = new Set<Collector>();
   private readonly probes = new Map<string, Promise<boolean>>();
   private readonly reservedDownloads = new Set<string>();
-  private readonly unreported: string[] = [];
+  /** Notes of a conversation's pages that arrived with none of its requests in flight. */
+  private readonly unreported = new Map<string, string[]>();
+  /** Device notes (no page: the browser build) for the next reply of any conversation. */
+  private readonly unreportedAll: string[] = [];
   private nextId = 1;
-  private active: string | undefined;
-  private queue: Promise<unknown> = Promise.resolve();
-  /** The blank tab {@link activePage} is opening because none was left. */
-  private opening: Promise<Page> | undefined;
-  /** The agent's latest click; `seq` grows with every click (viewers flash only new ones). */
-  lastClick: { x: number; y: number; seq: number } | undefined;
+  /** Each owned tab's owner (an unowned tab has no entry). */
+  private readonly owners = new Map<string, TabOwner>();
+  /** Each conversation's active tab. */
+  private readonly activeOf = new Map<string, string>();
+  /** The action queues, by {@link queueKey}. */
+  private readonly queues = new Map<string, Promise<unknown>>();
+  /** A conversation's first tab being claimed or opened (shared by its callers meanwhile). */
+  private readonly claiming = new Map<string, Promise<Page>>();
+  /** Tab allocations (claim, open, eviction) one at a time across conversations. */
+  private allocChain: Promise<unknown> = Promise.resolve();
+  /** Tabs being opened by the session (not yet tracked): they count toward the device cap. */
+  private reserved = 0;
+  /** When an agent request last acted on each tab (the eviction's least recently used tab). */
+  private readonly tabUsedAt = new Map<string, number>();
+  /** Order of the conversations' last acting requests (a viewer's default shown tab). */
+  private readonly actedSeq = new Map<string, number>();
+  private actSeq = 0;
+  private readonly usage: TabUsage;
+  /** Each tab's latest agent click; `seq` grows with every click (viewers flash only new ones). */
+  private readonly clicks = new Map<string, { x: number; y: number; seq: number }>();
   private clickSeq = 0;
 
   constructor(
@@ -566,6 +675,8 @@ export class BrowserSession {
       downloadWaitMs?: number;
       /** How long a navigation may take before it is stopped (default 30 s; tests shorten it). */
       navigationTimeoutMs?: number;
+      /** Who is in use, pinned or idle (DaemonState); default: nobody busy, everybody idle. */
+      usage?: TabUsage;
     },
   ) {
     this.ctx = ctx;
@@ -576,23 +687,20 @@ export class BrowserSession {
     this.downloadWaitMs = opts.downloadWaitMs ?? DOWNLOAD_WAIT_MS;
     this.clock = opts.clock ?? systemClock;
     this.navigationTimeoutMs = opts.navigationTimeoutMs ?? NAVIGATION_TIMEOUT_MS;
+    this.usage = opts.usage ?? NO_USAGE;
     ctx.setDefaultTimeout(ACTION_TIMEOUT_MS);
     ctx.setDefaultNavigationTimeout(this.navigationTimeoutMs);
     ctx.on("page", (p) => {
-      // A popup counts toward MAX_TABS like any tab (openTab refuses before it opens one): one
-      // past the limit is closed at once and the agent told.
-      if (!this.ids.has(p) && this.pages.size >= MAX_TABS) {
-        p.close().catch(() => undefined);
-        this.note(
-          `The page opened a popup, but the browser keeps at most ${MAX_TABS} tabs, so the popup was closed; close a tab and retry if it was needed.`,
-        );
-        return;
-      }
+      if (this.ids.has(p)) return;
       this.track(p);
-      // a popup the page opened comes to the front, as in a desktop browser
-      this.active = this.ids.get(p);
-      this.emit({ type: "active" });
       this.emit({ type: "state" });
+      // A popup is attributed by its opener's `popup` event, emitted right after this one. A page
+      // nobody opened (the browser's own) stays unowned; past the device cap it is closed.
+      queueMicrotask(() => {
+        const id = this.ids.get(p);
+        if (id === undefined || this.owners.has(id) || p.isClosed()) return;
+        if (this.pages.size > MAX_TABS + this.reserved) p.close().catch(() => undefined);
+      });
     });
     for (const p of ctx.pages()) this.track(p);
   }
@@ -606,58 +714,312 @@ export class BrowserSession {
     return () => this.listeners.delete(fn);
   }
 
-  /**
-   * The active tab, opening a blank one when none is left. Callers that find no tab at the same
-   * time (two quick closes of the last tabs, a viewer's frame and a request) share that one
-   * opening, so the last close leaves exactly one blank tab.
-   */
-  async activePage(): Promise<Page> {
-    const cur = this.active === undefined ? undefined : this.pages.get(this.active);
-    if (cur !== undefined && !cur.isClosed()) return cur;
-    const first = [...this.pages.values()].find((p) => !p.isClosed());
-    if (first !== undefined) {
-      this.active = this.ids.get(first);
-      return first;
-    }
-    this.opening ??= this.ctx.newPage().then(
-      (p) => {
-        this.opening = undefined;
-        this.track(p);
-        this.active = this.ids.get(p);
-        this.emit({ type: "active" });
-        this.emit({ type: "state" });
-        return p;
-      },
-      (e: unknown) => {
-        this.opening = undefined;
-        throw e;
-      },
-    );
-    return this.opening;
-  }
-
   tabIdOf(page: Page): string {
     return this.ids.get(page) ?? "";
   }
 
-  tabs(): (TabInfo & { active: boolean })[] {
+  /** The live page of a tab, if it is open. */
+  pageById(tabId: string | undefined): Page | undefined {
+    const page = tabId === undefined ? undefined : this.pages.get(tabId);
+    return page === undefined || page.isClosed() ? undefined : page;
+  }
+
+  /** A tab's owner, if it has one. */
+  ownerOf(tabId: string): TabOwner | undefined {
+    return this.owners.get(tabId);
+  }
+
+  /** The conversations owning a tab now. */
+  owningConversations(): string[] {
+    return [...new Set([...this.owners.values()].map((o) => o.owner))];
+  }
+
+  /** The conversation's tabs in tab order. */
+  tabsOf(conversationId: string): string[] {
+    return [...this.pages.keys()].filter((id) => this.owners.get(id)?.owner === conversationId);
+  }
+
+  /** How many tabs the conversation owns. */
+  countOf(conversationId: string): number {
+    return this.tabsOf(conversationId).length;
+  }
+
+  /** The conversation's active tab id, if it has a live one. */
+  activeTabOf(conversationId: string): string | undefined {
+    const id = this.activeOf.get(conversationId);
+    return this.pageById(id) === undefined ? undefined : id;
+  }
+
+  /** The conversation's active page, if it has one (never opens a tab). */
+  currentPage(conversationId: string): Page | undefined {
+    return this.pageById(this.activeOf.get(conversationId));
+  }
+
+  /** The order of the conversation's last acting request (higher: later; 0: never). */
+  actedOrder(conversationId: string): number {
+    return this.actedSeq.get(conversationId) ?? 0;
+  }
+
+  /** The tab's latest agent click, if any. */
+  lastClickOf(tabId: string | undefined): { x: number; y: number; seq: number } | undefined {
+    return tabId === undefined ? undefined : this.clicks.get(tabId);
+  }
+
+  /** Whether the tab is loading a document. */
+  isLoading(tabId: string | undefined): boolean {
+    return tabId !== undefined && this.loadingTabs.has(tabId);
+  }
+
+  tabs(): (TabInfo & { owner?: string; root?: string; active: boolean })[] {
     return [...this.pages.entries()].map(([id, p]) => {
       const blocker = this.blockers.get(id);
       const icon = this.favicons.get(id)?.data;
+      const o = this.owners.get(id);
       return {
         id,
         title: clip(this.titles.get(id) ?? "", MAX_TITLE_CHARS),
         url: clip(p.url(), MAX_URL_CHARS),
-        active: id === this.active,
+        active: o !== undefined && this.activeOf.get(o.owner) === id,
+        ...(o === undefined ? {} : { owner: o.owner, root: o.root }),
         ...(blocker === undefined ? {} : { blocker }),
         ...(icon === undefined || icon === null ? {} : { favicon: icon }),
       };
     });
   }
 
-  /** Whether the active tab is loading a document. */
-  get loading(): boolean {
-    return this.active !== undefined && this.loadingTabs.has(this.active);
+  /** Makes a tab the conversation's active tab (it must own it). */
+  setActive(conversationId: string, tabId: string): void {
+    if (this.owners.get(tabId)?.owner !== conversationId) return;
+    if (this.activeOf.get(conversationId) === tabId) return;
+    this.activeOf.set(conversationId, tabId);
+    this.emit({ type: "active", conversationId });
+    this.emit({ type: "state" });
+  }
+
+  /** Gives a tab to a conversation (owner and root); the previous owner's active moves on. */
+  private assign(tabId: string, to: TabOwner): TabOwner | undefined {
+    const before = this.owners.get(tabId);
+    this.owners.set(tabId, to);
+    if (before !== undefined && before.owner !== to.owner) this.activeMovedOff(before.owner, tabId);
+    return before;
+  }
+
+  /**
+   * A conversation lost its tab `tabId` (closed or moved): when it was its active tab, the active
+   * tab becomes its most recently opened remaining tab, or none.
+   */
+  private activeMovedOff(conversationId: string, tabId: string): void {
+    if (this.activeOf.get(conversationId) !== tabId) return;
+    const next = this.tabsOf(conversationId)
+      .filter((id) => id !== tabId)
+      .at(-1);
+    if (next === undefined) this.activeOf.delete(conversationId);
+    else this.activeOf.set(conversationId, next);
+    this.emit({ type: "active", conversationId });
+  }
+
+  /** Runs a tab allocation (claim, open, eviction) one at a time across conversations. */
+  private allocate<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.allocChain.then(fn, fn);
+    this.allocChain = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * The page an acting request of the conversation acts on: its active tab; with no live tab, an
+   * unowned tab it claims, else a new tab (subject to the caps). Callers that find no tab at the
+   * same time share one claim, so the conversation gets exactly one tab.
+   */
+  async pageFor(conversationId: string, root: string): Promise<Page> {
+    const cur = this.currentPage(conversationId);
+    if (cur !== undefined) return cur;
+    const own = this.tabsOf(conversationId).at(-1);
+    if (own !== undefined) {
+      this.setActive(conversationId, own);
+      const page = this.pageById(own);
+      if (page !== undefined) return page;
+    }
+    let claim = this.claiming.get(conversationId);
+    if (claim === undefined) {
+      claim = this.allocate(async () => {
+        const unowned = [...this.pages.entries()].find(
+          ([id, p]) => !p.isClosed() && !this.owners.has(id) && !this.usage.tabParked(id),
+        );
+        if (unowned !== undefined) {
+          const [id, page] = unowned;
+          this.assign(id, { owner: conversationId, root });
+          this.activeOf.set(conversationId, id);
+          this.emit({ type: "active", conversationId });
+          this.emit({ type: "state" });
+          return page;
+        }
+        return this.openLocked(conversationId, root);
+      }).finally(() => {
+        this.claiming.delete(conversationId);
+      });
+      this.claiming.set(conversationId, claim);
+    }
+    return claim;
+  }
+
+  /** Opens a new tab for the conversation (the caps apply) and makes it its active tab. */
+  openTab(conversationId: string, root: string): Promise<Page> {
+    return this.allocate(() => this.openLocked(conversationId, root));
+  }
+
+  /** {@link openTab} inside the allocation chain. */
+  private async openLocked(conversationId: string, root: string): Promise<Page> {
+    const own = this.countOf(conversationId);
+    if (own >= MAX_TABS_PER_CONVERSATION) throw new ActionError("failed", CONVERSATION_CAP_MESSAGE);
+    if (this.pages.size + this.reserved >= MAX_TABS && !(await this.evict(conversationId)))
+      throw new ActionError("failed", deviceCapMessage(own));
+    this.reserved++;
+    let page: Page;
+    try {
+      page = await this.ctx.newPage();
+    } finally {
+      this.reserved--;
+    }
+    this.track(page);
+    const id = this.tabIdOf(page);
+    this.assign(id, { owner: conversationId, root });
+    this.activeOf.set(conversationId, id);
+    this.emit({ type: "active", conversationId });
+    this.emit({ type: "state" });
+    return page;
+  }
+
+  /**
+   * Closes one tab to make room at the device cap: an unowned tab first, else a tab of the least
+   * recently active conversation that is evictable (not in use, not pinned by a viewer, idle for
+   * at least EVICT_MIN_IDLE_MS), its least recently used non-active tab before its active one; tabs
+   * a park pins are skipped. Its owner is told. False when no tab qualifies.
+   */
+  private async evict(forConversation: string): Promise<boolean> {
+    const live = [...this.pages.entries()].filter(
+      ([id, p]) => !p.isClosed() && !this.usage.tabParked(id),
+    );
+    const unowned = live.find(([id]) => !this.owners.has(id));
+    if (unowned !== undefined) {
+      await unowned[1].close().catch(() => undefined);
+      return true;
+    }
+    const owners = new Set<string>();
+    for (const [id] of live) {
+      const o = this.owners.get(id)?.owner;
+      if (
+        o !== undefined &&
+        o !== forConversation &&
+        !this.usage.busy(o) &&
+        !this.usage.pinned(o) &&
+        this.usage.idleFor(o) >= EVICT_MIN_IDLE_MS
+      )
+        owners.add(o);
+    }
+    const victim = [...owners].sort(
+      (a, b) => this.usage.lastActiveAt(a) - this.usage.lastActiveAt(b),
+    )[0];
+    if (victim === undefined) return false;
+    const active = this.activeOf.get(victim);
+    const used = (id: string) => this.tabUsedAt.get(id) ?? Number.NEGATIVE_INFINITY;
+    const [tabId, page] =
+      live
+        .filter(([id]) => this.owners.get(id)?.owner === victim)
+        .sort(
+          ([a], [b]) => (a === active ? 1 : 0) - (b === active ? 1 : 0) || used(a) - used(b),
+        )[0] ?? [];
+    if (tabId === undefined || page === undefined) return false;
+    const title = clip(this.titles.get(tabId) ?? "", OTHER_TITLE_CHARS) || "no title";
+    await page.close().catch(() => undefined);
+    this.noteTo(victim, tabEvicted(tabId, title));
+    return true;
+  }
+
+  /**
+   * Moves a tab to the conversation and makes it its active tab (the tool's and a viewer's adopt).
+   * `in_use`: its owner has a request in flight or a park (or a park pins the tab); `cap`: the
+   * conversation already owns MAX_TABS_PER_CONVERSATION tabs. The previous owner is told.
+   */
+  adopt(conversationId: string, root: string, tabId: string): "ok" | "in_use" | "cap" {
+    this.tabById(tabId);
+    const before = this.owners.get(tabId);
+    if (before?.owner === conversationId) {
+      this.setActive(conversationId, tabId);
+      return "ok";
+    }
+    if ((before !== undefined && this.usage.busy(before.owner)) || this.usage.tabParked(tabId))
+      return "in_use";
+    if (this.countOf(conversationId) >= MAX_TABS_PER_CONVERSATION) return "cap";
+    this.assign(tabId, { owner: conversationId, root });
+    this.activeOf.set(conversationId, tabId);
+    this.usage.seen(conversationId, root);
+    if (before !== undefined) {
+      const title = clip(this.titles.get(tabId) ?? "", OTHER_TITLE_CHARS) || "no title";
+      this.noteTo(before.owner, tabMoved(tabId, title));
+    }
+    this.emit({ type: "active", conversationId });
+    this.emit({ type: "state" });
+    return "ok";
+  }
+
+  /**
+   * Opens a restored tab for its owner (the first claims the start's blank tab) and starts its
+   * navigation without waiting for it.
+   */
+  async restoreTab(owner: TabOwner, url: string): Promise<string> {
+    const page = await this.allocate(async () => {
+      const blank = [...this.pages.entries()].find(
+        ([id, p]) => !p.isClosed() && !this.owners.has(id) && p.url() === "about:blank",
+      );
+      if (blank !== undefined) {
+        this.assign(blank[0], owner);
+        return blank[1];
+      }
+      this.reserved++;
+      try {
+        const p = await this.ctx.newPage();
+        this.track(p);
+        this.assign(this.tabIdOf(p), owner);
+        return p;
+      } finally {
+        this.reserved--;
+      }
+    });
+    const id = this.tabIdOf(page);
+    if (!this.activeOf.has(owner.owner)) this.activeOf.set(owner.owner, id);
+    this.usage.seen(owner.owner, owner.root);
+    this.emit({ type: "active", conversationId: owner.owner });
+    this.emit({ type: "state" });
+    let target: string | undefined;
+    try {
+      target = normalizeUrl(url);
+    } catch {
+      // not a URL a tab opens: the tab stays blank
+    }
+    if (target !== undefined) void this.viewerNav(page, { url: target });
+    return id;
+  }
+
+  /**
+   * Closes an idle conversation's tabs (except those a park pins) and forgets what the session
+   * keeps for it.
+   */
+  async closeConversation(conversationId: string): Promise<void> {
+    const ids = this.tabsOf(conversationId).filter((id) => !this.usage.tabParked(id));
+    this.activeOf.delete(conversationId);
+    this.queues.delete(this.queueKey(conversationId));
+    this.unreported.delete(conversationId);
+    this.claiming.delete(conversationId);
+    this.actedSeq.delete(conversationId);
+    await Promise.all(
+      ids.map((id) =>
+        this.pages
+          .get(id)
+          ?.close()
+          .catch(() => undefined),
+      ),
+    );
+    this.emit({ type: "state" });
   }
 
   private emit(e: SessionEvent): void {
@@ -727,21 +1089,27 @@ export class BrowserSession {
         this.emit({ type: "state" });
       }
       if (this.proxy !== undefined && PROXY_FAILURE_RE.test(err))
-        this.checkBlocked(r.url(), this.pageToOpen(page, r));
+        this.checkBlocked(page, r.url(), this.pageToOpen(page, r));
     });
     page.on("response", (r) => {
       if (r.request().isNavigationRequest() && r.frame() === page.mainFrame())
         this.docStatus.set(id, r.status());
       if (this.proxy !== undefined && r.status() === 403 && r.url().startsWith("http:")) {
-        this.checkBlocked(r.url(), this.pageToOpen(page, r.request()));
+        this.checkBlocked(page, r.url(), this.pageToOpen(page, r.request()));
       }
     });
-    page.on("dialog", (d) => this.onDialog(d));
-    page.on("download", (d) => this.onDownload(d));
+    page.on("dialog", (d) => this.onDialog(page, d));
+    page.on("download", (d) => this.onDownload(page, d));
     page.on("filechooser", () => {
-      this.note("The page opened a file chooser; use the upload tool with the file input's ref.");
-      this.emit({ type: "dialog", kind: "file", message: "" });
+      const o = this.owners.get(id);
+      this.noteTo(
+        o?.owner,
+        "The page opened a file chooser; use the upload tool with the file input's ref.",
+      );
+      if (o !== undefined) this.emit({ type: "dialog", kind: "file", message: "", root: o.root });
     });
+    // fires on the opener, `noopener` popups included: the popup is its opener's owner's
+    page.on("popup", (p) => this.onPopup(page, p));
     page.on("close", () => {
       this.pendingNavs.delete(page);
       this.pages.delete(id);
@@ -750,16 +1118,50 @@ export class BrowserSession {
       this.blockers.delete(id);
       this.favicons.delete(id);
       this.docStatus.delete(id);
-      if (this.active === id) {
-        const next = [...this.pages.keys()].at(-1);
-        this.active = next;
-        this.emit({ type: "active" });
-      }
+      this.tabUsedAt.delete(id);
+      this.clicks.delete(id);
+      const o = this.owners.get(id);
+      this.owners.delete(id);
+      if (o !== undefined) this.activeMovedOff(o.owner, id);
+      this.usage.tabClosed(id);
       this.emit({ type: "state" });
     });
   }
 
-  private onDialog(d: Dialog): void {
+  /**
+   * A page opened a popup: it belongs to the opener's owner and becomes its active tab, as in a
+   * desktop browser (an unowned opener leaves it unowned). Past the conversation's cap it is closed
+   * at once; past the device cap a tab is evicted for it, else it is closed; the owner is told.
+   */
+  private onPopup(opener: Page, popup: Page): void {
+    this.track(popup);
+    const id = this.tabIdOf(popup);
+    const o = this.owners.get(this.tabIdOf(opener));
+    if (o === undefined || this.owners.has(id) || popup.isClosed()) return;
+    const closeIt = (why: string) => {
+      popup.close().catch(() => undefined);
+      this.noteTo(
+        o.owner,
+        `The page opened a popup, but ${why}, so the popup was closed; close a tab and retry if it was needed.`,
+      );
+    };
+    if (this.countOf(o.owner) >= MAX_TABS_PER_CONVERSATION) {
+      closeIt(`this conversation keeps at most ${MAX_TABS_PER_CONVERSATION} tabs`);
+      return;
+    }
+    this.assign(id, o);
+    this.activeOf.set(o.owner, id);
+    this.emit({ type: "active", conversationId: o.owner });
+    this.emit({ type: "state" });
+    if (this.pages.size > MAX_TABS + this.reserved) {
+      void this.allocate(async () => {
+        if (popup.isClosed() || this.pages.size <= MAX_TABS + this.reserved) return;
+        if (!(await this.evict(o.owner))) closeIt(`the browser keeps at most ${MAX_TABS} tabs`);
+      });
+    }
+  }
+
+  private onDialog(page: Page, d: Dialog): void {
     const type = d.type();
     if (type === "beforeunload") {
       d.accept().catch(() => undefined);
@@ -771,24 +1173,51 @@ export class BrowserSession {
     // learns it so it can act differently.
     const settle = kind === "alert" ? d.accept() : d.dismiss();
     settle.catch(() => undefined);
-    this.note(
+    const o = this.owners.get(this.tabIdOf(page));
+    this.noteTo(
+      o?.owner,
       `The page showed ${kind === "alert" ? "an alert" : `a ${kind}`} dialog: ${JSON.stringify(message)} (${kind === "alert" ? "closed" : "dismissed"}).`,
     );
-    this.emit({ type: "dialog", kind, message });
+    if (o !== undefined) this.emit({ type: "dialog", kind, message, root: o.root });
   }
 
   /**
-   * Adds a note to the replies of the requests in flight; with none in flight (a download that
-   * finished after its click replied, a dialog the person caused) the next reply carries it.
+   * A device note (not about a page: the browser build that runs): the replies of the requests in
+   * flight carry it, else the next reply of any conversation.
    */
   note(text: string): void {
     const n = clip(text, MAX_DIALOG_CHARS + 200);
     if (this.collectors.size === 0) {
-      this.unreported.push(n);
-      if (this.unreported.length > MAX_UNREPORTED) this.unreported.shift();
+      this.unreportedAll.push(n);
+      if (this.unreportedAll.length > MAX_UNREPORTED) this.unreportedAll.shift();
       return;
     }
     for (const c of this.collectors) c.notes.push(n);
+  }
+
+  /**
+   * A note for a conversation (about one of its pages): its requests in flight carry it, else its
+   * next reply. A note of an unowned page (`undefined`) reaches nobody.
+   */
+  noteTo(conversationId: string | undefined, text: string): void {
+    if (conversationId === undefined) return;
+    const n = clip(text, MAX_DIALOG_CHARS + 200);
+    let delivered = false;
+    for (const c of this.collectors) {
+      if (c.conv !== conversationId) continue;
+      c.notes.push(n);
+      delivered = true;
+    }
+    if (delivered) return;
+    const list = this.unreported.get(conversationId) ?? [];
+    list.push(n);
+    if (list.length > MAX_UNREPORTED) list.shift();
+    this.unreported.set(conversationId, list);
+  }
+
+  /** The owner of a page, if it has one. */
+  private ownerOfPage(page: Page | null | undefined): TabOwner | undefined {
+    return page === null || page === undefined ? undefined : this.owners.get(this.tabIdOf(page));
   }
 
   /**
@@ -798,12 +1227,15 @@ export class BrowserSession {
    * cancelled when together they pass `downloadMaxBytes`, so a page cannot fill the disk.
    * Without a workspace the download is cancelled.
    */
-  private onDownload(d: Download): void {
+  private onDownload(page: Page, d: Download): void {
     const shown = JSON.stringify(clip(d.suggestedFilename(), 300));
     const workspace = this.workspace;
+    // read now: the page may move to another conversation later, its download's notes stay
+    const owner = this.ownerOfPage(page)?.owner;
+    const note = (text: string) => this.noteTo(owner, text);
     if (workspace === undefined) {
       d.cancel().catch(() => undefined);
-      this.note(
+      note(
         `The page started a download (${shown}), which was cancelled: the device has no workspace.`,
       );
       return;
@@ -816,20 +1248,20 @@ export class BrowserSession {
       try {
         const failure = await d.failure();
         if (failure !== null) {
-          if (failure !== "canceled") this.note(`The download of ${shown} failed: ${failure}.`);
+          if (failure !== "canceled") note(`The download of ${shown} failed: ${failure}.`);
           return;
         }
         const tmp = await d.path();
         if (statSync(tmp).size > this.downloadMaxBytes) {
-          this.note(
+          note(
             `The download of ${shown} was not saved: it is larger than ${this.downloadMaxBytes} bytes.`,
           );
           return;
         }
         target = this.saveDownload(workspace, safeFileName(d.suggestedFilename()), tmp);
-        this.note(`Downloaded ${shown} to ${target}.`);
+        note(`Downloaded ${shown} to ${target}.`);
       } catch (e) {
-        this.note(
+        note(
           `The download of ${shown} was not saved: ${e instanceof ActionError ? e.message : firstLine(e)}`,
         );
       } finally {
@@ -841,7 +1273,7 @@ export class BrowserSession {
         entry.finished = true;
       }
     })();
-    for (const c of this.collectors) c.downloads.push(entry);
+    for (const c of this.collectors) if (c.conv === owner) c.downloads.push(entry);
   }
 
   /**
@@ -947,7 +1379,8 @@ export class BrowserSession {
       if (bytes > this.downloadMaxBytes) {
         for (const f of names) this.cancelledTmp.add(f);
         for (const d of this.activeDownloads) {
-          this.note(
+          this.noteTo(
+            this.ownerOfPage(d.page())?.owner,
             `The download of ${JSON.stringify(clip(d.suggestedFilename(), 300))} was cancelled: downloads in progress passed ${this.downloadMaxBytes} bytes.`,
           );
           d.cancel().catch(() => undefined);
@@ -1039,8 +1472,10 @@ export class BrowserSession {
    * Probes the proxy for the URL's host and reports it when refused; the viewers' `blocked`
    * message carries `pageUrl` (default: the URL itself), the page to open once allowed.
    */
-  private checkBlocked(rawUrl: string, pageUrl?: string): Promise<boolean> {
+  private checkBlocked(page: Page, rawUrl: string, pageUrl?: string): Promise<boolean> {
     const proxy = this.proxy;
+    // the page's owner gets the refused host (its reply's blockedHosts, its tree's viewers)
+    const owner = this.ownerOfPage(page);
     if (proxy === undefined) return Promise.resolve(false);
     let url: URL;
     try {
@@ -1050,19 +1485,20 @@ export class BrowserSession {
     }
     const host = url.hostname;
     const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
-    let probe = this.probes.get(host);
+    const key = `${owner?.owner ?? ""}\u0000${host}`;
+    let probe = this.probes.get(key);
     if (probe === undefined) {
       probe = proxyRefuses(proxy, host, port).then((refused) => {
-        this.probes.delete(host);
-        if (refused) {
-          for (const c of this.collectors) c.blocked.add(host);
-          this.emit({ type: "blocked", host, url: pageUrl ?? url.href });
+        this.probes.delete(key);
+        if (refused && owner !== undefined) {
+          for (const c of this.collectors) if (c.conv === owner.owner) c.blocked.add(host);
+          this.emit({ type: "blocked", host, url: pageUrl ?? url.href, root: owner.root });
         }
         return refused;
       });
-      this.probes.set(host, probe);
+      this.probes.set(key, probe);
     }
-    for (const c of this.collectors) c.pending.push(probe);
+    for (const c of this.collectors) if (c.conv === owner?.owner) c.pending.push(probe);
     return probe;
   }
 
@@ -1081,30 +1517,61 @@ export class BrowserSession {
     }
   }
 
-  /** Runs `fn` one at a time with the other actions (`wait` and the tab list run beside them). */
-  private serial<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(fn, fn);
-    this.queue = run.catch(() => undefined);
+  /**
+   * The action queue a conversation's requests run in: one per conversation, so one
+   * conversation's slow navigation does not stall another (ruling 7). Falling back to one
+   * device-wide queue is returning a constant here.
+   */
+  private queueKey(conversationId: string): string {
+    return conversationId;
+  }
+
+  /**
+   * Runs `fn` one at a time with the conversation's other actions (`wait`, the tab list and adopt
+   * run beside them).
+   */
+  private serial<T>(conversationId: string, fn: () => Promise<T>): Promise<T> {
+    const key = this.queueKey(conversationId);
+    const run = (this.queues.get(key) ?? Promise.resolve()).then(fn, fn);
+    const tail = run.catch(() => undefined);
+    this.queues.set(key, tail);
+    // an idle queue is dropped (the map stays bounded by the conversations with work queued)
+    void tail.then(() => {
+      if (this.queues.get(key) === tail) this.queues.delete(key);
+    });
     return run;
   }
 
   /**
-   * Runs a tool request; never throws. `takenOver` is checked when a queued request leaves the
-   * queue: a takeover that began while it waited refuses it. An action already running is left to
-   * finish (stopping it halfway would leave the page in an unknown state).
+   * Runs a tool request of its conversation; never throws. `takenOver` is checked when a queued
+   * request leaves the queue: a takeover that began while it waited refuses it. An action already
+   * running is left to finish (stopping it halfway would leave the page in an unknown state).
    */
   async run(req: ToolRequest, opts: { takenOver?: () => boolean } = {}): Promise<ToolReply> {
-    // Notes that arrived with no request in flight ride the next reply, whichever conversation of
-    // the device sends it (they are all the owner's); a failed request puts them back.
-    const late = this.unreported.splice(0);
-    const c: Collector = { blocked: new Set(), notes: [...late], pending: [], downloads: [] };
+    const conv = req.conversationId;
+    // Notes that arrived with none of the conversation's requests in flight ride its next reply
+    // (device notes ride the next reply of any conversation); a failed request puts them back.
+    const lateOwn = this.unreported.get(conv) ?? [];
+    this.unreported.delete(conv);
+    const lateAll = this.unreportedAll.splice(0);
+    const c: Collector = {
+      conv,
+      blocked: new Set(),
+      notes: [...lateAll, ...lateOwn],
+      pending: [],
+      downloads: [],
+    };
     this.collectors.add(c);
     let reply: ToolReply;
     try {
-      // the tab list only reads what the session tracks: it answers while an action runs
-      const out = await (req.op === "wait" || (req.op === "tabs" && req.action === "list")
+      // the tab list and adopt only read and move what the session tracks: they answer while an
+      // action runs (wait runs beside the queue too)
+      const beside =
+        req.op === "wait" ||
+        (req.op === "tabs" && (req.action === "list" || req.action === "adopt"));
+      const out = await (beside
         ? this.exec(req)
-        : this.serial(() => {
+        : this.serial(conv, () => {
             if (opts.takenOver?.() === true)
               throw new ActionError("taken_over", TAKEN_OVER_MESSAGE);
             return this.exec(req);
@@ -1113,9 +1580,14 @@ export class BrowserSession {
       await this.settleDownloads(c);
       // from here on, notes go to later replies (none is lost between this one and the next)
       this.collectors.delete(c);
-      const page = await this.activePage();
+      const page = this.currentPage(conv);
+      if (page !== undefined && isActing(req)) {
+        this.tabUsedAt.set(this.tabIdOf(page), this.clock.now());
+        this.actedSeq.set(conv, ++this.actSeq);
+      }
       // a verification page goes to the person, said first so the agent hands off
-      const verifying = await this.checkVerification(page, this.tabIdOf(page));
+      const verifying =
+        page === undefined ? false : await this.checkVerification(page, this.tabIdOf(page));
       const text = [
         ...(verifying ? [VERIFICATION_NOTE] : []),
         ...c.notes,
@@ -1123,7 +1595,7 @@ export class BrowserSession {
       ].join("\n");
       reply = {
         ok: true,
-        page: await this.pageInfo(page),
+        ...(page === undefined ? {} : { page: await this.pageInfo(page) }),
         blockedHosts: [...c.blocked],
         ...(text === "" ? {} : { text }),
         ...(out.image === undefined ? {} : { image: out.image }),
@@ -1141,7 +1613,9 @@ export class BrowserSession {
         message = `The device's network settings block ${[...c.blocked].join(", ")}.`;
       }
       reply = { ok: false, error: code, message, blockedHosts: [...c.blocked] };
-      this.unreported.unshift(...late);
+      if (lateOwn.length > 0)
+        this.unreported.set(conv, [...lateOwn, ...(this.unreported.get(conv) ?? [])]);
+      this.unreportedAll.unshift(...lateAll);
     } finally {
       this.collectors.delete(c);
     }
@@ -1311,8 +1785,8 @@ export class BrowserSession {
     }
   }
 
-  private markClick(x: number, y: number): void {
-    this.lastClick = { x, y, seq: ++this.clickSeq };
+  private markClick(page: Page, x: number, y: number): void {
+    this.clicks.set(this.tabIdOf(page), { x, y, seq: ++this.clickSeq });
   }
 
   private async goto(page: Page, url: string): Promise<void> {
@@ -1360,7 +1834,7 @@ export class BrowserSession {
       watch.dispose();
     }
     // a plain-http request the proxy refuses loads its 403 page instead of failing
-    if (res?.status() === 403 && (await this.checkBlocked(res.url()))) {
+    if (res?.status() === 403 && (await this.checkBlocked(page, res.url()))) {
       throw new ActionError(
         "blocked",
         `The device's network settings block ${new URL(res.url()).hostname}.`,
@@ -1385,7 +1859,7 @@ export class BrowserSession {
     if (net === undefined || net === "ERR_ABORTED") return original;
     await this.errorPageCommitted(page);
     if (PROXY_FAILURE_RE.test(error)) {
-      if (await this.checkBlocked(url)) return original;
+      if (await this.checkBlocked(page, url)) return original;
       const detail = await this.networkDetail(url);
       return new ActionError(
         "unreachable",
@@ -1482,9 +1956,12 @@ export class BrowserSession {
   }
 
   private async exec(req: ToolRequest): Promise<{ text?: string; image?: string }> {
+    const conv = req.conversationId;
+    const root = req.rootConversationId;
+    const activePage = () => this.pageFor(conv, root);
     switch (req.op) {
       case "navigate": {
-        const page = await this.activePage();
+        const page = await activePage();
         if (req.url !== undefined) {
           await this.goto(page, normalizeUrl(req.url));
         } else if (req.action === "back" || req.action === "forward") {
@@ -1513,40 +1990,40 @@ export class BrowserSession {
       case "tabs":
         return this.tabsOp(req);
       case "snapshot":
-        return { text: await takeSnapshot(await this.activePage()) };
+        return { text: await takeSnapshot(await activePage()) };
       case "click":
       case "hover": {
-        const page = await this.activePage();
+        const page = await activePage();
         const loc = await this.locate(page, req.ref);
         if (req.op === "hover") {
           await loc.hover();
           return {};
         }
         const at = await this.centerOf(loc);
-        if (at !== undefined) this.markClick(at.x, at.y);
+        if (at !== undefined) this.markClick(page, at.x, at.y);
         await this.settled(page, () => loc.click());
         return {};
       }
       case "type": {
-        const page = await this.activePage();
+        const page = await activePage();
         const loc = await this.locate(page, req.ref);
         await loc.fill(req.text);
         if (req.submit === true) await this.settled(page, () => loc.press("Enter"));
         return {};
       }
       case "select": {
-        const page = await this.activePage();
+        const page = await activePage();
         const loc = await this.locate(page, req.ref);
         const chosen = await this.settled(page, () => loc.selectOption(req.values));
         return { text: `Selected ${JSON.stringify(chosen)}.` };
       }
       case "press": {
-        const page = await this.activePage();
+        const page = await activePage();
         await this.settled(page, () => page.keyboard.press(req.key));
         return {};
       }
       case "scroll": {
-        const page = await this.activePage();
+        const page = await activePage();
         if (req.ref !== undefined) {
           const loc = await this.locate(page, req.ref);
           await loc.scrollIntoViewIfNeeded();
@@ -1560,7 +2037,7 @@ export class BrowserSession {
         return {};
       }
       case "upload": {
-        const page = await this.activePage();
+        const page = await activePage();
         const file = this.readUpload(req.path);
         const loc = await this.locate(page, req.ref);
         await loc.setInputFiles(file);
@@ -1568,17 +2045,17 @@ export class BrowserSession {
       }
       case "click_at":
       case "type_at": {
-        const page = await this.activePage();
+        const page = await activePage();
         this.checkPoint(req.x, req.y);
-        this.markClick(Math.round(req.x), Math.round(req.y));
+        this.markClick(page, Math.round(req.x), Math.round(req.y));
         await this.settled(page, () => page.mouse.click(req.x, req.y));
         if (req.op === "type_at") await page.keyboard.type(req.text);
         return {};
       }
       case "wait":
-        return this.waitOp(req);
+        return this.waitOp(req, await activePage());
       case "screenshot": {
-        const page = await this.activePage();
+        const page = await activePage();
         const maxBytes = Math.min(MAX_SCREENSHOT_BYTES, Math.floor(req.maxBytes));
         if (!(maxBytes > 0))
           throw new ActionError("failed", "screenshot needs a positive maxBytes.");
@@ -1610,54 +2087,84 @@ export class BrowserSession {
   }
 
   private async tabsOp(req: Extract<ToolRequest, { op: "tabs" }>): Promise<{ text?: string }> {
+    const conv = req.conversationId;
+    const root = req.rootConversationId;
     switch (req.action) {
-      case "list": {
-        // no new tab here: the list runs beside the actions (a navigation may be opening one)
-        if (this.pages.size === 0) await this.activePage();
-        const lines = await Promise.all(
-          [...this.pages.entries()].map(async ([id, p]) => {
-            const info = await this.pageInfo(p);
-            return `${id}${id === this.active ? " (active)" : ""}: ${info.title || "(no title)"} ${info.url}`;
-          }),
-        );
-        return { text: lines.join("\n") };
-      }
+      case "list":
+        // never opens a tab (it runs beside the actions; a navigation may be opening one)
+        return { text: await this.listText(conv, root) };
       case "open": {
-        const page = await this.openTab();
+        // a conversation's first tab may be the unowned blank one: that is a new tab too
+        const page =
+          this.countOf(conv) === 0
+            ? await this.pageFor(conv, root)
+            : await this.openTab(conv, root);
         if (req.url !== undefined) await this.goto(page, normalizeUrl(req.url));
         return {};
       }
       case "switch": {
-        const page = this.tabById(req.tabId);
-        this.active = req.tabId;
-        await page.bringToFront().catch(() => undefined);
-        this.emit({ type: "active" });
+        this.ownTab(conv, req.tabId);
+        this.setActive(conv, req.tabId as string);
         return {};
       }
       case "close": {
-        const page = this.tabById(req.tabId);
+        const page = this.ownTab(conv, req.tabId);
         await page.close();
-        await this.activePage();
+        return {};
+      }
+      case "adopt": {
+        const id = req.tabId;
+        const result = this.adopt(conv, root, this.tabIdOf(this.tabById(id)));
+        if (result === "in_use") throw new ActionError("failed", tabInUse(id ?? ""));
+        if (result === "cap") throw new ActionError("failed", CONVERSATION_CAP_MESSAGE);
         return {};
       }
     }
-    throw new ActionError("failed", "tabs needs an action: list, open, switch or close.");
+    throw new ActionError("failed", "tabs needs an action: list, open, switch, close or adopt.");
   }
 
-  /** Opens a blank tab and makes it active. */
-  async openTab(): Promise<Page> {
-    if (this.pages.size >= MAX_TABS) {
-      throw new ActionError(
-        "failed",
-        `The browser has ${MAX_TABS} tabs open, the most it keeps; close one first.`,
-      );
-    }
-    const page = await this.ctx.newPage();
-    this.track(page);
-    this.active = this.ids.get(page);
-    this.emit({ type: "active" });
-    this.emit({ type: "state" });
+  /** The conversation's own tab `tabId`; another conversation's is refused with what to do. */
+  private ownTab(conversationId: string, tabId: string | undefined): Page {
+    const page = this.tabById(tabId);
+    if (this.owners.get(tabId as string)?.owner !== conversationId)
+      throw new ActionError("failed", notYourTab(tabId as string));
     return page;
+  }
+
+  /**
+   * The tab list of a conversation: its own tabs, then its tree's other tabs, then other trees'
+   * tabs (unowned ones too, but not a blank start tab), with ids, titles clipped to
+   * OTHER_TITLE_CHARS and URLs without query or fragment outside its own; no conversation ids.
+   */
+  private async listText(conversationId: string, root: string): Promise<string> {
+    const own: string[] = [];
+    const tree: string[] = [];
+    const device: string[] = [];
+    for (const [id, p] of [...this.pages.entries()]) {
+      if (p.isClosed()) continue;
+      const o = this.owners.get(id);
+      if (o?.owner === conversationId) {
+        const info = await this.pageInfo(p);
+        const active = this.activeOf.get(conversationId) === id ? " (active)" : "";
+        own.push(`${id}${active}: ${info.title || "(no title)"} ${info.url}`);
+        continue;
+      }
+      if (o === undefined && p.url() === "about:blank") continue;
+      const title = clip(this.titles.get(id) ?? "", OTHER_TITLE_CHARS) || "(no title)";
+      const line = `${id}: ${title} ${bareUrl(clip(p.url(), MAX_URL_CHARS))}`;
+      if (o !== undefined && o.root === root) tree.push(line);
+      else device.push(line);
+    }
+    const lines = [...own];
+    if (tree.length > 0)
+      lines.push("Tabs of other conversations in this task (you cannot use these):", ...tree);
+    if (device.length > 0) lines.push("Tabs of other conversations on this device:", ...device);
+    if (tree.length + device.length > 0)
+      lines.push(
+        "To use another conversation's tab, call browser_tabs with action adopt and its tabId.",
+      );
+    if (lines.length === 0) return "No browser tabs are open.";
+    return lines.join("\n");
   }
 
   tabById(tabId: string | undefined): Page {
@@ -1671,19 +2178,19 @@ export class BrowserSession {
     return page;
   }
 
-  /** Makes a tab active (a viewer's tab switch). */
-  async switchTo(tabId: string): Promise<void> {
-    const page = this.tabById(tabId);
-    this.active = tabId;
-    await page.bringToFront().catch(() => undefined);
-    this.emit({ type: "active" });
-    this.emit({ type: "state" });
+  /** Brings a tab to the front of the window (only a viewer in control decides what is front). */
+  async bringToFront(tabId: string): Promise<void> {
+    await this.pageById(tabId)
+      ?.bringToFront()
+      .catch(() => undefined);
   }
 
-  /** Navigates the active tab for a viewer (address bar, back, forward, reload); never throws. */
-  async viewerNav(nav: { url?: string; action?: "back" | "forward" | "reload" }): Promise<void> {
+  /** Navigates a tab for a viewer (address bar, back, forward, reload); never throws. */
+  async viewerNav(
+    page: Page,
+    nav: { url?: string; action?: "back" | "forward" | "reload" },
+  ): Promise<void> {
     try {
-      const page = await this.activePage();
       if (nav.url !== undefined) await this.goto(page, normalizeUrl(nav.url));
       else if (nav.action === "back") await page.goBack();
       else if (nav.action === "forward") await page.goForward();
@@ -1693,12 +2200,14 @@ export class BrowserSession {
     }
   }
 
-  private async waitOp(req: Extract<ToolRequest, { op: "wait" }>): Promise<{ text?: string }> {
+  private async waitOp(
+    req: Extract<ToolRequest, { op: "wait" }>,
+    page: Page,
+  ): Promise<{ text?: string }> {
     const asked = Number(req.timeoutMs);
     const timeout = Number.isFinite(asked)
       ? Math.max(0, Math.min(MAX_WAIT_MS, Math.floor(asked)))
       : DEFAULT_WAIT_MS;
-    const page = await this.activePage();
     if (req.text !== undefined) {
       await page
         .getByText(req.text)

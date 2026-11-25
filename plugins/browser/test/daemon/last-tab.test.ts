@@ -23,20 +23,27 @@ afterAll(async () => {
   if (d) removeDir(d.stateDir);
 });
 
-/** The ids of the daemon's tabs, from the tab list. */
+/** The ids of the conversation's own tabs, from the tab list. */
 async function tabIds(): Promise<string[]> {
   const r = await request(d.socketPath, { op: "tabs", action: "list" });
   if (!r.ok) throw new Error(r.message);
-  return (r.text ?? "")
-    .split("\n")
-    .map((l) => /^(t\d+)/.exec(l)?.[1])
-    .filter((id): id is string => id !== undefined);
+  // its own tabs come first, before any heading of other conversations' tabs
+  const own: string[] = [];
+  for (const l of (r.text ?? "").split("\n")) {
+    const id = /^(t\d+)/.exec(l)?.[1];
+    if (id === undefined) break;
+    own.push(id);
+  }
+  return own;
 }
 
 /** Opens tabs until there are exactly two; their ids. */
 async function twoTabs(): Promise<[string, string]> {
-  await request(d.socketPath, { op: "tabs", action: "open" });
   let ids = await tabIds();
+  while (ids.length < 2) {
+    await request(d.socketPath, { op: "tabs", action: "open" });
+    ids = await tabIds();
+  }
   for (const id of ids.slice(0, -2)) {
     await request(d.socketPath, { op: "tabs", action: "close", tabId: id });
   }
@@ -48,7 +55,7 @@ async function twoTabs(): Promise<[string, string]> {
 }
 
 describe("closing the last tabs", () => {
-  it("two quick closes by the agent leave one blank tab", async () => {
+  it("two quick closes by the agent leave none; the next acting calls open exactly one", async () => {
     const [a, b] = await twoTabs();
     const replies = await Promise.all([
       request(d.socketPath, { op: "tabs", action: "close", tabId: a }),
@@ -56,26 +63,32 @@ describe("closing the last tabs", () => {
       request(d.socketPath, { op: "tabs", action: "list" }),
     ]);
     for (const r of replies) expect(r).toMatchObject({ ok: true });
+    expect(await tabIds()).toHaveLength(0);
+    // a wait (beside the queue) and a snapshot at once share the one new tab
+    const [w, s] = await Promise.all([
+      request(d.socketPath, { op: "wait", timeoutMs: 0 }),
+      request(d.socketPath, { op: "snapshot" }),
+    ]);
+    expect(w).toMatchObject({ ok: true, tabs: { open: 1, max: 6 } });
+    expect(s.ok && w.ok && s.page?.tabId).toBe(w.ok ? w.page?.tabId : "");
     expect(await tabIds()).toHaveLength(1);
   });
 
-  it("two quick closes by the person leave one blank tab", async () => {
+  it("two quick closes by the person leave none; the viewer opens no tab", async () => {
     const [a, b] = await twoTabs();
     const v = await openViewer(d.socketPath, { maxWidth: 480, maxHeight: 300 });
     await v.next(isState);
     const taken = v.after((m) => isState(m) && m.control === "user");
     v.send({ t: "takeover" });
     await taken;
-    const one = v.after(
-      (m) => isState(m) && m.tabs.length === 1 && m.tabs[0]?.id !== a && m.tabs[0]?.id !== b,
-    );
+    const none = v.after((m) => isState(m) && m.tabs.length === 0 && m.shown === undefined);
     v.send({ t: "tab", action: "close", tabId: a });
     v.send({ t: "tab", action: "close", tabId: b });
-    await one;
+    await none;
     const back = v.after((m) => isState(m) && m.control === "agent");
     v.send({ t: "handback" });
     await back;
-    expect(await tabIds()).toHaveLength(1);
+    expect(await tabIds()).toHaveLength(0);
     await v.close();
   });
 });

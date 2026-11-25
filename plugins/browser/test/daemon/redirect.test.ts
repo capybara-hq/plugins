@@ -188,7 +188,12 @@ describe("navigate through redirects", () => {
     const stateDir = mkdtempSync(join(tmpdir(), "cbd-"));
     writeFileSync(
       join(stateDir, "session.json"),
-      JSON.stringify({ savedAt: Date.now(), tabs: [`${fx.url}/secure`], active: 0 }),
+      JSON.stringify({
+        version: 2,
+        savedAt: Date.now(),
+        tabs: [{ url: `${fx.url}/secure`, owner: "c1", root: "c1" }],
+        conversations: [{ id: "c1", root: "c1", active: 0 }],
+      }),
     );
     const arrived = holdNext();
     const restored = await startTestDaemon({ stateDir, launch: launchWatched });

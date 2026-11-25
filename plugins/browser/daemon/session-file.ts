@@ -1,26 +1,51 @@
-// The daemon's session file (`<state>/session.json`): the open tabs' URLs and the pending handoff,
-// so a daemon restarted moments ago (a network change restarts the service on some providers)
-// comes back with them. The profile (cookies, storage) persists on its own; this adds only what
-// Chromium does not keep. An idle stop forgets the file, and a file older than
-// RESTORE_MAX_AGE_MS is ignored: a later start begins with one blank tab, as before.
+// The daemon's session file (`<state>/session.json`): the open tabs' URLs with their owners, and
+// per conversation its active tab, pending handoff and persistent parks, so a daemon restarted
+// moments ago (a network change restarts the service on some providers) comes back with them and
+// gives each tab back to its owner. The profile (cookies, storage) persists on its own; this adds
+// only what Chromium does not keep. An idle stop forgets the file, and a file older than
+// RESTORE_MAX_AGE_MS or of another format is ignored: a later start begins with one blank tab.
 
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type BrowserSession, normalizeUrl } from "./actions.js";
+import type { BrowserSession } from "./actions.js";
 import { HANDOFF_MAX_CHARS, MAX_TABS } from "./protocol.js";
-import type { Clock } from "./state.js";
+import { type Clock, type DaemonState, HANDOFF_PARK } from "./state.js";
 
 /** A session file older than this is not restored. */
 export const RESTORE_MAX_AGE_MS = 10 * 60_000;
 
-export interface SavedSession {
-  savedAt: number;
-  /** The tabs' http(s) URLs in tab order. */
-  tabs: string[];
-  /** Index of the active tab in `tabs`. */
-  active: number;
-  handoff?: { callId: string; message: string };
+/** The session file format; a file of another one (an older daemon's) is not restored. */
+export const SESSION_FILE_VERSION = 2;
+
+export interface SavedTab {
+  /** An http(s) URL. */
+  url: string;
+  owner: string;
+  root: string;
 }
+
+export interface SavedConversation {
+  id: string;
+  root: string;
+  /** Index of the conversation's active tab in `tabs`. */
+  active?: number;
+  handoff?: { callId: string; message: string };
+  /** Persistent conversation parks besides the handoff. */
+  parks?: { kind: string; key: string }[];
+}
+
+export interface SavedSession {
+  version: typeof SESSION_FILE_VERSION;
+  savedAt: number;
+  /** The owned tabs with http(s) URLs, in tab order (unowned tabs are not kept). */
+  tabs: SavedTab[];
+  conversations: SavedConversation[];
+}
+
+const isId = (v: unknown): v is string => typeof v === "string" && v !== "";
+
+/** What `state` must answer for a save. */
+type StateView = Pick<DaemonState, "conversationIds" | "rootOf" | "handoffOf" | "parksOf">;
 
 export class SessionFile {
   private readonly file: string;
@@ -33,7 +58,7 @@ export class SessionFile {
     this.clock = clock;
   }
 
-  /** The saved session when it is recent and well formed; undefined otherwise. */
+  /** The saved session when it is recent, of this format and well formed; undefined otherwise. */
   read(): SavedSession | undefined {
     let raw: unknown;
     try {
@@ -45,56 +70,96 @@ export class SessionFile {
     if (
       typeof s !== "object" ||
       s === null ||
+      s.version !== SESSION_FILE_VERSION ||
       typeof s.savedAt !== "number" ||
       this.clock.now() - s.savedAt > RESTORE_MAX_AGE_MS ||
-      !Array.isArray(s.tabs)
+      !Array.isArray(s.tabs) ||
+      !Array.isArray(s.conversations)
     )
       return undefined;
-    const tabs = s.tabs.filter(
-      (u): u is string => typeof u === "string" && /^https?:\/\//i.test(u),
-    );
-    const h = s.handoff;
-    const handoff =
-      typeof h === "object" &&
-      h !== null &&
-      typeof h.callId === "string" &&
-      h.callId !== "" &&
-      typeof h.message === "string"
-        ? { callId: h.callId, message: h.message.slice(0, HANDOFF_MAX_CHARS) }
-        : undefined;
-    return {
-      savedAt: s.savedAt,
-      tabs: tabs.slice(0, MAX_TABS),
-      active: typeof s.active === "number" ? s.active : 0,
-      ...(handoff === undefined ? {} : { handoff }),
-    };
+    const tabs = s.tabs
+      .filter(
+        (t): t is SavedTab =>
+          typeof t === "object" &&
+          t !== null &&
+          typeof t.url === "string" &&
+          /^https?:\/\//i.test(t.url) &&
+          isId(t.owner) &&
+          isId(t.root),
+      )
+      .slice(0, MAX_TABS)
+      .map((t) => ({ url: t.url, owner: t.owner, root: t.root }));
+    const conversations: SavedConversation[] = [];
+    for (const c of s.conversations as unknown[]) {
+      if (typeof c !== "object" || c === null) continue;
+      const x = c as Partial<SavedConversation>;
+      if (!isId(x.id) || !isId(x.root)) continue;
+      const h = x.handoff;
+      const handoff =
+        typeof h === "object" && h !== null && isId(h.callId) && typeof h.message === "string"
+          ? { callId: h.callId, message: h.message.slice(0, HANDOFF_MAX_CHARS) }
+          : undefined;
+      const parks = Array.isArray(x.parks)
+        ? x.parks
+            .filter(
+              (p) =>
+                typeof p === "object" && p !== null && isId(p.kind) && typeof p.key === "string",
+            )
+            .map((p) => ({ kind: p.kind, key: p.key }))
+        : [];
+      conversations.push({
+        id: x.id,
+        root: x.root,
+        ...(typeof x.active === "number" ? { active: x.active } : {}),
+        ...(handoff === undefined ? {} : { handoff }),
+        ...(parks.length === 0 ? {} : { parks }),
+      });
+    }
+    return { version: SESSION_FILE_VERSION, savedAt: s.savedAt, tabs, conversations };
   }
 
   /**
-   * Writes the session soon (coalesced): the tabs' URLs and the pending handoff, both read when
-   * the write runs.
+   * Writes the session soon (coalesced): the tabs with their owners, and per conversation its
+   * active tab, pending handoff and persistent parks, all read when the write runs.
    */
-  save(
-    session: BrowserSession,
-    handoffNow: () => { callId: string; message: string } | undefined,
-  ): void {
+  save(session: BrowserSession, state: StateView): void {
     if (this.queued || this.forgotten) return;
     this.queued = true;
     queueMicrotask(() => {
       this.queued = false;
       if (this.forgotten) return;
-      const handoff = handoffNow();
-      const all = session.tabs();
-      const kept = all.filter((t) => /^https?:\/\//i.test(t.url));
-      const active = Math.max(
-        0,
-        kept.findIndex((t) => t.active),
-      );
+      const kept = session
+        .tabs()
+        .filter(
+          (t): t is typeof t & { owner: string; root: string } =>
+            t.owner !== undefined && t.root !== undefined && /^https?:\/\//i.test(t.url),
+        );
+      const tabs: SavedTab[] = kept.map((t) => ({ url: t.url, owner: t.owner, root: t.root }));
+      const ids = new Set<string>([...kept.map((t) => t.owner), ...state.conversationIds]);
+      const conversations: SavedConversation[] = [];
+      for (const id of ids) {
+        const root = kept.find((t) => t.owner === id)?.root ?? state.rootOf(id);
+        if (root === undefined) continue;
+        const active = kept.findIndex((t) => t.owner === id && t.active);
+        const handoff = state.handoffOf(id);
+        const parks = state
+          .parksOf(id)
+          .filter((p) => p.persist === true && p.tabId === undefined && p.kind !== HANDOFF_PARK)
+          .map((p) => ({ kind: p.kind, key: p.key }));
+        if (active < 0 && handoff === undefined && parks.length === 0) continue;
+        conversations.push({
+          id,
+          root,
+          ...(active < 0 ? {} : { active }),
+          ...(handoff === undefined ? {} : { handoff }),
+          ...(parks.length === 0 ? {} : { parks }),
+        });
+      }
       const body: SavedSession = {
+        version: SESSION_FILE_VERSION,
         savedAt: this.clock.now(),
-        tabs: kept.map((t) => t.url),
-        active,
-        ...(handoff === undefined ? {} : { handoff }),
+        tabs,
+        conversations,
       };
       try {
         writeFileSync(`${this.file}.tmp`, JSON.stringify(body), { mode: 0o600 });
@@ -111,23 +176,33 @@ export class SessionFile {
     rmSync(this.file, { force: true });
   }
 
+  /** Gives the conversations their pending handoffs and persistent parks back. */
+  restoreState(state: Pick<DaemonState, "noticeHandoff" | "park">, saved: SavedSession): void {
+    for (const c of saved.conversations) {
+      if (c.handoff !== undefined)
+        state.noticeHandoff(c.id, c.root, c.handoff.callId, c.handoff.message);
+      for (const p of c.parks ?? []) state.park(c.id, c.root, { ...p, persist: true });
+    }
+  }
+
   /**
-   * Opens the saved tabs in a browser that has only its first blank tab. The navigations are
-   * started, not awaited: the first request after a restart does not wait for every page to load.
+   * Opens the saved tabs, each for its owner, in a browser that has only its first blank tab, and
+   * gives each conversation its active tab back. The navigations are started, not awaited: the
+   * first request after a restart does not wait for every page to load.
    */
   async restoreTabs(session: BrowserSession, saved: SavedSession): Promise<void> {
-    if (saved.tabs.length === 0) return;
-    const ids: string[] = [];
-    for (const [i, url] of saved.tabs.entries()) {
+    const ids: (string | undefined)[] = [];
+    for (const t of saved.tabs) {
       try {
-        const page = i === 0 ? await session.activePage() : await session.openTab();
-        ids.push(session.tabIdOf(page));
-        void session.viewerNav({ url: normalizeUrl(url) });
+        ids.push(await session.restoreTab({ owner: t.owner, root: t.root }, t.url));
       } catch {
         // a tab that cannot open is left out
+        ids.push(undefined);
       }
     }
-    const active = ids[saved.active];
-    if (active !== undefined) await session.switchTo(active).catch(() => undefined);
+    for (const c of saved.conversations) {
+      const id = c.active === undefined ? undefined : ids[c.active];
+      if (id !== undefined) session.setActive(c.id, id);
+    }
   }
 }

@@ -2,7 +2,7 @@
 // conversation's device. Read-only and navigation tools declare `allow`; tools that act on a page
 // declare `ask`, so the conversation's permission profile decides.
 import { ToolError, type ToolHandler, type ToolSpec } from "@capybara-hq/plugin-sdk";
-import type { ToolRequest } from "../daemon/protocol.js";
+import type { ToolOp } from "../daemon/protocol.js";
 import { REPLY_TOO_LARGE_MESSAGE, VIEWPORT } from "../daemon/protocol.js";
 import {
   type BrowserDeps,
@@ -374,8 +374,8 @@ function need<T>(v: T | undefined, field: string, tool: string): T {
 /** A handler that maps the input to one daemon request and returns the page result. */
 function handler(
   deps: BrowserDeps,
-  toRequest: (i: Record<string, unknown>) => ToolRequest,
-  timeoutOf: (r: ToolRequest) => number = () => REQUEST_TIMEOUT_MS,
+  toRequest: (i: Record<string, unknown>) => ToolOp,
+  timeoutOf: (r: ToolOp) => number = () => REQUEST_TIMEOUT_MS,
 ): ToolHandler {
   return async (input, call) => {
     const req = toRequest(obj(input));
