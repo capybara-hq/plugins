@@ -64,17 +64,20 @@ A real browser in the person's device for agents (browser use spec,
   owner's.
 - Viewer input (mouse, keys, text, address bar, tabs) is applied only while the person holds
   control: a viewer in the watch state is read-only and its input is dropped on arrival, and input
-  still queued when control returns to the agent is dropped too (input already running, a
-  navigation or a long paste, finishes). Keys and buttons the person still holds are released
-  when control returns to the agent or the viewer ends, so the agent never inherits a held Shift
-  or a drag. Mouse moves are coalesced (the newest position wins while one waits). After a move,
-  click or scroll the daemon answers the page's cursor under the pointer (`cursor`, only when it
-  changed), off the input queue (the newest position wins, an answer later than 200 ms is
-  dropped) and without page code: CDP hit-tests the point (`DOM.getNodeForLocation`, through
-  shadow roots and in-process frames) and a function in an isolated world reads the computed
-  `cursor`, resolving `auto` as Chromium does (an I-beam over editable fields and text);
-  out-of-process frames are entered through their own session (at most 20 frames looked at,
-  3 levels).
+  still queued when control returns to the agent is dropped too (input already running, a navigation
+  or a long paste, finishes). Keys and buttons the person still holds are released when control
+  returns to the agent or the viewer ends, each on the tab where it was pressed (a held button after
+  moving the pointer outside the viewport, so the release completes no click), so the agent never
+  inherits a held Shift or a drag. Mouse moves are coalesced (the newest position wins while one
+  waits). After a move, click or scroll the daemon answers the page's cursor under the pointer
+  (`cursor`, only when it changed), off the input queue (the newest position wins, one lookup at a
+  time, an answer later than 200 ms is dropped) and without page code: CDP hit-tests the point
+  (`DOM.getNodeForLocation`, through shadow roots and in-process frames) and a function in an
+  isolated world reads the computed `cursor`, resolving `auto` as Chromium does (an I-beam over
+  editable fields and text); `pointer-events: none` elements are skipped as Chromium does;
+  out-of-process frames are entered through their own session (at most 20 frames looked at, 3
+  levels, matched in the page's coordinates), detached with their frame or when the viewer leaves
+  the page.
 - Frames are binary messages (`encodeFrame`: tag, seq, width, height, JPEG); every other message is
   JSON. Pacing (`daemon/viewer-pacing.ts`): the daemon pings each viewer every second (the path's
   own round trip) and compares each frame's ack round trip with it. While frames take longer than
