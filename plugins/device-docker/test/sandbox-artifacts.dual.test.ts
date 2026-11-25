@@ -343,8 +343,8 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
       .filter((v) => v !== "")
       .sort();
     expect(volumes).toEqual([
+      `cap-device-${deviceId}-services`,
       `cap-device-${deviceId}-skills`,
-      `cap-device-${deviceId}-svc`,
       `cap-device-${deviceId}-workspace`,
     ]);
 
