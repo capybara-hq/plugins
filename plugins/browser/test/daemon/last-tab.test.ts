@@ -64,9 +64,13 @@ describe("closing the last tabs", () => {
     ]);
     for (const r of replies) expect(r).toMatchObject({ ok: true });
     expect(await tabIds()).toHaveLength(0);
-    // a wait (beside the queue) and a snapshot at once share the one new tab
+    // a wait opens no tab; a snapshot and a screenshot at once share the one new tab
+    expect(await request(d.socketPath, { op: "wait", timeoutMs: 0 })).toMatchObject({
+      ok: true,
+      tabs: { open: 0, max: 6 },
+    });
     const [w, s] = await Promise.all([
-      request(d.socketPath, { op: "wait", timeoutMs: 0 }),
+      request(d.socketPath, { op: "screenshot", maxBytes: 200_000 }),
       request(d.socketPath, { op: "snapshot" }),
     ]);
     expect(w).toMatchObject({ ok: true, tabs: { open: 1, max: 6 } });

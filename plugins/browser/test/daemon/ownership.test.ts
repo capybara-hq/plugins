@@ -1,13 +1,16 @@
 import type { ServerResponse } from "node:http";
+import type { BrowserContext, Page } from "playwright-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   CONVERSATION_CAP_MESSAGE,
   deviceCapMessage,
+  NO_TAB_TO_WAIT_ON,
   notYourTab,
   tabEvicted,
   tabInUse,
   tabMoved,
 } from "../../daemon/actions.js";
+import { launchChromium } from "../../daemon/chromium.js";
 import {
   CONVERSATION_IDLE_MS,
   EVICT_MIN_IDLE_MS,
@@ -79,6 +82,41 @@ async function daemon(clock?: ShiftClock): Promise<TestDaemon> {
 
 const A = conv("a");
 const B = conv("b");
+
+/** A daemon whose browser context the test can reach (pages opened beside the session). */
+async function daemonWithContext(
+  clock?: ShiftClock,
+): Promise<{ d: TestDaemon; ctx: () => BrowserContext }> {
+  let ctx: BrowserContext | undefined;
+  const d = await startTestDaemon({
+    ...(clock === undefined ? {} : { clock }),
+    launch: async (plan) => {
+      ctx = await launchChromium(plan);
+      return ctx;
+    },
+  });
+  daemons.push(d);
+  return {
+    d,
+    ctx: () => {
+      if (ctx === undefined) throw new Error("no browser context");
+      return ctx;
+    },
+  };
+}
+
+/** The context's page showing `url`. */
+function pageAt(ctx: BrowserContext, url: string): Page {
+  const p = ctx.pages().find((x) => x.url() === url);
+  if (p === undefined) throw new Error(`no page at ${url}`);
+  return p;
+}
+
+/** The interrupt Playwright reports when a late error page's commit took the frame. */
+const interrupted = (url: string) =>
+  new Error(
+    `page.goto: Navigation to "${url}" is interrupted by another navigation to "chrome-error://chromewebdata/"`,
+  );
 
 function ok(r: ToolReply): Extract<ToolReply, { ok: true }> {
   if (!r.ok) throw new Error(`${r.error}: ${r.message}`);
@@ -462,5 +500,116 @@ describe("idle close", () => {
     expect(await gone).toMatchObject({ tabs: [{ id: "t1", group: "own" }], shown: "t1" });
     expect(d.daemon.state.conversationIds).toEqual(["root"]);
     await v.close();
+  });
+});
+
+describe("review follow-ups", () => {
+  it("a first acting call claims only the start's blank tab, never another unowned page", async () => {
+    const { d, ctx } = await daemonWithContext();
+    ok(await request(d.socketPath, { op: "snapshot" }, A));
+    // a page nobody owns that shows content (the browser's own, or one an idle close kept)
+    const stray = await ctx().newPage();
+    await stray.goto(`${fx.url}/b`);
+    const r = ok(await request(d.socketPath, { op: "snapshot" }, B));
+    expect(r.page?.url).toBe("about:blank");
+    expect(r.text ?? "").not.toContain("page b");
+  });
+
+  it("wait never claims or opens a tab, also while the person holds control", async () => {
+    const d = await daemon();
+    ok(await request(d.socketPath, { op: "navigate", url: `${fx.url}/a` }, A));
+    const v = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 }, A);
+    await v.next((m) => m.t === "state");
+    const taken = v.after((m) => m.t === "state" && m.control === "user");
+    v.send({ t: "takeover" });
+    await taken;
+    const w = ok(await request(d.socketPath, { op: "wait", timeoutMs: 0 }, B));
+    expect(w.page).toBeUndefined();
+    expect(w.tabs).toEqual({ open: 0, max: MAX_TABS_PER_CONVERSATION });
+    expect(
+      await request(d.socketPath, { op: "wait", text: "page a", timeoutMs: 0 }, B),
+    ).toMatchObject({ ok: false, error: "failed", message: NO_TAB_TO_WAIT_ON });
+    const back = v.after((m) => m.t === "state" && m.control === "agent");
+    v.send({ t: "handback" });
+    await back;
+    await v.close();
+    // still one tab in the browser, A's
+    expect(await ownTabs(d, B)).toEqual([]);
+    expect(await ownTabs(d, A)).toEqual(["t1"]);
+  });
+
+  it("after losing its active tab, a conversation's newest gained tab becomes active", async () => {
+    const d = await daemon();
+    ok(await request(d.socketPath, { op: "navigate", url: `${fx.url}/a` }, B)); // t1
+    ok(await request(d.socketPath, { op: "navigate", url: `${fx.url}/b` }, A)); // t2
+    ok(await request(d.socketPath, { op: "tabs", action: "open", url: `${fx.url}/c` }, A)); // t3
+    // adopted last, though it sits first in tab order
+    ok(await request(d.socketPath, { op: "tabs", action: "adopt", tabId: "t1" }, A));
+    ok(await request(d.socketPath, { op: "tabs", action: "switch", tabId: "t3" }, A));
+    ok(await request(d.socketPath, { op: "tabs", action: "close", tabId: "t3" }, A));
+    expect(ok(await request(d.socketPath, { op: "snapshot" }, A)).page?.tabId).toBe("t1");
+  });
+
+  it("the device cap leaves out tabs an idle close is closing", async () => {
+    const clock = new ShiftClock();
+    const d = await daemon(clock);
+    while ((await ownTabs(d, A)).length < MAX_TABS_PER_CONVERSATION)
+      ok(await request(d.socketPath, { op: "tabs", action: "open" }, A));
+    const busyB = conv("busy-b");
+    clock.advance(CONVERSATION_IDLE_MS - 1);
+    while ((await ownTabs(d, busyB)).length < MAX_TABS - MAX_TABS_PER_CONVERSATION)
+      ok(await request(d.socketPath, { op: "tabs", action: "open" }, busyB));
+    // A idle closes now; C's first call in the same tick needs no eviction and is not refused
+    clock.advance(1);
+    const c = await request(d.socketPath, { op: "snapshot" }, conv("c"));
+    expect(c).toMatchObject({ ok: true, tabs: { open: 1 } });
+  });
+
+  it("a navigation a late error page interrupted runs again when its request was aborted", async () => {
+    const { d, ctx } = await daemonWithContext();
+    ok(await request(d.socketPath, { op: "navigate", url: `${fx.url}/a` }, A));
+    const page = pageAt(ctx(), `${fx.url}/a`);
+    const original = page.goto.bind(page);
+    let arrivals = 0;
+    page.goto = (async (url: string, opts?: Parameters<Page["goto"]>[1]) => {
+      page.goto = original;
+      // the request goes out, the error page's commit cancels it (ERR_ABORTED), Playwright
+      // reports the interrupt
+      const arrived = held();
+      const first = original(url, opts).catch(() => null);
+      const res = await arrived;
+      arrivals++;
+      const cdp = await ctx().newCDPSession(page);
+      await cdp.send("Page.stopLoading");
+      await cdp.detach();
+      res.destroy();
+      await first;
+      // the run again is answered
+      void held().then((again) => {
+        arrivals++;
+        again.writeHead(200, { "content-type": "text/html" }).end("<title>Slow</title><p>slow</p>");
+      });
+      throw interrupted(url);
+    }) as Page["goto"];
+    const r = ok(await request(d.socketPath, { op: "navigate", url: `${fx.url}/slow` }, A));
+    expect(arrivals).toBe(2);
+    expect(r.page).toMatchObject({ url: `${fx.url}/slow`, title: "Slow" });
+  });
+
+  it("an interrupted navigation whose request failed with a real net error stays unreachable", async () => {
+    const { d, ctx } = await daemonWithContext();
+    ok(await request(d.socketPath, { op: "navigate", url: `${fx.url}/a` }, A));
+    const page = pageAt(ctx(), `${fx.url}/a`);
+    const original = page.goto.bind(page);
+    const refused = "http://127.0.0.1:1/";
+    page.goto = (async (url: string, opts?: Parameters<Page["goto"]>[1]) => {
+      page.goto = original;
+      await original(url, opts).catch(() => null);
+      throw interrupted(url);
+    }) as Page["goto"];
+    expect(await request(d.socketPath, { op: "navigate", url: refused }, A)).toMatchObject({
+      ok: false,
+      error: "unreachable",
+    });
   });
 });
