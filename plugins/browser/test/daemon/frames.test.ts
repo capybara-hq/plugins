@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { ViewerOut } from "../../daemon/protocol.js";
 import {
   openViewer,
   removeDir,
@@ -7,6 +6,7 @@ import {
   startFixtureServer,
   startTestDaemon,
   type TestDaemon,
+  type TestFrame,
 } from "./helpers.js";
 
 // Fresh random pixels every 100 ms: every screencast frame is large and different.
@@ -39,10 +39,8 @@ describe("browser daemon frame cap", () => {
     await request(d.socketPath, { op: "navigate", url: `${fx.url}/noise` });
     const v = await openViewer(d.socketPath, { maxWidth: 1280, maxHeight: 800 });
     await v.next((m) => m.t === "frame" && m.seq >= 4);
-    const frames = v.messages.filter(
-      (m): m is Extract<ViewerOut, { t: "frame" }> => m.t === "frame",
-    );
-    for (const f of frames) expect(JSON.stringify(f).length).toBeLessThanOrEqual(CAP);
+    const frames = v.messages.filter((m): m is TestFrame => m.t === "frame");
+    for (const f of frames) expect(f.bytes).toBeLessThanOrEqual(CAP);
     await v.close();
   });
 
