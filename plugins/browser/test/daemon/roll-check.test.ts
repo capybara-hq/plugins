@@ -1,11 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { HANDOFF_HOLDS_ROLL_MS } from "../../daemon/main.js";
 import { ROLL_CHECK_REQUEST, type ToolRequest } from "../../daemon/protocol.js";
+import { type Clock, systemClock } from "../../daemon/state.js";
 import { openViewer, removeDir, request, startTestDaemon, type TestDaemon } from "./helpers.js";
 
 let d: TestDaemon;
+/** Added to the real time: the test moves the daemon's clock past the handoff cap. */
+let offset = 0;
+const clock: Clock = { ...systemClock, now: () => Date.now() + offset };
 
 beforeAll(async () => {
-  d = await startTestDaemon();
+  d = await startTestDaemon({ clock });
 });
 
 afterAll(async () => {
@@ -44,5 +49,17 @@ describe("roll check", () => {
     await back;
     expect(await rollCheck()).toEqual({ busy: false });
     await v.close();
+  });
+
+  it("a handoff nobody ends stops holding the roll after its cap", async () => {
+    await request(d.socketPath, { op: "handoff_notice", callId: "h2", message: "Sign in" });
+    expect(await rollCheck()).toMatchObject({ busy: true });
+    offset = HANDOFF_HOLDS_ROLL_MS + 1;
+    try {
+      expect(await rollCheck()).toEqual({ busy: false });
+    } finally {
+      offset = 0;
+      await request(d.socketPath, { op: "handoff_clear", callId: "h2" });
+    }
   });
 });

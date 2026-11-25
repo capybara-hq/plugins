@@ -1965,13 +1965,6 @@ export class BrowserSession {
   }
 
   /**
-   * `page.goto`, past the late error page of the tab's previous failed or stopped navigation:
-   * Chromium can commit that page after Playwright reported the failure (the Linux full build),
-   * and its commit interrupts a navigation started meanwhile. Then this navigation is followed
-   * when it went on in Chromium, and otherwise started once more (the error page is in now),
-   * within the navigation's own deadline.
-   */
-  /**
    * `goto` past a change of the device's network (an interface came or went: Wi-Fi, a VPN, a
    * container network): Chromium answers net::ERR_NETWORK_CHANGED and may keep or restart the
    * navigation itself, so it is followed first (like one another navigation took over) and run
@@ -1991,13 +1984,22 @@ export class BrowserSession {
         if (!firstLine(e).includes("net::ERR_NETWORK_CHANGED")) throw e;
         const out = await watch.follow(deadline);
         if (out.kind === "loaded") return out.response;
-        if (out.kind === "failed" && !/ERR_NETWORK_CHANGED|ERR_ABORTED/.test(out.error))
+        // only a navigation the network change itself dropped runs again: an abort may be a
+        // download or another navigation taking over, never fetched again
+        if (out.kind === "failed" && !out.error.includes("ERR_NETWORK_CHANGED"))
           throw new Error(`${out.error} at ${out.url}`);
         if (attempt >= NETWORK_CHANGED_ATTEMPTS || Date.now() >= deadline) throw e;
       }
     }
   }
 
+  /**
+   * `page.goto`, past the late error page of the tab's previous failed or stopped navigation:
+   * Chromium can commit that page after Playwright reported the failure (the Linux full build),
+   * and its commit interrupts a navigation started meanwhile. Then this navigation is followed
+   * when it went on in Chromium, and otherwise started once more (the error page is in now),
+   * within the navigation's own deadline.
+   */
   private async gotoPastLateErrorPage(
     page: Page,
     url: string,
