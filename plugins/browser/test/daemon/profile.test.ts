@@ -26,19 +26,24 @@ afterAll(async () => {
 });
 
 describe("browser daemon profile", () => {
-  it("profile persists across daemon restarts", async () => {
-    const first = await startTestDaemon();
-    dirs.push(first.stateDir);
-    await request(first.socketPath, { op: "navigate", url: `${fx.url}/set` });
-    await first.stop();
-    const second = await startTestDaemon({ stateDir: first.stateDir });
-    try {
-      await request(second.socketPath, { op: "navigate", url: `${fx.url}/get` });
-      const snap = await request(second.socketPath, { op: "snapshot" });
-      if (!snap.ok) throw new Error(snap.message);
-      expect(snap.text).toContain("kept=v1");
-    } finally {
-      await second.stop();
-    }
-  });
+  // grace 1 ms: the stop gives up (and kills Chromium) before Chromium has written its Cookies
+  // file, as a loaded service stop does at the supervisor's 2 s SIGKILL
+  it.each([60_000, 1])(
+    "profile persists across daemon restarts (close grace %i ms)",
+    async (grace) => {
+      const first = await startTestDaemon({ browserCloseGraceMs: grace });
+      dirs.push(first.stateDir);
+      await request(first.socketPath, { op: "navigate", url: `${fx.url}/set` });
+      await first.stop();
+      const second = await startTestDaemon({ stateDir: first.stateDir });
+      try {
+        await request(second.socketPath, { op: "navigate", url: `${fx.url}/get` });
+        const snap = await request(second.socketPath, { op: "snapshot" });
+        if (!snap.ok) throw new Error(snap.message);
+        expect(snap.text).toContain("kept=v1");
+      } finally {
+        await second.stop();
+      }
+    },
+  );
 });
