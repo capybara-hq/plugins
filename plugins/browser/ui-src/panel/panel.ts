@@ -378,7 +378,9 @@ export function mountPanel(opts: PanelOptions): void {
     $("tabsbtn").setAttribute("aria-label", `${text("tabs")}: ${tabs.length}`);
   }
 
-  const tabName = (tab: ViewerTab): string => (tab.title === "" ? tab.url : tab.title);
+  // a blank tab (about:blank, the tab left after the last one closed) reads as a new tab
+  const tabName = (tab: ViewerTab): string =>
+    tab.title !== "" ? tab.title : tab.url === "about:blank" ? text("newTab") : tab.url;
   /** The tab's site icon (the daemon's data URL), or the placeholder square. */
   function favOf(tab: ViewerTab | undefined): HTMLElement {
     if (tab !== undefined && isIconDataUrl(tab.favicon)) {

@@ -1037,6 +1037,23 @@ describe("design states", () => {
     expect(sock.sent).toContainEqual({ t: "takeover" });
   });
 
+  it("a blank tab is labelled as a new tab, not about:blank", async () => {
+    const s = setup();
+    await live(
+      s,
+      state({
+        tabs: [
+          { id: "t1", title: "", url: "about:blank", active: true },
+          { id: "t2", title: "", url: "https://b.example/x", active: false },
+        ],
+      }),
+    );
+    const labels = Array.from($(s, "tabs").querySelectorAll(".tab .label")).map(
+      (l) => l.textContent,
+    );
+    expect(labels).toEqual(["New tab", "https://b.example/x"]);
+  });
+
   it("tabs show the site's icon, and the placeholder without a usable one", async () => {
     const s = setup();
     const png =
