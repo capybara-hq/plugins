@@ -710,8 +710,32 @@ describe("panel", () => {
     const sock = s.sock();
     sock.open();
     sock.push(state());
+    // one switch: the idle state holds until the browser's first frame, no skeleton between
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+    expect(($(s, "skeleton") as HTMLElement).hidden).toBe(true);
+    sock.pushFrame(1);
+    await vi.advanceTimersByTimeAsync(0);
     expect(($(s, "empty") as HTMLElement).hidden).toBe(true);
+    expect($(s, "app").hasAttribute("data-idle")).toBe(false);
     expect(($(s, "takeover") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("the idle states (not running, offline, error) are the idle layer alone", async () => {
+    for (const [code, title] of [
+      [4404, "emptyTitle"],
+      [4409, "offlineTitle"],
+      [1009, "errorTitle"],
+    ] as const) {
+      const s = setup();
+      await vi.waitFor(() => expect(FakeSocket.all.length).toBe(1));
+      s.sock().drop(code);
+      expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+      expect($(s, "empty-title").textContent).toBe(t("en", title));
+      // no tab strip, toolbar or status line beside it: the live layer is hidden as a whole
+      expect($(s, "app").hasAttribute("data-idle")).toBe(true);
+      expect(($(s, "skeleton") as HTMLElement).hidden).toBe(true);
+      expect($(s, "empty").closest("#app")).toBeNull();
+    }
   });
 
   it("the empty state looks for the browser every 10 s while visible, for 30 min at most", async () => {

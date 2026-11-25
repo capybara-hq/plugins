@@ -149,6 +149,8 @@ export function mountPanel(opts: PanelOptions): void {
   let pendingHandoff: { callId: string; message: string } | null = null;
   let sentSize = "";
   let image: CanvasImageSource | null = null;
+  /** The layer the panel shows now (see `renderLoading`). */
+  let shown: "idle" | "skeleton" | "app" = "skeleton";
 
   /**
    * Watch only on a phone (the host's compact size class, a pushed page): the device's screen,
@@ -286,7 +288,6 @@ export function mountPanel(opts: PanelOptions): void {
     input.sync();
     $("lock").hidden = !isLive || lastState?.secure !== true;
     const showEmpty = mode === "empty" || mode === "offline" || mode === "error";
-    $("empty").hidden = !showEmpty;
     $("reconnect").hidden = !showEmpty;
     const keys: Record<string, [StringKey, StringKey]> = {
       empty: ["emptyTitle", "emptyBody"],
@@ -305,15 +306,27 @@ export function mountPanel(opts: PanelOptions): void {
   }
 
   /**
-   * The whole panel is one skeleton until everything is ready (the browser's state and its first
-   * frame), then it switches once to the live panel; "not running", offline and error show at
-   * once. A connection that starts again (not a quiet look) shows the skeleton again.
+   * Which of the three layers shows; each is the whole panel and only one is visible:
+   * - `idle`: no browser to show (not running, offline, error): the centred idle state alone,
+   *   with no tabs, toolbar or status line (nothing to navigate);
+   * - `skeleton`: a connection on its way (or live without its first frame yet);
+   * - `app`: the live panel, once the browser's state and its first frame are there.
+   * A browser that comes up from the idle state (a quiet look found it) keeps the idle state until
+   * its first frame and then switches once to the live panel, as from the skeleton.
    */
   function renderLoading(): void {
-    const loading = mode === "connecting" || (mode === "live" && image === null);
-    $("app").toggleAttribute("data-loading", loading);
-    $("skeleton").hidden = !loading;
-    if (!loading) onBoxChange();
+    const idleMode = mode === "empty" || mode === "offline" || mode === "error";
+    let next: "idle" | "skeleton" | "app";
+    if (idleMode) next = "idle";
+    else if (mode === "live" && image !== null) next = "app";
+    else if (mode === "live" && shown === "idle") next = "idle";
+    else next = "skeleton";
+    shown = next;
+    $("app").toggleAttribute("data-loading", next === "skeleton");
+    $("app").toggleAttribute("data-idle", next === "idle");
+    $("skeleton").hidden = next !== "skeleton";
+    $("empty").hidden = next !== "idle";
+    if (next === "app") onBoxChange();
   }
 
   function renderTabs(): void {
@@ -581,6 +594,8 @@ export function mountPanel(opts: PanelOptions): void {
 
   function show(next: View): void {
     mode = next;
+    // a later browser is a new one: the idle state holds until its own first frame
+    if (next === "empty" || next === "offline" || next === "error") image = null;
     if (next === "empty") {
       wasLive = false;
       armEmptyPoll();
