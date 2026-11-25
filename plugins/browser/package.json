@@ -31,7 +31,7 @@
     "build:ui": "tsx build-ui.ts"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.72"
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.74"
   },
   "devDependencies": {
     "@capybara-hq/plugin-model-fake": "^0.1.0-rc.52",

@@ -6,3 +6,4 @@ device-local runs the full Chromium build too where its capybara-device sets `CA
 the headless shell) (new headless mode, an ordinary Chrome), installed into the sealed install
 directory as before: the local sandbox now lets the browser service register Chromium's own Mach services (capybara-hq/core#843).
 On macOS the browser gets `MAC_CHROMIUM_TMPDIR` (its temporary directory) and runs with crash reporting off.
+Where it keeps the headless shell, the next tool result asks the user to update capybara-device.

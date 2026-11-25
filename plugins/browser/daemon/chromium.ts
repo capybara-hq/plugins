@@ -25,6 +25,7 @@ import {
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEVICE_SERVICE_MACH_CHROMIUM, DEVICE_SERVICE_MACH_ENV } from "@capybara-hq/plugin-sdk";
 import type { BrowserContext } from "playwright-core";
 import { VIEWPORT } from "./protocol.js";
 
@@ -37,8 +38,12 @@ import { VIEWPORT } from "./protocol.js";
  */
 export type ChromiumBuild = "chromium" | "chromium-headless-shell";
 
-/** Names the Mach allowances of the service's sandbox (the SDK's DEVICE_SERVICE_MACH_ENV). */
-export const SERVICE_MACH_ENV = "CAPYBARA_SERVICE_MACH";
+/** Names the Mach allowances of the service's sandbox. */
+export const SERVICE_MACH_ENV = DEVICE_SERVICE_MACH_ENV;
+
+/** The note a tool result carries while macOS runs the headless shell (an older capybara-device). */
+export const HEADLESS_SHELL_NOTE =
+  "The browser runs as a headless shell, which sites flag as a bot more often: the machine's capybara-device predates the full browser; ask the user to update capybara-device on that machine.";
 
 /** The build for a platform and the service's environment ({@link ChromiumBuild}). */
 export function chromiumBuild(
@@ -46,7 +51,9 @@ export function chromiumBuild(
   env: Record<string, string | undefined> = process.env,
 ): ChromiumBuild {
   if (platform !== "darwin") return "chromium";
-  return env[SERVICE_MACH_ENV] === "chromium" ? "chromium" : "chromium-headless-shell";
+  return env[SERVICE_MACH_ENV] === DEVICE_SERVICE_MACH_CHROMIUM
+    ? "chromium"
+    : "chromium-headless-shell";
 }
 
 /** A build's directory name in a browsers directory, before `-<revision>`. */
