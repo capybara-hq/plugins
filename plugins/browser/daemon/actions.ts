@@ -450,8 +450,8 @@ export async function captureFitting(
  * What the device's proxy answers a CONNECT to a host: `refused` (403: the device's network rules
  * refuse it), `unreachable` (another refusal of the tunnel, such as 502: the proxy could not
  * connect), `connected` (the tunnel opened), `no_answer` (nothing within the probe's time),
- * `proxy_down` (the proxy itself refused or dropped the connection to it: the device's network is
- * not up) or `unknown` (anything else).
+ * `proxy_down` (the connection to the proxy itself could not be made: the device's network is not
+ * up) or `unknown` (anything else).
  */
 export type ProxyVerdict =
   | "refused"
@@ -464,12 +464,10 @@ export type ProxyVerdict =
 /** Socket errors that say the proxy itself cannot be reached (never the destination). */
 const PROXY_DOWN_CODES = new Set([
   "ECONNREFUSED",
-  "ECONNRESET",
   "EHOSTUNREACH",
   "ENETUNREACH",
   "ENOTFOUND",
   "EAI_AGAIN",
-  "EPIPE",
 ]);
 
 /**
@@ -517,8 +515,15 @@ export function probeProxy(proxy: string, host: string, port: number): Promise<P
       resolve("no_answer");
       req.destroy();
     });
+    // down only when the connection to the proxy never came about: a reset after it connected
+    // (a proxy dropping the client when its upstream fails) says nothing about the proxy itself
+    let connected = false;
+    req.on("socket", (sock) => {
+      if (sock.connecting) sock.once("connect", () => (connected = true));
+      else connected = true;
+    });
     req.on("error", (e: NodeJS.ErrnoException) =>
-      resolve(PROXY_DOWN_CODES.has(e.code ?? "") ? "proxy_down" : "unknown"),
+      resolve(!connected && PROXY_DOWN_CODES.has(e.code ?? "") ? "proxy_down" : "unknown"),
     );
     req.end();
   });
