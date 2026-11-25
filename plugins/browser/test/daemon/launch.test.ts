@@ -174,6 +174,37 @@ describe("browser daemon: stop", () => {
     expect(alive(pid)).toBe(false);
   });
 
+  it("waits for the browser's process to be gone, not only for the close to be reported", async () => {
+    let ctx: BrowserContext | undefined;
+    const { daemon } = await daemonWith({
+      launch: async (plan) => {
+        const real = await launchChromium(plan);
+        ctx = real;
+        // a close reported at once while the browser is still shutting down (flushing the profile)
+        return new Proxy(real, {
+          get: (target, key) => {
+            if (key === "close") {
+              return async () => {
+                setTimeout(() => void target.close(), 300);
+              };
+            }
+            const v = Reflect.get(target, key, target);
+            return typeof v === "function" ? v.bind(target) : v;
+          },
+        });
+      },
+    });
+    await daemon.ready;
+    if (ctx === undefined) throw new Error("not launched");
+    const pid = await browserProcessId(ctx);
+    if (pid === undefined) throw new Error("no browser process id");
+    cleanup.push(() => {
+      if (alive(pid)) process.kill(pid, "SIGKILL");
+    });
+    await daemon.close();
+    expect(alive(pid)).toBe(false);
+  });
+
   it("returns after the grace without killing when the browser's process id is unknown", async () => {
     let ctx: BrowserContext | undefined;
     const { daemon } = await daemonWith({

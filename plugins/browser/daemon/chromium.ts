@@ -274,3 +274,13 @@ export function killChromium(pid: number): void {
     }
   }
 }
+
+/** Whether a process with this id exists (signal 0 only checks; EPERM means it exists). */
+export function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
