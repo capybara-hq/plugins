@@ -191,8 +191,10 @@ export function RunHud({ conversationId }: ComponentProps<"conversation.properti
             </div>
           ) : null}
         </Stack>
+        {/* 12ch: the widest key, "工具调用" with its info icon, needs about 10ch in a narrow CJK
+            font and more in a wide one; the key column clips (overflow: hidden), so leave room. */}
         <KeyValue
-          keyWidth="10ch"
+          keyWidth="12ch"
           rows={[
             {
               k: t({ en: "Node", zh: "节点" }),
