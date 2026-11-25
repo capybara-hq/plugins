@@ -55,6 +55,7 @@ const call = (conversationId: string): ToolCallContext => ({
   accountId: "acc",
   agentId: "agent",
   conversationId,
+  rootConversationId: conversationId,
   callId: "call-1",
   signal: new AbortController().signal,
 });

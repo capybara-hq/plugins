@@ -28,8 +28,10 @@ A real browser in the person's device for agents (browser use spec,
   `reportBlockedHosts` (the kernel raises the network ask and reruns the call once allowed).
 - `browser_handoff` sends the daemon a handoff notice (the panels show a banner with 完成 / 取消),
   then raises an `InputRequired` question `{ done: boolean }` in the conversation, with `open`
-  naming the `browser` panel so the person's conversation page opens it (a boolean, not
-  a 完成 / 取消 enum: the kernel's `answerHandoff`, which the banner uses, answers `{ done }`); on
+  naming the `browser` panel so the person's conversation page opens it. The question's title is
+  请在浏览器中完成：<the reason's first sentence> / Finish in the browser: …, the body is the full
+  reason, and `choices` draw 完成 (true, primary) and 取消 (false) as buttons. It stays a boolean
+  because the kernel's `answerHandoff`, which the banner uses, answers `{ done }`. On
   resume it clears the notice (with Done also handing the browser back, so a takeover the person
   still holds ends) and returns the page snapshot, or fails with "The user cancelled the handoff;
   ask the user how to continue, or try another approach.".
