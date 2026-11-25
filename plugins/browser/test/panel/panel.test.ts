@@ -1068,7 +1068,7 @@ describe("design states", () => {
     expect(labels).toEqual(["New tab", "https://b.example/x"]);
   });
 
-  it("tabs show the site's icon, and the placeholder without a usable one", async () => {
+  it("tabs show the site's icon, and the globe glyph without a usable one", async () => {
     const s = setup();
     const png =
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
@@ -1091,8 +1091,29 @@ describe("design states", () => {
     const favs = Array.from($(s, "tabs").querySelectorAll(".tab .fav"));
     expect(favs.map((f) => f.tagName)).toEqual(["IMG", "SPAN", "SPAN"]);
     expect((favs[0] as HTMLImageElement).getAttribute("src")).toBe(png);
+    // never an empty square: the globe glyph in the slot
+    expect(favs.slice(1).map((f) => f.getAttribute("data-glyph"))).toEqual(["site", "site"]);
+    expect(favs.slice(1).every((f) => f.querySelector("svg") !== null)).toBe(true);
     // the narrow tabs button shows the active tab's icon too
     expect($(s, "tabsbtn").querySelector("img.fav")?.getAttribute("src")).toBe(png);
+  });
+
+  it("a loading tab spins in its icon slot; its icon replaces the glyph in the same slot", async () => {
+    const s = setup();
+    const png =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+    const tab = { id: "t1", title: "Baidu", url: "https://www.baidu.com/", active: true };
+    const sock = await live(s, state({ tabs: [{ ...tab, loading: true }] }));
+    const slot = () => $(s, "tabs").querySelector(".tab .fav") as HTMLElement;
+    expect(slot().getAttribute("data-glyph")).toBe("loading");
+    expect($(s, "tabsbtn").querySelector(".fav")?.getAttribute("data-glyph")).toBe("loading");
+    // loaded, no icon yet: the globe
+    sock.push(state({ tabs: [tab] }));
+    expect(slot().getAttribute("data-glyph")).toBe("site");
+    // the icon arrives: an <img> of the same slot class (no layout shift)
+    sock.push(state({ tabs: [{ ...tab, favicon: png }] }));
+    expect(slot().tagName).toBe("IMG");
+    expect(slot().className).toBe("fav");
   });
 
   it("only the active tab's blocker shows the verify strip", async () => {
@@ -1286,6 +1307,17 @@ describe("tab ownership", () => {
     sock.push(state({ tabs: tree.map((x) => ({ ...x, active: x.id === "t3" })), shown: "t3" }));
     expect(stripItems(s)).toContain("Shop*");
     expect(($(s, "url") as HTMLInputElement).value).toBe("https://shop.example/");
+  });
+
+  it("the other conversations' menu entries carry the globe glyph (they have no icons)", async () => {
+    const s = setup();
+    await live(s, state({ tabs: tree, otherTabs: others }));
+    $(s, "others").click();
+    const entries = Array.from($(s, "menu").querySelectorAll("button"));
+    expect(entries.length).toBe(others.length);
+    expect(entries.every((b) => b.querySelector('.fav[data-glyph="site"] svg') !== null)).toBe(
+      true,
+    );
   });
 
   it("a watching panel never sends tab open, close or switch", async () => {

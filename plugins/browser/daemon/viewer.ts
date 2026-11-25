@@ -660,6 +660,7 @@ export class ViewerSession {
         group,
         ...(t.blocker === undefined ? {} : { blocker: t.blocker }),
         ...(t.favicon === undefined ? {} : { favicon: t.favicon }),
+        ...(t.loading === true ? { loading: true as const } : {}),
       };
     });
     // the own group first, then each other group in order of first appearance (a stable sort)

@@ -107,6 +107,8 @@ interface MenuItem {
   hint?: string;
   current?: boolean;
   heading?: boolean;
+  /** The entry's icon slot (a tab's icon or glyph); none for actions. */
+  fav?(): HTMLElement;
   run?(): void;
 }
 
@@ -456,6 +458,8 @@ export function mountPanel(opts: PanelOptions): void {
     return otherTabs.map((tab) => ({
       label: tab.title !== "" ? tab.title : tab.url === "about:blank" ? text("newTab") : tab.url,
       hint: text("moveHere"),
+      // another conversation's tab carries no icon (by design): the neutral globe
+      fav: () => glyph("site"),
       run: () => send({ t: "tab", action: "adopt", tabId: tab.id }),
     }));
   }
@@ -466,19 +470,27 @@ export function mountPanel(opts: PanelOptions): void {
   // a blank tab (about:blank, the tab left after the last one closed) reads as a new tab
   const tabName = (tab: ViewerTab): string =>
     tab.title !== "" ? tab.title : tab.url === "about:blank" ? text("newTab") : tab.url;
-  /** The tab's site icon (the daemon's data URL), or the placeholder square. */
+  /**
+   * The tab's icon slot, never an empty square: the site's icon (the daemon's data URL), else a
+   * small spinner while the tab loads, else a neutral globe. Every state is the same 14 px box.
+   */
   function favOf(tab: ViewerTab | undefined): HTMLElement {
     if (tab !== undefined && isIconDataUrl(tab.favicon)) {
       const img = doc.createElement("img");
       img.className = "fav";
       img.alt = "";
       img.src = tab.favicon;
-      // an icon the browser cannot draw falls back to the placeholder
-      img.addEventListener("error", () => img.replaceWith(favOf(undefined)), { once: true });
+      // an icon the browser cannot draw falls back to the globe
+      img.addEventListener("error", () => img.replaceWith(glyph("site")), { once: true });
       return img;
     }
+    return glyph(tab?.loading === true ? "loading" : "site");
+  }
+  function glyph(kind: "loading" | "site"): HTMLElement {
     const fav = doc.createElement("span");
     fav.className = "fav";
+    fav.setAttribute("data-glyph", kind);
+    fav.innerHTML = kind === "loading" ? ICONS.spin : ICONS.globe;
     return fav;
   }
   function hostOf(u: string): string {
@@ -524,6 +536,7 @@ export function mountPanel(opts: PanelOptions): void {
       const b = doc.createElement("button");
       b.type = "button";
       b.setAttribute("role", "menuitem");
+      if (it.fav !== undefined) b.appendChild(it.fav());
       const name = doc.createElement("span");
       name.className = "name";
       name.textContent = it.label;
@@ -1010,7 +1023,12 @@ export function mountPanel(opts: PanelOptions): void {
         group = tab.group;
         if (group !== "own") items.push({ label: groupLabel(group, subs), heading: true });
       }
-      items.push({ label: tabName(tab), current: tab.active, run: () => pickTab(tab) });
+      items.push({
+        label: tabName(tab),
+        current: tab.active,
+        fav: () => favOf(tab),
+        run: () => pickTab(tab),
+      });
     }
     if (interactive())
       items.push({ label: text("newTab"), run: () => send({ t: "tab", action: "open" }) });
