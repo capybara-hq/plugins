@@ -48,8 +48,11 @@ A real browser in the person's device for agents (browser use spec,
   the full Chromium build in its new headless mode, so the browser presents as an ordinary Chrome:
   Chrome's own reduced user agent for the platform (`--user-agent`, never "HeadlessChrome"), the
   browser's own client hints, a window the size of the viewport, the device's locale and time zone.
-  On macOS (device-local) it is the headless shell in one process: the local device sandbox refuses
-  the full build's Mach service registrations. Nothing spoofs a fingerprint, solves a CAPTCHA or
+  On macOS (device-local) too where the machine's capybara-device says its sandbox allows it
+  (`CAPYBARA_SERVICE_MACH=chromium`, capybara-hq/core#843); the browser gets `MAC_CHROMIUM_TMPDIR`
+  and crash reporting off. An older capybara-device keeps the headless shell in one process (and
+  nothing larger is downloaded). First start there: one download into the install directory (about 377 MB, 16 s on a fast
+  link), one restart, then about 2 s to launch. Nothing spoofs a fingerprint, solves a CAPTCHA or
   hides automation beyond Playwright's own flags (`navigator.webdriver` stays true).
 - Where the browser comes from (plugins#209: never from a place the service or an agent command
   could write once it runs): the provider's install directory `CAPYBARA_SERVICE_INSTALL`

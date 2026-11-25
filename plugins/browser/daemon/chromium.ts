@@ -25,20 +25,35 @@ import {
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEVICE_SERVICE_MACH_CHROMIUM, DEVICE_SERVICE_MACH_ENV } from "@capybara-hq/plugin-sdk";
 import type { BrowserContext } from "playwright-core";
 import { VIEWPORT } from "./protocol.js";
 
 /**
- * The Chromium build the daemon runs: the full Chromium in its (new) headless mode wherever it
- * starts, so the browser presents as an ordinary Chrome; on macOS the headless shell in one
- * process, because the local device sandbox refuses the full build's Mach service registrations
- * (`bootstrap_check_in`, even with `--single-process`).
+ * The Chromium build the daemon runs: the full Chromium in its (new) headless mode, so the
+ * browser presents as an ordinary Chrome. On macOS only where the device says its sandbox lets
+ * the full build start ({@link SERVICE_MACH_ENV} = `chromium`: a capybara-device with
+ * capybara-hq/core#843); elsewhere on macOS the headless shell in one process, which an older
+ * capybara-device runs (and nothing larger is downloaded before that is known).
  */
 export type ChromiumBuild = "chromium" | "chromium-headless-shell";
 
-/** The build for a platform ({@link ChromiumBuild}). */
-export function chromiumBuild(platform: NodeJS.Platform): ChromiumBuild {
-  return platform === "darwin" ? "chromium-headless-shell" : "chromium";
+/** Names the Mach allowances of the service's sandbox. */
+export const SERVICE_MACH_ENV = DEVICE_SERVICE_MACH_ENV;
+
+/** The note a tool result carries while macOS runs the headless shell (an older capybara-device). */
+export const HEADLESS_SHELL_NOTE =
+  "The browser runs as a headless shell, which sites flag as a bot more often: the machine's capybara-device predates the full browser; ask the user to update capybara-device on that machine.";
+
+/** The build for a platform and the service's environment ({@link ChromiumBuild}). */
+export function chromiumBuild(
+  platform: NodeJS.Platform,
+  env: Record<string, string | undefined> = process.env,
+): ChromiumBuild {
+  if (platform !== "darwin") return "chromium";
+  return env[SERVICE_MACH_ENV] === DEVICE_SERVICE_MACH_CHROMIUM
+    ? "chromium"
+    : "chromium-headless-shell";
 }
 
 /** A build's directory name in a browsers directory, before `-<revision>`. */
@@ -50,6 +65,8 @@ export const BUILD_DIR: Record<ChromiumBuild, string> = {
 export interface LaunchPlan {
   browsersPath: string;
   build: ChromiumBuild;
+  /** Extra environment of the browser process (macOS: its temporary directory). */
+  env?: Record<string, string>;
   /**
    * The browsers are the provider's install directory: installed and sealed on the first start
    * (`sealed` false; the launch then fails with {@link BrowserInstalledError} and the daemon
@@ -274,10 +291,10 @@ export function chromiumLaunchPlan(
     browsersPath?: string;
   },
   release: { revision: string; version: string } | undefined = browserRelease(
-    chromiumBuild(opts.platform),
+    chromiumBuild(opts.platform, opts.env),
   ),
 ): LaunchPlan {
-  const build = chromiumBuild(opts.platform);
+  const build = chromiumBuild(opts.platform, opts.env);
   // `--headless` on the full build is its new headless mode (the old one lives on only in the
   // headless shell); the window is the viewport, so the page's window and screen sizes agree
   const args = [
@@ -286,9 +303,15 @@ export function chromiumLaunchPlan(
     `--window-size=${VIEWPORT.width},${VIEWPORT.height}`,
     `--user-agent=${chromeUserAgent(opts.platform, release?.version ?? "")}`,
   ];
-  // macOS: chrome-headless-shell in one process (the local sandbox does not run the full browser's
-  // helper processes); spike: stable for navigation, input, screencast and tabs.
   if (build === "chromium-headless-shell") args.push("--single-process");
+  // macOS: Crashpad would write under ~/Library (outside the service's roots), and Chromium takes
+  // its temporary directory (the process singleton's socket) from MAC_CHROMIUM_TMPDIR, not TMPDIR
+  let env: Record<string, string> | undefined;
+  if (opts.platform === "darwin") {
+    args.push("--disable-crash-reporter", "--disable-breakpad");
+    const tmp = envValue(opts.env, "TMPDIR");
+    if (tmp !== undefined) env = { MAC_CHROMIUM_TMPDIR: tmp };
+  }
   const proxy = envValue(opts.env, "HTTPS_PROXY") ?? envValue(opts.env, "HTTP_PROXY");
   // Chromium sends loopback (localhost, 127.0.0.1, [::1]) direct, never through the proxy; the
   // provider's network rules keep the device's host services closed.
@@ -322,6 +345,7 @@ export function chromiumLaunchPlan(
       ? browsersPathFor(opts.stateDir, opts.env, release?.revision, build)
       : { browsersPath: opts.browsersPath }),
     build,
+    ...(env === undefined ? {} : { env }),
     profileDir: join(opts.stateDir, "profile"),
     downloadsTmp: join(opts.stateDir, "downloads-tmp"),
     args,
@@ -450,6 +474,7 @@ export async function launchChromium(plan: LaunchPlan): Promise<BrowserContext> 
     acceptDownloads: true,
     downloadsPath: plan.downloadsTmp,
     ...(plan.proxyAuth === undefined ? {} : { proxy: plan.proxyAuth }),
+    ...(plan.env === undefined ? {} : { env: { ...process.env, ...plan.env } }),
   });
 }
 

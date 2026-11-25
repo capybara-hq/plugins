@@ -59,11 +59,31 @@ describe("chromium launch plan", () => {
     );
   });
 
-  it("runs the headless shell in one process with the mock keychain on macOS", () => {
-    const plan = chromiumLaunchPlan({ stateDir: "/s", env: {}, platform: "darwin" });
-    expect(plan.build).toBe("chromium-headless-shell");
-    expect(plan.args).toEqual(expect.arrayContaining(["--single-process", "--use-mock-keychain"]));
-    expect(plan.args.some((a) => a.startsWith("--proxy-server"))).toBe(false);
+  it("runs the full Chromium on macOS only where the device's sandbox allows it", () => {
+    const full = chromiumLaunchPlan({
+      stateDir: "/s",
+      env: { TMPDIR: "/s/tmp", CAPYBARA_SERVICE_MACH: "chromium" },
+      platform: "darwin",
+    });
+    expect(full.build).toBe("chromium");
+    expect(full.args).toEqual(
+      expect.arrayContaining([
+        "--use-mock-keychain",
+        "--disable-crash-reporter",
+        "--disable-breakpad",
+      ]),
+    );
+    expect(full.args).not.toContain("--single-process");
+    expect(full.env).toEqual({ MAC_CHROMIUM_TMPDIR: "/s/tmp" });
+    // an older capybara-device (no CAPYBARA_SERVICE_MACH): the headless shell in one process
+    const shell = chromiumLaunchPlan({
+      stateDir: "/s",
+      env: { TMPDIR: "/s/tmp" },
+      platform: "darwin",
+    });
+    expect(shell.build).toBe("chromium-headless-shell");
+    expect(shell.args).toContain("--single-process");
+    expect(shell.args.some((a) => a.startsWith("--proxy-server"))).toBe(false);
   });
 
   it("gives proxy credentials to Playwright, not to the flag", () => {

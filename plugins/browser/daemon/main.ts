@@ -18,6 +18,7 @@ import {
   browserProcessId,
   browserRevision,
   chromiumLaunchPlan,
+  HEADLESS_SHELL_NOTE,
   killChromium,
   type LaunchPlan,
   launchChromium,
@@ -280,6 +281,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       // a shipped browser of another revision runs: the next tool result says so
       if (plan.shippedDir !== undefined)
         session.note(shippedRevisionNote(plan.shippedDir, browserRevision(plan.build)));
+      // macOS on an older capybara-device: the headless shell runs; the next tool result says how
+      // to get the full browser
+      if (plan.build === "chromium-headless-shell" && opts.browsersPath === undefined)
+        session.note(HEADLESS_SHELL_NOTE);
       // A launch that finishes after a stop only gets closed (stopBrowser): no tabs restored and
       // no saves, which would write back the session file an idle stop just forgot.
       if (!closing) await restoreCookies(ctx, opts.stateDir);
