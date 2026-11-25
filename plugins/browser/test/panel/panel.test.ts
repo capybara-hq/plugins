@@ -930,8 +930,6 @@ describe("panel size", () => {
 });
 
 describe("design states", () => {
-  const frame = { t: "frame", seq: 1, jpeg: "AAAA", width: 1280, height: 800 } as const;
-
   it("is one skeleton until the state and the first frame are there, then switches once", async () => {
     const s = setup();
     expect(($(s, "skeleton") as HTMLElement).hidden).toBe(false);
@@ -939,7 +937,7 @@ describe("design states", () => {
     const sock = await live(s);
     // the state alone is not enough: still the skeleton
     expect(($(s, "skeleton") as HTMLElement).hidden).toBe(false);
-    sock.push(frame);
+    sock.pushFrame(1);
     await vi.waitFor(() => expect(($(s, "skeleton") as HTMLElement).hidden).toBe(true));
     expect($(s, "app").hasAttribute("data-loading")).toBe(false);
     expect(s.dom.window.document.body.hasAttribute("data-ready")).toBe(true);
@@ -962,9 +960,11 @@ describe("design states", () => {
 
   it("a narrow panel merges tabs and address into one button with the tab count", async () => {
     const s = setup({ width: 360 });
+    // the tabs menu is for the person in control (the watch state is read-only)
     await live(
       s,
       state({
+        control: "user",
         tabs: [
           { id: "t1", title: "News", url: "https://news.example.com/world", active: true },
           { id: "t2", title: "Search", url: "https://search.example.com/", active: false },
