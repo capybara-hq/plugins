@@ -1,8 +1,10 @@
 // browser_handoff (browser use spec §9): the agent asks the person to do something in the browser
 // (sign in, solve a challenge). The kernel shows the question card in the conversation and opens
 // the browser panel on the person's conversation page (`InputRequired.open`), and the daemon's
-// handoff notice gives every open panel a banner with 完成 / 取消 that answers it through
-// /ui/handoff-answer. The wait is the kernel's resumable InputRequired.
+// handoff notice (kept per conversation: runRequest names the call's conversation and its root)
+// gives the panels of the conversation's tree a banner with 完成 / 取消 that answers it through
+// /ui/handoff-answer, echoing the handoff's conversation. The wait is the kernel's resumable
+// InputRequired.
 import {
   type InputRequired,
   ToolError,
@@ -10,7 +12,15 @@ import {
   type ToolSpec,
 } from "@capybara-hq/plugin-sdk";
 import { HANDOFF_MAX_CHARS } from "../daemon/protocol.js";
-import { assertOwner, type BrowserDeps, runRequest, TOOL_TIMEOUT_MS, toResult } from "./browser.js";
+import {
+  assertOwner,
+  type BrowserDeps,
+  runRequest,
+  TOOL_TIMEOUT_MS,
+  tabCountOf,
+  tabsLine,
+  toResult,
+} from "./browser.js";
 import { HANDOFF_FORM } from "./i18n.js";
 
 /** The browser panel (the `conversation.panel` contribution in the manifest). */
@@ -103,17 +113,20 @@ export function handoffHandler(deps: BrowserDeps): ToolHandler {
     const done = answer !== null && answer.done === true;
     // Done also hands the browser back: a takeover the person still holds would refuse the
     // snapshot below (and Done means they are finished with the browser)
-    await runRequest(deps, call, {
+    const cleared = await runRequest(deps, call, {
       op: "handoff_clear",
       callId: call.callId,
       ...(done ? { handback: true } : {}),
     }).catch((e: unknown) => {
       if (!(e instanceof ToolError)) throw e;
+      return undefined;
     });
-    if (!done)
+    if (!done) {
+      const tabs = cleared === undefined ? undefined : tabCountOf(cleared);
       throw new ToolError(
-        "The user cancelled the handoff; ask the user how to continue, or try another approach.",
+        `The user cancelled the handoff; ask the user how to continue, or try another approach.${tabs === undefined ? "" : `\n${tabsLine(tabs)}`}`,
       );
+    }
     return toResult(await runRequest(deps, call, { op: "snapshot" }));
   };
 }

@@ -155,26 +155,28 @@ export function registerRoutes(
       const body = await readJson(req);
       const callId = body?.callId;
       const done = body?.done;
-      // the conversation whose call raised the handoff (a sub-agent's, when the panel echoes it);
-      // untrusted: the kernel answers only for the scope conversation or its sub-agents
+      // the conversation whose call raised the handoff, echoed by the panel from the daemon's
+      // `state.handoffs` (a sub-agent's, when the panel is the root's); untrusted: the kernel
+      // answers only for the scope conversation or one of its descendants
       const raised = body?.handoffConversationId;
       if (
         typeof callId !== "string" ||
         callId === "" ||
         callId.length > CALL_ID_MAX ||
         typeof done !== "boolean" ||
-        (raised !== undefined &&
-          (typeof raised !== "string" || raised === "" || raised.length > CALL_ID_MAX))
+        typeof raised !== "string" ||
+        raised === "" ||
+        raised.length > CALL_ID_MAX
       )
         return error(
           400,
           "invalid_body",
-          "the body must be { callId: string, done: boolean, handoffConversationId?: string }",
+          "the body must be { callId: string, handoffConversationId: string, done: boolean }",
         );
       await deps.deviceAccess.answerHandoff({
         ...scope,
         callId,
-        handoffConversationId: typeof raised === "string" ? raised : scope.conversationId,
+        handoffConversationId: raised,
         done,
       });
       return json(200, { ok: true });

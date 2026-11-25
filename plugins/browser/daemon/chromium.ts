@@ -505,6 +505,8 @@ export async function launchChromium(plan: LaunchPlan): Promise<BrowserContext> 
         )
       : await shippedExecutable(plan.browsersPath, plan.shippedDir, plan.build);
   const pw = await loadPlaywright(plan.browsersPath);
+  // never `ignoreDefaultArgs`: Playwright's default switches keep background tabs rendering
+  // (--disable-renderer-backgrounding and friends), which per-conversation tabs rely on
   return pw.chromium.launchPersistentContext(plan.profileDir, {
     headless: true,
     executablePath,

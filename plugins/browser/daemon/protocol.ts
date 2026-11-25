@@ -5,7 +5,15 @@
 // Transport: the device service socket protocol of @capybara-hq/plugin-sdk (`device-service.ts`).
 // Every message is one UTF-8 JSON value.
 // - A request connection (`{"kind":"request"}`) carries one ToolRequest and gets one ToolReply.
-// - A stream connection (`{"kind":"stream"}`) is one viewer: the viewer's first message is
+//   Every request names its conversation and the root of its conversation tree (written by the
+//   plugin server from the tool call context, never from tool input); one that does not is refused
+//   with NO_CONVERSATION_MESSAGE. Tabs are owned per conversation (tab ownership spec §4): a
+//   conversation acts only on its own tabs and has its own active tab.
+// - A stream connection (`{"kind":"stream"}`) is one viewer. Its first stream message is the
+//   kernel's viewer context (`parseViewerContext` of @capybara-hq/plugin-sdk: the ticket's
+//   conversation and its root); a stream whose first message is not is closed, and a later
+//   message of that shape (the panel's) is never read as context. The viewer sees its tree: the
+//   tabs its conversation and the tree's other conversations own. The viewer's next message is
 //   `hello`; the daemon answers at once with a full `state` message and a first frame, then
 //   sends `state` on every change. A frame is a binary message ({@link encodeFrame}: a zero tag
 //   byte, then seq, width, height and the raw JPEG); every other message is JSON (its first byte
@@ -14,10 +22,11 @@
 //   and only the newest frame waits (a stale one is replaced, never queued). JSON messages
 //   (state, cursor, dialogs) never wait behind a held frame. A quiet stream is not a dead one:
 //   Chromium sends frames only when the page changes, so the viewer keeps the last one.
-// - Viewer input (mouse, key, nav, tab) is applied only while the person holds control
-//   (`state.control === "user"`, after a `takeover` from any viewer): a viewer in the watch state
-//   is read-only, and the daemon drops its input, also input still queued when control returns
-//   to the agent. Input already running then (a navigation, a long paste) finishes; keys and
+// - Viewer input (mouse, key, nav, tab) acts on the viewer's shown tab and is applied only while
+//   the person holds control (`state.control === "user"`, after a `takeover` from any viewer): a
+//   viewer in the watch state is read-only, and the daemon drops its input, also input still
+//   queued when control returns to the agent. Two messages pass in the watch state too: `show`
+//   (the viewer-local shown tab) and `tab` with `action: "adopt"` (an ownership change). Input already running then (a navigation, a long paste) finishes; keys and
 //   buttons the person still holds are released for the agent. Mouse moves are coalesced (the
 //   newest wins). After a move the daemon answers the page's cursor at the pointer (`cursor`)
 //   when it changed, resolved off the input queue.
@@ -148,12 +157,31 @@ export const DEFAULT_FRAME_MAX_BYTES = 256 * 1024;
 /** The longest handoff message the daemon keeps. */
 export const HANDOFF_MAX_CHARS = 4096;
 
-/** The most tabs the browser keeps open (popups count too). */
+/** The most tabs the browser keeps open, all conversations together (popups count too). */
 export const MAX_TABS = 10;
 
+/** The most tabs one conversation owns (popups count too). */
+export const MAX_TABS_PER_CONVERSATION = 6;
+
 /**
- * The longest a pending handoff keeps an otherwise idle daemon running (the person may take a
- * while to sign in). The device's own idle suspension can still end it sooner.
+ * A conversation's tabs close after this long without a request, a viewer pinning it and a park
+ * (equal to the daemon's own idle stop); its per-conversation state goes with them.
+ */
+export const CONVERSATION_IDLE_MS = 15 * 60_000;
+
+/**
+ * At the device's tab cap, a tab of another conversation is closed to make room only when that
+ * conversation has been idle (no request) for at least this long (and is not in use).
+ */
+export const EVICT_MIN_IDLE_MS = 5 * 60_000;
+
+/** The failure message of a request without its conversation fields. */
+export const NO_CONVERSATION_MESSAGE = "the request names no conversation";
+
+/**
+ * The longest pending parks (a handoff, any conversation's) keep an otherwise idle daemon running,
+ * counted from the oldest one (the person may take a while to sign in). The device's own idle
+ * suspension can still end it sooner.
  */
 export const HANDOFF_KEEPALIVE_MS = 24 * 60 * 60_000;
 
@@ -165,9 +193,38 @@ export const DOWNLOAD_BLOCKED_PREFIX =
 export const REPLY_TOO_LARGE_MESSAGE =
   "The reply was too large to send; ask for less (a smaller maxBytes).";
 
-export type ToolRequest =
+/**
+ * What every request carries besides its operation: the tool call's conversation and the root of
+ * its conversation tree (equal outside sub-agents). Both non-empty strings, from the kernel's tool
+ * call context; the daemon trusts them as it trusts the socket (spec §3).
+ */
+export interface RequestConversation {
+  conversationId: string;
+  rootConversationId: string;
+}
+
+/**
+ * One operation of a request (what the plugin server builds from tool input).
+ *
+ * Acting operations (navigate, snapshot, screenshot, the element and coordinate actions, wait,
+ * `tabs open` / `switch` / `close`) act on the conversation's active tab; a conversation with no
+ * live tab first claims an unowned tab, else gets a new one (subject to the caps). Non-acting
+ * operations never open a tab: `tabs list`, `tabs adopt`, `handoff_notice`, `handoff_clear`.
+ *
+ * `tabs list` lists the conversation's own tabs, then the tree's other tabs, then other trees'
+ * tabs (titles clipped to 120 characters, URLs without query or fragment outside its own).
+ * `tabs switch` / `close` take only the conversation's own tabs. `tabs adopt` moves `tabId` to the
+ * conversation (owner and root) and makes it its active tab; refused while the tab's owner is in
+ * use (a request in flight or a pending park).
+ */
+export type ToolOp =
   | { op: "navigate"; url?: string; action?: "back" | "forward" | "reload" }
-  | { op: "tabs"; action: "list" | "open" | "switch" | "close"; tabId?: string; url?: string }
+  | {
+      op: "tabs";
+      action: "list" | "open" | "switch" | "close" | "adopt";
+      tabId?: string;
+      url?: string;
+    }
   | { op: "snapshot" }
   | { op: "click" | "hover"; ref: string }
   | { op: "type"; ref: string; text: string; submit?: boolean }
@@ -180,13 +237,18 @@ export type ToolRequest =
   | { op: "wait"; text?: string; ref?: string; navigation?: boolean; timeoutMs: number }
   | { op: "screenshot"; fullPage?: boolean; maxBytes: number }
   /**
-   * The plugin server's handoff bookkeeping (not agent input, so allowed during a takeover): the
-   * daemon keeps at most one pending handoff, the latest notice wins, and a clear removes it only
-   * when its callId matches. Viewers see it in `state.handoff`. `handback` (the person answered
-   * Done) also ends a takeover, so the request that follows is not refused as taken over.
+   * The plugin server's handoff bookkeeping (not agent input, so allowed during a takeover). Per
+   * conversation: the daemon keeps at most one pending handoff per conversation, the latest notice
+   * wins, and a clear removes it only when its callId matches. Any other request of the same
+   * conversation drops it (its run moved on); requests of other conversations leave it. Viewers
+   * of the conversation's tree see it in `state.handoffs`. `handback` (the person answered Done)
+   * also ends a takeover, so the request that follows is not refused as taken over.
    */
   | { op: "handoff_notice"; callId: string; message: string }
   | { op: "handoff_clear"; callId: string; handback?: boolean };
+
+/** A request as it travels on the socket: an operation and its conversation. */
+export type ToolRequest = ToolOp & RequestConversation;
 
 /**
  * Why a request failed. `restart`: the browser was just installed into the provider's install
@@ -204,18 +266,40 @@ export type ToolErrorCode =
   | "failed"
   | "restart";
 
+/**
+ * The calling conversation's own tab count after the request, and MAX_TABS_PER_CONVERSATION. On
+ * every reply (ok or not) of a request that named its conversation; the plugin server turns it
+ * into the result's last line.
+ */
+export interface TabCount {
+  open: number;
+  max: number;
+}
+
 export type ToolReply =
   | {
       ok: true;
-      page: { url: string; title: string; tabId: string };
+      /** The conversation's active tab; absent when the conversation has no tab. */
+      page?: { url: string; title: string; tabId: string };
       text?: string;
       /** base64 JPEG */
       image?: string;
       blockedHosts: string[];
-      /** Set on the first reply after a takeover ended: when the person took control (ISO). */
+      /**
+       * Set on this conversation's first ok reply after a takeover that concerned it ended (it
+       * owned a tab when the takeover began, or the person used one of its tabs): when the person
+       * took control (ISO).
+       */
       userControlledSince?: string;
+      tabs?: TabCount;
     }
-  | { ok: false; error: ToolErrorCode; message: string; blockedHosts: string[] };
+  | {
+      ok: false;
+      error: ToolErrorCode;
+      message: string;
+      blockedHosts: string[];
+      tabs?: TabCount;
+    };
 
 export type ViewerIn =
   | { t: "hello"; maxWidth: number; maxHeight: number }
@@ -231,7 +315,21 @@ export type ViewerIn =
     }
   | { t: "key"; kind: "down" | "up" | "char"; key: string; code?: string; text?: string }
   | { t: "nav"; url?: string; action?: "back" | "forward" | "reload" }
-  | { t: "tab"; action: "open" | "switch" | "close"; tabId?: string }
+  /**
+   * Tab actions on the viewer's tree. `open` (control only): a new tab owned by the viewer's
+   * conversation, made its active tab and shown. `switch` (control only): shows a tab of the
+   * tree; for a tab of the viewer's own conversation it also becomes that conversation's active
+   * tab. `close` (control only): closes a tab of the tree. `adopt` (also in the watch state):
+   * moves a tab of another tree (or an unowned one) to the viewer's conversation, as the tool's
+   * adopt does; a tab of the viewer's own tree is ignored; refused while its owner is in use, which
+   * answers `{ t: "notice", code: "tab_in_use" }`, or at the conversation's cap (`tab_cap`).
+   */
+  | { t: "tab"; action: "open" | "switch" | "close" | "adopt"; tabId?: string }
+  /**
+   * Chooses the viewer's shown tab among its tree's tabs (also in the watch state: it moves no
+   * ownership and no agent's active tab). Any other tab id is ignored.
+   */
+  | { t: "show"; tabId: string }
   | { t: "takeover" }
   | { t: "handback" }
   | { t: "frame-ack"; seq: number }
@@ -251,7 +349,15 @@ export interface ViewerTab {
   id: string;
   title: string;
   url: string;
+  /** Whether this is the viewer's shown tab (the one its frames and input are on). */
   active: boolean;
+  /**
+   * The tab's group in the viewer's tree: `"own"` for the viewer's own conversation, else an
+   * opaque key per other conversation of the tree (`"sub1"`, `"sub2"`, …, stable for the
+   * viewer's lifetime; no conversation names). `state.tabs` lists the `own` group first, then each
+   * other group in order of first appearance.
+   */
+  group: string;
   /**
    * Set while the tab shows a verification page (a bot check or CAPTCHA): the panel offers the
    * person to complete it ("需要你完成验证 · 去验证"); cleared once the tab's page changes. A
@@ -266,23 +372,63 @@ export interface ViewerTab {
   favicon?: string;
 }
 
+/** A tab of another conversation tree as a viewer sees it: no per-tab detail beyond this. */
+export interface ViewerOtherTab {
+  id: string;
+  title: string;
+  url: string;
+}
+
+/** A pending handoff of the viewer's tree. */
+export interface ViewerHandoff {
+  callId: string;
+  /**
+   * The conversation that asked (from the trusted request): an opaque id the panel only echoes in
+   * its handoff answer, never shows.
+   */
+  conversationId: string;
+  /** At most HANDOFF_MAX_CHARS. */
+  message: string;
+  /** The tabs that conversation owns. */
+  tabIds: string[];
+}
+
 /** The JSON viewer messages (frames are binary, {@link encodeFrame}). */
 export type ViewerOut =
   | {
       t: "state";
+      /** The tabs of the viewer's tree, grouped (see {@link ViewerTab.group}). */
       tabs: ViewerTab[];
+      /** The viewer's shown tab; absent when the tree owns no tab (the panel's empty state). */
+      shown?: string;
+      /** Tabs of other conversation trees and unowned tabs, in tab order. */
+      otherTabs: ViewerOtherTab[];
+      /** Whether the shown tab is loading a document. */
       loading: boolean;
+      /** Whether the shown tab's page is https. */
       secure: boolean;
       control: "agent" | "user";
-      /** The agent's latest click; `seq` grows with every click, so a viewer flashes only new ones. */
+      /**
+       * The agent's latest click on the shown tab; `seq` grows with every click on any tab, so a
+       * viewer flashes only new ones.
+       */
       lastClick?: { x: number; y: number; seq: number };
-      /** The pending handoff question, if any (message at most HANDOFF_MAX_CHARS). */
-      handoff?: { callId: string; message: string };
+      /** The tree's pending handoffs, oldest first (the newest is last). */
+      handoffs: ViewerHandoff[];
     }
-  /** `url`: the page to open once the host is allowed (the blocked navigation, or the page whose resource was refused). */
+  /**
+   * A host the device refused for a page of the viewer's tree. `url`: the page to open once the
+   * host is allowed (the blocked navigation, or the page whose resource was refused).
+   */
   | { t: "blocked"; host: string; url: string }
+  /** A dialog on a page of the viewer's tree. */
   | { t: "dialog"; kind: "alert" | "confirm" | "prompt" | "file"; message: string }
   /** Answered at once with `pong`: the round trip of a tiny message paces the frames. */
   | { t: "ping"; id: number }
   /** The page's cursor at the pointer, sent after a move when it changed (takeover only). */
-  | { t: "cursor"; cursor: ViewerCursor };
+  | { t: "cursor"; cursor: ViewerCursor }
+  /**
+   * A viewer `adopt` was refused: `tab_in_use`, the tab's owner is using it right now; `tab_cap`,
+   * the viewer's conversation already owns MAX_TABS_PER_CONVERSATION tabs.
+   */
+  | { t: "notice"; code: "tab_in_use" | "tab_cap" };

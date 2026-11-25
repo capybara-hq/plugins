@@ -26,6 +26,10 @@ A real browser in the person's device for agents (browser use spec,
   `ctx.deviceAccess.ensureService` (files: every file under `ui/service/`, read once per
   extension instance), sends one `ToolRequest` and reports the hosts the device refused with
   `reportBlockedHosts` (the kernel raises the network ask and reruns the call once allowed).
+  Every request carries the call's `conversationId` and `rootConversationId` from the kernel's
+  tool call context (written after the operation, never from tool input). A result names the
+  conversation's active tab, or says "This conversation has no browser tab yet.", and every result
+  the daemon answered, ok or error, ends with "Tabs open in this conversation: N of 6.".
 - `browser_handoff` sends the daemon a handoff notice (the panels show a banner with 完成 / 取消),
   then raises an `InputRequired` question `{ done: boolean }` in the conversation, with `open`
   naming the `browser` panel so the person's conversation page opens it. The question's title is
@@ -41,8 +45,11 @@ A real browser in the person's device for agents (browser use spec,
 - Panel routes: `GET /ui/browser` (the page) and `GET /ui/panel.js` are public; `POST
   /ui/stream-ticket`, `/ui/network-hosts` and `/ui/handoff-answer` are `embed` routes that take
   the org, account and conversation from the caller only (a platform-scope token or one without a
-  conversation gets 403). The panel never starts the service: a ticket is minted either way, and a
-  stopped service closes the viewer with 4404 (the panel's "not running" state).
+  conversation gets 403). `/ui/handoff-answer` takes `{ callId, handoffConversationId, done }`:
+  the panel echoes the handoff's conversation from the daemon's `state.handoffs` (a sub-agent's,
+  in the root's panel), and the kernel answers only for the scope conversation or a descendant.
+  The panel never starts the service: a ticket is minted either way, and a stopped service closes
+  the viewer with 4404 (the panel's "not running" state).
 
 ## The daemon (`daemon/`)
 
@@ -104,7 +111,8 @@ A real browser in the person's device for agents (browser use spec,
   running for up to 24 hours after its notice (the person may take a while to sign in); the
   device's own idle suspension can still stop it sooner, and then the question stays open in the
   conversation without its banner until the browser runs again.
-- `<state>/session.json` keeps the open tabs' URLs and the pending handoff. A daemon started within
+- `<state>/session.json` keeps the open tabs' URLs with their owners and, per conversation, the
+  active tab, the pending handoff and park (an older file is not restored). A daemon started within
   10 minutes of the last write (a provider that restarts the service for a network change, see
   device-local) reopens them; an idle stop removes the file. The profile keeps cookies and storage
   on its own.
@@ -117,11 +125,12 @@ A real browser in the person's device for agents (browser use spec,
   either: the daemon runs Chromium with `--use-mock-keychain`, so its values are only obfuscated
   with a key every Chromium shares (observed: `encrypted_value` of 51 bytes, readable by anyone
   who can read the directory). The JSON therefore adds no exposure.
-- A `handoff_clear` with `handback` (the person answered Done) also ends a takeover. Dropping a
-  handoff on the next agent request is device-wide: every conversation of the device is the
-  owner's.
-- Viewer input (mouse, keys, text, address bar, tabs) is applied only while the person holds
-  control: a viewer in the watch state is read-only and its input is dropped on arrival, and input
+- A `handoff_clear` with `handback` (the person answered Done) also ends a takeover. A handoff is
+  kept per conversation (at most one each) and dropped only by that conversation's next request.
+- Viewer input (mouse, keys, text, address bar, tab open / switch / close) is applied only while
+  the person holds control: in the watch state a viewer may only choose its shown tab (`show`, a
+  tab of its tree) and move another conversation's tab here (`tab` `adopt`); any other input is
+  dropped on arrival, and input
   still queued when control returns to the agent is dropped too (input already running, a navigation
   or a long paste, finishes). Keys and buttons the person still holds are released when control
   returns to the agent or the viewer ends, each on the tab where it was pressed (a held button after
@@ -145,14 +154,54 @@ A real browser in the person's device for agents (browser use spec,
   (a stale one is replaced), and Chromium encodes the next frame at most every 500 ms while one
   waits. JSON messages (state, cursor, pings, dialogs) never wait behind a held frame.
 
+## Tabs
+
+Tab ownership spec, `docs/superpowers/specs/2026-11-25-browser-tab-ownership-design.md` in
+capybara-hq/core. One daemon, one Chromium and one profile per device stay: logins and cookies are
+shared by every conversation, the tabs are not.
+
+- **Owned per conversation.** Every tab belongs to one conversation, which alone acts on it, and
+  each conversation has its own active tab and its own action queue. A conversation's first acting
+  call takes the unowned blank tab if there is one, else opens a new tab; `tabs list`, `adopt` and
+  the handoff bookkeeping never open one. A popup belongs to the owner of the page that opened it.
+  `switch` and `close` take only the conversation's own tabs.
+- **Seen per task tree.** A conversation and its sub-agent conversations form a tree whose root is
+  the conversation the person looks at. `tabs list` shows the conversation's own tabs, then the
+  tree's other tabs, then other trees' tabs (titles cut to 120 characters, URLs without query or
+  fragment). A panel shows its tree's tabs, grouped per sub-task, and the newest pending handoff of
+  the tree; a sub-agent's handoff is answered with Done from the root's panel.
+- **Adopt / Move here.** `browser_tabs` action `adopt` (with `tabId`) moves another conversation's
+  tab (or an unowned one) to the calling conversation and makes it its active tab; the previous
+  owner's next result says so. The panel's 其他对话 / Other conversations menu does the same with
+  移到此对话 / Move here, also while only watching. Refused while the owner is in use (a request in
+  flight or a pending handoff, long wait or held dialog).
+- **Caps and eviction.** At most 10 tabs in the browser and 6 per conversation. At the device cap
+  the daemon first closes the least recently used tab of a conversation that is not in use and has
+  made no request for 5 minutes (its non-active tabs before its active one) and tells that
+  conversation; it refuses only when no tab qualifies.
+- **Idle close.** A conversation's tabs close after 15 minutes without a request, without an open
+  panel showing it and without a pending park; its per-conversation state goes with them. The
+  profile is never touched.
+- **Takeover per device.** While the person controls the browser from any conversation's panel,
+  every conversation's agent requests are refused. Afterwards only the conversations whose tabs the
+  takeover concerned are told that the user had control.
+
 ## The panel (`ui-src/panel/`)
 
 - Every viewer is the owner's: any non-compact panel is interactive (keys, pointer, Esc) while the
   person holds control, whichever panel took it, and may ask for frames up to the full viewport
-  then. In the watch state the panel is read-only (no pointer, keys, address bar, tabs or
-  navigation; the cursor is the arrow). Nothing is kept in storage (the sandboxed iframe has none);
+  then. In the watch state the panel takes no page input (no pointer, keys, address bar,
+  navigation or tab open / close; the cursor is the arrow), but a click on a tab of the strip shows
+  that tab, and 其他对话 / Other conversations › 移到此对话 / Move here moves another conversation's
+  tab here. Nothing is kept in storage (the sandboxed iframe has none);
   a remount rebuilds from the daemon's first state. Take over is offered only in the live view;
   handing back with a pending handoff answers it Done.
+- The strip shows the conversation tree's tabs: this conversation's first, then one 子任务 /
+  Sub-task group per sub-agent conversation. With no tab in the tree while the browser runs, the
+  panel shows 智能体尚未在此对话中打开网页 / "The agent has not opened a page in this conversation
+  yet" (never another conversation's page). A refused Move here shows a short line (the tab is in
+  use, or this conversation has its most tabs). The banner shows the tree's newest pending handoff;
+  its Done / Cancel answer that handoff's conversation.
 - Takeover input (`ui-src/panel/input.ts`): button and wheel events at once, moves coalesced to the
   newest position at most every 33 ms (hover effects, menus and tooltips render in the stream), a
   drag reported until the button is released wherever that happens; the page's cursor from the
