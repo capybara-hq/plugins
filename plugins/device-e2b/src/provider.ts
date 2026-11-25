@@ -59,6 +59,7 @@ import {
   runtimeFiles,
 } from "./runtime-source.js";
 import {
+  DOWNLOADS_DIR_SCRIPT,
   isFilesNeeded,
   managerArgv,
   managerRequest,
@@ -66,7 +67,11 @@ import {
   relayArgv,
   relayRequest,
   relayStream,
+  SERVICE_DOWNLOADS_DIR,
+  SERVICE_RUN_ROOT,
   SERVICE_STATE_ROOT,
+  SERVICE_UID,
+  SERVICE_USER,
   serviceStateDir,
 } from "./services.js";
 
@@ -166,6 +171,33 @@ const UPLOAD_DIR = "/opt/capybara/upload";
 const MAX_TIMEOUT_SECONDS = 86_400;
 /** 长命令：沙箱超时至少推到命令超时之后这么多秒。 */
 const TIMEOUT_MARGIN_SECONDS = 120;
+/**
+ * Prepares isolated device services on a VM, as root (`$1` the state root, `$2` the run root):
+ * makes the service user when the template predates it (its uid must be free), then both roots
+ * as directories of that user, 0700. A state root that is not that user's directory (the sandbox
+ * user's from before isolation, or anything planted) is removed first; `rm -rf` never follows a
+ * link.
+ */
+const SERVICE_SETUP_SCRIPT = `set -e
+if ! id -u ${SERVICE_USER} >/dev/null 2>&1; then
+  if getent passwd ${SERVICE_UID} >/dev/null || getent group ${SERVICE_UID} >/dev/null; then
+    echo "uid or gid ${SERVICE_UID} is taken by another account" >&2; exit 5
+  fi
+  groupadd --gid ${SERVICE_UID} ${SERVICE_USER}
+  useradd --uid ${SERVICE_UID} --gid ${SERVICE_UID} --home-dir "$1" --no-create-home --shell /usr/sbin/nologin ${SERVICE_USER}
+fi
+[ "$(id -u ${SERVICE_USER})" = ${SERVICE_UID} ] || { echo "${SERVICE_USER} is not uid ${SERVICE_UID}" >&2; exit 5; }
+umask 022
+mkdir -p -- "$(dirname -- "$1")"
+for d in "$1" "$2"; do
+  if [ -L "$d" ] || { [ -e "$d" ] && { [ ! -d "$d" ] || [ "$(stat -c %u -- "$d")" != ${SERVICE_UID} ]; }; }; then
+    rm -rf -- "$d"
+  fi
+  [ -d "$d" ] || mkdir -m 0700 -- "$d"
+  chown ${SERVICE_UID}:${SERVICE_UID} -- "$d"
+  chmod 0700 -- "$d"
+done`;
+
 /** The manager answered a digest-only start with "send the files" (R27). */
 const FILES_NEEDED = "files-needed" as const;
 /** The service manager's time limit: writing the files, then up to 30 s until the service listens. */
@@ -1515,7 +1547,8 @@ export function createE2BSandbox(
   });
 
   /**
-   * Runs the service manager in the VM as the sandbox user. `start` connects (resumes) a paused
+   * Runs the service manager in the VM as the service user (after preparing that user, its roots
+   * and the workspace downloads directory on a start). `start` connects (resumes) a paused
    * VM first (a normal ensure); otherwise a paused or missing VM answers `stopped` (pausing
    * without memory ended every process) and is left as it is.
    */
@@ -1531,11 +1564,23 @@ export function createE2BSandbox(
     const [cmd, ...args] = managerArgv(op, name) as [string, ...string[]];
     const t = o.start ? await attach(h.id, signal) : await targetIfRunning(h.id, signal);
     if (t === undefined) return stoppedService(name);
-    if (o.start) await ensureStateRoot(t, signal);
+    if (o.start) {
+      await ensureServiceUser(t, signal);
+      await run(t, {
+        user: SANDBOX_USER,
+        cmd: "/bin/sh",
+        args: ["-c", DOWNLOADS_DIR_SCRIPT, "capybara-downloads", SERVICE_DOWNLOADS_DIR],
+        cwd: "/",
+        maxOutputBytes: STDERR_ROOM,
+        timeoutMs: 30_000,
+        signal,
+      });
+    }
     let r: RunResult;
     try {
+      // as the service user, never the sandbox user agent commands run as (plugins#210)
       r = await run(t, {
-        user: SANDBOX_USER,
+        user: SERVICE_USER,
         cmd,
         args,
         cwd: "/",
@@ -1546,6 +1591,9 @@ export function createE2BSandbox(
       });
     } catch (e) {
       if (!o.start && pausedMeanwhile(e)) return stoppedService(name);
+      // a VM whose template predates the service user (made on the first start): none can run
+      if (!o.start && e instanceof Error && /invalid username/.test(e.message))
+        return stoppedService(name);
       throw e;
     }
     if (r.aborted) throw abortReason(signal);
@@ -1567,20 +1615,23 @@ export function createE2BSandbox(
   };
 
   /**
-   * Makes the service state root on a VM whose template predates it (an E2B file system keeps
-   * the template it was made from): as root, owned by the sandbox user, 0700. `/var/lib` is
-   * root's, so nothing the sandbox user planted can redirect it. An existing root is left as is
-   * (the manager refuses one that is not the sandbox user's).
+   * Makes what isolated services need on a VM whose template predates it (an E2B file system keeps
+   * the template it was made from), as root, before every start: the service user, the state root
+   * and the run root, both that user's and 0700. `/var/lib/capybara` and `/run` are root's, so
+   * nothing the sandbox user planted can redirect them. A state root left from before (the sandbox
+   * user's, readable by agent commands: a browser profile with its cookies) is removed, never
+   * handed over: a person logs in again once.
    */
-  const ensureStateRoot = async (t: EnvdTarget, signal: AbortSignal) => {
+  const ensureServiceUser = async (t: EnvdTarget, signal: AbortSignal) => {
     const r = await run(t, {
       user: ROOT_USER,
       cmd: "/bin/sh",
       args: [
         "-c",
-        '[ -e "$1" ] && exit 0; umask 022; mkdir -p "$(dirname "$1")" && mkdir -m 0700 "$1" && chown 1000:1000 "$1"',
-        "capybara-svc-root",
+        SERVICE_SETUP_SCRIPT,
+        "capybara-svc-setup",
         SERVICE_STATE_ROOT,
+        SERVICE_RUN_ROOT,
       ],
       cwd: "/",
       maxOutputBytes: STDERR_ROOM,
@@ -1589,7 +1640,7 @@ export function createE2BSandbox(
     });
     if (r.aborted) throw abortReason(signal);
     if (r.exitCode !== 0) {
-      throw new Error(`device-e2b: cannot make ${SERVICE_STATE_ROOT}: ${stderrOf(r)}`);
+      throw new Error(`device-e2b: cannot prepare the device service user: ${stderrOf(r)}`);
     }
   };
 
@@ -1677,7 +1728,8 @@ export function createE2BSandbox(
     );
     void envdStart(
       t,
-      SANDBOX_USER,
+      // the socket is the service user's alone
+      SERVICE_USER,
       {
         cmd,
         args,
@@ -1945,8 +1997,10 @@ export function createE2BSandbox(
     },
 
     /**
-     * A device service: a process the manager starts detached in its own session as the sandbox
-     * user, its state directory on the VM's disk (the device's file system). Its network is the
+     * A device service: a process the manager starts detached in its own session as the service
+     * user (`capybara-svc`, never the sandbox user: agent commands can neither read its state nor
+     * reach its socket or process), keyed by its id, its state directory on the VM's disk (the
+     * device's file system). Its network is the
      * VM's: E2B applies the egress rules to the whole VM and `update` changes them in place, so an
      * `ifRunning` ensure after an allowlist change has nothing to re-apply. Pausing (suspend,
      * destroy) ends it with every other process.

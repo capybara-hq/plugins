@@ -202,7 +202,14 @@ export class ViewerSession {
           : { handoff: { ...m.handoff, message: clip(m.handoff.message, 200) } };
       small = {
         ...m,
-        tabs: m.tabs.map((t) => ({ ...t, title: clip(t.title, 200), url: clip(t.url, 200) })),
+        tabs: m.tabs.map((t) => ({
+          ...t,
+          title: clip(t.title, 200),
+          url: clip(t.url, 200),
+          ...(t.blocker === undefined
+            ? {}
+            : { blocker: { ...t.blocker, url: clip(t.blocker.url, 200) } }),
+        })),
         ...handoff,
       };
     } else if (m.t === "dialog") {

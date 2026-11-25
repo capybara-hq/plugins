@@ -1,12 +1,21 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  browserPaths,
+  browserRevision,
+  chromeUserAgent,
   chromiumLaunchPlan,
   ensureChromium,
-  headlessShellPaths,
-  headlessShellRevision,
   playwrightDownloadHosts,
 } from "../../daemon/chromium.js";
 
@@ -25,8 +34,31 @@ describe("chromium launch plan", () => {
     expect(plan.args.some((a) => a.startsWith("--remote-debugging-port"))).toBe(false);
   });
 
+  it("runs the full Chromium in new headless mode as an ordinary Chrome on Linux", () => {
+    const plan = chromiumLaunchPlan(
+      { stateDir: "/s", env: {}, platform: "linux" },
+      { revision: "1255", version: "159.0.8154.6" },
+    );
+    expect(plan.build).toBe("chromium");
+    expect(plan.args).toEqual(
+      expect.arrayContaining([
+        "--headless",
+        "--window-size=1280,800",
+        "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/159.0.0.0 Safari/537.36",
+      ]),
+    );
+    expect(plan.args.join(" ")).not.toMatch(/HeadlessChrome|--single-process/);
+  });
+
+  it("names the browser Chrome of its version on its platform, never HeadlessChrome", () => {
+    expect(chromeUserAgent("darwin", "159.0.8154.6")).toBe(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/159.0.0.0 Safari/537.36",
+    );
+  });
+
   it("runs the headless shell in one process with the mock keychain on macOS", () => {
     const plan = chromiumLaunchPlan({ stateDir: "/s", env: {}, platform: "darwin" });
+    expect(plan.build).toBe("chromium-headless-shell");
     expect(plan.args).toEqual(expect.arrayContaining(["--single-process", "--use-mock-keychain"]));
     expect(plan.args.some((a) => a.startsWith("--proxy-server"))).toBe(false);
   });
@@ -47,28 +79,67 @@ describe("chromium launch plan", () => {
 });
 
 describe("chromium browsers directory", () => {
-  it("prefers a PLAYWRIGHT_BROWSERS_PATH that already holds this revision's headless shell", () => {
+  it("prefers a read-only PLAYWRIGHT_BROWSERS_PATH that already holds this revision's headless shell", () => {
     const cache = mkdtempSync(join(tmpdir(), "cbd-cache-"));
     try {
       const env = { PLAYWRIGHT_BROWSERS_PATH: cache };
       const plan = () => chromiumLaunchPlan({ stateDir: "/s", env, platform: "linux" });
       // empty: the state directory's own download
       expect(plan().browsersPath).toBe("/s/browsers");
-      mkdirSync(join(cache, "chromium_headless_shell-1"));
-      expect(chromiumLaunchPlan({ stateDir: "/s", env, platform: "linux" }, "1").browsersPath).toBe(
-        cache,
-      );
-      // another revision: not usable, so not used
-      expect(chromiumLaunchPlan({ stateDir: "/s", env, platform: "linux" }, "2").browsersPath).toBe(
-        "/s/browsers",
-      );
-      // this build's revision, read from playwright-core
-      const rev = headlessShellRevision();
+      const rev = browserRevision("chromium");
       expect(rev).toMatch(/^\d+$/);
-      mkdirSync(join(cache, `chromium_headless_shell-${rev}`));
+      mkdirSync(join(cache, "chromium-1"));
+      mkdirSync(join(cache, `chromium-${rev}`));
+      // writable by this process: something it (or an agent command) could replace, never used
+      expect(plan().browsersPath).toBe("/s/browsers");
+      chmodSync(cache, 0o555);
+      expect(
+        chromiumLaunchPlan(
+          { stateDir: "/s", env, platform: "linux" },
+          { revision: "1", version: "1" },
+        ),
+      ).toMatchObject({
+        browsersPath: cache,
+        shipped: true,
+      });
+      // another revision: not usable, so not used
+      expect(
+        chromiumLaunchPlan(
+          { stateDir: "/s", env, platform: "linux" },
+          { revision: "2", version: "2" },
+        ).browsersPath,
+      ).toBe("/s/browsers");
+      // this build's revision, read from playwright-core
       expect(plan().browsersPath).toBe(cache);
+      // a cache in the workspace is the agent's, never trusted
+      expect(
+        chromiumLaunchPlan({
+          stateDir: "/s",
+          env: { ...env, CAPYBARA_SERVICE_WORKSPACE: dirname(cache) },
+          platform: "linux",
+        }).browsersPath,
+      ).toBe("/s/browsers");
     } finally {
+      chmodSync(cache, 0o755);
       rmSync(cache, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the provider's install directory, sealed once a regular seal file is there", () => {
+    const install = mkdtempSync(join(tmpdir(), "cbd-install-dir-"));
+    try {
+      const env = { CAPYBARA_SERVICE_INSTALL: install, PLAYWRIGHT_BROWSERS_PATH: "/opt/x" };
+      const plan = () => chromiumLaunchPlan({ stateDir: "/s", env, platform: "darwin" });
+      expect(plan()).toMatchObject({ browsersPath: install, install: { sealed: false } });
+      // a link is no seal
+      writeFileSync(join(install, "elsewhere"), "");
+      symlinkSync(join(install, "elsewhere"), join(install, ".sealed"));
+      expect(plan().install).toEqual({ sealed: false });
+      rmSync(join(install, ".sealed"));
+      writeFileSync(join(install, ".sealed"), "");
+      expect(plan().install).toEqual({ sealed: true });
+    } finally {
+      rmSync(install, { recursive: true, force: true });
     }
   });
 
@@ -89,7 +160,7 @@ describe("chromium install", () => {
     // its own browsers directory: playwright-core reads it once per test file's process
     const dir = mkdtempSync(join(tmpdir(), "cbd-install-"));
     try {
-      const { executable, marker } = await headlessShellPaths(dir);
+      const { executable, marker } = await browserPaths(dir);
       // another daemon mid-install: it holds the registry's lock and has written the executable,
       // not yet the rest nor the marker
       mkdirSync(dirname(executable), { recursive: true });

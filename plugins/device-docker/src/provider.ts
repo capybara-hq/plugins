@@ -41,6 +41,7 @@ import {
 import { createOperations, type OperationTransport, refusedFrame } from "./operations.js";
 import { OPERATION_AGENT } from "./runtime-source.js";
 import {
+  DOWNLOADS_DIR_SCRIPT,
   isFilesNeeded,
   managerArgv,
   managerRequest,
@@ -48,7 +49,12 @@ import {
   relayArgv,
   relayRequest,
   relayStream,
+  SERVICE_DOWNLOADS_DIR,
+  SERVICE_IMAGE_TOO_OLD,
+  SERVICE_RUN_ROOT,
   SERVICE_STATE_ROOT,
+  SERVICE_UID,
+  SERVICE_USER,
   serviceStateDir,
 } from "./services.js";
 
@@ -298,8 +304,16 @@ export function sandboxResourceNames(name: string) {
     network: `${name}-net`,
     workspace: `${name}-workspace`,
     skills: `${name}-skills`,
-    /** Device service state (src/services.ts), mounted at SERVICE_STATE_ROOT. */
-    svc: `${name}-svc`,
+    /**
+     * Device service state (src/services.ts), mounted at SERVICE_STATE_ROOT: owned by the service
+     * user, which Docker copies from the image onto the empty volume at its first mount.
+     */
+    svc: `${name}-services`,
+    /**
+     * The state volume of the services before they ran as their own user (owned by the sandbox
+     * user, so unusable now): removed at the next create and with the file system.
+     */
+    legacySvc: `${name}-svc`,
   };
 }
 
@@ -902,6 +916,7 @@ export function createDockerSandbox(
       removeWithRetry(`/volumes/${enc(n.workspace)}`, signal),
       removeWithRetry(`/volumes/${enc(n.skills)}`, signal),
       removeWithRetry(`/volumes/${enc(n.svc)}`, signal),
+      removeWithRetry(`/volumes/${enc(n.legacySvc)}`, signal),
     ]);
   };
 
@@ -1967,9 +1982,11 @@ export function createDockerSandbox(
   });
 
   /**
-   * Runs the service manager in the container as the sandbox user. `start` starts a stopped
-   * container first (a normal ensure); otherwise a stopped container answers `stopped` (its
-   * processes died with it) and is left stopped.
+   * Runs the service manager in the container as the service user (never the sandbox user agent
+   * commands run as). `start` starts a stopped container first (a normal ensure) and makes the
+   * workspace downloads directory as the sandbox user; otherwise a stopped container answers
+   * `stopped` (its processes died with it) and is left stopped. A container from an image without
+   * the service user answers {@link SERVICE_IMAGE_TOO_OLD}.
    */
   const manage = async (
     h: SandboxHandle,
@@ -1980,17 +1997,33 @@ export function createDockerSandbox(
   ): Promise<DeviceServiceStatus | typeof FILES_NEEDED> => {
     signal.throwIfAborted();
     if (o.stdin) test.onServiceManagerStdin?.(name, o.stdin.byteLength);
-    const go = () =>
-      run(h.id, {
-        cmd: managerArgv(op, name),
-        user: SANDBOX_USER,
-        cwd: "/",
-        ...(o.stdin && { stdin: o.stdin }),
-        maxOutputBytes: 64 * 1024,
-        timeoutMs: SERVICE_MANAGER_TIMEOUT_MS,
-        signal,
-        incarnation: h,
-      });
+    const go = async () => {
+      if (o.start)
+        await run(h.id, {
+          cmd: ["/bin/sh", "-c", DOWNLOADS_DIR_SCRIPT, "capybara-downloads", SERVICE_DOWNLOADS_DIR],
+          user: SANDBOX_USER,
+          cwd: "/",
+          maxOutputBytes: STDERR_ROOM,
+          timeoutMs: 30_000,
+          signal,
+          incarnation: h,
+        });
+      try {
+        return await run(h.id, {
+          cmd: managerArgv(op, name),
+          user: SERVICE_USER,
+          cwd: "/",
+          ...(o.stdin && { stdin: o.stdin }),
+          maxOutputBytes: 64 * 1024,
+          timeoutMs: SERVICE_MANAGER_TIMEOUT_MS,
+          signal,
+          incarnation: h,
+        });
+      } catch (e) {
+        if (noServiceUser(e)) throw new Error(SERVICE_IMAGE_TOO_OLD, { cause: e });
+        throw e;
+      }
+    };
     let r: RunResult;
     if (o.start) r = await autoStart(h, signal, go);
     else {
@@ -1998,6 +2031,8 @@ export function createDockerSandbox(
         r = await go();
       } catch (e) {
         if (e instanceof NotRunningError) return stoppedService(name);
+        // no service user in the image: no service can run there
+        if (e instanceof Error && e.message === SERVICE_IMAGE_TOO_OLD) return stoppedService(name);
         throw e;
       }
     }
@@ -2008,6 +2043,7 @@ export function createDockerSandbox(
       stderr: stderrOf(r),
       timedOut: r.timedOut,
     };
+    if (r.exitCode !== 0 && noServiceUser(reply.stderr)) throw new Error(SERVICE_IMAGE_TOO_OLD);
     if (op === "ensure" && isFilesNeeded(reply)) return FILES_NEEDED;
     return parseManagerReply(name, reply);
   };
@@ -2020,8 +2056,8 @@ export function createDockerSandbox(
   };
 
   /**
-   * Starts the socket relay to the service's socket (an exec as the sandbox user with stdin
-   * attached) and returns a relay stream over the hijacked connection: stdin carries our framed
+   * Starts the socket relay to the service's socket (an exec as the service user with stdin
+   * attached: the socket is that user's alone) and returns a relay stream over the hijacked connection: stdin carries our framed
    * messages, the demultiplexed stdout the service's, stderr the relay's `ready` or its reason.
    * A stopped container is not started: the service died with it.
    */
@@ -2040,7 +2076,7 @@ export function createDockerSandbox(
           Tty: false,
           // inline: an instance made from an older image runs it as well
           Cmd: relayArgv(name),
-          User: SANDBOX_USER,
+          User: SERVICE_USER,
           Env: [`PATH=${SYSTEM_PATH}`],
           WorkingDir: "/",
         },
@@ -2223,6 +2259,9 @@ export function createDockerSandbox(
       const token = tokenOf(fence);
       await refuseStale(name, "create", token, signal, true);
       await removeInstance(name, signal);
+      // the pre-isolation service state (the sandbox user's: the agent could read it) goes now;
+      // best effort, the file system's destroy removes it too
+      await api.json("DELETE", `/volumes/${enc(v.legacySvc)}`, { signal }).catch(() => undefined);
       try {
         let networkMode = "none";
         // the egress control, when the proxy image has it (an older own build of a deployment
@@ -2287,7 +2326,12 @@ export function createDockerSandbox(
               NetworkMode: networkMode,
               // One profile for every instance: room for browsers and other shared-memory users.
               ShmSize: plan.shmBytes,
-              Tmpfs: { "/tmp": `rw,nosuid,nodev,size=${tmpMb}m,mode=1777` },
+              Tmpfs: {
+                "/tmp": `rw,nosuid,nodev,size=${tmpMb}m,mode=1777`,
+                // the services' sockets, records and temporary files: the service user's, private,
+                // made before any agent command could plant a directory there
+                [SERVICE_RUN_ROOT]: `rw,nosuid,nodev,size=${Math.min(64, tmpMb)}m,uid=${SERVICE_UID},gid=${SERVICE_UID},mode=0700`,
+              },
               Mounts: [
                 { Type: "volume", Source: v.workspace, Target: "/workspace" },
                 { Type: "volume", Source: v.skills, Target: "/skills", ReadOnly: true },
@@ -2295,8 +2339,8 @@ export function createDockerSandbox(
                 // 0700), and the plugin writes skills through it.
                 { Type: "volume", Source: v.skills, Target: "/opt/capybara/skills" },
                 // Device service state, outside the workspace (no project, share or Glob reaches
-                // it); the image's directory there is the sandbox user's, and Docker copies its
-                // owner onto the empty volume at the first mount.
+                // it); the image's directory there is the service user's, 0700, and Docker copies
+                // its owner onto the empty volume at the first mount.
                 { Type: "volume", Source: v.svc, Target: SERVICE_STATE_ROOT },
               ],
             },
@@ -2551,8 +2595,10 @@ export function createDockerSandbox(
     },
 
     /**
-     * A device service: a process the manager starts detached in its own session as the sandbox
-     * user, its state directory on the device's service state volume (`<name>-svc`). Its network is the instance's: the
+     * A device service: a process the manager starts detached in its own session as the service
+     * user (`capybara-svc`, never the sandbox user: agent commands can neither read its state nor
+     * reach its socket or process), keyed by its id, its state directory on the device's service
+     * state volume (`<name>-services`). Its network is the instance's: the
      * manager hands it the container's egress proxy variables (`HTTPS_PROXY` / `HTTP_PROXY`, so a
      * browser's `--proxy-server` reaches the proxy), and the egress proxy enforces the device's
      * allowlist live (an in-place apply swaps the list and closes every connection the new list
@@ -2629,6 +2675,17 @@ export function createDockerSandbox(
     revokeOperation: operations.revokeOperation,
     background: operations.background,
   };
+}
+
+/**
+ * Docker could not run an exec as the service user: the container's image predates it (Docker
+ * names the user it did not find, on the exec's start or in its output).
+ */
+function noServiceUser(e: unknown): boolean {
+  const text = typeof e === "string" ? e : e instanceof Error ? e.message : "";
+  return (
+    /unable to find user|no matching entries in passwd/i.test(text) && text.includes(SERVICE_USER)
+  );
 }
 
 const NO_PYTHON =

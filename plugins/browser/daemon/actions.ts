@@ -25,6 +25,7 @@ import {
 } from "./protocol.js";
 import { takeSnapshot } from "./snapshot.js";
 import { type Clock, systemClock } from "./state.js";
+import { isVerificationPage, type TabBlocker, VERIFICATION_NOTE } from "./verification.js";
 
 /** Something the viewers follow. */
 export type SessionEvent =
@@ -388,6 +389,8 @@ export interface TabInfo {
   id: string;
   title: string;
   url: string;
+  /** Set while the tab shows a verification page (bot check, CAPTCHA); cleared when it changes. */
+  blocker?: TabBlocker;
 }
 
 export class BrowserSession {
@@ -411,6 +414,10 @@ export class BrowserSession {
   private readonly ids = new WeakMap<Page, string>();
   private readonly titles = new Map<string, string>();
   private readonly loadingTabs = new Set<string>();
+  /** Tabs showing a verification page, by tab id (cleared on every main-frame navigation). */
+  private readonly blockers = new Map<string, TabBlocker>();
+  /** The status of each tab's current document (main-frame response), by tab id. */
+  private readonly docStatus = new Map<string, number>();
   /** Each page's main-frame navigation request in flight (until it commits, fails or finishes). */
   private readonly pendingNavs = new WeakMap<Page, Request>();
   private readonly listeners = new Set<(e: SessionEvent) => void>();
@@ -494,12 +501,16 @@ export class BrowserSession {
   }
 
   tabs(): (TabInfo & { active: boolean })[] {
-    return [...this.pages.entries()].map(([id, p]) => ({
-      id,
-      title: clip(this.titles.get(id) ?? "", MAX_TITLE_CHARS),
-      url: clip(p.url(), MAX_URL_CHARS),
-      active: id === this.active,
-    }));
+    return [...this.pages.entries()].map(([id, p]) => {
+      const blocker = this.blockers.get(id);
+      return {
+        id,
+        title: clip(this.titles.get(id) ?? "", MAX_TITLE_CHARS),
+        url: clip(p.url(), MAX_URL_CHARS),
+        active: id === this.active,
+        ...(blocker === undefined ? {} : { blocker }),
+      };
+    });
   }
 
   /** Whether the active tab is loading a document. */
@@ -527,6 +538,7 @@ export class BrowserSession {
         .title()
         .then((t) => this.titles.set(id, t))
         .catch(() => undefined)
+        .then(() => this.checkVerification(page, id))
         .finally(() => this.emit({ type: "state" }));
     };
     const settle = (r: Request) => {
@@ -555,6 +567,8 @@ export class BrowserSession {
     page.on("framenavigated", (f) => {
       if (f !== page.mainFrame()) return;
       this.pendingNavs.delete(page);
+      // a new document: a verification shown before is gone (refresh looks at the new one)
+      this.blockers.delete(id);
       refresh();
     });
     page.on("domcontentloaded", refresh);
@@ -573,6 +587,8 @@ export class BrowserSession {
         this.checkBlocked(r.url(), this.pageToOpen(page, r));
     });
     page.on("response", (r) => {
+      if (r.request().isNavigationRequest() && r.frame() === page.mainFrame())
+        this.docStatus.set(id, r.status());
       if (this.proxy !== undefined && r.status() === 403 && r.url().startsWith("http:")) {
         this.checkBlocked(r.url(), this.pageToOpen(page, r.request()));
       }
@@ -588,6 +604,8 @@ export class BrowserSession {
       this.pages.delete(id);
       this.titles.delete(id);
       this.loadingTabs.delete(id);
+      this.blockers.delete(id);
+      this.docStatus.delete(id);
       if (this.active === id) {
         const next = [...this.pages.keys()].at(-1);
         this.active = next;
@@ -844,7 +862,13 @@ export class BrowserSession {
       // from here on, notes go to later replies (none is lost between this one and the next)
       this.collectors.delete(c);
       const page = await this.activePage();
-      const text = [...c.notes, ...(out.text === undefined ? [] : [out.text])].join("\n");
+      // a verification page goes to the person, said first so the agent hands off
+      const verifying = await this.checkVerification(page, this.tabIdOf(page));
+      const text = [
+        ...(verifying ? [VERIFICATION_NOTE] : []),
+        ...c.notes,
+        ...(out.text === undefined ? [] : [out.text]),
+      ].join("\n");
       reply = {
         ok: true,
         page: await this.pageInfo(page),
@@ -900,6 +924,28 @@ export class BrowserSession {
       const all = c.pending.splice(0);
       await Promise.allSettled(all);
     }
+  }
+
+  /**
+   * Looks at the tab's page now and records or clears its verification blocker; true when it
+   * shows a verification page.
+   */
+  private async checkVerification(page: Page, id: string): Promise<boolean> {
+    if (id === "") return false;
+    const blocked = await isVerificationPage(page, this.docStatus.get(id));
+    if (this.pages.get(id) !== page) return false;
+    const before = this.blockers.get(id);
+    if (blocked) {
+      const url = clip(page.url(), MAX_URL_CHARS);
+      if (before?.url !== url) {
+        this.blockers.set(id, { kind: "verification", url });
+        this.emit({ type: "state" });
+      }
+    } else if (before !== undefined) {
+      this.blockers.delete(id);
+      this.emit({ type: "state" });
+    }
+    return blocked;
   }
 
   async pageInfo(page: Page): Promise<{ url: string; title: string; tabId: string }> {

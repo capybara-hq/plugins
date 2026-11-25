@@ -1,17 +1,54 @@
 /// <reference path="./playwright-registry.d.ts" />
-// Chromium for the daemon (spec §5): installed on first start into `<state>/browsers` through
-// playwright-core's registry, launched with the profile `<state>/profile` (launchPersistentContext,
-// the only way Playwright takes a user data directory) over a CDP pipe, never a debugging port.
+// Chromium for the daemon (spec §5), launched with the profile `<state>/profile`
+// (launchPersistentContext, the only way Playwright takes a user data directory) over a CDP pipe,
+// never a debugging port. Where it comes from (capybara-hq/plugins#209: never from a place the
+// service, or an agent command, could write once the browser runs), in this order:
+// - the provider's install directory (CAPYBARA_SERVICE_INSTALL, device-local): installed there
+//   through playwright-core's registry on the first start, sealed, and the daemon restarts, so
+//   every later start runs it read only;
+// - a browsers cache the device ships (PLAYWRIGHT_BROWSERS_PATH: device-docker / device-e2b's
+//   image) that this process cannot write and that lies outside the workspace, when it holds
+//   this build's revision;
+// - else `<state>/browsers`, installed on the first start (an image without the pinned browser).
 
-import { existsSync, readFileSync } from "node:fs";
+import { accessSync, constants, existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { BrowserContext } from "playwright-core";
 import { VIEWPORT } from "./protocol.js";
 
+/**
+ * The Chromium build the daemon runs: the full Chromium in its (new) headless mode wherever it
+ * starts, so the browser presents as an ordinary Chrome; on macOS the headless shell in one
+ * process, because the local device sandbox refuses the full build's Mach service registrations
+ * (`bootstrap_check_in`, even with `--single-process`).
+ */
+export type ChromiumBuild = "chromium" | "chromium-headless-shell";
+
+/** The build for a platform ({@link ChromiumBuild}). */
+export function chromiumBuild(platform: NodeJS.Platform): ChromiumBuild {
+  return platform === "darwin" ? "chromium-headless-shell" : "chromium";
+}
+
+/** A build's directory name in a browsers directory, before `-<revision>`. */
+export const BUILD_DIR: Record<ChromiumBuild, string> = {
+  chromium: "chromium",
+  "chromium-headless-shell": "chromium_headless_shell",
+};
+
 export interface LaunchPlan {
   browsersPath: string;
+  build: ChromiumBuild;
+  /**
+   * The browsers are the provider's install directory: installed and sealed on the first start
+   * (`sealed` false; the launch then fails with {@link BrowserInstalledError} and the daemon
+   * restarts), launched read only once sealed. Absent: never installed into anything but the
+   * state directory.
+   */
+  install?: { sealed: boolean };
+  /** The browsers are a read-only cache the device ships: launched, never installed into. */
+  shipped?: boolean;
   profileDir: string;
   /** Where Chromium writes downloads in progress (saved into the workspace when done). */
   downloadsTmp: string;
@@ -33,10 +70,12 @@ function envValue(env: Record<string, string | undefined>, name: string): string
 }
 
 /**
- * The revision of chromium-headless-shell this build's playwright-core installs (its
+ * The revision and version of a Chromium build this build's playwright-core installs (its
  * browsers.json): next to the bundle (`vendor/playwright-core/`), else the installed package.
  */
-export function headlessShellRevision(): string | undefined {
+export function browserRelease(
+  build: ChromiumBuild,
+): { revision: string; version: string } | undefined {
   const candidates = [new URL("./vendor/playwright-core/browsers.json", import.meta.url)];
   try {
     const pkg = createRequire(import.meta.url).resolve("playwright-core/package.json");
@@ -47,15 +86,41 @@ export function headlessShellRevision(): string | undefined {
   for (const file of candidates) {
     try {
       const json = JSON.parse(readFileSync(fileURLToPath(file), "utf8")) as {
-        browsers?: { name?: unknown; revision?: unknown }[];
+        browsers?: { name?: unknown; revision?: unknown; browserVersion?: unknown }[];
       };
-      const rev = json.browsers?.find((b) => b.name === "chromium-headless-shell")?.revision;
-      if (typeof rev === "string" && rev !== "") return rev;
+      const b = json.browsers?.find((x) => x.name === build);
+      if (typeof b?.revision === "string" && b.revision !== "")
+        return {
+          revision: b.revision,
+          version: typeof b.browserVersion === "string" ? b.browserVersion : "",
+        };
     } catch {
       // try the next one
     }
   }
   return undefined;
+}
+
+/** The revision of a build ({@link browserRelease}). */
+export function browserRevision(build: ChromiumBuild): string | undefined {
+  return browserRelease(build)?.revision;
+}
+
+/**
+ * The browser's user agent: Chrome's own reduced user agent for the platform (the form every
+ * Chrome sends since the user agent reduction: frozen OS part, `<major>.0.0.0`), so headless mode
+ * does not announce itself as "HeadlessChrome". It is the browser's true identity (Chromium of
+ * that version on that platform); the client hints (UA-CH) stay the browser's own.
+ */
+export function chromeUserAgent(platform: NodeJS.Platform, version: string): string {
+  const major = /^\d+/.exec(version)?.[0] ?? "0";
+  const os =
+    platform === "darwin"
+      ? "Macintosh; Intel Mac OS X 10_15_7"
+      : platform === "win32"
+        ? "Windows NT 10.0; Win64; x64"
+        : "X11; Linux x86_64";
+  return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
 }
 
 /**
@@ -78,24 +143,68 @@ export function playwrightDownloadHosts(env: Record<string, string | undefined>)
   return ["cdn.playwright.dev", "playwright.download.prss.microsoft.com", "storage.googleapis.com"];
 }
 
+/** Names the provider's install directory (the SDK's DEVICE_SERVICE_INSTALL_ENV). */
+export const SERVICE_INSTALL_ENV = "CAPYBARA_SERVICE_INSTALL";
+/** The file that seals it (the SDK's DEVICE_SERVICE_INSTALL_SEAL). */
+export const SERVICE_INSTALL_SEAL = ".sealed";
+
+/** The first start installed the browser and sealed the install: the daemon restarts to run it. */
+export class BrowserInstalledError extends Error {
+  constructor() {
+    super("The browser was installed; the browser service restarts to run it read only.");
+    this.name = "BrowserInstalledError";
+  }
+}
+
+/** Whether `dir` lies inside (or is) `root`. */
+function inside(dir: string, root: string): boolean {
+  const rel = relative(root, dir);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/** Whether this process cannot write `dir` (a read-only cache of the device). */
+function readOnlyForUs(dir: string): boolean {
+  try {
+    accessSync(dir, constants.W_OK);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 /**
- * Where the browsers live: a PLAYWRIGHT_BROWSERS_PATH from the device's environment (a read-only
- * cache in the image) when it already holds this revision's headless shell, so nothing is
- * downloaded; otherwise the state directory, where the daemon installs it on first start.
+ * Where the browsers live (see the file comment): the provider's install directory; a
+ * PLAYWRIGHT_BROWSERS_PATH this process cannot write, outside the workspace, holding this
+ * revision's headless shell; else the state directory.
  */
 function browsersPathFor(
   stateDir: string,
   env: Record<string, string | undefined>,
   revision: string | undefined,
-): string {
+  build: ChromiumBuild,
+): { browsersPath: string; install?: { sealed: boolean }; shipped?: boolean } {
+  const install = envValue(env, SERVICE_INSTALL_ENV);
+  if (install !== undefined && isAbsolute(install)) {
+    let sealed = false;
+    try {
+      sealed = lstatSync(join(install, SERVICE_INSTALL_SEAL)).isFile();
+    } catch {
+      sealed = false;
+    }
+    return { browsersPath: install, install: { sealed } };
+  }
   const cache = envValue(env, "PLAYWRIGHT_BROWSERS_PATH");
+  const workspace = envValue(env, "CAPYBARA_SERVICE_WORKSPACE");
   if (
     cache !== undefined &&
+    isAbsolute(cache) &&
     revision !== undefined &&
-    existsSync(join(cache, `chromium_headless_shell-${revision}`))
+    (workspace === undefined || !inside(cache, workspace)) &&
+    readOnlyForUs(cache) &&
+    existsSync(join(cache, `${BUILD_DIR[build]}-${revision}`))
   )
-    return cache;
-  return join(stateDir, "browsers");
+    return { browsersPath: cache, shipped: true };
+  return { browsersPath: join(stateDir, "browsers") };
 }
 
 /** The launch for a state directory and environment (pure apart from the browsers cache check). */
@@ -106,12 +215,22 @@ export function chromiumLaunchPlan(
     platform: NodeJS.Platform;
     browsersPath?: string;
   },
-  revision: string | undefined = headlessShellRevision(),
+  release: { revision: string; version: string } | undefined = browserRelease(
+    chromiumBuild(opts.platform),
+  ),
 ): LaunchPlan {
-  const args = ["--headless", "--use-mock-keychain"];
+  const build = chromiumBuild(opts.platform);
+  // `--headless` on the full build is its new headless mode (the old one lives on only in the
+  // headless shell); the window is the viewport, so the page's window and screen sizes agree
+  const args = [
+    "--headless",
+    "--use-mock-keychain",
+    `--window-size=${VIEWPORT.width},${VIEWPORT.height}`,
+    `--user-agent=${chromeUserAgent(opts.platform, release?.version ?? "")}`,
+  ];
   // macOS: chrome-headless-shell in one process (the local sandbox does not run the full browser's
   // helper processes); spike: stable for navigation, input, screencast and tabs.
-  if (opts.platform === "darwin") args.push("--single-process");
+  if (build === "chromium-headless-shell") args.push("--single-process");
   const proxy = envValue(opts.env, "HTTPS_PROXY") ?? envValue(opts.env, "HTTP_PROXY");
   // Chromium sends loopback (localhost, 127.0.0.1, [::1]) direct, never through the proxy; the
   // provider's network rules keep the device's host services closed.
@@ -141,7 +260,10 @@ export function chromiumLaunchPlan(
     }
   }
   return {
-    browsersPath: opts.browsersPath ?? browsersPathFor(opts.stateDir, opts.env, revision),
+    ...(opts.browsersPath === undefined
+      ? browsersPathFor(opts.stateDir, opts.env, release?.revision, build)
+      : { browsersPath: opts.browsersPath }),
+    build,
     profileDir: join(opts.stateDir, "profile"),
     downloadsTmp: join(opts.stateDir, "downloads-tmp"),
     args,
@@ -177,9 +299,10 @@ async function loadPlaywright(browsersPath: string): Promise<Playwright> {
 type Registry = typeof import("playwright-core/lib/coreBundle")["registry"]["registry"];
 type Executable = NonNullable<ReturnType<Registry["findExecutable"]>>;
 
-/** playwright-core's registry and its headless shell, for browsers in `browsersPath`. */
-async function headlessShell(
+/** playwright-core's registry and a Chromium build, for browsers in `browsersPath`. */
+async function registryBrowser(
   browsersPath: string,
+  build: ChromiumBuild,
 ): Promise<{ registry: Registry; exe: Executable; executablePath: string; directory: string }> {
   await loadPlaywright(browsersPath);
   const mod = (await import("playwright-core/lib/coreBundle")) as {
@@ -188,32 +311,44 @@ async function headlessShell(
   };
   const registry = (mod.registry ?? mod.default?.registry)?.registry;
   if (registry === undefined) throw new Error("playwright-core has no browser registry");
-  const exe = registry.findExecutable("chromium-headless-shell");
-  if (exe === undefined) throw new Error("playwright-core does not know chromium-headless-shell");
+  const exe = registry.findExecutable(build);
+  if (exe === undefined) throw new Error(`playwright-core does not know ${build}`);
   const executablePath = exe.executablePath();
   if (executablePath === undefined || exe.directory === undefined)
-    throw new Error("playwright-core has no chromium-headless-shell for this platform");
+    throw new Error(`playwright-core has no ${build} for this platform`);
   return { registry, exe, executablePath, directory: exe.directory };
 }
 
 /**
- * Where the headless shell lives in `browsersPath`, and the file Playwright writes into its
- * directory once an install has finished (INSTALLATION_COMPLETE, written last).
+ * Where a build lives in `browsersPath`, and the file Playwright writes into its directory once
+ * an install has finished (INSTALLATION_COMPLETE, written last).
  */
-export async function headlessShellPaths(
+export async function browserPaths(
   browsersPath: string,
+  build: ChromiumBuild = chromiumBuild(process.platform),
 ): Promise<{ executable: string; marker: string }> {
-  const { executablePath, directory } = await headlessShell(browsersPath);
+  const { executablePath, directory } = await registryBrowser(browsersPath, build);
   return { executable: executablePath, marker: join(directory, "INSTALLATION_COMPLETE") };
 }
 
-/** The headless shell's executable, downloaded into the registry first when missing. */
-export async function ensureChromium(browsersPath: string): Promise<string> {
-  const { registry, exe, executablePath, directory } = await headlessShell(browsersPath);
+/**
+ * A build's executable, downloaded into the registry first when missing (unless `install` is
+ * false: a read-only place, sealed or shipped, is never installed into).
+ */
+export async function ensureChromium(
+  browsersPath: string,
+  install = true,
+  build: ChromiumBuild = chromiumBuild(process.platform),
+): Promise<string> {
+  const { registry, exe, executablePath, directory } = await registryBrowser(browsersPath, build);
   // Installed means Playwright's marker: another process installing into the same directory has
   // the executable on disk long before the rest (still being written: spawn ETXTBSY).
   const marked = existsSync(join(directory, "INSTALLATION_COMPLETE"));
   if (marked && existsSync(executablePath)) return executablePath;
+  if (!install)
+    throw new Error(
+      `the browser in ${browsersPath} is incomplete and read only for the browser service; delete the device and create it again`,
+    );
   // The registry's lock makes this wait for an install already running, which it then finds
   // done. A marked install without its executable (removed since) is installed again.
   await registry.install([exe], { gc: false, force: marked });
@@ -223,9 +358,22 @@ export async function ensureChromium(browsersPath: string): Promise<string> {
   return executablePath;
 }
 
-/** Installs (when needed) and launches Chromium on the plan's profile. */
+/**
+ * Installs (when needed) and launches Chromium on the plan's profile. Into the provider's unsealed
+ * install directory it installs, seals it and throws {@link BrowserInstalledError} without
+ * launching: a browser runs only from a place this process can no longer write.
+ */
 export async function launchChromium(plan: LaunchPlan): Promise<BrowserContext> {
-  const executablePath = await ensureChromium(plan.browsersPath);
+  if (plan.install?.sealed === false) {
+    await ensureChromium(plan.browsersPath, true, plan.build);
+    sealInstall(plan.browsersPath);
+    throw new BrowserInstalledError();
+  }
+  const executablePath = await ensureChromium(
+    plan.browsersPath,
+    plan.install === undefined && plan.shipped !== true,
+    plan.build,
+  );
   const pw = await loadPlaywright(plan.browsersPath);
   return pw.chromium.launchPersistentContext(plan.profileDir, {
     headless: true,
@@ -237,6 +385,15 @@ export async function launchChromium(plan: LaunchPlan): Promise<BrowserContext> 
     downloadsPath: plan.downloadsTmp,
     ...(plan.proxyAuth === undefined ? {} : { proxy: plan.proxyAuth }),
   });
+}
+
+/** Seals the provider's install directory (an existing seal stays as it is). */
+export function sealInstall(dir: string): void {
+  try {
+    writeFileSync(join(dir, SERVICE_INSTALL_SEAL), "", { flag: "wx", mode: 0o644 });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+  }
 }
 
 /**

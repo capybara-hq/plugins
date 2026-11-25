@@ -3,8 +3,8 @@
 // for byte; edit one and copy it to the other).
 import { createHash } from "node:crypto";
 import {
+  DEVICE_SERVICE_ID_RE,
   DEVICE_SERVICE_MAX_MESSAGE,
-  DEVICE_SERVICE_NAME_RE,
   type DeviceServiceSpec,
   type DeviceServiceStatus,
   type DeviceStream,
@@ -13,26 +13,62 @@ import {
 } from "@capybara-hq/plugin-sdk";
 
 /**
+ * The user every device service, its manager and its socket relay run as (the image's
+ * `capybara-svc`, uid and gid {@link SERVICE_UID}: not 1001, which E2B gives its own `user`),
+ * never the sandbox user agent commands run as (capybara-hq/plugins#210): a service's state (a
+ * browser profile with the cookies of sessions the person logged into), its socket and its processes are out of an agent command's reach, and
+ * the service cannot touch the agent's files beyond what their modes allow everyone.
+ */
+export const SERVICE_USER = "capybara-svc";
+/** The uid and gid of {@link SERVICE_USER}. */
+export const SERVICE_UID = 1100;
+
+/**
  * Where a device's service state directories live: persistent with the device's files but outside
  * the workspace, so no project root, Glob / Grep, share or delivery ever reaches a service's state
  * (a browser profile's cookies). Docker: the device's own `<name>-svc` volume mounted here; E2B:
- * a directory on the VM's disk. Owned by the sandbox user (the image makes it; device-e2b creates
- * it as root on a VM whose template predates it).
+ * a directory on the VM's disk. Owned by {@link SERVICE_USER}, 0700 (the image makes it; device-e2b
+ * makes it as root on a VM whose template predates it).
  */
 export const SERVICE_STATE_ROOT = "/var/lib/capybara/svc";
 
-/** The answer when the state root is missing or not the sandbox user's (an image before services). */
-export const SERVICE_IMAGE_TOO_OLD =
-  "This device's image predates device services, or /var/lib/capybara/svc is not owned by the sandbox user. The instance must be recreated on the current image: that happens after a period without use, or delete the device and create it again.";
+/**
+ * Where a service's runtime files live (pid record, socket, lock, log): owned by
+ * {@link SERVICE_USER}, 0700, where the sandbox user cannot make it first (Docker: a tmpfs mounted
+ * there with that owner; E2B: made by root under the root-owned /run). Nothing of a process
+ * outlives the instance that ran it (Docker: a tmpfs; E2B: the record is checked against the boot
+ * id and the process start time as well).
+ */
+export const SERVICE_RUN_ROOT = "/run/capybara-svc";
 
 /**
- * Where a service's runtime files live (pid record, socket, lock, log): /tmp, so nothing of a
- * process outlives the instance that ran it (Docker: a tmpfs; E2B: the record is checked against
- * the boot id and the process start time as well).
+ * The browsers the image ships (Playwright's full Chromium build, pinned to the browser plugin's
+ * playwright-core): root-owned and read only for every service, which gets it as
+ * PLAYWRIGHT_BROWSERS_PATH, so a service never runs a browser it or an agent command could
+ * replace (capybara-hq/plugins#209).
  */
-export const SERVICE_RUN_ROOT = "/tmp/.capybara-svc";
+export const SERVICE_BROWSERS_PATH = "/opt/capybara-browsers";
 
-/** The state directory of a service: absolute, stable per device and name, known before start. */
+/**
+ * Where the device's workspace downloads go (`<workspace>/downloads`): made by the provider as the
+ * sandbox user, 2777, so a service (another user) can save files there and they stay the agent's
+ * group (setgid); a service writes nothing else in the workspace.
+ */
+export const SERVICE_DOWNLOADS_DIR = "/workspace/downloads";
+
+/**
+ * Makes {@link SERVICE_DOWNLOADS_DIR} as the sandbox user before a service starts (`$1`): a
+ * directory, mode 2777, unless a link stands there (the service refuses a link itself). Always
+ * exits 0: a failure only means the service cannot save downloads, which it reports itself.
+ */
+export const DOWNLOADS_DIR_SCRIPT =
+  '[ -L "$1" ] && exit 0; mkdir -p -- "$1" 2>/dev/null && chmod 2777 -- "$1" 2>/dev/null; exit 0';
+
+/** The answer when the image or VM predates isolated device services. */
+export const SERVICE_IMAGE_TOO_OLD =
+  "This device's image predates isolated device services (no capybara-svc user, or /var/lib/capybara/svc or /run/capybara-svc is not owned by it). The instance must be recreated on the current image: that happens after a period without use, or delete the device and create it again.";
+
+/** The state directory of a service: absolute, stable per device and id, known before start. */
 export function serviceStateDir(name: string): string {
   checkServiceName(name);
   return `${SERVICE_STATE_ROOT}/${name}`;
@@ -44,9 +80,10 @@ export function serviceSocketPath(name: string): string {
   return `${SERVICE_RUN_ROOT}/${name}/sock`;
 }
 
+/** Refuses anything but a service id (`<extension>.<name>`: the kernel namespaces every name). */
 export function checkServiceName(name: string): void {
-  if (!DEVICE_SERVICE_NAME_RE.test(name)) {
-    throw new Error(`invalid device service name: ${JSON.stringify(name)}`);
+  if (!DEVICE_SERVICE_ID_RE.test(name)) {
+    throw new Error(`invalid device service id: ${JSON.stringify(name)}`);
   }
 }
 
@@ -57,8 +94,8 @@ export const MANAGER_PYTHON = "/usr/bin/python3";
 export const SERVICE_NODE = "/usr/local/bin/node";
 
 /**
- * The service manager, run as the sandbox user by the provider: `python3 -I -c <script> <op>
- * <name>` with `op` one of `status`, `ensure` (request on stdin: a 4-byte big-endian length, then
+ * The service manager, run as {@link SERVICE_USER} by the provider: `python3 -I -c <script> <op>
+ * <id>` with `op` one of `status`, `ensure` (request on stdin: a 4-byte big-endian length, then
  * JSON) and `stop`. It answers one JSON line: a status `{state, startedAt, stateDir}`, or
  * `{error}` with exit code 1.
  *
@@ -77,21 +114,28 @@ export const SERVICE_NODE = "/usr/local/bin/node";
  * - A pid record counts only while its process is alive with the recorded start time on the
  *   recorded boot: after a suspend, a restart or a pid reuse it reads as stopped.
  * - The service gets the manager's environment (the instance's, with its egress proxy variables)
- *   with `PATH` set to root-owned directories, the spec's `env`, and the socket and state
- *   variables (`CAPYBARA_SERVICE_WORKSPACE` too: the device's workspace root). Nothing restarts a service that exited: the next `ensure` (reviewed again by the
- *   kernel) does.
- * - A state root that is missing or not the sandbox user's (an image before device services)
- *   answers {@link SERVICE_IMAGE_TOO_OLD}.
+ *   less every variable naming a path in the workspace (the agent's caches: a service never runs
+ *   or trusts what an agent command can write), its own `HOME` and XDG directories in its state
+ *   directory, `TMPDIR` in its run directory, `PLAYWRIGHT_BROWSERS_PATH` set to the image's
+ *   read-only browsers ({@link SERVICE_BROWSERS_PATH}), then the spec's `env`, `PATH` set to
+ *   root-owned directories and the socket and state variables (`CAPYBARA_SERVICE_WORKSPACE` too:
+ *   the device's workspace root). It runs with umask 002, so what it saves in the workspace
+ *   downloads stays writable for the agent's group. Nothing restarts a service that exited: the
+ *   next `ensure` (reviewed again by the kernel) does.
+ * - A state root or run root that is missing or not {@link SERVICE_USER}'s, private (an image
+ *   before isolated device services) answers {@link SERVICE_IMAGE_TOO_OLD} on a start; a status or
+ *   stop there answers stopped.
  * - `stop` sends SIGTERM to the service's process group, waits up to 5 s, then SIGKILLs every
  *   process left in its session.
  */
 export const SERVICE_MANAGER_SCRIPT = `import base64, fcntl, hashlib, json, os, re, signal, stat, sys, time
-NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,40}\\.[a-z][a-z0-9-]{0,31}$")
 KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 STATE = ("/var/lib/capybara/svc", ())
-TOO_OLD = "This device's image predates device services, or /var/lib/capybara/svc is not owned by the sandbox user. The instance must be recreated on the current image: that happens after a period without use, or delete the device and create it again."
-RUN = ("/tmp", (".capybara-svc",))
+TOO_OLD = "This device's image predates isolated device services (no capybara-svc user, or /var/lib/capybara/svc or /run/capybara-svc is not owned by it). The instance must be recreated on the current image: that happens after a period without use, or delete the device and create it again."
+RUN = "/run/capybara-svc"
 WORKSPACE = "/workspace"
+BROWSERS = "/opt/capybara-browsers"
 DIGEST_FILE = ".files-digest"
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 NODE = "/usr/local/bin/node"
@@ -108,24 +152,6 @@ def answer(obj, code=0):
 
 def fail(msg):
     answer({"error": msg}, 1)
-
-def opendirs(root, parts, create):
-    fd = os.open(root, DIR)
-    for p in parts:
-        try:
-            nfd = os.open(p, DIR, dir_fd=fd)
-        except FileNotFoundError:
-            if not create:
-                os.close(fd)
-                return None
-            try:
-                os.mkdir(p, 0o700, dir_fd=fd)
-            except FileExistsError:
-                pass
-            nfd = os.open(p, DIR, dir_fd=fd)
-        os.close(fd)
-        fd = nfd
-    return fd
 
 def boot_id():
     try:
@@ -172,9 +198,25 @@ def status(name, rec):
         return {"name": name, "state": "stopped", "startedAt": None, "stateDir": state_dir}
     return {"name": name, "state": "running", "startedAt": rec["at"], "stateDir": state_dir}
 
+def private_dir(path):
+    # a directory of this user that nobody else may enter, opened without following a link; None
+    # when it is missing or anything else
+    try:
+        fd = os.open(path, DIR)
+    except OSError:
+        return None
+    st = os.fstat(fd)
+    if st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077:
+        os.close(fd)
+        return None
+    return fd
+
 def rundir(name, create):
-    base = opendirs(RUN[0], RUN[1], create)
+    # the run root is never made here: the image or the provider makes it, owned by this user
+    base = private_dir(RUN)
     if base is None:
+        if create:
+            fail(TOO_OLD)
         return None
     try:
         return opendirs_at(base, name, create)
@@ -238,7 +280,7 @@ def kill(pid, sig):
 def kill_relays(name):
     # relays left connected to this service's socket (a provider that lost one before it knew
     # its pid): their command line names the relay and ends with the socket path
-    sock = ("%s/%s/%s/sock" % (RUN[0], RUN[1][0], name)).encode()
+    sock = ("%s/%s/sock" % (RUN, name)).encode()
     for e in os.listdir("/proc"):
         if not e.isdigit() or int(e) == os.getpid():
             continue
@@ -355,11 +397,15 @@ def log_tail(rfd):
         f.seek(max(0, size - 2000))
         return f.read().decode("utf-8", "replace").strip()
 
+def names_workspace(value):
+    # a variable naming a path in the workspace (alone, or in a list such as PATH)
+    return any(p == WORKSPACE or p.startswith(WORKSPACE + "/") for p in value.split(":"))
+
 def ensure(name, req):
     rfd = rundir(name, True)
     st = os.fstat(rfd)
     if st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077:
-        fail("the service run directory is not private to the sandbox user")
+        fail("the service run directory is not private to the service user")
     lock(rfd)
     rec = read_record(rfd)
     if rec is not None or req.get("ifRunning") is True:
@@ -382,12 +428,8 @@ def ensure(name, req):
         fail("invalid service arguments")
     if not isinstance(env, dict) or not all(isinstance(k, str) and KEY_RE.match(k) and isinstance(v, str) and "\\0" not in v for k, v in env.items()):
         fail("invalid service environment")
-    try:
-        root = os.open(STATE[0], DIR)
-    except OSError:
-        fail(TOO_OLD)
-    rst = os.fstat(root)
-    if rst.st_uid != os.getuid() or not os.access(STATE[0], os.W_OK):
+    root = private_dir(STATE[0])
+    if root is None:
         fail(TOO_OLD)
     try:
         sfd = opendirs_at(root, name, True)
@@ -407,14 +449,20 @@ def ensure(name, req):
         write_files(sfd, decoded)
         record_digest(sfd, digest)
     state_dir = status(name, None)["stateDir"]
-    sock = "%s/%s/%s/sock" % (RUN[0], RUN[1][0], name)
+    sock = "%s/%s/sock" % (RUN, name)
+    tmp_fd = opendirs_at(rfd, "tmp", True)
+    os.close(tmp_fd)
     unlink(rfd, "sock")
     unlink(rfd, "pid")
     unlink(rfd, "log")
     logfd = open_reg("log", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, rfd)
     # the service's output must not be non-blocking
     os.set_blocking(logfd, True)
-    penv = {k: v for k, v in os.environ.items() if not k.startswith("CAPYBARA_")}
+    # nothing the agent can write: no variable naming a workspace path (its caches, its PATH)
+    penv = {k: v for k, v in os.environ.items() if not k.startswith("CAPYBARA_") and not names_workspace(v)}
+    penv.update({"HOME": state_dir, "XDG_CACHE_HOME": state_dir + "/.cache",
+                 "XDG_CONFIG_HOME": state_dir + "/.config", "XDG_DATA_HOME": state_dir + "/.local/share",
+                 "TMPDIR": "%s/%s/tmp" % (RUN, name), "PLAYWRIGHT_BROWSERS_PATH": BROWSERS})
     penv.update(env)
     penv.update({"PATH": PATH, "CAPYBARA_SERVICE_SOCKET": sock, "CAPYBARA_SERVICE_STATE": state_dir,
                  "CAPYBARA_SERVICE_WORKSPACE": WORKSPACE})
@@ -424,6 +472,7 @@ def ensure(name, req):
     if pid == 0:
         try:
             os.setsid()
+            os.umask(0o002)
             os.fchdir(sfd)
             null = os.open("/dev/null", os.O_RDONLY)
             os.dup2(null, 0)

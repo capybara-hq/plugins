@@ -7,7 +7,7 @@ import { fakeDialIn, fakeLog, LIMITS, memoryStore, ROOTS, rejection, signal } fr
 const DEVICE = "dev-1";
 const HANDLE: LocalDeviceHandle = { id: DEVICE, roots: ROOTS, limits: LIMITS, generation: "1" };
 const DEVICE_DIR = "/home/me/capybara-device/dev-1";
-const STATE_DIR = `${DEVICE_DIR}/services/echo`;
+const STATE_DIR = `${DEVICE_DIR}/services/tx.echo`;
 
 type Body = Record<string, unknown>;
 
@@ -96,7 +96,7 @@ function setup(opts: { oldMachine?: boolean; codeDir?: unknown } = {}) {
 }
 
 const SPEC = {
-  name: "echo",
+  name: "tx.echo",
   runtime: "node" as const,
   entry: "echo.mjs",
   args: ["--x"],
@@ -108,13 +108,13 @@ describe("device-local services", () => {
   it("ensureService sends service.ensure with base64 files and the device network", async () => {
     const { m, provider } = setup();
     const status = await provider.ensureService?.(HANDLE, SPEC, signal());
-    expect(status).toMatchObject({ name: "echo", state: "running", stateDir: STATE_DIR });
+    expect(status).toMatchObject({ name: "tx.echo", state: "running", stateDir: STATE_DIR });
     expect(m.requests).toHaveLength(2);
     expect(m.requests[0]).not.toHaveProperty("spec.files");
     expect(m.requests[1]).toEqual({
       op: "service.ensure",
       spec: {
-        name: "echo",
+        name: "tx.echo",
         entry: "echo.mjs",
         args: ["--x"],
         files: { "echo.mjs": "AQID" },
@@ -128,7 +128,7 @@ describe("device-local services", () => {
   it("a digest hit starts without sending files", async () => {
     const { m, provider } = setup();
     await provider.ensureService?.(HANDLE, SPEC, signal());
-    await provider.stopService?.(HANDLE, "echo", signal());
+    await provider.stopService?.(HANDLE, "tx.echo", signal());
     m.requests.length = 0;
     const status = await provider.ensureService?.(HANDLE, SPEC, signal());
     expect(status?.state).toBe("running");
@@ -159,7 +159,7 @@ describe("device-local services", () => {
     expect(m.requests).toEqual([
       {
         op: "service.ensure",
-        spec: { name: "echo" },
+        spec: { name: "tx.echo" },
         network: { kind: "allowlist", hosts: ["example.com"] },
         ifRunning: true,
       },
@@ -184,13 +184,13 @@ describe("device-local services", () => {
     const { provider } = setup({ codeDir });
     const status = await provider.ensureService?.(HANDLE, SPEC, signal());
     expect(status).toEqual({
-      name: "echo",
+      name: "tx.echo",
       state: "running",
       startedAt: expect.any(String),
       stateDir: STATE_DIR,
       codeDir,
     });
-    expect(await provider.serviceStatus?.(HANDLE, "echo", signal())).toHaveProperty(
+    expect(await provider.serviceStatus?.(HANDLE, "tx.echo", signal())).toHaveProperty(
       "codeDir",
       codeDir,
     );
@@ -200,7 +200,7 @@ describe("device-local services", () => {
     for (const codeDir of ["code", 7, "/a\0b"]) {
       const { provider } = setup({ codeDir });
       const e = await rejection(
-        provider.serviceStatus?.(HANDLE, "echo", signal()) as Promise<unknown>,
+        provider.serviceStatus?.(HANDLE, "tx.echo", signal()) as Promise<unknown>,
       );
       expect((e as Error).message).toMatch(/invalid service status/);
     }
@@ -221,14 +221,14 @@ describe("device-local services", () => {
   it("serviceRequest decodes the reply body", async () => {
     const { m, provider } = setup();
     await provider.ensureService?.(HANDLE, SPEC, signal());
-    const out = await provider.serviceRequest?.(HANDLE, "echo", new Uint8Array([9, 8]), {
+    const out = await provider.serviceRequest?.(HANDLE, "tx.echo", new Uint8Array([9, 8]), {
       timeoutMs: 1234,
       signal: signal(),
     });
     expect([...(out ?? [])]).toEqual([9, 8]);
     expect(m.requests.at(-1)).toEqual({
       op: "service.request",
-      name: "echo",
+      name: "tx.echo",
       body: "CQg=",
       timeoutMs: 1234,
     });
@@ -237,8 +237,8 @@ describe("device-local services", () => {
   it("serviceStatus and stopService send their ops", async () => {
     const { m, provider } = setup();
     await provider.ensureService?.(HANDLE, SPEC, signal());
-    expect((await provider.serviceStatus?.(HANDLE, "echo", signal()))?.state).toBe("running");
-    await provider.stopService?.(HANDLE, "echo", signal());
+    expect((await provider.serviceStatus?.(HANDLE, "tx.echo", signal()))?.state).toBe("running");
+    await provider.stopService?.(HANDLE, "tx.echo", signal());
     expect(m.requests.map((r) => r.op)).toEqual([
       "service.ensure",
       "service.ensure",
@@ -253,8 +253,8 @@ describe("device-local services", () => {
     const stream = {} as DeviceStream;
     dial.state.openStream = async () => stream;
     const s = signal();
-    expect(await provider.openStream?.(HANDLE, { service: "echo" }, s)).toBe(stream);
-    expect(dial.streams).toEqual([{ deviceId: DEVICE, body: { service: "echo" }, signal: s }]);
+    expect(await provider.openStream?.(HANDLE, { service: "tx.echo" }, s)).toBe(stream);
+    expect(dial.streams).toEqual([{ deviceId: DEVICE, body: { service: "tx.echo" }, signal: s }]);
   });
 
   it("an offline machine surfaces DeviceOfflineError unchanged", async () => {
@@ -270,7 +270,7 @@ describe("device-local services", () => {
     );
     expect(e1).toBeInstanceOf(DeviceOfflineError);
     const e2 = await rejection(
-      provider.openStream?.(HANDLE, { service: "echo" }, signal()) as Promise<unknown>,
+      provider.openStream?.(HANDLE, { service: "tx.echo" }, signal()) as Promise<unknown>,
     );
     expect(e2).toBeInstanceOf(DeviceOfflineError);
   });
@@ -282,7 +282,7 @@ describe("device-local services", () => {
       error: { kind: "unsupported", message: "no services" },
     });
     const e = await rejection(
-      provider.serviceStatus?.(HANDLE, "echo", signal()) as Promise<unknown>,
+      provider.serviceStatus?.(HANDLE, "tx.echo", signal()) as Promise<unknown>,
     );
     expect((e as Error).message).toContain("no services");
     expect((e as Error).name).toMatch(/Unsupported/);
@@ -299,7 +299,7 @@ describe("device-local services", () => {
       const text = kind === "denied" ? "not yours" : kind === "invalid" ? "bad name" : "boom";
       dial.state.answer = () => ({ ok: false, error: { kind, message: text } });
       const e = await rejection(
-        provider.serviceStatus?.(HANDLE, "echo", signal()) as Promise<unknown>,
+        provider.serviceStatus?.(HANDLE, "tx.echo", signal()) as Promise<unknown>,
       );
       expect((e as Error).message).toMatch(message);
       expect((e as Error).name + (e as Error).constructor.name).toMatch(name);
@@ -331,7 +331,7 @@ describe("device-local services", () => {
     // the kernel's refresh right after the panel's allow: an ifRunning ensure on the same handle
     await provider.ensureService?.(HANDLE, SPEC, signal(), { ifRunning: true });
     expect(m.requests).toEqual([
-      { op: "service.ensure", spec: { name: "echo" }, network: wider, ifRunning: true },
+      { op: "service.ensure", spec: { name: "tx.echo" }, network: wider, ifRunning: true },
     ]);
     // a stale holder's update changes nothing the next ensure sends
     await expect(provider.update?.(HANDLE, LIMITS, signal(), { token: 1 })).rejects.toMatchObject({

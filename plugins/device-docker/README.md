@@ -113,9 +113,9 @@ Every sandbox reaches Docker through the proxy only and its egress proxy refuses
 
 | Operation | What it does |
 |---|---|
-| `createFileSystem` | Creates the volumes `<name>-workspace` (with the `volumeDriver` size option), `<name>-skills` and `<name>-svc` (device service state; with `volumeDriver`, sized `min(diskMb, 2048)` MB), labelled `dev.capybara.sandbox.role=workspace` / `skills` / `svc`; a volume that already exists is kept as it is (idempotent by name, never replaced); the handle id is the name |
+| `createFileSystem` | Creates the volumes `<name>-workspace` (with the `volumeDriver` size option), `<name>-skills` and `<name>-services` (device service state; with `volumeDriver`, sized `min(diskMb, 2048)` MB), labelled `dev.capybara.sandbox.role=workspace` / `skills` / `svc`; a volume that already exists is kept as it is (idempotent by name, never replaced); the handle id is the name |
 | `destroyFileSystem` / `destroyFileSystemByName` | Force-removes the instance of the same name first (Docker refuses to remove a volume a container still uses, even a stopped one), then removes its three volumes; a missing one counts as success. The kernel's one-off cleanup calls `destroyFileSystemByName("cap-<conversation id>")` for `sandbox@1` sandboxes, whose volumes `cap-<conversation id>-workspace` / `-skills` follow the same naming |
-| `create` | Checks that both volumes of the file system exist and carry their role label (`GET /volumes/<name>`); otherwise it throws `FileSystemGoneError`, because Docker would silently create empty volumes for a missing mount source. A missing `<name>-svc` volume (a file system made before device services) is created, empty (sized like `createFileSystem`'s). Then deletes any old instance of the same name (the kernel may have exited before recording the handle; its volumes are kept), creates (see [Network and egress](#network-and-egress)) the internal network, the egress proxy and the sandbox container, checks the volumes again (if they were removed in between, Docker made empty unlabelled ones for the mounts: the container and those volumes are removed and `create` throws `FileSystemGoneError`) and starts it. **Fencing**: the kernel's token is stamped on the sandbox container and the proxy (`dev.capybara.sandbox.fence`) and given to the proxy (`FENCE`); before replacing an old instance under the name, `create` reads its token (the higher of its labels and its running proxy's own) and throws `StaleFenceError`, touching nothing, when it is higher than the call's (a stale holder). That read and the removal are two steps (Docker has no conditional remove), so the handle carries the token too: the handle is `{ id: <name>, fence: <token> }`, and every call on it checks the container's fence label first, a replacement under the same name answering `SandboxGoneError` (`gone` for `resume`). Without a token (an older kernel) the instance is seeded with 0, so every handle then names fence 0 and the identity check cannot tell incarnations apart (fencing is off with such a kernel). Without `image` it uses the published sandbox image |
+| `create` | Checks that both volumes of the file system exist and carry their role label (`GET /volumes/<name>`); otherwise it throws `FileSystemGoneError`, because Docker would silently create empty volumes for a missing mount source. A missing `<name>-services` volume (a file system made before isolated device services) is created, empty (sized like `createFileSystem`'s). Then deletes any old instance of the same name (the kernel may have exited before recording the handle; its volumes are kept), creates (see [Network and egress](#network-and-egress)) the internal network, the egress proxy and the sandbox container, checks the volumes again (if they were removed in between, Docker made empty unlabelled ones for the mounts: the container and those volumes are removed and `create` throws `FileSystemGoneError`) and starts it. **Fencing**: the kernel's token is stamped on the sandbox container and the proxy (`dev.capybara.sandbox.fence`) and given to the proxy (`FENCE`); before replacing an old instance under the name, `create` reads its token (the higher of its labels and its running proxy's own) and throws `StaleFenceError`, touching nothing, when it is higher than the call's (a stale holder). That read and the removal are two steps (Docker has no conditional remove), so the handle carries the token too: the handle is `{ id: <name>, fence: <token> }`, and every call on it checks the container's fence label first, a replacement under the same name answering `SandboxGoneError` (`gone` for `resume`). Without a token (an older kernel) the instance is seeded with 0, so every handle then names fence 0 and the identity check cannot tell incarnations apart (fencing is off with such a kernel). Without `image` it uses the published sandbox image |
 | `destroy` / `destroyByName` | Force-removes the sandbox container, the egress proxy, the internal network and the proxy's config volume (never the file system's volumes); a missing one counts as success. With a fence token, an instance whose label carries a higher token (a newer holder created it) is refused with `StaleFenceError`; `null` (the kernel's cleanup without a device lease) or no token removes without a check |
 | `suspend` | Stops the sandbox container and the egress proxy (files stay on the volumes). **Processes are not preserved**: all background processes in the sandbox end and `/tmp` (tmpfs) is cleared; E2B's pause, in contrast, keeps memory too |
 | `resume` | Starts (or unpauses one that was `docker pause`d); if the container does not exist it returns `gone`. With `refuseOpenNetwork` on, a container whose labels say `open-public` (made before the setting was turned on) is not started and answers `gone` too, so the kernel recreates it under the current rule. If the egress proxy or internal network is gone, it is rebuilt: for an instance with the egress control (every instance this version creates) only on the instance's config volume `<name>-egress-conf`, which holds the list in force; when that volume is gone too (or the proxy lacks the control), `resume` answers `gone` and the kernel recreates the instance under the desired network, never a proxy rebuilt from the create-time labels, which an in-place narrowing left wider than the list in force. An instance made by an earlier version with the egress control (label `1`) is treated the same way (its list may have changed in place; its config file has no fence, so a rebuilt proxy refuses to start and `resume` answers `gone`); only an instance without any control label is rebuilt from the network and host list recorded in its labels (that version changed its proxy only to lists covering them) |
@@ -129,7 +129,7 @@ Every sandbox reaches Docker through the proxy only and its egress proxy refuses
 | `list` / `scan` (projects) | A `python3 -I` script (`src/listing.ts`, the same file as the E2B plugin's; it follows the rules of core's local device docker mode) run in the container as the sandbox user under `timeout -s KILL 30` with `PATH=/usr/local/bin:/usr/bin:/bin` (never the writable `/workspace/.cache/npm-global/bin`), the normalized path passed as argv. The reachable area is `/workspace` (core spec 2026-11-14 project root §4.2; the kernel scopes a cloud device's projects to it): a path outside it, also through a link, is refused with `ProjectPathRefusedError` and a fixed reason (en / zh) the kernel answers as `device.project_refused`, and the owner browse (`browse`: `stat` / `list` / `scan`, what the kernel adds projects through) refuses such a path the same way before anything runs, so the device page explains the refusal when the project is added; a link whose target leaves it is not a directory. `scan` walks breadth-first, at most 500 directories, two levels below the base, without following links. An abort returns at once; the read-only script ends at its time limit at worst. Needs python3 and timeout in the image (a clear error otherwise; so is a listing that hits the 30 s limit) |
 
 Resources for each device (`<name>` = `cap-device-<device id>`): the instance is the container `<name>`, the egress proxy `<name>-egress` and the
-internal network `<name>-net` and the egress proxy's config volume `<name>-egress-conf` (the list in force, mounted only in the proxy at `/config`); the file system is the volumes `<name>-workspace` (`/workspace`), `<name>-skills` (`/skills`) and `<name>-svc` (`/var/lib/capybara/svc`, device service state). All carry the labels
+internal network `<name>-net` and the egress proxy's config volume `<name>-egress-conf` (the list in force, mounted only in the proxy at `/config`); the file system is the volumes `<name>-workspace` (`/workspace`), `<name>-skills` (`/skills`) and `<name>-services` (`/var/lib/capybara/svc`, device service state). All carry the labels
 `dev.capybara.sandbox=1`, `dev.capybara.sandbox.name=<name>` and `dev.capybara.sandbox.role=<role>`.
 
 ## Isolation and limits
@@ -264,37 +264,51 @@ deployment refuse the open network outright (support then reports `openPublic: f
 
 `ensureService` / `stopService` / `serviceStatus` / `serviceRequest` / `openStream` (core's browser use design §5–6): one long-lived
 named process per device, started on an extension's behalf after the kernel's command review, reached only through the provider.
+Services are keyed by their id `<extension>.<name>` (the kernel namespaces every name, core#817).
+
+- **Isolation (plugins#210)**: the manager, every service and the socket relay run as the image's `capybara-svc` user (uid / gid
+  1100), never as the sandbox user agent commands run as. Its state root `/var/lib/capybara/svc` and run root `/run/capybara-svc`
+  are that user's, 0700, so an agent command can neither read a service's state (a browser profile with its cookies), nor reach
+  its socket, nor signal or inspect its process (`/proc/<pid>/environ`, `cwd`); `test/services.test.ts` proves each. The service
+  writes only its own directories and `/workspace/downloads`, which the provider makes (as the sandbox user, mode 2777, setgid) so
+  what it saves stays the agent's group. Its environment drops every variable naming a workspace path (the agent's caches) and
+  gets its own `HOME`, XDG directories and `TMPDIR`.
+- **Browser (plugins#209)**: the image ships the browser plugin's Chromium (Playwright's full build, pinned to its
+  playwright-core: `tools/checks/test/browser-pin.test.ts`) in `/opt/capybara-browsers`, root-owned and read only; services get it
+  as `PLAYWRIGHT_BROWSERS_PATH`, so no service runs a browser it or an agent command could replace. About 412 MB unpacked
+  (linux arm64), +0.43 GB on the image; the first launch in a device takes about 0.2 s (nothing is downloaded).
 
 - **Process**: the provider runs its service manager (`src/services.ts`, `python3 -I`, standard library, shared byte for byte with
-  device-e2b) in the container as the sandbox user. `ensure` takes the service's lock, keeps a running service as it is (an
+  device-e2b) in the container as `capybara-svc`. `ensure` takes the service's lock, keeps a running service as it is (an
   `ifRunning` ensure never starts anything and leaves a stopped container stopped), writes the spec's files into the state
   directory, then forks `node <stateDir>/<entry> <args>` (`/usr/local/bin/node`) into its own session with the state directory as
   its working directory, and answers once the service listens on its socket (or reports its exit with the tail of its log). The
   process outlives the exec that started it (Docker reparents it to the container's init) and is not one of the exec commands:
   `killAll` / `killTagged` leave it alone. Nothing restarts a service that exited: the kernel's next ensure does, reviewed again.
-- **State directory**: `/var/lib/capybara/svc/<name>` on the device's own volume `<name>-svc`, created and removed with the
+- **State directory**: `/var/lib/capybara/svc/<id>` on the device's own volume `<name>-services` (the pre-isolation
+  `<name>-svc`, the sandbox user's, is removed at the next `create` and with the file system), created and removed with the
   workspace volume (so a files reset or device deletion removes it; a `<name>-svc` volume left from a lost file system of the
   same name is removed when `createFileSystem` has to make the workspace volume anew) and **outside the workspace**: no project root, Glob / Grep,
-  share or delivery reaches a service's state (a browser profile's cookies). The image makes `/var/lib/capybara/svc` the sandbox
-  user's (0700) and Docker copies that owner onto the empty volume at its first mount. An instance of an image from before device
-  services has no such directory (the mount point is root's): `ensureService` refuses ("This device's image predates
-  device services, or /var/lib/capybara/svc is not owned by the sandbox user …"): the device page has no action that recreates only
+  share or delivery reaches a service's state (a browser profile's cookies). The image makes `/var/lib/capybara/svc` `capybara-svc`'s
+  (0700) and Docker copies that owner onto the empty volume at its first mount. An instance of an image from before isolated
+  device services has no `capybara-svc` user: `ensureService` refuses ("This device's image predates isolated device services
+  …"; a status or stop answers stopped): the device page has no action that recreates only
   the instance, so the answer names the ways it happens (the instance recreated after a period without use, or the device deleted
   and created again). A recreate on the current image over the same files restores it: the volume is still empty, so Docker
   copies the image directory's owner onto it. Files are written without following links and only into regular files: every directory
   is opened `O_NOFOLLOW` below the state root and every file `O_NOFOLLOW | O_NONBLOCK` relative to its directory, then checked to be
-  a regular file, so a link or a FIFO planted there (by the service itself or a command, both the sandbox user) fails the ensure at
-  once instead of redirecting or blocking the write. The service's code stays in its state directory (no separate `codeDir`:
-  the service runs as the same user, so a separate directory would protect nothing); files a newer version no longer ships stay
+  a regular file, so a link or a FIFO planted there (by the service itself) fails the ensure at
+  once instead of redirecting or blocking the write. The service's code stays in its state directory (no separate `codeDir`; agent commands cannot
+  reach it, and a start re-hashes the files against their digest, so a service that changed its own code gets the files again); files a newer version no longer ships stay
   there until the service removes them or the device's files are reset.
-- **Disk**: with `volumeDriver` set, `<name>-svc` is made with the same driver and `DriverOpts.size` of `min(diskMb, 2048)` MB,
+- **Disk**: with `volumeDriver` set, `<name>-services` is made with the same driver and `DriverOpts.size` of `min(diskMb, 2048)` MB,
   so a service (a browser's profile, cache and downloaded Chromium) cannot fill the host's disk; a file system made before it
   gets the sized volume at its next `create`. Without `volumeDriver` the volume is a local one with no size limit, like the
   workspace's.
-- **Operation roots**: `/var/lib/capybara/svc` and `/tmp/.capybara-svc` are refused as read and write roots of an operation
+- **Operation roots**: `/var/lib/capybara/svc` and `/run/capybara-svc` are refused as read and write roots of an operation
   (`protectedRoot`), so no reviewed command scope names a service's state or socket.
-- **Runtime files**: `/tmp/.capybara-svc/<name>/` (0700): `pid` (pid, process start time, boot id, `startedAt`), `sock` (the
-  socket, `CAPYBARA_SERVICE_SOCKET`), `lock`, `log`. `/tmp` is a tmpfs, so a stop, a suspension, a restart fallback or a recreate
+- **Runtime files**: `/run/capybara-svc/<id>/` (0700): `pid` (pid, process start time, boot id, `startedAt`), `sock` (the
+  socket, `CAPYBARA_SERVICE_SOCKET`), `lock`, `log`, `tmp/` (`TMPDIR`). `/run/capybara-svc` is a tmpfs owned by `capybara-svc`, so a stop, a suspension, a restart fallback or a recreate
   wipes them; a pid record also counts only while its process runs with the recorded start time, so it never claims a dead or
   reused pid.
 - **Environment**: the instance's (with its egress proxy variables `HTTP_PROXY` / `HTTPS_PROXY` = `http://<proxy>:3128`, so a

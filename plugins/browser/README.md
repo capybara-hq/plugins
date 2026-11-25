@@ -43,14 +43,31 @@ A real browser in the person's device for agents (browser use spec,
 
 ## The daemon (`daemon/`)
 
-- Chromium starts on the daemon's first start. A launch that fails (no download, a refused
-  network) does not stop the daemon: every request answers the cause and launches again. When the
-  device's proxy refuses Playwright's download hosts (`cdn.playwright.dev`,
-  `playwright.download.prss.microsoft.com`, `storage.googleapis.com` where the CDN redirects the
-  headless shell, or `PLAYWRIGHT_DOWNLOAD_HOST`), the reply lists them
-  as blocked hosts, so the person is asked to allow them. A `PLAYWRIGHT_BROWSERS_PATH` in the
-  device's environment that already holds this build's headless shell revision is used as is
-  (a read-only image cache); otherwise the browser is installed into `<state>/browsers`.
+- Chromium starts on the daemon's first start. On Linux devices (device-docker, device-e2b) it is
+  the full Chromium build in its new headless mode, so the browser presents as an ordinary Chrome:
+  Chrome's own reduced user agent for the platform (`--user-agent`, never "HeadlessChrome"), the
+  browser's own client hints, a window the size of the viewport, the device's locale and time zone.
+  On macOS (device-local) it is the headless shell in one process: the local device sandbox refuses
+  the full build's Mach service registrations. Nothing spoofs a fingerprint, solves a CAPTCHA or
+  hides automation beyond Playwright's own flags (`navigator.webdriver` stays true).
+- Where the browser comes from (plugins#209: never from a place the service or an agent command
+  could write once it runs): the provider's install directory `CAPYBARA_SERVICE_INSTALL`
+  (device-local) is filled on the first start, sealed with `.sealed`, and the daemon answers
+  `restart` and exits, so every later start runs it read only (the plugin starts the service again
+  within the same tool call); else a `PLAYWRIGHT_BROWSERS_PATH` the daemon cannot write, outside
+  the workspace, holding this build's revision (device-docker / device-e2b ship it in
+  `/opt/capybara-browsers`, pinned to this package's playwright-core); else `<state>/browsers`
+  (an image without the pinned browser).
+- A launch that fails (no download, a refused network) does not stop the daemon: every request
+  answers the cause and launches again. When the device's proxy refuses Playwright's download
+  hosts (`cdn.playwright.dev`, `playwright.download.prss.microsoft.com`, `storage.googleapis.com`
+  where the CDN redirects the download, or `PLAYWRIGHT_DOWNLOAD_HOST`), the reply lists them as
+  blocked hosts, so the person is asked to allow them.
+- Verification pages (bot checks, CAPTCHAs: recognised by URL, title, a visible CAPTCHA widget,
+  or a 418 / 429 document): every tool result while one shows starts with a note telling the agent
+  to call `browser_handoff` instead of solving it or switching sites, and the viewer's tab state
+  carries `blocker: { kind: "verification", url }` on that tab (cleared when its page changes) for
+  the panel's "需要你完成验证" strip.
 - The daemon stops after 15 minutes without requests and viewers. A pending handoff keeps it
   running for up to 24 hours after its notice (the person may take a while to sign in); the
   device's own idle suspension can still stop it sooner, and then the question stays open in the

@@ -33,7 +33,7 @@ const transport = (pausable: boolean) => {
 describe("relay stream backpressure", () => {
   it("pauses a pausable transport above the high water mark and resumes at half", async () => {
     const { io, calls } = transport(true);
-    const { sink, stream } = relayStream("svc", io);
+    const { sink, stream } = relayStream("tx.svc", io);
     sink.stderr(new TextEncoder().encode("ready\n"));
     const count = RELAY_HIGH_WATER_BYTES / MIB;
     for (let i = 0; i < count; i++) sink.stdout(frame(MIB));
@@ -51,7 +51,7 @@ describe("relay stream backpressure", () => {
 
   it("closes a stream whose transport cannot pause at the hard cap", async () => {
     const { io, calls } = transport(false);
-    const { sink, stream } = relayStream("svc", io);
+    const { sink, stream } = relayStream("tx.svc", io);
     sink.stderr(new TextEncoder().encode("ready\n"));
     for (let i = 0; i < RELAY_HARD_CAP_BYTES / MIB - 1; i++) sink.stdout(frame(MIB));
     expect(calls).toEqual([]);
@@ -67,7 +67,7 @@ describe("relay stream backpressure", () => {
 
   it("never pauses for messages a reader takes as they come", async () => {
     const { io, calls } = transport(true);
-    const { sink, stream } = relayStream("svc", io);
+    const { sink, stream } = relayStream("tx.svc", io);
     sink.stderr(new TextEncoder().encode("ready\n"));
     const it = stream.messages[Symbol.asyncIterator]();
     for (let i = 0; i < 40; i++) {
@@ -82,7 +82,7 @@ describe("relay stream backpressure", () => {
 describe("relay stream messages iterator", () => {
   it("return() closes the stream", async () => {
     const { io, calls } = transport(true);
-    const { sink, stream } = relayStream("svc", io);
+    const { sink, stream } = relayStream("tx.svc", io);
     sink.stderr(new TextEncoder().encode("ready\n"));
     sink.stdout(frame(1));
     for await (const _ of stream.messages) break;
@@ -92,7 +92,7 @@ describe("relay stream messages iterator", () => {
 
   it("rejects a second next() while one is waiting", async () => {
     const { io } = transport(true);
-    const { sink, stream } = relayStream("svc", io);
+    const { sink, stream } = relayStream("tx.svc", io);
     sink.stderr(new TextEncoder().encode("ready\n"));
     const it = stream.messages[Symbol.asyncIterator]();
     const first = it.next();

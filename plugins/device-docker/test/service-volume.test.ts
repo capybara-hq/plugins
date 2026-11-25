@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createDockerSandbox } from "../src/provider.js";
 
 /**
- * The device service state volume (`<name>-svc`) against a fake Engine API that knows only volumes:
+ * The device service state volume (`<name>-services`) against a fake Engine API that knows only volumes:
  * its size cap under `volumeDriver`, and a stale one dropped when the file system is made anew.
  */
 interface Volume {
@@ -86,7 +86,7 @@ describe("device-docker service state volume", () => {
       Driver: "sized",
       DriverOpts: { size: "8192M" },
     });
-    expect(e.volumes.get("cap-device-a-svc")).toMatchObject({
+    expect(e.volumes.get("cap-device-a-services")).toMatchObject({
       Driver: "sized",
       DriverOpts: { size: "2048M" },
     });
@@ -99,7 +99,7 @@ describe("device-docker service state volume", () => {
       limits: { ...LIMITS, diskMb: 1024 },
       signal: signal(),
     });
-    expect(e.volumes.get("cap-device-b-svc")?.DriverOpts).toEqual({ size: "1024M" });
+    expect(e.volumes.get("cap-device-b-services")?.DriverOpts).toEqual({ size: "1024M" });
   });
 
   it("without volumeDriver the service volume is a plain local one", async () => {
@@ -109,35 +109,35 @@ describe("device-docker service state volume", () => {
       limits: LIMITS,
       signal: signal(),
     });
-    const v = e.volumes.get("cap-device-c-svc");
+    const v = e.volumes.get("cap-device-c-services");
     expect(v).toBeDefined();
     expect(v).not.toHaveProperty("Driver");
     expect(v).not.toHaveProperty("DriverOpts");
   });
 
   it("a stale service volume is dropped when the workspace volume has to be made", async () => {
-    const e = await fakeEngine([{ Name: "cap-device-d-svc", Labels: { stale: "1" } }]);
+    const e = await fakeEngine([{ Name: "cap-device-d-services", Labels: { stale: "1" } }]);
     await provider(e.endpoint).createFileSystem({
       name: "cap-device-d",
       limits: LIMITS,
       signal: signal(),
     });
-    expect(e.calls).toContain("DELETE /volumes/cap-device-d-svc");
-    expect(e.volumes.get("cap-device-d-svc")?.Labels).not.toHaveProperty("stale");
+    expect(e.calls).toContain("DELETE /volumes/cap-device-d-services");
+    expect(e.volumes.get("cap-device-d-services")?.Labels).not.toHaveProperty("stale");
   });
 
   it("an existing file system keeps its service volume", async () => {
     const e = await fakeEngine([
       { Name: "cap-device-e-workspace" },
       { Name: "cap-device-e-skills" },
-      { Name: "cap-device-e-svc", Labels: { kept: "1" } },
+      { Name: "cap-device-e-services", Labels: { kept: "1" } },
     ]);
     await provider(e.endpoint).createFileSystem({
       name: "cap-device-e",
       limits: LIMITS,
       signal: signal(),
     });
-    expect(e.calls).not.toContain("DELETE /volumes/cap-device-e-svc");
-    expect(e.volumes.get("cap-device-e-svc")?.Labels).toEqual({ kept: "1" });
+    expect(e.calls).not.toContain("DELETE /volumes/cap-device-e-services");
+    expect(e.volumes.get("cap-device-e-services")?.Labels).toEqual({ kept: "1" });
   });
 });

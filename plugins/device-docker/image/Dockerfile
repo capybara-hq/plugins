@@ -31,15 +31,23 @@
 #   docs/superpowers/specs/2026-11-23-docker-device-without-host-python-design.md in core;
 # - device services (src/services.ts): the provider runs its service manager with /usr/bin/python3
 #   (standard library only, Linux /proc) and every service and the inline socket relay with
-#   /usr/local/bin/node; state directories live under /var/lib/capybara/svc (owned by the sandbox
-#   user, 0700; device-docker mounts the device's `<name>-svc` volume there, Docker copying the
-#   owner onto it), runtime files under /tmp/.capybara-svc;
+#   /usr/local/bin/node, all as the user capybara-svc (uid / gid 1100, never the sandbox user agent
+#   commands run as: capybara-hq/plugins#210); state directories live under /var/lib/capybara/svc
+#   (owned by capybara-svc, 0700; device-docker mounts the device's `<name>-services` volume there,
+#   Docker copying the owner onto it), runtime files under /run/capybara-svc (capybara-svc, 0700;
+#   device-docker mounts a tmpfs with that owner there, device-e2b uses the directory);
+# - the browser plugin's Chromium (Playwright's full Chromium build, run in its new headless mode so
+#   the browser presents as an ordinary Chrome; PLAYWRIGHT_VERSION below,
+#   kept equal to the browser plugin's playwright-core by tools/checks/test/browser-pin.test.ts)
+#   is installed at build time in /opt/capybara-browsers, root-owned and read only for every
+#   service, which gets it as PLAYWRIGHT_BROWSERS_PATH: a service never runs a browser it or an
+#   agent command could replace (capybara-hq/plugins#209);
 # - one image for every sandbox mode (`auto` / `sandbox`): what a mode may do is set by policy (the
 #   sandbox tool policy and the egress network), not by missing binaries. It carries Node 22
 #   (official tarball, SHA256 pinned per architecture), pnpm (global, so
 #   `pnpm -v` works offline), yarn through corepack shims, ssh / nc / socat, a C toolchain, the
-#   Chromium runtime libraries (no browser binary: Playwright downloads its own into
-#   PLAYWRIGHT_BROWSERS_PATH), CJK fonts, and the published ssh host keys of github.com, gitlab.com
+#   Chromium runtime libraries (the agent's own Playwright downloads its browsers into
+#   PLAYWRIGHT_BROWSERS_PATH in the workspace), CJK fonts, and the published ssh host keys of github.com, gitlab.com
 #   and bitbucket.org in /etc/ssh/ssh_known_hosts;
 # - the root file system is read-only at run time and the user is non-root: everything a tool writes
 #   goes under /workspace (the workspace volume, kept with the device) or /tmp. Package caches,
@@ -90,9 +98,22 @@ RUN groupadd --gid 1000 sandbox \
   && chown 1000:1000 /workspace \
   && chmod 0755 /skills /opt/capybara/skills \
   && chmod 0700 /opt/capybara \
-  && mkdir -p /var/lib/capybara/svc \
-  && chown 1000:1000 /var/lib/capybara/svc \
-  && chmod 0700 /var/lib/capybara/svc
+  && groupadd --gid 1100 capybara-svc \
+  && useradd --uid 1100 --gid 1100 --home-dir /var/lib/capybara/svc --no-create-home \
+    --shell /usr/sbin/nologin capybara-svc \
+  && mkdir -p /var/lib/capybara/svc /run/capybara-svc \
+  && chown 1100:1100 /var/lib/capybara/svc /run/capybara-svc \
+  && chmod 0700 /var/lib/capybara/svc /run/capybara-svc
+
+# The browser plugin's pinned Chromium (the full build), root-owned and read only (see above). Bump
+# PLAYWRIGHT_VERSION together with plugins/browser's playwright-core.
+ARG PLAYWRIGHT_VERSION=1.65.1
+RUN set -eu; \
+  PLAYWRIGHT_BROWSERS_PATH=/opt/capybara-browsers \
+    npx -y "playwright-core@${PLAYWRIGHT_VERSION}" install --no-progress --no-shell chromium; \
+  rm -rf /root/.npm /root/.cache; \
+  chown -R 0:0 /opt/capybara-browsers; chmod -R a+rX,go-w /opt/capybara-browsers; \
+  ls /opt/capybara-browsers | grep -q '^chromium-'
 
 # ssh host keys of the common git hosts, so `git clone git@github.com:…` through the egress proxy's
 # SOCKS listener does not stop at "Host key verification failed". Copied from the hosts' own publications

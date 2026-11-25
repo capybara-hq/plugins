@@ -74,6 +74,31 @@ createServer((conn) => {
 }).listen(process.env.CAPYBARA_SERVICE_SOCKET);
 `;
 
+/**
+ * A service that answers every request with what only it can see: its uid, its environment and
+ * `data/note.txt` in its state directory (agent commands cannot read either since plugins#210).
+ */
+const INFO = `import { createServer } from "node:net";
+import { readFileSync } from "node:fs";
+const frame = (b) => { const o = Buffer.alloc(4 + b.length); o.writeUInt32BE(b.length, 0); b.copy(o, 4); return o; };
+createServer((conn) => {
+  let buf = Buffer.alloc(0);
+  let seen = 0;
+  conn.on("data", (c) => {
+    buf = Buffer.concat([buf, c]);
+    while (buf.length >= 4 && buf.length >= 4 + buf.readUInt32BE(0)) {
+      buf = buf.subarray(4 + buf.readUInt32BE(0));
+      if (++seen === 2) {
+        let note = null;
+        try { note = readFileSync("data/note.txt", "utf8"); } catch {}
+        conn.end(frame(Buffer.from(JSON.stringify({ uid: process.getuid(), env: process.env, note }))));
+      }
+    }
+  });
+  conn.on("error", () => {});
+}).listen(process.env.CAPYBARA_SERVICE_SOCKET);
+`;
+
 const waitFor = async (cond: () => Promise<boolean>, ms = 30_000) => {
   const end = Date.now() + ms;
   while (!(await cond())) {
@@ -122,6 +147,13 @@ describe.skipIf(!READY)("device-e2b services (live)", { timeout: 240_000 }, () =
       tag: "svc-live",
       actor,
     });
+  /** What the service `id` (running INFO) sees. */
+  const info = async (id: string) =>
+    JSON.parse(
+      dec.decode(
+        await sbx.serviceRequest?.(h, id, enc.encode("?"), { timeoutMs: 30_000, signal: sig() }),
+      ),
+    ) as { uid: number; env: Record<string, string>; note: string | null };
   const relays = async () =>
     (await sh("pgrep -fc '[c]apybara-socket-relay' || true")).stdout.trim();
 
@@ -130,15 +162,18 @@ describe.skipIf(!READY)("device-e2b services (live)", { timeout: 240_000 }, () =
   });
 
   it("serviceRequest round-trips an echo service", async () => {
-    await sbx.ensureService?.(h, echo("echo"), sig());
+    await sbx.ensureService?.(h, echo("tx.echo"), sig());
     const big = new Uint8Array(1024 * 1024).map((_, i) => i % 251);
-    const answer = await sbx.serviceRequest?.(h, "echo", big, { timeoutMs: 60_000, signal: sig() });
+    const answer = await sbx.serviceRequest?.(h, "tx.echo", big, {
+      timeoutMs: 60_000,
+      signal: sig(),
+    });
     expect(Buffer.from(answer ?? []).equals(Buffer.from(big))).toBe(true);
     await waitFor(async () => (await relays()) === "0");
   });
 
   it("openStream relays 50 messages", async () => {
-    const s = await sbx.openStream?.(h, { service: "echo" }, sig());
+    const s = await sbx.openStream?.(h, { service: "tx.echo" }, sig());
     if (s === undefined) throw new Error("no stream");
     const got: string[] = [];
     const reading = (async () => {
@@ -159,10 +194,10 @@ describe.skipIf(!READY)("device-e2b services (live)", { timeout: 240_000 }, () =
   it("relay exits when the socket closes", async () => {
     await sbx.ensureService?.(
       h,
-      { ...echo("oneshot"), entry: "one.mjs", files: { "one.mjs": enc.encode(ONE_SHOT) } },
+      { ...echo("tx.oneshot"), entry: "one.mjs", files: { "one.mjs": enc.encode(ONE_SHOT) } },
       sig(),
     );
-    const s = await sbx.openStream?.(h, { service: "oneshot" }, sig());
+    const s = await sbx.openStream?.(h, { service: "tx.oneshot" }, sig());
     if (s === undefined) throw new Error("no stream");
     await s.send(enc.encode("only"));
     const got: string[] = [];
@@ -173,71 +208,115 @@ describe.skipIf(!READY)("device-e2b services (live)", { timeout: 240_000 }, () =
   });
 
   it("service survives across exec calls and stops on suspend", async () => {
-    const started = await sbx.ensureService?.(h, echo("keep"), sig());
+    const started = await sbx.ensureService?.(h, echo("tx.keep"), sig());
     expect(started?.state).toBe("running");
     expect((await sh("echo hi")).stdout).toBe("hi\n");
     await sbx.killAll(h, sig());
     await sbx.killTagged(h, ["svc-live"], sig());
-    expect(await sbx.serviceStatus?.(h, "keep", sig())).toEqual(started);
+    expect(await sbx.serviceStatus?.(h, "tx.keep", sig())).toEqual(started);
     await sbx.suspend(h, sig());
-    expect(await sbx.serviceStatus?.(h, "keep", sig())).toEqual({
+    expect(await sbx.serviceStatus?.(h, "tx.keep", sig())).toEqual({
       ...started,
       state: "stopped",
       startedAt: null,
     });
     expect(await sbx.resume(h, sig())).toBe("resumed");
-    expect((await sbx.serviceStatus?.(h, "keep", sig()))?.state).toBe("stopped");
+    expect((await sbx.serviceStatus?.(h, "tx.keep", sig()))?.state).toBe("stopped");
   });
 
   it("sends the files only when the state directory does not hold them (digest first)", async () => {
     const MIB = 1024 * 1024;
     const filler = (seed: number) => new Uint8Array(MIB).map((_, i) => (i * seed) % 251);
-    const ENV = `import { createServer } from "node:net";
-import { writeFileSync } from "node:fs";
-writeFileSync("env.json", JSON.stringify(process.env));
-createServer(() => {}).listen(process.env.CAPYBARA_SERVICE_SOCKET);
-`;
     const spec = (seed: number): DeviceServiceSpec => ({
-      name: "digest",
+      name: "tx.digest",
       runtime: "node",
-      entry: "env.mjs",
+      entry: "info.mjs",
       args: [],
-      files: { "env.mjs": enc.encode(ENV), "lib/filler.bin": filler(seed) },
+      files: { "info.mjs": enc.encode(INFO), "lib/filler.bin": filler(seed) },
     });
     const s = await sbx.ensureService?.(h, spec(7), sig());
-    expect(sentFor("digest")).toHaveLength(2);
-    const raw = await sbx.readFile(h, `${s?.stateDir}/env.json`, {
-      maxBytes: 64_000,
-      signal: sig(),
-    });
-    const svcEnv = JSON.parse(dec.decode(raw?.data)) as Record<string, string>;
+    expect(sentFor("tx.digest")).toHaveLength(2);
+    expect(s?.state).toBe("running");
+    const { env: svcEnv } = await info("tx.digest");
     expect(svcEnv.CAPYBARA_SERVICE_WORKSPACE).toBe("/workspace");
-    await sbx.stopService?.(h, "digest", sig());
+    expect(svcEnv.HOME).toBe(s?.stateDir);
+    for (const [k, v] of Object.entries(svcEnv))
+      if (k !== "CAPYBARA_SERVICE_WORKSPACE")
+        expect(`${k}=${v}`).not.toMatch(/(^|[=:])\/workspace(\/|:|$)/);
+    await sbx.stopService?.(h, "tx.digest", sig());
     sent.length = 0;
     expect((await sbx.ensureService?.(h, spec(7), sig()))?.state).toBe("running");
-    expect(sentFor("digest")).toHaveLength(1);
-    expect(sentFor("digest")[0]).toBeLessThan(4096);
-    await sbx.stopService?.(h, "digest", sig());
+    expect(sentFor("tx.digest")).toHaveLength(1);
+    expect(sentFor("tx.digest")[0]).toBeLessThan(4096);
+    await sbx.stopService?.(h, "tx.digest", sig());
     sent.length = 0;
     expect((await sbx.ensureService?.(h, spec(11), sig()))?.state).toBe("running");
-    expect(sentFor("digest")).toHaveLength(2);
-    expect(sentFor("digest")[1]).toBeGreaterThan(MIB);
+    expect(sentFor("tx.digest")).toHaveLength(2);
+    expect(sentFor("tx.digest")[1]).toBeGreaterThan(MIB);
+  });
+
+  it("an agent command can neither read a service's state nor reach its socket or process", async () => {
+    const id = "browser.browser";
+    const status = await sbx.ensureService?.(
+      h,
+      {
+        ...echo(id),
+        entry: "info.mjs",
+        files: { "info.mjs": enc.encode(INFO), "data/note.txt": enc.encode("session=secret") },
+      },
+      sig(),
+    );
+    expect(status?.state).toBe("running");
+    const seen = await info(id);
+    expect(seen.uid).toBe(1100);
+    expect(seen.note).toBe("session=secret");
+    const dir = serviceStateDir(id);
+    const pid = (await sh(`pgrep -u capybara-svc -f '${dir}/info.mjs' | head -n1`)).stdout.trim();
+    expect(pid).toMatch(/^\d+$/);
+    // refused (or read as missing): never the contents
+    const leaked = await sbx
+      .readFile(h, `${dir}/data/note.txt`, { maxBytes: 100, signal: sig() })
+      .catch(() => null);
+    expect(leaked).toBeNull();
+    const agent = await sh(
+      [
+        `cat ${dir}/data/note.txt`,
+        "ls /var/lib/capybara/svc",
+        "ls /run/capybara-svc",
+        `node -e 'require("net").connect(process.argv[1]).on("connect",()=>process.exit(0)).on("error",()=>process.exit(1))' /run/capybara-svc/${id}/sock`,
+        `kill -0 ${pid}`,
+        `cat /proc/${pid}/environ`,
+      ]
+        .map((c) => `if ${c} >/dev/null 2>&1; then echo OPEN; else echo refused; fi`)
+        .join("; "),
+    );
+    expect(agent.stdout.trim().split("\n")).toEqual(Array(6).fill("refused"));
   });
 
   it("service files land on the persistent volume", async () => {
     const status = await sbx.ensureService?.(
       h,
-      echo("files", { "data/note.txt": enc.encode("kept") }),
+      {
+        ...echo("tx.files"),
+        entry: "info.mjs",
+        files: { "info.mjs": enc.encode(INFO), "data/note.txt": enc.encode("kept") },
+      },
       sig(),
     );
-    expect(status?.stateDir).toBe(serviceStateDir("files"));
+    expect(status?.stateDir).toBe(serviceStateDir("tx.files"));
     await sbx.destroy(h, sig(), FENCE);
     h = await sbx.create({ fence: FENCE, name, limits, fileSystem: fs, signal: sig() });
-    const r = await sbx.readFile(h, `${status?.stateDir}/data/note.txt`, {
-      maxBytes: 100,
-      signal: sig(),
-    });
-    expect(dec.decode(r?.data)).toBe("kept");
-    expect((await sbx.serviceStatus?.(h, "files", sig()))?.state).toBe("stopped");
+    expect((await sbx.serviceStatus?.(h, "tx.files", sig()))?.state).toBe("stopped");
+    // started again from the kept state directory, it still reads its file
+    await sbx.ensureService?.(
+      h,
+      {
+        ...echo("tx.files"),
+        entry: "info.mjs",
+        files: { "info.mjs": enc.encode(INFO), "data/note.txt": enc.encode("kept") },
+      },
+      sig(),
+    );
+    expect((await info("tx.files")).note).toBe("kept");
   });
 });
