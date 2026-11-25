@@ -3,10 +3,12 @@
 // through the embed bridge and to the plugin only through relative routes (`stream-ticket`,
 // `network-hosts`, `handoff-answer`) plus the ticket's WebSocket. Every (re)connect rebuilds the
 // whole UI from the daemon's first `state` message; nothing else survives an iframe remount (the
-// opaque-origin sandbox has no usable storage). Every viewer is the conversation owner's, so any
-// non-compact panel is interactive while the person holds control, whichever panel took it; in
-// the watch state (the agent drives) the panel is read-only, and the daemon drops input anyway.
-// Takeover input (pointer, cursor, keys, IME, paste) lives in input.ts.
+// opaque-origin sandbox has no usable storage). The host keeps the frame mounted across its full
+// mode and tells the panel the mode it draws (`panel-mode` after `init` and on every change).
+// Every viewer is the conversation owner's, so any non-compact panel is interactive while the
+// person holds control, whichever panel took it; in the watch state (the agent drives) the panel
+// is read-only, and the daemon drops input anyway. Takeover input (pointer, cursor, keys, IME,
+// paste) lives in input.ts.
 import type { ViewerFrame, ViewerIn, ViewerOut, ViewerTab } from "../../daemon/protocol.js";
 import { decodeFrame, VIEWPORT } from "../../daemon/protocol.js";
 import { type Locale, type StringKey, t } from "./i18n.js";
@@ -125,8 +127,9 @@ export function mountPanel(opts: PanelOptions): void {
   /** This connection is a quiet look for the browser from "not running": it stays there until a state. */
   let quiet = false;
   /**
-   * The host shows this panel full (this panel asked for it on take over): the frame fills the box,
-   * no resize. The host sends no mode back, so it ends when the person's control ends by any path.
+   * The host shows this panel full: the frame fills the box, no resize. Only the host's
+   * `panel-mode` sets it (after `init` and on every change, whoever made it: this panel's ask on
+   * take over, the host's close control or Esc, the host refusing full mode on a phone).
    */
   let full = false;
   let postedHeight = 0;
@@ -169,14 +172,19 @@ export function mountPanel(opts: PanelOptions): void {
     },
     label: t(locale, "view"),
   });
-  function bridge(next: boolean): void {
-    full = next;
+  /** Asks the host to enter or leave full mode; the host's own `panel-mode` says what it did. */
+  function askMode(next: boolean): void {
     post({ protocol: PROTOCOL, type: "panel-mode", full: next });
+  }
+  /** The host's `panel-mode`: the mode it draws this panel in. */
+  function hostMode(next: boolean): void {
+    if (next === full) return;
+    full = next;
     if (!next) {
       // back in the side panel: ask for its size again, even if it equals the last one asked
       postedHeight = 0;
-      fitHeight();
     }
+    onBoxChange();
   }
 
   // ---- rendering ----
@@ -302,7 +310,7 @@ export function mountPanel(opts: PanelOptions): void {
     const was = control;
     control = s.control;
     // the take over ended elsewhere (another panel handed back, the agent resumed): leave full
-    if (full && was === "user" && control === "agent") bridge(false);
+    if (full && was === "user" && control === "agent") askMode(false);
     // and an allow's pending reopen no longer takes over again on this connection's successors
     if (was === "user" && control === "agent" && pendingNav?.sentOn === sock) pendingNav = null;
     const active = tabs.find((x) => x.active);
@@ -629,7 +637,7 @@ export function mountPanel(opts: PanelOptions): void {
 
   function takeover(): void {
     send({ t: "takeover" });
-    bridge(true);
+    askMode(true);
     input.focus();
     renderChrome();
   }
@@ -639,7 +647,7 @@ export function mountPanel(opts: PanelOptions): void {
     // the person's latest choice wins over an allow's pending reopen (which would take over again)
     pendingNav = null;
     send({ t: "handback" });
-    bridge(false);
+    askMode(false);
     renderChrome();
     if (pendingHandoff !== null) void answerHandoff(true);
   }
@@ -806,6 +814,8 @@ export function mountPanel(opts: PanelOptions): void {
       token = m.token;
     } else if (m.type === "theme") {
       applyTheme(m.tokens, m.theme);
+    } else if (m.type === "panel-mode" && typeof m.full === "boolean") {
+      hostMode(m.full);
     }
   });
 }

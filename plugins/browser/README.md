@@ -27,7 +27,8 @@ A real browser in the person's device for agents (browser use spec,
   extension instance), sends one `ToolRequest` and reports the hosts the device refused with
   `reportBlockedHosts` (the kernel raises the network ask and reruns the call once allowed).
 - `browser_handoff` sends the daemon a handoff notice (the panels show a banner with 完成 / 取消),
-  then raises an `InputRequired` question `{ done: boolean }` in the conversation (a boolean, not
+  then raises an `InputRequired` question `{ done: boolean }` in the conversation, with `open`
+  naming the `browser` panel so the person's conversation page opens it (a boolean, not
   a 完成 / 取消 enum: the kernel's `answerHandoff`, which the banner uses, answers `{ done }`); on
   resume it clears the notice (with Done also handing the browser back, so a takeover the person
   still holds ends) and returns the page snapshot, or fails with "The user cancelled the handoff;
@@ -151,10 +152,12 @@ A real browser in the person's device for agents (browser use spec,
   until the browser answers) every 10 s while visible, for 30 minutes at most (a ticket never
   starts the service). A refused allow or answer shows the kernel's reason.
 - Size: in the side panel the page posts the embed `resize` (120–4000) for the 16:10 frame at the
-  available width plus its bars, again whenever its box changes; in full mode (asked for with
-  `panel-mode` on take over) the host fills the panel and the frame is letterboxed in it, with
-  the viewer's frame size following the shown size. The host sends no mode back, so full mode
-  ends with the person's control by any path (hand back here or elsewhere, the agent resuming),
-  and the side size is asked for again.
+  available width plus its bars, again whenever its box changes; in full mode the host fills the
+  panel and the frame is letterboxed in it, with the viewer's frame size following the shown size.
+  The page asks for full mode with `panel-mode` on take over and for the side panel on hand back
+  (here, or when control returns to the agent elsewhere), but its layout follows only the host's
+  `panel-mode` (after `init` and on every change: the host's close control or Esc, a phone where
+  the host refuses full mode); back in the side panel it asks for its size again. The host keeps
+  the frame mounted across the switch, so the viewer connection survives it.
 - A dialog strip hides after 10 s or when the page changes; agent clicks flash once each; a lock
   shows a secure page. The panel listens only to messages from its host page.

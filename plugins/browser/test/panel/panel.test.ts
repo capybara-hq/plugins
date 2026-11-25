@@ -150,6 +150,14 @@ function setup(
 const resizes = (s: Setup) =>
   s.host.filter((m) => (m as { type?: string }).type === "resize") as { height: number }[];
 const modes = (s: Setup) => s.host.filter((m) => (m as { type?: string }).type === "panel-mode");
+/** The host tells the panel the mode it draws it in (the embed bridge's `panel-mode`). */
+const hostMode = (s: Setup, full: boolean) =>
+  s.dom.window.dispatchEvent(
+    new s.dom.window.MessageEvent("message", {
+      source: s.dom.window,
+      data: { protocol: "capybara-embed/1", type: "panel-mode", full },
+    }),
+  );
 
 async function live(s: Setup, st: ViewerOut = state()): Promise<FakeSocket> {
   await vi.waitFor(() => expect(FakeSocket.all.length).toBeGreaterThan(0));
@@ -881,6 +889,7 @@ describe("panel size", () => {
     const sock = await live(s);
     $(s, "takeover").click();
     sock.push(state({ control: "user" }));
+    hostMode(s, true);
     const n = resizes(s).length;
     // the host fills the panel: 1000x700 letterboxes to 1000x625, the viewer size follows it
     Object.defineProperty(s.dom.window, "innerHeight", { value: 780, configurable: true });
@@ -889,7 +898,37 @@ describe("panel size", () => {
     expect(sock.sent.at(-1)).toEqual({ t: "resize", maxWidth: 1000, maxHeight: 625 });
     expect($(s, "view").style.width).toBe("1000px");
     $(s, "handback").click();
+    // asked, not yet done: still full until the host says so
+    expect(resizes(s)).toHaveLength(n);
+    hostMode(s, false);
     expect(resizes(s).at(-1)?.height).toBe(80 + 625);
+  });
+
+  it("follows the host leaving full mode on its own (its Esc or close), the person still driving", async () => {
+    const s = setup({ innerHeight: 480, dpr: 1 });
+    const sock = await live(s);
+    $(s, "takeover").click();
+    sock.push(state({ control: "user" }));
+    hostMode(s, true);
+    const asks = modes(s).length;
+    const n = resizes(s).length;
+    hostMode(s, false);
+    // back in the side panel: its size is asked for again, and nothing is asked of the host
+    expect(resizes(s)).toHaveLength(n + 1);
+    expect(modes(s)).toHaveLength(asks);
+    expect(($(s, "handback") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("never takes full mode from its own ask: a host that refuses it keeps the side size", async () => {
+    const s = setup({ innerHeight: 480, dpr: 1 });
+    const sock = await live(s);
+    $(s, "takeover").click();
+    sock.push(state({ control: "user" }));
+    // the host keeps the side panel (a phone): the page still asks for its height
+    hostMode(s, false);
+    const n = resizes(s).length;
+    s.resizeStage(320, 400);
+    expect(resizes(s)).toHaveLength(n + 1);
   });
 
   it("leaves full mode when the take over ends elsewhere and asks for its size again", async () => {
@@ -898,6 +937,7 @@ describe("panel size", () => {
     const before = resizes(s).length;
     $(s, "takeover").click();
     sock.push(state({ control: "user" }));
+    hostMode(s, true);
     // another panel handed back: control returns to the agent without this panel's hand back
     sock.push(state({ control: "agent" }));
     expect(modes(s).at(-1)).toEqual({
@@ -905,6 +945,7 @@ describe("panel size", () => {
       type: "panel-mode",
       full: false,
     });
+    hostMode(s, false);
     // posted again although the height is the one asked before
     expect(resizes(s)).toHaveLength(before + 1);
     expect(resizes(s).at(-1)?.height).toBe(380);

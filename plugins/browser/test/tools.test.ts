@@ -421,6 +421,8 @@ describe("browser_handoff", () => {
     expect(field?.key).toBe("done");
     expect(field?.schema).toEqual({ type: "boolean" });
     expect(field?.label).toEqual({ zh: "完成", en: "Done" });
+    // the person's conversation page opens the browser panel (a panel of this extension)
+    expect(first.open).toEqual({ contribution: "browser" });
     expect(f.requests).toEqual([
       { op: "handoff_notice", callId: "call-1", message: "Please sign in." },
     ]);
