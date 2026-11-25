@@ -16,6 +16,8 @@
 # - /skills 归 root，插件只读挂载；/opt/capybara 归 root 且 0700：插件以 root 经 /opt/capybara/skills
 #   （同一个卷的可写挂载）写入技能，沙箱用户进不去；
 # - 内核的工具要用 GNU find（-print0）、GNU grep（--null、-e … --）、coreutils、sh / bash；
+# - the kernel's Grep / Glob prefer ripgrep (`rg`, so .gitignore and other ignore files are honored)
+#   and fall back to GNU grep / find when it is missing; the image ships it (core#889);
 #   插件中止命令要用 setsid（util-linux）与 pkill（procps）、timeout 与 base64（coreutils）；
 # - /opt/capybara-runtime holds the restricted operation runtime, root-owned 0755 / 0644 (below);
 # - the plugins' list and scan (project root) run a python3 script inside the sandbox (python3 -I and
@@ -60,7 +62,7 @@ FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20b
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     bash ca-certificates coreutils curl file findutils git grep jq less procps python3 \
-    python3-pip python3-venv unzip util-linux xz-utils \
+    python3-pip python3-venv ripgrep unzip util-linux xz-utils \
     openssh-client netcat-openbsd socat build-essential pkg-config \
     fonts-liberation fonts-noto-cjk \
 # Chromium runtime libraries: the set `playwright install-deps chromium` installs on Debian 13

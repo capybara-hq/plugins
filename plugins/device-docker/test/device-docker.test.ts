@@ -378,6 +378,10 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
       expect(big.exitCode).toBe(0);
       // bash 语法可用
       expect((await sh(h.id, "a=(x y); [[ $a == x ]] && echo bash")).stdout).toBe("bash\n");
+      // ripgrep is on the system PATH: the kernel's Grep / Glob prefer it (core#889)
+      expect((await sh(h.id, "PATH=/usr/bin:/bin rg --version | head -n 1")).stdout).toMatch(
+        /^ripgrep \d+\./,
+      );
     } finally {
       await sbx.destroy(h, sig(), null);
     }

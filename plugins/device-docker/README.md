@@ -46,7 +46,7 @@ plugin upgrade moves both images with it and the kernel never needs to know the 
 
 - The sandbox image `image/Dockerfile` (shared by the Docker plugin and the E2B template).
   Debian trixie-slim (pinned by digest), with bash, coreutils, GNU find / grep (the kernel's `Glob` / `Grep`
-  depend on them), procps, util-linux (`setsid`), curl, git, jq, python3 (with pip / venv) and so on; it runs as the non-root user `sandbox`
+  depend on them), ripgrep (`rg`: the kernel's `Glob` / `Grep` prefer it, so ignore files such as `.gitignore` are honored), procps, util-linux (`setsid`), curl, git, jq, python3 (with pip / venv) and so on; it runs as the non-root user `sandbox`
   (uid 1000), with HOME and the working directory at `/workspace`. **One image serves every device**: what limits a device is the
   container and its network, not missing binaries:
   - Node 22 LTS (the official tarball, checksum-pinned), pnpm (installed globally) and yarn (a corepack shim; `COREPACK_HOME`
