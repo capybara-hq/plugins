@@ -66,6 +66,8 @@ function setup(
   opts: {
     locale?: "zh" | "en";
     width?: number;
+    /** The device's screen width (default a desktop's). */
+    screen?: number;
     dpr?: number;
     ticket?: () => Response;
     answer?: () => Response;
@@ -80,6 +82,11 @@ function setup(
   const dom = new JSDOM(PANEL_HTML, { url: "https://app.test/plugin-ui/browser/browser" });
   const win = dom.window as unknown as Window & typeof globalThis;
   Object.defineProperty(win, "innerWidth", { value: opts.width ?? 800, configurable: true });
+  // the device's screen: a phone (below 600) only watches
+  Object.defineProperty(win, "screen", {
+    value: { width: opts.screen ?? 1440, height: 900 },
+    configurable: true,
+  });
   Object.defineProperty(win, "devicePixelRatio", { value: opts.dpr ?? 1, configurable: true });
   Object.defineProperty(win, "innerHeight", { value: opts.innerHeight ?? 480, configurable: true });
   const observers: (() => void)[] = [];
@@ -112,8 +119,10 @@ function setup(
     return new Response("{}", { status: 200 });
   };
   const stage = dom.window.document.getElementById("stage") as HTMLElement;
+  // the area the picture is fitted into: the stage minus its 12 px ground on each side
   let stageRect = { width: 480, height: 400 };
-  stage.getBoundingClientRect = () => ({ left: 0, top: 0, ...stageRect }) as DOMRect;
+  stage.getBoundingClientRect = () =>
+    ({ left: 0, top: 0, width: stageRect.width + 24, height: stageRect.height + 24 }) as DOMRect;
   mountPanel({
     window: win,
     fetch: fetchImpl as never,
@@ -235,7 +244,9 @@ describe("panel", () => {
     const sock = await live(s, state({ control: "user" }));
     // no takeover click in this panel: a remount (expand / collapse) mid-takeover
     expect(($(s, "handback") as HTMLElement).hidden).toBe(false);
-    expect($(s, "status").textContent).toBe(t("en", "takeoverHint"));
+    expect($(s, "status").textContent).toBe(
+      `${t("en", "statusUser")} · ${t("en", "statusUserDetail")}`,
+    );
     const view = $(s, "view");
     view.getBoundingClientRect = () => ({ left: 0, top: 0, width: 480, height: 300 }) as DOMRect;
     $(s, "input-sink").dispatchEvent(
@@ -827,8 +838,8 @@ describe("panel", () => {
     expect($(s, "empty").textContent).toContain(t("en", "emptyTitle"));
   });
 
-  it("compact size class is watch-only", async () => {
-    const s = setup({ width: 500 });
+  it("a phone (the host's compact size class) is watch-only", async () => {
+    const s = setup({ width: 390, screen: 390 });
     const sock = await live(s);
     expect(($(s, "takeover") as HTMLElement).hidden).toBe(true);
     expect(sock.sent[0]).toMatchObject({ t: "hello" });
@@ -857,84 +868,49 @@ describe("panel", () => {
 });
 
 describe("panel size", () => {
-  it("asks for the height of a 16:10 frame at the available width plus its bars", async () => {
-    // viewport 480, stage 400: 80 px of bars; a 480 px wide frame is 300 px tall
-    const s = setup({ innerHeight: 480 });
-    await live(s);
-    expect(resizes(s).at(-1)).toEqual({
-      protocol: "capybara-embed/1",
-      type: "resize",
-      height: 380,
-    });
-    // the host applies it: the stage is now exactly the frame, nothing more is asked
-    const n = resizes(s).length;
-    Object.defineProperty(s.dom.window, "innerHeight", { value: 380, configurable: true });
-    s.resizeStage(480, 300);
-    expect(resizes(s)).toHaveLength(n);
-  });
-
-  it("asks again when the width changes, within the host's range", async () => {
-    const s = setup({ innerHeight: 480 });
-    await live(s);
+  it("never posts resize: the host fills the panel and the picture is contained in it", async () => {
+    const s = setup({ dpr: 1 });
+    const sock = await live(s);
     s.resizeStage(320, 400);
-    expect(resizes(s).at(-1)?.height).toBe(80 + 200);
-    s.resizeStage(16_000, 400);
-    expect(resizes(s).at(-1)?.height).toBe(4000);
-    s.resizeStage(16, 400);
-    expect(resizes(s).at(-1)?.height).toBe(120);
+    s.resizeStage(1000, 300);
+    expect(resizes(s)).toHaveLength(0);
+    // contained: 1000x300 fits a 480x300 picture, centred by the stage
+    expect($(s, "view").style.width).toBe("480px");
+    expect($(s, "view").style.height).toBe("300px");
+    expect(sock.sent.at(-1)).toEqual({ t: "resize", maxWidth: 480, maxHeight: 300 });
   });
 
-  it("asks nothing in full mode, where the frame fills the box, and again after hand back", async () => {
-    const s = setup({ innerHeight: 480, dpr: 1 });
+  it("the viewer size follows the shown size in full mode, and the side cap after it", async () => {
+    const s = setup({ dpr: 1 });
     const sock = await live(s);
     $(s, "takeover").click();
     sock.push(state({ control: "user" }));
     hostMode(s, true);
-    const n = resizes(s).length;
-    // the host fills the panel: 1000x700 letterboxes to 1000x625, the viewer size follows it
-    Object.defineProperty(s.dom.window, "innerHeight", { value: 780, configurable: true });
+    // the host fills the page: 1000x700 letterboxes to 1000x625, the viewer size follows it
     s.resizeStage(1000, 700);
-    expect(resizes(s)).toHaveLength(n);
     expect(sock.sent.at(-1)).toEqual({ t: "resize", maxWidth: 1000, maxHeight: 625 });
     expect($(s, "view").style.width).toBe("1000px");
     $(s, "handback").click();
-    // asked, not yet done: still full until the host says so
-    expect(resizes(s)).toHaveLength(n);
+    sock.push(state({ control: "agent" }));
     hostMode(s, false);
-    expect(resizes(s).at(-1)?.height).toBe(80 + 625);
+    expect(sock.sent.at(-1)).toEqual({ t: "resize", maxWidth: 640, maxHeight: 400 });
   });
 
-  it("follows the host leaving full mode on its own (its Esc or close), the person still driving", async () => {
-    const s = setup({ innerHeight: 480, dpr: 1 });
+  it("follows the host leaving full mode on its own (its Esc or close), asking nothing back", async () => {
+    const s = setup({ dpr: 1 });
     const sock = await live(s);
     $(s, "takeover").click();
     sock.push(state({ control: "user" }));
     hostMode(s, true);
     const asks = modes(s).length;
-    const n = resizes(s).length;
     hostMode(s, false);
-    // back in the side panel: its size is asked for again, and nothing is asked of the host
-    expect(resizes(s)).toHaveLength(n + 1);
     expect(modes(s)).toHaveLength(asks);
     expect(($(s, "handback") as HTMLElement).hidden).toBe(false);
   });
 
-  it("never takes full mode from its own ask: a host that refuses it keeps the side size", async () => {
-    const s = setup({ innerHeight: 480, dpr: 1 });
+  it("leaves full mode when the take over ends elsewhere", async () => {
+    const s = setup();
     const sock = await live(s);
-    $(s, "takeover").click();
-    sock.push(state({ control: "user" }));
-    // the host keeps the side panel (a phone): the page still asks for its height
-    hostMode(s, false);
-    const n = resizes(s).length;
-    s.resizeStage(320, 400);
-    expect(resizes(s)).toHaveLength(n + 1);
-  });
-
-  it("leaves full mode when the take over ends elsewhere and asks for its size again", async () => {
-    const s = setup({ innerHeight: 480 });
-    const sock = await live(s);
-    const before = resizes(s).length;
     $(s, "takeover").click();
     sock.push(state({ control: "user" }));
     hostMode(s, true);
@@ -946,13 +922,89 @@ describe("panel size", () => {
       full: false,
     });
     hostMode(s, false);
-    // posted again although the height is the one asked before
-    expect(resizes(s)).toHaveLength(before + 1);
-    expect(resizes(s).at(-1)?.height).toBe(380);
     // a state of the agent before the take over lands does not leave full mode
     $(s, "takeover").click();
     sock.push(state({ control: "agent" }));
     expect(modes(s).at(-1)).toMatchObject({ full: true });
+  });
+});
+
+describe("design states", () => {
+  const frame = { t: "frame", seq: 1, jpeg: "AAAA", width: 1280, height: 800 } as const;
+
+  it("is one skeleton until the state and the first frame are there, then switches once", async () => {
+    const s = setup();
+    expect(($(s, "skeleton") as HTMLElement).hidden).toBe(false);
+    expect($(s, "app").hasAttribute("data-loading")).toBe(true);
+    const sock = await live(s);
+    // the state alone is not enough: still the skeleton
+    expect(($(s, "skeleton") as HTMLElement).hidden).toBe(false);
+    sock.push(frame);
+    await vi.waitFor(() => expect(($(s, "skeleton") as HTMLElement).hidden).toBe(true));
+    expect($(s, "app").hasAttribute("data-loading")).toBe(false);
+    expect(s.dom.window.document.body.hasAttribute("data-ready")).toBe(true);
+  });
+
+  it("not running shows at once, without the skeleton", async () => {
+    const s = setup({
+      ticket: () => new Response(JSON.stringify({ code: "service_not_running" }), { status: 409 }),
+    });
+    await vi.waitFor(() => expect(($(s, "empty") as HTMLElement).hidden).toBe(false));
+    expect(($(s, "skeleton") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("the takeover slot is reserved before the view is live and at any width", async () => {
+    const s = setup({ width: 320 });
+    expect($(s, "takeover").hasAttribute("data-gone")).toBe(false);
+    await live(s);
+    expect(($(s, "takeover") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("a narrow panel merges tabs and address into one button with the tab count", async () => {
+    const s = setup({ width: 360 });
+    await live(
+      s,
+      state({
+        tabs: [
+          { id: "t1", title: "News", url: "https://news.example.com/world", active: true },
+          { id: "t2", title: "Search", url: "https://search.example.com/", active: false },
+        ],
+      }),
+    );
+    expect($(s, "tabsbtn-name").textContent).toBe("news.example.com");
+    expect($(s, "tabsbtn-count").textContent).toBe("2");
+    $(s, "tabsbtn").click();
+    const items = Array.from($(s, "menu").querySelectorAll("button")).map((b) => b.textContent);
+    expect(items).toEqual(["News", "Search", t("en", "newTab")]);
+    $(s, "more").click();
+    const more = Array.from($(s, "menu").querySelectorAll("button")).map((b) => b.textContent);
+    expect(more).toEqual([t("en", "forward"), t("en", "reload")]);
+  });
+
+  it("the status line: the agent at work, and the person in control with the frame's accent ring", async () => {
+    const s = setup();
+    const sock = await live(s, state({ loading: true }));
+    expect($(s, "status").getAttribute("data-tone")).toBe("agent");
+    expect($(s, "status").textContent).toBe(
+      `${t("en", "statusAgent")} · ${t("en", "statusLoading")}`,
+    );
+    sock.push(state({ control: "user" }));
+    expect($(s, "status").getAttribute("data-tone")).toBe("user");
+    expect($(s, "stage").getAttribute("data-control")).toBe("user");
+  });
+
+  it("a page that asks for a human check shows the verify strip; 去验证 takes over", async () => {
+    const s = setup();
+    const sock = await live(
+      s,
+      state({ verification: { url: "https://search.example.com/verify" } }),
+    );
+    expect(($(s, "verify") as HTMLElement).hidden).toBe(false);
+    expect(($(s, "status") as HTMLElement).hidden).toBe(true);
+    // one primary: take over steps back while verification waits
+    expect($(s, "takeover").className).toBe("secondary");
+    $(s, "verify-go").click();
+    expect(sock.sent).toContainEqual({ t: "takeover" });
   });
 });
 
@@ -1039,7 +1091,7 @@ describe("handoff banner", () => {
   });
 
   it("works in the compact size class", async () => {
-    const s = setup({ width: 500 });
+    const s = setup({ width: 390, screen: 390 });
     await live(s, state({ handoff }));
     expect(($(s, "handoff") as HTMLElement).hidden).toBe(false);
     $(s, "handoff-done").click();
@@ -1069,7 +1121,13 @@ describe("i18n", () => {
         doc.querySelectorAll("button, label, p, span, [aria-label], [title], input"),
       )) {
         if (el.closest("[hidden]") !== null) continue;
-        if (el.id === "url" || el.closest("#tabs") !== null || el.id === "blocked-host") continue;
+        // page data: the address, the tabs (and the narrow tabs button), the blocked host
+        if (
+          el.id === "url" ||
+          el.closest("#tabs, #tabsbtn, #urltext") !== null ||
+          el.id === "blocked-host"
+        )
+          continue;
         const own = Array.from(el.childNodes)
           .filter((n) => n.nodeType === 3)
           .map((n) => (n.textContent ?? "").trim())
@@ -1080,8 +1138,11 @@ describe("i18n", () => {
           if (v) texts.push(v);
         }
       }
-      for (const text of texts)
-        expect(known.has(text) || /^[<>↻×+]$/.test(text), `${locale}: ${text}`).toBe(true);
+      for (const text of texts) {
+        // the status detail is an i18n string after a separator
+        const bare = text.replace(/^· /, "");
+        expect(known.has(bare), `${locale}: ${text}`).toBe(true);
+      }
       if (locale === "zh") expect(texts.join(" ")).not.toMatch(/agent|企业/i);
     }
   });

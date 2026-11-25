@@ -13,6 +13,7 @@ import type { ViewerFrame, ViewerIn, ViewerOut, ViewerTab } from "../../daemon/p
 import { decodeFrame, VIEWPORT } from "../../daemon/protocol.js";
 import { type Locale, type StringKey, t } from "./i18n.js";
 import { mountInput } from "./input.js";
+import { ICONS } from "./page.js";
 
 const PROTOCOL = "capybara-embed/1";
 const ASPECT = VIEWPORT.width / VIEWPORT.height;
@@ -23,9 +24,8 @@ const SIDE_MAX_WIDTH = 640;
  * screen at 2x would ask four times the bytes of 1x for text that reads well at 1.25x.
  */
 const MAX_DPR = 1.25;
-/** The embed `resize` range the host clamps to. */
-const MIN_HEIGHT = 120;
-const MAX_HEIGHT = 4000;
+/** The ground around the picture (CSS `#stage` padding). */
+const STAGE_PAD = 12;
 const HIDDEN_CLOSE_MS = 60_000;
 const COMPACT_BELOW = 600;
 /**
@@ -132,7 +132,6 @@ export function mountPanel(opts: PanelOptions): void {
    * take over, the host's close control or Esc, the host refusing full mode on a phone).
    */
   let full = false;
-  let postedHeight = 0;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let emptyTimer: ReturnType<typeof setTimeout> | undefined;
   let emptySince: number | undefined;
@@ -151,7 +150,14 @@ export function mountPanel(opts: PanelOptions): void {
   let sentSize = "";
   let image: CanvasImageSource | null = null;
 
-  const compact = () => win.innerWidth < COMPACT_BELOW;
+  /**
+   * Watch only on a phone (the host's compact size class, a pushed page): the device's screen,
+   * never the panel's width, so a narrow side panel on a desktop still offers take over.
+   */
+  const compact = (): boolean => {
+    const sw = win.screen?.width ?? 0;
+    return sw > 0 && sw < COMPACT_BELOW;
+  };
   const text = (key: StringKey) => t(locale, key);
   /** The person drives the page from this panel: any non-compact panel while they hold control. */
   const interactive = (): boolean => !compact() && control === "user";
@@ -180,10 +186,6 @@ export function mountPanel(opts: PanelOptions): void {
   function hostMode(next: boolean): void {
     if (next === full) return;
     full = next;
-    if (!next) {
-      // back in the side panel: ask for its size again, even if it equals the last one asked
-      postedHeight = 0;
-    }
     onBoxChange();
   }
 
@@ -195,6 +197,10 @@ export function mountPanel(opts: PanelOptions): void {
     };
     set("takeover", "takeover");
     set("handback", "handback");
+    set("verify-title", "verifyTitle");
+    set("verify-body", "verifyBody");
+    set("verify-go", "verifyGo");
+    set("skeleton-status", "statusConnecting");
     set("allow", "allow");
     set("reconnect", "reconnect");
     set("blocked-label", "blocked");
@@ -209,10 +215,10 @@ export function mountPanel(opts: PanelOptions): void {
       ["back", "back"],
       ["forward", "forward"],
       ["reload", "reload"],
+      ["more", "more"],
     ] as const) {
       $(id).setAttribute("aria-label", text(key));
       $(id).setAttribute("title", text(key));
-      $(id).textContent = id === "back" ? "<" : id === "forward" ? ">" : "↻";
     }
     url.setAttribute("aria-label", text("address"));
     view.setAttribute("aria-label", text("view"));
@@ -220,19 +226,33 @@ export function mountPanel(opts: PanelOptions): void {
     doc.documentElement.lang = locale;
   }
 
+  /** The status line: an icon, a lead and a detail, in one fixed-height line. */
   function renderStatus(): void {
     const el = $("status");
     el.setAttribute("data-control", control);
-    let key: StringKey;
-    if (mode === "empty" || mode === "offline" || mode === "error") {
-      el.textContent = "";
-      return;
+    let tone: "agent" | "user" | "quiet" = "quiet";
+    let icon = "";
+    let lead: StringKey | null = null;
+    let detail: StringKey | null = null;
+    if (mode === "connecting") lead = "statusConnecting";
+    else if (mode === "live" && control === "user") {
+      if (interactive()) {
+        tone = "user";
+        icon = ICONS.hand;
+        lead = "statusUser";
+        detail = "statusUserDetail";
+      } else lead = "statusUserElsewhere";
+    } else if (mode === "live") {
+      tone = "agent";
+      const loading = lastState?.loading === true;
+      icon = loading ? ICONS.spin : ICONS.dot;
+      lead = "statusAgent";
+      if (loading) detail = "statusLoading";
     }
-    if (mode === "connecting") key = "statusConnecting";
-    else if (control === "user") key = compact() ? "statusUserElsewhere" : "takeoverHint";
-    else if (lastState?.loading === true) key = "statusLoading";
-    else key = "statusAgent";
-    el.textContent = text(key);
+    el.setAttribute("data-tone", tone);
+    $("status-icon").innerHTML = icon;
+    $("status-lead").textContent = lead === null ? "" : text(lead);
+    $("status-detail").textContent = detail === null ? "" : ` · ${text(detail)}`;
   }
 
   function renderChrome(): void {
@@ -242,8 +262,21 @@ export function mountPanel(opts: PanelOptions): void {
     const isLive = mode === "live";
     $("takeover").hidden = watchOnly || !isLive || control === "user";
     $("handback").hidden = watchOnly || !isLive || control !== "user";
+    // the takeover slot stays reserved unless hand back takes it or the device only watches
+    $("takeover").toggleAttribute("data-gone", watchOnly || (isLive && control === "user"));
+    const verifying =
+      isLive && control === "agent" && lastState?.verification !== undefined && !watchOnly;
+    $("verify").hidden = !verifying;
+    // one primary action: while a verification waits, take over steps back
+    $("takeover").className = verifying ? "secondary" : "primary";
+    $("handoff").hidden = pendingHandoff === null || verifying;
+    $("status").hidden = verifying || pendingHandoff !== null;
+    $("stage").setAttribute("data-control", isLive ? control : "agent");
+    $("field").toggleAttribute("data-edit", interactive());
     for (const id of ["back", "forward", "reload"])
       ($(id) as HTMLButtonElement).disabled = readOnly;
+    ($("more") as HTMLButtonElement).disabled = readOnly;
+    ($("tabsbtn") as HTMLButtonElement).disabled = readOnly;
     url.readOnly = readOnly;
     input.sync();
     $("lock").hidden = !isLive || lastState?.secure !== true;
@@ -263,6 +296,19 @@ export function mountPanel(opts: PanelOptions): void {
     $("blocked").hidden = blockedHost === "";
     $("blocked-host").textContent = blockedHost;
     renderStatus();
+    renderLoading();
+  }
+
+  /**
+   * The whole panel is one skeleton until everything is ready (the browser's state and its first
+   * frame), then it switches once to the live panel; "not running", offline and error show at
+   * once. A connection that starts again (not a quiet look) shows the skeleton again.
+   */
+  function renderLoading(): void {
+    const loading = mode === "connecting" || (mode === "live" && image === null);
+    $("app").toggleAttribute("data-loading", loading);
+    $("skeleton").hidden = !loading;
+    if (!loading) onBoxChange();
   }
 
   function renderTabs(): void {
@@ -274,17 +320,24 @@ export function mountPanel(opts: PanelOptions): void {
       el.className = "tab";
       el.setAttribute("role", "tab");
       el.setAttribute("data-active", String(tab.active));
+      el.setAttribute("aria-selected", String(tab.active));
+      const fav = doc.createElement("span");
+      fav.className = "fav";
+      el.appendChild(fav);
       const label = doc.createElement("button");
       label.type = "button";
       label.className = "label";
-      label.textContent = tab.title === "" ? tab.url : tab.title;
+      label.textContent = tabName(tab);
+      label.title = tabName(tab);
       label.disabled = watchOnly;
       label.addEventListener("click", () => send({ t: "tab", action: "switch", tabId: tab.id }));
       el.appendChild(label);
-      if (!watchOnly) {
+      // close only while the person is in control (the design's take over state)
+      if (!watchOnly && tab.active && control === "user") {
         const close = doc.createElement("button");
         close.type = "button";
-        close.textContent = "×";
+        close.className = "x";
+        close.innerHTML = ICONS.close;
         close.setAttribute("aria-label", text("closeTab"));
         close.addEventListener("click", () => send({ t: "tab", action: "close", tabId: tab.id }));
         el.appendChild(close);
@@ -294,11 +347,77 @@ export function mountPanel(opts: PanelOptions): void {
     if (!watchOnly) {
       const add = doc.createElement("button");
       add.type = "button";
-      add.textContent = "+";
+      add.className = "add";
+      add.innerHTML = ICONS.plus;
       add.setAttribute("aria-label", text("newTab"));
       add.addEventListener("click", () => send({ t: "tab", action: "open" }));
       box.appendChild(add);
     }
+    // narrow panels: one button for the tabs and the address
+    const active = tabs.find((x) => x.active);
+    $("tabsbtn-name").textContent =
+      active === undefined ? "" : hostOf(active.url) || tabName(active);
+    $("tabsbtn-count").textContent = String(tabs.length);
+    $("tabsbtn").setAttribute("aria-label", `${text("tabs")}: ${tabs.length}`);
+  }
+
+  const tabName = (tab: ViewerTab): string => (tab.title === "" ? tab.url : tab.title);
+  function hostOf(u: string): string {
+    try {
+      return new URL(u).host;
+    } catch {
+      return "";
+    }
+  }
+
+  /** The address as host (ink) and the rest (muted) while the field is not being edited. */
+  function renderUrl(u: string): void {
+    let host = u;
+    let rest = "";
+    try {
+      const p = new URL(u);
+      if (p.protocol === "http:" || p.protocol === "https:") {
+        host = p.host;
+        rest = `${p.pathname === "/" ? "" : p.pathname}${p.search}${p.hash}`;
+      }
+    } catch {
+      // not a URL (about:blank and the like): shown as it is
+    }
+    $("urltext-host").textContent = host;
+    $("urltext-path").textContent = rest;
+  }
+
+  // ---- menus (narrow panels) ----
+
+  function openMenu(
+    anchor: HTMLElement,
+    items: { label: string; current?: boolean; run(): void }[],
+  ): void {
+    const menu = $("menu");
+    menu.textContent = "";
+    for (const it of items) {
+      const b = doc.createElement("button");
+      b.type = "button";
+      b.setAttribute("role", "menuitem");
+      b.textContent = it.label;
+      if (it.current) b.setAttribute("aria-current", "true");
+      b.addEventListener("click", () => {
+        closeMenu();
+        it.run();
+      });
+      menu.appendChild(b);
+    }
+    const r = anchor.getBoundingClientRect();
+    menu.style.top = `${Math.round(r.bottom + 4)}px`;
+    menu.style.right = `${Math.max(12, Math.round(win.innerWidth - r.right))}px`;
+    menu.hidden = false;
+    anchor.setAttribute("aria-expanded", "true");
+    (menu.firstElementChild as HTMLElement | null)?.focus();
+  }
+  function closeMenu(): void {
+    $("menu").hidden = true;
+    $("tabsbtn").removeAttribute("aria-expanded");
+    $("more").removeAttribute("aria-expanded");
   }
 
   function applyState(s: Extract<ViewerOut, { t: "state" }>): void {
@@ -315,6 +434,7 @@ export function mountPanel(opts: PanelOptions): void {
     if (was === "user" && control === "agent" && pendingNav?.sentOn === sock) pendingNav = null;
     const active = tabs.find((x) => x.active);
     if (doc.activeElement !== url) url.value = active?.url ?? "";
+    renderUrl(active?.url ?? "");
     renderTabs();
     renderChrome();
     // the frame budget follows control (the full viewport while the person drives): the hello
@@ -402,7 +522,10 @@ export function mountPanel(opts: PanelOptions): void {
 
   function layout(): { w: number; h: number } {
     const st = stage.getBoundingClientRect();
-    const box = letterbox(Math.max(0, Math.floor(st.width)), Math.max(0, Math.floor(st.height)));
+    const box = letterbox(
+      Math.max(0, Math.floor(st.width) - 2 * STAGE_PAD),
+      Math.max(0, Math.floor(st.height) - 2 * STAGE_PAD),
+    );
     view.style.width = `${box.w}px`;
     view.style.height = `${box.h}px`;
     const dpr = win.devicePixelRatio || 1;
@@ -411,26 +534,8 @@ export function mountPanel(opts: PanelOptions): void {
     return { w, h: Math.max(1, Math.round(w / ASPECT)) };
   }
 
-  /**
-   * In the side panel the host sizes the iframe by the embed `resize` message: ask for the height
-   * that shows the 16:10 frame at the full available width, plus the panel's own bars. Full mode
-   * fills the panel instead (the frame is letterboxed in it), so nothing is asked there.
-   */
-  function fitHeight(): void {
-    if (full) return;
-    const st = stage.getBoundingClientRect();
-    const width = Math.max(0, Math.floor(st.width));
-    if (width === 0) return;
-    const chrome = Math.max(0, win.innerHeight - Math.max(0, st.height));
-    const height = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.ceil(chrome + width / ASPECT)));
-    if (height === postedHeight) return;
-    postedHeight = height;
-    post({ protocol: PROTOCOL, type: "resize", height });
-  }
-
   /** The box changed (width, the host's new height, a strip shown or hidden). */
   function onBoxChange(): void {
-    fitHeight();
     if (sock === null || mode !== "live") return;
     const { w, h } = layout();
     if (sentSize !== `${w}x${h}`) sizeMessage("resize");
@@ -456,7 +561,9 @@ export function mountPanel(opts: PanelOptions): void {
 
   async function onFrame(m: ViewerFrame): Promise<void> {
     try {
+      const first = image === null;
       image = await decode(m.jpeg);
+      if (first) renderLoading();
       draw();
       input.frame();
     } catch {
@@ -513,7 +620,11 @@ export function mountPanel(opts: PanelOptions): void {
     quiet = lookOnly && mode === "empty";
     // a quiet look keeps the next one armed: a handshake that hangs does not end the looking
     if (quiet) armEmptyPoll();
-    else show("connecting");
+    else {
+      // a new connection shows the skeleton until its own first frame
+      image = null;
+      show("connecting");
+    }
     let ticketUrl: string;
     try {
       const res = await doFetch("stream-ticket", {
@@ -727,6 +838,30 @@ export function mountPanel(opts: PanelOptions): void {
   // ---- wiring ----
 
   $("takeover").addEventListener("click", takeover);
+  $("verify-go").addEventListener("click", takeover);
+  $("tabsbtn").addEventListener("click", (e) => {
+    if (!interactive()) return;
+    openMenu(e.currentTarget as HTMLElement, [
+      ...tabs.map((tab) => ({
+        label: tabName(tab),
+        current: tab.active,
+        run: () => send({ t: "tab", action: "switch", tabId: tab.id }),
+      })),
+      { label: text("newTab"), run: () => send({ t: "tab", action: "open" }) },
+    ]);
+  });
+  $("more").addEventListener("click", (e) => {
+    openMenu(e.currentTarget as HTMLElement, [
+      { label: text("forward"), run: () => send({ t: "nav", action: "forward" }) },
+      { label: text("reload"), run: () => send({ t: "nav", action: "reload" }) },
+    ]);
+  });
+  doc.addEventListener("mousedown", (e) => {
+    const m = $("menu");
+    if (m.hidden || m.contains(e.target as Node)) return;
+    if ((e.target as Element | null)?.closest?.("#tabsbtn, #more")) return;
+    closeMenu();
+  });
   $("handback").addEventListener("click", handback);
   $("handoff-done").addEventListener("click", () => void answerHandoff(true));
   $("handoff-cancel").addEventListener("click", () => void answerHandoff(false));
@@ -745,7 +880,12 @@ export function mountPanel(opts: PanelOptions): void {
     input.focus();
   });
   doc.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && interactive()) handback();
+    if (e.key !== "Escape") return;
+    if (!$("menu").hidden) {
+      closeMenu();
+      return;
+    }
+    if (interactive()) handback();
   });
   win.addEventListener("resize", () => {
     onBoxChange();
@@ -791,7 +931,6 @@ export function mountPanel(opts: PanelOptions): void {
 
   setLabels();
   renderChrome();
-  fitHeight();
 
   win.addEventListener("message", (ev: MessageEvent) => {
     // only the host page speaks the embed protocol (not a page this frame may embed)
@@ -804,8 +943,7 @@ export function mountPanel(opts: PanelOptions): void {
       applyTheme(m.tokens, m.theme);
       setLabels();
       renderChrome();
-      postedHeight = 0;
-      fitHeight();
+      doc.body.setAttribute("data-ready", "");
       if (!started) {
         started = true;
         void connect();
