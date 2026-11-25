@@ -673,6 +673,65 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
     }
   });
 
+  it("a running instance whose egress proxy is lost or on another image gets it back at its next use, in every mode", async () => {
+    for (const [network, host] of [
+      [OPEN, "denied.example.com"],
+      [allow(["allowed.example.com"]), "allowed.example.com"],
+    ] as const) {
+      const name = sbxName();
+      const h = await newSandbox(sbx, {
+        name,
+        image: images.sandboxImage,
+        limits: limits(network),
+        signal: sig(),
+      });
+      try {
+        const id = (await inspect(name)).Id;
+        const get = `curl -sS --max-time 10 http://${host}/`;
+        expect((await sh(h.id, get)).stdout).toBe("hello-egress");
+        // lost while the instance runs (removed, as an old image's proxy was): the next command
+        // makes it again, the sandbox container untouched
+        await docker("rm", "-f", `${name}-egress`);
+        expect((await sh(h.id, get)).stdout).toBe("hello-egress");
+        expect((await inspect(name)).Id).toBe(id);
+        // a proxy on another image than the configured one is replaced at the next use
+        const other = createDockerSandbox(
+          { ...cfg, egressProxyImage: `${images.egressImage}-other` },
+          {
+            labels: { [TEST_LABEL]: RUN },
+            egressTestHosts: { "allowed.example.com": targetIp, "denied.example.com": targetIp },
+          },
+        );
+        await docker("tag", images.egressImage, `${images.egressImage}-other`);
+        try {
+          expect(
+            (
+              await other.exec(h, {
+                ...who(),
+                command: get,
+                timeoutMs: 30_000,
+                maxOutputBytes: 1_000_000,
+                signal: sig(),
+              })
+            ).stdout,
+          ).toBe("hello-egress");
+          expect(JSON.parse(await docker("inspect", `${name}-egress`))[0].Config.Image).toBe(
+            `${images.egressImage}-other`,
+          );
+          expect((await sh(h.id, get)).stdout).toBe("hello-egress");
+          expect(JSON.parse(await docker("inspect", `${name}-egress`))[0].Config.Image).toBe(
+            images.egressImage,
+          );
+          expect((await inspect(name)).Id).toBe(id);
+        } finally {
+          await docker("rmi", `${images.egressImage}-other`).catch(() => undefined);
+        }
+      } finally {
+        await sbx.destroy(h, sig(), null);
+      }
+    }
+  });
+
   describe("network modes", () => {
     const envOf = async (container: string) => (await inspect(container)).Config.Env;
 

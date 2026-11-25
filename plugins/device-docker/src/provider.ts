@@ -1254,18 +1254,9 @@ export function createDockerSandbox(
     await ensureSharedNetwork(signal);
     // an internal network of an earlier version keeps a host gateway: only a recreate replaces it
     if (!(await ensureInternalNetwork(name, signal))) return false;
-    let running: boolean;
-    try {
-      const c = await api.json<{
-        State: { Running: boolean; Paused?: boolean };
-        Config: { Labels: Record<string, string> | null };
-      }>("GET", `/containers/${enc(n.egress)}/json`, { signal });
-      if (control && !hadControl(c.Config.Labels)) return false;
-      if (c.State.Paused) await unpause(n.egress, signal);
-      running = c.State.Running;
-    } catch (e) {
-      if (!isStatus(e, 404)) throw e;
-      // never rebuilt from the (possibly wider) labels when the volume with the list is gone
+    // a lost proxy is made again (from the config volume when the instance has the control: never
+    // from the possibly wider labels when that volume is gone)
+    const remake = async (): Promise<boolean> => {
       if (control && !(await egressConfOk(name, signal))) return false;
       // a concurrent auto-start may create it at the same moment: a name conflict is fine
       try {
@@ -1274,7 +1265,27 @@ export function createDockerSandbox(
         if (control && !signal.aborted && !(await egressRunning(name, signal))) return false;
         throw e;
       }
+    };
+    let c: {
+      State: { Running: boolean; Paused?: boolean };
+      Config: { Labels: Record<string, string> | null; Image?: string };
+    };
+    try {
+      c = await api.json("GET", `/containers/${enc(n.egress)}/json`, { signal });
+    } catch (e) {
+      if (!isStatus(e, 404)) throw e;
+      return remake();
     }
+    if (control && !hadControl(c.Config.Labels)) return false;
+    // a proxy on another image than the configured one (an older build) is replaced
+    if (c.Config.Image !== undefined && c.Config.Image !== cfg.egressProxyImage) {
+      await api
+        .json("DELETE", `/containers/${enc(n.egress)}`, { query: { force: true }, signal })
+        .catch(ignore(404));
+      return remake();
+    }
+    if (c.State.Paused) await unpause(n.egress, signal);
+    const running = c.State.Running;
     if (!running) {
       try {
         await start(n.egress, signal);
@@ -1651,6 +1662,7 @@ export function createDockerSandbox(
    * 先按 resume 的做法（出站代理、网络就位）启动，再重试一次。已不在 → SandboxGoneError。
    */
   async function autoStart<T>(h: SandboxHandle, signal: AbortSignal, fn: () => Promise<T>) {
+    await healEgress(h, signal);
     try {
       return await fn();
     } catch (e) {
@@ -1660,6 +1672,48 @@ export function createDockerSandbox(
       }
       return await fn();
     }
+  }
+
+  /**
+   * Before a use of a running instance: its egress proxy must run, on the configured image, for
+   * every network mode (open public included). A proxy that is missing, stopped or on another
+   * image is made again in place ({@link ensureEgressRunning}), the sandbox container untouched;
+   * one that only a recreate can give a network no wider than the last applied answers
+   * `SandboxGoneError` (the kernel recreates the instance on the same files). A stopped or missing
+   * sandbox container is left to the resume that follows.
+   */
+  async function healEgress(h: SandboxHandle, signal: AbortSignal): Promise<void> {
+    let c: { State: { Running: boolean }; Config: { Labels: Record<string, string> | null } };
+    try {
+      c = await api.json("GET", `/containers/${enc(h.id)}/json`, { signal });
+    } catch (e) {
+      if (isStatus(e, 404)) return;
+      throw e;
+    }
+    if (!c.State.Running) return;
+    const labels = c.Config.Labels ?? {};
+    if (!sameIncarnation(h, labels)) return;
+    const net = labelNetwork(labels);
+    if (net === null || net.mode === "none") return;
+    try {
+      const e = await api.json<{ State: { Running: boolean }; Config: { Image?: string } }>(
+        "GET",
+        `/containers/${enc(sandboxResourceNames(h.id).egress)}/json`,
+        { signal },
+      );
+      if (e.State.Running && e.Config.Image === cfg.egressProxyImage) return;
+    } catch (e) {
+      if (!isStatus(e, 404)) throw e;
+    }
+    const ok = await ensureEgressRunning(
+      h.id,
+      net.mode,
+      net.allowHosts,
+      signal,
+      hadControl(labels),
+      labelFence(labels) ?? 0,
+    );
+    if (!ok) throw new SandboxGoneError(`the egress proxy of ${h.id} cannot be rebuilt in place`);
   }
 
   /**
