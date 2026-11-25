@@ -12,8 +12,11 @@ const FORM = `<!doctype html><title>Form</title>
 <form action="/done" method="get"><input name="q" aria-label="Query" value="x">
 <button type="submit">Send</button></form>`;
 
+// A listitem with a link is about 100 characters of snapshot, so 3000 of them pass the 40000
+// character cap several times over. The snapshot is built for the whole page before it is capped
+// (about 2-3 s for 50000 items on 2 CPUs), so a larger page only makes the test slow.
 const HUGE = `<!doctype html><title>Huge</title><ul>${Array.from(
-  { length: 50_000 },
+  { length: 3_000 },
   (_, i) => `<li><a href="#${i}">item ${i}</a></li>`,
 ).join("")}</ul>`;
 
