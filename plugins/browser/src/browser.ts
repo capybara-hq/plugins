@@ -47,6 +47,14 @@ export const RESTART_ATTEMPTS = 3;
 /** The longest a daemon request may take, beyond an action's own wait. */
 export const REQUEST_TIMEOUT_MS = 90_000;
 
+/**
+ * Every browser tool's time limit (`ToolSpec.timeoutMs`, instead of the deployment's
+ * `tools.timeoutMs`): any tool may be a conversation's first, which first starts the device and
+ * the service (instance resume or create, the service files, a Chromium download of about 200 MB)
+ * and then makes one daemon request of up to {@link REQUEST_TIMEOUT_MS}.
+ */
+export const TOOL_TIMEOUT_MS = 300_000;
+
 /** A successful daemon reply. */
 export type OkReply = Extract<ToolReply, { ok: true }>;
 
