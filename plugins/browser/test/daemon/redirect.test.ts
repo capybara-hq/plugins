@@ -12,6 +12,7 @@ import {
   startFixtureServer,
   startTestDaemon,
   type TestDaemon,
+  type TestViewer,
 } from "./helpers.js";
 
 // /secure redirects to /login (302), like a site whose session expired. One request can be held,
@@ -86,6 +87,17 @@ function holdNext(): Promise<ServerResponse> {
   });
 }
 
+/** Viewer input acts only while the person holds control: take it, send, and (optionally) give it back. */
+async function asPerson(v: TestViewer, run: () => Promise<void> | void): Promise<void> {
+  const taken = v.after((m) => m.t === "state" && m.control === "user");
+  v.send({ t: "takeover" });
+  await taken;
+  await run();
+  const back = v.after((m) => m.t === "state" && m.control === "agent");
+  v.send({ t: "handback" });
+  await back;
+}
+
 function nextGotoFailure(): Promise<void> {
   return new Promise((resolve) => {
     onGotoFailed = () => {
@@ -108,8 +120,12 @@ describe("navigate through redirects", () => {
     // a navigation to /secure is in flight (as a tab restored at start); Chromium drops the
     // tool's navigation to the same address with net::ERR_ABORTED
     const arrived = holdNext();
-    v.send({ t: "nav", url: `${fx.url}/secure` });
-    const first = await arrived;
+    let first!: ServerResponse;
+    // the person's navigation stays in flight after they hand back
+    await asPerson(v, async () => {
+      v.send({ t: "nav", url: `${fx.url}/secure` });
+      first = await arrived;
+    });
     const dropped = nextGotoFailure();
     const nav = request(d.socketPath, { op: "navigate", url: `${fx.url}/secure` });
     await dropped;
@@ -127,8 +143,12 @@ describe("navigate through redirects", () => {
     const v = await openViewer(d.socketPath, { maxWidth: 480, maxHeight: 300 });
     await v.next((m) => m.t === "state");
     const arrived = holdNext();
-    v.send({ t: "nav", url: `${fx.url}/plain` });
-    const first = await arrived;
+    let first!: ServerResponse;
+    // the person's navigation stays in flight after they hand back
+    await asPerson(v, async () => {
+      v.send({ t: "nav", url: `${fx.url}/plain` });
+      first = await arrived;
+    });
     const dropped = nextGotoFailure();
     const nav = request(d.socketPath, { op: "navigate", url: `${fx.url}/plain` });
     await dropped;
@@ -144,8 +164,12 @@ describe("navigate through redirects", () => {
     const v = await openViewer(d.socketPath, { maxWidth: 480, maxHeight: 300 });
     await v.next((m) => m.t === "state");
     const arrived = holdNext();
-    v.send({ t: "nav", url: `${fx.url}/secure` });
-    const first = await arrived;
+    let first!: ServerResponse;
+    // the person's navigation stays in flight after they hand back
+    await asPerson(v, async () => {
+      v.send({ t: "nav", url: `${fx.url}/secure` });
+      first = await arrived;
+    });
     const dropped = nextGotoFailure();
     const nav = request(d.socketPath, { op: "navigate", url: `${fx.url}/secure` });
     await dropped;
@@ -191,8 +215,11 @@ describe("navigate through redirects", () => {
     const arrived = holdNext();
     const nav = request(d.socketPath, { op: "navigate", url: `${fx.url}/secure` });
     await arrived;
-    v.send({ t: "nav", url: `${fx.url}/other` });
-    const r = await nav;
+    let r!: Awaited<typeof nav>;
+    await asPerson(v, async () => {
+      v.send({ t: "nav", url: `${fx.url}/other` });
+      r = await nav;
+    });
     expect(r).toMatchObject({ ok: false, error: "failed" });
     if (!r.ok) expect(r.message).toContain("ERR_ABORTED");
     await v.close();

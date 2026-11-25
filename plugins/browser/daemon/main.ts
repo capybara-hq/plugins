@@ -461,6 +461,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
                     });
                     return ok || dropped || sock.destroyed;
                   },
+                  sendFrame: (frame) => {
+                    if (sock.destroyed) return true;
+                    // the frame cap keeps it far below the service message limit
+                    return sock.write(encodeServiceMessage(frame));
+                  },
                   whenDrained: () => new Promise((r) => sock.once("drain", () => r())),
                 },
               });

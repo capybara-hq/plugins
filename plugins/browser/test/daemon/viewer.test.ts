@@ -12,6 +12,8 @@ import {
   startTestDaemon,
   TEST_BROWSERS,
   type TestDaemon,
+  type TestFrame,
+  type ViewerMsg,
 } from "./helpers.js";
 
 const SIZE = `<!doctype html><title>Size</title><p id=s></p><script>
@@ -26,10 +28,9 @@ requestAnimationFrame(f); })();</script>`;
 const POPUPS = `<!doctype html><title>Popups</title>
 <button onclick="for (let i = 0; i < 3; i++) window.open('about:blank#' + i)">Open</button>`;
 
-type Frame = Extract<ViewerOut, { t: "frame" }>;
 type State = Extract<ViewerOut, { t: "state" }>;
-const isFrame = (m: ViewerOut): m is Frame => m.t === "frame";
-const isState = (m: ViewerOut): m is State => m.t === "state";
+const isFrame = (m: ViewerMsg): m is TestFrame => m.t === "frame";
+const isState = (m: ViewerMsg): m is State => m.t === "state";
 
 let fx: Awaited<ReturnType<typeof startFixtureServer>>;
 let d: TestDaemon;
@@ -153,20 +154,20 @@ describe("browser daemon viewer", () => {
     await v.close();
   });
 
-  it("caps a viewer at 5 frames per second on an animated page", async () => {
+  it("caps a viewer at 15 frames per second on an animated page", async () => {
     await request(d.socketPath, { op: "navigate", url: `${fx.url}/anim` });
     const v = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 });
     await v.next(isFrame);
-    // the page changes every animation frame; the daemon still sends at most one per 200 ms
+    // the page changes every animation frame; the daemon still sends at most one per 66 ms
     // (a loaded machine only makes them slower, so the gaps are the property, not a count)
     const at: number[] = [];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 6; i++) {
       await v.after(isFrame);
       at.push(performance.now());
     }
     const gaps = at.slice(1).map((t, i) => t - (at[i] as number));
-    // 200 ms apart when sent; arrival jitter on the local socket stays well below 50 ms
-    for (const g of gaps) expect(g).toBeGreaterThanOrEqual(150);
+    // 66 ms apart when sent; arrival jitter on the local socket stays well below 20 ms
+    for (const g of gaps) expect(g).toBeGreaterThanOrEqual(45);
     await v.close();
   });
 

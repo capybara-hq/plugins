@@ -6,13 +6,21 @@
 // Every message is one UTF-8 JSON value.
 // - A request connection (`{"kind":"request"}`) carries one ToolRequest and gets one ToolReply.
 // - A stream connection (`{"kind":"stream"}`) is one viewer: the viewer's first message is
-//   `hello`; the daemon answers at once with a full `state` message and a first `frame`, then
-//   sends `state` on every change. Frames are paced by the viewer's `frame-ack` (at most
-//   VIEWER_UNACKED_FRAMES unacknowledged) and capped at VIEWER_MAX_FPS. A quiet stream is not a
-//   dead one: Chromium sends frames only when the page changes, so the viewer keeps the last one.
+//   `hello`; the daemon answers at once with a full `state` message and a first frame, then
+//   sends `state` on every change. A frame is a binary message ({@link encodeFrame}: a zero tag
+//   byte, then seq, width, height and the raw JPEG); every other message is JSON (its first byte
+//   is `{`). Frames are paced by the viewer's `frame-ack`: at most VIEWER_UNACKED_FRAMES
+//   unacknowledged, fewer while the measured link is slow, never more often than VIEWER_MAX_FPS,
+//   and only the newest frame waits (a stale one is replaced, never queued). JSON messages
+//   (state, cursor, dialogs) never wait behind a held frame. A quiet stream is not a dead one:
+//   Chromium sends frames only when the page changes, so the viewer keeps the last one.
+// - Viewer input (mouse, key, nav, tab) is applied only while the person holds control
+//   (`state.control === "user"`, after a `takeover` from any viewer): a viewer in the watch state
+//   is read-only, and the daemon drops its input. Mouse moves are coalesced (the newest wins).
+//   After a move the daemon answers the page's cursor at the pointer (`cursor`) when it changed.
 // - Viewer coordinates are viewport CSS pixels (the panel maps them back through its scale).
 // - Viewer key input: `down` / `up` carry a key name (KeyboardEvent.key); a printable key's `down`
-//   types its character. `char` inserts composed text (IME) only; never send both for one key.
+//   types its character. `char` inserts text (IME composition, paste); never send both for one key.
 
 /** The fixed viewport; viewers never change it (§8). */
 export const VIEWPORT = { width: 1280, height: 800 } as const;
@@ -26,14 +34,103 @@ export const IDLE_STOP_MS = 15 * 60_000;
 /** A takeover ends this long after the last viewer stream closes (unless one reconnects). */
 export const TAKEOVER_GRACE_MS = 60_000;
 
-/** The most frames per second a viewer gets. */
-export const VIEWER_MAX_FPS = 5;
+/** The most frames per second a viewer gets (a slow link gets fewer, see viewer-pacing.ts). */
+export const VIEWER_MAX_FPS = 15;
 
 /** The most frames a viewer may have unacknowledged before the daemon holds the next one. */
 export const VIEWER_UNACKED_FRAMES = 2;
 
+/** The longest `char` text one viewer message carries (a paste is cut to it). */
+export const VIEWER_TEXT_MAX_CHARS = 10_000;
+
+/** The cursor keywords a viewer may show (anything else is `default`). */
+// capybara:allow-module-state read-only constant (a keyword list, never written)
+export const VIEWER_CURSORS = [
+  "default",
+  "pointer",
+  "text",
+  "vertical-text",
+  "crosshair",
+  "move",
+  "grab",
+  "grabbing",
+  "not-allowed",
+  "no-drop",
+  "wait",
+  "progress",
+  "help",
+  "context-menu",
+  "cell",
+  "copy",
+  "alias",
+  "zoom-in",
+  "zoom-out",
+  "col-resize",
+  "row-resize",
+  "ew-resize",
+  "ns-resize",
+  "nesw-resize",
+  "nwse-resize",
+  "n-resize",
+  "e-resize",
+  "s-resize",
+  "w-resize",
+  "ne-resize",
+  "nw-resize",
+  "se-resize",
+  "sw-resize",
+  "all-scroll",
+  "none",
+] as const;
+
+export type ViewerCursor = (typeof VIEWER_CURSORS)[number];
+
+/** A known cursor keyword, else `default`. */
+export function toViewerCursor(value: unknown): ViewerCursor {
+  return typeof value === "string" && (VIEWER_CURSORS as readonly string[]).includes(value)
+    ? (value as ViewerCursor)
+    : "default";
+}
+
+/** The first byte of a binary frame message (a JSON message starts with `{`). */
+export const FRAME_TAG = 0;
+/** Tag, seq (u32), width (u16), height (u16), all big-endian, before the JPEG. */
+export const FRAME_HEADER_BYTES = 9;
+
+/** One screencast frame as the viewer receives it. */
+export interface ViewerFrame {
+  seq: number;
+  width: number;
+  height: number;
+  jpeg: Uint8Array;
+}
+
+/** A frame as one binary viewer message. */
+export function encodeFrame(f: ViewerFrame): Uint8Array {
+  const out = new Uint8Array(FRAME_HEADER_BYTES + f.jpeg.byteLength);
+  const v = new DataView(out.buffer);
+  v.setUint8(0, FRAME_TAG);
+  v.setUint32(1, f.seq >>> 0);
+  v.setUint16(5, f.width);
+  v.setUint16(7, f.height);
+  out.set(f.jpeg, FRAME_HEADER_BYTES);
+  return out;
+}
+
+/** The frame in a viewer message, or null when it is not a frame (a JSON message). */
+export function decodeFrame(m: Uint8Array): ViewerFrame | null {
+  if (m.byteLength < FRAME_HEADER_BYTES || m[0] !== FRAME_TAG) return null;
+  const v = new DataView(m.buffer, m.byteOffset, m.byteLength);
+  return {
+    seq: v.getUint32(1),
+    width: v.getUint16(5),
+    height: v.getUint16(7),
+    jpeg: m.subarray(FRAME_HEADER_BYTES),
+  };
+}
+
 /**
- * The default cap, in bytes, of one viewer message (a frame's JSON, base64 included). A frame
+ * The default cap, in bytes, of one viewer message (a frame's header and JPEG). A frame
  * above the cap is sent smaller or not at all. The daemon's environment variable
  * BROWSER_FRAME_MAX_BYTES overrides it (a provider whose stream frames are smaller sets it lower).
  */
@@ -114,7 +211,9 @@ export type ViewerIn =
   | { t: "tab"; action: "open" | "switch" | "close"; tabId?: string }
   | { t: "takeover" }
   | { t: "handback" }
-  | { t: "frame-ack"; seq: number };
+  | { t: "frame-ack"; seq: number }
+  /** The answer to a `ping`, sent at once. */
+  | { t: "pong"; id: number };
 
 export interface ViewerTab {
   id: string;
@@ -123,8 +222,8 @@ export interface ViewerTab {
   active: boolean;
 }
 
+/** The JSON viewer messages (frames are binary, {@link encodeFrame}). */
 export type ViewerOut =
-  | { t: "frame"; seq: number; jpeg: string; width: number; height: number }
   | {
       t: "state";
       tabs: ViewerTab[];
@@ -138,4 +237,8 @@ export type ViewerOut =
     }
   /** `url`: the page to open once the host is allowed (the blocked navigation, or the page whose resource was refused). */
   | { t: "blocked"; host: string; url: string }
-  | { t: "dialog"; kind: "alert" | "confirm" | "prompt" | "file"; message: string };
+  | { t: "dialog"; kind: "alert" | "confirm" | "prompt" | "file"; message: string }
+  /** Answered at once with `pong`: the round trip of a tiny message paces the frames. */
+  | { t: "ping"; id: number }
+  /** The page's cursor at the pointer, sent after a move when it changed (takeover only). */
+  | { t: "cursor"; cursor: ViewerCursor };
