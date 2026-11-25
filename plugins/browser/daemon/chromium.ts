@@ -29,16 +29,24 @@ import type { BrowserContext } from "playwright-core";
 import { VIEWPORT } from "./protocol.js";
 
 /**
- * The Chromium build the daemon runs: the full Chromium in its (new) headless mode on every
- * platform, so the browser presents as an ordinary Chrome. On macOS the local device sandbox lets
- * a device service register the full build's own Mach services (capybara-hq/core#843); the
- * headless shell stays known to the registry code only.
+ * The Chromium build the daemon runs: the full Chromium in its (new) headless mode, so the
+ * browser presents as an ordinary Chrome. On macOS only where the device says its sandbox lets
+ * the full build start ({@link SERVICE_MACH_ENV} = `chromium`: a capybara-device with
+ * capybara-hq/core#843); elsewhere on macOS the headless shell in one process, which an older
+ * capybara-device runs (and nothing larger is downloaded before that is known).
  */
 export type ChromiumBuild = "chromium" | "chromium-headless-shell";
 
-/** The build for a platform ({@link ChromiumBuild}). */
-export function chromiumBuild(_platform: NodeJS.Platform): ChromiumBuild {
-  return "chromium";
+/** Names the Mach allowances of the service's sandbox (the SDK's DEVICE_SERVICE_MACH_ENV). */
+export const SERVICE_MACH_ENV = "CAPYBARA_SERVICE_MACH";
+
+/** The build for a platform and the service's environment ({@link ChromiumBuild}). */
+export function chromiumBuild(
+  platform: NodeJS.Platform,
+  env: Record<string, string | undefined> = process.env,
+): ChromiumBuild {
+  if (platform !== "darwin") return "chromium";
+  return env[SERVICE_MACH_ENV] === "chromium" ? "chromium" : "chromium-headless-shell";
 }
 
 /** A build's directory name in a browsers directory, before `-<revision>`. */
@@ -276,10 +284,10 @@ export function chromiumLaunchPlan(
     browsersPath?: string;
   },
   release: { revision: string; version: string } | undefined = browserRelease(
-    chromiumBuild(opts.platform),
+    chromiumBuild(opts.platform, opts.env),
   ),
 ): LaunchPlan {
-  const build = chromiumBuild(opts.platform);
+  const build = chromiumBuild(opts.platform, opts.env);
   // `--headless` on the full build is its new headless mode (the old one lives on only in the
   // headless shell); the window is the viewport, so the page's window and screen sizes agree
   const args = [

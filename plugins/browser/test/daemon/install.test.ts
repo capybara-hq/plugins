@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   BrowserInstalledError,
   browserPaths,
+  chromiumBuild,
   chromiumLaunchPlan,
   launchChromium,
 } from "../../daemon/chromium.js";
@@ -15,7 +16,8 @@ describe("chromium in the provider's install directory (plugins#209)", () => {
     // its own browsers directory: playwright-core reads it once per test file's process
     const dir = mkdtempSync(join(tmpdir(), "cbd-seal-"));
     try {
-      const { executable, marker } = await browserPaths(dir);
+      const env = { CAPYBARA_SERVICE_INSTALL: dir };
+      const { executable, marker } = await browserPaths(dir, chromiumBuild(process.platform, env));
       // something left a complete-looking "install" there (an older version, a compromised run)
       mkdirSync(dirname(executable), { recursive: true });
       writeFileSync(executable, "planted");
@@ -33,7 +35,7 @@ describe("chromium in the provider's install directory (plugins#209)", () => {
       });
       const plan = chromiumLaunchPlan({
         stateDir: "/s",
-        env: { CAPYBARA_SERVICE_INSTALL: dir },
+        env,
         platform: process.platform,
       });
       await expect(launchChromium(plan)).rejects.toBeInstanceOf(BrowserInstalledError);
@@ -45,7 +47,7 @@ describe("chromium in the provider's install directory (plugins#209)", () => {
       rmSync(executable);
       const sealed = chromiumLaunchPlan({
         stateDir: "/s",
-        env: { CAPYBARA_SERVICE_INSTALL: dir },
+        env,
         platform: process.platform,
       });
       expect(sealed.install).toEqual({ sealed: true });
