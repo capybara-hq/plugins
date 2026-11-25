@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { ViewerOut } from "../../daemon/protocol.js";
 import { looksLikeVerification, VERIFICATION_NOTE } from "../../daemon/verification.js";
 import {
   openViewer,
@@ -8,6 +7,7 @@ import {
   startFixtureServer,
   startTestDaemon,
   type TestDaemon,
+  type ViewerMsg,
 } from "./helpers.js";
 
 let fx: Awaited<ReturnType<typeof startFixtureServer>>;
@@ -32,7 +32,7 @@ afterAll(async () => {
   if (d) removeDir(d.stateDir);
 });
 
-const blockerOf = (m: ViewerOut) =>
+const blockerOf = (m: ViewerMsg) =>
   m.t === "state" ? m.tabs.find((t) => t.active)?.blocker : undefined;
 
 describe("verification pages", () => {

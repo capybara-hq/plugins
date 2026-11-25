@@ -5,7 +5,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { encodeServiceMessage, ServiceMessageDecoder } from "@capybara-hq/plugin-sdk";
 import { type Daemon, type DaemonOptions, startDaemon } from "../../daemon/main.js";
-import type { ToolReply, ToolRequest, ViewerIn, ViewerOut } from "../../daemon/protocol.js";
+import {
+  decodeFrame,
+  type ToolReply,
+  type ToolRequest,
+  type ViewerIn,
+  type ViewerOut,
+} from "../../daemon/protocol.js";
+
+/** A binary frame as the tests see it: the JPEG in base64 and the message's size. */
+export interface TestFrame {
+  t: "frame";
+  seq: number;
+  width: number;
+  height: number;
+  jpeg: string;
+  /** The whole message's bytes (header and JPEG). */
+  bytes: number;
+}
+
+/** Every message a viewer receives: the JSON ones and the frames. */
+export type ViewerMsg = ViewerOut | TestFrame;
 
 /**
  * One Chromium download shared by every test run on this machine (never the person's own browser
@@ -34,6 +54,10 @@ export async function startTestDaemon(
     stateDir,
     env: {},
     browsersPath: TEST_BROWSERS,
+    // A stop waits for Chromium to close and flush the profile, however long a loaded machine
+    // takes: the daemon's default grace (3 s) kills it, which loses what was not yet written (a
+    // cookie, a half-committed Cookies file). Tests that need the kill pass their own grace.
+    browserCloseGraceMs: 60_000,
     ...opts,
   });
   await daemon.ready;
@@ -75,16 +99,18 @@ export function request(socketPath: string, req: ToolRequest): Promise<ToolReply
 }
 
 export interface TestViewer {
-  messages: ViewerOut[];
+  messages: ViewerMsg[];
   send(m: ViewerIn): void;
   /** Resolves with the first message (already received or later) matching `pred`. */
-  next<T extends ViewerOut>(pred: (m: ViewerOut) => m is T): Promise<T>;
-  next(pred: (m: ViewerOut) => boolean): Promise<ViewerOut>;
+  next<T extends ViewerMsg>(pred: (m: ViewerMsg) => m is T): Promise<T>;
+  next(pred: (m: ViewerMsg) => boolean): Promise<ViewerMsg>;
   /** Like `next`, but only messages received after this call. */
-  after(pred: (m: ViewerOut) => boolean): Promise<ViewerOut>;
+  after(pred: (m: ViewerMsg) => boolean): Promise<ViewerMsg>;
   close(): Promise<void>;
   /** Acks every frame automatically (default on). */
   autoAck: boolean;
+  /** Answers every ping at once (default on). */
+  autoPong: boolean;
 }
 
 /** A viewer stream on its own connection, as the kernel relay opens it. */
@@ -95,17 +121,18 @@ export function openViewer(
   return new Promise((resolve, reject) => {
     const sock = connect(socketPath);
     const decoder = new ServiceMessageDecoder();
-    const messages: ViewerOut[] = [];
+    const messages: ViewerMsg[] = [];
     const waiters: {
       from: number;
-      pred: (m: ViewerOut) => boolean;
-      done: (m: ViewerOut) => void;
+      pred: (m: ViewerMsg) => boolean;
+      done: (m: ViewerMsg) => void;
     }[] = [];
     const viewer: TestViewer = {
       messages,
       autoAck: true,
+      autoPong: true,
       send: (m) => send(sock, m),
-      next: ((pred: (m: ViewerOut) => boolean) => waitFrom(0, pred)) as TestViewer["next"],
+      next: ((pred: (m: ViewerMsg) => boolean) => waitFrom(0, pred)) as TestViewer["next"],
       after: (pred) => waitFrom(messages.length, pred),
       close: () =>
         new Promise<void>((r) => {
@@ -116,7 +143,7 @@ export function openViewer(
           }
         }),
     };
-    function waitFrom(from: number, pred: (m: ViewerOut) => boolean): Promise<ViewerOut> {
+    function waitFrom(from: number, pred: (m: ViewerMsg) => boolean): Promise<ViewerMsg> {
       const hit = messages.slice(from).find(pred);
       if (hit !== undefined) return Promise.resolve(hit);
       return new Promise((done) => waiters.push({ from, pred, done }));
@@ -128,9 +155,21 @@ export function openViewer(
     });
     sock.on("data", (chunk: Buffer) => {
       for (const raw of decoder.push(chunk)) {
-        const m = JSON.parse(dec.decode(raw)) as ViewerOut;
+        const f = decodeFrame(raw);
+        const m: ViewerMsg =
+          f === null
+            ? (JSON.parse(dec.decode(raw)) as ViewerOut)
+            : {
+                t: "frame",
+                seq: f.seq,
+                width: f.width,
+                height: f.height,
+                jpeg: Buffer.from(f.jpeg).toString("base64"),
+                bytes: raw.byteLength,
+              };
         messages.push(m);
         if (m.t === "frame" && viewer.autoAck) viewer.send({ t: "frame-ack", seq: m.seq });
+        if (m.t === "ping" && viewer.autoPong) viewer.send({ t: "pong", id: m.id });
         for (const w of [...waiters]) {
           if (messages.length - 1 >= w.from && w.pred(m)) {
             waiters.splice(waiters.indexOf(w), 1);

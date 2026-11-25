@@ -4,8 +4,8 @@ description: "Gets a person ready to contribute to a capybara-hq repository: run
 # Synced from capybara-hq/.github. Edit the source there, then run sync.
 metadata:
   source: capybara-hq/.github
-  version: v2.2.0
-  sha256: eef7bf206c5c11147097360bcaf9422a9c5a438c52ac02d3ce7fbb440c856d32
+  version: v2.3.0
+  sha256: 31d8bb1c8ac10a1c62cc36448f88e08934a861233b91cacfbacc44601863b917
 ---
 
 # Onboarding
@@ -92,8 +92,8 @@ Keep it short: a few lines per item, links rather than copies.
      not even for typo fixes. Core developers may start without an issue.
    - Start a branch in a worktree from upstream `main` (say "start on issue #N").
    - For larger changes, write the design doc first if `AGENTS.md` requires it.
-   - Before pushing, run `pnpm verify --fast` (or `pnpm verify` where there is no `--fast`) and
-     the tests you touched; CI on the PR is the merge gate.
+   - Before pushing, fetch upstream `main`, then run `pnpm verify --fast` (or `pnpm verify` where
+     there is no `--fast`) and the tests you touched; CI on the PR is the merge gate.
    - Open the PR with `Closes #N` (say "open a PR"); answer review (say "address review").
    - Only a maintainer approves and merges.
 4. **Something to work on**: list open, unassigned issues for newcomers, for example

@@ -4,8 +4,8 @@ description: "Carries day-to-day work in a capybara-hq repository from an issue 
 # Synced from capybara-hq/.github. Edit the source there, then run sync.
 metadata:
   source: capybara-hq/.github
-  version: v2.2.0
-  sha256: 2be319d4923043e1aa96d0de68fa49fda8c6a9dc813e7666881f2c6bba4a30e4
+  version: v2.3.0
+  sha256: d12ceca008c347e93a9db1007bae5235a0ca4a0fdceed8a8cfb8ae10d6f7cd20
 ---
 
 # Contributing
@@ -88,14 +88,18 @@ Input: an issue number `N` (core developers may also start without one).
 
 ## Verify
 
-1. In the worktree, run `pnpm -s verify --fast --json` when the repository's `AGENTS.md` lists
-   `pnpm verify --fast`, otherwise `pnpm -s verify --json`. It prints the same contract as doctor:
+1. In the worktree, first `git fetch <upstream> main`: the fast check never fetches, and some of
+   its steps (added comment lines, commit messages, migration numbers) compare with the local
+   upstream `main`, so a stale ref misses what main took meanwhile. Then run
+   `pnpm -s verify --fast --json` when the repository's `AGENTS.md` lists `pnpm verify --fast`,
+   otherwise `pnpm -s verify --json`. It prints the same contract as doctor:
    `{ "ok", "checks": [{ "id", "title", "status", "detail", "fix"? }] }`, exit 0 when nothing is
    `fail`. Keep the `-s`: without it the script banner on stdout breaks JSON parsing.
 2. For each `fail`, explain in plain words what broke and where, using `detail` and `fix`. Fix the
    code when the cause is clear and inside the task; ask when it is not. Do not skip, disable or
    weaken a check to make it pass.
-3. Mention each `warn` (for example a missing changeset) and what CI will run in addition.
+3. Mention each `warn` (for example a missing changeset, or no local upstream `main`, which skips
+   the steps that compare with it) and what CI will run in addition.
 4. Run the tests of the files you changed, with the single-test command `AGENTS.md` gives.
 5. Re-run until everything passes.
 6. If CI on the PR fails later, read the failing job's log, run that test locally, fix and push.

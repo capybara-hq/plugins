@@ -24,9 +24,11 @@ import {
 import {
   type BrowserDeps,
   NOT_OWNER_MESSAGE,
+  REQUEST_TIMEOUT_MS,
   RESTART_ATTEMPTS,
   RESTARTING_MESSAGE,
   TAKEN_OVER_MESSAGE,
+  TOOL_TIMEOUT_MS,
 } from "../src/browser.js";
 import { registerHandoffTool } from "../src/handoff.js";
 import { serviceSpecLoader } from "../src/service.js";
@@ -394,6 +396,15 @@ describe("browser tools", () => {
     }
   });
 
+  it("every tool declares a time limit that covers the device's first start and its own wait", () => {
+    const f = fake();
+    // any tool may be the first call: the instance start, the service files, the Chromium
+    // download, then one daemon request (REQUEST_TIMEOUT_MS covers browser_wait's own wait)
+    expect(TOOL_TIMEOUT_MS).toBeGreaterThan(REQUEST_TIMEOUT_MS + 120_000);
+    for (const name of f.tools.keys())
+      expect(f.tools.get(name)?.spec.timeoutMs, name).toBe(TOOL_TIMEOUT_MS);
+  });
+
   it("tool descriptions are English and pass validateToolSpec", () => {
     const f = fake();
     for (const { spec } of f.tools.values()) {
@@ -421,6 +432,8 @@ describe("browser_handoff", () => {
     expect(field?.key).toBe("done");
     expect(field?.schema).toEqual({ type: "boolean" });
     expect(field?.label).toEqual({ zh: "完成", en: "Done" });
+    // the person's conversation page opens the browser panel (a panel of this extension)
+    expect(first.open).toEqual({ contribution: "browser" });
     expect(f.requests).toEqual([
       { op: "handoff_notice", callId: "call-1", message: "Please sign in." },
     ]);

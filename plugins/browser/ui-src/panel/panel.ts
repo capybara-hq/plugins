@@ -3,22 +3,31 @@
 // through the embed bridge and to the plugin only through relative routes (`stream-ticket`,
 // `network-hosts`, `handoff-answer`) plus the ticket's WebSocket. Every (re)connect rebuilds the
 // whole UI from the daemon's first `state` message; nothing else survives an iframe remount (the
-// opaque-origin sandbox has no usable storage). Every viewer is the conversation owner's, so any
-// non-compact panel is interactive while the person holds control, whichever panel took it.
-import type { ViewerIn, ViewerOut, ViewerTab } from "../../daemon/protocol.js";
-import { VIEWPORT } from "../../daemon/protocol.js";
+// opaque-origin sandbox has no usable storage). The host keeps the frame mounted across its full
+// mode and tells the panel the mode it draws (`panel-mode` after `init` and on every change).
+// Every viewer is the conversation owner's, so any non-compact panel is interactive while the
+// person holds control, whichever panel took it; in the watch state (the agent drives) the panel
+// is read-only, and the daemon drops input anyway. Takeover input (pointer, cursor, keys, IME,
+// paste) lives in input.ts.
+import type { ViewerFrame, ViewerIn, ViewerOut, ViewerTab } from "../../daemon/protocol.js";
+import { decodeFrame, isIconDataUrl, VIEWPORT } from "../../daemon/protocol.js";
 import { type Locale, type StringKey, t } from "./i18n.js";
+import { mountInput } from "./input.js";
+import { ICONS } from "./page.js";
 
 const PROTOCOL = "capybara-embed/1";
 const ASPECT = VIEWPORT.width / VIEWPORT.height;
 /** The side view's frame budget; the expanded view (a takeover) may ask for the full viewport. */
 const SIDE_MAX_WIDTH = 640;
-/** The embed `resize` range the host clamps to. */
-const MIN_HEIGHT = 120;
-const MAX_HEIGHT = 4000;
+/**
+ * Frames are sized to the picture's CSS box times the device pixel ratio, capped here: a Retina
+ * screen at 2x would ask four times the bytes of 1x for text that reads well at 1.25x.
+ */
+const MAX_DPR = 1.25;
+/** The ground around the picture (CSS `#stage` padding). */
+const STAGE_PAD = 12;
 const HIDDEN_CLOSE_MS = 60_000;
 const COMPACT_BELOW = 600;
-const MOVE_INTERVAL_MS = 50;
 /**
  * Backoff of the retries of a 4404 that follows a live view (the service restarting, e.g. after an
  * allow) before "not running". A 4404 before any live view is "not running" at once.
@@ -118,11 +127,11 @@ export function mountPanel(opts: PanelOptions): void {
   /** This connection is a quiet look for the browser from "not running": it stays there until a state. */
   let quiet = false;
   /**
-   * The host shows this panel full (this panel asked for it on take over): the frame fills the box,
-   * no resize. The host sends no mode back, so it ends when the person's control ends by any path.
+   * The host shows this panel full: the frame fills the box, no resize. Only the host's
+   * `panel-mode` sets it (after `init` and on every change, whoever made it: this panel's ask on
+   * take over, the host's close control or Esc, the host refusing full mode on a phone).
    */
   let full = false;
-  let postedHeight = 0;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let emptyTimer: ReturnType<typeof setTimeout> | undefined;
   let emptySince: number | undefined;
@@ -139,10 +148,18 @@ export function mountPanel(opts: PanelOptions): void {
   let blockedUrl = "";
   let pendingHandoff: { callId: string; message: string } | null = null;
   let sentSize = "";
-  let lastMove = Number.NEGATIVE_INFINITY;
   let image: CanvasImageSource | null = null;
+  /** The layer the panel shows now (see `renderLoading`). */
+  let shown: "idle" | "skeleton" | "app" = "skeleton";
 
-  const compact = () => win.innerWidth < COMPACT_BELOW;
+  /**
+   * Watch only on a phone (the host's compact size class, a pushed page): the device's screen,
+   * never the panel's width, so a narrow side panel on a desktop still offers take over.
+   */
+  const compact = (): boolean => {
+    const sw = win.screen?.width ?? 0;
+    return sw > 0 && sw < COMPACT_BELOW;
+  };
   const text = (key: StringKey) => t(locale, key);
   /** The person drives the page from this panel: any non-compact panel while they hold control. */
   const interactive = (): boolean => !compact() && control === "user";
@@ -151,14 +168,27 @@ export function mountPanel(opts: PanelOptions): void {
     if (sock === null) return;
     sock.send(new TextEncoder().encode(JSON.stringify(msg)));
   }
-  function bridge(next: boolean): void {
-    full = next;
+  const input = mountInput({
+    window: win,
+    view,
+    stage,
+    send,
+    interactive: () => interactive(),
+    toPage: (clientX, clientY) => {
+      const r = view.getBoundingClientRect();
+      return mapPoint(clientX - r.left, clientY - r.top, { x: 0, y: 0, w: r.width, h: r.height });
+    },
+    label: t(locale, "view"),
+  });
+  /** Asks the host to enter or leave full mode; the host's own `panel-mode` says what it did. */
+  function askMode(next: boolean): void {
     post({ protocol: PROTOCOL, type: "panel-mode", full: next });
-    if (!next) {
-      // back in the side panel: ask for its size again, even if it equals the last one asked
-      postedHeight = 0;
-      fitHeight();
-    }
+  }
+  /** The host's `panel-mode`: the mode it draws this panel in. */
+  function hostMode(next: boolean): void {
+    if (next === full) return;
+    full = next;
+    onBoxChange();
   }
 
   // ---- rendering ----
@@ -169,6 +199,10 @@ export function mountPanel(opts: PanelOptions): void {
     };
     set("takeover", "takeover");
     set("handback", "handback");
+    set("verify-title", "verifyTitle");
+    set("verify-body", "verifyBody");
+    set("verify-go", "verifyGo");
+    set("skeleton-status", "statusConnecting");
     set("allow", "allow");
     set("reconnect", "reconnect");
     set("blocked-label", "blocked");
@@ -176,16 +210,17 @@ export function mountPanel(opts: PanelOptions): void {
     set("handoff-label", "handoff");
     set("handoff-done", "handoffDone");
     set("handoff-cancel", "handoffCancel");
+    input.sink.setAttribute("aria-label", text("view"));
     $("lock").setAttribute("aria-label", text("secure"));
     $("lock").setAttribute("title", text("secure"));
     for (const [id, key] of [
       ["back", "back"],
       ["forward", "forward"],
       ["reload", "reload"],
+      ["more", "more"],
     ] as const) {
       $(id).setAttribute("aria-label", text(key));
       $(id).setAttribute("title", text(key));
-      $(id).textContent = id === "back" ? "<" : id === "forward" ? ">" : "↻";
     }
     url.setAttribute("aria-label", text("address"));
     view.setAttribute("aria-label", text("view"));
@@ -193,33 +228,66 @@ export function mountPanel(opts: PanelOptions): void {
     doc.documentElement.lang = locale;
   }
 
+  /** The status line: an icon, a lead and a detail, in one fixed-height line. */
   function renderStatus(): void {
     const el = $("status");
     el.setAttribute("data-control", control);
-    let key: StringKey;
-    if (mode === "empty" || mode === "offline" || mode === "error") {
-      el.textContent = "";
-      return;
+    let tone: "agent" | "user" | "quiet" = "quiet";
+    let icon = "";
+    let lead: StringKey | null = null;
+    let detail: StringKey | null = null;
+    if (mode === "connecting") lead = "statusConnecting";
+    else if (mode === "live" && control === "user") {
+      if (interactive()) {
+        tone = "user";
+        icon = ICONS.hand;
+        lead = "statusUser";
+        detail = "statusUserDetail";
+      } else lead = "statusUserElsewhere";
+    } else if (mode === "live") {
+      tone = "agent";
+      const loading = lastState?.loading === true;
+      icon = loading ? ICONS.spin : ICONS.dot;
+      lead = "statusAgent";
+      if (loading) detail = "statusLoading";
     }
-    if (mode === "connecting") key = "statusConnecting";
-    else if (control === "user") key = compact() ? "statusUserElsewhere" : "takeoverHint";
-    else if (lastState?.loading === true) key = "statusLoading";
-    else key = "statusAgent";
-    el.textContent = text(key);
+    el.setAttribute("data-tone", tone);
+    $("status-icon").innerHTML = icon;
+    $("status-lead").textContent = lead === null ? "" : text(lead);
+    $("status-detail").textContent = detail === null ? "" : ` · ${text(detail)}`;
   }
 
   function renderChrome(): void {
     const watchOnly = compact();
+    // the watch state is read-only: navigation and tabs only while the person drives
+    const readOnly = !interactive();
     const isLive = mode === "live";
     $("takeover").hidden = watchOnly || !isLive || control === "user";
     $("handback").hidden = watchOnly || !isLive || control !== "user";
+    // the takeover slot stays reserved unless hand back takes it or the device only watches
+    $("takeover").toggleAttribute("data-gone", watchOnly || (isLive && control === "user"));
+    // the active tab shows a verification page (the daemon's tab blocker, cleared on its next
+    // navigation)
+    const verifying =
+      isLive &&
+      control === "agent" &&
+      tabs.find((x) => x.active)?.blocker?.kind === "verification" &&
+      !watchOnly;
+    $("verify").hidden = !verifying;
+    // one primary action: while a verification waits, take over steps back
+    $("takeover").className = verifying ? "secondary" : "primary";
+    $("handoff").hidden = pendingHandoff === null || verifying;
+    $("status").hidden = verifying || pendingHandoff !== null;
+    $("stage").setAttribute("data-control", isLive ? control : "agent");
+    $("field").toggleAttribute("data-edit", interactive());
     for (const id of ["back", "forward", "reload"])
-      ($(id) as HTMLButtonElement).disabled = watchOnly;
-    url.readOnly = watchOnly;
-    view.style.cursor = interactive() ? "default" : "pointer";
+      ($(id) as HTMLButtonElement).disabled = readOnly;
+    ($("more") as HTMLButtonElement).disabled = readOnly;
+    ($("tabsbtn") as HTMLButtonElement).disabled = readOnly;
+    url.readOnly = readOnly;
+    input.sync();
     $("lock").hidden = !isLive || lastState?.secure !== true;
     const showEmpty = mode === "empty" || mode === "offline" || mode === "error";
-    $("empty").hidden = !showEmpty;
     $("reconnect").hidden = !showEmpty;
     const keys: Record<string, [StringKey, StringKey]> = {
       empty: ["emptyTitle", "emptyBody"],
@@ -234,28 +302,58 @@ export function mountPanel(opts: PanelOptions): void {
     $("blocked").hidden = blockedHost === "";
     $("blocked-host").textContent = blockedHost;
     renderStatus();
+    renderLoading();
+  }
+
+  /**
+   * Which of the three layers shows; each is the whole panel and only one is visible:
+   * - `idle`: no browser to show (not running, offline, error): the centred idle state alone,
+   *   with no tabs, toolbar or status line (nothing to navigate);
+   * - `skeleton`: a connection on its way (or live without its first frame yet);
+   * - `app`: the live panel, once the browser's state and its first frame are there.
+   * A browser that comes up from the idle state (a quiet look found it) keeps the idle state until
+   * its first frame and then switches once to the live panel, as from the skeleton.
+   */
+  function renderLoading(): void {
+    const idleMode = mode === "empty" || mode === "offline" || mode === "error";
+    let next: "idle" | "skeleton" | "app";
+    if (idleMode) next = "idle";
+    else if (mode === "live" && image !== null) next = "app";
+    else if (mode === "live" && shown === "idle") next = "idle";
+    else next = "skeleton";
+    shown = next;
+    $("app").toggleAttribute("data-loading", next === "skeleton");
+    $("app").toggleAttribute("data-idle", next === "idle");
+    $("skeleton").hidden = next !== "skeleton";
+    $("empty").hidden = next !== "idle";
+    if (next === "app") onBoxChange();
   }
 
   function renderTabs(): void {
     const box = $("tabs");
     box.textContent = "";
-    const watchOnly = compact();
+    const watchOnly = !interactive();
     for (const tab of tabs) {
       const el = doc.createElement("div");
       el.className = "tab";
       el.setAttribute("role", "tab");
       el.setAttribute("data-active", String(tab.active));
+      el.setAttribute("aria-selected", String(tab.active));
+      el.appendChild(favOf(tab));
       const label = doc.createElement("button");
       label.type = "button";
       label.className = "label";
-      label.textContent = tab.title === "" ? tab.url : tab.title;
+      label.textContent = tabName(tab);
+      label.title = tabName(tab);
       label.disabled = watchOnly;
       label.addEventListener("click", () => send({ t: "tab", action: "switch", tabId: tab.id }));
       el.appendChild(label);
-      if (!watchOnly) {
+      // close only while the person is in control (the design's take over state)
+      if (!watchOnly && tab.active && control === "user") {
         const close = doc.createElement("button");
         close.type = "button";
-        close.textContent = "×";
+        close.className = "x";
+        close.innerHTML = ICONS.close;
         close.setAttribute("aria-label", text("closeTab"));
         close.addEventListener("click", () => send({ t: "tab", action: "close", tabId: tab.id }));
         el.appendChild(close);
@@ -265,11 +363,93 @@ export function mountPanel(opts: PanelOptions): void {
     if (!watchOnly) {
       const add = doc.createElement("button");
       add.type = "button";
-      add.textContent = "+";
+      add.className = "add";
+      add.innerHTML = ICONS.plus;
       add.setAttribute("aria-label", text("newTab"));
       add.addEventListener("click", () => send({ t: "tab", action: "open" }));
       box.appendChild(add);
     }
+    // narrow panels: one button for the tabs and the address
+    const active = tabs.find((x) => x.active);
+    $("tabsbtn").querySelector(".fav")?.replaceWith(favOf(active));
+    $("tabsbtn-name").textContent =
+      active === undefined ? "" : hostOf(active.url) || tabName(active);
+    $("tabsbtn-count").textContent = String(tabs.length);
+    $("tabsbtn").setAttribute("aria-label", `${text("tabs")}: ${tabs.length}`);
+  }
+
+  const tabName = (tab: ViewerTab): string => (tab.title === "" ? tab.url : tab.title);
+  /** The tab's site icon (the daemon's data URL), or the placeholder square. */
+  function favOf(tab: ViewerTab | undefined): HTMLElement {
+    if (tab !== undefined && isIconDataUrl(tab.favicon)) {
+      const img = doc.createElement("img");
+      img.className = "fav";
+      img.alt = "";
+      img.src = tab.favicon;
+      // an icon the browser cannot draw falls back to the placeholder
+      img.addEventListener("error", () => img.replaceWith(favOf(undefined)), { once: true });
+      return img;
+    }
+    const fav = doc.createElement("span");
+    fav.className = "fav";
+    return fav;
+  }
+  function hostOf(u: string): string {
+    try {
+      return new URL(u).host;
+    } catch {
+      return "";
+    }
+  }
+
+  /** The address as host (ink) and the rest (muted) while the field is not being edited. */
+  function renderUrl(u: string): void {
+    let host = u;
+    let rest = "";
+    try {
+      const p = new URL(u);
+      if (p.protocol === "http:" || p.protocol === "https:") {
+        host = p.host;
+        rest = `${p.pathname === "/" ? "" : p.pathname}${p.search}${p.hash}`;
+      }
+    } catch {
+      // not a URL (about:blank and the like): shown as it is
+    }
+    $("urltext-host").textContent = host;
+    $("urltext-path").textContent = rest;
+  }
+
+  // ---- menus (narrow panels) ----
+
+  function openMenu(
+    anchor: HTMLElement,
+    items: { label: string; current?: boolean; run(): void }[],
+  ): void {
+    const menu = $("menu");
+    menu.textContent = "";
+    for (const it of items) {
+      const b = doc.createElement("button");
+      b.type = "button";
+      b.setAttribute("role", "menuitem");
+      b.textContent = it.label;
+      if (it.current) b.setAttribute("aria-current", "true");
+      b.addEventListener("click", () => {
+        closeMenu();
+        it.run();
+      });
+      menu.appendChild(b);
+    }
+    const r = anchor.getBoundingClientRect();
+    menu.style.top = `${Math.round(r.bottom + 4)}px`;
+    menu.style.right = `${Math.max(12, Math.round(win.innerWidth - r.right))}px`;
+    menu.hidden = false;
+    anchor.setAttribute("aria-expanded", "true");
+    (menu.firstElementChild as HTMLElement | null)?.focus();
+  }
+  function closeMenu(): void {
+    $("menu").hidden = true;
+    $("tabsbtn").removeAttribute("aria-expanded");
+    $("more").removeAttribute("aria-expanded");
   }
 
   function applyState(s: Extract<ViewerOut, { t: "state" }>): void {
@@ -281,9 +461,12 @@ export function mountPanel(opts: PanelOptions): void {
     const was = control;
     control = s.control;
     // the take over ended elsewhere (another panel handed back, the agent resumed): leave full
-    if (full && was === "user" && control === "agent") bridge(false);
+    if (full && was === "user" && control === "agent") askMode(false);
+    // and an allow's pending reopen no longer takes over again on this connection's successors
+    if (was === "user" && control === "agent" && pendingNav?.sentOn === sock) pendingNav = null;
     const active = tabs.find((x) => x.active);
     if (doc.activeElement !== url) url.value = active?.url ?? "";
+    renderUrl(active?.url ?? "");
     renderTabs();
     renderChrome();
     // the frame budget follows control (the full viewport while the person drives): the hello
@@ -328,6 +511,9 @@ export function mountPanel(opts: PanelOptions): void {
     }
     if (p.sentOn !== sock && sock !== null) {
       p.sentOn = sock;
+      // the person allowed it while driving: a daemon restarted by the allow starts with the
+      // agent in control, so take it over again (input is dropped in the watch state)
+      if (control !== "user" && !compact()) takeover();
       send({ t: "nav", url: p.url });
     }
   }
@@ -368,35 +554,20 @@ export function mountPanel(opts: PanelOptions): void {
 
   function layout(): { w: number; h: number } {
     const st = stage.getBoundingClientRect();
-    const box = letterbox(Math.max(0, Math.floor(st.width)), Math.max(0, Math.floor(st.height)));
+    const box = letterbox(
+      Math.max(0, Math.floor(st.width) - 2 * STAGE_PAD),
+      Math.max(0, Math.floor(st.height) - 2 * STAGE_PAD),
+    );
     view.style.width = `${box.w}px`;
     view.style.height = `${box.h}px`;
     const dpr = win.devicePixelRatio || 1;
     const cap = control === "user" || full ? VIEWPORT.width : SIDE_MAX_WIDTH;
-    const w = Math.max(1, Math.min(cap, Math.round(box.w * dpr)));
+    const w = Math.max(1, Math.min(cap, Math.round(box.w * Math.min(dpr, MAX_DPR))));
     return { w, h: Math.max(1, Math.round(w / ASPECT)) };
-  }
-
-  /**
-   * In the side panel the host sizes the iframe by the embed `resize` message: ask for the height
-   * that shows the 16:10 frame at the full available width, plus the panel's own bars. Full mode
-   * fills the panel instead (the frame is letterboxed in it), so nothing is asked there.
-   */
-  function fitHeight(): void {
-    if (full) return;
-    const st = stage.getBoundingClientRect();
-    const width = Math.max(0, Math.floor(st.width));
-    if (width === 0) return;
-    const chrome = Math.max(0, win.innerHeight - Math.max(0, st.height));
-    const height = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.ceil(chrome + width / ASPECT)));
-    if (height === postedHeight) return;
-    postedHeight = height;
-    post({ protocol: PROTOCOL, type: "resize", height });
   }
 
   /** The box changed (width, the host's new height, a strip shown or hidden). */
   function onBoxChange(): void {
-    fitHeight();
     if (sock === null || mode !== "live") return;
     const { w, h } = layout();
     if (sentSize !== `${w}x${h}`) sizeMessage("resize");
@@ -420,13 +591,13 @@ export function mountPanel(opts: PanelOptions): void {
     ctx?.drawImage(image, 0, 0, w, h);
   }
 
-  async function onFrame(m: Extract<ViewerOut, { t: "frame" }>): Promise<void> {
+  async function onFrame(m: ViewerFrame): Promise<void> {
     try {
-      const bin = win.atob(m.jpeg);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      image = await decode(bytes);
+      const first = image === null;
+      image = await decode(m.jpeg);
+      if (first) renderLoading();
       draw();
+      input.frame();
     } catch {
       // A frame that fails to decode is skipped; the ack below keeps the stream moving.
     }
@@ -437,6 +608,8 @@ export function mountPanel(opts: PanelOptions): void {
 
   function show(next: View): void {
     mode = next;
+    // a later browser is a new one: the idle state holds until its own first frame
+    if (next === "empty" || next === "offline" || next === "error") image = null;
     if (next === "empty") {
       wasLive = false;
       armEmptyPoll();
@@ -481,7 +654,11 @@ export function mountPanel(opts: PanelOptions): void {
     quiet = lookOnly && mode === "empty";
     // a quiet look keeps the next one armed: a handshake that hangs does not end the looking
     if (quiet) armEmptyPoll();
-    else show("connecting");
+    else {
+      // a new connection shows the skeleton until its own first frame
+      image = null;
+      show("connecting");
+    }
     let ticketUrl: string;
     try {
       const res = await doFetch("stream-ticket", {
@@ -518,32 +695,41 @@ export function mountPanel(opts: PanelOptions): void {
   }
 
   async function onMessage(data: unknown): Promise<void> {
-    let raw: string;
-    if (typeof data === "string") raw = data;
-    else if (data instanceof ArrayBuffer) raw = new TextDecoder().decode(data);
-    else if (ArrayBuffer.isView(data)) raw = new TextDecoder().decode(data);
+    let bytes: Uint8Array;
+    if (typeof data === "string") bytes = new TextEncoder().encode(data);
+    else if (data instanceof ArrayBuffer) bytes = new Uint8Array(data);
+    else if (ArrayBuffer.isView(data))
+      bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
     else if (typeof (data as Blob).arrayBuffer === "function")
-      raw = new TextDecoder().decode(await (data as Blob).arrayBuffer());
+      bytes = new Uint8Array(await (data as Blob).arrayBuffer());
     else return;
-    let msg: ViewerOut;
-    try {
-      msg = JSON.parse(raw) as ViewerOut;
-    } catch {
-      return;
-    }
     retried401 = false;
     attempts = 0;
     restartRetries = 0;
+    const frame = decodeFrame(bytes);
+    if (frame !== null) {
+      void onFrame(frame);
+      return;
+    }
+    let msg: ViewerOut;
+    try {
+      msg = JSON.parse(new TextDecoder().decode(bytes)) as ViewerOut;
+    } catch {
+      return;
+    }
     switch (msg.t) {
+      case "ping":
+        send({ t: "pong", id: msg.id });
+        break;
+      case "cursor":
+        input.cursor(msg.cursor);
+        break;
       case "state":
         mode = "live";
         wasLive = true;
         quiet = false;
         emptySince = undefined;
         applyState(msg);
-        break;
-      case "frame":
-        void onFrame(msg);
         break;
       case "blocked":
         blockedHost = msg.host;
@@ -596,15 +782,17 @@ export function mountPanel(opts: PanelOptions): void {
 
   function takeover(): void {
     send({ t: "takeover" });
-    bridge(true);
-    view.focus();
+    askMode(true);
+    input.focus();
     renderChrome();
   }
 
   /** Hands the browser back; a pending handoff question is answered Done with it. */
   function handback(): void {
+    // the person's latest choice wins over an allow's pending reopen (which would take over again)
+    pendingNav = null;
     send({ t: "handback" });
-    bridge(false);
+    askMode(false);
     renderChrome();
     if (pendingHandoff !== null) void answerHandoff(true);
   }
@@ -641,6 +829,8 @@ export function mountPanel(opts: PanelOptions): void {
     blockedHost = "";
     blockedUrl = "";
     renderChrome();
+    // the watch state is read-only: the agent opens the page again itself
+    if (!interactive()) return;
     if (target === "") {
       send({ t: "nav", action: "reload" });
       return;
@@ -679,30 +869,33 @@ export function mountPanel(opts: PanelOptions): void {
     // The daemon clears state.handoff once the answer lands; the next state hides the banner.
   }
 
-  function onPointer(kind: "down" | "up" | "move", e: MouseEvent): void {
-    if (compact()) return;
-    if (kind === "move") {
-      if (!interactive() || e.timeStamp - lastMove < MOVE_INTERVAL_MS) return;
-      lastMove = e.timeStamp;
-    }
-    const r = view.getBoundingClientRect();
-    const p = mapPoint(e.clientX - r.left, e.clientY - r.top, {
-      x: 0,
-      y: 0,
-      w: r.width,
-      h: r.height,
-    });
-    send({
-      t: "mouse",
-      kind,
-      ...p,
-      ...(kind === "move" ? {} : { button: e.button === 2 ? "right" : "left" }),
-    });
-  }
-
   // ---- wiring ----
 
   $("takeover").addEventListener("click", takeover);
+  $("verify-go").addEventListener("click", takeover);
+  $("tabsbtn").addEventListener("click", (e) => {
+    if (!interactive()) return;
+    openMenu(e.currentTarget as HTMLElement, [
+      ...tabs.map((tab) => ({
+        label: tabName(tab),
+        current: tab.active,
+        run: () => send({ t: "tab", action: "switch", tabId: tab.id }),
+      })),
+      { label: text("newTab"), run: () => send({ t: "tab", action: "open" }) },
+    ]);
+  });
+  $("more").addEventListener("click", (e) => {
+    openMenu(e.currentTarget as HTMLElement, [
+      { label: text("forward"), run: () => send({ t: "nav", action: "forward" }) },
+      { label: text("reload"), run: () => send({ t: "nav", action: "reload" }) },
+    ]);
+  });
+  doc.addEventListener("mousedown", (e) => {
+    const m = $("menu");
+    if (m.hidden || m.contains(e.target as Node)) return;
+    if ((e.target as Element | null)?.closest?.("#tabsbtn, #more")) return;
+    closeMenu();
+  });
   $("handback").addEventListener("click", handback);
   $("handoff-done").addEventListener("click", () => void answerHandoff(true));
   $("handoff-cancel").addEventListener("click", () => void answerHandoff(false));
@@ -716,45 +909,17 @@ export function mountPanel(opts: PanelOptions): void {
   $("forward").addEventListener("click", () => send({ t: "nav", action: "forward" }));
   $("reload").addEventListener("click", () => send({ t: "nav", action: "reload" }));
   url.addEventListener("keydown", (e) => {
-    if (e.key !== "Enter" || compact() || url.value.trim() === "") return;
+    if (e.key !== "Enter" || !interactive() || url.value.trim() === "") return;
     send({ t: "nav", url: normalizeUrl(url.value) });
-    view.focus();
-  });
-  view.addEventListener("mousedown", (e) => onPointer("down", e));
-  view.addEventListener("mouseup", (e) => onPointer("up", e));
-  view.addEventListener("mousemove", (e) => onPointer("move", e));
-  view.addEventListener("contextmenu", (e) => e.preventDefault());
-  view.addEventListener(
-    "wheel",
-    (e) => {
-      if (compact()) return;
-      e.preventDefault();
-      const r = view.getBoundingClientRect();
-      const p = mapPoint(e.clientX - r.left, e.clientY - r.top, {
-        x: 0,
-        y: 0,
-        w: r.width,
-        h: r.height,
-      });
-      send({ t: "mouse", kind: "wheel", ...p, dx: e.deltaX, dy: e.deltaY });
-    },
-    { passive: false },
-  );
-  view.addEventListener("keydown", (e) => {
-    if (!interactive() || e.key === "Escape" || e.isComposing) return;
-    e.preventDefault();
-    send({ t: "key", kind: "down", key: e.key, code: e.code });
-  });
-  view.addEventListener("keyup", (e) => {
-    if (!interactive() || e.key === "Escape" || e.isComposing) return;
-    e.preventDefault();
-    send({ t: "key", kind: "up", key: e.key, code: e.code });
-  });
-  view.addEventListener("compositionend", (e) => {
-    if (interactive() && e.data !== "") send({ t: "key", kind: "char", key: e.data, text: e.data });
+    input.focus();
   });
   doc.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && interactive()) handback();
+    if (e.key !== "Escape") return;
+    if (!$("menu").hidden) {
+      closeMenu();
+      return;
+    }
+    if (interactive()) handback();
   });
   win.addEventListener("resize", () => {
     onBoxChange();
@@ -800,7 +965,6 @@ export function mountPanel(opts: PanelOptions): void {
 
   setLabels();
   renderChrome();
-  fitHeight();
 
   win.addEventListener("message", (ev: MessageEvent) => {
     // only the host page speaks the embed protocol (not a page this frame may embed)
@@ -813,8 +977,7 @@ export function mountPanel(opts: PanelOptions): void {
       applyTheme(m.tokens, m.theme);
       setLabels();
       renderChrome();
-      postedHeight = 0;
-      fitHeight();
+      doc.body.setAttribute("data-ready", "");
       if (!started) {
         started = true;
         void connect();
@@ -823,6 +986,8 @@ export function mountPanel(opts: PanelOptions): void {
       token = m.token;
     } else if (m.type === "theme") {
       applyTheme(m.tokens, m.theme);
+    } else if (m.type === "panel-mode" && typeof m.full === "boolean") {
+      hostMode(m.full);
     }
   });
 }

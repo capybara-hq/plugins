@@ -1,6 +1,11 @@
 import { JSDOM } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ViewerIn, ViewerOut } from "../../daemon/protocol.js";
+import {
+  clipCodePoints,
+  encodeFrame,
+  type ViewerIn,
+  type ViewerOut,
+} from "../../daemon/protocol.js";
 import { STRINGS, t } from "../../ui-src/panel/i18n.js";
 import { PANEL_HTML } from "../../ui-src/panel/page.js";
 import { letterbox, mapPoint, mountPanel } from "../../ui-src/panel/panel.js";
@@ -29,6 +34,11 @@ class FakeSocket {
   push(msg: ViewerOut): void {
     this.onmessage?.({ data: new TextEncoder().encode(JSON.stringify(msg)).buffer });
   }
+  /** A binary frame message, as the daemon sends it. */
+  pushFrame(seq: number): void {
+    const bytes = encodeFrame({ seq, width: 1280, height: 800, jpeg: new Uint8Array([1, 2, 3]) });
+    this.onmessage?.({ data: bytes.buffer });
+  }
   drop(code: number): void {
     this.onclose?.({ code });
   }
@@ -56,6 +66,8 @@ function setup(
   opts: {
     locale?: "zh" | "en";
     width?: number;
+    /** The device's screen width (default a desktop's). */
+    screen?: number;
     dpr?: number;
     ticket?: () => Response;
     answer?: () => Response;
@@ -70,6 +82,11 @@ function setup(
   const dom = new JSDOM(PANEL_HTML, { url: "https://app.test/plugin-ui/browser/browser" });
   const win = dom.window as unknown as Window & typeof globalThis;
   Object.defineProperty(win, "innerWidth", { value: opts.width ?? 800, configurable: true });
+  // the device's screen: a phone (below 600) only watches
+  Object.defineProperty(win, "screen", {
+    value: { width: opts.screen ?? 1440, height: 900 },
+    configurable: true,
+  });
   Object.defineProperty(win, "devicePixelRatio", { value: opts.dpr ?? 1, configurable: true });
   Object.defineProperty(win, "innerHeight", { value: opts.innerHeight ?? 480, configurable: true });
   const observers: (() => void)[] = [];
@@ -102,8 +119,10 @@ function setup(
     return new Response("{}", { status: 200 });
   };
   const stage = dom.window.document.getElementById("stage") as HTMLElement;
+  // the area the picture is fitted into: the stage minus its 12 px ground on each side
   let stageRect = { width: 480, height: 400 };
-  stage.getBoundingClientRect = () => ({ left: 0, top: 0, ...stageRect }) as DOMRect;
+  stage.getBoundingClientRect = () =>
+    ({ left: 0, top: 0, width: stageRect.width + 24, height: stageRect.height + 24 }) as DOMRect;
   mountPanel({
     window: win,
     fetch: fetchImpl as never,
@@ -140,6 +159,14 @@ function setup(
 const resizes = (s: Setup) =>
   s.host.filter((m) => (m as { type?: string }).type === "resize") as { height: number }[];
 const modes = (s: Setup) => s.host.filter((m) => (m as { type?: string }).type === "panel-mode");
+/** The host tells the panel the mode it draws it in (the embed bridge's `panel-mode`). */
+const hostMode = (s: Setup, full: boolean) =>
+  s.dom.window.dispatchEvent(
+    new s.dom.window.MessageEvent("message", {
+      source: s.dom.window,
+      data: { protocol: "capybara-embed/1", type: "panel-mode", full },
+    }),
+  );
 
 async function live(s: Setup, st: ViewerOut = state()): Promise<FakeSocket> {
   await vi.waitFor(() => expect(FakeSocket.all.length).toBeGreaterThan(0));
@@ -173,7 +200,7 @@ describe("panel", () => {
     const sock = await live(s);
     expect(sock.binaryType).toBe("arraybuffer");
     expect(sock.sent[0]).toEqual({ t: "hello", maxWidth: 480, maxHeight: 300 });
-    sock.push({ t: "frame", seq: 7, jpeg: "AAAA", width: 1280, height: 800 });
+    sock.pushFrame(7);
     await vi.waitFor(() => expect(sock.sent).toContainEqual({ t: "frame-ack", seq: 7 }));
   });
 
@@ -217,10 +244,14 @@ describe("panel", () => {
     const sock = await live(s, state({ control: "user" }));
     // no takeover click in this panel: a remount (expand / collapse) mid-takeover
     expect(($(s, "handback") as HTMLElement).hidden).toBe(false);
-    expect($(s, "status").textContent).toBe(t("en", "takeoverHint"));
+    expect($(s, "status").textContent).toBe(
+      `${t("en", "statusUser")} · ${t("en", "statusUserDetail")}`,
+    );
     const view = $(s, "view");
     view.getBoundingClientRect = () => ({ left: 0, top: 0, width: 480, height: 300 }) as DOMRect;
-    view.dispatchEvent(new s.dom.window.KeyboardEvent("keydown", { key: "a", code: "KeyA" }));
+    $(s, "input-sink").dispatchEvent(
+      new s.dom.window.KeyboardEvent("keydown", { key: "a", code: "KeyA", bubbles: true }),
+    );
     expect(sock.sent).toContainEqual({ t: "key", kind: "down", key: "a", code: "KeyA" });
     view.dispatchEvent(
       new s.dom.window.MouseEvent("mousemove", { clientX: 240, clientY: 150, bubbles: true }),
@@ -237,21 +268,27 @@ describe("panel", () => {
     });
   });
 
-  it("asks for full-viewport frames whenever the person holds control", async () => {
+  it("sizes frames to the CSS box with the pixel ratio capped, up to the full viewport in control", async () => {
     const s = setup({ dpr: 2 });
+    // a 480 px wide box at 2x asks 1.25x of it, not 960
     const sock = await live(s);
-    expect(sock.sent[0]).toEqual({ t: "hello", maxWidth: 640, maxHeight: 400 });
+    expect(sock.sent[0]).toEqual({ t: "hello", maxWidth: 600, maxHeight: 375 });
+    // a wide box: the side view stays within its budget
+    s.resizeStage(1000, 700);
+    expect(sock.sent.at(-1)).toEqual({ t: "resize", maxWidth: 640, maxHeight: 400 });
+    // in control the full viewport is the cap
     sock.push(state({ control: "user" }));
-    expect(sock.sent.at(-1)).toEqual({ t: "resize", maxWidth: 960, maxHeight: 600 });
+    expect(sock.sent.at(-1)).toEqual({ t: "resize", maxWidth: 1250, maxHeight: 781 });
     sock.push(state({ control: "agent" }));
     expect(sock.sent.at(-1)).toEqual({ t: "resize", maxWidth: 640, maxHeight: 400 });
   });
 
   it("a fresh mount mid-takeover asks for the full-viewport cap on the first state", async () => {
     const s = setup({ dpr: 2 });
+    s.resizeStage(800, 500);
     const sock = await live(s, state({ control: "user" }));
     expect(sock.sent[0]).toEqual({ t: "hello", maxWidth: 640, maxHeight: 400 });
-    expect(sock.sent).toContainEqual({ t: "resize", maxWidth: 960, maxHeight: 600 });
+    expect(sock.sent).toContainEqual({ t: "resize", maxWidth: 1000, maxHeight: 625 });
     // a reconnect (new socket, no state yet) does the same
     sock.drop(1012);
     await vi.waitFor(() => expect(FakeSocket.all.length).toBe(2));
@@ -260,18 +297,239 @@ describe("panel", () => {
     sock2.push(state({ control: "user" }));
     // the last size this connection asked for is the full-viewport one (hello or resize)
     const sized = sock2.sent.filter((m) => m.t === "hello" || m.t === "resize").at(-1);
-    expect(sized).toMatchObject({ maxWidth: 960, maxHeight: 600 });
+    expect(sized).toMatchObject({ maxWidth: 1000, maxHeight: 625 });
   });
 
-  it("does not drive the page while the agent holds control", async () => {
+  it("is read-only while the agent holds control: no input of any kind leaves the panel", async () => {
     const s = setup();
     const sock = await live(s);
+    const w = s.dom.window;
     const view = $(s, "view");
-    view.dispatchEvent(new s.dom.window.KeyboardEvent("keydown", { key: "a" }));
-    view.dispatchEvent(new s.dom.window.MouseEvent("mousemove", { clientX: 1, clientY: 1 }));
-    expect(sock.sent.some((m) => m.t === "key" || (m.t === "mouse" && m.kind === "move"))).toBe(
-      false,
+    view.getBoundingClientRect = () => ({ left: 0, top: 0, width: 480, height: 300 }) as DOMRect;
+    const sink = $(s, "input-sink");
+    view.dispatchEvent(new w.MouseEvent("mousedown", { clientX: 10, clientY: 10, bubbles: true }));
+    w.dispatchEvent(new w.MouseEvent("mouseup", { clientX: 10, clientY: 10 }));
+    view.dispatchEvent(new w.MouseEvent("mousemove", { clientX: 1, clientY: 1, bubbles: true }));
+    view.dispatchEvent(new w.WheelEvent("wheel", { deltaY: 100, bubbles: true, cancelable: true }));
+    sink.dispatchEvent(new w.KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    sink.dispatchEvent(new w.CompositionEvent("compositionend", { data: "你好" }));
+    const url = $(s, "url") as HTMLInputElement;
+    url.value = "https://news.test/";
+    url.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter" }));
+    $(s, "back").click();
+    for (const b of Array.from(w.document.querySelectorAll("#tabs button")))
+      (b as HTMLButtonElement).click();
+    sock.push({ t: "blocked", host: "cdn.test", url: "https://cdn.test/page" });
+    $(s, "allow").click();
+    await vi.waitFor(() => expect(s.fetchCalls.some((c) => c.url === "network-hosts")).toBe(true));
+    const input = sock.sent.filter((m) => !["hello", "resize", "frame-ack", "pong"].includes(m.t));
+    expect(input).toEqual([]);
+    expect(($(s, "back") as HTMLButtonElement).disabled).toBe(true);
+    expect(url.readOnly).toBe(true);
+    // a cursor message changes nothing in the watch state
+    sock.push({ t: "cursor", cursor: "pointer" });
+    expect(view.style.cursor).toBe("default");
+  });
+
+  it("answers a ping at once", async () => {
+    const s = setup();
+    const sock = await live(s);
+    sock.push({ t: "ping", id: 42 });
+    expect(sock.sent.at(-1)).toEqual({ t: "pong", id: 42 });
+  });
+
+  it("sends the newest pointer position at most every 33 ms while it moves", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    await vi.advanceTimersByTimeAsync(0);
+    const sock = s.sock();
+    sock.open();
+    sock.push(state({ control: "user" }));
+    const w = s.dom.window;
+    const view = $(s, "view");
+    view.getBoundingClientRect = () => ({ left: 0, top: 0, width: 640, height: 400 }) as DOMRect;
+    const moves = () => sock.sent.filter((m) => m.t === "mouse" && m.kind === "move");
+    for (let i = 1; i <= 5; i++)
+      view.dispatchEvent(
+        new w.MouseEvent("mousemove", { clientX: i * 10, clientY: 10, bubbles: true }),
+      );
+    // the first at once, the rest wait for the interval and only the newest goes
+    expect(moves()).toEqual([{ t: "mouse", kind: "move", x: 20, y: 20 }]);
+    await vi.advanceTimersByTimeAsync(33);
+    expect(moves()).toEqual([
+      { t: "mouse", kind: "move", x: 20, y: 20 },
+      { t: "mouse", kind: "move", x: 100, y: 20 },
+    ]);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(moves()).toHaveLength(2);
+  });
+
+  it("shows the page's cursor on the picture while driving, and the default after hand back", async () => {
+    const s = setup();
+    const sock = await live(s, state({ control: "user" }));
+    const view = $(s, "view");
+    sock.push({ t: "cursor", cursor: "pointer" });
+    expect(view.style.cursor).toBe("pointer");
+    sock.push({ t: "cursor", cursor: "text" });
+    expect(view.style.cursor).toBe("text");
+    // anything unknown (an image cursor, a forged value) is the arrow
+    sock.push({ t: "cursor", cursor: "url(evil.png), auto" } as never);
+    expect(view.style.cursor).toBe("default");
+    sock.push({ t: "cursor", cursor: "grab" });
+    sock.push(state({ control: "agent" }));
+    expect(view.style.cursor).toBe("default");
+  });
+
+  it("shows a press indicator at mousedown, before any frame, until the frame after release", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    await vi.advanceTimersByTimeAsync(0);
+    const sock = s.sock();
+    sock.open();
+    sock.push(state({ control: "user" }));
+    const w = s.dom.window;
+    const view = $(s, "view");
+    view.getBoundingClientRect = () => ({ left: 0, top: 0, width: 480, height: 300 }) as DOMRect;
+    const press = $(s, "press");
+    expect(press.hidden).toBe(true);
+    view.dispatchEvent(new w.MouseEvent("mousedown", { clientX: 40, clientY: 30, bubbles: true }));
+    expect(press.hidden).toBe(false);
+    expect([press.style.left, press.style.top]).toEqual(["40px", "30px"]);
+    // a frame while the button is still down keeps it
+    sock.pushFrame(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(press.hidden).toBe(false);
+    w.dispatchEvent(new w.MouseEvent("mouseup", { clientX: 40, clientY: 30 }));
+    expect(press.hidden).toBe(false);
+    sock.pushFrame(2);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(press.hidden).toBe(true);
+    // no frame comes back: it goes after a second
+    view.dispatchEvent(new w.MouseEvent("mousedown", { clientX: 40, clientY: 30, bubbles: true }));
+    w.dispatchEvent(new w.MouseEvent("mouseup", { clientX: 40, clientY: 30 }));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(press.hidden).toBe(true);
+  });
+
+  it("a drag released outside the picture still sends the button up", async () => {
+    const s = setup();
+    const sock = await live(s, state({ control: "user" }));
+    const w = s.dom.window;
+    const view = $(s, "view");
+    view.getBoundingClientRect = () => ({ left: 0, top: 0, width: 480, height: 300 }) as DOMRect;
+    view.dispatchEvent(new w.MouseEvent("mousedown", { clientX: 10, clientY: 10, bubbles: true }));
+    w.document.body.dispatchEvent(
+      new w.MouseEvent("mousemove", { clientX: 900, clientY: 10, bubbles: true }),
     );
+    w.dispatchEvent(new w.MouseEvent("mouseup", { clientX: 900, clientY: 10 }));
+    expect(sock.sent).toContainEqual({ t: "mouse", kind: "move", x: 1280, y: 27 });
+    expect(sock.sent.at(-1)).toEqual({ t: "mouse", kind: "up", x: 1280, y: 27, button: "left" });
+  });
+
+  it("takeover moves the focus to the input sink; IME text goes once, at compositionend", async () => {
+    const s = setup();
+    const sock = await live(s);
+    const w = s.dom.window;
+    $(s, "takeover").click();
+    sock.push(state({ control: "user" }));
+    const sink = $(s, "input-sink") as HTMLTextAreaElement;
+    expect(w.document.activeElement).toBe(sink);
+    // keys the IME takes are not sent as keys
+    sink.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Process", bubbles: true }));
+    sink.dispatchEvent(
+      new w.KeyboardEvent("keydown", { key: "n", isComposing: true, bubbles: true }),
+    );
+    sink.value = "ni";
+    sink.dispatchEvent(
+      new w.InputEvent("input", { isComposing: true, inputType: "insertCompositionText" }),
+    );
+    sink.value = "你";
+    sink.dispatchEvent(new w.CompositionEvent("compositionend", { data: "你" }));
+    sink.dispatchEvent(new w.InputEvent("input", { inputType: "insertText" }));
+    const keys = sock.sent.filter((m) => m.t === "key");
+    expect(keys).toEqual([{ t: "key", kind: "char", key: "你", text: "你" }]);
+    expect(sink.value).toBe("");
+    // a printable key outside a composition goes as a key (it types its character)
+    sink.dispatchEvent(new w.KeyboardEvent("keydown", { key: "a", code: "KeyA", bubbles: true }));
+    expect(sock.sent.at(-1)).toEqual({ t: "key", kind: "down", key: "a", code: "KeyA" });
+  });
+
+  it("releases held keys and the held button when the window loses the focus", async () => {
+    const s = setup();
+    const sock = await live(s, state({ control: "user" }));
+    const w = s.dom.window;
+    const view = $(s, "view");
+    view.getBoundingClientRect = () => ({ left: 0, top: 0, width: 480, height: 300 }) as DOMRect;
+    const sink = $(s, "input-sink");
+    sink.dispatchEvent(
+      new w.KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft", bubbles: true }),
+    );
+    view.dispatchEvent(
+      new w.MouseEvent("mousedown", { clientX: 240, clientY: 150, bubbles: true }),
+    );
+    w.dispatchEvent(new w.Event("blur"));
+    expect(sock.sent.slice(-2)).toEqual([
+      { t: "key", kind: "up", key: "Shift", code: "ShiftLeft" },
+      { t: "mouse", kind: "up", x: 640, y: 400, button: "left" },
+    ]);
+    // nothing is released twice
+    w.dispatchEvent(new w.Event("blur"));
+    expect(sock.sent.filter((m) => m.t === "key" && m.kind === "up")).toHaveLength(1);
+  });
+
+  it("the input sink gives up the focus when control returns to the agent", async () => {
+    const s = setup();
+    const sock = await live(s);
+    $(s, "takeover").click();
+    sock.push(state({ control: "user" }));
+    const sink = $(s, "input-sink");
+    expect(s.dom.window.document.activeElement).toBe(sink);
+    sock.push(state({ control: "agent" }));
+    expect(s.dom.window.document.activeElement).not.toBe(sink);
+  });
+
+  it("a hand back cancels an allow's pending reopen: a reconnect does not take over again", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    await vi.advanceTimersByTimeAsync(0);
+    const sock = s.sock();
+    sock.open();
+    sock.push(state({ control: "user" }));
+    sock.push({ t: "blocked", host: "cdn.test", url: "https://cdn.test/page" });
+    $(s, "allow").click();
+    await vi.advanceTimersByTimeAsync(0);
+    $(s, "handback").click();
+    sock.drop(1012);
+    await vi.advanceTimersByTimeAsync(0);
+    const sock2 = s.sock();
+    expect(sock2).not.toBe(sock);
+    sock2.open();
+    sock2.push(state({ tabs: [{ id: "t1", title: "", url: "about:blank", active: true }] }));
+    expect(sock2.sent.some((m) => m.t === "takeover" || m.t === "nav")).toBe(false);
+  });
+
+  it("clips pasted text by code points, never half of a surrogate pair", () => {
+    expect(clipCodePoints("ab😀c", 3)).toBe("ab😀");
+    expect(clipCodePoints("ab", 3)).toBe("ab");
+    expect(Array.from(clipCodePoints("😀".repeat(5), 4))).toHaveLength(4);
+  });
+
+  it("paste sends the clipboard text, not the Cmd+V keys", async () => {
+    const s = setup();
+    const sock = await live(s, state({ control: "user" }));
+    const w = s.dom.window;
+    const sink = $(s, "input-sink");
+    sink.dispatchEvent(new w.KeyboardEvent("keydown", { key: "v", metaKey: true, bubbles: true }));
+    sink.dispatchEvent(new w.KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true }));
+    const paste = new w.Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, "clipboardData", {
+      value: { getData: (type: string) => (type === "text/plain" ? "粘贴 text" : "") },
+    });
+    sink.dispatchEvent(paste);
+    expect(paste.defaultPrevented).toBe(true);
+    expect(sock.sent.filter((m) => m.t === "key")).toEqual([
+      { t: "key", kind: "char", key: "粘贴 text", text: "粘贴 text" },
+    ]);
   });
 
   it("offers takeover only in the live view", async () => {
@@ -355,7 +613,7 @@ describe("panel", () => {
 
   it("typing in the address bar and Enter sends nav with the url", async () => {
     const s = setup();
-    const sock = await live(s);
+    const sock = await live(s, state({ control: "user" }));
     const url = $(s, "url") as HTMLInputElement;
     url.value = "https://news.test/";
     url.dispatchEvent(new s.dom.window.KeyboardEvent("keydown", { key: "Enter" }));
@@ -364,7 +622,7 @@ describe("panel", () => {
 
   it("back, forward and reload send nav actions", async () => {
     const s = setup();
-    const sock = await live(s);
+    const sock = await live(s, state({ control: "user" }));
     $(s, "back").click();
     $(s, "forward").click();
     $(s, "reload").click();
@@ -377,7 +635,7 @@ describe("panel", () => {
 
   it("allow button adds the host and opens the blocked page", async () => {
     const s = setup();
-    const sock = await live(s);
+    const sock = await live(s, state({ control: "user" }));
     sock.push({ t: "blocked", host: "cdn.test", url: "https://cdn.test/page" });
     expect(($(s, "blocked") as HTMLElement).hidden).toBe(false);
     expect($(s, "blocked").textContent).toContain("cdn.test");
@@ -398,7 +656,7 @@ describe("panel", () => {
     await vi.advanceTimersByTimeAsync(0);
     const sock = s.sock();
     sock.open();
-    sock.push(state());
+    sock.push(state({ control: "user" }));
     sock.push({ t: "blocked", host: "cdn.test", url: "https://cdn.test/page" });
     $(s, "allow").click();
     await vi.advanceTimersByTimeAsync(0);
@@ -415,8 +673,12 @@ describe("panel", () => {
     expect(FakeSocket.all).toHaveLength(3);
     const sock3 = s.sock();
     sock3.open();
+    // the restarted daemon starts with the agent in control: the panel takes over again first
     sock3.push(state({ tabs: [{ id: "t1", title: "", url: "about:blank", active: true }] }));
-    expect(sock3.sent).toContainEqual({ t: "nav", url: "https://cdn.test/page" });
+    const takeover = sock3.sent.findIndex((m) => m.t === "takeover");
+    const nav = sock3.sent.findIndex((m) => m.t === "nav" && m.url === "https://cdn.test/page");
+    expect(takeover).toBeGreaterThanOrEqual(0);
+    expect(nav).toBeGreaterThan(takeover);
   });
 
   it("a 4404 before any live view is the empty state at once, not a reconnect loop", async () => {
@@ -448,8 +710,32 @@ describe("panel", () => {
     const sock = s.sock();
     sock.open();
     sock.push(state());
+    // one switch: the idle state holds until the browser's first frame, no skeleton between
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+    expect(($(s, "skeleton") as HTMLElement).hidden).toBe(true);
+    sock.pushFrame(1);
+    await vi.advanceTimersByTimeAsync(0);
     expect(($(s, "empty") as HTMLElement).hidden).toBe(true);
+    expect($(s, "app").hasAttribute("data-idle")).toBe(false);
     expect(($(s, "takeover") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("the idle states (not running, offline, error) are the idle layer alone", async () => {
+    for (const [code, title] of [
+      [4404, "emptyTitle"],
+      [4409, "offlineTitle"],
+      [1009, "errorTitle"],
+    ] as const) {
+      const s = setup();
+      await vi.waitFor(() => expect(FakeSocket.all.length).toBe(1));
+      s.sock().drop(code);
+      expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+      expect($(s, "empty-title").textContent).toBe(t("en", title));
+      // no tab strip, toolbar or status line beside it: the live layer is hidden as a whole
+      expect($(s, "app").hasAttribute("data-idle")).toBe(true);
+      expect(($(s, "skeleton") as HTMLElement).hidden).toBe(true);
+      expect($(s, "empty").closest("#app")).toBeNull();
+    }
   });
 
   it("the empty state looks for the browser every 10 s while visible, for 30 min at most", async () => {
@@ -576,8 +862,8 @@ describe("panel", () => {
     expect($(s, "empty").textContent).toContain(t("en", "emptyTitle"));
   });
 
-  it("compact size class is watch-only", async () => {
-    const s = setup({ width: 500 });
+  it("a phone (the host's compact size class) is watch-only", async () => {
+    const s = setup({ width: 390, screen: 390 });
     const sock = await live(s);
     expect(($(s, "takeover") as HTMLElement).hidden).toBe(true);
     expect(sock.sent[0]).toMatchObject({ t: "hello" });
@@ -606,55 +892,52 @@ describe("panel", () => {
 });
 
 describe("panel size", () => {
-  it("asks for the height of a 16:10 frame at the available width plus its bars", async () => {
-    // viewport 480, stage 400: 80 px of bars; a 480 px wide frame is 300 px tall
-    const s = setup({ innerHeight: 480 });
-    await live(s);
-    expect(resizes(s).at(-1)).toEqual({
-      protocol: "capybara-embed/1",
-      type: "resize",
-      height: 380,
-    });
-    // the host applies it: the stage is now exactly the frame, nothing more is asked
-    const n = resizes(s).length;
-    Object.defineProperty(s.dom.window, "innerHeight", { value: 380, configurable: true });
-    s.resizeStage(480, 300);
-    expect(resizes(s)).toHaveLength(n);
-  });
-
-  it("asks again when the width changes, within the host's range", async () => {
-    const s = setup({ innerHeight: 480 });
-    await live(s);
+  it("never posts resize: the host fills the panel and the picture is contained in it", async () => {
+    const s = setup({ dpr: 1 });
+    const sock = await live(s);
     s.resizeStage(320, 400);
-    expect(resizes(s).at(-1)?.height).toBe(80 + 200);
-    s.resizeStage(16_000, 400);
-    expect(resizes(s).at(-1)?.height).toBe(4000);
-    s.resizeStage(16, 400);
-    expect(resizes(s).at(-1)?.height).toBe(120);
+    s.resizeStage(1000, 300);
+    expect(resizes(s)).toHaveLength(0);
+    // contained: 1000x300 fits a 480x300 picture, centred by the stage
+    expect($(s, "view").style.width).toBe("480px");
+    expect($(s, "view").style.height).toBe("300px");
+    expect(sock.sent.at(-1)).toEqual({ t: "resize", maxWidth: 480, maxHeight: 300 });
   });
 
-  it("asks nothing in full mode, where the frame fills the box, and again after hand back", async () => {
-    const s = setup({ innerHeight: 480, dpr: 1 });
+  it("the viewer size follows the shown size in full mode, and the side cap after it", async () => {
+    const s = setup({ dpr: 1 });
     const sock = await live(s);
     $(s, "takeover").click();
     sock.push(state({ control: "user" }));
-    const n = resizes(s).length;
-    // the host fills the panel: 1000x700 letterboxes to 1000x625, the viewer size follows it
-    Object.defineProperty(s.dom.window, "innerHeight", { value: 780, configurable: true });
+    hostMode(s, true);
+    // the host fills the page: 1000x700 letterboxes to 1000x625, the viewer size follows it
     s.resizeStage(1000, 700);
-    expect(resizes(s)).toHaveLength(n);
     expect(sock.sent.at(-1)).toEqual({ t: "resize", maxWidth: 1000, maxHeight: 625 });
     expect($(s, "view").style.width).toBe("1000px");
     $(s, "handback").click();
-    expect(resizes(s).at(-1)?.height).toBe(80 + 625);
+    sock.push(state({ control: "agent" }));
+    hostMode(s, false);
+    expect(sock.sent.at(-1)).toEqual({ t: "resize", maxWidth: 640, maxHeight: 400 });
   });
 
-  it("leaves full mode when the take over ends elsewhere and asks for its size again", async () => {
-    const s = setup({ innerHeight: 480 });
+  it("follows the host leaving full mode on its own (its Esc or close), asking nothing back", async () => {
+    const s = setup({ dpr: 1 });
     const sock = await live(s);
-    const before = resizes(s).length;
     $(s, "takeover").click();
     sock.push(state({ control: "user" }));
+    hostMode(s, true);
+    const asks = modes(s).length;
+    hostMode(s, false);
+    expect(modes(s)).toHaveLength(asks);
+    expect(($(s, "handback") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("leaves full mode when the take over ends elsewhere", async () => {
+    const s = setup();
+    const sock = await live(s);
+    $(s, "takeover").click();
+    sock.push(state({ control: "user" }));
+    hostMode(s, true);
     // another panel handed back: control returns to the agent without this panel's hand back
     sock.push(state({ control: "agent" }));
     expect(modes(s).at(-1)).toEqual({
@@ -662,13 +945,139 @@ describe("panel size", () => {
       type: "panel-mode",
       full: false,
     });
-    // posted again although the height is the one asked before
-    expect(resizes(s)).toHaveLength(before + 1);
-    expect(resizes(s).at(-1)?.height).toBe(380);
+    hostMode(s, false);
     // a state of the agent before the take over lands does not leave full mode
     $(s, "takeover").click();
     sock.push(state({ control: "agent" }));
     expect(modes(s).at(-1)).toMatchObject({ full: true });
+  });
+});
+
+describe("design states", () => {
+  it("is one skeleton until the state and the first frame are there, then switches once", async () => {
+    const s = setup();
+    expect(($(s, "skeleton") as HTMLElement).hidden).toBe(false);
+    expect($(s, "app").hasAttribute("data-loading")).toBe(true);
+    const sock = await live(s);
+    // the state alone is not enough: still the skeleton
+    expect(($(s, "skeleton") as HTMLElement).hidden).toBe(false);
+    sock.pushFrame(1);
+    await vi.waitFor(() => expect(($(s, "skeleton") as HTMLElement).hidden).toBe(true));
+    expect($(s, "app").hasAttribute("data-loading")).toBe(false);
+    expect(s.dom.window.document.body.hasAttribute("data-ready")).toBe(true);
+  });
+
+  it("not running shows at once, without the skeleton", async () => {
+    const s = setup({
+      ticket: () => new Response(JSON.stringify({ code: "service_not_running" }), { status: 409 }),
+    });
+    await vi.waitFor(() => expect(($(s, "empty") as HTMLElement).hidden).toBe(false));
+    expect(($(s, "skeleton") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("the takeover slot is reserved before the view is live and at any width", async () => {
+    const s = setup({ width: 320 });
+    expect($(s, "takeover").hasAttribute("data-gone")).toBe(false);
+    await live(s);
+    expect(($(s, "takeover") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("a narrow panel merges tabs and address into one button with the tab count", async () => {
+    const s = setup({ width: 360 });
+    // the tabs menu is for the person in control (the watch state is read-only)
+    await live(
+      s,
+      state({
+        control: "user",
+        tabs: [
+          { id: "t1", title: "News", url: "https://news.example.com/world", active: true },
+          { id: "t2", title: "Search", url: "https://search.example.com/", active: false },
+        ],
+      }),
+    );
+    expect($(s, "tabsbtn-name").textContent).toBe("news.example.com");
+    expect($(s, "tabsbtn-count").textContent).toBe("2");
+    $(s, "tabsbtn").click();
+    const items = Array.from($(s, "menu").querySelectorAll("button")).map((b) => b.textContent);
+    expect(items).toEqual(["News", "Search", t("en", "newTab")]);
+    $(s, "more").click();
+    const more = Array.from($(s, "menu").querySelectorAll("button")).map((b) => b.textContent);
+    expect(more).toEqual([t("en", "forward"), t("en", "reload")]);
+  });
+
+  it("the status line: the agent at work, and the person in control with the frame's accent ring", async () => {
+    const s = setup();
+    const sock = await live(s, state({ loading: true }));
+    expect($(s, "status").getAttribute("data-tone")).toBe("agent");
+    expect($(s, "status").textContent).toBe(
+      `${t("en", "statusAgent")} · ${t("en", "statusLoading")}`,
+    );
+    sock.push(state({ control: "user" }));
+    expect($(s, "status").getAttribute("data-tone")).toBe("user");
+    expect($(s, "stage").getAttribute("data-control")).toBe("user");
+  });
+
+  it("a page that asks for a human check shows the verify strip; 去验证 takes over", async () => {
+    const s = setup();
+    const url = "https://search.example.com/verify";
+    const sock = await live(
+      s,
+      state({
+        tabs: [
+          { id: "t1", title: "Check", url, active: true, blocker: { kind: "verification", url } },
+          { id: "t2", title: "Other", url: "https://other.example.com/", active: false },
+        ],
+      }),
+    );
+    expect(($(s, "verify") as HTMLElement).hidden).toBe(false);
+    expect(($(s, "status") as HTMLElement).hidden).toBe(true);
+    // one primary: take over steps back while verification waits
+    expect($(s, "takeover").className).toBe("secondary");
+    $(s, "verify-go").click();
+    expect(sock.sent).toContainEqual({ t: "takeover" });
+  });
+
+  it("tabs show the site's icon, and the placeholder without a usable one", async () => {
+    const s = setup();
+    const png =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+    await live(
+      s,
+      state({
+        tabs: [
+          { id: "t1", title: "A", url: "https://a.example/", active: true, favicon: png },
+          { id: "t2", title: "B", url: "https://b.example/", active: false },
+          {
+            id: "t3",
+            title: "C",
+            url: "https://c.example/",
+            active: false,
+            favicon: "javascript:alert(1)",
+          },
+        ],
+      }),
+    );
+    const favs = Array.from($(s, "tabs").querySelectorAll(".tab .fav"));
+    expect(favs.map((f) => f.tagName)).toEqual(["IMG", "SPAN", "SPAN"]);
+    expect((favs[0] as HTMLImageElement).getAttribute("src")).toBe(png);
+    // the narrow tabs button shows the active tab's icon too
+    expect($(s, "tabsbtn").querySelector("img.fav")?.getAttribute("src")).toBe(png);
+  });
+
+  it("only the active tab's blocker shows the verify strip", async () => {
+    const s = setup();
+    const url = "https://search.example.com/verify";
+    await live(
+      s,
+      state({
+        tabs: [
+          { id: "t1", title: "News", url: "https://news.example.com/", active: true },
+          { id: "t2", title: "Check", url, active: false, blocker: { kind: "verification", url } },
+        ],
+      }),
+    );
+    expect(($(s, "verify") as HTMLElement).hidden).toBe(true);
+    expect(($(s, "status") as HTMLElement).hidden).toBe(false);
   });
 });
 
@@ -755,7 +1164,7 @@ describe("handoff banner", () => {
   });
 
   it("works in the compact size class", async () => {
-    const s = setup({ width: 500 });
+    const s = setup({ width: 390, screen: 390 });
     await live(s, state({ handoff }));
     expect(($(s, "handoff") as HTMLElement).hidden).toBe(false);
     $(s, "handoff-done").click();
@@ -785,7 +1194,13 @@ describe("i18n", () => {
         doc.querySelectorAll("button, label, p, span, [aria-label], [title], input"),
       )) {
         if (el.closest("[hidden]") !== null) continue;
-        if (el.id === "url" || el.closest("#tabs") !== null || el.id === "blocked-host") continue;
+        // page data: the address, the tabs (and the narrow tabs button), the blocked host
+        if (
+          el.id === "url" ||
+          el.closest("#tabs, #tabsbtn, #urltext") !== null ||
+          el.id === "blocked-host"
+        )
+          continue;
         const own = Array.from(el.childNodes)
           .filter((n) => n.nodeType === 3)
           .map((n) => (n.textContent ?? "").trim())
@@ -796,8 +1211,11 @@ describe("i18n", () => {
           if (v) texts.push(v);
         }
       }
-      for (const text of texts)
-        expect(known.has(text) || /^[<>↻×+]$/.test(text), `${locale}: ${text}`).toBe(true);
+      for (const text of texts) {
+        // the status detail is an i18n string after a separator
+        const bare = text.replace(/^· /, "");
+        expect(known.has(bare), `${locale}: ${text}`).toBe(true);
+      }
       if (locale === "zh") expect(texts.join(" ")).not.toMatch(/agent|企业/i);
     }
   });

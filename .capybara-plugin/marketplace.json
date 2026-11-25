@@ -826,7 +826,7 @@
     },
     {
       "name": "device-docker",
-      "version": "0.1.0-rc.29",
+      "version": "0.1.0-rc.30",
       "summary": {
         "en": "Devices as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with their files on volumes kept until the device is deleted: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist",
         "zh": "以 Docker 容器（runc 或 gVisor runsc）承载设备，经 Docker socket 代理访问；文件保存在卷上，直到设备被删除。网络默认开放公网（拒绝回环、私有、链路本地与元数据地址），也可用主机白名单"
@@ -853,14 +853,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-docker",
-          "version": "0.1.0-rc.29",
-          "integrity": "sha512-TGdSjzofH1KNP8t0fgzFqd7Jf19nrDSJ+l+G+0oLc36PI3GGk2pzp97m9K1XfAlaIWrABghZytjE3myCXpvdBw=="
+          "version": "0.1.0-rc.30",
+          "integrity": "sha512-bhqSRr6r9gNI7aKYE0ANf3xeCYYIKCOFlvOZZLyM83AzaTn4A2K7zgbgZQZAGgs9b5M3cZhlemjVTAChBPZGuw=="
         }
       }
     },
     {
       "name": "device-e2b",
-      "version": "0.1.0-rc.29",
+      "version": "0.1.0-rc.30",
       "summary": {
         "en": "Devices as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, an allowlist or the open internet with local ranges denied (E2B's metadata service stays reachable)",
         "zh": "以 E2B 沙箱承载设备（E2B 云或自托管）：暂停沙箱保留文件，从已发布镜像构建模板，网络为出站白名单或开放公网（拒绝私有、回环与链路本地地址；E2B 元数据端点仍可达，见 README）"
@@ -886,14 +886,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-e2b",
-          "version": "0.1.0-rc.29",
-          "integrity": "sha512-03WJd9SKT5zXL/Rx3eQin5zkAoKS40JnDM7Km1DeNqWtDVtsldK6XoeBLD7TeVexOD9C2jLYgBHN+MTLR/Ka8g=="
+          "version": "0.1.0-rc.30",
+          "integrity": "sha512-KwXaRE8B3S6V4fDnPUwyiJzClDNSb4oDmk8BZx26z2ShnSFUHjjBiF/ThpUeUXNT8EhBhAzoHntft22uPSbONw=="
         }
       }
     },
     {
       "name": "device-local",
-      "version": "0.1.0-rc.10",
+      "version": "0.1.0-rc.11",
       "summary": {
         "en": "Devices on people's own computers: a machine connected with capybara-device serves the device over the dial-in channel, and its owner limits it there",
         "zh": "在自己的电脑上使用设备：用 capybara-device 连接的电脑通过拨入通道为设备服务，由电脑的所有者在本机限制它"
@@ -916,8 +916,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-local",
-          "version": "0.1.0-rc.10",
-          "integrity": "sha512-f33WI+WifA/5jNjsWiuuPsrvRR/TD3qizXY2GkW4IVKZGHuMoznoxQu+znEYjsQl7b0ZxuuBzcTgHI9oGIFhRg=="
+          "version": "0.1.0-rc.11",
+          "integrity": "sha512-ZxWxrGjPjNpJtwH/2oK58itxfPFRi5CQQFbMe8VPyfYaEdfyPT8ZlOjgocdz/F8hR9jeu+E2VPgOmh7uMeBo/w=="
         }
       }
     },
@@ -948,7 +948,7 @@
     },
     {
       "name": "browser",
-      "version": "0.1.0-rc.4",
+      "version": "0.1.0-rc.5",
       "summary": {
         "en": "A real browser in the conversation owner's device for agents: navigate, read and act on pages through tools, with a live view in the conversation panel and takeover by the person",
         "zh": "在对话所有者的设备中为智能体运行真实浏览器：通过工具打开、读取和操作网页，在对话面板中实时查看，并可由本人接管"
@@ -1012,8 +1012,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-browser",
-          "version": "0.1.0-rc.4",
-          "integrity": "sha512-0gtu9QNdoSdLwUjrQch1g9qy3yGN7G7QqF74tkdAh/mbdaBRo1gneXMmU4jYDI/OB0cFO+ZLsA9mErh1G2mxBQ=="
+          "version": "0.1.0-rc.5",
+          "integrity": "sha512-34TGnQ5FzSsSMdbEp5h9IxL9QIsRNl10+JVyiEXZSS281nogSPjgmFk8OacassE+gekrisSU7i+hyLsoRmIIbg=="
         }
       }
     }

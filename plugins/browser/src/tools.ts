@@ -4,7 +4,13 @@
 import { ToolError, type ToolHandler, type ToolSpec } from "@capybara-hq/plugin-sdk";
 import type { ToolRequest } from "../daemon/protocol.js";
 import { REPLY_TOO_LARGE_MESSAGE, VIEWPORT } from "../daemon/protocol.js";
-import { type BrowserDeps, REQUEST_TIMEOUT_MS, runRequest, toResult } from "./browser.js";
+import {
+  type BrowserDeps,
+  REQUEST_TIMEOUT_MS,
+  runRequest,
+  TOOL_TIMEOUT_MS,
+  toResult,
+} from "./browser.js";
 
 /**
  * The largest screenshot the daemon may return, in decoded bytes: below the kernel's image limit
@@ -43,6 +49,8 @@ const NAVIGATE: ToolSpec = {
   },
   keyArgs: ["url", "action"],
   defaultPolicy: "allow",
+  // any tool may start the device first (see TOOL_TIMEOUT_MS)
+  timeoutMs: TOOL_TIMEOUT_MS,
 };
 
 const TABS: ToolSpec = {
@@ -68,6 +76,8 @@ const TABS: ToolSpec = {
   },
   keyArgs: ["action", "url"],
   defaultPolicy: "allow",
+  // any tool may start the device first (see TOOL_TIMEOUT_MS)
+  timeoutMs: TOOL_TIMEOUT_MS,
 };
 
 const SNAPSHOT: ToolSpec = {
@@ -80,6 +90,8 @@ const SNAPSHOT: ToolSpec = {
     "the layout or an image matters.",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
   defaultPolicy: "allow",
+  // any tool may start the device first (see TOOL_TIMEOUT_MS)
+  timeoutMs: TOOL_TIMEOUT_MS,
 };
 
 const SCREENSHOT: ToolSpec = {
@@ -98,6 +110,8 @@ const SCREENSHOT: ToolSpec = {
     additionalProperties: false,
   },
   defaultPolicy: "allow",
+  // any tool may start the device first (see TOOL_TIMEOUT_MS)
+  timeoutMs: TOOL_TIMEOUT_MS,
 };
 
 const CLICK: ToolSpec = {
@@ -115,6 +129,8 @@ const CLICK: ToolSpec = {
   },
   keyArgs: ["ref"],
   defaultPolicy: "ask",
+  // any tool may start the device first (see TOOL_TIMEOUT_MS)
+  timeoutMs: TOOL_TIMEOUT_MS,
 };
 
 const TYPE: ToolSpec = {
@@ -135,6 +151,8 @@ const TYPE: ToolSpec = {
   },
   keyArgs: ["ref", "text"],
   defaultPolicy: "ask",
+  // any tool may start the device first (see TOOL_TIMEOUT_MS)
+  timeoutMs: TOOL_TIMEOUT_MS,
 };
 
 const SELECT: ToolSpec = {
@@ -159,6 +177,8 @@ const SELECT: ToolSpec = {
   },
   keyArgs: ["ref", "values"],
   defaultPolicy: "ask",
+  // any tool may start the device first (see TOOL_TIMEOUT_MS)
+  timeoutMs: TOOL_TIMEOUT_MS,
 };
 
 const PRESS: ToolSpec = {
@@ -180,6 +200,8 @@ const PRESS: ToolSpec = {
   },
   keyArgs: ["key"],
   defaultPolicy: "ask",
+  // any tool may start the device first (see TOOL_TIMEOUT_MS)
+  timeoutMs: TOOL_TIMEOUT_MS,
 };
 
 const SCROLL: ToolSpec = {
@@ -200,6 +222,8 @@ const SCROLL: ToolSpec = {
   },
   keyArgs: ["ref", "dy"],
   defaultPolicy: "ask",
+  // any tool may start the device first (see TOOL_TIMEOUT_MS)
+  timeoutMs: TOOL_TIMEOUT_MS,
 };
 
 const HOVER: ToolSpec = {
@@ -216,6 +240,8 @@ const HOVER: ToolSpec = {
   },
   keyArgs: ["ref"],
   defaultPolicy: "ask",
+  // any tool may start the device first (see TOOL_TIMEOUT_MS)
+  timeoutMs: TOOL_TIMEOUT_MS,
 };
 
 const UPLOAD: ToolSpec = {
@@ -236,6 +262,8 @@ const UPLOAD: ToolSpec = {
   },
   keyArgs: ["ref", "path"],
   defaultPolicy: "ask",
+  // any tool may start the device first (see TOOL_TIMEOUT_MS)
+  timeoutMs: TOOL_TIMEOUT_MS,
 };
 
 const POINT = {
@@ -268,6 +296,8 @@ const CLICK_AT: ToolSpec = {
   },
   keyArgs: ["x", "y"],
   defaultPolicy: "ask",
+  // any tool may start the device first (see TOOL_TIMEOUT_MS)
+  timeoutMs: TOOL_TIMEOUT_MS,
 };
 
 const TYPE_AT: ToolSpec = {
@@ -284,6 +314,8 @@ const TYPE_AT: ToolSpec = {
   },
   keyArgs: ["x", "y", "text"],
   defaultPolicy: "ask",
+  // any tool may start the device first (see TOOL_TIMEOUT_MS)
+  timeoutMs: TOOL_TIMEOUT_MS,
 };
 
 const WAIT: ToolSpec = {
@@ -312,6 +344,8 @@ const WAIT: ToolSpec = {
   },
   keyArgs: ["text", "timeoutMs"],
   defaultPolicy: "allow",
+  // any tool may start the device first (see TOOL_TIMEOUT_MS)
+  timeoutMs: TOOL_TIMEOUT_MS,
 };
 
 /** The input as an object (the kernel validated it against the schema already). */
