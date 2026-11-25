@@ -98,7 +98,7 @@ const LOAD_GRACE_MS = 5_000;
  * The longest a reply waits on a query of a page besides the action (its title, the verification
  * check): a page whose navigation hangs keeps such queries waiting.
  */
-const PAGE_QUERY_MS = 2_000;
+const PAGE_QUERY_MS = 1_000;
 const MAX_WAIT_MS = 60_000;
 /**
  * The largest screenshot, decoded: its base64 plus the reply's JSON stays below the device service
@@ -1679,8 +1679,12 @@ export class BrowserSession {
         this.actedSeq.set(conv, ++this.actSeq);
       }
       // a verification page goes to the person, said first so the agent hands off
+      // (not for the tab list or adopt, which run beside a navigation and only read the tabs)
       const verifying =
-        page === undefined ? false : await this.checkVerification(page, this.tabIdOf(page));
+        page === undefined ||
+        (req.op === "tabs" && (req.action === "list" || req.action === "adopt"))
+          ? false
+          : await this.checkVerification(page, this.tabIdOf(page));
       const text = [
         ...(verifying ? [VERIFICATION_NOTE] : []),
         ...c.notes,
