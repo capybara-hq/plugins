@@ -514,8 +514,10 @@ export function createDeviceLocalProvider(
     /**
      * Needs the machine online. Ends any background work a suspension could not reach (the machine
      * was offline then), then re-verifies the generation's binding. `gone` (the kernel recreates the
-     * instance) when the handle is not this provider's, the device directory's roots changed (a
-     * new login into another directory or mode), or the generation can never be bound again.
+     * instance) when the handle is not this provider's, the machine's hello did not attest the
+     * generation (unattested: answered at once, with no round trip), the device directory's roots
+     * changed (a new login into another directory or mode), or the generation can never be bound
+     * again.
      */
     async resume(h, signal) {
       signal.throwIfAborted();
@@ -524,6 +526,9 @@ export function createDeviceLocalProvider(
       if (!(await ctx.dialIn.online(l.id))) throw new DeviceOfflineError(l.id);
       const current = await store.binding(l.id);
       if (current?.generation !== l.generation) return "gone";
+      // the machine came back without this binding (its program restarted unbound, typically
+      // upgraded to another runtime): it never serves the generation again, so nothing is asked
+      if (current.unattested) return "gone";
       const roots = await machineCreate(l.id, current.limits ?? l.limits, signal);
       if (!sameRoots(roots, l.roots)) return "gone";
       return (await bindings.rebind(l.id, l.generation, signal)) === "bound" ? "resumed" : "gone";
