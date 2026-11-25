@@ -57,13 +57,34 @@ type Answer = { cursor?: string; frame?: boolean };
 export class CursorResolver {
   /** Isolated world execution contexts, per CDP session and frame id. */
   private readonly worlds = new WeakMap<CDPSession, Map<string, number>>();
+  /** Sessions of out-of-process frames entered, detached with their frame or on dispose. */
   private readonly sessions = new Map<Frame, CDPSession>();
+  private readonly onFrameDetached = (frame: Frame) => {
+    const cdp = this.sessions.get(frame);
+    if (cdp === undefined) return;
+    this.sessions.delete(frame);
+    cdp.detach().catch(() => undefined);
+  };
 
   constructor(
     private readonly context: BrowserContext,
     private readonly page: Page,
     private readonly cdp: CDPSession,
-  ) {}
+  ) {
+    page.on("framedetached", this.onFrameDetached);
+  }
+
+  /** How many out-of-process frame sessions are open (a test seam). */
+  get openSessions(): number {
+    return this.sessions.size;
+  }
+
+  /** Detaches the frame sessions this resolver opened (the viewer detached from the page). */
+  dispose(): void {
+    this.page.off("framedetached", this.onFrameDetached);
+    for (const cdp of this.sessions.values()) cdp.detach().catch(() => undefined);
+    this.sessions.clear();
+  }
 
   /** The cursor Chromium would show at viewport point (x, y). */
   async at(x: number, y: number): Promise<ViewerCursor> {
@@ -80,10 +101,13 @@ export class CursorResolver {
       if (!answer.frame || depth === MAX_DEPTH) return "default";
       // an out-of-process frame: enter it through its own session
       const box = (await cdp.send("DOM.getBoxModel", { backendNodeId: hit.backendNodeId })) as {
-        model: { content: number[] };
+        model: { content: number[]; border: number[] };
       };
       const [left = 0, top = 0] = box.model.content;
-      const child = await this.childAt(frame, left, top);
+      const [borderLeft = 0, borderTop = 0] = box.model.border;
+      // the box is in this session's frame coordinates, boundingBox() (the border box) in the
+      // page's: matched in the page's, entered at the content box
+      const child = await this.childAt(frame, borderLeft + (x - px), borderTop + (y - py));
       if (child === undefined) return "default";
       frame = child.frame;
       cdp = child.cdp;
@@ -183,7 +207,10 @@ export class CursorResolver {
     return { x: box.model.content[0] ?? 0, y: box.model.content[1] ?? 0 };
   }
 
-  /** The child frame of `parent` whose element's content box starts at (left, top). */
+  /**
+   * The child frame of `parent` whose element's border box starts at (left, top), in the page's
+   * (main frame) coordinates.
+   */
   private async childAt(
     parent: Frame,
     left: number,

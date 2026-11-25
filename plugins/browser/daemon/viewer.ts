@@ -46,7 +46,10 @@ export const VIEWER_PING_MS = 1000;
 const RESTART_MIN_MS = 500;
 /** Chromium is let encode the next frame at most this often while frames wait for the viewer. */
 const ENCODE_MAX_INTERVAL_MS = 500;
-/** A cursor answer later than this is dropped (the next pointer position asks again). */
+/**
+ * A cursor answer later than this is dropped (the next pointer position asks again); the next
+ * lookup waits for a late one to settle, so lookups never overlap.
+ */
 export const CURSOR_TIMEOUT_MS = 200;
 
 type ScreencastFrame = {
@@ -93,13 +96,14 @@ export class ViewerSession {
   private cursorResolver: CursorResolver | undefined;
   /** The newest pointer position whose cursor is wanted; one resolution runs at a time. */
   private cursorPoint: { x: number; y: number } | undefined;
-  private cursorBusy = false;
+  /** The resolver a resolution loop runs for (one loop per resolver, one lookup at a time). */
+  private cursorLoop: CursorResolver | undefined;
   /**
    * Keys and buttons this viewer pressed and has not released: released for the agent when
    * control returns to it or the viewer ends, whatever reached the page of the person's input.
    */
-  private readonly heldKeys = new Set<string>();
-  private readonly heldButtons = new Set<"left" | "right">();
+  private readonly heldKeys = new Map<string, Page>();
+  private readonly heldButtons = new Map<"left" | "right", Page>();
   private seq = 0;
   /**
    * The newest screencast frame waiting for room (viewer acks, transport, rate cap). A newer one
@@ -264,29 +268,29 @@ export class ViewerSession {
    */
   private wantCursor(x: number, y: number): void {
     this.cursorPoint = { x, y };
-    if (this.cursorBusy) return;
-    this.cursorBusy = true;
+    const resolver = this.cursorResolver;
+    // one loop per resolver: a lookup stuck on a frozen page holds only that page's loop
+    if (resolver === undefined || this.cursorLoop === resolver) return;
+    this.cursorLoop = resolver;
     void (async () => {
       try {
-        for (;;) {
+        while (!this.closed && this.cursorResolver === resolver) {
           const p = this.cursorPoint;
           this.cursorPoint = undefined;
-          const resolver = this.cursorResolver;
-          if (p === undefined || resolver === undefined || this.closed) return;
-          let timer: unknown;
-          const late = new Promise<undefined>((r) => {
-            timer = this.clock.schedule(() => r(undefined), CURSOR_TIMEOUT_MS);
-          });
-          const cursor = await Promise.race([resolver.at(p.x, p.y).catch(() => undefined), late]);
-          this.clock.cancel(timer);
+          if (p === undefined) return;
+          // one lookup at a time: the next one starts only once this one settled, so a slow
+          // page never piles lookups up; an answer later than CURSOR_TIMEOUT_MS is stale
+          const started = this.clock.now();
+          const cursor = await resolver.at(p.x, p.y).catch(() => undefined);
+          if (cursor === undefined || this.clock.now() - started > CURSOR_TIMEOUT_MS) continue;
           // a newer position asks again; an answer for this one would only flicker
-          if (cursor === undefined || this.cursorPoint !== undefined) continue;
+          if (this.cursorPoint !== undefined) continue;
           if (cursor === this.cursor || this.closed || this.state.control !== "user") continue;
           this.cursor = cursor;
           this.send({ t: "cursor", cursor });
         }
       } finally {
-        this.cursorBusy = false;
+        if (this.cursorLoop === resolver) this.cursorLoop = undefined;
       }
     })();
   }
@@ -301,10 +305,14 @@ export class ViewerSession {
     const buttons = [...this.heldButtons];
     this.heldKeys.clear();
     this.heldButtons.clear();
-    const page = await this.browser.activePage().catch(() => undefined);
-    if (page === undefined) return;
-    for (const key of keys) await page.keyboard.up(key).catch(() => undefined);
-    for (const button of buttons) await page.mouse.up({ button }).catch(() => undefined);
+    // each on the tab where it was pressed (the person may have switched tabs meanwhile)
+    for (const [key, page] of keys) await page.keyboard.up(key).catch(() => undefined);
+    for (const [button, page] of buttons) {
+      // off the page first (outside the viewport: no element there): the release must not
+      // complete the person's click for the agent
+      await page.mouse.move(-1, -1).catch(() => undefined);
+      await page.mouse.up({ button }).catch(() => undefined);
+    }
   }
 
   /** Whether input this viewer applied should stay applied (still in control, not closed). */
@@ -500,6 +508,7 @@ export class ViewerSession {
     this.page = undefined;
     this.pending = undefined;
     this.encodeAck = undefined;
+    this.cursorResolver?.dispose();
     this.cursorResolver = undefined;
     if (cdp === undefined) return;
     await cdp.send("Page.stopScreencast").catch(() => undefined);
@@ -612,7 +621,7 @@ export class ViewerSession {
         await page.mouse.move(x, y);
         await page.mouse.down({ button });
         // control went to the agent meanwhile: let go at once instead of holding it
-        if (this.driving) this.heldButtons.add(button);
+        if (this.driving) this.heldButtons.set(button, page);
         else await page.mouse.up({ button });
       } else if (m.kind === "up") {
         this.heldButtons.delete(button);
@@ -640,7 +649,7 @@ export class ViewerSession {
       } else if (m.kind === "down") {
         await page.keyboard.down(m.key);
         // control went to the agent meanwhile: let go at once instead of holding it
-        if (this.driving) this.heldKeys.add(m.key);
+        if (this.driving) this.heldKeys.set(m.key, page);
         else await page.keyboard.up(m.key);
       } else if (m.kind === "up") {
         this.heldKeys.delete(m.key);

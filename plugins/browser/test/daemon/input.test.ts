@@ -211,6 +211,49 @@ describe("browser daemon viewer input", () => {
     }
   });
 
+  it("a button held at hand back is released off the element: no click for the agent", async () => {
+    // a page of its own: no fragment left over from an earlier test's click
+    const v = await viewerOn("/input?held-button");
+    await takeOver(v);
+    v.send({ t: "mouse", kind: "down", x: 100, y: 50, button: "left" });
+    v.send({ t: "mouse", kind: "move", x: 100, y: 50 });
+    await v.after((m) => m.t === "cursor");
+    const back = v.after((m) => isState(m) && m.control === "agent");
+    v.send({ t: "handback" });
+    await back;
+    // the agent's next action sees the page as the person left it: the press did not click
+    const snap = await request(d.socketPath, { op: "snapshot" });
+    if (!snap.ok) throw new Error(snap.message);
+    expect(snap.page.url).toBe(`${fx.url}/input?held-button`);
+    await v.close();
+  });
+
+  it("a key held on one tab is released on that tab, not the one active at hand back", async () => {
+    const v = await viewerOn("/input");
+    await takeOver(v);
+    const first = (await v.next(isState)).tabs.find((t) => t.active)?.id ?? "";
+    v.send({ t: "key", kind: "down", key: "Shift" });
+    // the person opens another tab while holding Shift, then hands back
+    const opened = v.after((m) => isState(m) && m.tabs.length === 2);
+    v.send({ t: "tab", action: "open" });
+    await opened;
+    const back = v.after((m) => isState(m) && m.control === "agent");
+    v.send({ t: "handback" });
+    await back;
+    expect((await request(d.socketPath, { op: "tabs", action: "switch", tabId: first })).ok).toBe(
+      true,
+    );
+    const r = await request(d.socketPath, { op: "click_at", x: 100, y: 50 });
+    expect(r.ok && decodeURIComponent(new URL(r.page.url).hash)).toMatch(/ s0$/);
+    const list = await request(d.socketPath, { op: "tabs", action: "list" });
+    for (const line of (list.ok ? (list.text ?? "") : "").split("\n")) {
+      const id = line.split(/[: ]/)[0] ?? "";
+      if (id !== "" && id !== first)
+        await request(d.socketPath, { op: "tabs", action: "close", tabId: id });
+    }
+    await v.close();
+  });
+
   it("resolves the cursor without the page's code: a page breaking its builtins changes nothing", async () => {
     const v = await viewerOn("/hostile");
     await takeOver(v);
