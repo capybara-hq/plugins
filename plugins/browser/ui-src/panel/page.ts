@@ -78,7 +78,8 @@ export const PANEL_HTML = `<!doctype html>
   .outline { padding: 0 12px; color: var(--cb-accent, #CC4609); box-shadow: inset 0 0 0 1px var(--cb-accent, #CC4609); }
 
   .layer { position: absolute; inset: 0; display: flex; flex-direction: column; }
-  #app[data-loading] { visibility: hidden; }
+  /* laid out underneath while the skeleton or the idle state shows, so the switch never reflows */
+  #app[data-loading], #app[data-idle] { visibility: hidden; }
   .row { flex: none; display: flex; align-items: center; padding: 0 12px; }
 
   /* tab strip */
@@ -86,7 +87,8 @@ export const PANEL_HTML = `<!doctype html>
   .tab { display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 64px; max-width: 200px; padding: 0 10px; color: var(--cb-muted, #5E5E5A); }
   .tab[data-active="true"] { color: var(--cb-ink, #1A1A18); font-weight: 500; box-shadow: inset 0 -2px 0 var(--cb-accent, #CC4609); padding-right: 6px; }
   .fav { width: 14px; height: 14px; border-radius: 3px; flex: none; background: var(--cb-line-soft, #E8E7E2); }
-  .tab[data-active="true"] .fav { background: var(--cb-line, #D9D8D2); }
+  img.fav { background: none; object-fit: contain; }
+  .tab[data-active="true"] span.fav { background: var(--cb-line, #D9D8D2); }
   .tab .label { flex: 1; min-width: 0; display: block; height: auto; text-align: left; overflow: hidden; text-overflow: ellipsis; font-weight: inherit; }
   .tab .label:hover:not(:disabled) { background: transparent; }
   .tab .label:disabled { color: inherit; }
@@ -143,7 +145,7 @@ export const PANEL_HTML = `<!doctype html>
   #stage[data-control="user"] #view { box-shadow: 0 0 0 2px var(--cb-accent, #CC4609), 0 4px 16px rgba(26,26,24,.08); }
   #view:focus-visible { box-shadow: 0 0 0 2px var(--cb-focus-ring, Highlight), var(--frame-shadow); }
   #flash { position: absolute; width: 24px; height: 24px; margin: -12px 0 0 -12px; border: 2px solid var(--cb-accent, #CC4609); border-radius: 50%; pointer-events: none; }
-  .center { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 6px; align-items: center; justify-content: center; padding: 16px; text-align: center; background: var(--cb-panel-2, Canvas); }
+  .center { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 6px; align-items: center; justify-content: center; padding: 16px; text-align: center; background: var(--ground); }
   .center h2 { margin: 0; font-size: inherit; font-weight: 600; }
   .center p { margin: 0; font-family: var(--cb-font-prose, system-ui, sans-serif); color: var(--cb-muted, #5E5E5A); }
   .center button { margin-top: 6px; }
@@ -199,17 +201,17 @@ export const PANEL_HTML = `<!doctype html>
   <div id="stage">
     <canvas id="view" tabindex="0"></canvas>
     <div id="flash" hidden></div>
-    <div id="empty" class="center" hidden>
-      <h2 id="empty-title"></h2>
-      <p id="empty-body"></p>
-      <button type="button" id="reconnect" class="secondary"></button>
-    </div>
     <div id="strips">
       <div id="blocked" class="strip" hidden><p><span id="blocked-label" class="label"></span> <span id="blocked-host"></span></p><button type="button" id="allow" class="primary"></button></div>
       <div id="dialog" class="strip" hidden><p><span id="dialog-label" class="label"></span> <span id="dialog-text"></span></p></div>
       <div id="notice" class="strip" role="alert" hidden><p><span id="notice-text"></span></p></div>
     </div>
   </div>
+</div>
+<div id="empty" class="layer center" hidden>
+  <h2 id="empty-title"></h2>
+  <p id="empty-body"></p>
+  <button type="button" id="reconnect" class="secondary"></button>
 </div>
 <div id="menu" class="menu" role="menu" hidden></div>
 <script src="panel.js"></script>

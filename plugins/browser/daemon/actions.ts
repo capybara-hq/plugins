@@ -29,6 +29,7 @@ import type {
   Request,
   Response,
 } from "playwright-core";
+import { fetchIcon, iconDataUrl, iconUrlOf } from "./favicon.js";
 import {
   MAX_TABS,
   type ToolErrorCode,
@@ -444,6 +445,8 @@ export interface TabInfo {
   url: string;
   /** Set while the tab shows a verification page (bot check, CAPTCHA); cleared when it changes. */
   blocker?: TabBlocker;
+  /** The tab's site icon as a `data:image/...` URL, once fetched (the panel shows a placeholder). */
+  favicon?: string;
 }
 
 export class BrowserSession {
@@ -467,6 +470,11 @@ export class BrowserSession {
   private readonly ids = new WeakMap<Page, string>();
   private readonly titles = new Map<string, string>();
   private readonly loadingTabs = new Set<string>();
+  /**
+   * Each tab's icon: the address it came from and its data URL (null: none or not usable). Kept
+   * across navigations until the new page's icon is known, so the strip does not flicker.
+   */
+  private readonly favicons = new Map<string, { url: string; data: string | null }>();
   /** Tabs showing a verification page, by tab id (cleared on every main-frame navigation). */
   private readonly blockers = new Map<string, TabBlocker>();
   /** The status of each tab's current document (main-frame response), by tab id. */
@@ -556,12 +564,14 @@ export class BrowserSession {
   tabs(): (TabInfo & { active: boolean })[] {
     return [...this.pages.entries()].map(([id, p]) => {
       const blocker = this.blockers.get(id);
+      const icon = this.favicons.get(id)?.data;
       return {
         id,
         title: clip(this.titles.get(id) ?? "", MAX_TITLE_CHARS),
         url: clip(p.url(), MAX_URL_CHARS),
         active: id === this.active,
         ...(blocker === undefined ? {} : { blocker }),
+        ...(icon === undefined || icon === null ? {} : { favicon: icon }),
       };
     });
   }
@@ -628,6 +638,7 @@ export class BrowserSession {
     page.on("load", () => {
       this.loadingTabs.delete(id);
       refresh();
+      void this.resolveFavicon(page, id);
     });
     page.on("requestfailed", (r) => {
       settle(r);
@@ -658,6 +669,7 @@ export class BrowserSession {
       this.titles.delete(id);
       this.loadingTabs.delete(id);
       this.blockers.delete(id);
+      this.favicons.delete(id);
       this.docStatus.delete(id);
       if (this.active === id) {
         const next = [...this.pages.keys()].at(-1);
@@ -1068,6 +1080,36 @@ export class BrowserSession {
     while (c.pending.length > 0) {
       const all = c.pending.splice(0);
       await Promise.allSettled(all);
+    }
+  }
+
+  /**
+   * Finds the loaded page's icon and fetches it through the browser (the device's network rules
+   * apply); a new address replaces the tab's icon, the same one is not fetched again. Any failure
+   * leaves no icon (the panel's placeholder) and never affects the page.
+   */
+  private async resolveFavicon(page: Page, id: string): Promise<void> {
+    try {
+      const url = await iconUrlOf(page);
+      if (this.pages.get(id) !== page) return;
+      if (url === null) {
+        if (this.favicons.delete(id)) this.emit({ type: "state" });
+        return;
+      }
+      if (this.favicons.get(id)?.url === url) return;
+      const cdp = await this.ctx.newCDPSession(page);
+      let data: string | null = null;
+      try {
+        const bytes = await fetchIcon(cdp, url);
+        data = bytes === null ? null : iconDataUrl(bytes);
+      } finally {
+        await cdp.detach().catch(() => undefined);
+      }
+      if (this.pages.get(id) !== page) return;
+      this.favicons.set(id, { url, data });
+      this.emit({ type: "state" });
+    } catch {
+      // a closed page or a refused fetch: no icon
     }
   }
 

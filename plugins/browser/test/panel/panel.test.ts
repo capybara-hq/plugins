@@ -710,8 +710,32 @@ describe("panel", () => {
     const sock = s.sock();
     sock.open();
     sock.push(state());
+    // one switch: the idle state holds until the browser's first frame, no skeleton between
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+    expect(($(s, "skeleton") as HTMLElement).hidden).toBe(true);
+    sock.pushFrame(1);
+    await vi.advanceTimersByTimeAsync(0);
     expect(($(s, "empty") as HTMLElement).hidden).toBe(true);
+    expect($(s, "app").hasAttribute("data-idle")).toBe(false);
     expect(($(s, "takeover") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("the idle states (not running, offline, error) are the idle layer alone", async () => {
+    for (const [code, title] of [
+      [4404, "emptyTitle"],
+      [4409, "offlineTitle"],
+      [1009, "errorTitle"],
+    ] as const) {
+      const s = setup();
+      await vi.waitFor(() => expect(FakeSocket.all.length).toBe(1));
+      s.sock().drop(code);
+      expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+      expect($(s, "empty-title").textContent).toBe(t("en", title));
+      // no tab strip, toolbar or status line beside it: the live layer is hidden as a whole
+      expect($(s, "app").hasAttribute("data-idle")).toBe(true);
+      expect(($(s, "skeleton") as HTMLElement).hidden).toBe(true);
+      expect($(s, "empty").closest("#app")).toBeNull();
+    }
   });
 
   it("the empty state looks for the browser every 10 s while visible, for 30 min at most", async () => {
@@ -1011,6 +1035,33 @@ describe("design states", () => {
     expect($(s, "takeover").className).toBe("secondary");
     $(s, "verify-go").click();
     expect(sock.sent).toContainEqual({ t: "takeover" });
+  });
+
+  it("tabs show the site's icon, and the placeholder without a usable one", async () => {
+    const s = setup();
+    const png =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+    await live(
+      s,
+      state({
+        tabs: [
+          { id: "t1", title: "A", url: "https://a.example/", active: true, favicon: png },
+          { id: "t2", title: "B", url: "https://b.example/", active: false },
+          {
+            id: "t3",
+            title: "C",
+            url: "https://c.example/",
+            active: false,
+            favicon: "javascript:alert(1)",
+          },
+        ],
+      }),
+    );
+    const favs = Array.from($(s, "tabs").querySelectorAll(".tab .fav"));
+    expect(favs.map((f) => f.tagName)).toEqual(["IMG", "SPAN", "SPAN"]);
+    expect((favs[0] as HTMLImageElement).getAttribute("src")).toBe(png);
+    // the narrow tabs button shows the active tab's icon too
+    expect($(s, "tabsbtn").querySelector("img.fav")?.getAttribute("src")).toBe(png);
   });
 
   it("only the active tab's blocker shows the verify strip", async () => {

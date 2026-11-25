@@ -234,6 +234,15 @@ export type ViewerIn =
   /** The answer to a `ping`, sent at once. */
   | { t: "pong"; id: number };
 
+/** The largest tab icon sent to the panel (raw bytes; a larger one keeps the placeholder). */
+export const FAVICON_MAX_BYTES = 8 * 1024;
+
+/** Whether a value is a tab icon the daemon would send (the panel shows only these). */
+export const isIconDataUrl = (s: unknown): s is string =>
+  typeof s === "string" &&
+  s.length <= 64 + Math.ceil((FAVICON_MAX_BYTES * 4) / 3) &&
+  /^data:image\/(png|x-icon|gif|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(s);
+
 export interface ViewerTab {
   id: string;
   title: string;
@@ -245,6 +254,12 @@ export interface ViewerTab {
    * stable field: the panel builds on `kind` and `url`.
    */
   blocker?: { kind: "verification"; url: string };
+  /**
+   * The site's icon as a `data:image/(png|x-icon|gif|jpeg|webp|svg+xml);base64,…` URL (at most
+   * FAVICON_MAX_BYTES of image), fetched by the browser through the device's network rules;
+   * absent until known or when the site has none (the panel shows a placeholder).
+   */
+  favicon?: string;
 }
 
 /** The JSON viewer messages (frames are binary, {@link encodeFrame}). */

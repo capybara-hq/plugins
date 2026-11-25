@@ -380,6 +380,10 @@ export class ViewerSession {
     if (fits(m)) return m;
     let small: ViewerOut;
     if (m.t === "state") {
+      // the icons go first: the strip falls back to its placeholders
+      const plain = { ...m, tabs: m.tabs.map(({ favicon: _icon, ...t }) => t) };
+      if (fits(plain)) return plain;
+      m = plain;
       const handoff =
         m.handoff === undefined
           ? {}

@@ -155,7 +155,9 @@ A real browser in the person's device for agents (browser use spec,
   status line and picture are separated by space and ground, not borders. Colours come from the
   host's `--cb-*` tokens (light and dark). Until the browser's state and its first frame are there,
   the whole panel is one skeleton and nothing else; then it switches once to the live panel. "Not
-  running", offline and error show at once. The picture is contained and centred on a neutral ground
+  running", offline and error show at once as the centred idle state alone (no tabs, toolbar or
+  status line: nothing to navigate); a browser that comes up switches once to the live panel on
+  its first frame. The picture is contained and centred on a neutral ground
   (soft shadow; a 2 px accent ring while the person is in control). The status line has a fixed
   height. Take over is there at every width: below 440 px the tabs and the address merge into one
   button with a tab count, and forward and reload move into a "more" menu. On a phone (a screen
