@@ -995,9 +995,15 @@ describe("design states", () => {
 
   it("a page that asks for a human check shows the verify strip; 去验证 takes over", async () => {
     const s = setup();
+    const url = "https://search.example.com/verify";
     const sock = await live(
       s,
-      state({ verification: { url: "https://search.example.com/verify" } }),
+      state({
+        tabs: [
+          { id: "t1", title: "Check", url, active: true, blocker: { kind: "verification", url } },
+          { id: "t2", title: "Other", url: "https://other.example.com/", active: false },
+        ],
+      }),
     );
     expect(($(s, "verify") as HTMLElement).hidden).toBe(false);
     expect(($(s, "status") as HTMLElement).hidden).toBe(true);
@@ -1005,6 +1011,22 @@ describe("design states", () => {
     expect($(s, "takeover").className).toBe("secondary");
     $(s, "verify-go").click();
     expect(sock.sent).toContainEqual({ t: "takeover" });
+  });
+
+  it("only the active tab's blocker shows the verify strip", async () => {
+    const s = setup();
+    const url = "https://search.example.com/verify";
+    await live(
+      s,
+      state({
+        tabs: [
+          { id: "t1", title: "News", url: "https://news.example.com/", active: true },
+          { id: "t2", title: "Check", url, active: false, blocker: { kind: "verification", url } },
+        ],
+      }),
+    );
+    expect(($(s, "verify") as HTMLElement).hidden).toBe(true);
+    expect(($(s, "status") as HTMLElement).hidden).toBe(false);
   });
 });
 

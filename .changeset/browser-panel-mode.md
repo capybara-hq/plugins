@@ -9,5 +9,5 @@ opens the browser panel on the person's conversation page (`InputRequired.open`)
 the approved browser panel design: one box, host theme tokens, a single skeleton until the first
 frame, a contained picture with an accent ring while in control, take over at every width (a
 narrow form with a tabs button and a "more" menu), and a verify strip driven by
-`state.verification`. The panel no longer posts `resize` (the host fills the panel). Needs the
+the active tab's `blocker` (kind `verification`). The panel no longer posts `resize` (the host fills the panel). Needs the
 plugin-sdk and kernel release that adds `panel-mode` to the embed bridge and `InputRequired.open`.

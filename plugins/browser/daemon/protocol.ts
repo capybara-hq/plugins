@@ -259,12 +259,6 @@ export type ViewerOut =
       lastClick?: { x: number; y: number; seq: number };
       /** The pending handoff question, if any (message at most HANDOFF_MAX_CHARS). */
       handoff?: { callId: string; message: string };
-      /**
-       * The active page asks for a human check (a CAPTCHA or bot challenge), as the daemon detects
-       * it: the panel shows the "verification needed" strip with 去验证 (take over). Optional:
-       * absent until the daemon reports it.
-       */
-      verification?: { url: string };
     }
   /** `url`: the page to open once the host is allowed (the blocked navigation, or the page whose resource was refused). */
   | { t: "blocked"; host: string; url: string }

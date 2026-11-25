@@ -160,7 +160,7 @@ A real browser in the person's device for agents (browser use spec,
   height. Take over is there at every width: below 440 px the tabs and the address merge into one
   button with a tab count, and forward and reload move into a "more" menu. On a phone (a screen
   under 600 px, the host's compact class) the panel only watches. A page that asks for a human check
-  (`state.verification`, reported by the daemon) shows a warn strip with 去验证 as the one primary
+  (the active tab's `blocker` of kind `verification`, reported by the daemon) shows a warn strip with 去验证 as the one primary
   action.
 - Size: the host fills its panel with the embed in both panel modes. The page posts no `resize`,
   and the viewer's frame size follows the shown size. The page asks for full mode with `panel-mode`

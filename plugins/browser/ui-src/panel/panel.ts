@@ -264,8 +264,13 @@ export function mountPanel(opts: PanelOptions): void {
     $("handback").hidden = watchOnly || !isLive || control !== "user";
     // the takeover slot stays reserved unless hand back takes it or the device only watches
     $("takeover").toggleAttribute("data-gone", watchOnly || (isLive && control === "user"));
+    // the active tab shows a verification page (the daemon's tab blocker, cleared on its next
+    // navigation)
     const verifying =
-      isLive && control === "agent" && lastState?.verification !== undefined && !watchOnly;
+      isLive &&
+      control === "agent" &&
+      tabs.find((x) => x.active)?.blocker?.kind === "verification" &&
+      !watchOnly;
     $("verify").hidden = !verifying;
     // one primary action: while a verification waits, take over steps back
     $("takeover").className = verifying ? "secondary" : "primary";
