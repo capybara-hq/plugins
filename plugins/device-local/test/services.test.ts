@@ -20,7 +20,10 @@ type Body = Record<string, unknown>;
  */
 function serviceMachine(opts: { oldMachine?: boolean; preIds?: boolean; codeDir?: unknown } = {}) {
   const digests = new Set<string>();
-  const running = new Map<string, { startedAt: string; network: unknown; entry: string }>();
+  const running = new Map<
+    string,
+    { startedAt: string; network: unknown; entry: string; digest?: string | undefined }
+  >();
   const codeDirOf = (name: string): unknown =>
     opts.codeDir !== undefined ? opts.codeDir : `${DEVICE_DIR}/svc-files/${name}`;
   const requests: Body[] = [];
@@ -34,6 +37,8 @@ function serviceMachine(opts: { oldMachine?: boolean; preIds?: boolean; codeDir?
         startedAt: r?.startedAt ?? null,
         stateDir: `${DEVICE_DIR}/services/${name}`,
         codeDir: codeDirOf(name),
+        // like capybara-device: a running service names the files it runs
+        ...(r?.digest !== undefined && { filesDigest: r.digest }),
       };
     };
     switch (body.op) {
@@ -71,6 +76,7 @@ function serviceMachine(opts: { oldMachine?: boolean; preIds?: boolean; codeDir?
             startedAt: new Date().toISOString(),
             network: body.network,
             entry: spec.entry ?? "",
+            digest,
           });
         return { ok: true, result: status(spec.name) };
       }
@@ -198,7 +204,7 @@ describe("device-local services", () => {
     }
   });
 
-  it("keeps the machine's code directory in the status", async () => {
+  it("keeps the machine's code directory and the running files' digest in the status", async () => {
     const codeDir = "/home/me/capybara-device/dev-1/services/echo/code";
     const { provider } = setup({ codeDir });
     const status = await provider.ensureService?.(HANDLE, SPEC, signal());
@@ -208,7 +214,12 @@ describe("device-local services", () => {
       startedAt: expect.any(String),
       stateDir: STATE_DIR,
       codeDir,
+      filesDigest: filesDigestOf(SPEC.files),
     });
+    // an ifRunning ensure (the kernel's look before a launch review) carries it too
+    expect(
+      await provider.ensureService?.(HANDLE, { ...SPEC, files: {} }, signal(), { ifRunning: true }),
+    ).toHaveProperty("filesDigest", filesDigestOf(SPEC.files));
     expect(await provider.serviceStatus?.(HANDLE, "tx.echo", signal())).toHaveProperty(
       "codeDir",
       codeDir,

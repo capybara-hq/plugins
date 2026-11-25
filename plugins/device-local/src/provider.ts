@@ -176,14 +176,23 @@ function statusOf(v: unknown): DeviceServiceStatus {
     throw new ToolError(
       "The connected machine sent an invalid service status; update capybara-device on that machine and retry",
     );
+  // the digest of the files a running service runs (capybara-device from its service-upgrade
+  // release): the kernel restarts a service running other files; a malformed one is dropped
+  const digest = (s as { filesDigest?: unknown }).filesDigest;
   return {
     name: s.name,
     state: s.state,
     startedAt: s.startedAt,
     stateDir: s.stateDir,
     ...(s.codeDir !== undefined && { codeDir: s.codeDir }),
+    ...(s.state === "running" && typeof digest === "string" && FILES_DIGEST_RE.test(digest)
+      ? { filesDigest: digest }
+      : {}),
   };
 }
+
+/** A machine's files digest as capybara-device accepts one. */
+const FILES_DIGEST_RE = /^[A-Za-z0-9:_-]{1,128}$/;
 
 /** The handle as a local one, or the kernel rebuilds the instance (a handle it cannot use). */
 function requireLocal(h: SandboxHandle): LocalDeviceHandle {
