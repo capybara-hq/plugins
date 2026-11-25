@@ -1,5 +1,21 @@
 # @capybara-hq/plugin-browser
 
+## 0.1.0-rc.7
+
+### Patch Changes
+
+- 3e7e986: The handoff question in the conversation now matches the panel banner. Its title is a short
+  "请在浏览器中完成：<reason>" / "Finish in the browser: <reason>", the agent's full reason is the body,
+  and 完成 / 取消 are buttons (InputForm `choices` on `{ done }`) instead of a toggle with Answer.
+  Needs plugin-sdk rc.75 (core v0.1.0-rc.117).
+  
+  The panel's `/ui/handoff-answer` passes `handoffConversationId`, which plugin-sdk rc.75's
+  `answerHandoff` requires. By default it is the panel's conversation, or the raising conversation
+  when the panel names it (a sub-agent's).
+- 004df64: Closing the last tabs quickly (two closes in a takeover, or a close beside a tab list) leaves one
+  blank tab, not one per close: callers that find no tab share the one blank tab being opened. The
+  panel labels a blank tab "New tab" (新标签页) instead of about:blank.
+
 ## 0.1.0-rc.6
 
 ### Patch Changes
