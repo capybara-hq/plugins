@@ -212,6 +212,9 @@ const sameFile = (a: { dev: number; ino: number }, b: { dev: number; ino: number
 const REF_RE = /^(f\d+)?e\d+$/;
 const PROXY_FAILURE_RE = /ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED/;
 
+/** Playwright's error for a navigation that a network error page's late commit interrupted. */
+const ERROR_PAGE_INTERRUPT_RE = /is interrupted by another navigation to "chrome-error:/;
+
 /** The longest a failed navigation waits for its error page to commit. */
 const ERROR_PAGE_WAIT_MS = 2_000;
 
@@ -1844,7 +1847,7 @@ export class BrowserSession {
     const deadline = Date.now() + this.navigationTimeoutMs;
     const watch = new NavWatch(page, url, () => this.pendingNavs.get(page));
     try {
-      res = await page.goto(url, { waitUntil: "domcontentloaded" });
+      res = await this.gotoPastLateErrorPage(page, url, watch, deadline);
     } catch (e) {
       const msg = firstLine(e);
       // a URL that is a file download: it is saved and reported (onDownload), not an error
@@ -1885,6 +1888,33 @@ export class BrowserSession {
       );
     }
     await page.waitForLoadState("load", { timeout: LOAD_GRACE_MS }).catch(() => undefined);
+  }
+
+  /**
+   * `page.goto`, past the late error page of the tab's previous failed or stopped navigation:
+   * Chromium can commit that page after Playwright reported the failure (the Linux full build),
+   * and its commit interrupts a navigation started meanwhile. Then this navigation is followed
+   * when it went on in Chromium, and otherwise started once more (the error page is in now),
+   * within the navigation's own deadline.
+   */
+  private async gotoPastLateErrorPage(
+    page: Page,
+    url: string,
+    watch: NavWatch,
+    deadline: number,
+  ): Promise<Awaited<ReturnType<Page["goto"]>>> {
+    try {
+      return await page.goto(url, { waitUntil: "domcontentloaded" });
+    } catch (e) {
+      if (!ERROR_PAGE_INTERRUPT_RE.test(firstLine(e))) throw e;
+      const out = await watch.follow(deadline);
+      if (out.kind === "loaded") return out.response;
+      if (out.kind === "failed") throw new Error(`${out.error} at ${out.url}`);
+      return page.goto(url, {
+        waitUntil: "domcontentloaded",
+        timeout: Math.max(1, deadline - Date.now()),
+      });
+    }
   }
 
   /**
