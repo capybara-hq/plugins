@@ -22,6 +22,7 @@ import {
   playwrightDownloadHosts,
   processAlive,
 } from "./chromium.js";
+import { restoreCookies, saveCookies } from "./cookie-file.js";
 import {
   DEFAULT_FRAME_MAX_BYTES,
   DOWNLOAD_BLOCKED_PREFIX,
@@ -81,6 +82,9 @@ export const BROWSER_CLOSE_GRACE_MS = 3_000;
 
 /** How often a stop checks whether the closed browser's process is gone. */
 const PROCESS_POLL_MS = 10;
+
+/** The most a stop spends writing the cookie file before it closes the browser. */
+const COOKIE_SAVE_MS = 500;
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -186,7 +190,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
    * The process id of the browser `current` launched, asked right after its launch (stopBrowser
    * kills it); dropped when that browser closes or its launch fails.
    */
-  let running: { launch: Promise<BrowserSession>; pid: number | undefined } | undefined;
+  let running:
+    | { launch: Promise<BrowserSession>; pid: number | undefined; ctx: BrowserContext }
+    | undefined;
   let restored = false;
 
   /** Resolves with `value`, or undefined once `ms` passed. */
@@ -248,7 +254,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       });
       const pid = await within(browserProcessId(ctx), BROWSER_CLOSE_GRACE_MS);
       setPid(pid);
-      if (!gone) running = { launch: starting, pid };
+      if (!gone) running = { launch: starting, pid, ctx };
       const workspace = opts.env[SERVICE_WORKSPACE_ENV];
       const session = new BrowserSession(ctx, {
         proxy: plan.proxy,
@@ -260,6 +266,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       });
       // A launch that finishes after a stop only gets closed (stopBrowser): no tabs restored and
       // no saves, which would write back the session file an idle stop just forgot.
+      if (!closing) await restoreCookies(ctx, opts.stateDir);
       if (!restored && !closing) {
         restored = true;
         if (saved !== undefined) await sessionFile.restoreTabs(session, saved);
@@ -330,7 +337,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     const starting = current;
     if (starting === undefined) return;
     // read before the close: the browser's close event drops `running`
-    const pid = running?.launch === starting ? running.pid : undefined;
+    const r = running?.launch === starting ? running : undefined;
+    const pid = r?.pid;
+    // first, and outside the close grace: the service's SIGKILL can land in the middle of
+    // Chromium's own write
+    if (r !== undefined) await within(saveCookies(r.ctx, opts.stateDir), COOKIE_SAVE_MS);
     await closeOrKill(
       starting.then(
         async (session) => {
