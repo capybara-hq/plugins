@@ -1380,6 +1380,10 @@ describe("tab ownership", () => {
     );
     await vi.advanceTimersByTimeAsync(10_000);
     expect(($(s, "notice") as HTMLElement).hidden).toBe(true);
+    sock.push({ t: "notice", code: "tab_cap" });
+    expect($(s, "notice").textContent).toBe(
+      "This conversation has the most tabs it can keep; close one first",
+    );
   });
 
   it("the tree's empty state: no page of another tree, its tabs to move here", async () => {

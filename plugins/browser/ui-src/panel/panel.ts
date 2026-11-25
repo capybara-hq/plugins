@@ -848,8 +848,10 @@ export function mountPanel(opts: PanelOptions): void {
         showDialog(msg);
         break;
       case "notice":
-        // a refused "Move here": the tab's conversation is using it right now
+        // a refused "Move here": the tab's conversation is using it right now, or this
+        // conversation keeps the most tabs it may
         if (msg.code === "tab_in_use") notice("tabInUse", "");
+        else if (msg.code === "tab_cap") notice("tabCap", "");
         break;
     }
   }
