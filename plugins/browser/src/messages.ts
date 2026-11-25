@@ -4,7 +4,3 @@
 /** A browser tool called by a run whose trigger account is not the conversation's owner. */
 export const NOT_OWNER_MESSAGE =
   "Browser tools only run for the conversation's owner on their own device.";
-
-/** A browser tool other than wait / handoff while the person controls the browser. */
-export const TAKEN_OVER_MESSAGE =
-  "The user is controlling the browser; call browser_wait or browser_handoff.";

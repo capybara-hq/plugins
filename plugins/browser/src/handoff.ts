@@ -1,8 +1,10 @@
 // browser_handoff (browser use spec §9): the agent asks the person to do something in the browser
 // (sign in, solve a challenge). The kernel shows the question card in the conversation and opens
 // the browser panel on the person's conversation page (`InputRequired.open`), and the daemon's
-// handoff notice gives every open panel a banner with 完成 / 取消 that answers it through
-// /ui/handoff-answer. The wait is the kernel's resumable InputRequired.
+// handoff notice (kept per conversation: runRequest names the call's conversation and its root)
+// gives the panels of the conversation's tree a banner with 完成 / 取消 that answers it through
+// /ui/handoff-answer, echoing the handoff's conversation. The wait is the kernel's resumable
+// InputRequired.
 import {
   type InputRequired,
   ToolError,

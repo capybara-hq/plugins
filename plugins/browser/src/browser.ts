@@ -10,13 +10,22 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import {
   DOWNLOAD_BLOCKED_PREFIX,
+  type TabCount,
   type ToolErrorCode,
   type ToolOp,
   type ToolReply,
+  type ToolRequest,
 } from "../daemon/protocol.js";
-import { NOT_OWNER_MESSAGE, TAKEN_OVER_MESSAGE } from "./messages.js";
+import { NOT_OWNER_MESSAGE } from "./messages.js";
 
-export { NOT_OWNER_MESSAGE, TAKEN_OVER_MESSAGE };
+export { NOT_OWNER_MESSAGE };
+
+/**
+ * A browser tool other than wait / handoff while the person controls the browser. Defined here,
+ * not in messages.ts, so the tool-design check reads it where the tab count line is appended.
+ */
+export const TAKEN_OVER_MESSAGE =
+  "The user is controlling the browser; call browser_wait or browser_handoff.";
 
 /** A service start (ensureService) that failed for a reason the kernel gave no text for. */
 export const START_FAILED_MESSAGE =
@@ -83,6 +92,26 @@ export const REQUEST_TIMEOUT_MS = 90_000;
  */
 export const TOOL_TIMEOUT_MS = 300_000;
 
+/** What a result says in place of the page line when the conversation owns no tab yet. */
+export const NO_TAB_MESSAGE = "This conversation has no browser tab yet.";
+
+/**
+ * The fact line every result of a request the daemon answered ends with (ok or error): the
+ * calling conversation's own tab count after the request and the per-conversation cap. Neutral:
+ * it states the count, it asks for nothing.
+ */
+export function tabsLine(tabs: TabCount): string {
+  return `Tabs open in this conversation: ${tabs.open} of ${tabs.max}.`;
+}
+
+/** The reply's tab count when it is well formed, else undefined (no line). */
+function tabCountOf(reply: ToolReply): TabCount | undefined {
+  const t = reply.tabs as Partial<TabCount> | undefined;
+  if (typeof t !== "object" || t === null) return undefined;
+  const ok = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0;
+  return ok(t.open) && ok(t.max) ? { open: t.open, max: t.max } : undefined;
+}
+
 /** A successful daemon reply. */
 export type OkReply = Extract<ToolReply, { ok: true }>;
 
@@ -125,34 +154,39 @@ export function deviceAccessToolError(e: unknown): unknown {
   }
 }
 
-/** Actionable text for a daemon error reply (the daemon's own message plus the next step). */
-function daemonToolError(code: ToolErrorCode, message: string): ToolError {
+/**
+ * Actionable text for a daemon error reply (the daemon's own message plus the next step), then
+ * `tail` (the tab count line, or nothing).
+ */
+function daemonToolError(code: ToolErrorCode, message: string, tail: string): ToolError {
   switch (code) {
     case "taken_over":
-      return new ToolError(TAKEN_OVER_MESSAGE);
+      return new ToolError(TAKEN_OVER_MESSAGE + tail);
     case "no_such_ref":
-      return new ToolError(`${message} Call browser_snapshot for the current element refs.`);
+      return new ToolError(`${message} Call browser_snapshot for the current element refs.${tail}`);
     case "timeout":
       return new ToolError(
-        `${message} Check the page with browser_snapshot, then retry or call browser_wait.`,
+        `${message} Check the page with browser_snapshot, then retry or call browser_wait.${tail}`,
       );
     case "unreachable":
       // the daemon's message names the host and what the device's network answered for it
-      return new ToolError(`${message} Check the address before retrying.`);
+      return new ToolError(`${message} Check the address before retrying.${tail}`);
     case "blocked":
       // the browser's own download was refused: allowing it is the only way on
       if (message.startsWith(DOWNLOAD_BLOCKED_PREFIX))
         return new ToolError(
-          `${message} Ask the user to allow these hosts so the browser can be installed, then retry.`,
+          `${message} Ask the user to allow these hosts so the browser can be installed, then retry.${tail}`,
         );
       // the one next step after a refused host, whatever refused it (the daemon's messages give
       // none): the kernel raises the network ask from the reported hosts when the device's own
       // list can take them (and reruns once allowed), and its network note says which
       return new ToolError(
-        `${message} The network note says whether the host can be allowed from this conversation; if it is not allowed, use another site.`,
+        `${message} The network note says whether the host can be allowed from this conversation; if it is not allowed, use another site.${tail}`,
       );
     default:
-      return new ToolError(`${message} Check the page with browser_snapshot before retrying.`);
+      return new ToolError(
+        `${message} Check the page with browser_snapshot before retrying.${tail}`,
+      );
   }
 }
 
@@ -200,6 +234,10 @@ function failure(deps: BrowserDeps, call: ToolCallContext, e: unknown, starting:
  * {@link RESTART_ATTEMPTS} times, all in this call: while `ensureService` still reports the old
  * process (its start time) no request goes to it, and a request failing while the new one comes
  * up is retried, both with growing pauses for at most {@link RESTART_WAIT_MS}.
+ *
+ * Every request carries the call's conversation and the root of its conversation tree, taken
+ * from the kernel's tool call context and written after the operation, so no operation field
+ * (built from tool input) can name another conversation (tab ownership spec §3).
  */
 export async function runRequest(
   deps: BrowserDeps,
@@ -235,7 +273,12 @@ export async function runRequest(
       throw new ToolError(RESTARTING_MESSAGE);
     }
     try {
-      const body = new TextEncoder().encode(JSON.stringify(req));
+      const sent: ToolRequest = {
+        ...req,
+        conversationId: call.conversationId,
+        rootConversationId: call.rootConversationId,
+      };
+      const body = new TextEncoder().encode(JSON.stringify(sent));
       reply = parseReply(
         await deps.deviceAccess.request(call, { service: SERVICE, body, timeoutMs }),
       );
@@ -263,7 +306,14 @@ export async function runRequest(
       hosts,
       reply.ok && reply.page !== undefined ? { url: reply.page.url } : {},
     );
-  if (!reply.ok) throw daemonToolError(reply.error, reply.message);
+  if (!reply.ok) {
+    const tabs = tabCountOf(reply);
+    throw daemonToolError(
+      reply.error,
+      reply.message,
+      tabs === undefined ? "" : `\n${tabsLine(tabs)}`,
+    );
+  }
   return reply;
 }
 
@@ -274,16 +324,21 @@ function pageLine(page: NonNullable<OkReply["page"]>): string {
 
 /**
  * The tool result of an ok reply: the takeover note when the person had control (spec §9), the
- * page line, the daemon's text, and the screenshot as an image block.
+ * page line (or that the conversation has no tab yet), the daemon's text, the tab count line, and
+ * the screenshot as an image block.
  */
 export function toResult(reply: OkReply): ToolResult {
   const lines: string[] = [];
-  if (reply.userControlledSince !== undefined && reply.page !== undefined)
+  if (reply.userControlledSince !== undefined)
     lines.push(
-      `The user controlled the browser from ${reply.userControlledSince}; now at ${reply.page.url} (${reply.page.title}).`,
+      reply.page === undefined
+        ? `The user controlled the browser from ${reply.userControlledSince}.`
+        : `The user controlled the browser from ${reply.userControlledSince}; now at ${reply.page.url} (${reply.page.title}).`,
     );
-  if (reply.page !== undefined) lines.push(pageLine(reply.page));
+  lines.push(reply.page === undefined ? NO_TAB_MESSAGE : pageLine(reply.page));
   if (reply.text !== undefined && reply.text !== "") lines.push(reply.text);
+  const tabs = tabCountOf(reply);
+  if (tabs !== undefined) lines.push(tabsLine(tabs));
   return {
     content: [
       { type: "text", text: lines.join("\n") },

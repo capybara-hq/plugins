@@ -57,24 +57,27 @@ const TABS: ToolSpec = {
   name: "browser_tabs",
   title: "Browser tabs",
   description:
-    "List, open, switch or close tabs of the browser in the user's device (at most 10 tabs). " +
-    "Use list to see the tab ids, open to load a url in a new tab, switch to make a tab active " +
-    "(the other tools act on the active tab) and close to close one.",
+    "List, open, switch, close or adopt tabs of the browser in the user's device. Each " +
+    "conversation has its own tabs (at most 6, and 10 in the browser) and its own active tab, " +
+    "which the other tools act on. Use list to see the tab ids, open to load a url in a new tab, " +
+    "switch to make one of this conversation's tabs active and close to close one. list also " +
+    "shows tabs of other conversations; adopt moves one of them (tabId) to this conversation and " +
+    "makes it active, for when the user points you to a page they opened elsewhere.",
   inputSchema: {
     type: "object",
     properties: {
       action: {
         type: "string",
-        enum: ["list", "open", "switch", "close"],
+        enum: ["list", "open", "switch", "close", "adopt"],
         description: "What to do.",
       },
-      tabId: { type: "string", description: "The tab for switch and close, from list." },
+      tabId: { type: "string", description: "The tab for switch, close and adopt, from list." },
       url: { type: "string", description: "The address for open (optional: a blank tab)." },
     },
     required: ["action"],
     additionalProperties: false,
   },
-  keyArgs: ["action", "url"],
+  keyArgs: ["action", "tabId", "url"],
   defaultPolicy: "allow",
   // any tool may start the device first (see TOOL_TIMEOUT_MS)
   timeoutMs: TOOL_TIMEOUT_MS,
@@ -371,6 +374,11 @@ function need<T>(v: T | undefined, field: string, tool: string): T {
   return v;
 }
 
+type TabAction = Extract<ToolOp, { op: "tabs" }>["action"];
+
+/** Whether a browser_tabs action names a tab. */
+const namesTab = (a: TabAction) => a === "switch" || a === "close" || a === "adopt";
+
 /** A handler that maps the input to one daemon request and returns the page result. */
 function handler(
   deps: BrowserDeps,
@@ -400,18 +408,15 @@ export function registerBrowserTools(
   );
   ctx.tools.register(
     TABS,
-    handler(deps, (i) =>
-      defined({
-        op: "tabs" as const,
-        action: need(str(i.action), "an action", "browser_tabs") as
-          | "list"
-          | "open"
-          | "switch"
-          | "close",
-        tabId: str(i.tabId),
-        url: str(i.url),
-      }),
-    ),
+    handler(deps, (i) => {
+      const action = need(str(i.action), "an action", "browser_tabs") as TabAction;
+      const tabId = str(i.tabId);
+      if (namesTab(action) && (tabId === undefined || tabId === ""))
+        throw new ToolError(
+          `browser_tabs needs a tabId for ${action}; call browser_tabs with action list for the tab ids, then retry.`,
+        );
+      return defined({ op: "tabs" as const, action, tabId, url: str(i.url) });
+    }),
   );
   ctx.tools.register(
     SNAPSHOT,
