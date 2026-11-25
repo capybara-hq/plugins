@@ -57,10 +57,22 @@ describe("chromium launch plan", () => {
     );
   });
 
-  it("runs the headless shell in one process with the mock keychain on macOS", () => {
-    const plan = chromiumLaunchPlan({ stateDir: "/s", env: {}, platform: "darwin" });
-    expect(plan.build).toBe("chromium-headless-shell");
-    expect(plan.args).toEqual(expect.arrayContaining(["--single-process", "--use-mock-keychain"]));
+  it("runs the full Chromium on macOS too, its temporary directory and crash reporting set for the local sandbox", () => {
+    const plan = chromiumLaunchPlan({
+      stateDir: "/s",
+      env: { TMPDIR: "/s/tmp" },
+      platform: "darwin",
+    });
+    expect(plan.build).toBe("chromium");
+    expect(plan.args).toEqual(
+      expect.arrayContaining([
+        "--use-mock-keychain",
+        "--disable-crash-reporter",
+        "--disable-breakpad",
+      ]),
+    );
+    expect(plan.args).not.toContain("--single-process");
+    expect(plan.env).toEqual({ MAC_CHROMIUM_TMPDIR: "/s/tmp" });
     expect(plan.args.some((a) => a.startsWith("--proxy-server"))).toBe(false);
   });
 
