@@ -102,11 +102,12 @@ const BOT_EVENTS = [
 ];
 
 describe("plugin.json setupGuides", () => {
-  it("declares the channel guide and the connector template guide (spec §5.1)", () => {
+  it("declares the channel, sign-in and connector template guides (spec §5.1)", () => {
     const parsed = parsePluginManifest(manifestJson);
     expect("errors" in parsed ? parsed.errors : []).toEqual([]);
     expect(manifestJson.setupGuides).toEqual([
       { id: "slack-app", place: "channel-connection" },
+      { id: "slack-sign-in", place: "extension-deployment" },
       { id: "slack-connector", place: "connector-template", templates: ["slack"] },
     ]);
   });
@@ -117,6 +118,7 @@ describe("plugin.json setupGuides", () => {
 
   for (const g of [
     { id: "slack-app", place: "channel-connection" as const },
+    { id: "slack-sign-in", place: "extension-deployment" as const },
     { id: "slack-connector", place: "connector-template" as const },
   ]) {
     it(`${g.id}: en and zh validate without errors or warnings`, () => {
@@ -324,5 +326,49 @@ describe("guides/slack-connector.md", () => {
       expect(codeBlocks(zh).map((b) => b.text)).toEqual(codeBlocks(en).map((b) => b.text));
       expect(zh.checks.map((c) => c.id)).toEqual(en.checks.map((c) => c.id));
     }
+  });
+});
+
+describe("guides/slack-sign-in.md", () => {
+  const signInValues = {
+    publicUrl: "https://capybara.example.com",
+    signInCallbackUrl: "https://capybara.example.com/api/v1/auth/sso/slack/callback",
+    pluginName: "slack",
+    pluginVersion: "0.1.0",
+  };
+  const renderSignIn = (locale: "en" | "zh") =>
+    render("slack-sign-in", "extension-deployment", null, "admin", locale, signInValues);
+
+  it.each(["en", "zh"] as const)(
+    "%s: the redirect URL, the client fields, the public URL check and the login source",
+    (locale) => {
+      const r = renderSignIn(locale);
+      expect(r.title).toBeTruthy();
+      expect(r.unresolved).toEqual([]);
+      expect(codeBlocks(r).map((b) => b.text.trim())).toEqual([signInValues.signInCallbackUrl]);
+      expect(r.checks.map((c) => c.id)).toEqual(["capybara:public-url"]);
+      const text = JSON.stringify(r.blocks);
+      for (const s of [
+        "`clientId`",
+        "`clientSecret`",
+        "`openid`",
+        "`auth.loginSources`",
+        "CAPYBARA_AUTH__LOGIN_SOURCES",
+        "`auth.trustedIdentitySources`",
+      ])
+        expect(text, s).toContain(s);
+    },
+  );
+
+  it("without a public URL the callback is reported unresolved", () => {
+    const { signInCallbackUrl: _, ...rest } = signInValues;
+    const r = render("slack-sign-in", "extension-deployment", null, "admin", "en", rest);
+    expect(r.unresolved).toEqual(["signInCallbackUrl"]);
+  });
+
+  it("the zh guide uses the platform terms", () => {
+    const zh = doc("slack-sign-in", "zh");
+    expect(zh).not.toContain("企业");
+    expect(zh).not.toMatch(/\bagents?\b/i);
   });
 });

@@ -26,7 +26,8 @@ never on what the browser sends.
 ::check google-discovery Google's sign-in endpoints match the plugin
 ::check google-client Google accepts the client ID and secret
 
-5. In the platform settings, add `google` to `auth.loginSources`. To let a Google sign-in join an
+5. Add `google` to the kernel config `auth.loginSources` (env `CAPYBARA_AUTH__LOGIN_SOURCES`), set
+   where the deployment's config lives, not in the admin console. To let a Google sign-in join an
    existing account with the same verified email, also add `google:<your domain>` (for example
    `google:example.com`) to `auth.trustedIdentitySources`.
 
