@@ -145,7 +145,7 @@ export class DaemonState {
     return this.inflight;
   }
 
-  /** Subscribes to control and handoff changes; returns the unsubscribe function. */
+  /** Subscribes to control, handoff and park changes; returns the unsubscribe function. */
   onChange(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
@@ -260,6 +260,7 @@ export class DaemonState {
     e.parks.set(id, { ...spec, since });
     this.armConversation(conversationId, e);
     this.armIdle();
+    this.emit();
   }
 
   /** Ends a park; an unknown one changes nothing. */
@@ -269,6 +270,7 @@ export class DaemonState {
     e.lastActiveAt = this.clock.now();
     this.armConversation(conversationId, e);
     this.armIdle();
+    this.emit();
   }
 
   /** The conversation's parks. */

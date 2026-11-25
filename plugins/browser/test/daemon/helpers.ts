@@ -258,3 +258,62 @@ export function jpegSize(b64: string): { width: number; height: number } {
   }
   throw new Error("no SOF marker");
 }
+
+/**
+ * A clock whose timers are real but whose time can be moved ahead: `advance` adds to `now()` and
+ * runs at once every timer that is then due (the daemon's idle closes and eviction ages), while
+ * Playwright and the sockets keep real time.
+ */
+export class ShiftClock {
+  private offset = 0;
+  private seq = 0;
+  private readonly timers = new Map<
+    number,
+    { at: number; fn: () => void; handle: ReturnType<typeof setTimeout> }
+  >();
+  now(): number {
+    return Date.now() + this.offset;
+  }
+  schedule(fn: () => void, ms: number): unknown {
+    const id = ++this.seq;
+    const handle = setTimeout(() => {
+      this.timers.delete(id);
+      fn();
+    }, ms);
+    handle.unref();
+    this.timers.set(id, { at: this.now() + ms, fn, handle });
+    return id;
+  }
+  cancel(h: unknown): void {
+    const t = this.timers.get(h as number);
+    if (t === undefined) return;
+    clearTimeout(t.handle);
+    this.timers.delete(h as number);
+  }
+  advance(ms: number): void {
+    this.offset += ms;
+    for (;;) {
+      const due = [...this.timers.entries()]
+        .filter(([, t]) => t.at <= this.now())
+        .sort((a, b) => a[1].at - b[1].at)[0];
+      if (due === undefined) return;
+      clearTimeout(due[1].handle);
+      this.timers.delete(due[0]);
+      due[1].fn();
+    }
+  }
+}
+
+/**
+ * The conversation's own tab ids in a tab list: the tab lines before the first heading of other
+ * conversations' tabs (notes may come first).
+ */
+export function ownTabIds(text: string | undefined): string[] {
+  const ids: string[] = [];
+  for (const line of (text ?? "").split("\n")) {
+    if (line.startsWith("Tabs of other conversations")) break;
+    const id = /^(t\d+)(?: \(active\))?: /.exec(line)?.[1];
+    if (id !== undefined) ids.push(id);
+  }
+  return ids;
+}
