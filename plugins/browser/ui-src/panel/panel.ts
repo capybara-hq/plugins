@@ -439,9 +439,16 @@ export function mountPanel(opts: PanelOptions): void {
   const subGroups = (): string[] => [
     ...new Set(tabs.map((x) => x.group).filter((g) => g !== "own")),
   ];
-  /** "Sub-task", numbered only when the tree has more than one (no conversation names). */
-  const groupLabel = (group: string, subs: string[]): string =>
-    subs.length > 1 ? `${text("subTask")} ${subs.indexOf(group) + 1}` : text("subTask");
+  /**
+   * "Sub-task", numbered only while the tree has more than one (no conversation names). The number
+   * comes from the daemon's group key (`sub<n>`, stable for the viewer's lifetime), so a group keeps
+   * its number when an earlier one closes.
+   */
+  const groupLabel = (group: string, subs: string[]): string => {
+    if (subs.length <= 1) return text("subTask");
+    const n = /^sub(\d+)$/.exec(group)?.[1];
+    return n === undefined ? text("subTask") : `${text("subTask")} ${n}`;
+  };
   const othersLabel = (): string => `${text("otherConversations")} (${otherTabs.length})`;
 
   /** The other conversations' tabs as menu entries, each moved here on a click (an adopt). */

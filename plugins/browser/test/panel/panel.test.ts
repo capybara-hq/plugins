@@ -84,7 +84,7 @@ function setup(
     screen?: number;
     dpr?: number;
     ticket?: () => Response;
-    answer?: () => Response;
+    answer?: () => Response | Promise<Response>;
     hosts?: () => Response;
     /** Storage throws, as in the opaque-origin sandboxed iframe. */
     noStorage?: boolean;
@@ -1249,6 +1249,26 @@ describe("tab ownership", () => {
     const one = setup({ locale: "zh" });
     await live(one, state({ tabs: tree.slice(0, 3) }));
     expect(stripItems(one)).toEqual(["Docs*", "Mail", "[子任务]", "Shop"]);
+    // a group keeps its number when an earlier one closes
+    const later = setup();
+    await live(
+      later,
+      state({
+        tabs: [
+          ...tree.slice(0, 2),
+          tree[3] as TabIn,
+          { id: "t5", title: "Pay", url: "https://pay.example/", active: false, group: "sub3" },
+        ],
+      }),
+    );
+    expect(stripItems(later)).toEqual([
+      "Docs*",
+      "Mail",
+      "[Sub-task 2]",
+      "Maps",
+      "[Sub-task 3]",
+      "Pay",
+    ]);
   });
 
   it("while only watching, a click on a tab of the tree shows it (show, never switch)", async () => {
@@ -1266,6 +1286,50 @@ describe("tab ownership", () => {
     sock.push(state({ tabs: tree.map((x) => ({ ...x, active: x.id === "t3" })), shown: "t3" }));
     expect(stripItems(s)).toContain("Shop*");
     expect(($(s, "url") as HTMLInputElement).value).toBe("https://shop.example/");
+  });
+
+  it("a watching panel never sends tab open, close or switch", async () => {
+    const s = setup();
+    const sock = await live(s, state({ tabs: tree, otherTabs: others }));
+    // no close or new-tab buttons while only watching
+    expect($(s, "tablist").querySelector(".x")).toBeNull();
+    expect($(s, "tablist").querySelector(".add")).toBeNull();
+    for (const l of Array.from($(s, "tablist").querySelectorAll(".tab .label")))
+      (l as HTMLButtonElement).click();
+    // the narrow tabs menu offers no new tab while watching either
+    $(s, "tabsbtn").click();
+    const items = Array.from($(s, "menu").querySelectorAll("button"));
+    expect(items.map((b) => b.textContent)).not.toContain("New tab");
+    for (const b of items) b.click();
+    const tabMsgs = sentOf(sock).filter((m) => m.t === "tab");
+    expect(tabMsgs.every((m) => (m as { action?: string }).action === "adopt")).toBe(true);
+    expect(sentOf(sock).filter((m) => m.t !== "tab" && m.t !== "show")).toEqual([]);
+  });
+
+  it("a 404 hides the banner only when it still shows that handoff (callIds repeat across sub-agents)", async () => {
+    let release: (r: Response) => void = () => {};
+    const s = setup({
+      answer: () =>
+        new Promise<Response>((r) => {
+          release = r;
+        }),
+    });
+    const sub = { callId: "call-1", conversationId: "c2", message: "Pay", tabIds: ["t3"] };
+    const own = { callId: "call-1", conversationId: "c1", message: "Sign in", tabIds: ["t1"] };
+    const sock = await live(s, state({ tabs: tree, handoffs: [own, sub] }));
+    $(s, "handoff-done").click();
+    await vi.waitFor(() => expect(s.fetchCalls.some((c) => c.url === "handoff-answer")).toBe(true));
+    // meanwhile the sub-agent's handoff ended and the root's own (same callId) is the newest
+    sock.push(state({ tabs: tree, handoffs: [own] }));
+    release(
+      new Response(JSON.stringify({ error: { code: "question.not_found", message: "x" } }), {
+        status: 404,
+      }),
+    );
+    // let the answer's continuation run (one macrotask turn, no timed wait)
+    await new Promise((r) => setTimeout(r, 0));
+    expect(($(s, "handoff") as HTMLElement).hidden).toBe(false);
+    expect($(s, "handoff-message").textContent).toBe("Sign in");
   });
 
   it("in control, a click on a tab switches to it", async () => {
