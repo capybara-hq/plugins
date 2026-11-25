@@ -14,6 +14,16 @@ import {
   switchNamed,
 } from "./fake-design.js";
 
+// The fake host always reports the built-in theme; the theme test switches the key here.
+const theme = vi.hoisted(() => ({ key: null as string | null }));
+vi.mock("@capybara-hq/plugin-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@capybara-hq/plugin-client")>();
+  return {
+    ...actual,
+    useTheme: () => ({ ...actual.useTheme(), key: theme.key }),
+  };
+});
+
 const conversationId = "conv_0001abcdef";
 const SLOT = "conversation.properties.section";
 const SOUND = "cap-ext:theme-cyberpunk:sound";
@@ -62,6 +72,7 @@ beforeEach(() => {
 afterEach(() => {
   host?.unmount();
   host = undefined;
+  theme.key = null;
   vi.unstubAllGlobals();
 });
 
@@ -242,7 +253,25 @@ describe("run HUD", () => {
     expect(ticker(0)).toBe("T+00:00.0");
     expect(ticker(12_345)).toBe("T+00:12.3");
     expect(ticker(125_000)).toBe("T+02:05.0");
+  });
+
+  it("shows no ticker before this panel has seen a run", () => {
+    const h = renderHud({});
+    expect(document.querySelector(".cx-theme-cyberpunk-hud-ticker")).toBeNull();
+    h.setRunState("running");
+    expect(document.querySelector(".cx-theme-cyberpunk-hud-ticker")?.textContent).toMatch(/^T\+/);
+  });
+
+  it("draws the dot and the meter only under the cyberpunk theme", () => {
+    const decoration = () => [
+      document.querySelector(".cx-theme-cyberpunk-hud-dot"),
+      document.querySelector(".cx-theme-cyberpunk-hud-meter"),
+    ];
     renderHud({});
-    expect(document.querySelector(".cx-theme-cyberpunk-hud-ticker")?.textContent).toBe("T+--:--.-");
+    expect(decoration()).toEqual([null, null]);
+    host?.unmount();
+    theme.key = "theme-cyberpunk/cyberpunk";
+    renderHud({});
+    expect(decoration().every((el) => el !== null)).toBe(true);
   });
 });
