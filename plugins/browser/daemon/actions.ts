@@ -77,6 +77,11 @@ const MAX_NAME_BYTES = 200;
 const ACTION_TIMEOUT_MS = 10_000;
 const NAVIGATION_TIMEOUT_MS = 30_000;
 const LOAD_GRACE_MS = 5_000;
+/**
+ * The longest a reply waits on a query of a page besides the action (its title, the verification
+ * check): a page whose navigation hangs keeps such queries waiting.
+ */
+const PAGE_QUERY_MS = 2_000;
 const MAX_WAIT_MS = 60_000;
 /**
  * The largest screenshot, decoded: its base64 plus the reply's JSON stays below the device service
@@ -189,6 +194,27 @@ const sameFile = (a: { dev: number; ino: number }, b: { dev: number; ino: number
 
 const REF_RE = /^(f\d+)?e\d+$/;
 const PROXY_FAILURE_RE = /ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED/;
+
+/** Whether `e` is Playwright's timeout. */
+const isTimeout = (e: unknown) => e instanceof Error && e.name === "TimeoutError";
+
+/** What Chromium's common net errors of a navigation mean (the rest are named only). */
+// capybara:allow-module-state read-only constant (device service process, not the kernel)
+const NET_ERROR_MEANINGS: Record<string, string> = {
+  ERR_NAME_NOT_RESOLVED: "the host name does not resolve",
+  ERR_CONNECTION_REFUSED: "the host refused the connection",
+  ERR_CONNECTION_RESET: "the connection was reset",
+  ERR_CONNECTION_CLOSED: "the host closed the connection without an answer",
+  ERR_CONNECTION_TIMED_OUT: "the host did not answer the connection",
+  ERR_ADDRESS_UNREACHABLE: "the host's address is unreachable",
+  ERR_INTERNET_DISCONNECTED: "the device has no network connection",
+  ERR_EMPTY_RESPONSE: "the server sent an empty answer",
+  ERR_SSL_PROTOCOL_ERROR: "the secure connection failed",
+  ERR_CERT_AUTHORITY_INVALID: "the site's certificate is not trusted",
+  ERR_CERT_COMMON_NAME_INVALID: "the site's certificate is for another name",
+  ERR_CERT_DATE_INVALID: "the site's certificate has expired or is not yet valid",
+  ERR_TOO_MANY_REDIRECTS: "the page redirects in a loop",
+};
 
 /** A document address without its fragment (a request's URL has none; a frame's may). */
 function docUrl(raw: string): string {
@@ -310,6 +336,17 @@ class NavWatch {
     return { kind: "loaded", response: await final.response().catch(() => null) };
   }
 
+  /**
+   * The status the newest navigation to the target address was answered with, when it finished
+   * without a document (a 204 or 205: Chromium keeps the page and aborts the navigation).
+   */
+  async emptyAnswer(): Promise<number | undefined> {
+    const r = this.lastOurs;
+    if (r === undefined || r === this.committedOurs) return undefined;
+    const status = (await r.response().catch(() => null))?.status();
+    return status === 204 || status === 205 ? status : undefined;
+  }
+
   dispose(): void {
     this.page.off("request", this.onRequest);
     this.page.off("framenavigated", this.onNavigated);
@@ -379,16 +416,29 @@ export async function captureFitting(
 }
 
 /**
+ * What the device's proxy answers a CONNECT to a host: `refused` (403: the device's network rules
+ * refuse it), `unreachable` (another refusal of the tunnel, such as 502: the proxy could not
+ * connect), `connected` (the tunnel opened), `no_answer` (nothing within the probe's time) or
+ * `unknown` (the proxy itself failed).
+ */
+export type ProxyVerdict = "refused" | "unreachable" | "connected" | "no_answer" | "unknown";
+
+/**
  * Asks the proxy whether it refuses `host` (a CONNECT that answers 403): Chromium reports every
  * failed tunnel alike, and an origin's own 403 looks like the proxy's.
  */
-export function proxyRefuses(proxy: string, host: string, port: number): Promise<boolean> {
+export async function proxyRefuses(proxy: string, host: string, port: number): Promise<boolean> {
+  return (await probeProxy(proxy, host, port)) === "refused";
+}
+
+/** Opens (and at once closes) a tunnel to `host:port` through the proxy: its {@link ProxyVerdict}. */
+export function probeProxy(proxy: string, host: string, port: number): Promise<ProxyVerdict> {
   return new Promise((resolve) => {
     let url: URL;
     try {
       url = new URL(proxy.includes("://") ? proxy : `http://${proxy}`);
     } catch {
-      resolve(false);
+      resolve("unknown");
       return;
     }
     const headers: Record<string, string> = { host: `${host}:${port}` };
@@ -404,16 +454,21 @@ export function proxyRefuses(proxy: string, host: string, port: number): Promise
       headers,
       timeout: PROXY_PROBE_TIMEOUT_MS,
     });
+    const verdict = (status: number | undefined): ProxyVerdict =>
+      status === 403 ? "refused" : status === 200 ? "connected" : "unreachable";
     req.on("connect", (res, socket) => {
       socket.destroy();
-      resolve(res.statusCode === 403);
+      resolve(verdict(res.statusCode));
     });
     req.on("response", (res) => {
       res.resume();
-      resolve(res.statusCode === 403);
+      resolve(verdict(res.statusCode));
     });
-    req.on("timeout", () => req.destroy());
-    req.on("error", () => resolve(false));
+    req.on("timeout", () => {
+      resolve("no_answer");
+      req.destroy();
+    });
+    req.on("error", () => resolve("unknown"));
     req.end();
   });
 }
@@ -453,6 +508,7 @@ export class BrowserSession {
   private readonly ctx: BrowserContext;
   private readonly proxy: string | undefined;
   private readonly clock: Clock;
+  private readonly navigationTimeoutMs: number;
   /** The device's workspace root (CAPYBARA_SERVICE_WORKSPACE): uploads and downloads stay in it. */
   private readonly workspace: string | undefined;
   private readonly downloadsTmp: string | undefined;
@@ -503,6 +559,8 @@ export class BrowserSession {
       downloadsTmp?: string | undefined;
       downloadMaxBytes?: number;
       downloadWaitMs?: number;
+      /** How long a navigation may take before it is stopped (default 30 s; tests shorten it). */
+      navigationTimeoutMs?: number;
     },
   ) {
     this.ctx = ctx;
@@ -512,8 +570,9 @@ export class BrowserSession {
     this.downloadMaxBytes = opts.downloadMaxBytes ?? DEFAULT_DOWNLOAD_MAX_BYTES;
     this.downloadWaitMs = opts.downloadWaitMs ?? DOWNLOAD_WAIT_MS;
     this.clock = opts.clock ?? systemClock;
+    this.navigationTimeoutMs = opts.navigationTimeoutMs ?? NAVIGATION_TIMEOUT_MS;
     ctx.setDefaultTimeout(ACTION_TIMEOUT_MS);
-    ctx.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
+    ctx.setDefaultNavigationTimeout(this.navigationTimeoutMs);
     ctx.on("page", (p) => {
       // A popup counts toward MAX_TABS like any tab (openTab refuses before it opens one): one
       // past the limit is closed at once and the agent told.
@@ -987,7 +1046,22 @@ export class BrowserSession {
     return probe;
   }
 
-  /** Runs `fn` one at a time with the other actions (`wait` runs beside them). */
+  /** `value`, or `fallback` when it takes longer than {@link PAGE_QUERY_MS} (never rejects). */
+  private async bounded<T>(value: Promise<T>, fallback: T): Promise<T> {
+    let timer: unknown;
+    try {
+      return await Promise.race([
+        value.catch(() => fallback),
+        new Promise<T>((r) => {
+          timer = this.clock.schedule(() => r(fallback), PAGE_QUERY_MS);
+        }),
+      ]);
+    } finally {
+      this.clock.cancel(timer);
+    }
+  }
+
+  /** Runs `fn` one at a time with the other actions (`wait` and the tab list run beside them). */
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const run = this.queue.then(fn, fn);
     this.queue = run.catch(() => undefined);
@@ -1007,7 +1081,8 @@ export class BrowserSession {
     this.collectors.add(c);
     let reply: ToolReply;
     try {
-      const out = await (req.op === "wait"
+      // the tab list only reads what the session tracks: it answers while an action runs
+      const out = await (req.op === "wait" || (req.op === "tabs" && req.action === "list")
         ? this.exec(req)
         : this.serial(() => {
             if (opts.takenOver?.() === true)
@@ -1119,7 +1194,8 @@ export class BrowserSession {
    */
   private async checkVerification(page: Page, id: string): Promise<boolean> {
     if (id === "") return false;
-    const blocked = await isVerificationPage(page, this.docStatus.get(id));
+    // bounded: a page whose navigation hangs keeps locator queries waiting (no timeout of their own)
+    const blocked = await this.bounded(isVerificationPage(page, this.docStatus.get(id)), false);
     if (this.pages.get(id) !== page) return false;
     const before = this.blockers.get(id);
     if (blocked) {
@@ -1136,12 +1212,11 @@ export class BrowserSession {
   }
 
   async pageInfo(page: Page): Promise<{ url: string; title: string; tabId: string }> {
-    let title = "";
-    try {
-      title = await page.title();
-    } catch {
-      title = this.titles.get(this.tabIdOf(page)) ?? "";
-    }
+    const known = this.titles.get(this.tabIdOf(page)) ?? "";
+    const title = await this.bounded(
+      page.title().catch(() => known),
+      known,
+    );
     return {
       url: clip(page.url(), MAX_URL_CHARS),
       title: clip(title, MAX_TITLE_CHARS),
@@ -1191,7 +1266,7 @@ export class BrowserSession {
       const out = await fn();
       if (navigating && !loaded) {
         await page
-          .waitForEvent("domcontentloaded", { timeout: NAVIGATION_TIMEOUT_MS })
+          .waitForEvent("domcontentloaded", { timeout: this.navigationTimeoutMs })
           .catch(() => undefined);
       }
       return out;
@@ -1228,7 +1303,7 @@ export class BrowserSession {
     // The main frame's navigations while this one runs: another navigation to the same address
     // (a tab restored at start, the address bar) aborts this one but still lands on its page.
     // Following it shares the navigation's own deadline: an aborted navigate takes no longer.
-    const deadline = Date.now() + NAVIGATION_TIMEOUT_MS;
+    const deadline = Date.now() + this.navigationTimeoutMs;
     const watch = new NavWatch(page, url, () => this.pendingNavs.get(page));
     try {
       res = await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -1239,14 +1314,25 @@ export class BrowserSession {
         await download.catch(() => undefined);
         return;
       }
-      if (PROXY_FAILURE_RE.test(msg)) await this.checkBlocked(url);
-      if (!msg.includes("net::ERR_ABORTED")) throw e;
+      if (isTimeout(e)) throw await this.navigationTimedOut(page, url);
+      if (!msg.includes("net::ERR_ABORTED")) throw await this.navigationFailed(e, url, msg);
       const out = await watch.follow(deadline);
+      if (out.kind !== "loaded") {
+        const status = await watch.emptyAnswer();
+        if (status !== undefined)
+          throw new ActionError(
+            "failed",
+            `${url} answered ${status} with no page to show; the tab shows ${page.url()}.`,
+          );
+      }
       if (out.kind === "none") throw e;
       if (out.kind === "failed") {
         // the navigation that took over failed: that failure is this one's
-        if (PROXY_FAILURE_RE.test(out.error)) await this.checkBlocked(out.url);
-        throw new Error(`${out.error} at ${out.url}`);
+        throw await this.navigationFailed(
+          new Error(`${out.error} at ${out.url}`),
+          out.url,
+          out.error,
+        );
       }
       res = out.response;
     } finally {
@@ -1262,6 +1348,97 @@ export class BrowserSession {
     await page.waitForLoadState("load", { timeout: LOAD_GRACE_MS }).catch(() => undefined);
   }
 
+  /**
+   * The error of a navigation that failed with Chromium's net error `error`: a host the proxy
+   * refuses is reported as blocked (`run` turns `original` into the blocked reply); any other net
+   * error is `unreachable`, saying what the device's network answered when it went through it.
+   */
+  private async navigationFailed(original: unknown, url: string, error: string): Promise<unknown> {
+    const net = /net::(ERR_[A-Z_]+)/.exec(error)?.[1];
+    // an abort is not the site's failure: another navigation replaced this one
+    if (net === undefined || net === "ERR_ABORTED") return original;
+    if (PROXY_FAILURE_RE.test(error)) {
+      if (await this.checkBlocked(url)) return original;
+      const detail = await this.networkDetail(url);
+      return new ActionError(
+        "unreachable",
+        `${url} could not be loaded (net::${net})${detail === "" ? "." : `: ${detail}`}`,
+      );
+    }
+    const meaning = NET_ERROR_MEANINGS[net];
+    return new ActionError(
+      "unreachable",
+      `${url} could not be loaded (net::${net})${meaning === undefined ? "." : `: ${meaning}.`}`,
+    );
+  }
+
+  /**
+   * The error of a navigation that took longer than its time limit. The navigation is stopped
+   * first (a navigation left in flight keeps the page's scripts and snapshots waiting for a
+   * document that never comes), so the tab goes back to the page it showed and the next request
+   * works on it; the message says what the device's network answered for the host.
+   */
+  private async navigationTimedOut(page: Page, url: string): Promise<ActionError> {
+    await this.stopNavigation(page);
+    const seconds = Math.round(this.navigationTimeoutMs / 1000);
+    let detail = await this.networkDetail(url, true);
+    if (detail === "") detail = "no page came in that time.";
+    const now = page.isClosed() ? "" : ` The navigation was stopped; the tab shows ${page.url()}.`;
+    return new ActionError(
+      "unreachable",
+      `${url} did not load within ${seconds} s: ${detail}${now}`,
+    );
+  }
+
+  /** Stops the page's navigation in flight (Chromium's stop button); never throws. */
+  private async stopNavigation(page: Page): Promise<void> {
+    if (page.isClosed()) return;
+    try {
+      const cdp = await this.ctx.newCDPSession(page);
+      try {
+        await cdp.send("Page.stopLoading");
+      } finally {
+        await cdp.detach().catch(() => undefined);
+      }
+    } catch {
+      // a page closing meanwhile: nothing left to stop
+    }
+    this.pendingNavs.delete(page);
+    const id = this.ids.get(page);
+    if (id !== undefined && this.loadingTabs.delete(id)) this.emit({ type: "state" });
+  }
+
+  /**
+   * What the device's proxy answers for the URL's host, as a sentence ("" without a proxy, or when
+   * the proxy failed itself). `timedOut`: the navigation got no page in time.
+   */
+  private async networkDetail(rawUrl: string, timedOut = false): Promise<string> {
+    if (this.proxy === undefined) return "";
+    let url: URL;
+    try {
+      url = new URL(rawUrl);
+    } catch {
+      return "";
+    }
+    const host = url.hostname;
+    const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+    switch (await probeProxy(this.proxy, host, port)) {
+      case "unreachable":
+        return `the device's network could not connect to ${host}:${port} (the name did not resolve, or the host refused or did not answer the connection).`;
+      case "no_answer":
+        return `the device's network got no answer from ${host}:${port}.`;
+      case "connected":
+        return timedOut
+          ? `${host} accepted the connection through the device's network but sent no page in that time.`
+          : `the device's network connects to ${host}:${port}, but the connection failed.`;
+      case "refused":
+        // checkBlocked reports it (a navigation that timed out is refused only if the rules changed)
+        return `the device's network settings block ${host}.`;
+      default:
+        return "";
+    }
+  }
+
   private async exec(req: ToolRequest): Promise<{ text?: string; image?: string }> {
     switch (req.op) {
       case "navigate": {
@@ -1269,12 +1446,20 @@ export class BrowserSession {
         if (req.url !== undefined) {
           await this.goto(page, normalizeUrl(req.url));
         } else if (req.action === "back" || req.action === "forward") {
-          const r = await (req.action === "back" ? page.goBack() : page.goForward());
+          const r = await (req.action === "back" ? page.goBack() : page.goForward()).catch(
+            async (e: unknown) => {
+              if (isTimeout(e)) throw await this.navigationTimedOut(page, page.url());
+              throw e;
+            },
+          );
           if (r === null && page.url() === "about:blank") {
             return { text: `No ${req.action === "back" ? "earlier" : "later"} page in this tab.` };
           }
         } else if (req.action === "reload") {
-          await page.reload({ waitUntil: "domcontentloaded" });
+          await page.reload({ waitUntil: "domcontentloaded" }).catch(async (e: unknown) => {
+            if (isTimeout(e)) throw await this.navigationTimedOut(page, page.url());
+            throw e;
+          });
         } else {
           throw new ActionError(
             "failed",
@@ -1385,7 +1570,8 @@ export class BrowserSession {
   private async tabsOp(req: Extract<ToolRequest, { op: "tabs" }>): Promise<{ text?: string }> {
     switch (req.action) {
       case "list": {
-        await this.activePage();
+        // no new tab here: the list runs beside the actions (a navigation may be opening one)
+        if (this.pages.size === 0) await this.activePage();
         const lines = await Promise.all(
           [...this.pages.entries()].map(async ([id, p]) => {
             const info = await this.pageInfo(p);

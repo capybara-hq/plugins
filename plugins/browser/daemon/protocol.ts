@@ -190,13 +190,17 @@ export type ToolRequest =
 
 /**
  * Why a request failed. `restart`: the browser was just installed into the provider's install
- * directory and sealed; the daemon exits and the plugin starts the service again.
+ * directory and sealed; the daemon exits and the plugin starts the service again. `unreachable`:
+ * a navigation could not load its page (a net error, or no page within the navigation's time,
+ * after which the navigation was stopped); the message names the host and what the device's
+ * network answered for it.
  */
 export type ToolErrorCode =
   | "taken_over"
   | "no_such_ref"
   | "timeout"
   | "blocked"
+  | "unreachable"
   | "failed"
   | "restart";
 

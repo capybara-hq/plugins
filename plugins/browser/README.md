@@ -55,7 +55,8 @@ A real browser in the person's device for agents (browser use spec,
   could write once it runs): the provider's install directory `CAPYBARA_SERVICE_INSTALL`
   (device-local) is filled on the first start, sealed with `.sealed`, and the daemon answers
   `restart` and exits, so every later start runs it read only (the plugin starts the service again
-  within the same tool call; an unsealed directory is always installed afresh, never trusted as
+  within the same tool call, waiting while `ensureService` still reports the exiting process's
+  start time, for at most 30 s; an unsealed directory is always installed afresh, never trusted as
   found); else a `PLAYWRIGHT_BROWSERS_PATH` the daemon cannot write, outside the workspace
   (device-docker / device-e2b ship it in `/opt/capybara-browsers`, pinned to this package's
   playwright-core): this build's revision, else the newest revision of the build there. Nothing
@@ -68,6 +69,20 @@ A real browser in the person's device for agents (browser use spec,
   created file in `<workspace>/downloads`, checked to be that directory's own before any byte is
   written. So a link the agent plants in the workspace never makes the service read or write its
   own profile.
+- The network: Chromium sends everything, loopback included, through the device's proxy
+  (`HTTPS_PROXY` / `HTTP_PROXY` of the service, the same proxy and rules as the device's commands:
+  the proxy resolves the name, with the fake-IP DNS fallback, and judges the address). A proxy URL
+  with credentials goes to Playwright's `proxy` option, which answers the challenge by
+  intercepting requests; under that interception Chromium loses a request it restarts for an
+  ACCEPT_CH frame (www.google.com sends one), so the daemon disables `AcceptCHFrame` (its
+  `--disable-features` repeats Playwright's own list: Chromium takes only the last flag).
+- A navigation that fails says why (`unreachable`): Chromium's net error with its meaning, and
+  for a failed tunnel what the device's proxy answers for the host (refused by the network
+  settings: `blocked`; could not connect: the name did not resolve, or the host refused or did not
+  answer). A navigation with no page within 30 s is stopped (CDP `Page.stopLoading`: one left in
+  flight keeps the page's queries waiting), so the tab shows its previous page and the next
+  request works on it. A 204 / 205 answer says so. The tab list runs beside the actions, and a
+  reply's title and verification check are bounded (2 s), so neither waits on a hanging page.
 - A launch that fails (no download, a refused network) does not stop the daemon: every request
   answers the cause and launches again. When the device's proxy refuses Playwright's download
   hosts (`cdn.playwright.dev`, `playwright.download.prss.microsoft.com`, `storage.googleapis.com`

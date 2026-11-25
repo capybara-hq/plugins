@@ -265,6 +265,42 @@ function shippedRevisions(cache: string, build: ChromiumBuild): string[] {
     .map((x) => x.n);
 }
 
+/**
+ * The features Playwright 1.65's own launch disables (its `chromiumSwitches`). Chromium takes only
+ * the last `--disable-features` flag and ours comes after Playwright's, so ours repeats its list
+ * (a test compares it with the playwright-core in use).
+ */
+// capybara:allow-module-state read-only constant (device service process, not the kernel)
+const PLAYWRIGHT_DISABLED_FEATURES = [
+  "AvoidUnnecessaryBeforeUnloadCheckSync",
+  "DestroyProfileOnBrowserClose",
+  "HttpsUpgrades",
+  "HttpsFirstBalancedModeAutoEnable",
+  "LensOverlay",
+  "MediaRouter",
+  "PaintHolding",
+  "ThirdPartyStoragePartitioning",
+  "AvoidCorsURLLoaderRestartOnRedirect",
+  "TcpPortRandomizationWin",
+  "OptimizationHints",
+  "NetworkTimeServiceQuerying",
+  "AimEnabled",
+  "PreconnectToSearch",
+  "msForceBrowserSignIn",
+  "msEdgeUpdateLaunchServicesPreferredVersion",
+];
+
+/**
+ * The features this daemon disables besides Playwright's. `AcceptCHFrame`: a server's ACCEPT_CH
+ * frame (sent in the TLS handshake, as www.google.com does) makes Chromium restart the request
+ * with the client hints it asks for, and while Playwright intercepts requests to answer the
+ * device proxy's credential challenge the restarted navigation is lost: the tab stays at
+ * about:blank until the navigation times out. Without the frame the hints follow from the
+ * response's Accept-CH header, as in a browser that never saw the site.
+ */
+// capybara:allow-module-state read-only constant (device service process, not the kernel)
+const DISABLED_FEATURES = [...PLAYWRIGHT_DISABLED_FEATURES, "AcceptCHFrame"];
+
 /** The launch for a state directory and environment (pure apart from the browsers cache check). */
 export function chromiumLaunchPlan(
   opts: {
@@ -285,6 +321,7 @@ export function chromiumLaunchPlan(
     "--use-mock-keychain",
     `--window-size=${VIEWPORT.width},${VIEWPORT.height}`,
     `--user-agent=${chromeUserAgent(opts.platform, release?.version ?? "")}`,
+    `--disable-features=${DISABLED_FEATURES.join(",")}`,
   ];
   // macOS: chrome-headless-shell in one process (the local sandbox does not run the full browser's
   // helper processes); spike: stable for navigation, input, screencast and tabs.

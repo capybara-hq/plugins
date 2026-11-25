@@ -54,6 +54,8 @@ export interface DaemonOptions {
   onIdle?: () => void;
   /** How long a reply waits for the downloads its action started (default 10 s). */
   downloadWaitMs?: number;
+  /** How long a navigation may take before it is stopped (default 30 s). */
+  navigationTimeoutMs?: number;
   /** Called when Chromium exits without the daemon closing it. */
   onBrowserGone?: () => void;
   /** How long a stop waits for Chromium to close before killing it (default 3 s). */
@@ -276,6 +278,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         downloadsTmp: plan.downloadsTmp,
         downloadMaxBytes: downloadMaxBytes(opts.env),
         ...(opts.downloadWaitMs === undefined ? {} : { downloadWaitMs: opts.downloadWaitMs }),
+        ...(opts.navigationTimeoutMs === undefined
+          ? {}
+          : { navigationTimeoutMs: opts.navigationTimeoutMs }),
       });
       // a shipped browser of another revision runs: the next tool result says so
       if (plan.shippedDir !== undefined)
