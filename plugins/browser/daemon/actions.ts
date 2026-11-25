@@ -219,6 +219,9 @@ export const NO_TAB_TO_WAIT_ON =
 /** Playwright's error for a navigation that a network error page's late commit interrupted. */
 const ERROR_PAGE_INTERRUPT_RE = /is interrupted by another navigation to "chrome-error:/;
 
+/** How often a navigation runs while the device's network keeps changing under it. */
+const NETWORK_CHANGED_ATTEMPTS = 4;
+
 /** The longest a failed navigation waits for its error page to commit. */
 const ERROR_PAGE_WAIT_MS = 2_000;
 
@@ -1890,7 +1893,7 @@ export class BrowserSession {
     const deadline = Date.now() + this.navigationTimeoutMs;
     const watch = new NavWatch(page, url, () => this.pendingNavs.get(page));
     try {
-      res = await this.gotoPastLateErrorPage(page, url, watch, deadline);
+      res = await this.gotoPastNetworkChange(page, url, watch, deadline);
     } catch (e) {
       const msg = firstLine(e);
       // a URL that is a file download: it is saved and reported (onDownload), not an error
@@ -1940,6 +1943,33 @@ export class BrowserSession {
    * when it went on in Chromium, and otherwise started once more (the error page is in now),
    * within the navigation's own deadline.
    */
+  /**
+   * `goto` past a change of the device's network (an interface came or went: Wi-Fi, a VPN, a
+   * container network): Chromium answers net::ERR_NETWORK_CHANGED and may keep or restart the
+   * navigation itself, so it is followed first (like one another navigation took over) and run
+   * again only when none goes on, at most {@link NETWORK_CHANGED_ATTEMPTS} times, within the
+   * navigation's deadline.
+   */
+  private async gotoPastNetworkChange(
+    page: Page,
+    url: string,
+    watch: NavWatch,
+    deadline: number,
+  ): Promise<Awaited<ReturnType<Page["goto"]>>> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.gotoPastLateErrorPage(page, url, watch, deadline);
+      } catch (e) {
+        if (!firstLine(e).includes("net::ERR_NETWORK_CHANGED")) throw e;
+        const out = await watch.follow(deadline);
+        if (out.kind === "loaded") return out.response;
+        if (out.kind === "failed" && !/ERR_NETWORK_CHANGED|ERR_ABORTED/.test(out.error))
+          throw new Error(`${out.error} at ${out.url}`);
+        if (attempt >= NETWORK_CHANGED_ATTEMPTS || Date.now() >= deadline) throw e;
+      }
+    }
+  }
+
   private async gotoPastLateErrorPage(
     page: Page,
     url: string,

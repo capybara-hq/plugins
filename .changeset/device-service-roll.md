@@ -10,5 +10,6 @@ devices: the service manager records the digest of the files a service started f
 other files, stops it once the new files are there or were sent and checked, then starts it on
 them. The browser daemon answers the kernel's roll check (capybara-hq/core#879) busy while the
 person holds control or a handoff waits, so a roll waits for a later call.
-A request the device's network change dropped (`ERR_NETWORK_CHANGED`) has its host checked against
-the proxy, as a failed tunnel does.
+A navigation the device's network change dropped (`ERR_NETWORK_CHANGED`: Wi-Fi, a VPN, a container
+network) is followed if Chromium keeps it going and run again otherwise, a few times within its
+deadline; a request it dropped has its host checked against the proxy, as a failed tunnel does.
