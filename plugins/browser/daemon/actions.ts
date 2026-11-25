@@ -1169,7 +1169,12 @@ export class BrowserSession {
         this.loadingTabs.delete(id);
         this.emit({ type: "state" });
       }
-      if (this.proxy !== undefined && PROXY_FAILURE_RE.test(err))
+      // a request the device's network change dropped may have been a refused one: the proxy is
+      // asked about its host too (a network change hides the tunnel's answer)
+      if (
+        this.proxy !== undefined &&
+        (PROXY_FAILURE_RE.test(err) || err.includes("ERR_NETWORK_CHANGED"))
+      )
         this.checkBlocked(page, r.url(), this.pageToOpen(page, r));
     });
     page.on("response", (r) => {
