@@ -948,7 +948,7 @@
     },
     {
       "name": "browser",
-      "version": "0.1.0-rc.5",
+      "version": "0.1.0-rc.6",
       "summary": {
         "en": "A real browser in the conversation owner's device for agents: navigate, read and act on pages through tools, with a live view in the conversation panel and takeover by the person",
         "zh": "在对话所有者的设备中为智能体运行真实浏览器：通过工具打开、读取和操作网页，在对话面板中实时查看，并可由本人接管"
@@ -1012,8 +1012,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-browser",
-          "version": "0.1.0-rc.5",
-          "integrity": "sha512-34TGnQ5FzSsSMdbEp5h9IxL9QIsRNl10+JVyiEXZSS281nogSPjgmFk8OacassE+gekrisSU7i+hyLsoRmIIbg=="
+          "version": "0.1.0-rc.6",
+          "integrity": "sha512-B1CASWwN1XLyBnrnrOI6hFZ8QLq7+3vQgsJlLfGI8xgAMXrB78KSFS6DLNi80fDetgKstriF8vPdAvZob8xySw=="
         }
       }
     }
