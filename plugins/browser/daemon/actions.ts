@@ -212,6 +212,10 @@ const sameFile = (a: { dev: number; ino: number }, b: { dev: number; ino: number
 const REF_RE = /^(f\d+)?e\d+$/;
 const PROXY_FAILURE_RE = /ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED/;
 
+/** Connection-level net errors (not the page's content): the device proxy is asked about them. */
+const NETWORK_ERROR_RE =
+  /^ERR_(TIMED_OUT|CONNECTION_[A-Z_]+|NAME_NOT_RESOLVED|NAME_RESOLUTION_FAILED|ADDRESS_UNREACHABLE|EMPTY_RESPONSE|NETWORK_[A-Z_]+|SOCKET_NOT_CONNECTED)$/;
+
 /** A wait for a page event in a conversation that has no tab (wait never opens one). */
 export const NO_TAB_TO_WAIT_ON =
   "This conversation has no browser tab to wait on; call browser_navigate to open a page first.";
@@ -445,10 +449,28 @@ export async function captureFitting(
 /**
  * What the device's proxy answers a CONNECT to a host: `refused` (403: the device's network rules
  * refuse it), `unreachable` (another refusal of the tunnel, such as 502: the proxy could not
- * connect), `connected` (the tunnel opened), `no_answer` (nothing within the probe's time) or
- * `unknown` (the proxy itself failed).
+ * connect), `connected` (the tunnel opened), `no_answer` (nothing within the probe's time),
+ * `proxy_down` (the proxy itself refused or dropped the connection to it: the device's network is
+ * not up) or `unknown` (anything else).
  */
-export type ProxyVerdict = "refused" | "unreachable" | "connected" | "no_answer" | "unknown";
+export type ProxyVerdict =
+  | "refused"
+  | "unreachable"
+  | "connected"
+  | "no_answer"
+  | "proxy_down"
+  | "unknown";
+
+/** Socket errors that say the proxy itself cannot be reached (never the destination). */
+const PROXY_DOWN_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EPIPE",
+]);
 
 /**
  * Asks the proxy whether it refuses `host` (a CONNECT that answers 403): Chromium reports every
@@ -495,7 +517,9 @@ export function probeProxy(proxy: string, host: string, port: number): Promise<P
       resolve("no_answer");
       req.destroy();
     });
-    req.on("error", () => resolve("unknown"));
+    req.on("error", (e: NodeJS.ErrnoException) =>
+      resolve(PROXY_DOWN_CODES.has(e.code ?? "") ? "proxy_down" : "unknown"),
+    );
     req.end();
   });
 }
@@ -1972,13 +1996,22 @@ export class BrowserSession {
     // an abort is not the site's failure: another navigation replaced this one
     if (net === undefined || net === "ERR_ABORTED") return original;
     await this.errorPageCommitted(page);
-    if (PROXY_FAILURE_RE.test(error)) {
-      if (await this.checkBlocked(page, url)) return original;
-      const detail = await this.networkDetail(url);
-      return new ActionError(
-        "unreachable",
-        `${url} could not be loaded (net::${net})${detail === "" ? "." : `: ${detail}`}`,
-      );
+    const proxied = PROXY_FAILURE_RE.test(error);
+    if (proxied && (await this.checkBlocked(page, url))) return original;
+    // a connection-level failure through the device's proxy: what the proxy answers for the host
+    // says whether the host, the network rules or the device's network itself is the cause
+    if (proxied || NETWORK_ERROR_RE.test(net)) {
+      const verdict = await this.networkVerdict(url);
+      if (verdict?.kind === "proxy_down")
+        return new ActionError(
+          "network_unavailable",
+          `${url} could not be loaded (net::${net}): ${verdict.text}`,
+        );
+      if (verdict !== undefined && verdict.text !== "")
+        return new ActionError(
+          "unreachable",
+          `${url} could not be loaded (net::${net}): ${verdict.text}`,
+        );
     }
     const meaning = NET_ERROR_MEANINGS[net];
     return new ActionError(
@@ -2011,11 +2044,12 @@ export class BrowserSession {
   private async navigationTimedOut(page: Page, url: string): Promise<ActionError> {
     await this.stopNavigation(page);
     const seconds = Math.round(this.navigationTimeoutMs / 1000);
-    let detail = await this.networkDetail(url, true);
-    if (detail === "") detail = "no page came in that time.";
+    const verdict = await this.networkVerdict(url, true);
+    const detail =
+      verdict === undefined || verdict.text === "" ? "no page came in that time." : verdict.text;
     const now = page.isClosed() ? "" : ` The navigation was stopped; the tab shows ${page.url()}.`;
     return new ActionError(
-      "unreachable",
+      verdict?.kind === "proxy_down" ? "network_unavailable" : "unreachable",
       `${url} did not load within ${seconds} s: ${detail}${now}`,
     );
   }
@@ -2039,20 +2073,32 @@ export class BrowserSession {
   }
 
   /**
-   * What the device's proxy answers for the URL's host, as a sentence ("" without a proxy, or when
-   * the proxy failed itself). `timedOut`: the navigation got no page in time.
+   * What the device's proxy answers for the URL's host, and as a sentence (undefined without a
+   * proxy). `timedOut`: the navigation got no page in time.
    */
-  private async networkDetail(rawUrl: string, timedOut = false): Promise<string> {
-    if (this.proxy === undefined) return "";
+  private async networkVerdict(
+    rawUrl: string,
+    timedOut = false,
+  ): Promise<{ kind: ProxyVerdict; text: string } | undefined> {
+    if (this.proxy === undefined) return undefined;
     let url: URL;
     try {
       url = new URL(rawUrl);
     } catch {
-      return "";
+      return undefined;
     }
     const host = url.hostname;
     const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
-    switch (await probeProxy(this.proxy, host, port)) {
+    const kind = await probeProxy(this.proxy, host, port);
+    return { kind, text: this.verdictText(kind, host, port, timedOut) };
+  }
+
+  /** The sentence for a {@link ProxyVerdict} ("" when it says nothing). */
+  private verdictText(kind: ProxyVerdict, host: string, port: number, timedOut: boolean): string {
+    switch (kind) {
+      case "proxy_down":
+        // the device's own network, not the address: nothing loads until it is back
+        return "the device's network proxy is not reachable, so no page loads on the device right now; this is not a problem of the address.";
       case "unreachable":
         return `the device's network could not connect to ${host}:${port} (the name did not resolve, or the host refused or did not answer the connection).`;
       case "no_answer":
