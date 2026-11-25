@@ -105,7 +105,7 @@ export function tabsLine(tabs: TabCount): string {
 }
 
 /** The reply's tab count when it is well formed, else undefined (no line). */
-function tabCountOf(reply: ToolReply): TabCount | undefined {
+export function tabCountOf(reply: ToolReply): TabCount | undefined {
   const t = reply.tabs as Partial<TabCount> | undefined;
   if (typeof t !== "object" || t === null) return undefined;
   const ok = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0;

@@ -501,6 +501,16 @@ describe("browser tools", () => {
     expect(e.message).toBe(
       "No element e9. Call browser_snapshot for the current element refs.\nTabs open in this conversation: 1 of 6.",
     );
+    // the takeover refusal too
+    const taken = fake(() => ({
+      ok: false,
+      error: "taken_over",
+      message: "x",
+      blockedHosts: [],
+      tabs: { open: 3, max: 6 },
+    }));
+    const t = (await taken.run("browser_click", { ref: "e1" }).catch((x: unknown) => x)) as Error;
+    expect(t.message.split("\n").at(-1)).toBe("Tabs open in this conversation: 3 of 6.");
     // a reply with no (or a malformed) count adds no line
     const bad = fake(() => ({
       ok: true,
@@ -627,6 +637,16 @@ describe("browser_handoff", () => {
     expect(f.requests.map((q) => q.op)).toEqual(["handoff_clear", "handoff_clear"]);
     // a cancel leaves a takeover as it is
     for (const q of f.requests) expect(q).toEqual({ op: "handoff_clear", callId: "call-1" });
+  });
+
+  it("the cancel error ends with the tab count of the clear's reply", async () => {
+    const f = fake(() => ({ ok: true, blockedHosts: [], tabs: { open: 2, max: 6 } }));
+    const e = (await f
+      .run("browser_handoff", { message: "m" }, call({ resume: { state: {}, answer: null } }))
+      .catch((x: unknown) => x)) as Error;
+    expect(e.message).toBe(
+      "The user cancelled the handoff; ask the user how to continue, or try another approach.\nTabs open in this conversation: 2 of 6.",
+    );
   });
 
   it("a failed clear keeps the person's answer, unless the call was aborted", async () => {
