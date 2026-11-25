@@ -20,6 +20,7 @@ import {
   type LaunchPlan,
   launchChromium,
   playwrightDownloadHosts,
+  processAlive,
 } from "./chromium.js";
 import {
   DEFAULT_FRAME_MAX_BYTES,
@@ -77,6 +78,9 @@ export const SERVICE_WORKSPACE_ENV = "CAPYBARA_SERVICE_WORKSPACE";
  * never hangs on a browser that does not answer.
  */
 export const BROWSER_CLOSE_GRACE_MS = 3_000;
+
+/** How often a stop checks whether the closed browser's process is gone. */
+const PROCESS_POLL_MS = 10;
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -325,13 +329,25 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   async function stopBrowser(): Promise<void> {
     const starting = current;
     if (starting === undefined) return;
+    // read before the close: the browser's close event drops `running`
+    const pid = running?.launch === starting ? running.pid : undefined;
     await closeOrKill(
       starting.then(
-        (session) => session.close(),
+        async (session) => {
+          await session.close();
+          // Playwright may report the close before the process is done flushing the profile
+          // (cookies): a restart on the same profile must not start before the process is gone
+          if (pid !== undefined) await processGone(pid);
+        },
         () => undefined,
       ),
-      () => (running?.launch === starting ? running.pid : undefined),
+      () => pid,
     );
+  }
+
+  /** Resolves once no process has the id (polled: the process is Playwright's child, not ours to await). */
+  async function processGone(pid: number): Promise<void> {
+    while (processAlive(pid)) await new Promise<void>((r) => clock.schedule(r, PROCESS_POLL_MS));
   }
 
   const ready = browser().then(() => undefined);

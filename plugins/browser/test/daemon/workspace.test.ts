@@ -34,6 +34,10 @@ const x = c.getContext("2d"); const d = x.createImageData(1280, 6000);
 for (let i = 0; i < d.data.length; i++) d.data[i] = (i % 4 === 3) ? 255 : Math.random() * 255;
 x.putImageData(d, 0, 0);</script>`;
 
+// A wait on a condition (a download finishing, a note arriving) is bounded only far above any
+// loaded machine: vi.waitFor gives up after 1 s by default, which a 2-CPU runner can exceed.
+const WAIT = { timeout: 20_000 };
+
 let fx: Awaited<ReturnType<typeof startFixtureServer>>;
 let d: TestDaemon;
 let workspace: string;
@@ -104,7 +108,7 @@ async function noteContaining(needle: string): Promise<string> {
     const r = await request(d.socketPath, { op: "tabs", action: "list" });
     all += r.ok ? (r.text ?? "") : "";
     expect(all).toContain(needle);
-  });
+  }, WAIT);
   return all;
 }
 
@@ -165,7 +169,7 @@ describe("browser daemon workspace and limits", () => {
       if (!click.ok) throw new Error(click.message);
       notes.push(click.text ?? "");
       // the download may finish after the click's reply: then the next reply names it
-      await vi.waitFor(() => expect(existsSync(join(dir, name))).toBe(true));
+      await vi.waitFor(() => expect(existsSync(join(dir, name))).toBe(true), WAIT);
       const next = await request(d.socketPath, { op: "tabs", action: "list" });
       notes.push(next.ok ? (next.text ?? "") : "");
     }
@@ -218,7 +222,10 @@ describe("browser daemon workspace and limits", () => {
     if (!nav.ok) throw new Error(nav.message);
     expect(nav.text).toContain('Download still in progress: "slow.bin"');
     releaseSlow();
-    await vi.waitFor(() => expect(existsSync(join(workspace, "downloads", "slow.bin"))).toBe(true));
+    await vi.waitFor(
+      () => expect(existsSync(join(workspace, "downloads", "slow.bin"))).toBe(true),
+      WAIT,
+    );
     // a failing request does not swallow the late note
     const failed = await request(d.socketPath, { op: "click", ref: "e99999" });
     expect(failed.ok).toBe(false);
@@ -258,7 +265,7 @@ describe("download leftovers", () => {
         left = [];
       }
       expect(left).toEqual([]);
-    });
+    }, WAIT);
 
   it("leaves no artifact in downloads-tmp after a save", async () => {
     renameSync(join(workspace, "downloads"), join(workspace, "downloads-link"));
@@ -275,7 +282,7 @@ describe("download leftovers", () => {
         const r = await request(d.socketPath, { op: "tabs", action: "list" });
         all += r.ok ? (r.text ?? "") : "";
         expect(all).toMatch(/big2\.bin.*(not saved|cancelled)/);
-      });
+      }, WAIT);
     }
     expect(existsSync(join(workspace, "downloads", "big2.bin"))).toBe(false);
     await tmpEmpty();
