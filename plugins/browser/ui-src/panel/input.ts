@@ -9,6 +9,7 @@
 //   there and paste works: keys go as `down` / `up`, composed and pasted text as `char`.
 // Nothing here acts in the watch state: `interactive()` gates every event.
 import {
+  clipCodePoints,
   toViewerCursor,
   VIEWER_TEXT_MAX_CHARS,
   type ViewerCursor,
@@ -104,6 +105,9 @@ export function mountInput(opts: InputOptions): InputController {
   let focusWanted = false;
   /** The button held down in the picture (a drag reports until it is released). */
   let held: "left" | "right" | null = null;
+  /** Keys sent down and not up yet: released when the panel loses the window or the focus. */
+  const downKeys = new Map<string, string>();
+  let lastPointer = { x: 0, y: 0 };
   let moveTimer: ReturnType<typeof setTimeout> | undefined;
   let nextMove: { x: number; y: number } | null = null;
 
@@ -176,7 +180,8 @@ export function mountInput(opts: InputOptions): InputController {
     placeSink(e.clientX, e.clientY);
     sink.focus();
     showPress(e.clientX, e.clientY);
-    send({ t: "mouse", kind: "down", ...opts.toPage(e.clientX, e.clientY), button });
+    lastPointer = opts.toPage(e.clientX, e.clientY);
+    send({ t: "mouse", kind: "down", ...lastPointer, button });
   });
 
   const release = (e: MouseEvent) => {
@@ -194,7 +199,8 @@ export function mountInput(opts: InputOptions): InputController {
 
   const moved = (e: MouseEvent) => {
     if (!interactive()) return;
-    queueMove(opts.toPage(e.clientX, e.clientY));
+    lastPointer = opts.toPage(e.clientX, e.clientY);
+    queueMove(lastPointer);
   };
   view.addEventListener("mousemove", moved);
   win.addEventListener("mousemove", (e) => {
@@ -229,19 +235,39 @@ export function mountInput(opts: InputOptions): InputController {
 
   function sendText(text: string): void {
     if (text === "") return;
-    const t = text.slice(0, VIEWER_TEXT_MAX_CHARS);
+    const t = clipCodePoints(text, VIEWER_TEXT_MAX_CHARS);
     send({ t: "key", kind: "char", key: t, text: t });
   }
 
   sink.addEventListener("keydown", (e) => {
     if (!interactive() || e.key === "Escape" || composing(e) || isPasteShortcut(e)) return;
     e.preventDefault();
+    downKeys.set(e.key, e.code);
     send({ t: "key", kind: "down", key: e.key, code: e.code });
   });
   sink.addEventListener("keyup", (e) => {
     if (!interactive() || e.key === "Escape" || composing(e) || isPasteShortcut(e)) return;
     e.preventDefault();
+    downKeys.delete(e.key);
     send({ t: "key", kind: "up", key: e.key, code: e.code });
+  });
+
+  /**
+   * Lets go of what this panel holds down: a window switch or a hidden tab never delivers the
+   * keyup or mouseup, and the page would keep Shift held or a drag going.
+   */
+  function releaseAll(): void {
+    if (interactive()) {
+      for (const [key, code] of downKeys) send({ t: "key", kind: "up", key, code });
+      if (held !== null) send({ t: "mouse", kind: "up", ...lastPointer, button: held });
+    }
+    downKeys.clear();
+    held = null;
+  }
+  win.addEventListener("blur", releaseAll);
+  sink.addEventListener("blur", releaseAll);
+  doc.addEventListener("visibilitychange", () => {
+    if (doc.visibilityState === "hidden") releaseAll();
   });
   sink.addEventListener("compositionend", (e) => {
     if (interactive()) sendText(e.data ?? "");
@@ -267,8 +293,11 @@ export function mountInput(opts: InputOptions): InputController {
       applyCursor();
       if (!interactive()) {
         held = null;
+        downKeys.clear();
         nextMove = null;
         hidePress();
+        // keys typed now must not go into an invisible field
+        if (doc.activeElement === sink) sink.blur();
         return;
       }
       // the takeover this panel asked for is in effect: the keys go to the page from now on

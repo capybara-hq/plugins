@@ -16,8 +16,11 @@
 //   Chromium sends frames only when the page changes, so the viewer keeps the last one.
 // - Viewer input (mouse, key, nav, tab) is applied only while the person holds control
 //   (`state.control === "user"`, after a `takeover` from any viewer): a viewer in the watch state
-//   is read-only, and the daemon drops its input. Mouse moves are coalesced (the newest wins).
-//   After a move the daemon answers the page's cursor at the pointer (`cursor`) when it changed.
+//   is read-only, and the daemon drops its input, also input still queued when control returns
+//   to the agent. Input already running then (a navigation, a long paste) finishes; keys and
+//   buttons the person still holds are released for the agent. Mouse moves are coalesced (the
+//   newest wins). After a move the daemon answers the page's cursor at the pointer (`cursor`)
+//   when it changed, resolved off the input queue.
 // - Viewer coordinates are viewport CSS pixels (the panel maps them back through its scale).
 // - Viewer key input: `down` / `up` carry a key name (KeyboardEvent.key); a printable key's `down`
 //   types its character. `char` inserts text (IME composition, paste); never send both for one key.
@@ -40,8 +43,14 @@ export const VIEWER_MAX_FPS = 15;
 /** The most frames a viewer may have unacknowledged before the daemon holds the next one. */
 export const VIEWER_UNACKED_FRAMES = 2;
 
-/** The longest `char` text one viewer message carries (a paste is cut to it). */
+/** The longest `char` text one viewer message carries, in code points (a paste is cut to it). */
 export const VIEWER_TEXT_MAX_CHARS = 10_000;
+
+/** `text` cut to at most `max` code points (never half of a surrogate pair). */
+export function clipCodePoints(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return Array.from(text).slice(0, max).join("");
+}
 
 /** The cursor keywords a viewer may show (anything else is `default`). */
 // capybara:allow-module-state read-only constant (a keyword list, never written)

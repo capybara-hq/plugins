@@ -1,6 +1,11 @@
 import { JSDOM } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { encodeFrame, type ViewerIn, type ViewerOut } from "../../daemon/protocol.js";
+import {
+  clipCodePoints,
+  encodeFrame,
+  type ViewerIn,
+  type ViewerOut,
+} from "../../daemon/protocol.js";
 import { STRINGS, t } from "../../ui-src/panel/i18n.js";
 import { PANEL_HTML } from "../../ui-src/panel/page.js";
 import { letterbox, mapPoint, mountPanel } from "../../ui-src/panel/panel.js";
@@ -428,6 +433,66 @@ describe("panel", () => {
     // a printable key outside a composition goes as a key (it types its character)
     sink.dispatchEvent(new w.KeyboardEvent("keydown", { key: "a", code: "KeyA", bubbles: true }));
     expect(sock.sent.at(-1)).toEqual({ t: "key", kind: "down", key: "a", code: "KeyA" });
+  });
+
+  it("releases held keys and the held button when the window loses the focus", async () => {
+    const s = setup();
+    const sock = await live(s, state({ control: "user" }));
+    const w = s.dom.window;
+    const view = $(s, "view");
+    view.getBoundingClientRect = () => ({ left: 0, top: 0, width: 480, height: 300 }) as DOMRect;
+    const sink = $(s, "input-sink");
+    sink.dispatchEvent(
+      new w.KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft", bubbles: true }),
+    );
+    view.dispatchEvent(
+      new w.MouseEvent("mousedown", { clientX: 240, clientY: 150, bubbles: true }),
+    );
+    w.dispatchEvent(new w.Event("blur"));
+    expect(sock.sent.slice(-2)).toEqual([
+      { t: "key", kind: "up", key: "Shift", code: "ShiftLeft" },
+      { t: "mouse", kind: "up", x: 640, y: 400, button: "left" },
+    ]);
+    // nothing is released twice
+    w.dispatchEvent(new w.Event("blur"));
+    expect(sock.sent.filter((m) => m.t === "key" && m.kind === "up")).toHaveLength(1);
+  });
+
+  it("the input sink gives up the focus when control returns to the agent", async () => {
+    const s = setup();
+    const sock = await live(s);
+    $(s, "takeover").click();
+    sock.push(state({ control: "user" }));
+    const sink = $(s, "input-sink");
+    expect(s.dom.window.document.activeElement).toBe(sink);
+    sock.push(state({ control: "agent" }));
+    expect(s.dom.window.document.activeElement).not.toBe(sink);
+  });
+
+  it("a hand back cancels an allow's pending reopen: a reconnect does not take over again", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    await vi.advanceTimersByTimeAsync(0);
+    const sock = s.sock();
+    sock.open();
+    sock.push(state({ control: "user" }));
+    sock.push({ t: "blocked", host: "cdn.test", url: "https://cdn.test/page" });
+    $(s, "allow").click();
+    await vi.advanceTimersByTimeAsync(0);
+    $(s, "handback").click();
+    sock.drop(1012);
+    await vi.advanceTimersByTimeAsync(0);
+    const sock2 = s.sock();
+    expect(sock2).not.toBe(sock);
+    sock2.open();
+    sock2.push(state({ tabs: [{ id: "t1", title: "", url: "about:blank", active: true }] }));
+    expect(sock2.sent.some((m) => m.t === "takeover" || m.t === "nav")).toBe(false);
+  });
+
+  it("clips pasted text by code points, never half of a surrogate pair", () => {
+    expect(clipCodePoints("ab😀c", 3)).toBe("ab😀");
+    expect(clipCodePoints("ab", 3)).toBe("ab");
+    expect(Array.from(clipCodePoints("😀".repeat(5), 4))).toHaveLength(4);
   });
 
   it("paste sends the clipboard text, not the Cmd+V keys", async () => {

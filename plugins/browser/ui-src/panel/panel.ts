@@ -303,6 +303,8 @@ export function mountPanel(opts: PanelOptions): void {
     control = s.control;
     // the take over ended elsewhere (another panel handed back, the agent resumed): leave full
     if (full && was === "user" && control === "agent") bridge(false);
+    // and an allow's pending reopen no longer takes over again on this connection's successors
+    if (was === "user" && control === "agent" && pendingNav?.sentOn === sock) pendingNav = null;
     const active = tabs.find((x) => x.active);
     if (doc.activeElement !== url) url.value = active?.url ?? "";
     renderTabs();
@@ -634,6 +636,8 @@ export function mountPanel(opts: PanelOptions): void {
 
   /** Hands the browser back; a pending handoff question is answered Done with it. */
   function handback(): void {
+    // the person's latest choice wins over an allow's pending reopen (which would take over again)
+    pendingNav = null;
     send({ t: "handback" });
     bridge(false);
     renderChrome();

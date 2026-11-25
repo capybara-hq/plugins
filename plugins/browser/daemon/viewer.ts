@@ -14,8 +14,9 @@ import {
   jpegSize,
   type SessionEvent,
 } from "./actions.js";
-import { cursorAt } from "./cursor.js";
+import { CursorResolver } from "./cursor.js";
 import {
+  clipCodePoints,
   encodeFrame,
   FRAME_HEADER_BYTES,
   VIEWER_MAX_FPS,
@@ -45,6 +46,8 @@ export const VIEWER_PING_MS = 1000;
 const RESTART_MIN_MS = 500;
 /** Chromium is let encode the next frame at most this often while frames wait for the viewer. */
 const ENCODE_MAX_INTERVAL_MS = 500;
+/** A cursor answer later than this is dropped (the next pointer position asks again). */
+export const CURSOR_TIMEOUT_MS = 200;
 
 type ScreencastFrame = {
   data: string;
@@ -86,6 +89,17 @@ export class ViewerSession {
   private moveSlot: { x: number; y: number } | undefined;
   /** The cursor last sent (reset when control returns to the agent). */
   private cursor: ViewerCursor | undefined;
+  /** Resolves cursors on the attached page (off the input chain, see {@link wantCursor}). */
+  private cursorResolver: CursorResolver | undefined;
+  /** The newest pointer position whose cursor is wanted; one resolution runs at a time. */
+  private cursorPoint: { x: number; y: number } | undefined;
+  private cursorBusy = false;
+  /**
+   * Keys and buttons this viewer pressed and has not released: released for the agent when
+   * control returns to it or the viewer ends, whatever reached the page of the person's input.
+   */
+  private readonly heldKeys = new Set<string>();
+  private readonly heldButtons = new Set<"left" | "right">();
   private seq = 0;
   /**
    * The newest screencast frame waiting for room (viewer acks, transport, rate cap). A newer one
@@ -237,24 +251,65 @@ export class ViewerSession {
       } catch {
         return;
       }
-      await this.sendCursor(page, slot.x, slot.y);
+      this.wantCursor(slot.x, slot.y);
     });
     // input() cleared the slot for ordinary input; a move keeps it open for the next moves
     this.moveSlot = slot;
   }
 
-  /** Sends the page's cursor at (x, y) when it changed. */
-  private async sendCursor(page: Page, x: number, y: number): Promise<void> {
-    let cursor: ViewerCursor;
-    try {
-      cursor = await cursorAt(page, x, y);
-    } catch {
-      // the page navigated under the pointer: the next move asks again
-      return;
-    }
-    if (cursor === this.cursor || this.closed || this.state.control !== "user") return;
-    this.cursor = cursor;
-    this.send({ t: "cursor", cursor });
+  /**
+   * Asks for the page's cursor at (x, y): resolved off the input chain (a click never waits for
+   * it), the newest position wins while one resolution runs, and an answer later than
+   * CURSOR_TIMEOUT_MS is dropped.
+   */
+  private wantCursor(x: number, y: number): void {
+    this.cursorPoint = { x, y };
+    if (this.cursorBusy) return;
+    this.cursorBusy = true;
+    void (async () => {
+      try {
+        for (;;) {
+          const p = this.cursorPoint;
+          this.cursorPoint = undefined;
+          const resolver = this.cursorResolver;
+          if (p === undefined || resolver === undefined || this.closed) return;
+          let timer: unknown;
+          const late = new Promise<undefined>((r) => {
+            timer = this.clock.schedule(() => r(undefined), CURSOR_TIMEOUT_MS);
+          });
+          const cursor = await Promise.race([resolver.at(p.x, p.y).catch(() => undefined), late]);
+          this.clock.cancel(timer);
+          // a newer position asks again; an answer for this one would only flicker
+          if (cursor === undefined || this.cursorPoint !== undefined) continue;
+          if (cursor === this.cursor || this.closed || this.state.control !== "user") continue;
+          this.cursor = cursor;
+          this.send({ t: "cursor", cursor });
+        }
+      } finally {
+        this.cursorBusy = false;
+      }
+    })();
+  }
+
+  /**
+   * Releases the keys and buttons this viewer still holds (straight, not on the input chain and
+   * not through the control gate): the agent must not inherit a held Shift or a drag.
+   */
+  private async releaseHeld(): Promise<void> {
+    if (this.heldKeys.size === 0 && this.heldButtons.size === 0) return;
+    const keys = [...this.heldKeys];
+    const buttons = [...this.heldButtons];
+    this.heldKeys.clear();
+    this.heldButtons.clear();
+    const page = await this.browser.activePage().catch(() => undefined);
+    if (page === undefined) return;
+    for (const key of keys) await page.keyboard.up(key).catch(() => undefined);
+    for (const button of buttons) await page.mouse.up({ button }).catch(() => undefined);
+  }
+
+  /** Whether input this viewer applied should stay applied (still in control, not closed). */
+  private get driving(): boolean {
+    return !this.closed && this.state.control === "user";
   }
 
   /** Ends the viewer: stops its screencast and its subscriptions. */
@@ -262,6 +317,7 @@ export class ViewerSession {
     if (this.closed) return;
     this.closed = true;
     this.inputGen++;
+    await this.releaseHeld();
     for (const u of this.unsubscribe.splice(0)) u();
     for (const t of [this.pumpTimer, this.pingTimer, this.encodeTimer])
       if (t !== undefined) this.clock.cancel(t);
@@ -291,7 +347,11 @@ export class ViewerSession {
       this.lastControl = control;
       this.moveSlot = undefined;
       this.cursor = undefined;
-      if (control === "agent") this.inputGen++;
+      this.cursorPoint = undefined;
+      if (control === "agent") {
+        this.inputGen++;
+        void this.releaseHeld();
+      }
     }
     this.queueState();
   }
@@ -404,13 +464,21 @@ export class ViewerSession {
     this.page = page;
     this.cdp = cdp;
     cdp.on("Page.screencastFrame", (f: ScreencastFrame) => this.onFrame(cdp, f));
+    this.cursorResolver = new CursorResolver(this.browser.context, page, cdp);
     // Screencast is silent on a static page: the first frame is a screenshot.
     const first = await captureFitting(cdp, {
       maxBytes: this.jpegBudget,
       maxScale: this.scale,
     }).catch(() => null);
     if (first !== null && this.cdp === cdp) {
-      this.sendFrame(Buffer.from(first.data, "base64"), first.width, first.height);
+      // like any frame: it waits for room (the transport, the pacer), the newest wins
+      this.pending = {
+        cdp,
+        jpeg: Buffer.from(first.data, "base64"),
+        width: first.width,
+        height: first.height,
+      };
+      this.pump();
     }
     await this.startScreencast(cdp);
   }
@@ -432,6 +500,7 @@ export class ViewerSession {
     this.page = undefined;
     this.pending = undefined;
     this.encodeAck = undefined;
+    this.cursorResolver = undefined;
     if (cdp === undefined) return;
     await cdp.send("Page.stopScreencast").catch(() => undefined);
     await cdp.detach().catch(() => undefined);
@@ -542,7 +611,11 @@ export class ViewerSession {
       if (m.kind === "down") {
         await page.mouse.move(x, y);
         await page.mouse.down({ button });
+        // control went to the agent meanwhile: let go at once instead of holding it
+        if (this.driving) this.heldButtons.add(button);
+        else await page.mouse.up({ button });
       } else if (m.kind === "up") {
+        this.heldButtons.delete(button);
         await page.mouse.move(x, y);
         await page.mouse.up({ button });
       } else if (m.kind === "wheel") {
@@ -554,7 +627,7 @@ export class ViewerSession {
       return;
     }
     // a click or a scroll may change what is under the pointer
-    if (m.kind !== "down") await this.sendCursor(page, x, y);
+    if (m.kind !== "down") this.wantCursor(x, y);
   }
 
   private async key(m: Extract<ViewerIn, { t: "key" }>): Promise<void> {
@@ -563,9 +636,16 @@ export class ViewerSession {
       if (m.kind === "char") {
         const text = m.text ?? m.key;
         if (typeof text === "string" && text !== "")
-          await page.keyboard.insertText(text.slice(0, VIEWER_TEXT_MAX_CHARS));
-      } else if (m.kind === "down") await page.keyboard.down(m.key);
-      else if (m.kind === "up") await page.keyboard.up(m.key);
+          await page.keyboard.insertText(clipCodePoints(text, VIEWER_TEXT_MAX_CHARS));
+      } else if (m.kind === "down") {
+        await page.keyboard.down(m.key);
+        // control went to the agent meanwhile: let go at once instead of holding it
+        if (this.driving) this.heldKeys.add(m.key);
+        else await page.keyboard.up(m.key);
+      } else if (m.kind === "up") {
+        this.heldKeys.delete(m.key);
+        await page.keyboard.up(m.key);
+      }
     } catch {
       // a key Playwright does not know (IME process keys, media keys): ignored
     }
