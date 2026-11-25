@@ -322,6 +322,9 @@ export function chromiumLaunchPlan(
     `--window-size=${VIEWPORT.width},${VIEWPORT.height}`,
     `--user-agent=${chromeUserAgent(opts.platform, release?.version ?? "")}`,
     `--disable-features=${DISABLED_FEATURES.join(",")}`,
+    // Chrome reloads a network error page by itself (after 1 s, then backing off): that reload
+    // aborts the agent's next navigation in the tab and asks the proxy for the failed host again
+    "--disable-auto-reload",
   ];
   // macOS: chrome-headless-shell in one process (the local sandbox does not run the full browser's
   // helper processes); spike: stable for navigation, input, screencast and tabs.

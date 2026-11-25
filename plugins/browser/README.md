@@ -75,7 +75,9 @@ A real browser in the person's device for agents (browser use spec,
   with credentials goes to Playwright's `proxy` option, which answers the challenge by
   intercepting requests; under that interception Chromium loses a request it restarts for an
   ACCEPT_CH frame (www.google.com sends one), so the daemon disables `AcceptCHFrame` (its
-  `--disable-features` repeats Playwright's own list: Chromium takes only the last flag).
+  `--disable-features` repeats Playwright's own list: Chromium takes only the last flag), and
+  `--disable-auto-reload` keeps a network error page from reloading itself (that reload aborted
+  the agent's next navigation in the tab).
 - A navigation that fails says why (`unreachable`): Chromium's net error with its meaning, and
   for a failed tunnel what the device's proxy answers for the host (refused by the network
   settings: `blocked`; could not connect: the name did not resolve, or the host refused or did not

@@ -94,6 +94,13 @@ describe("chromium launch plan", () => {
     expect(features).toEqual(expect.arrayContaining(playwright));
   });
 
+  it("keeps a network error page from reloading itself", () => {
+    for (const platform of ["darwin", "linux"] as const) {
+      const plan = chromiumLaunchPlan({ stateDir: "/s", env: {}, platform });
+      expect(plan.args).toContain("--disable-auto-reload");
+    }
+  });
+
   it("gives proxy credentials to Playwright, not to the flag", () => {
     const plan = chromiumLaunchPlan({
       stateDir: "/s",
