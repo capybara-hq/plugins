@@ -16,12 +16,14 @@ import {
 import {
   BrowserInstalledError,
   browserProcessId,
+  browserRevision,
   chromiumLaunchPlan,
   killChromium,
   type LaunchPlan,
   launchChromium,
   playwrightDownloadHosts,
   processAlive,
+  shippedRevisionNote,
 } from "./chromium.js";
 import {
   DEFAULT_FRAME_MAX_BYTES,
@@ -269,6 +271,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         downloadMaxBytes: downloadMaxBytes(opts.env),
         ...(opts.downloadWaitMs === undefined ? {} : { downloadWaitMs: opts.downloadWaitMs }),
       });
+      // a shipped browser of another revision runs: the next tool result says so
+      if (plan.shippedDir !== undefined)
+        session.note(shippedRevisionNote(plan.shippedDir, browserRevision(plan.build)));
       // A launch that finishes after a stop only gets closed (stopBrowser): no tabs restored and
       // no saves, which would write back the session file an idle stop just forgot.
       if (!restored && !closing) {

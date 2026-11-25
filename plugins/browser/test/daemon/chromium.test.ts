@@ -17,7 +17,9 @@ import {
   chromeUserAgent,
   chromiumLaunchPlan,
   ensureChromium,
+  MAX_REVISION_SKEW,
   playwrightDownloadHosts,
+  shippedRevisionNote,
 } from "../../daemon/chromium.js";
 
 describe("chromium launch plan", () => {
@@ -115,13 +117,23 @@ describe("chromium browsers directory", () => {
         browsersPath: cache,
         shipped: true,
       });
-      // another revision: the newest one shipped runs (read only), never a writable install
+      // another revision near this build's: the newest such one shipped runs (read only)
       expect(
         chromiumLaunchPlan(
           { stateDir: "/s", env, platform: "linux" },
           { revision: "2", version: "2" },
         ),
-      ).toMatchObject({ browsersPath: cache, shipped: true, shippedDir: `chromium-${rev}` });
+      ).toMatchObject({ browsersPath: cache, shipped: true, shippedDir: "chromium-1" });
+      // one further than MAX_REVISION_SKEW away: an outdated (or too new) browser never runs
+      expect(
+        chromiumLaunchPlan(
+          { stateDir: "/s", env, platform: "linux" },
+          { revision: String(Number(rev) + MAX_REVISION_SKEW + 1), version: "1" },
+        ),
+      ).toMatchObject({ unavailable: BROWSER_UNAVAILABLE_MESSAGE });
+      expect(shippedRevisionNote("chromium-1", "2")).toMatch(
+        /runs chromium-1 from the device image, not revision 2/,
+      );
       // this build's revision, read from playwright-core
       expect(plan().browsersPath).toBe(cache);
       // a cache in the workspace is the agent's, never trusted
