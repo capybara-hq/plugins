@@ -9,7 +9,7 @@ import {
   type ToolSpec,
 } from "@capybara-hq/plugin-sdk";
 import { HANDOFF_MAX_CHARS } from "../daemon/protocol.js";
-import { assertOwner, type BrowserDeps, runRequest, toResult } from "./browser.js";
+import { assertOwner, type BrowserDeps, runRequest, TOOL_TIMEOUT_MS, toResult } from "./browser.js";
 import { HANDOFF_FORM } from "./i18n.js";
 
 /** The longest handoff message (the question card's title and the panel banner). */
@@ -37,6 +37,7 @@ const HANDOFF: ToolSpec = {
   },
   keyArgs: ["message"],
   defaultPolicy: "allow",
+  timeoutMs: TOOL_TIMEOUT_MS,
 };
 
 /** The handler of browser_handoff. */
