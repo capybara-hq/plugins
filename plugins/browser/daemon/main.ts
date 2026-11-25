@@ -1,10 +1,15 @@
 // The browser daemon (spec §5): a device service listening on its unix socket. A request
-// connection carries one tool request and gets one reply; a stream connection is one viewer.
-// Takeover is decided here, for every conversation of the device at once (§9, §10).
+// connection carries one tool request of one conversation and gets one reply; a stream connection
+// is one viewer, whose first stream message is the kernel's viewer context. Takeover is decided
+// here, for every conversation of the device at once (§9, §10).
 
 import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
-import { encodeServiceMessage, ServiceMessageDecoder } from "@capybara-hq/plugin-sdk";
+import {
+  encodeServiceMessage,
+  parseViewerContext,
+  ServiceMessageDecoder,
+} from "@capybara-hq/plugin-sdk";
 import type { BrowserContext } from "playwright-core";
 import {
   ActionError,
@@ -30,6 +35,8 @@ import { restoreCookies, saveCookies } from "./cookie-file.js";
 import {
   DEFAULT_FRAME_MAX_BYTES,
   DOWNLOAD_BLOCKED_PREFIX,
+  MAX_TABS_PER_CONVERSATION,
+  NO_CONVERSATION_MESSAGE,
   REPLY_TOO_LARGE_MESSAGE,
   ROLL_CHECK_REQUEST,
   type ToolReply,
@@ -52,6 +59,8 @@ export interface DaemonOptions {
   browsersPath?: string;
   clock?: Clock;
   idleMs?: number;
+  /** How long a conversation idles before its tabs close (default CONVERSATION_IDLE_MS). */
+  conversationIdleMs?: number;
   /** Called when the daemon has been idle for its idle period. */
   onIdle?: () => void;
   /** How long a reply waits for the downloads its action started (default 10 s). */
@@ -195,19 +204,26 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   let closing = false;
   const sessionFile = new SessionFile(opts.stateDir, clock);
   const saved = sessionFile.read();
+  /** The running browser session, once its launch finished (the tab counts read it). */
+  let live: BrowserSession | undefined;
   const state = new DaemonState({
     clock,
     ...(opts.idleMs === undefined ? {} : { idleMs: opts.idleMs }),
+    ...(opts.conversationIdleMs === undefined
+      ? {}
+      : { conversationIdleMs: opts.conversationIdleMs }),
     onIdle: () => {
       // an idle stop ends the session for good: nothing to restore at the next start
       sessionFile.forget();
       opts.onIdle?.();
     },
+    onConversationIdle: (conversationId) => {
+      void live?.closeConversation(conversationId);
+    },
   });
   // A daemon restarted moments ago (a network change restarts the service) gets its pending
-  // handoff back: the person's question is still open in the conversation.
-  if (saved?.handoff !== undefined)
-    state.noticeHandoff(saved.handoff.callId, saved.handoff.message);
+  // handoffs and parks back: the person's questions are still open in their conversations.
+  if (saved !== undefined) sessionFile.restoreState(state, saved);
 
   const launch = opts.launch ?? launchChromium;
   const closeGraceMs = opts.browserCloseGraceMs ?? BROWSER_CLOSE_GRACE_MS;
@@ -261,6 +277,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     current = starting;
     starting.catch(() => {
       if (current === starting) current = undefined;
+      live = undefined;
       if (running?.launch === starting) running = undefined;
     });
     return starting;
@@ -285,6 +302,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       const session = new BrowserSession(ctx, {
         proxy: plan.proxy,
         clock,
+        usage: state,
         workspace: workspace === undefined || workspace === "" ? undefined : workspace,
         downloadsTmp: plan.downloadsTmp,
         downloadMaxBytes: downloadMaxBytes(opts.env),
@@ -308,10 +326,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         if (saved !== undefined) await sessionFile.restoreTabs(session, saved);
       }
       if (!closing) {
-        const save = () => sessionFile.save(session, () => state.handoff);
+        const save = () => sessionFile.save(session, state);
         session.on(save);
         state.onChange(save);
       }
+      if (!failed()) live = session;
       return session;
     }
   }
@@ -410,17 +429,21 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       clock.schedule(() => opts.onSealed?.(), SEALED_EXIT_GRACE_MS);
   });
 
-  /** Handoff bookkeeping from the plugin server: not agent input, so allowed during a takeover. */
+  /**
+   * Handoff bookkeeping from the plugin server, for the request's conversation: not agent input,
+   * so allowed during a takeover. Never opens a tab.
+   */
   async function handoffOp(
     req: Extract<ToolRequest, { op: "handoff_notice" | "handoff_clear" }>,
   ): Promise<ToolReply> {
     if (typeof req.callId !== "string" || req.callId === "")
       return fail("The handoff needs a callId.");
+    const conv = req.conversationId;
     if (req.op === "handoff_notice") {
       if (typeof req.message !== "string") return fail("The handoff notice needs a message.");
-      state.noticeHandoff(req.callId, req.message);
+      state.noticeHandoff(conv, req.rootConversationId, req.callId, req.message);
     } else {
-      state.clearHandoff(req.callId);
+      state.clearHandoff(conv, req.callId);
       // the person answered Done: they are finished with the browser, so a takeover they still
       // hold ends here and the snapshot the plugin asks for next is not refused
       if (req.handback === true) state.handback();
@@ -431,8 +454,24 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     } catch (e) {
       return launchFailure(e);
     }
-    return { ok: true, page: await session.pageInfo(await session.activePage()), blockedHosts: [] };
+    const page = session.currentPage(conv);
+    return {
+      ok: true,
+      ...(page === undefined ? {} : { page: await session.pageInfo(page) }),
+      blockedHosts: [],
+    };
   }
+
+  /** Whether a request names its conversation and the root of its tree (non-empty strings). */
+  const namesConversation = (raw: object): boolean => {
+    const r = raw as { conversationId?: unknown; rootConversationId?: unknown };
+    return (
+      typeof r.conversationId === "string" &&
+      r.conversationId !== "" &&
+      typeof r.rootConversationId === "string" &&
+      r.rootConversationId !== ""
+    );
+  };
 
   async function handleRequest(raw: unknown): Promise<ToolReply> {
     if (
@@ -442,12 +481,30 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     ) {
       return fail("Unknown browser request.");
     }
+    // no compatibility with a plugin server that does not name the conversation (pre-0.1.0)
+    if (!namesConversation(raw)) return fail(NO_CONVERSATION_MESSAGE);
     const req = raw as ToolRequest;
+    const conv = req.conversationId;
+    // in use from arrival to reply (queued requests and wait included): adopt is refused meanwhile
+    state.requestArrived(conv, req.rootConversationId);
+    let reply: ToolReply;
+    try {
+      reply = await conversationRequest(req);
+    } catch (e) {
+      reply = fail(e instanceof ActionError ? e.message : String(e));
+    } finally {
+      state.requestFinished(conv);
+    }
+    // the conversation's own tab count after the request (the result's last line)
+    return { ...reply, tabs: { open: live?.countOf(conv) ?? 0, max: MAX_TABS_PER_CONVERSATION } };
+  }
+
+  async function conversationRequest(req: ToolRequest): Promise<ToolReply> {
     if (req.op === "handoff_notice" || req.op === "handoff_clear") return handoffOp(req);
-    // A browser tool call after a handoff notice means that run moved on: a run aborted while
-    // waiting never sends handoff_clear, so the notice would stay up. (Any conversation of the
-    // device clears it; they are all the owner's.)
-    state.dropHandoff();
+    // A browser tool call after a handoff notice means that conversation's run moved on: a run
+    // aborted while waiting never sends handoff_clear, so the notice would stay up. Other
+    // conversations' handoffs stay.
+    state.dropHandoff(req.conversationId);
     if (state.control === "user" && req.op !== "wait") {
       return { ok: false, error: "taken_over", message: TAKEN_OVER_MESSAGE, blockedHosts: [] };
     }
@@ -459,7 +516,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     }
     const reply = await session.run(req, { takenOver: () => state.control === "user" });
     if (reply.ok) {
-      const since = state.takeHandbackNote();
+      const since = state.takeHandbackNote(req.conversationId);
       if (since !== undefined) reply.userControlledSince = since;
     }
     return reply;
@@ -471,6 +528,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     sockets.add(sock);
     const decoder = new ServiceMessageDecoder();
     let kind: "request" | "stream" | undefined;
+    /** A stream's viewer context (its first stream message, written by the kernel). */
+    let context: { conversationId: string; rootConversationId: string } | undefined;
     let handled = false;
     let viewer: ViewerSession | undefined;
     // set when this connection counted itself as a viewer: every open is balanced by one close,
@@ -497,40 +556,57 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       if (kind === undefined) {
         const first = parse(raw) as { kind?: unknown } | undefined;
         if (first?.kind === "request") kind = "request";
-        else if (first?.kind === "stream") {
-          kind = "stream";
-          opened = true;
-          state.viewerOpened();
-          browser().then(
-            (session) => {
-              if (sock.destroyed) return;
-              viewer = new ViewerSession({
-                browser: session,
-                state,
-                clock,
-                frameMaxBytes: frameCap,
-                transport: {
-                  send: (m) => {
-                    // a message above the service limit is dropped, never thrown
-                    let dropped = false;
-                    const ok = write(sock, m, () => {
-                      dropped = true;
-                    });
-                    return ok || dropped || sock.destroyed;
-                  },
-                  sendFrame: (frame) => {
-                    if (sock.destroyed) return true;
-                    // the frame cap keeps it far below the service message limit
-                    return sock.write(encodeServiceMessage(frame));
-                  },
-                  whenDrained: () => new Promise((r) => sock.once("drain", () => r())),
+        else if (first?.kind === "stream") kind = "stream";
+        else sock.destroy();
+        return;
+      }
+      if (kind === "stream" && context === undefined) {
+        // the kernel writes the viewer context as the first stream message; anything else (an
+        // older kernel, a panel's own message) closes the stream, and a later message of that
+        // shape is never read as context
+        const ctx = parseViewerContext(raw);
+        if (ctx === null) {
+          sock.destroy();
+          return;
+        }
+        context = {
+          conversationId: ctx.conversationId,
+          rootConversationId: ctx.rootConversationId,
+        };
+        const viewerContext = context;
+        opened = true;
+        state.viewerOpened();
+        browser().then(
+          (session) => {
+            if (sock.destroyed) return;
+            viewer = new ViewerSession({
+              browser: session,
+              state,
+              conversationId: viewerContext.conversationId,
+              rootConversationId: viewerContext.rootConversationId,
+              clock,
+              frameMaxBytes: frameCap,
+              transport: {
+                send: (m) => {
+                  // a message above the service limit is dropped, never thrown
+                  let dropped = false;
+                  const ok = write(sock, m, () => {
+                    dropped = true;
+                  });
+                  return ok || dropped || sock.destroyed;
                 },
-              });
-              // messages that arrived while Chromium was starting were queued on the chain
-            },
-            () => sock.destroy(),
-          );
-        } else sock.destroy();
+                sendFrame: (frame) => {
+                  if (sock.destroyed) return true;
+                  // the frame cap keeps it far below the service message limit
+                  return sock.write(encodeServiceMessage(frame));
+                },
+                whenDrained: () => new Promise((r) => sock.once("drain", () => r())),
+              },
+            });
+            // messages that arrived while Chromium was starting were queued on the chain
+          },
+          () => sock.destroy(),
+        );
         return;
       }
       if (kind === "request") {
@@ -543,7 +619,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
           const reason =
             state.control === "user"
               ? "the person holds control of the browser"
-              : state.handoff !== undefined
+              : state.handoffs().length > 0
                 ? "a handoff to the person is pending"
                 : undefined;
           write(sock, reason === undefined ? { busy: false } : { busy: true, reason });
@@ -552,7 +628,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         }
         state.requestStarted();
         handleRequest(body)
-          .catch((e) => fail(e instanceof ActionError ? e.message : String(e)))
+          .catch((e): ToolReply => fail(e instanceof ActionError ? e.message : String(e)))
           .then((reply) => {
             write(sock, reply, () => write(sock, fail(REPLY_TOO_LARGE_MESSAGE), () => undefined));
             sock.end();

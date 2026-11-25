@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import { connect } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  conv,
   openViewer,
   removeDir,
   request,
@@ -101,6 +102,49 @@ describe("browser daemon blocked hosts", () => {
       await request(d.socketPath, { op: "navigate", url: `${fx.url}/page` });
       expect(await blocked).toEqual({ t: "blocked", host: "blocked.test", url: `${fx.url}/page` });
       await v.close();
+    } finally {
+      await fx.close();
+    }
+  });
+
+  it("a refused host and a dialog reach only the page owner's reply and its tree's viewers", async () => {
+    const fx = await startFixtureServer({
+      "/refusing": `<!doctype html><title>R</title>
+<script src="https://blocked.test/owned.js"></script>
+<script>setTimeout(() => alert("late from a"), 200)</script>`,
+      "/plain": "<!doctype html><title>Plain</title>",
+    });
+    try {
+      const A = conv("own-a");
+      const B = conv("own-b");
+      await request(d.socketPath, { op: "navigate", url: `${fx.url}/plain` }, B);
+      const va = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 }, A);
+      const vb = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 }, B);
+      await va.next((m) => m.t === "state");
+      await vb.next((m) => m.t === "state");
+      const blocked = va.after((m) => m.t === "blocked" && m.url.startsWith(fx.url));
+      const dialog = va.after((m) => m.t === "dialog");
+      // B browses at the same time as A's page is refused
+      const [a, b] = await Promise.all([
+        request(d.socketPath, { op: "navigate", url: `${fx.url}/refusing` }, A),
+        request(d.socketPath, { op: "navigate", url: `${fx.url}/plain?again` }, B),
+      ]);
+      expect(a).toMatchObject({ ok: true, blockedHosts: ["blocked.test"] });
+      expect(b).toMatchObject({ ok: true, blockedHosts: [] });
+      await blocked;
+      expect(await dialog).toMatchObject({ kind: "alert", message: "late from a" });
+      // anything sent to B's viewer before this state would have arrived first
+      const marker = vb.after((m) => m.t === "state");
+      const b2 = await request(d.socketPath, { op: "snapshot" }, B);
+      await marker;
+      expect(b2.ok && (b2.text ?? "")).not.toContain("late from a");
+      expect(b2.blockedHosts).toEqual([]);
+      expect(vb.messages.some((m) => m.t === "blocked" || m.t === "dialog")).toBe(false);
+      // A's note rides A's navigate reply or, if the alert came after it, A's next reply
+      const a2 = await request(d.socketPath, { op: "snapshot" }, A);
+      expect(`${a.ok ? a.text : ""}\n${a2.ok ? a2.text : ""}`).toContain("late from a");
+      await va.close();
+      await vb.close();
     } finally {
       await fx.close();
     }

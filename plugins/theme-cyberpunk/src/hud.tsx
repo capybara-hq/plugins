@@ -13,11 +13,12 @@ import {
   useLocale,
   usePrefersReducedMotion,
   useRunState,
+  useTheme,
   useView,
 } from "@capybara-hq/plugin-client";
 import { useEffect, useId, useReducer, useState } from "react";
 import { readCounts, recordEvent } from "./counts.js";
-import { cx, parseHudData, SOUND_KEY } from "./shared.js";
+import { cx, parseHudData, SOUND_KEY, THEME_KEY } from "./shared.js";
 import { playCue } from "./sound.js";
 
 type Label = { en: string; zh: string };
@@ -87,15 +88,18 @@ function clock(iso: string): string | null {
 
 /**
  * The run HUD (slot `conversation.properties.section`, inside the host's section frame): a status
- * row with the open conversation's run state, the elapsed time of the run (a ticker) and the sound
- * switch (off by default, local client storage); a signal meter; the server's view data (operator
- * role, last uplink) and the runs, tool results and approvals seen live in this browser session
- * ("—" before any). The structure is laid out with design `Stack`s so it reads the same without the
- * theme; the colours, the dot and the meter come from the plugin CSS
- * (`[data-cap-state~="run=…"]`), only while the cyberpunk theme is active.
+ * row with the open conversation's run state and the elapsed time of the run (a ticker, shown once
+ * this panel has seen a run); the server's view data (operator role, last uplink) and the runs,
+ * tool results and approvals seen live in this browser session ("—" before any); and the sound
+ * switch (off by default, local client storage) on its own row at the end. The structure is laid
+ * out with design `Stack`s so it reads the same without the theme. The status dot and the signal
+ * meter are pure decoration drawn by the plugin CSS, so they render only while the cyberpunk theme
+ * is active: under another theme they would be empty boxes that only add gaps. The colours come
+ * from the plugin CSS (`[data-cap-state~="run=…"]`), only while the theme is active.
  */
 export function RunHud({ conversationId }: ComponentProps<"conversation.properties.section">) {
   const { state } = useRunState();
+  const themed = useTheme().key === THEME_KEY;
   const { view, status, retry } = useView();
   const { t } = useLocale();
   const storage = useClientStorage();
@@ -162,51 +166,35 @@ export function RunHud({ conversationId }: ComponentProps<"conversation.properti
 
   return (
     <div className={cx("hud")}>
-      <Stack gap={8}>
-        <Stack direction="row" justify="between" align="center" gap={8} wrap>
-          <Stack direction="row" align="center" gap={8}>
-            <span aria-hidden="true" className={cx("hud-dot")} />
-            <span className={cx("hud-state")}>{t(STATE_LABEL[state])}</span>
-            <span
-              className={cx("hud-ticker")}
-              title={t({ en: "Time of the current or last run", zh: "本次或上次运行的用时" })}
-            >
-              {elapsed === null ? "T+--:--.-" : ticker(elapsed)}
-            </span>
-          </Stack>
-          <Stack direction="row" align="center" gap={4}>
-            <Icon name="volume" size={12} />
-            {/* The switch carries the name (aria-label); the visible text repeats it, so it is
-                hidden from assistive tech. Clicking it flips the switch. */}
-            <label htmlFor={soundId} aria-hidden="true" className={cx("hud-sound-label")}>
-              {soundLabel}
-            </label>
-            <Tooltip content={soundHelp}>
-              <span className={cx("hud-sound")}>
-                <Switch
-                  id={soundId}
-                  checked={sound}
-                  onChange={changeSound}
-                  label={soundLabel}
-                  aria-describedby={soundDescId}
-                />
+      <Stack gap={12}>
+        <Stack gap={8}>
+          <Stack direction="row" justify="between" align="center" gap={8}>
+            <Stack direction="row" align="center" gap={8}>
+              {themed ? <span aria-hidden="true" className={cx("hud-dot")} /> : null}
+              <span className={cx("hud-state")}>{t(STATE_LABEL[state])}</span>
+            </Stack>
+            {elapsed === null ? null : (
+              <span
+                className={cx("hud-ticker")}
+                title={t({ en: "Time of the current or last run", zh: "本次或上次运行的用时" })}
+              >
+                {ticker(elapsed)}
               </span>
-            </Tooltip>
-            <span id={soundDescId} hidden>
-              {soundHelp}
-            </span>
+            )}
           </Stack>
+          {themed ? (
+            <div aria-hidden="true" className={cx("hud-meter")}>
+              {Array.from({ length: BARS }, (_, i) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: a fixed row of identical bars
+                <span key={i} />
+              ))}
+            </div>
+          ) : null}
         </Stack>
-        <Stack>
-          <div aria-hidden="true" className={cx("hud-meter")}>
-            {Array.from({ length: BARS }, (_, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: a fixed row of identical bars
-              <span key={i} />
-            ))}
-          </div>
-        </Stack>
+        {/* 12ch: the widest key, "工具调用" with its info icon, needs about 10ch in a narrow CJK
+            font and more in a wide one; the key column clips (overflow: hidden), so leave room. */}
         <KeyValue
-          keyWidth="10ch"
+          keyWidth="12ch"
           rows={[
             {
               k: t({ en: "Node", zh: "节点" }),
@@ -249,6 +237,30 @@ export function RunHud({ conversationId }: ComponentProps<"conversation.properti
             },
           ]}
         />
+        <Stack direction="row" justify="between" align="center" gap={8}>
+          <Stack direction="row" align="center" gap={4}>
+            <Icon name="volume" size={12} />
+            {/* The switch carries the name (aria-label); the visible text repeats it, so it is
+                hidden from assistive tech. Clicking it flips the switch. */}
+            <label htmlFor={soundId} aria-hidden="true" className={cx("hud-sound-label")}>
+              {soundLabel}
+            </label>
+          </Stack>
+          <Tooltip content={soundHelp}>
+            <span className={cx("hud-sound")}>
+              <Switch
+                id={soundId}
+                checked={sound}
+                onChange={changeSound}
+                label={soundLabel}
+                aria-describedby={soundDescId}
+              />
+            </span>
+          </Tooltip>
+        </Stack>
+        <span id={soundDescId} hidden>
+          {soundHelp}
+        </span>
         {status === "failed" ? (
           <Stack direction="row" justify="end">
             <Button variant="ghost" onClick={retry}>

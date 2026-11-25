@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -8,6 +9,7 @@ import { BrowserInstalledError, browserProcessId, launchChromium } from "../../d
 import { type Daemon, startDaemon } from "../../daemon/main.js";
 import { DOWNLOAD_BLOCKED_PREFIX } from "../../daemon/protocol.js";
 import {
+  conv,
   openViewer,
   removeDir,
   request,
@@ -266,9 +268,13 @@ describe("browser daemon: stop", () => {
     cleanup.push(() => removeDir(stateDir));
     // tabs a restart would reopen (the first in the blank tab, the second in a new one)
     const session = JSON.stringify({
+      version: 2,
       savedAt: Date.now(),
-      tabs: ["http://127.0.0.1:9/a", "http://127.0.0.1:9/b"],
-      active: 0,
+      tabs: [
+        { url: "http://127.0.0.1:9/a", owner: "c1", root: "c1" },
+        { url: "http://127.0.0.1:9/b", owner: "c1", root: "c1" },
+      ],
+      conversations: [{ id: "c1", root: "c1", active: 0 }],
     });
     writeFileSync(join(stateDir, "session.json"), session);
     let opened = 0;
@@ -318,33 +324,62 @@ describe("browser daemon: stop", () => {
   });
 });
 
+describe("browser daemon: background tabs", () => {
+  it("keeps Playwright's switches that let background tabs render (no default args dropped)", async () => {
+    let ctx: BrowserContext | undefined;
+    const { daemon } = await daemonWith({
+      launch: async (plan) => {
+        ctx = await launchChromium(plan);
+        return ctx;
+      },
+    });
+    await daemon.ready;
+    if (ctx === undefined) throw new Error("no browser");
+    const pid = await browserProcessId(ctx);
+    if (pid === undefined) throw new Error("no browser process id");
+    // the browser process's own command line (Playwright adds its defaults to it)
+    const args = execFileSync("ps", ["-ww", "-o", "args=", "-p", String(pid)], {
+      encoding: "utf8",
+    }).split(/\s+/);
+    // another conversation's tab keeps rendering and screencasting while it is not in front
+    for (const sw of [
+      "--disable-background-timer-throttling",
+      "--disable-renderer-backgrounding",
+      "--disable-backgrounding-occluded-windows",
+    ])
+      expect(args).toContain(sw);
+  });
+});
+
 describe("browser daemon: restart", () => {
-  it("restores the tabs and the pending handoff of a daemon that stopped moments ago", async () => {
+  it("restores the tabs to their owners and the handoffs of a daemon that stopped moments ago", async () => {
     const fx = await startFixtureServer({
       "/a": "<!doctype html><title>A</title>",
       "/b": "<!doctype html><title>B</title>",
+      "/s": "<!doctype html><title>S</title>",
     });
     cleanup.push(() => fx.close());
     const stateDir = mkdtempSync(join(tmpdir(), "cbd-"));
     cleanup.push(() => removeDir(stateDir));
     const one = await startTestDaemon({ stateDir });
+    const sub = conv("sub", "c1");
     await request(one.socketPath, { op: "navigate", url: `${fx.url}/a` });
     await request(one.socketPath, { op: "tabs", action: "open", url: `${fx.url}/b` });
-    await request(one.socketPath, { op: "handoff_notice", callId: "h1", message: "Sign in" });
+    await request(one.socketPath, { op: "navigate", url: `${fx.url}/s` }, sub);
+    await request(one.socketPath, { op: "tabs", action: "list" });
+    await request(one.socketPath, { op: "handoff_notice", callId: "h1", message: "Sign in" }, sub);
     await one.stop();
 
     const two = await startTestDaemon({ stateDir });
     cleanup.push(() => two.stop());
-    expect(two.daemon.state.handoff).toEqual({ callId: "h1", message: "Sign in" });
-    const v = await openViewer(two.socketPath, { maxWidth: 320, maxHeight: 200 });
-    cleanup.push(() => v.close());
-    const st = await v.next(
-      (m) =>
-        m.t === "state" && m.tabs.length === 2 && m.tabs.every((t) => t.url.startsWith("http")),
-    );
-    if (st.t !== "state") throw new Error("no state");
-    expect(st.tabs.map((t) => t.url)).toEqual([`${fx.url}/a`, `${fx.url}/b`]);
-    expect(st.tabs.find((t) => t.active)?.url).toBe(`${fx.url}/b`);
+    expect(two.daemon.state.handoffs()).toMatchObject([
+      { conversationId: "sub", rootConversationId: "c1", callId: "h1", message: "Sign in" },
+    ]);
+    // each conversation gets its own tabs and its active tab back
+    const own = await request(two.socketPath, { op: "tabs", action: "list" });
+    expect(own).toMatchObject({ ok: true, page: { url: `${fx.url}/b` }, tabs: { open: 2 } });
+    const subs = await request(two.socketPath, { op: "tabs", action: "list" }, sub);
+    expect(subs).toMatchObject({ ok: true, page: { url: `${fx.url}/s` }, tabs: { open: 1 } });
   });
 
   it("restores nothing after an idle stop or from an old session file", async () => {
@@ -353,19 +388,41 @@ describe("browser daemon: restart", () => {
     writeFileSync(
       join(stateDir, "session.json"),
       JSON.stringify({
+        version: 2,
         savedAt: Date.now() - 24 * 60 * 60_000,
-        tabs: ["http://127.0.0.1:9/old"],
-        active: 0,
-        handoff: { callId: "old", message: "x" },
+        tabs: [{ url: "http://127.0.0.1:9/old", owner: "c1", root: "c1" }],
+        conversations: [
+          { id: "c1", root: "c1", active: 0, handoff: { callId: "old", message: "x" } },
+        ],
       }),
     );
     const d = await startTestDaemon({ stateDir });
     cleanup.push(() => d.stop());
-    expect(d.daemon.state.handoff).toBeUndefined();
+    expect(d.daemon.state.handoffs()).toEqual([]);
     const v = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 });
     cleanup.push(() => v.close());
     const st = await v.next((m) => m.t === "state");
     if (st.t !== "state") throw new Error("no state");
     expect(st.tabs.some((t) => t.url.includes("/old"))).toBe(false);
+  });
+
+  it("does not restore a recent file of the older format (one owner for all tabs)", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "cbd-"));
+    cleanup.push(() => removeDir(stateDir));
+    writeFileSync(
+      join(stateDir, "session.json"),
+      JSON.stringify({
+        savedAt: Date.now(),
+        tabs: ["http://127.0.0.1:9/older"],
+        active: 0,
+        handoff: { callId: "older", message: "x" },
+      }),
+    );
+    const d = await startTestDaemon({ stateDir });
+    cleanup.push(() => d.stop());
+    expect(d.daemon.state.handoffs()).toEqual([]);
+    const list = await request(d.socketPath, { op: "tabs", action: "list" });
+    expect(list).toMatchObject({ ok: true, tabs: { open: 0 } });
+    expect(list.ok && list.page).toBeFalsy();
   });
 });

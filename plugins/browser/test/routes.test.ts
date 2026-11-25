@@ -115,7 +115,13 @@ describe("browser routes", () => {
       200,
     );
     expect(
-      (await s.hit("POST /ui/handoff-answer", { callId: "call-1", done: true }, conv)).status,
+      (
+        await s.hit(
+          "POST /ui/handoff-answer",
+          { callId: "call-1", done: true, handoffConversationId: "conv" },
+          conv,
+        )
+      ).status,
     ).toBe(200);
     expect(s.calls).toEqual([
       {
@@ -129,7 +135,6 @@ describe("browser routes", () => {
           conversationId: "conv",
           accountId: "acc",
           callId: "call-1",
-          // the panel's conversation unless the panel names the one that raised it
           handoffConversationId: "conv",
           done: true,
         },
@@ -150,15 +155,18 @@ describe("browser routes", () => {
     for (const bad of ["a..b", "-a.example", "a-.example", "a_b.example", `${"x".repeat(64)}.com`])
       expect((await s.hit("POST /ui/network-hosts", { hosts: [bad] }, conv)).status, bad).toBe(400);
     expect((await s.hit("POST /ui/handoff-answer", { callId: "c" }, conv)).status).toBe(400);
-    expect(
-      (
-        await s.hit(
-          "POST /ui/handoff-answer",
-          { callId: "c", done: true, handoffConversationId: 7 },
-          conv,
-        )
-      ).status,
-    ).toBe(400);
+    // the handoff's conversation is required: no default to the panel's own conversation
+    for (const handoffConversationId of [undefined, 7, "", "x".repeat(201)])
+      expect(
+        (
+          await s.hit(
+            "POST /ui/handoff-answer",
+            { callId: "c", done: true, handoffConversationId },
+            conv,
+          )
+        ).status,
+        String(handoffConversationId),
+      ).toBe(400);
     expect(s.calls).toEqual([]);
   });
 

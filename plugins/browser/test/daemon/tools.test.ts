@@ -72,7 +72,7 @@ describe("browser daemon tools", () => {
     expect(click.ok).toBe(true);
     const waited = await request(d.socketPath, { op: "wait", text: "Submitted", timeoutMs: 4000 });
     expect(waited).toMatchObject({ ok: true, page: { title: "Done" } });
-    if (waited.ok) expect(waited.page.url).toBe(`${fx.url}/done?q=x`);
+    if (waited.ok) expect(waited.page?.url).toBe(`${fx.url}/done?q=x`);
   });
 
   it("an unknown ref is refused at once", async () => {
@@ -109,12 +109,12 @@ describe("browser daemon tools", () => {
       url: `${fx.url}/done`,
     });
     if (!opened.ok) throw new Error(opened.message);
-    const second = opened.page.tabId;
+    const second = opened.page?.tabId ?? "";
     const list = await request(d.socketPath, { op: "tabs", action: "list" });
     if (!list.ok) throw new Error(list.message);
     expect(list.text).toContain(second);
     const closed = await request(d.socketPath, { op: "tabs", action: "close", tabId: second });
     expect(closed.ok).toBe(true);
-    if (closed.ok) expect(closed.page.tabId).not.toBe(second);
+    if (closed.ok) expect(closed.page?.tabId).not.toBe(second);
   });
 });

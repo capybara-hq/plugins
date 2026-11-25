@@ -15,6 +15,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { MAX_SCREENSHOT_BYTES, MAX_TITLE_CHARS, safeFileName } from "../../daemon/actions.js";
 import type { ViewerOut } from "../../daemon/protocol.js";
 import {
+  conv,
   openViewer,
   removeDir,
   request,
@@ -44,6 +45,7 @@ let d: TestDaemon;
 let workspace: string;
 let outside: string;
 let releaseSlow: () => void = () => undefined;
+let releaseRouted: () => void = () => undefined;
 const link = (href: string, name: string) =>
   `<!doctype html><title>Download</title><a href="${href}" download="${name}">Get</a>`;
 
@@ -80,6 +82,14 @@ beforeAll(async () => {
       // Chromium decides on a download after its first few KB
       res.write(Buffer.alloc(4096, 97));
       releaseSlow = () => res.end("b");
+    },
+    "/routed": (_req, res) => {
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-disposition": 'attachment; filename="routed.bin"',
+      });
+      res.write(Buffer.alloc(4096, 97));
+      releaseRouted = () => res.end("b");
     },
     "/dl-dangle": link("/file.txt", "dangle.txt"),
     "/dl-big": link("/big", "big2.bin"),
@@ -208,7 +218,7 @@ describe("browser daemon workspace and limits", () => {
     const v = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 });
     const nav = await request(d.socketPath, { op: "navigate", url: `${fx.url}/huge-title` });
     if (!nav.ok) throw new Error(nav.message);
-    expect(nav.page.title.length).toBeLessThanOrEqual(MAX_TITLE_CHARS);
+    expect(nav.page?.title.length).toBeLessThanOrEqual(MAX_TITLE_CHARS);
     const list = await request(d.socketPath, { op: "tabs", action: "list" });
     if (!list.ok) throw new Error(list.message);
     expect(list.text?.length ?? 0).toBeLessThan(20_000);
@@ -257,6 +267,34 @@ describe("browser daemon workspace and limits", () => {
     await noteContaining(
       `Downloaded "slow.bin" to ${join(realpathSync(workspace), "downloads", "slow.bin")}.`,
     );
+  });
+
+  it("a download's late note goes to the conversation whose page started it", async () => {
+    const A = conv("dl-a");
+    const B = conv("dl-b");
+    await request(d.socketPath, { op: "snapshot" }, B);
+    const nav = await request(d.socketPath, { op: "navigate", url: `${fx.url}/routed` }, A);
+    if (!nav.ok) throw new Error(nav.message);
+    expect(nav.text).toContain('Download still in progress: "routed.bin"');
+    releaseRouted();
+    await vi.waitFor(
+      () => expect(existsSync(join(workspace, "downloads", "routed.bin"))).toBe(true),
+      WAIT,
+    );
+    const done = `Downloaded "routed.bin" to ${join(realpathSync(workspace), "downloads", "routed.bin")}.`;
+    // B's replies never carry it; A's next one does
+    let seenByB = "";
+    for (let i = 0; i < 3; i++) {
+      const r = await request(d.socketPath, { op: "tabs", action: "list" }, B);
+      seenByB += r.ok ? (r.text ?? "") : "";
+    }
+    expect(seenByB).not.toContain("routed.bin");
+    let seenByA = "";
+    await vi.waitFor(async () => {
+      const r = await request(d.socketPath, { op: "tabs", action: "list" }, A);
+      seenByA += r.ok ? (r.text ?? "") : "";
+      expect(seenByA).toContain(done);
+    }, WAIT);
   });
 
   it("a dangling link at the target name is not overwritten", async () => {

@@ -2,7 +2,11 @@ import { connect } from "node:net";
 import { encodeServiceMessage } from "@capybara-hq/plugin-sdk";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { startDaemon } from "../../daemon/main.js";
-import { HANDOFF_MAX_CHARS, MAX_TABS, type ViewerOut } from "../../daemon/protocol.js";
+import {
+  HANDOFF_MAX_CHARS,
+  MAX_TABS_PER_CONVERSATION,
+  type ViewerOut,
+} from "../../daemon/protocol.js";
 import {
   jpegSize,
   openViewer,
@@ -171,12 +175,12 @@ describe("browser daemon viewer", () => {
     await v.close();
   });
 
-  it("popups count toward the tab limit; extras are closed with a note", async () => {
+  it("popups count toward the conversation's tab limit; extras are closed with a note", async () => {
     await request(d.socketPath, { op: "navigate", url: `${fx.url}/button` });
     for (;;) {
       const list = await request(d.socketPath, { op: "tabs", action: "list" });
       if (!list.ok) throw new Error(list.message);
-      if ((list.text ?? "").split("\n").length >= MAX_TABS - 1) break;
+      if ((list.text ?? "").split("\n").length >= MAX_TABS_PER_CONVERSATION - 1) break;
       await request(d.socketPath, { op: "tabs", action: "open" });
     }
     await request(d.socketPath, { op: "navigate", url: `${fx.url}/popups` });
@@ -188,7 +192,7 @@ describe("browser daemon viewer", () => {
     await vi.waitFor(async () => {
       const list = await request(d.socketPath, { op: "tabs", action: "list" });
       if (!list.ok) throw new Error(list.message);
-      expect((list.text ?? "").split("\n")).toHaveLength(MAX_TABS);
+      expect((list.text ?? "").split("\n")).toHaveLength(MAX_TABS_PER_CONVERSATION);
     });
     const later = await request(d.socketPath, { op: "snapshot" });
     const notes = `${r.ok ? (r.text ?? "") : ""}\n${later.ok ? (later.text ?? "") : ""}`;
@@ -231,16 +235,18 @@ describe("browser daemon handoff notice", () => {
   it("viewers see the pending handoff; the latest wins; only its callId clears it", async () => {
     const v = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 });
     await v.next(isState);
-    const first = v.after((m) => isState(m) && m.handoff?.callId === "c1");
+    const first = v.after((m) => isState(m) && m.handoffs.at(-1)?.callId === "c1");
     expect(
       await request(d.socketPath, { op: "handoff_notice", callId: "c1", message: "Log in" }),
     ).toMatchObject({ ok: true });
-    expect(await first).toMatchObject({ handoff: { callId: "c1", message: "Log in" } });
+    expect(await first).toMatchObject({
+      handoffs: [{ callId: "c1", conversationId: "c1", message: "Log in" }],
+    });
     // allowed while the person holds control; a long message is cut to 4 KB
     const taken = v.after((m) => isState(m) && m.control === "user");
     v.send({ t: "takeover" });
     await taken;
-    const second = v.after((m) => isState(m) && m.handoff?.callId === "c2");
+    const second = v.after((m) => isState(m) && m.handoffs.at(-1)?.callId === "c2");
     const notice = await request(d.socketPath, {
       op: "handoff_notice",
       callId: "c2",
@@ -248,20 +254,20 @@ describe("browser daemon handoff notice", () => {
     });
     expect(notice.ok).toBe(true);
     const s2 = (await second) as State;
-    expect(s2.handoff?.message.length).toBeLessThanOrEqual(HANDOFF_MAX_CHARS);
+    expect(s2.handoffs.at(-1)?.message.length).toBeLessThanOrEqual(HANDOFF_MAX_CHARS);
     // a new viewer (a remounted panel) gets it in its first state
     const v2 = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 });
-    expect((await v2.next(isState)).handoff?.callId).toBe("c2");
+    expect((await v2.next(isState)).handoffs.at(-1)?.callId).toBe("c2");
     // a stale clear changes nothing; the matching one clears
     expect(await request(d.socketPath, { op: "handoff_clear", callId: "c1" })).toMatchObject({
       ok: true,
     });
-    const cleared = v.after((m) => isState(m) && m.handoff === undefined);
+    const cleared = v.after((m) => isState(m) && m.handoffs.length === 0);
     expect(await request(d.socketPath, { op: "handoff_clear", callId: "c2" })).toMatchObject({
       ok: true,
     });
     await cleared;
-    expect(d.daemon.state.handoff).toBeUndefined();
+    expect(d.daemon.state.handoffOf("c1")).toBeUndefined();
     const back = v.after((m) => isState(m) && m.control === "agent");
     v.send({ t: "handback" });
     await back;
@@ -278,7 +284,7 @@ describe("browser daemon handoff answered during a takeover", () => {
     v.send({ t: "takeover" });
     await taken;
     await request(d.socketPath, { op: "handoff_notice", callId: "hb", message: "Sign in" });
-    const back = v.after((m) => isState(m) && m.control === "agent" && m.handoff === undefined);
+    const back = v.after((m) => isState(m) && m.control === "agent" && m.handoffs.length === 0);
     expect(
       await request(d.socketPath, { op: "handoff_clear", callId: "hb", handback: true }),
     ).toMatchObject({ ok: true });
@@ -308,17 +314,17 @@ describe("browser daemon handoff after an aborted run", () => {
   it("the next agent tool request drops a handoff that was never cleared", async () => {
     const v = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 });
     await v.next(isState);
-    const shown = v.after((m) => isState(m) && m.handoff?.callId === "aborted");
+    const shown = v.after((m) => isState(m) && m.handoffs.at(-1)?.callId === "aborted");
     await request(d.socketPath, { op: "handoff_notice", callId: "aborted", message: "Solve it" });
     await shown;
     // another handoff op leaves it
     await request(d.socketPath, { op: "handoff_clear", callId: "other" });
-    expect(d.daemon.state.handoff?.callId).toBe("aborted");
-    const dropped = v.after((m) => isState(m) && m.handoff === undefined);
+    expect(d.daemon.state.handoffOf("c1")?.callId).toBe("aborted");
+    const dropped = v.after((m) => isState(m) && m.handoffs.length === 0);
     const snap = await request(d.socketPath, { op: "snapshot" });
     expect(snap.ok).toBe(true);
     await dropped;
-    expect(d.daemon.state.handoff).toBeUndefined();
+    expect(d.daemon.state.handoffOf("c1")).toBeUndefined();
     await v.close();
   });
 });

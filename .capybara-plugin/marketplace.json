@@ -481,7 +481,7 @@
     },
     {
       "name": "theme-cyberpunk",
-      "version": "0.1.0-rc.16",
+      "version": "0.1.0-rc.17",
       "summary": {
         "en": "Cyberpunk theme and UI: neon yellow on deep blue-black, a run-state HUD, scanlines, a boot screen, a glitch CYBERBARA wordmark and opt-in synthesized sound",
         "zh": "赛博朋克主题与界面：深蓝黑底上的霓虹黄，运行状态 HUD、扫描线、启动画面、故障风 CYBERBARA 字标，以及可选的合成音效"
@@ -513,8 +513,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-theme-cyberpunk",
-          "version": "0.1.0-rc.16",
-          "integrity": "sha512-nodG+1C4O1NRhmulsSS8qoEXdml9FjuIOmFbM6Zhz6BbeO4m6ev8Diq+EGcKadVL4pI8JG2aL5Yoqt6Q+ywdZg=="
+          "version": "0.1.0-rc.17",
+          "integrity": "sha512-Hh6ZYPHXJHY8wDaX9rMGMxYNLiZgx3ggU7JJR67B0D3wNXnl8T9+yvu9WuTUBsnytxRGmauqWi36xhJSwOvXNw=="
         }
       }
     },
@@ -948,7 +948,7 @@
     },
     {
       "name": "browser",
-      "version": "0.1.0-rc.7",
+      "version": "0.1.0-rc.9",
       "summary": {
         "en": "A real browser in the conversation owner's device for agents: navigate, read and act on pages through tools, with a live view in the conversation panel and takeover by the person",
         "zh": "在对话所有者的设备中为智能体运行真实浏览器：通过工具打开、读取和操作网页，在对话面板中实时查看，并可由本人接管"
@@ -1012,8 +1012,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-browser",
-          "version": "0.1.0-rc.7",
-          "integrity": "sha512-75lrqBcp/44ftD4ID3RPwFwpQ9tzdhqHWsmlBhdV7/8rDcELQOUPIS1uFQG9UY2v1v8zV48JzXEcx8r/losEhw=="
+          "version": "0.1.0-rc.9",
+          "integrity": "sha512-4Y6iS+75KTsaBK7Ep0Ay2A6fbBCfCI/IItsnxvVfTfaOIZNKMUlm9faXaTLNkke9qWIbUnBlJet51DWN7cwVbQ=="
         }
       }
     }

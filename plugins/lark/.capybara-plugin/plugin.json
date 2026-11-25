@@ -9,5 +9,11 @@
   "publisher": "Capybara",
   "icon": "./icon.svg",
   "description": "Lark (channel@1 bot over the Lark long connection with interactive cards, identity-source@1 web login, directory@1)",
-  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/lark#readme"
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/lark#readme",
+  "setupGuides": [
+    {
+      "id": "lark-sign-in",
+      "place": "extension-deployment"
+    }
+  ]
 }

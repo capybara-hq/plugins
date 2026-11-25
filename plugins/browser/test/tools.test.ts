@@ -17,12 +17,15 @@ import {
 import { describe, expect, it } from "vitest";
 import {
   DOWNLOAD_BLOCKED_PREFIX,
+  MAX_TABS_PER_CONVERSATION,
   REPLY_TOO_LARGE_MESSAGE,
+  type ToolOp,
   type ToolReply,
   type ToolRequest,
 } from "../daemon/protocol.js";
 import {
   type BrowserDeps,
+  NO_TAB_MESSAGE,
   NOT_OWNER_MESSAGE,
   REQUEST_TIMEOUT_MS,
   RESTART_ATTEMPTS,
@@ -52,7 +55,10 @@ function fake(
 ) {
   let ensures = 0;
   const log: string[] = [];
-  const requests: ToolRequest[] = [];
+  /** The operations sent (without the conversation fields, see `sent`). */
+  const requests: ToolOp[] = [];
+  /** The requests exactly as they went on the socket. */
+  const sent: ToolRequest[] = [];
   const reported: { hosts: string[]; url?: string | undefined }[] = [];
   let failWith: Error | undefined;
   /** Requests that throw instead of answering (the daemon's socket gone), by request index. */
@@ -68,7 +74,9 @@ function fake(
       async request(_call, req) {
         const body = JSON.parse(new TextDecoder().decode(req.body)) as ToolRequest;
         log.push(`request:${req.service}:${body.op}`);
-        requests.push(body);
+        sent.push(body);
+        const { conversationId: _c, rootConversationId: _r, ...op } = body;
+        requests.push(op as ToolOp);
         const failure = requestFailures.get(requests.length - 1);
         if (failure) throw failure;
         return new TextEncoder().encode(JSON.stringify(answer(body)));
@@ -91,6 +99,7 @@ function fake(
     deps,
     log,
     requests,
+    sent,
     reported,
     tools,
     fail: (e: Error) => {
@@ -269,6 +278,19 @@ describe("browser tools", () => {
     ).toBe(true);
   });
 
+  it("the user-control note is kept when the reply has no page (the person closed its tabs)", async () => {
+    const f = fake(() => ({
+      ok: true,
+      blockedHosts: [],
+      userControlledSince: "2026-11-24T10:00:00.000Z",
+      tabs: { open: 0, max: 6 },
+    }));
+    const r = await f.run("browser_tabs", { action: "list" });
+    expect(textOf(r)).toBe(
+      `The user controlled the browser from 2026-11-24T10:00:00.000Z.\n${NO_TAB_MESSAGE}\nTabs open in this conversation: 0 of 6.`,
+    );
+  });
+
   it("daemon errors become actionable ToolErrors", async () => {
     const f = fake(() => ({
       ok: false,
@@ -393,7 +415,7 @@ describe("browser tools", () => {
     }));
     const r = (await f.run("browser_screenshot", { fullPage: true })) as ToolResult;
     expect(r.content).toContainEqual({ type: "image", mimeType: "image/jpeg", data: "AAAA" });
-    const req = f.requests[0] as Extract<ToolRequest, { op: "screenshot" }>;
+    const req = f.requests[0] as Extract<ToolOp, { op: "screenshot" }>;
     expect(req.fullPage).toBe(true);
     expect(req.maxBytes).toBeGreaterThan(0);
   });
@@ -422,6 +444,100 @@ describe("browser tools", () => {
       { op: "type_at", x: 10, y: 20, text: "q" },
       { op: "wait", text: "Done", timeoutMs: 5000 },
     ]);
+  });
+
+  it("every request carries the call's conversation and root, never tool input's", async () => {
+    const f = fake();
+    const sub = call({ conversationId: "child", rootConversationId: "root" });
+    await f.run("browser_navigate", { url: "https://example.com" }, sub);
+    // input fields of those names (not in any schema) are neither forwarded nor trusted
+    await f.run(
+      "browser_tabs",
+      { action: "list", conversationId: "evil", rootConversationId: "evil" },
+      sub,
+    );
+    await f.run("browser_snapshot", { conversationId: "evil" }, call());
+    expect(f.sent).toEqual([
+      {
+        op: "navigate",
+        url: "https://example.com",
+        conversationId: "child",
+        rootConversationId: "root",
+      },
+      { op: "tabs", action: "list", conversationId: "child", rootConversationId: "root" },
+      { op: "snapshot", conversationId: "conv", rootConversationId: "conv" },
+    ]);
+    expect(JSON.stringify(f.sent)).not.toContain("evil");
+  });
+
+  it("a result without a page says the conversation has no tab yet", async () => {
+    const f = fake(() => ({ ok: true, blockedHosts: [], text: "No tabs of other conversations." }));
+    const r = await f.run("browser_tabs", { action: "list" });
+    expect(NO_TAB_MESSAGE).toBe("This conversation has no browser tab yet.");
+    expect(textOf(r)).toBe(`${NO_TAB_MESSAGE}\nNo tabs of other conversations.`);
+    expect(textOf(r)).not.toContain("Page:");
+  });
+
+  it("every answered result ends with the conversation's tab count", async () => {
+    const tabs = { open: 2, max: MAX_TABS_PER_CONVERSATION };
+    const ok = fake(() => ({ ok: true, page: PAGE, blockedHosts: [], text: "tree", tabs }));
+    const r = await ok.run("browser_snapshot", {});
+    expect(textOf(r).split("\n").at(-1)).toBe("Tabs open in this conversation: 2 of 6.");
+    // a reply without a page
+    const none = fake(() => ({ ok: true, blockedHosts: [], tabs: { open: 0, max: 6 } }));
+    expect(textOf(await none.run("browser_tabs", { action: "list" }))).toBe(
+      `${NO_TAB_MESSAGE}\nTabs open in this conversation: 0 of 6.`,
+    );
+    // an error the daemon answered
+    const err = fake(() => ({
+      ok: false,
+      error: "no_such_ref",
+      message: "No element e9.",
+      blockedHosts: [],
+      tabs: { open: 1, max: 6 },
+    }));
+    const e = (await err.run("browser_click", { ref: "e9" }).catch((x: unknown) => x)) as Error;
+    expect(e).toBeInstanceOf(ToolError);
+    expect(e.message).toBe(
+      "No element e9. Call browser_snapshot for the current element refs.\nTabs open in this conversation: 1 of 6.",
+    );
+    // the takeover refusal too
+    const taken = fake(() => ({
+      ok: false,
+      error: "taken_over",
+      message: "x",
+      blockedHosts: [],
+      tabs: { open: 3, max: 6 },
+    }));
+    const t = (await taken.run("browser_click", { ref: "e1" }).catch((x: unknown) => x)) as Error;
+    expect(t.message.split("\n").at(-1)).toBe("Tabs open in this conversation: 3 of 6.");
+    // a reply with no (or a malformed) count adds no line
+    const bad = fake(() => ({
+      ok: true,
+      page: PAGE,
+      blockedHosts: [],
+      tabs: { open: "2", max: 6 } as never,
+    }));
+    expect(textOf(await bad.run("browser_snapshot", {}))).not.toContain("Tabs open");
+  });
+
+  it("browser_tabs adopt sends the tab and needs a tabId", async () => {
+    const f = fake();
+    await f.run("browser_tabs", { action: "adopt", tabId: "t3" });
+    expect(f.requests).toEqual([{ op: "tabs", action: "adopt", tabId: "t3" }]);
+    for (const action of ["adopt", "switch", "close"])
+      await expect(f.run("browser_tabs", { action })).rejects.toThrow(
+        new ToolError(
+          `browser_tabs needs a tabId for ${action}; call browser_tabs with action list for the tab ids, then retry.`,
+        ),
+      );
+    expect(f.requests).toHaveLength(1);
+    const spec = f.tools.get("browser_tabs")?.spec;
+    if (spec === undefined) throw new Error("no browser_tabs");
+    const props = spec.inputSchema.properties as { action: { enum: string[] } };
+    expect(props.action.enum).toContain("adopt");
+    expect(spec.description).toMatch(/other conversations/);
+    expect(spec.description).toMatch(/adopt moves one of them/);
   });
 
   it("click declares defaultPolicy ask and snapshot declares allow", () => {
@@ -523,6 +639,16 @@ describe("browser_handoff", () => {
     for (const q of f.requests) expect(q).toEqual({ op: "handoff_clear", callId: "call-1" });
   });
 
+  it("the cancel error ends with the tab count of the clear's reply", async () => {
+    const f = fake(() => ({ ok: true, blockedHosts: [], tabs: { open: 2, max: 6 } }));
+    const e = (await f
+      .run("browser_handoff", { message: "m" }, call({ resume: { state: {}, answer: null } }))
+      .catch((x: unknown) => x)) as Error;
+    expect(e.message).toBe(
+      "The user cancelled the handoff; ask the user how to continue, or try another approach.\nTabs open in this conversation: 2 of 6.",
+    );
+  });
+
   it("a failed clear keeps the person's answer, unless the call was aborted", async () => {
     const boom = (req: ToolRequest): ToolReply => {
       if (req.op === "handoff_clear") throw new Error("relay dropped");
@@ -549,6 +675,22 @@ describe("browser_handoff", () => {
         call({ signal: aborted.signal, resume: { state: {}, answer: { done: true } } }),
       ),
     ).rejects.toThrow("relay dropped");
+  });
+
+  it("the handoff notice and clear carry the call's conversation and root", async () => {
+    const f = fake();
+    const sub = { conversationId: "child", rootConversationId: "root" };
+    await f.run("browser_handoff", { message: "m" }, call(sub));
+    await f.run(
+      "browser_handoff",
+      { message: "m" },
+      call({ ...sub, resume: { state: {}, answer: { done: true } } }),
+    );
+    expect(f.sent.map((q) => [q.op, q.conversationId, q.rootConversationId])).toEqual([
+      ["handoff_notice", "child", "root"],
+      ["handoff_clear", "child", "root"],
+      ["snapshot", "child", "root"],
+    ]);
   });
 
   it("handoff refuses a non-owner", async () => {

@@ -22,6 +22,10 @@
       "place": "channel-connection"
     },
     {
+      "id": "slack-sign-in",
+      "place": "extension-deployment"
+    },
+    {
       "id": "slack-connector",
       "place": "connector-template",
       "templates": ["slack"]

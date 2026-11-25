@@ -5,6 +5,7 @@ import {
   encodeFrame,
   type ViewerIn,
   type ViewerOut,
+  type ViewerTab,
 } from "../../daemon/protocol.js";
 import { STRINGS, t } from "../../ui-src/panel/i18n.js";
 import { PANEL_HTML } from "../../ui-src/panel/page.js";
@@ -44,14 +45,27 @@ class FakeSocket {
   }
 }
 
-const state = (over: Partial<Extract<ViewerOut, { t: "state" }>> = {}): ViewerOut => ({
-  t: "state",
-  tabs: [{ id: "t1", title: "Example", url: "https://example.com/", active: true }],
-  loading: false,
-  secure: true,
-  control: "agent",
-  ...over,
-});
+type StateMsg = Extract<ViewerOut, { t: "state" }>;
+/** A tab of the state message; its group defaults to the viewer's own conversation. */
+type TabIn = Omit<ViewerTab, "group"> & { group?: string };
+
+const state = (over: Partial<Omit<StateMsg, "tabs">> & { tabs?: TabIn[] } = {}): ViewerOut => {
+  const tabs = (
+    over.tabs ?? [{ id: "t1", title: "Example", url: "https://example.com/", active: true }]
+  ).map((x) => ({ ...x, group: x.group ?? "own" }));
+  const shown = tabs.find((x) => x.active)?.id;
+  return {
+    t: "state",
+    otherTabs: [],
+    handoffs: [],
+    loading: false,
+    secure: true,
+    control: "agent",
+    ...(shown === undefined ? {} : { shown }),
+    ...over,
+    tabs,
+  };
+};
 
 interface Setup {
   dom: JSDOM;
@@ -70,7 +84,7 @@ function setup(
     screen?: number;
     dpr?: number;
     ticket?: () => Response;
-    answer?: () => Response;
+    answer?: () => Response | Promise<Response>;
     hosts?: () => Response;
     /** Storage throws, as in the opaque-origin sandboxed iframe. */
     noStorage?: boolean;
@@ -1054,7 +1068,7 @@ describe("design states", () => {
     expect(labels).toEqual(["New tab", "https://b.example/x"]);
   });
 
-  it("tabs show the site's icon, and the placeholder without a usable one", async () => {
+  it("tabs show the site's icon, and the globe glyph without a usable one", async () => {
     const s = setup();
     const png =
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
@@ -1077,8 +1091,29 @@ describe("design states", () => {
     const favs = Array.from($(s, "tabs").querySelectorAll(".tab .fav"));
     expect(favs.map((f) => f.tagName)).toEqual(["IMG", "SPAN", "SPAN"]);
     expect((favs[0] as HTMLImageElement).getAttribute("src")).toBe(png);
+    // never an empty square: the globe glyph in the slot
+    expect(favs.slice(1).map((f) => f.getAttribute("data-glyph"))).toEqual(["site", "site"]);
+    expect(favs.slice(1).every((f) => f.querySelector("svg") !== null)).toBe(true);
     // the narrow tabs button shows the active tab's icon too
     expect($(s, "tabsbtn").querySelector("img.fav")?.getAttribute("src")).toBe(png);
+  });
+
+  it("a loading tab spins in its icon slot; its icon replaces the glyph in the same slot", async () => {
+    const s = setup();
+    const png =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+    const tab = { id: "t1", title: "Baidu", url: "https://www.baidu.com/", active: true };
+    const sock = await live(s, state({ tabs: [{ ...tab, loading: true }] }));
+    const slot = () => $(s, "tabs").querySelector(".tab .fav") as HTMLElement;
+    expect(slot().getAttribute("data-glyph")).toBe("loading");
+    expect($(s, "tabsbtn").querySelector(".fav")?.getAttribute("data-glyph")).toBe("loading");
+    // loaded, no icon yet: the globe
+    sock.push(state({ tabs: [tab] }));
+    expect(slot().getAttribute("data-glyph")).toBe("site");
+    // the icon arrives: an <img> of the same slot class (no layout shift)
+    sock.push(state({ tabs: [{ ...tab, favicon: png }] }));
+    expect(slot().tagName).toBe("IMG");
+    expect(slot().className).toBe("fav");
   });
 
   it("only the active tab's blocker shows the verify strip", async () => {
@@ -1099,11 +1134,11 @@ describe("design states", () => {
 });
 
 describe("handoff banner", () => {
-  const handoff = { callId: "call-1", message: "Log in" };
+  const handoff = { callId: "call-1", conversationId: "c1", message: "Log in", tabIds: ["t1"] };
 
   it("shows the banner from state.handoff and hides it when absent", async () => {
     const s = setup();
-    const sock = await live(s, state({ handoff }));
+    const sock = await live(s, state({ handoffs: [handoff] }));
     expect(($(s, "handoff") as HTMLElement).hidden).toBe(false);
     expect($(s, "handoff-message").textContent).toBe("Log in");
     sock.push(state());
@@ -1112,12 +1147,13 @@ describe("handoff banner", () => {
 
   it("done and cancel post handoff-answer", async () => {
     const s = setup();
-    await live(s, state({ handoff }));
+    await live(s, state({ handoffs: [handoff] }));
     $(s, "handoff-done").click();
     await vi.waitFor(() =>
       expect(s.fetchCalls.find((c) => c.url === "handoff-answer")?.body).toEqual({
         callId: "call-1",
         done: true,
+        handoffConversationId: "c1",
       }),
     );
     $(s, "handoff-cancel").click();
@@ -1125,6 +1161,7 @@ describe("handoff banner", () => {
       expect(s.fetchCalls.filter((c) => c.url === "handoff-answer")[1]?.body).toEqual({
         callId: "call-1",
         done: false,
+        handoffConversationId: "c1",
       }),
     );
   });
@@ -1136,7 +1173,7 @@ describe("handoff banner", () => {
           status: 404,
         }),
     });
-    const sock = await live(s, state({ handoff }));
+    const sock = await live(s, state({ handoffs: [handoff] }));
     $(s, "handoff-done").click();
     await vi.waitFor(() => expect(($(s, "handoff") as HTMLElement).hidden).toBe(true));
     expect(($(s, "empty") as HTMLElement).hidden).toBe(true);
@@ -1150,7 +1187,7 @@ describe("handoff banner", () => {
           status: 500,
         }),
     });
-    await live(s, state({ handoff }));
+    await live(s, state({ handoffs: [handoff] }));
     $(s, "handoff-done").click();
     await vi.waitFor(() => expect(($(s, "notice") as HTMLElement).hidden).toBe(false));
     expect($(s, "notice").textContent).toContain(t("en", "answerFailed"));
@@ -1160,13 +1197,14 @@ describe("handoff banner", () => {
 
   it("handing back with a pending handoff answers it Done", async () => {
     const s = setup();
-    const sock = await live(s, state({ control: "user", handoff }));
+    const sock = await live(s, state({ control: "user", handoffs: [handoff] }));
     $(s, "handback").click();
     expect(sock.sent).toContainEqual({ t: "handback" });
     await vi.waitFor(() =>
       expect(s.fetchCalls.find((c) => c.url === "handoff-answer")?.body).toEqual({
         callId: "call-1",
         done: true,
+        handoffConversationId: "c1",
       }),
     );
   });
@@ -1182,10 +1220,302 @@ describe("handoff banner", () => {
 
   it("works in the compact size class", async () => {
     const s = setup({ width: 390, screen: 390 });
-    await live(s, state({ handoff }));
+    await live(s, state({ handoffs: [handoff] }));
     expect(($(s, "handoff") as HTMLElement).hidden).toBe(false);
     $(s, "handoff-done").click();
     await vi.waitFor(() => expect(s.fetchCalls.some((c) => c.url === "handoff-answer")).toBe(true));
+  });
+});
+
+describe("tab ownership", () => {
+  const tree: TabIn[] = [
+    { id: "t1", title: "Docs", url: "https://docs.example/", active: true },
+    { id: "t2", title: "Mail", url: "https://mail.example/", active: false },
+    { id: "t3", title: "Shop", url: "https://shop.example/", active: false, group: "sub1" },
+    { id: "t4", title: "Maps", url: "https://maps.example/", active: false, group: "sub2" },
+  ];
+  const others = [
+    { id: "t7", title: "Portal", url: "https://portal.example/login" },
+    { id: "t8", title: "", url: "about:blank" },
+  ];
+  const stripItems = (s: Setup) =>
+    Array.from($(s, "tablist").children).map((el) =>
+      el.classList.contains("group")
+        ? `[${el.textContent}]`
+        : el.classList.contains("tab")
+          ? `${el.querySelector(".label")?.textContent}${el.getAttribute("data-active") === "true" ? "*" : ""}`
+          : (el.getAttribute("aria-label") ?? ""),
+    );
+  const menuItems = (s: Setup) =>
+    Array.from($(s, "menu").children).map((el) =>
+      el.classList.contains("heading")
+        ? `[${el.textContent}]`
+        : `${el.querySelector(".name")?.textContent}${el.querySelector(".hint") ? ` > ${el.querySelector(".hint")?.textContent}` : ""}`,
+    );
+  const sentOf = (sock: FakeSocket) =>
+    sock.sent.filter((m) => !["hello", "resize", "frame-ack", "pong"].includes(m.t));
+
+  it("the strip shows the own tabs, then one labelled group per sub-task", async () => {
+    const s = setup();
+    await live(s, state({ tabs: tree }));
+    expect(stripItems(s)).toEqual([
+      "Docs*",
+      "Mail",
+      "[Sub-task 1]",
+      "Shop",
+      "[Sub-task 2]",
+      "Maps",
+    ]);
+    // one sub-task needs no number
+    const one = setup({ locale: "zh" });
+    await live(one, state({ tabs: tree.slice(0, 3) }));
+    expect(stripItems(one)).toEqual(["Docs*", "Mail", "[子任务]", "Shop"]);
+    // a group keeps its number when an earlier one closes
+    const later = setup();
+    await live(
+      later,
+      state({
+        tabs: [
+          ...tree.slice(0, 2),
+          tree[3] as TabIn,
+          { id: "t5", title: "Pay", url: "https://pay.example/", active: false, group: "sub3" },
+        ],
+      }),
+    );
+    expect(stripItems(later)).toEqual([
+      "Docs*",
+      "Mail",
+      "[Sub-task 2]",
+      "Maps",
+      "[Sub-task 3]",
+      "Pay",
+    ]);
+  });
+
+  it("while only watching, a click on a tab of the tree shows it (show, never switch)", async () => {
+    const s = setup();
+    const sock = await live(s, state({ tabs: tree }));
+    const label = (name: string) =>
+      Array.from($(s, "tablist").querySelectorAll(".tab .label")).find(
+        (l) => l.textContent === name,
+      ) as HTMLButtonElement;
+    label("Shop").click();
+    // the shown tab already is shown: nothing to send
+    label("Docs").click();
+    expect(sentOf(sock)).toEqual([{ t: "show", tabId: "t3" }]);
+    // the daemon's next state marks it, and the address follows
+    sock.push(state({ tabs: tree.map((x) => ({ ...x, active: x.id === "t3" })), shown: "t3" }));
+    expect(stripItems(s)).toContain("Shop*");
+    expect(($(s, "url") as HTMLInputElement).value).toBe("https://shop.example/");
+  });
+
+  it("the other conversations' menu entries carry the globe glyph (they have no icons)", async () => {
+    const s = setup();
+    await live(s, state({ tabs: tree, otherTabs: others }));
+    $(s, "others").click();
+    const entries = Array.from($(s, "menu").querySelectorAll("button"));
+    expect(entries.length).toBe(others.length);
+    expect(entries.every((b) => b.querySelector('.fav[data-glyph="site"] svg') !== null)).toBe(
+      true,
+    );
+  });
+
+  it("a watching panel never sends tab open, close or switch", async () => {
+    const s = setup();
+    const sock = await live(s, state({ tabs: tree, otherTabs: others }));
+    // no close or new-tab buttons while only watching
+    expect($(s, "tablist").querySelector(".x")).toBeNull();
+    expect($(s, "tablist").querySelector(".add")).toBeNull();
+    for (const l of Array.from($(s, "tablist").querySelectorAll(".tab .label")))
+      (l as HTMLButtonElement).click();
+    // the narrow tabs menu offers no new tab while watching either
+    $(s, "tabsbtn").click();
+    const items = Array.from($(s, "menu").querySelectorAll("button"));
+    expect(items.map((b) => b.textContent)).not.toContain("New tab");
+    for (const b of items) b.click();
+    const tabMsgs = sentOf(sock).filter((m) => m.t === "tab");
+    expect(tabMsgs.every((m) => (m as { action?: string }).action === "adopt")).toBe(true);
+    expect(sentOf(sock).filter((m) => m.t !== "tab" && m.t !== "show")).toEqual([]);
+  });
+
+  it("a 404 hides the banner only when it still shows that handoff (callIds repeat across sub-agents)", async () => {
+    let release: (r: Response) => void = () => {};
+    const s = setup({
+      answer: () =>
+        new Promise<Response>((r) => {
+          release = r;
+        }),
+    });
+    const sub = { callId: "call-1", conversationId: "c2", message: "Pay", tabIds: ["t3"] };
+    const own = { callId: "call-1", conversationId: "c1", message: "Sign in", tabIds: ["t1"] };
+    const sock = await live(s, state({ tabs: tree, handoffs: [own, sub] }));
+    $(s, "handoff-done").click();
+    await vi.waitFor(() => expect(s.fetchCalls.some((c) => c.url === "handoff-answer")).toBe(true));
+    // meanwhile the sub-agent's handoff ended and the root's own (same callId) is the newest
+    sock.push(state({ tabs: tree, handoffs: [own] }));
+    release(
+      new Response(JSON.stringify({ error: { code: "question.not_found", message: "x" } }), {
+        status: 404,
+      }),
+    );
+    // let the answer's continuation run (one macrotask turn, no timed wait)
+    await new Promise((r) => setTimeout(r, 0));
+    expect(($(s, "handoff") as HTMLElement).hidden).toBe(false);
+    expect($(s, "handoff-message").textContent).toBe("Sign in");
+  });
+
+  it("in control, a click on a tab switches to it", async () => {
+    const s = setup();
+    const sock = await live(s, state({ tabs: tree, control: "user" }));
+    (
+      Array.from($(s, "tablist").querySelectorAll(".tab .label")).find(
+        (l) => l.textContent === "Shop",
+      ) as HTMLButtonElement
+    ).click();
+    expect(sentOf(sock)).toEqual([{ t: "tab", action: "switch", tabId: "t3" }]);
+  });
+
+  it("other conversations' tabs are a menu; Move here adopts one, also while only watching", async () => {
+    const s = setup();
+    const sock = await live(s, state({ tabs: tree, otherTabs: others }));
+    expect(($(s, "others") as HTMLElement).hidden).toBe(false);
+    expect($(s, "others").textContent).toBe("Other conversations (2)");
+    $(s, "others").click();
+    expect(menuItems(s)).toEqual([
+      "[Other conversations (2)]",
+      "Portal > Move here",
+      "New tab > Move here",
+    ]);
+    ($(s, "menu").querySelector("button") as HTMLButtonElement).click();
+    expect(sentOf(sock)).toEqual([{ t: "tab", action: "adopt", tabId: "t7" }]);
+    expect(($(s, "menu") as HTMLElement).hidden).toBe(true);
+    // no other conversations: no menu button
+    sock.push(state({ tabs: tree }));
+    expect(($(s, "others") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("the zh menu says 其他对话 and 移到此对话", async () => {
+    const s = setup({ locale: "zh" });
+    await live(s, state({ tabs: tree, otherTabs: others.slice(0, 1) }));
+    expect($(s, "others").textContent).toBe("其他对话 (1)");
+    $(s, "others").click();
+    expect(menuItems(s)).toEqual(["[其他对话 (1)]", "Portal > 移到此对话"]);
+  });
+
+  it("a narrow panel's tabs menu groups the tree, shows on a pick while watching, and lists the others", async () => {
+    const s = setup({ width: 360 });
+    const sock = await live(s, state({ tabs: tree.slice(0, 3), otherTabs: others.slice(0, 1) }));
+    $(s, "tabsbtn").click();
+    // no new tab while only watching
+    expect(menuItems(s)).toEqual([
+      "Docs",
+      "Mail",
+      "[Sub-task]",
+      "Shop",
+      "[Other conversations (1)]",
+      "Portal > Move here",
+    ]);
+    (
+      Array.from($(s, "menu").querySelectorAll("button")).find(
+        (b) => b.textContent === "Shop",
+      ) as HTMLButtonElement
+    ).click();
+    expect(sentOf(sock)).toEqual([{ t: "show", tabId: "t3" }]);
+  });
+
+  it("the shown tab follows a new handoff, and the banner shows the newest", async () => {
+    const s = setup();
+    const sock = await live(s, state({ tabs: tree }));
+    const older = { callId: "call-1", conversationId: "c1", message: "Sign in", tabIds: ["t1"] };
+    const newer = { callId: "call-1", conversationId: "c2", message: "Pay", tabIds: ["t3"] };
+    // the daemon moves the viewer's shown tab to the asking sub-agent's active tab
+    sock.push(
+      state({
+        tabs: tree.map((x) => ({ ...x, active: x.id === "t3" })),
+        shown: "t3",
+        handoffs: [older, newer],
+      }),
+    );
+    expect(stripItems(s)).toContain("Shop*");
+    expect($(s, "handoff-message").textContent).toBe("Pay");
+  });
+
+  it("Done on a sub-agent's handoff echoes its conversation", async () => {
+    const s = setup();
+    await live(
+      s,
+      state({
+        tabs: tree,
+        handoffs: [
+          { callId: "call-1", conversationId: "c1", message: "Sign in", tabIds: ["t1"] },
+          { callId: "call-1", conversationId: "c2", message: "Pay", tabIds: ["t3"] },
+        ],
+      }),
+    );
+    $(s, "handoff-done").click();
+    await vi.waitFor(() =>
+      expect(s.fetchCalls.find((c) => c.url === "handoff-answer")?.body).toEqual({
+        callId: "call-1",
+        done: true,
+        handoffConversationId: "c2",
+      }),
+    );
+  });
+
+  it("a refused Move here shows a short notice that goes away by itself", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    await vi.advanceTimersByTimeAsync(0);
+    const sock = s.sock();
+    sock.open();
+    sock.push(state({ tabs: tree, otherTabs: others }));
+    sock.push({ t: "notice", code: "tab_in_use" });
+    expect(($(s, "notice") as HTMLElement).hidden).toBe(false);
+    expect($(s, "notice").textContent).toBe(
+      "Another conversation is using this tab; try again shortly",
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(($(s, "notice") as HTMLElement).hidden).toBe(true);
+    sock.push({ t: "notice", code: "tab_cap" });
+    expect($(s, "notice").textContent).toBe(
+      "This conversation has the most tabs it can keep; close one first",
+    );
+  });
+
+  it("the tree's empty state: no page of another tree, its tabs to move here", async () => {
+    const s = setup();
+    const sock = await live(s, state({ tabs: [], otherTabs: others.slice(0, 1) }));
+    sock.pushFrame(1);
+    await vi.waitFor(() => expect(sock.sent.some((m) => m.t === "frame-ack")).toBe(true));
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+    expect($(s, "app").hasAttribute("data-idle")).toBe(true);
+    expect($(s, "empty-title").textContent).toBe(
+      "The agent has not opened a page in this conversation yet",
+    );
+    expect(($(s, "reconnect") as HTMLElement).hidden).toBe(true);
+    expect(($(s, "empty-others") as HTMLElement).hidden).toBe(false);
+    expect($(s, "empty-others").textContent).toBe("Other conversations (1)");
+    $(s, "empty-others").click();
+    expect(menuItems(s)).toEqual(["[Other conversations (1)]", "Portal > Move here"]);
+    ($(s, "menu").querySelector("button") as HTMLButtonElement).click();
+    expect(sentOf(sock)).toEqual([{ t: "tab", action: "adopt", tabId: "t7" }]);
+    // the moved tab arrives: the empty state holds until its first frame, then the live panel
+    sock.push(
+      state({
+        tabs: [{ id: "t7", title: "Portal", url: "https://portal.example/", active: true }],
+      }),
+    );
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+    sock.pushFrame(2);
+    await vi.waitFor(() => expect(($(s, "empty") as HTMLElement).hidden).toBe(true));
+    expect($(s, "app").hasAttribute("data-idle")).toBe(false);
+  });
+
+  it("the tree's empty state without other conversations offers no menu (zh)", async () => {
+    const s = setup({ locale: "zh" });
+    await live(s, state({ tabs: [] }));
+    expect($(s, "empty-title").textContent).toBe("智能体尚未在此对话中打开网页");
+    expect(($(s, "empty-others") as HTMLElement).hidden).toBe(true);
   });
 });
 

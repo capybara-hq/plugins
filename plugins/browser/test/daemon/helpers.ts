@@ -7,8 +7,9 @@ import { encodeServiceMessage, ServiceMessageDecoder } from "@capybara-hq/plugin
 import { type Daemon, type DaemonOptions, startDaemon } from "../../daemon/main.js";
 import {
   decodeFrame,
+  type RequestConversation,
+  type ToolOp,
   type ToolReply,
-  type ToolRequest,
   type ViewerIn,
   type ViewerOut,
 } from "../../daemon/protocol.js";
@@ -77,8 +78,29 @@ function send(sock: Socket, value: unknown): void {
   sock.write(encodeServiceMessage(enc.encode(JSON.stringify(value))));
 }
 
-/** One tool request on its own connection, as the provider makes it. */
-export function request(socketPath: string, req: ToolRequest): Promise<ToolReply> {
+/** The conversation the tests' requests and viewers belong to unless they name another. */
+export const CONV: RequestConversation = { conversationId: "c1", rootConversationId: "c1" };
+
+/** A conversation `id` of the tree rooted at `root` (default: its own root). */
+export const conv = (id: string, root = id): RequestConversation => ({
+  conversationId: id,
+  rootConversationId: root,
+});
+
+/**
+ * One tool request of a conversation (default {@link CONV}) on its own connection, as the provider
+ * makes it.
+ */
+export function request(
+  socketPath: string,
+  req: ToolOp,
+  of: RequestConversation = CONV,
+): Promise<ToolReply> {
+  return rawRequest(socketPath, { ...req, ...of });
+}
+
+/** One request body exactly as given (a request without conversation fields included). */
+export function rawRequest(socketPath: string, req: unknown): Promise<ToolReply> {
   return new Promise((resolve, reject) => {
     const sock = connect(socketPath);
     const decoder = new ServiceMessageDecoder();
@@ -111,12 +133,18 @@ export interface TestViewer {
   autoAck: boolean;
   /** Answers every ping at once (default on). */
   autoPong: boolean;
+  /** Resolves when the daemon (or the test) closed the stream. */
+  closed: Promise<void>;
 }
 
-/** A viewer stream on its own connection, as the kernel relay opens it. */
+/**
+ * A viewer stream on its own connection, as the kernel relay opens it: the viewer context of a
+ * conversation (default {@link CONV}; `null` sends none), then the panel's `hello`.
+ */
 export function openViewer(
   socketPath: string,
   hello: { maxWidth: number; maxHeight: number },
+  of: RequestConversation | null = CONV,
 ): Promise<TestViewer> {
   return new Promise((resolve, reject) => {
     const sock = connect(socketPath);
@@ -131,6 +159,7 @@ export function openViewer(
       messages,
       autoAck: true,
       autoPong: true,
+      closed: Promise.resolve(),
       send: (m) => send(sock, m),
       next: ((pred: (m: ViewerMsg) => boolean) => waitFrom(0, pred)) as TestViewer["next"],
       after: (pred) => waitFrom(messages.length, pred),
@@ -150,6 +179,7 @@ export function openViewer(
     }
     sock.on("connect", () => {
       send(sock, { kind: "stream" });
+      if (of !== null) send(sock, { kind: "viewer", ...of });
       send(sock, { t: "hello", ...hello });
       resolve(viewer);
     });
@@ -179,6 +209,7 @@ export function openViewer(
       }
     });
     sock.on("error", reject);
+    viewer.closed = new Promise<void>((r) => sock.once("close", () => r()));
   });
 }
 
@@ -226,4 +257,63 @@ export function jpegSize(b64: string): { width: number; height: number } {
     i += 2 + len;
   }
   throw new Error("no SOF marker");
+}
+
+/**
+ * A clock whose timers are real but whose time can be moved ahead: `advance` adds to `now()` and
+ * runs at once every timer that is then due (the daemon's idle closes and eviction ages), while
+ * Playwright and the sockets keep real time.
+ */
+export class ShiftClock {
+  private offset = 0;
+  private seq = 0;
+  private readonly timers = new Map<
+    number,
+    { at: number; fn: () => void; handle: ReturnType<typeof setTimeout> }
+  >();
+  now(): number {
+    return Date.now() + this.offset;
+  }
+  schedule(fn: () => void, ms: number): unknown {
+    const id = ++this.seq;
+    const handle = setTimeout(() => {
+      this.timers.delete(id);
+      fn();
+    }, ms);
+    handle.unref();
+    this.timers.set(id, { at: this.now() + ms, fn, handle });
+    return id;
+  }
+  cancel(h: unknown): void {
+    const t = this.timers.get(h as number);
+    if (t === undefined) return;
+    clearTimeout(t.handle);
+    this.timers.delete(h as number);
+  }
+  advance(ms: number): void {
+    this.offset += ms;
+    for (;;) {
+      const due = [...this.timers.entries()]
+        .filter(([, t]) => t.at <= this.now())
+        .sort((a, b) => a[1].at - b[1].at)[0];
+      if (due === undefined) return;
+      clearTimeout(due[1].handle);
+      this.timers.delete(due[0]);
+      due[1].fn();
+    }
+  }
+}
+
+/**
+ * The conversation's own tab ids in a tab list: the tab lines before the first heading of other
+ * conversations' tabs (notes may come first).
+ */
+export function ownTabIds(text: string | undefined): string[] {
+  const ids: string[] = [];
+  for (const line of (text ?? "").split("\n")) {
+    if (line.startsWith("Tabs of other conversations")) break;
+    const id = /^(t\d+)(?: \(active\))?: /.exec(line)?.[1];
+    if (id !== undefined) ids.push(id);
+  }
+  return ids;
 }

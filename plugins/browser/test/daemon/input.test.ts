@@ -146,7 +146,7 @@ describe("browser daemon viewer input", () => {
     expect(loaded.ok).toBe(true);
     const snap = await request(d.socketPath, { op: "snapshot" });
     if (!snap.ok) throw new Error(snap.message);
-    expect(snap.page.url).toBe(`${fx.url}/held`);
+    expect(snap.page?.url).toBe(`${fx.url}/held`);
     await v.close();
   });
 
@@ -175,7 +175,7 @@ describe("browser daemon viewer input", () => {
       );
       const snap = await request(d.socketPath, { op: "snapshot" });
       if (!snap.ok) throw new Error(snap.message);
-      expect(snap.page.url, how).toBe(`${fx.url}/held`);
+      expect(snap.page?.url, how).toBe(`${fx.url}/held`);
       await v1.close();
       await v2.close();
     }
@@ -206,7 +206,7 @@ describe("browser daemon viewer input", () => {
       // the agent's click is a plain click, not a Shift-click (a new window)
       const r = await request(d.socketPath, { op: "click_at", x: 100, y: 50 });
       expect(r.ok).toBe(true);
-      expect(r.ok && decodeURIComponent(new URL(r.page.url).hash)).toMatch(/ s0$/);
+      expect(r.ok && decodeURIComponent(new URL(r.page?.url ?? "").hash)).toMatch(/ s0$/);
       if (end === "handback") await v.close();
     }
   });
@@ -224,7 +224,7 @@ describe("browser daemon viewer input", () => {
     // the agent's next action sees the page as the person left it: the press did not click
     const snap = await request(d.socketPath, { op: "snapshot" });
     if (!snap.ok) throw new Error(snap.message);
-    expect(snap.page.url).toBe(`${fx.url}/input?held-button`);
+    expect(snap.page?.url).toBe(`${fx.url}/input?held-button`);
     await v.close();
   });
 
@@ -244,7 +244,7 @@ describe("browser daemon viewer input", () => {
       true,
     );
     const r = await request(d.socketPath, { op: "click_at", x: 100, y: 50 });
-    expect(r.ok && decodeURIComponent(new URL(r.page.url).hash)).toMatch(/ s0$/);
+    expect(r.ok && decodeURIComponent(new URL(r.page?.url ?? "").hash)).toMatch(/ s0$/);
     const list = await request(d.socketPath, { op: "tabs", action: "list" });
     for (const line of (list.ok ? (list.text ?? "") : "").split("\n")) {
       const id = line.split(/[: ]/)[0] ?? "";
