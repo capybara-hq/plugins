@@ -135,9 +135,8 @@ describe("browser daemon unreachable pages", () => {
   });
 
   it("a page answered with 204 says so at once instead of an abort", async () => {
-    expect(await request(d.socketPath, { op: "navigate", url: `${fx.url}/page` })).toMatchObject({
-      ok: true,
-    });
+    const before = await request(d.socketPath, { op: "navigate", url: `${fx.url}/page` });
+    expect(before.ok ? "ok" : before.message).toBe("ok");
     const r = await request(d.socketPath, { op: "navigate", url: `${fx.url}/empty` });
     expect(r).toMatchObject({ ok: false, error: "failed" });
     expect(r.ok ? "" : r.message).toBe(
