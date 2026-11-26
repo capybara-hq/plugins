@@ -248,14 +248,21 @@ export const NO_TAB_TO_WAIT_ON =
 /** Playwright's error for a navigation that a network error page's late commit interrupted. */
 const ERROR_PAGE_INTERRUPT_RE = /is interrupted by another navigation to "chrome-error:/;
 
-/** How often a navigation runs while the device's network keeps changing under it. */
-const NETWORK_CHANGED_ATTEMPTS = 4;
+/** The address of the navigation that interrupted this one, from Playwright's error. */
+const INTERRUPTED_BY_RE = /is interrupted by another navigation to "([^"]*)"/;
 
 /** The longest a failed navigation waits for its error page to commit. */
 const ERROR_PAGE_WAIT_MS = 2_000;
 
 /** Whether `e` is Playwright's timeout. */
 const isTimeout = (e: unknown) => e instanceof Error && e.name === "TimeoutError";
+
+/** An error {@link isTimeout} takes for Playwright's timeout. */
+function timeoutError(message: string): Error {
+  const e = new Error(message);
+  e.name = "TimeoutError";
+  return e;
+}
 
 /** What Chromium's common net errors of a navigation mean (the rest are named only). */
 // capybara:allow-module-state read-only constant (device service process, not the kernel)
@@ -291,6 +298,81 @@ type TakenOver =
   | { kind: "loaded"; response: Response | null }
   | { kind: "failed"; url: string; error: string }
   | { kind: "none" };
+
+/**
+ * Runs a navigation (`run`) past changes of the device's network (an interface came or went:
+ * Wi-Fi, a VPN, a container network; starting one container adds several): Chromium answers
+ * net::ERR_NETWORK_CHANGED and may keep or restart the navigation itself, so it is followed first
+ * (`follow`, like one another navigation took over) and run again only when none goes on, as often
+ * as the network changes before `deadline` (each run ends only at a real change, never in a tight
+ * loop). A navigation the changes kept from loading by its deadline did not load in its time: it
+ * ends as a timeout, like one that got no answer, never as the last change's error.
+ */
+export async function pastNetworkChanges<R>(
+  run: () => Promise<R>,
+  follow: () => Promise<
+    | { kind: "loaded"; response: R }
+    | { kind: "failed"; url: string; error: string }
+    | { kind: "none" }
+  >,
+  deadline: number,
+  now: () => number = Date.now,
+): Promise<R> {
+  for (;;) {
+    try {
+      return await run();
+    } catch (e) {
+      if (!firstLine(e).includes("net::ERR_NETWORK_CHANGED")) throw e;
+      const out = await follow();
+      if (out.kind === "loaded") return out.response;
+      // only a navigation the network change itself dropped runs again: an abort may be a
+      // download or another navigation taking over, never fetched again
+      if (out.kind === "failed" && !out.error.includes("ERR_NETWORK_CHANGED"))
+        throw new Error(`${out.error} at ${out.url}`);
+      if (now() >= deadline) throw timeoutError(`${firstLine(e)}, past the navigation's deadline`);
+    }
+  }
+}
+
+/**
+ * Runs `page.goto` (`run`) to `url` past the late error page of the tab's previous failed or
+ * stopped navigation: Chromium can commit that page after Playwright reported the failure (the
+ * Linux full build), and its commit interrupts a navigation started meanwhile; Chromium may then
+ * start that navigation once more itself, which interrupts a run started meanwhile with a
+ * navigation to the same address (seen on Linux while interfaces come and go). After either
+ * interrupt the navigation is followed (`follow`) when it went on in Chromium, and otherwise
+ * started again (the error page is in now), until `deadline`: each run ends only at a real
+ * navigation event, never in a tight loop.
+ */
+export async function pastInterrupts<R>(
+  run: () => Promise<R>,
+  follow: () => Promise<
+    | { kind: "loaded"; response: R }
+    | { kind: "failed"; url: string; error: string }
+    | { kind: "none" }
+  >,
+  url: string,
+  deadline: number,
+  now: () => number = Date.now,
+): Promise<R> {
+  for (;;) {
+    try {
+      return await run();
+    } catch (e) {
+      const msg = firstLine(e);
+      const by = INTERRUPTED_BY_RE.exec(msg)?.[1];
+      const sameAddress = by !== undefined && docUrl(by) === docUrl(url);
+      if (!ERROR_PAGE_INTERRUPT_RE.test(msg) && !sameAddress) throw e;
+      const out = await follow();
+      if (out.kind === "loaded") return out.response;
+      // aborted: the error page took the frame from it, so it runs again; a real net error is
+      // its own
+      if (out.kind === "failed" && !out.error.includes("net::ERR_ABORTED"))
+        throw new Error(`${out.error} at ${out.url}`);
+      if (now() >= deadline) throw timeoutError(`${msg}, past the navigation's deadline`);
+    }
+  }
+}
 
 /**
  * Watches a page's main-frame navigations while one `goto` runs, to tell an abort that still
@@ -2029,62 +2111,39 @@ export class BrowserSession {
     await page.waitForLoadState("load", { timeout: LOAD_GRACE_MS }).catch(() => undefined);
   }
 
-  /**
-   * `goto` past a change of the device's network (an interface came or went: Wi-Fi, a VPN, a
-   * container network): Chromium answers net::ERR_NETWORK_CHANGED and may keep or restart the
-   * navigation itself, so it is followed first (like one another navigation took over) and run
-   * again only when none goes on, at most {@link NETWORK_CHANGED_ATTEMPTS} times, within the
-   * navigation's deadline.
-   */
-  private async gotoPastNetworkChange(
+  /** `goto` past changes of the device's network ({@link pastNetworkChanges}). */
+  private gotoPastNetworkChange(
     page: Page,
     url: string,
     watch: NavWatch,
     deadline: number,
   ): Promise<Awaited<ReturnType<Page["goto"]>>> {
-    for (let attempt = 1; ; attempt++) {
-      try {
-        return await this.gotoPastLateErrorPage(page, url, watch, deadline);
-      } catch (e) {
-        if (!firstLine(e).includes("net::ERR_NETWORK_CHANGED")) throw e;
-        const out = await watch.follow(deadline);
-        if (out.kind === "loaded") return out.response;
-        // only a navigation the network change itself dropped runs again: an abort may be a
-        // download or another navigation taking over, never fetched again
-        if (out.kind === "failed" && !out.error.includes("ERR_NETWORK_CHANGED"))
-          throw new Error(`${out.error} at ${out.url}`);
-        if (attempt >= NETWORK_CHANGED_ATTEMPTS || Date.now() >= deadline) throw e;
-      }
-    }
+    return pastNetworkChanges(
+      () => this.gotoPastLateErrorPage(page, url, watch, deadline),
+      () => watch.follow(deadline),
+      deadline,
+    );
   }
 
-  /**
-   * `page.goto`, past the late error page of the tab's previous failed or stopped navigation:
-   * Chromium can commit that page after Playwright reported the failure (the Linux full build),
-   * and its commit interrupts a navigation started meanwhile. Then this navigation is followed
-   * when it went on in Chromium, and otherwise started once more (the error page is in now),
-   * within the navigation's own deadline.
-   */
-  private async gotoPastLateErrorPage(
+  /** `page.goto`, past the late error page of the tab's previous navigation ({@link pastInterrupts}). */
+  private gotoPastLateErrorPage(
     page: Page,
     url: string,
     watch: NavWatch,
     deadline: number,
   ): Promise<Awaited<ReturnType<Page["goto"]>>> {
-    try {
-      return await page.goto(url, { waitUntil: "domcontentloaded" });
-    } catch (e) {
-      if (!ERROR_PAGE_INTERRUPT_RE.test(firstLine(e))) throw e;
-      const out = await watch.follow(deadline);
-      if (out.kind === "loaded") return out.response;
-      // aborted: the error page took the frame from it, so it runs again; a real net error is its own
-      if (out.kind === "failed" && !out.error.includes("net::ERR_ABORTED"))
-        throw new Error(`${out.error} at ${out.url}`);
-      return page.goto(url, {
-        waitUntil: "domcontentloaded",
-        timeout: Math.max(1, deadline - Date.now()),
-      });
-    }
+    return pastInterrupts(
+      // a run after an interrupt or a network change gets what is left of the navigation's
+      // time, not all of it
+      () =>
+        page.goto(url, {
+          waitUntil: "domcontentloaded",
+          timeout: Math.max(1, deadline - Date.now()),
+        }),
+      () => watch.follow(deadline),
+      url,
+      deadline,
+    );
   }
 
   /**

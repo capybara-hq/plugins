@@ -51,8 +51,11 @@ export default defineConfig({
       },
       {
         // The device-docker tests start containers and networks all the time; on Linux each new
-        // interface makes Chromium drop requests in flight (net::ERR_NETWORK_CHANGED), which made the
-        // browser daemon's tests flaky when both ran at once. This group runs after every other one.
+        // interface makes Chromium drop requests in flight (net::ERR_NETWORK_CHANGED). The browser
+        // daemon runs a navigation again at each change within its deadline (pastNetworkChanges),
+        // but a page's subresources and timings still suffer, so this group runs after every other
+        // one. Other tests start containers too (testcontainers): the browser tests must not
+        // depend on a quiet network.
         extends: true,
         test: {
           name: "docker",
