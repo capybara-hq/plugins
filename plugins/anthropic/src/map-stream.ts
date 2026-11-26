@@ -237,6 +237,12 @@ export async function* streamMessages(
       if (ev.type === "message_stop") break;
       if (ev.type === "content_block_start" && ev.content_block.type === "tool_use") {
         yield { type: "tool_call_start", id: ev.content_block.id, name: ev.content_block.name };
+      } else if (ev.type === "content_block_stop") {
+        // A no-argument tool streams no input text; complete() parses that as {}, so say so.
+        const block = acc.blocks.get(ev.index);
+        if (block?.kind === "tool_use" && block.json === "") {
+          yield { type: "tool_call_delta", id: block.id, input: "{}" };
+        }
       } else if (ev.type === "content_block_delta") {
         const d = ev.delta;
         if (d.type === "input_json_delta") {

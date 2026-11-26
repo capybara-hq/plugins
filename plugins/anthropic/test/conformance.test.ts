@@ -290,6 +290,23 @@ describe("anthropic: errors and edge cases", () => {
     expect(JSON.parse(joined("toolu_b"))).toEqual({ path: "/etc/hosts" });
   });
 
+  it("a no-argument tool call streams a single {} delta", async () => {
+    next = () =>
+      sseMessage({
+        model: "claude-haiku-5-5",
+        stopReason: "tool_use",
+        usage: { input_tokens: 5, output_tokens: 3 },
+        blocks: [{ type: "tool_use", id: "toolu_noargs", name: "Now", inputJson: "" }],
+      });
+    const events = await drain(provider(), req());
+    const done = events.at(-1);
+    if (done?.type !== "message_complete") throw new Error("no message_complete");
+    expect(checkToolStream(events, done)).toEqual([]);
+    expect(events.filter((e) => e.type === "tool_call_delta")).toEqual([
+      { type: "tool_call_delta", id: "toolu_noargs", input: "{}" },
+    ]);
+  });
+
   it("429 -> rate_limited with retryAfterMs from retry-after", async () => {
     next = () => errorJson(429, "rate_limit_error", "Rate limited", { "retry-after": "7" });
     const e = await streamError(provider());
