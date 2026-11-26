@@ -2,6 +2,7 @@ import type { ChannelCard } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { decodeActionValue } from "../src/actions.js";
 import {
+  PENDING_BUTTONS,
   renderCard,
   renderSend,
   renderUpdate,
@@ -353,6 +354,117 @@ describe("renderSend / renderUpdate", () => {
     } catch (e) {
       expect(e).toMatchObject({ name: "ChannelSendError", retryable: false, reason: "too_large" });
     }
+  });
+});
+
+const progress = (
+  over: Partial<Extract<ChannelCard, { kind: "progress" }>> = {},
+): Extract<ChannelCard, { kind: "progress" }> => ({
+  kind: "progress",
+  state: "running",
+  title: "Working",
+  meta: "Elapsed 0:42",
+  status: "Reading the **invoices** now",
+  pinned: "Todo list updated (2 items):\n[x] Plan\n[>] Building",
+  steps: ["Read invoice-1.pdf", "Bash ls -la"],
+  pending: [{ text: "Approve: send the report", url: `${WEB}#apr_1` }],
+  url: WEB,
+  urlText: "See the full process on the web",
+  ...over,
+});
+
+const FINISHED: ChannelCard = {
+  kind: "progress",
+  state: "finished",
+  title: "Worked for 2m 43s",
+  meta: "12 tools",
+  steps: [],
+  pending: [],
+  url: WEB,
+  urlText: "See the full process on the web",
+};
+
+describe("progress card", () => {
+  it("renders a running progress card", () => {
+    const blocks = renderCard(progress(), "en") as Block[];
+    expect(blocks.map((b) => b.type)).toEqual([
+      "section",
+      "section",
+      "section",
+      "rich_text",
+      "actions",
+    ]);
+    const texts = blocks.map((b) => (b.text as { text?: string } | undefined)?.text);
+    expect(texts[0]).toBe("*Working*  ·  Elapsed 0:42");
+    expect(texts[1]).toBe("Reading the *invoices* now");
+    expect(texts[2]).toContain("[x] Plan");
+    expect(JSON.stringify(blocks[3])).toContain("Read invoice-1.pdf\\nBash ls -la");
+    const links = ((blocks[4]?.elements ?? []) as El[]).map((e) => [e.text.text, e.url]);
+    expect(links).toEqual([
+      ["Approve: send the report", `${WEB}#apr_1`],
+      ["See the full process on the web", WEB],
+    ]);
+    // the notification text is the title, and the update path renders the same blocks
+    const [p] = renderSend({ text: "", cards: [progress()] }, "en");
+    expect(p?.text).toBe("Working · Elapsed 0:42");
+    expect(renderUpdate({ text: "", cards: [progress()] }, "en").blocks).toEqual(p?.blocks);
+  });
+
+  it("renders a finished one: only the fields it carries", () => {
+    const blocks = renderCard(FINISHED, "en") as Block[];
+    expect(blocks.map((b) => b.type)).toEqual(["section", "actions"]);
+    expect(((blocks[1]?.elements ?? []) as El[]).map((e) => e.text.text)).toEqual([
+      "See the full process on the web",
+    ]);
+  });
+
+  it("steps never become links, mentions or formatting", () => {
+    const steps = [
+      "Fetch https://evil.example/x",
+      "<https://evil.example|click> <!channel>",
+      "*b*",
+    ];
+    const blocks = renderCard(progress({ steps }), "en") as Block[];
+    const pre = blocks.find((b) => b.type === "rich_text") as Block;
+    // plain text elements only: Slack parses no mrkdwn, links or mentions in them
+    const els = (pre.elements as { type: string; elements: { type: string; text: string }[] }[])[0];
+    expect(els?.type).toBe("rich_text_preformatted");
+    expect(els?.elements.map((e) => e.type)).toEqual(["text"]);
+    expect(els?.elements[0]?.text).toBe(steps.join("\n"));
+    const urls = blocks.flatMap((b) => ((b.elements as El[] | undefined) ?? []).map((e) => e.url));
+    expect(urls.some((u) => u?.includes("evil"))).toBe(false);
+    expect(JSON.stringify(blocks.filter((b) => b.type === "section"))).not.toContain("evil");
+  });
+
+  it("steps that are only whitespace draw no rich text block (Slack rejects empty text)", () => {
+    const empty = renderCard(progress({ steps: ["  ", "\n\t"] }), "en") as Block[];
+    expect(empty.some((b) => b.type === "rich_text")).toBe(false);
+    const one = renderCard(progress({ steps: [" ", "Read a.pdf"] }), "en") as Block[];
+    expect(JSON.stringify(one.find((b) => b.type === "rich_text"))).toContain(
+      '"text":"Read a.pdf"',
+    );
+  });
+
+  it(`at most ${PENDING_BUTTONS} pending buttons; the rest are counted in one line`, () => {
+    const pending = Array.from({ length: PENDING_BUTTONS + 3 }, (_, i) => ({
+      text: `Approve ${i}`,
+      url: `${WEB}#apr_${i}`,
+    }));
+    const blocks = renderCard(progress({ pending }), "en") as Block[];
+    const row = blocks.find((b) => b.type === "actions") as Block;
+    const els = row.elements as El[];
+    expect(els).toHaveLength(PENDING_BUTTONS + 1);
+    expect(new Set(els.map((e) => e.action_id)).size).toBe(els.length);
+    expect(els.at(-1)?.text.text).toBe("See the full process on the web");
+    expect(JSON.stringify(blocks.at(-1))).toContain("and 3 more waiting on the web");
+    const zh = renderCard(progress({ pending }), "zh") as Block[];
+    expect(JSON.stringify(zh.at(-1))).toContain("另有 3 项待处理，请到网页查看");
+  });
+
+  it("an unknown card kind falls back to text and never throws", () => {
+    const future = { kind: "future", title: "x" } as unknown as ChannelCard;
+    const [p] = renderSend({ text: "hi", cards: [future] }, "en");
+    expect(p?.blocks?.length).toBeGreaterThan(0);
   });
 });
 

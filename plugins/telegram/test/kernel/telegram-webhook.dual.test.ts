@@ -125,6 +125,9 @@ describe("Telegram webhook inbound (dual replica, real plugin)", () => {
       name: "Acme Telegram",
       agentId: (ag.json.agent as { id: string }).id,
       config: { botToken: tg.bot.token, webhookSecret: WEBHOOK_SECRET },
+      // process display off: this test covers webhook inbound and dedupe, one reply per update;
+      // the native progress card is covered in telegram.dual.test.ts
+      processDisplay: "off",
     });
     expect(ch.status, JSON.stringify(ch.json)).toBe(201);
     expect(JSON.stringify(ch.json)).not.toContain(WEBHOOK_SECRET);

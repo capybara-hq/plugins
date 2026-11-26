@@ -515,6 +515,8 @@ export function createSlackChannel(opts: SlackChannelOptions): Channel {
       cards: true,
       edit: true,
       threads: true,
+      // the run's progress card is drawn natively (blocks.ts) and edited in place
+      progress: true,
       minEditIntervalMs: MIN_EDIT_INTERVAL_MS,
       files: { maxBytes: SLACK_FILE_MAX_BYTES, imageMaxBytes: SLACK_FILE_MAX_BYTES },
     },

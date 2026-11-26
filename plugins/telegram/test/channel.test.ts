@@ -403,6 +403,10 @@ describe("sendFile", () => {
     data: new Uint8Array([0x25, 0x50, 0x44, 0x46]),
   };
 
+  it("declares a native progress card (cards and edits)", () => {
+    expect(make().features).toMatchObject({ cards: true, edit: true, progress: true });
+  });
+
   it("declares files: 50 MB documents, 10 MB photos", () => {
     expect(make().features.files).toEqual({ maxBytes: 50_000_000, imageMaxBytes: 10_000_000 });
   });

@@ -71,6 +71,7 @@ const T = {
     connect: "Connect",
     connectText: (app: string) => `*${app}* needs to be connected.`,
     bind: "Link account",
+    morePending: (n: number) => `and ${n} more waiting on the web`,
     approvalStates: {
       pending: "Pending",
       approved: "Approved",
@@ -107,6 +108,7 @@ const T = {
     connect: "连接",
     connectText: (app: string) => `需要连接 *${app}*。`,
     bind: "绑定账号",
+    morePending: (n: number) => `另有 ${n} 项待处理，请到网页查看`,
     approvalStates: {
       pending: "待审批",
       approved: "已批准",
@@ -356,6 +358,65 @@ function questionBlocks(c: Extract<ChannelCard, { kind: "question" }>, locale: L
   return blocks;
 }
 
+const STEP_LIMIT = 300;
+/** Pending actions drawn as buttons; the rest are counted in one line (the web lists them all). */
+export const PENDING_BUTTONS = 20;
+
+/**
+ * The run's progress card, edited in place: the title (+ meta), the status line and the pinned
+ * text as mrkdwn (model and extension Markdown, like an answer), the latest steps as a
+ * preformatted rich text block (plain text elements: model-written arguments never become links,
+ * mentions or formatting), then the pending actions and the web link as link buttons. A finished
+ * card carries fewer fields; only the ones present are drawn. Slack blocks have no head colour.
+ */
+function progressBlocks(c: Extract<ChannelCard, { kind: "progress" }>, locale: Locale): Block[] {
+  const blocks: Block[] = [
+    section(c.meta ? `*${esc(c.title)}*  ·  ${esc(c.meta)}` : `*${esc(c.title)}*`),
+  ];
+  if (c.status) blocks.push(section(markdownToMrkdwn(c.status)));
+  if (c.pinned) blocks.push(section(markdownToMrkdwn(c.pinned)));
+  // Slack rejects an empty text element: a step that is only whitespace draws nothing
+  const steps = c.steps.map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x !== "");
+  if (steps.length > 0) {
+    const text = steps.map((x) => plainTrunc(x, STEP_LIMIT)).join("\n");
+    blocks.push({
+      type: "rich_text",
+      elements: [{ type: "rich_text_preformatted", elements: [{ type: "text", text }] }],
+    });
+  }
+  // an actions block holds at most 25 elements: the rest of the pending actions are counted
+  const shown = c.pending.slice(0, PENDING_BUTTONS);
+  blocks.push(
+    actions([
+      ...shown.map((p, i) => link(`cap_link_pending_${i}`, p.text, p.url)),
+      link("cap_link_web", c.urlText, c.url),
+    ]),
+  );
+  const more = c.pending.length - shown.length;
+  if (more > 0) blocks.push(context((T[locale] ?? T.en).morePending(more)));
+  return blocks;
+}
+
+/** Cut raw text (no entities) to `n` code units with an ellipsis, never splitting a surrogate pair. */
+function plainTrunc(s: string, n: number): string {
+  if (s.length <= n) return s;
+  let at = n - 1;
+  const c = s.charCodeAt(at - 1);
+  if (c >= 0xd800 && c <= 0xdbff) at--;
+  return `${s.slice(0, at)}…`;
+}
+
+/** A card kind this plugin does not know (a newer kernel): the SDK's text form, never a throw. */
+function unknownBlocks(card: never, locale: Locale): Block[] {
+  let text: unknown;
+  try {
+    text = renderCardAsText(card, locale);
+  } catch {
+    text = undefined;
+  }
+  return [section(typeof text === "string" && text !== "" ? markdownToMrkdwn(text) : "…")];
+}
+
 /** 一张卡片 → Block Kit blocks（按钮文字与固定词按 locale）。 */
 export function renderCard(card: ChannelCard, locale: Locale): Block[] {
   return placeLinkText(cardBlocks(card, locale));
@@ -375,6 +436,10 @@ function cardBlocks(card: ChannelCard, locale: Locale): Block[] {
       ];
     case "bind":
       return [section(esc(card.text)), actions([link("cap_link_bind", t.bind, card.url)])];
+    case "progress":
+      return progressBlocks(card, locale);
+    default:
+      return unknownBlocks(card, locale);
   }
 }
 
@@ -387,7 +452,9 @@ function cardHeadline(card: ChannelCard, locale: Locale): string | undefined {
       return textOf(card.form.title, locale);
     case "bind":
       return card.text;
-    case "connect":
+    case "progress":
+      return card.title;
+    default:
       return undefined;
   }
 }
@@ -465,9 +532,20 @@ function renderText(
     if (i > 0) blocks.push({ type: "divider" });
     blocks.push(...renderCard(c, locale));
   });
-  const fallback = last ?? esc(cards.map((c) => renderCardAsText(c, locale)).join("\n\n"));
+  const fallback = last ?? esc(cards.map((c) => cardText(c, locale)).join("\n\n"));
   posts.push({ text: trunc(fallback, TEXT_LIMIT), blocks });
   return posts;
+}
+
+/** The notification text of a card: the progress card's title, otherwise the SDK's text form. */
+function cardText(card: ChannelCard, locale: Locale): string {
+  if (card.kind === "progress") return card.meta ? `${card.title} · ${card.meta}` : card.title;
+  try {
+    const text: unknown = renderCardAsText(card, locale);
+    return typeof text === "string" ? text : "…";
+  } catch {
+    return "…";
+  }
 }
 
 /**

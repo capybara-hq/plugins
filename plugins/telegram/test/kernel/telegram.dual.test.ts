@@ -40,7 +40,8 @@ const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
  * fake Bot API, long polling:
  *  (a) exactly one `getUpdates` poller across both replicas;
  *  (b) an unbound user's private message gets the bind card (URL button), bound on the web;
- *  (c) the next private message streams: one `sendMessage`, then edits, final text exact;
+ *  (c) the next private message: the run's native progress card (one `sendMessage`, then edits in
+ *      place, its web link a URL button) and the answer as a second message, text exact;
  *  (d) a group mention is answered as a reply to it; a reply to the bot's reply continues the same
  *      conversation;
  *  (e) a write tool (fake-im's `post_announcement`, policy ask) → approval card in the group thread →
@@ -251,23 +252,29 @@ describe("Telegram plugin in the kernel (dual replica, long polling)", () => {
       .executeTakeFirstOrThrow();
     expect(identity).toEqual({ account_id: aliceId, source: "telegram:global" });
 
-    // ================= (c) streamed private reply: one sendMessage, then edits =================
+    // ================= (c) private reply: the native progress card, edited, + the answer =================
     const before = sentTo(ALICE.id).length;
     tg.push(telegramPrivateMessage(ALICE, `slow:120:${LONG}`));
-    const draft = await waitFor(
+    const progress = await waitFor(
       async () => sentTo(ALICE.id).slice(before)[0],
       20_000,
-      "draft message",
+      "progress card",
     );
-    expect(draft.text.length).toBeLessThan(LONG.length);
+    expect(progress.parseMode).toBe("HTML");
     // The plugin trims the inbound text, so model-fake echoes it without the trailing space
-    await waitFor(
-      async () => finalText(draft) === LONG.trimEnd() || undefined,
+    const answer = await waitFor(
+      async () =>
+        sentTo(ALICE.id)
+          .slice(before)
+          .find((m) => finalText(m) === LONG.trimEnd()),
       30_000,
-      "final text",
+      "answer",
     );
-    expect(editsOf(draft).length).toBeGreaterThanOrEqual(1);
-    expect(latest(draft).parseMode).toBe("HTML");
+    expect(answer.messageId).not.toBe(progress.messageId);
+    await waitFor(async () => editsOf(progress).length > 0 || undefined, 20_000, "progress edited");
+    expect(
+      findTelegramButton(latest(progress).replyMarkup, (b) => b.url?.startsWith(PUBLIC) === true),
+    ).toBeDefined();
     // Barrier: the run is over, so no further message for it can come
     const [dmThread] = await threadsIn(ALICE.id);
     expect(dmThread).toBeDefined();
@@ -277,7 +284,7 @@ describe("Telegram plugin in the kernel (dual replica, long polling)", () => {
       20_000,
       "dm run finished",
     );
-    expect(sentTo(ALICE.id).slice(before)).toHaveLength(1);
+    expect(sentTo(ALICE.id).slice(before)).toHaveLength(2);
 
     // ================= (d) group mention → reply to it; a reply to the bot continues =================
     tg.push(
@@ -407,7 +414,12 @@ describe("Telegram plugin in the kernel (dual replica, long polling)", () => {
     // The kernel's fixed text and the card are one message (a second one would break the update)
     expect(askMsg.text).toContain("Your input is needed");
     expect(askMsg.text).toContain("Deploy target");
-    expect(sentTo(ALICE.id).slice(beforeAsk)).toHaveLength(1);
+    // (the run's progress card is a message of its own, before it)
+    expect(
+      sentTo(ALICE.id)
+        .slice(beforeAsk)
+        .filter((m) => m.text.includes("Your input is needed")),
+    ).toHaveLength(1);
     const staging = findTelegramButton(askMsg.replyMarkup, (b) => b.text === "staging");
     if (!staging?.callback_data) throw new Error("no option button");
     expect(

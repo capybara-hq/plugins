@@ -36,7 +36,8 @@ const MODEL_FAKE = "@capybara-hq/plugin-model-fake";
  * （Web API + Socket Mode WebSocket），走一遍：
  *  1. 建 Slack 渠道连接（verify = auth.test：租户 = team id）；只有一个副本连上 Socket Mode；
  *  2. 未绑定的人私聊 → Block Kit 绑定卡片（链接按钮）→ 网页上确认绑定；
- *  3. 私聊流式回复：chat.postMessage 发草稿、chat.update 更新、以完整文本定稿；
+ *  3. DM: the run's native progress card (chat.postMessage, then chat.update in place) and the
+ *     answer as a new message;
  *  4. 频道里 @ 机器人调用写工具 → 话题里的审批卡片（按钮）→ 点「批准一次」→ 卡片经 chat.update 变为已批准、
  *     按钮移除，续跑后最终回复投到同一话题；
  *  5. 每个推送的信封都被确认（内核收下后才 ack）。
@@ -219,27 +220,39 @@ describe("Slack 插件接内核（双副本）", () => {
       .executeTakeFirstOrThrow();
     expect(identity).toEqual({ account_id: aliceId, source: "slack:T1" });
 
-    // ================= 3. 私聊流式回复：postMessage 草稿 → chat.update → 定稿 =================
+    // ================= 3. DM: the run's native progress card, edited in place, + the answer =================
     const before = postedTo("DUALICE").length;
     await slack.waitForAck(
       push(slack.pushEvent(slackDmEvent("UALICE", `slow:120:${LONG}`, { ts: "100.2" }))),
     );
-    const draft = await waitFor(
+    const progress = await waitFor(
       async () => postedTo("DUALICE").slice(before)[0],
       20_000,
-      "draft message",
+      "progress card",
     );
-    expect(draft.text.length).toBeLessThan(LONG.length);
-    // 模型回复原样转换为 mrkdwn（这段文本没有需要转换的格式）；插件去 @ 时会去掉入站文本首尾的空白，
-    // 所以 model-fake 回显的文本没有末尾空格
-    await waitFor(
-      async () => slack.finalText(draft) === LONG.trimEnd() || undefined,
+    expect(progress.blocks?.length).toBeGreaterThan(0);
+    // the answer is a new message, sent whole (edits do not notify); 插件去 @ 时会去掉入站文本首尾的
+    // 空白，所以 model-fake 回显的文本没有末尾空格
+    const answer = await waitFor(
+      async () =>
+        postedTo("DUALICE")
+          .slice(before)
+          .find((m) => slack.finalText(m) === LONG.trimEnd()),
       30_000,
-      "final text",
+      "answer",
     );
-    expect(slack.updates.filter((u) => u.ts === draft.ts).length).toBeGreaterThanOrEqual(1);
+    expect(answer.ts).not.toBe(progress.ts);
+    // the progress card was edited in place and keeps its web link button
+    await waitFor(
+      async () => slack.updates.some((u) => u.ts === progress.ts) || undefined,
+      20_000,
+      "progress card edited",
+    );
+    expect(
+      findSlackButton(slack.finalBlocks(progress), (b) => b.url?.startsWith(PUBLIC) === true),
+    ).toBeDefined();
     await sleep(500);
-    expect(postedTo("DUALICE").slice(before)).toHaveLength(1);
+    expect(postedTo("DUALICE").slice(before)).toHaveLength(2);
 
     // ================= 4. 频道里 @ 机器人 → 话题里的审批卡片 → 点击批准 =================
     const tool = 'tool:plugin__fake-im__post_announcement:{"text":"Office closed on Friday"}';

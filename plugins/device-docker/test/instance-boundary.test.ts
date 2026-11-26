@@ -160,15 +160,30 @@ describe("staged runtime digests against the host SDK", () => {
     );
   };
 
-  it("keeps an instance of an earlier image available while the host SDK accepts its launcher", async () => {
-    // the launcher released images staged before this restage: a digest the SDK still accepts
-    // (its `accepted` list keeps the earlier launcher for one revision after the promotion)
-    const staged = stagedRuntimeDigests()["linux-sandbox.py"];
-    const earlier = SANDBOX_RUNTIME_SOURCE.accepted["linux-sandbox.py"]?.find((d) => d !== staged);
-    expect(earlier).toBeDefined();
-    const got = await support({ "linux-sandbox.py": earlier ?? "" });
-    expect(got.unavailableReason).toBeUndefined();
-    expect(got.background).toBe(true);
+  it("keeps an instance available with every launcher digest the host SDK accepts", async () => {
+    // the launcher released images staged: the staged digest, and for one revision after a
+    // promotion the previous one (core drops it at the next runtime change; an earlier launcher
+    // on a stub host SDK: runtime-earlier-image.test.ts)
+    const accepted = SANDBOX_RUNTIME_SOURCE.accepted["linux-sandbox.py"] ?? [];
+    expect(accepted).toContain(stagedRuntimeDigests()["linux-sandbox.py"]);
+    for (const digest of accepted) {
+      const got = await support({ "linux-sandbox.py": digest });
+      expect(got.unavailableReason, digest).toBeUndefined();
+      expect(got.background, digest).toBe(true);
+    }
+  });
+
+  it("offers nothing for an earlier native helper, even one the host SDK still accepts", async () => {
+    // a file the agent runs must be exactly the staged one every operation expects
+    const staged = stagedRuntimeDigests()["native-files.py"];
+    const earlier = SANDBOX_RUNTIME_SOURCE.accepted["native-files.py"]?.filter((d) => d !== staged);
+    for (const digest of [...(earlier ?? []), "b".repeat(64)]) {
+      const got = await support({ "native-files.py": digest });
+      expect(got.background, digest).toBe(false);
+      expect(got.unavailableReason, digest).toBe(
+        "The staged native-files.py does not match its digest",
+      );
+    }
   });
 
   it("offers nothing for a launcher or helper digest the host SDK does not accept", async () => {

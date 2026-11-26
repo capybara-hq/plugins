@@ -1,4 +1,5 @@
 import {
+  CARD_TEXT_MAX,
   defineExtension,
   type ExtensionContext,
   ToolError,
@@ -77,6 +78,31 @@ export function renderTodos(todos: Todo[]): string {
     (t) => `${MARK[t.status]} ${t.status === "in_progress" ? t.activeForm : t.content}`,
   );
   return `Todo list updated (${todos.length} items):\n${lines.join("\n")}`;
+}
+
+/**
+ * The pinned card's Markdown text for channels (the progress card shows it): a heading line with
+ * the count done, then the checklist as a Markdown list, one item per line (`- [x] done`,
+ * `- [ ] **active form** (in progress)`, `- [ ] pending`), so every renderer keeps one line per
+ * item. Cut on whole items to at most {@link CARD_TEXT_MAX} characters, a last `- …` item marking
+ * the cut.
+ */
+export function todosCardText(todos: Todo[]): string {
+  if (todos.length === 0) return "The todo list is empty.";
+  const done = todos.filter((t) => t.status === "completed").length;
+  const one = (s: string) => s.replace(/\s+/g, " ").trim();
+  const items = todos.map((t) =>
+    t.status === "completed"
+      ? `- [x] ${one(t.content)}`
+      : t.status === "in_progress"
+        ? `- [ ] **${one(t.activeForm)}** (in progress)`
+        : `- [ ] ${one(t.content)}`,
+  );
+  const full = [`Todos (${done}/${todos.length}):`, "", ...items].join("\n");
+  if (full.length <= CARD_TEXT_MAX) return full;
+  const room = CARD_TEXT_MAX - 4; // "\n- …"
+  const cut = full.lastIndexOf("\n", room);
+  return `${full.slice(0, cut > 0 ? cut : room)}\n- …`;
 }
 
 /** 整表覆盖写入一个会话的清单（单条 upsert，多副本并发下最后写入者胜出）。 */
@@ -258,7 +284,8 @@ export function writeHandler(db: Db, ui: Pick<ExtensionContext["ui"], "invalidat
           en: `Updated todos (${todos.length} items)`,
         },
       },
-      card: { view: TASKS_CARD, key: snapshot },
+      // pinned: the run keeps its latest list in view; `text` is what channels show for it
+      card: { view: TASKS_CARD, key: snapshot, placement: "pinned", text: todosCardText(todos) },
     };
   };
 }

@@ -361,6 +361,8 @@ export function createLarkChannel(opts: LarkChannelOptions): Channel {
       cards: true,
       edit: true,
       threads: true,
+      // the run's progress card is drawn natively (cards.ts) and edited in place
+      progress: true,
       minEditIntervalMs: MIN_EDIT_INTERVAL_MS,
       files: { maxBytes: 31_457_280, imageMaxBytes: 10_485_760 },
     },

@@ -223,27 +223,40 @@ describe("Lark 插件接内核（双副本）", () => {
       .executeTakeFirstOrThrow();
     expect(identity).toEqual({ account_id: aliceId, source: "lark:t1" });
 
-    // ================= 3. 私聊流式回复：卡片草稿 → PATCH → 定稿 =================
+    // ================= 3. DM: the run's native progress card, edited in place, + the answer =================
     const before = postedTo("oc_dm_alice").length;
     await lark.waitForAck(push(lark.pushEvent(dm(`slow:120:${LONG}`, "om_dm_2"))));
-    const draft = await waitFor(
+    const progress = await waitFor(
       async () => postedTo("oc_dm_alice").slice(before)[0],
       20_000,
-      "draft message",
+      "progress card",
     );
-    expect(draft.msgType).toBe("interactive");
-    expect(lark.cardText(draft.card).length).toBeLessThan(LONG.length);
+    expect(progress.msgType).toBe("interactive");
+    const head = (card: unknown) =>
+      (card as { header?: { template?: string; title?: { content?: string } } }).header;
+    expect(head(progress.card)?.title?.content).toBeTruthy();
+    // the answer is a new message, sent whole (edits do not notify)
     // 插件去 @ 时去掉入站文本首尾的空白，所以 model-fake 回显的文本没有末尾空格
-    await waitFor(
-      async () => finalText(draft) === LONG.trimEnd() || undefined,
+    const answer = await waitFor(
+      async () =>
+        postedTo("oc_dm_alice")
+          .slice(before)
+          .find((m) => finalText(m) === LONG.trimEnd()),
       30_000,
-      "final text",
+      "answer",
+    );
+    expect(answer.messageId).not.toBe(progress.messageId);
+    // the progress card ends edited down to its finished form (green head) with the web link
+    await waitFor(
+      async () => head(lark.finalCard(progress))?.template === "green" || undefined,
+      20_000,
+      "progress card finished",
     );
     expect(
-      lark.updates.filter((u) => u.messageId === draft.messageId).length,
-    ).toBeGreaterThanOrEqual(1);
+      findLarkButton(lark.finalCard(progress), (b) => b.url?.startsWith(PUBLIC) === true),
+    ).toBeDefined();
     await sleep(500);
-    expect(postedTo("oc_dm_alice").slice(before)).toHaveLength(1);
+    expect(postedTo("oc_dm_alice").slice(before)).toHaveLength(2);
 
     // ================= 4. 群里 @ 机器人 → 话题里的审批卡片 → 点击批准 =================
     const tool = 'tool:plugin__fake-im__post_announcement:{"text":"Office closed on Friday"}';

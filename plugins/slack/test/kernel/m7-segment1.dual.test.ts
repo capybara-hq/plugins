@@ -160,7 +160,14 @@ describe("M7 segment 1: gateway roles, fair share, webhook mode, failover (dual 
     expect(en.status, JSON.stringify(en.json)).toBe(200);
 
     const create = async (name: string, config: Json) => {
-      const ch = await call("POST", `${base}/channels`, { plugin: "slack", name, agentId, config });
+      // process display off: this test covers gateways and failover with the streaming draft
+      const ch = await call("POST", `${base}/channels`, {
+        plugin: "slack",
+        name,
+        agentId,
+        config,
+        processDisplay: "off",
+      });
       expect(ch.status, JSON.stringify(ch.json)).toBe(201);
       return (ch.json.channel as { id: string }).id;
     };

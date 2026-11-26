@@ -131,6 +131,7 @@ describe("plugin manifest", () => {
       cards: true,
       edit: true,
       threads: true,
+      progress: true,
       minEditIntervalMs: MIN_EDIT_INTERVAL_MS,
       files: { maxBytes: 31_457_280, imageMaxBytes: 10_485_760 },
     });
