@@ -71,6 +71,7 @@ const T = {
     connect: "Connect",
     connectText: (app: string) => `*${app}* needs to be connected.`,
     bind: "Link account",
+    morePending: (n: number) => `and ${n} more waiting on the web`,
     approvalStates: {
       pending: "Pending",
       approved: "Approved",
@@ -107,6 +108,7 @@ const T = {
     connect: "连接",
     connectText: (app: string) => `需要连接 *${app}*。`,
     bind: "绑定账号",
+    morePending: (n: number) => `另有 ${n} 项待处理，请到网页查看`,
     approvalStates: {
       pending: "待审批",
       approved: "已批准",
@@ -357,6 +359,8 @@ function questionBlocks(c: Extract<ChannelCard, { kind: "question" }>, locale: L
 }
 
 const STEP_LIMIT = 300;
+/** Pending actions drawn as buttons; the rest are counted in one line (the web lists them all). */
+export const PENDING_BUTTONS = 20;
 
 /**
  * The run's progress card, edited in place: the title (+ meta), the status line and the pinned
@@ -365,25 +369,31 @@ const STEP_LIMIT = 300;
  * mentions or formatting), then the pending actions and the web link as link buttons. A finished
  * card carries fewer fields; only the ones present are drawn. Slack blocks have no head colour.
  */
-function progressBlocks(c: Extract<ChannelCard, { kind: "progress" }>): Block[] {
+function progressBlocks(c: Extract<ChannelCard, { kind: "progress" }>, locale: Locale): Block[] {
   const blocks: Block[] = [
     section(c.meta ? `*${esc(c.title)}*  ·  ${esc(c.meta)}` : `*${esc(c.title)}*`),
   ];
   if (c.status) blocks.push(section(markdownToMrkdwn(c.status)));
   if (c.pinned) blocks.push(section(markdownToMrkdwn(c.pinned)));
-  if (c.steps.length > 0) {
-    const text = c.steps.map((x) => plainTrunc(x.replace(/\s+/g, " "), STEP_LIMIT)).join("\n");
+  // Slack rejects an empty text element: a step that is only whitespace draws nothing
+  const steps = c.steps.map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x !== "");
+  if (steps.length > 0) {
+    const text = steps.map((x) => plainTrunc(x, STEP_LIMIT)).join("\n");
     blocks.push({
       type: "rich_text",
       elements: [{ type: "rich_text_preformatted", elements: [{ type: "text", text }] }],
     });
   }
+  // an actions block holds at most 25 elements: the rest of the pending actions are counted
+  const shown = c.pending.slice(0, PENDING_BUTTONS);
   blocks.push(
     actions([
-      ...c.pending.map((p, i) => link(`cap_link_pending_${i}`, p.text, p.url)),
+      ...shown.map((p, i) => link(`cap_link_pending_${i}`, p.text, p.url)),
       link("cap_link_web", c.urlText, c.url),
     ]),
   );
+  const more = c.pending.length - shown.length;
+  if (more > 0) blocks.push(context((T[locale] ?? T.en).morePending(more)));
   return blocks;
 }
 
@@ -427,7 +437,7 @@ function cardBlocks(card: ChannelCard, locale: Locale): Block[] {
     case "bind":
       return [section(esc(card.text)), actions([link("cap_link_bind", t.bind, card.url)])];
     case "progress":
-      return progressBlocks(card);
+      return progressBlocks(card, locale);
     default:
       return unknownBlocks(card, locale);
   }

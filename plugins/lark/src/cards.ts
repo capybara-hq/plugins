@@ -75,6 +75,7 @@ const T = {
     connect: "Connect",
     connectText: (app: string) => `**${app}** needs to be connected.`,
     bind: "Link account",
+    morePending: (n: number) => `and ${n} more waiting on the web`,
     approvalStates: {
       pending: "Pending",
       approved: "Approved",
@@ -112,6 +113,7 @@ const T = {
     connect: "连接",
     connectText: (app: string) => `需要连接 **${app}**。`,
     bind: "绑定账号",
+    morePending: (n: number) => `另有 ${n} 项待处理，请到网页查看`,
     approvalStates: {
       pending: "待审批",
       approved: "已批准",
@@ -156,6 +158,8 @@ const PROGRESS_COLOR: Record<string, string> = {
   failed: "red",
 };
 const STATUS_LIMIT = 1000;
+/** Pending actions drawn as buttons; the rest are counted in one line (the web lists them all). */
+export const PENDING_BUTTONS = 20;
 const STEP_LIMIT = 300;
 
 /** 截到 `n` 个码元以内（末尾加省略号），不拆代理对。 */
@@ -397,18 +401,21 @@ function question(
  * hold model-written arguments: never links), then the pending actions and the web link as link
  * buttons. A finished card carries fewer fields; only the ones present are drawn.
  */
-function progress(c: Extract<ChannelCard, { kind: "progress" }>): Rendered {
+function progress(c: Extract<ChannelCard, { kind: "progress" }>, locale: Locale): Rendered {
   const head = c.meta ? `${c.title} · ${c.meta}` : c.title;
   const elements: El[] = [];
   if (c.status) elements.push(md(toCardMarkdown(trunc(c.status, STATUS_LIMIT))));
   if (c.pinned) elements.push(md(toCardMarkdown(c.pinned)));
-  if (c.steps.length > 0) {
-    const lines = c.steps.map((x) => codeSafe(trunc(x.replace(/\s+/g, " "), STEP_LIMIT)));
+  // a step that is only whitespace draws nothing: no empty lines, no empty code block
+  const steps = c.steps.map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x !== "");
+  if (steps.length > 0) {
+    const lines = steps.map((x) => codeSafe(trunc(x, STEP_LIMIT)));
     elements.push(md(`\`\`\`\n${lines.join("\n")}\n\`\`\``));
   }
-  elements.push(
-    ...actions([], ...c.pending.map((p) => link(p.text, p.url)), link(c.urlText, c.url)),
-  );
+  const shown = c.pending.slice(0, PENDING_BUTTONS);
+  elements.push(...actions([], ...shown.map((p) => link(p.text, p.url)), link(c.urlText, c.url)));
+  const more = c.pending.length - shown.length;
+  if (more > 0) elements.push(md(T[locale].morePending(more)));
   return {
     header: { title: plain(trunc(head, 200)), template: PROGRESS_COLOR[c.state] ?? "grey" },
     elements,
@@ -436,7 +443,7 @@ function renderOne(card: ChannelCard, locale: Locale, chat: ChatKind): Rendered 
         headline: card.text,
       };
     case "progress":
-      return progress(card);
+      return progress(card, locale);
     default:
       return fallback(card, locale);
   }

@@ -351,6 +351,18 @@ describe("renderCards: progress card", () => {
     expect(p?.withoutUrlButtons?.html).not.toContain('<a href="https://evil');
   });
 
+  it("steps that are only whitespace draw no pre block", async () => {
+    const [p] = await renderCards([progress({ steps: ["  ", "\n\t"] })], "en", setup().tokens, log);
+    expect(p?.html).not.toContain("<pre>");
+    const [q] = await renderCards(
+      [progress({ steps: [" ", "Read a.pdf"] })],
+      "en",
+      setup().tokens,
+      log,
+    );
+    expect(q?.html).toContain("<pre>Read a.pdf</pre>");
+  });
+
   it("an unknown card kind falls back to text and never throws", async () => {
     const future = { kind: "future", title: "x" } as unknown as ChannelCard;
     const [p] = await renderCards([future], "en", setup().tokens, log);

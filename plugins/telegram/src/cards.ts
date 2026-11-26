@@ -79,9 +79,11 @@ function progressText(c: Extract<ChannelCard, { kind: "progress" }>): {
   ];
   if (c.status) parts.push(markdownToTelegramHtml(c.status));
   if (c.pinned) parts.push(markdownToTelegramHtml(c.pinned));
-  if (c.steps.length > 0) {
-    const steps = c.steps.map((x) => {
-      const chars = [...x.replace(/\s+/g, " ")];
+  // a step that is only whitespace draws nothing: no empty lines, no empty <pre>
+  const kept = c.steps.map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x !== "");
+  if (kept.length > 0) {
+    const steps = kept.map((x) => {
+      const chars = [...x];
       return chars.length > STEP_MAX ? `${chars.slice(0, STEP_MAX - 1).join("")}…` : chars.join("");
     });
     parts.push(`<pre>${escapeHtml(steps.join("\n"))}</pre>`);
@@ -162,6 +164,10 @@ async function callbackButton(
   }
 }
 
+/** A card kind this plugin does not know (a newer kernel) gets no buttons; `never` keeps the
+ * switch above exhaustive for the kinds this SDK has. */
+const noButtons = (_card: never): Button[][] => [];
+
 async function keyboard(
   card: ChannelCard,
   locale: Locale,
@@ -232,7 +238,7 @@ async function keyboard(
         urlButton(clip(card.urlText), card.url),
       ];
     default:
-      return [];
+      return noButtons(card);
   }
 }
 

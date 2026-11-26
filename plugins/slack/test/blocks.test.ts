@@ -2,6 +2,7 @@ import type { ChannelCard } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { decodeActionValue } from "../src/actions.js";
 import {
+  PENDING_BUTTONS,
   renderCard,
   renderSend,
   renderUpdate,
@@ -433,6 +434,31 @@ describe("progress card", () => {
     const urls = blocks.flatMap((b) => ((b.elements as El[] | undefined) ?? []).map((e) => e.url));
     expect(urls.some((u) => u?.includes("evil"))).toBe(false);
     expect(JSON.stringify(blocks.filter((b) => b.type === "section"))).not.toContain("evil");
+  });
+
+  it("steps that are only whitespace draw no rich text block (Slack rejects empty text)", () => {
+    const empty = renderCard(progress({ steps: ["  ", "\n\t"] }), "en") as Block[];
+    expect(empty.some((b) => b.type === "rich_text")).toBe(false);
+    const one = renderCard(progress({ steps: [" ", "Read a.pdf"] }), "en") as Block[];
+    expect(JSON.stringify(one.find((b) => b.type === "rich_text"))).toContain(
+      '"text":"Read a.pdf"',
+    );
+  });
+
+  it(`at most ${PENDING_BUTTONS} pending buttons; the rest are counted in one line`, () => {
+    const pending = Array.from({ length: PENDING_BUTTONS + 3 }, (_, i) => ({
+      text: `Approve ${i}`,
+      url: `${WEB}#apr_${i}`,
+    }));
+    const blocks = renderCard(progress({ pending }), "en") as Block[];
+    const row = blocks.find((b) => b.type === "actions") as Block;
+    const els = row.elements as El[];
+    expect(els).toHaveLength(PENDING_BUTTONS + 1);
+    expect(new Set(els.map((e) => e.action_id)).size).toBe(els.length);
+    expect(els.at(-1)?.text.text).toBe("See the full process on the web");
+    expect(JSON.stringify(blocks.at(-1))).toContain("and 3 more waiting on the web");
+    const zh = renderCard(progress({ pending }), "zh") as Block[];
+    expect(JSON.stringify(zh.at(-1))).toContain("另有 3 项待处理，请到网页查看");
   });
 
   it("an unknown card kind falls back to text and never throws", () => {

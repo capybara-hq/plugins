@@ -6,6 +6,7 @@ import {
   CONTENT_BYTES_LIMIT,
   contentBytes,
   type LarkCard,
+  PENDING_BUTTONS,
   renderSend,
   renderUpdate,
   TEXT_LIMIT,
@@ -482,6 +483,31 @@ describe("renderSend: progress card", () => {
     expect(
       buttons(c as LarkCard).some((b) => String(behavior(b).default_url).includes("evil")),
     ).toBe(false);
+  });
+
+  it("steps that are only whitespace draw no code block", () => {
+    const [c] = renderSend({ text: "", cards: [progress({ steps: ["  ", "\n\t"] })] }, "en", "d");
+    expect(markdown(c as LarkCard)).not.toContain("```");
+    const [d] = renderSend(
+      { text: "", cards: [progress({ steps: [" ", "Read a.pdf"] })] },
+      "en",
+      "d",
+    );
+    expect(markdown(d as LarkCard)).toContain("```\nRead a.pdf\n```");
+  });
+
+  it(`at most ${PENDING_BUTTONS} pending buttons; the rest are counted in one line`, () => {
+    const pending = Array.from({ length: PENDING_BUTTONS + 3 }, (_, i) => ({
+      text: `Approve ${i}`,
+      url: `https://cap.example/c/1#apr_${i}`,
+    }));
+    const [c] = renderSend({ text: "", cards: [progress({ pending })] }, "en", "d");
+    const labels = buttons(c as LarkCard).map(label);
+    expect(labels).toHaveLength(PENDING_BUTTONS + 1);
+    expect(labels.at(-1)).toBe("See the full process on the web");
+    expect(markdown(c as LarkCard)).toContain("and 3 more waiting on the web");
+    const [z] = renderSend({ text: "", cards: [progress({ pending })] }, "zh", "d");
+    expect(markdown(z as LarkCard)).toContain("另有 3 项待处理，请到网页查看");
   });
 
   it("an unknown card kind falls back to text and never throws", () => {
