@@ -15,7 +15,7 @@ import {
   ActionError,
   BrowserSession,
   DEFAULT_DOWNLOAD_MAX_BYTES,
-  proxyRefuses,
+  proxyRefusal,
   TAKEN_OVER_MESSAGE,
 } from "./actions.js";
 import {
@@ -377,16 +377,17 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         ? []
         : (
             await Promise.all(
-              playwrightDownloadHosts(opts.env).map(async (h) =>
-                (await proxyRefuses(proxy, h, 443)) ? h : undefined,
-              ),
+              playwrightDownloadHosts(opts.env).map(async (host) => {
+                const layer = await proxyRefusal(proxy, host, 443);
+                return layer === null ? undefined : { host, layer };
+              }),
             )
-          ).filter((h): h is string => h !== undefined);
+          ).filter((h) => h !== undefined);
     if (refused.length > 0)
       return {
         ok: false,
         error: "blocked",
-        message: `${DOWNLOAD_BLOCKED_PREFIX}${refused.join(", ")}.`,
+        message: `${DOWNLOAD_BLOCKED_PREFIX}${refused.map((r) => r.host).join(", ")}.`,
         blockedHosts: refused,
       };
     return fail(

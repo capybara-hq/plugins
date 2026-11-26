@@ -6,6 +6,7 @@ import {
   DeviceAccessError,
   type DeviceServiceSpec,
   type InputRequired,
+  type ServiceBlockedHost,
   type ToolCallContext,
   ToolError,
   type ToolHandler,
@@ -59,7 +60,7 @@ function fake(
   const requests: ToolOp[] = [];
   /** The requests exactly as they went on the socket. */
   const sent: ToolRequest[] = [];
-  const reported: { hosts: string[]; url?: string | undefined }[] = [];
+  const reported: { hosts: ServiceBlockedHost[]; url?: string | undefined }[] = [];
   let failWith: Error | undefined;
   /** Requests that throw instead of answering (the daemon's socket gone), by request index. */
   const requestFailures = new Map<number, Error>();
@@ -234,10 +235,40 @@ describe("browser tools", () => {
     expect(f.log).toEqual(["ensure:browser", "request:browser:snapshot"]);
   });
 
-  it("blocked hosts are reported to deviceAccess", async () => {
-    const f = fake(() => ({ ok: true, page: PAGE, blockedHosts: ["cdn.example.net"] }));
+  it("blocked hosts are reported to deviceAccess with their layers", async () => {
+    const f = fake(() => ({
+      ok: true,
+      page: PAGE,
+      blockedHosts: [
+        { host: "cdn.example.net", layer: "device" },
+        { host: "intranet.example.net", layer: "address" },
+      ],
+    }));
     await f.run("browser_navigate", { url: "https://example.com" });
-    expect(f.reported).toEqual([{ hosts: ["cdn.example.net"], url: PAGE.url }]);
+    expect(f.reported).toEqual([
+      {
+        hosts: [
+          { host: "cdn.example.net", layer: "device" },
+          { host: "intranet.example.net", layer: "address" },
+        ],
+        url: PAGE.url,
+      },
+    ]);
+  });
+
+  it("a malformed blocked host entry is dropped, an unknown layer is the device's", async () => {
+    const f = fake(
+      () =>
+        ({
+          ok: true,
+          page: PAGE,
+          blockedHosts: ["bare.example", { host: "" }, null, { host: "odd.example", layer: "x" }],
+        }) as never,
+    );
+    await f.run("browser_navigate", { url: "https://example.com" });
+    expect(f.reported).toEqual([
+      { hosts: [{ host: "odd.example", layer: "device" }], url: PAGE.url },
+    ]);
   });
 
   it("blocked hosts on a failed reply are reported before the error", async () => {
@@ -245,12 +276,14 @@ describe("browser tools", () => {
       ok: false,
       error: "blocked",
       message: "The device's network settings block a.example.",
-      blockedHosts: ["a.example"],
+      blockedHosts: [{ host: "a.example", layer: "device" }],
     }));
     await expect(f.run("browser_navigate", { url: "https://a.example" })).rejects.toBeInstanceOf(
       ToolError,
     );
-    expect(f.reported).toEqual([{ hosts: ["a.example"], url: undefined }]);
+    expect(f.reported).toEqual([
+      { hosts: [{ host: "a.example", layer: "device" }], url: undefined },
+    ]);
   });
 
   it("taken_over maps to the actionable ToolError", async () => {
@@ -384,7 +417,7 @@ describe("browser tools", () => {
       ok: false,
       error: "blocked",
       message: "The device's network settings block x.test.",
-      blockedHosts: ["x.test"],
+      blockedHosts: [{ host: "x.test", layer: "device" }],
     }));
     const e = await f.run("browser_navigate", { url: "https://x.test" }).catch((x: unknown) => x);
     expect((e as Error).message).toBe(
@@ -397,7 +430,7 @@ describe("browser tools", () => {
       ok: false,
       error: "blocked",
       message: `${DOWNLOAD_BLOCKED_PREFIX}cdn.playwright.dev.`,
-      blockedHosts: ["cdn.playwright.dev"],
+      blockedHosts: [{ host: "cdn.playwright.dev", layer: "device" }],
     }));
     const e = await f.run("browser_snapshot", {}).catch((x: unknown) => x);
     expect((e as Error).message).toBe(

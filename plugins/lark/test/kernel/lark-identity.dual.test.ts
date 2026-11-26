@@ -9,6 +9,7 @@ import {
   kernelDb,
   larkMessageEvent,
   TEST_PASSWORD as PW,
+  seedLoginSources,
   startFakeLark,
   startTestPostgres,
   startTestRedis,
@@ -83,7 +84,7 @@ describe("Lark 登录与通讯录接内核（双副本）", () => {
         lark: { apiUrl: lark.url, accountsUrl: lark.url, appId: lark.appId, appSecret: SECRET },
       },
       config: {
-        auth: { cookieSecure: false, loginSources: ["lark"] },
+        auth: { cookieSecure: false },
         http: { publicUrl: PUBLIC },
         channels: { leaseTtlMs: 3000, scanIntervalMs: 300 },
         runtime: { jobLockMs: 2000, stalledIntervalMs: 1000 },
@@ -93,6 +94,8 @@ describe("Lark 登录与通讯录接内核（双副本）", () => {
     const raw = createDb(harness.dbUrl, 3);
     cleanups.push(() => raw.destroy());
     const db: KernelSchemaDb = kernelDb(raw);
+    // The login source is on, and an unlinked Lark account signs up (the link page is the default).
+    await seedLoginSources(db, [{ plugin: "lark", signUp: "create" }]);
 
     const call = async (jar: Jar, method: string, path: string, body?: unknown) => {
       const res = await harness.request(path, {

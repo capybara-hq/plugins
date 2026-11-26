@@ -285,6 +285,17 @@ export interface TabCount {
   max: number;
 }
 
+/**
+ * A host the device's network proxy refused during a request, with the layer that refused it:
+ * `address` when the proxy said the destination's address is closed (a name resolving to a private
+ * or local address, or a closed IP literal: no host grant reaches it), else `device` (the device's
+ * network settings). The plugin server reports these to the kernel as they are.
+ */
+export interface BlockedHost {
+  host: string;
+  layer: "device" | "address";
+}
+
 export type ToolReply =
   | {
       ok: true;
@@ -293,7 +304,7 @@ export type ToolReply =
       text?: string;
       /** base64 JPEG */
       image?: string;
-      blockedHosts: string[];
+      blockedHosts: BlockedHost[];
       /**
        * Set on this conversation's first ok reply after a takeover that concerned it ended (it
        * owned a tab when the takeover began, or the person used one of its tabs): when the person
@@ -306,7 +317,7 @@ export type ToolReply =
       ok: false;
       error: ToolErrorCode;
       message: string;
-      blockedHosts: string[];
+      blockedHosts: BlockedHost[];
       tabs?: TabCount;
     };
 

@@ -18,6 +18,7 @@ import {
   TEST_PASSWORD as PW,
   pidOwningLocalPort,
   replicaOf,
+  seedLoginSources,
   sleep,
   startFakeChannelServer,
   startFakeLark,
@@ -126,7 +127,7 @@ describe("M4 第二段验收：Lark（双副本）", () => {
         lark: { apiUrl: lark.url, accountsUrl: lark.url, appId: lark.appId, appSecret: SECRET },
       },
       config: {
-        auth: { cookieSecure: false, loginSources: ["lark"] },
+        auth: { cookieSecure: false },
         http: { publicUrl: PUBLIC },
         channels: { leaseTtlMs: LEASE_TTL_MS, scanIntervalMs: 300 },
         runtime: { jobLockMs: 2000, stalledIntervalMs: 1000 },
@@ -136,6 +137,8 @@ describe("M4 第二段验收：Lark（双副本）", () => {
     const raw = createDb(harness.dbUrl, 3);
     cleanups.push(() => raw.destroy());
     const db: KernelSchemaDb = kernelDb(raw);
+    // The login source is on, and an unlinked Lark account signs up (the link page is the default).
+    await seedLoginSources(db, [{ plugin: "lark", signUp: "create" }]);
 
     // ---- HTTP：杀副本前严格交替发往两个副本；之后只发往幸存的副本 ----
     let dead: number | undefined;
@@ -553,7 +556,8 @@ describe("M4 第二段验收：Lark（双副本）", () => {
       expect(cbUrl.origin + cbUrl.pathname).toBe(`${PUBLIC}/api/v1/auth/sso/lark/callback`);
       const cb = await call(jar, "GET", cbUrl.pathname + cbUrl.search);
       expect(cb.status).toBe(302);
-      expect(jar.has("cap_sso")).toBe(false);
+      // the link page keeps the binding cookie (its routes need it); every other outcome clears it
+      expect(jar.has("cap_sso")).toBe(cb.location.startsWith(`${PUBLIC}/login/link?`));
       return cb.location;
     };
     const sso = async (openId: string, jar: Jar = new Map()) => {
@@ -563,10 +567,27 @@ describe("M4 第二段验收：Lark（双副本）", () => {
       expect(JSON.stringify(me.json)).not.toContain(SECRET);
       return { jar, accountId: (me.json.account as { id: string }).id };
     };
+    // A bot-binding (`bind`) row never signs in: the link page, where alice's password upgrades it.
     const anon: Jar = new Map();
-    expect(await ssoTo("ou_alice", anon)).toBe(`${PUBLIC}/login?error=sso.identity_not_verified`);
+    const linkPage = new URL(await ssoTo("ou_alice", anon));
+    expect(linkPage.origin + linkPage.pathname).toBe(`${PUBLIC}/login/link`);
     expect(anon.has("cap_at")).toBe(false);
-    expect((await sso("ou_alice", aliceJar)).accountId).toBe(aliceId);
+    const ticket = linkPage.searchParams.get("ticket") ?? "";
+    const view = await call(
+      anon,
+      "GET",
+      `/api/v1/auth/sso/link?ticket=${encodeURIComponent(ticket)}`,
+    );
+    expect(view.status).toBe(200);
+    expect(view.json.linkedToAnother).toBe(true);
+    expect(JSON.stringify(view.json)).not.toContain(SECRET);
+    const linked = await call(anon, "POST", "/api/v1/auth/sso/link", {
+      ticket,
+      login: "alice",
+      password: PW,
+    });
+    expect(linked.status).toBe(200);
+    expect((linked.json.account as { id: string }).id).toBe(aliceId);
     expect((await sso("ou_alice")).accountId).toBe(aliceId);
     const carol = await sso("ou_carol");
     expect(carol.accountId).not.toBe(aliceId);

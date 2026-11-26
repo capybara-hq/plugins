@@ -4,11 +4,13 @@
 import {
   type DeviceAccessCtx,
   type DeviceServiceSpec,
+  type ServiceBlockedHost,
   type ToolCallContext,
   ToolError,
   type ToolResult,
 } from "@capybara-hq/plugin-sdk";
 import {
+  type BlockedHost,
   DOWNLOAD_BLOCKED_PREFIX,
   type TabCount,
   type ToolErrorCode,
@@ -302,8 +304,15 @@ export async function runRequest(
     waitUntil = Date.now() + RESTART_WAIT_MS;
     pauseMs = RESTART_PAUSE_FIRST_MS;
   }
-  const hosts = Array.isArray(reply.blockedHosts)
-    ? reply.blockedHosts.filter((h): h is string => typeof h === "string" && h !== "")
+  // each host with the layer the daemon read from the device's proxy: the kernel asks about a
+  // `device` host it can offer and writes the private-address note for an `address` one
+  const hosts: ServiceBlockedHost[] = Array.isArray(reply.blockedHosts)
+    ? reply.blockedHosts.flatMap((h: unknown) => {
+        const b = h as Partial<BlockedHost> | null;
+        if (typeof b !== "object" || b === null || typeof b.host !== "string" || b.host === "")
+          return [];
+        return [{ host: b.host, layer: b.layer === "address" ? "address" : "device" } as const];
+      })
     : [];
   if (hosts.length > 0)
     deps.deviceAccess.reportBlockedHosts(

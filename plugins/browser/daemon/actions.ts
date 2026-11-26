@@ -23,6 +23,7 @@ import {
 } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { basename, extname, join, sep } from "node:path";
+import { sandboxProxyRefusalLayer } from "@capybara-hq/plugin-sdk";
 import type {
   BrowserContext,
   CDPSession,
@@ -35,6 +36,7 @@ import type {
 } from "playwright-core";
 import { fetchIcon, iconForPanel, iconUrlOf } from "./favicon.js";
 import {
+  type BlockedHost,
   EVICT_MIN_IDLE_MS,
   MAX_TABS,
   MAX_TABS_PER_CONVERSATION,
@@ -73,11 +75,34 @@ export class ActionError extends Error {
   }
 }
 
+/** A collector's refused hosts as a reply carries them. */
+function blockedHostsOf(c: Collector): BlockedHost[] {
+  return [...c.blocked].map(([host, layer]) => ({ host, layer }));
+}
+
+/**
+ * The message of a request that failed on refused hosts: the device's settings block the
+ * `device` ones; the `address` ones resolve to private or local addresses, closed to the browser.
+ */
+export function blockedMessage(blocked: readonly BlockedHost[]): string {
+  const device = blocked.filter((b) => b.layer === "device").map((b) => b.host);
+  const address = blocked.filter((b) => b.layer === "address").map((b) => b.host);
+  return [
+    ...(device.length > 0 ? [`The device's network settings block ${device.join(", ")}.`] : []),
+    ...(address.length > 0
+      ? [
+          `${address.join(", ")} ${address.length === 1 ? "resolves" : "resolve"} to a private or local address on the device, which the browser never reaches from the sandbox.`,
+        ]
+      : []),
+  ].join(" ");
+}
+
 /** What happened in the browser while one request ran. */
 interface Collector {
   /** The request's conversation: only events of its pages land here. */
   conv: string;
-  blocked: Set<string>;
+  /** The hosts the device's proxy refused for this request's pages, with the refusing layer. */
+  blocked: Map<string, BlockedHost["layer"]>;
   notes: string[];
   pending: Promise<unknown>[];
   /** Downloads that began during the request: waited for, at most `downloadWaitMs`. */
@@ -474,21 +499,44 @@ const PROXY_DOWN_CODES = new Set([
 ]);
 
 /**
- * Asks the proxy whether it refuses `host` (a CONNECT that answers 403): Chromium reports every
- * failed tunnel alike, and an origin's own 403 looks like the proxy's.
+ * What the proxy answered a CONNECT probe: its {@link ProxyVerdict} and the status phrase of its
+ * answer (for a refusal, the sandbox proxy puts its reason there: "resolved to a private address",
+ * "host is not on the allow list").
  */
-export async function proxyRefuses(proxy: string, host: string, port: number): Promise<boolean> {
-  return (await probeProxy(proxy, host, port)) === "refused";
+export interface ProxyAnswer {
+  verdict: ProxyVerdict;
+  reason: string;
 }
 
-/** Opens (and at once closes) a tunnel to `host:port` through the proxy: its {@link ProxyVerdict}. */
-export function probeProxy(proxy: string, host: string, port: number): Promise<ProxyVerdict> {
+/**
+ * Asks the proxy whether it refuses `host` (a CONNECT that answers 403: Chromium reports every
+ * failed tunnel alike, and an origin's own 403 looks like the proxy's), and for which layer:
+ * `address` when the proxy's reason says the destination's address is closed
+ * (`sandboxProxyRefusalLayer`), else `device`; null when it does not refuse it.
+ */
+export async function proxyRefusal(
+  proxy: string,
+  host: string,
+  port: number,
+): Promise<BlockedHost["layer"] | null> {
+  const answer = await probeProxy(proxy, host, port);
+  if (answer.verdict !== "refused") return null;
+  return refusalLayer(answer.reason);
+}
+
+/** The layer of a proxy refusal from its reason: only a closed address is not the device's. */
+export function refusalLayer(reason: string): BlockedHost["layer"] {
+  return sandboxProxyRefusalLayer(reason) === "address" ? "address" : "device";
+}
+
+/** Opens (and at once closes) a tunnel to `host:port` through the proxy: its {@link ProxyAnswer}. */
+export function probeProxy(proxy: string, host: string, port: number): Promise<ProxyAnswer> {
   return new Promise((resolve) => {
     let url: URL;
     try {
       url = new URL(proxy.includes("://") ? proxy : `http://${proxy}`);
     } catch {
-      resolve("unknown");
+      resolve({ verdict: "unknown", reason: "" });
       return;
     }
     const headers: Record<string, string> = { host: `${host}:${port}` };
@@ -504,18 +552,24 @@ export function probeProxy(proxy: string, host: string, port: number): Promise<P
       headers,
       timeout: PROXY_PROBE_TIMEOUT_MS,
     });
-    const verdict = (status: number | undefined): ProxyVerdict =>
-      status === 403 ? "refused" : status === 200 ? "connected" : "unreachable";
+    const answer = (res: {
+      statusCode?: number | undefined;
+      statusMessage?: string | undefined;
+    }): ProxyAnswer => ({
+      verdict:
+        res.statusCode === 403 ? "refused" : res.statusCode === 200 ? "connected" : "unreachable",
+      reason: res.statusMessage ?? "",
+    });
     req.on("connect", (res, socket) => {
       socket.destroy();
-      resolve(verdict(res.statusCode));
+      resolve(answer(res));
     });
     req.on("response", (res) => {
       res.resume();
-      resolve(verdict(res.statusCode));
+      resolve(answer(res));
     });
     req.on("timeout", () => {
-      resolve("no_answer");
+      resolve({ verdict: "no_answer", reason: "" });
       req.destroy();
     });
     // down only when the connection to the proxy never came about: a reset after it connected
@@ -526,7 +580,10 @@ export function probeProxy(proxy: string, host: string, port: number): Promise<P
       else connected = true;
     });
     req.on("error", (e: NodeJS.ErrnoException) =>
-      resolve(!connected && PROXY_DOWN_CODES.has(e.code ?? "") ? "proxy_down" : "unknown"),
+      resolve({
+        verdict: !connected && PROXY_DOWN_CODES.has(e.code ?? "") ? "proxy_down" : "unknown",
+        reason: "",
+      }),
     );
     req.end();
   });
@@ -1610,13 +1667,16 @@ export class BrowserSession {
     const key = `${owner?.owner ?? ""}\u0000${host}`;
     let probe = this.probes.get(key);
     if (probe === undefined) {
-      probe = proxyRefuses(proxy, host, port).then((refused) => {
+      probe = proxyRefusal(proxy, host, port).then((layer) => {
         this.probes.delete(key);
-        if (refused && owner !== undefined) {
-          for (const c of this.collectors) if (c.conv === owner.owner) c.blocked.add(host);
-          this.emit({ type: "blocked", host, url: pageUrl ?? url.href, root: owner.root });
+        if (layer !== null && owner !== undefined) {
+          for (const c of this.collectors) if (c.conv === owner.owner) c.blocked.set(host, layer);
+          // the viewers offer to allow the host: only the device's settings can (a closed
+          // address stays closed whatever the device's list says)
+          if (layer === "device")
+            this.emit({ type: "blocked", host, url: pageUrl ?? url.href, root: owner.root });
         }
-        return refused;
+        return layer !== null;
       });
       this.probes.set(key, probe);
     }
@@ -1678,7 +1738,7 @@ export class BrowserSession {
     const lateAll = this.unreportedAll.splice(0);
     const c: Collector = {
       conv,
-      blocked: new Set(),
+      blocked: new Map(),
       notes: [...lateAll, ...lateOwn],
       pending: [],
       downloads: [],
@@ -1722,7 +1782,7 @@ export class BrowserSession {
       reply = {
         ok: true,
         ...(page === undefined ? {} : { page: await this.pageInfo(page) }),
-        blockedHosts: [...c.blocked],
+        blockedHosts: blockedHostsOf(c),
         ...(text === "" ? {} : { text }),
         ...(out.image === undefined ? {} : { image: out.image }),
       };
@@ -1735,10 +1795,10 @@ export class BrowserSession {
       }
       if (c.blocked.size > 0 && code !== "no_such_ref" && code !== "taken_over") {
         code = "blocked";
-        // the plugin server adds the one next step (the network ask), so no advice here
-        message = `The device's network settings block ${[...c.blocked].join(", ")}.`;
+        // the plugin server adds the one next step (the network ask or note), so no advice here
+        message = blockedMessage(blockedHostsOf(c));
       }
-      reply = { ok: false, error: code, message, blockedHosts: [...c.blocked] };
+      reply = { ok: false, error: code, message, blockedHosts: blockedHostsOf(c) };
       if (lateOwn.length > 0)
         this.unreported.set(conv, [...lateOwn, ...(this.unreported.get(conv) ?? [])]);
       this.unreportedAll.unshift(...lateAll);
@@ -2135,13 +2195,13 @@ export class BrowserSession {
     }
     const host = url.hostname;
     const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
-    const kind = await probeProxy(this.proxy, host, port);
-    return { kind, text: this.verdictText(kind, host, port, timedOut) };
+    const answer = await probeProxy(this.proxy, host, port);
+    return { kind: answer.verdict, text: this.verdictText(answer, host, port, timedOut) };
   }
 
-  /** The sentence for a {@link ProxyVerdict} ("" when it says nothing). */
-  private verdictText(kind: ProxyVerdict, host: string, port: number, timedOut: boolean): string {
-    switch (kind) {
+  /** The sentence for a proxy's {@link ProxyAnswer} ("" when it says nothing). */
+  private verdictText(answer: ProxyAnswer, host: string, port: number, timedOut: boolean): string {
+    switch (answer.verdict) {
       case "proxy_down":
         // the device's own network, not the address: nothing loads until it is back
         return "the device's network proxy is not reachable, so no page loads on the device right now; this is not a problem of the address.";
@@ -2155,7 +2215,9 @@ export class BrowserSession {
           : `the device's network connects to ${host}:${port}, but the connection failed.`;
       case "refused":
         // checkBlocked reports it (a navigation that timed out is refused only if the rules changed)
-        return `the device's network settings block ${host}.`;
+        return refusalLayer(answer.reason) === "address"
+          ? `${host} resolves to a private or local address on the device, which the browser never reaches from the sandbox.`
+          : `the device's network settings block ${host}.`;
       default:
         return "";
     }

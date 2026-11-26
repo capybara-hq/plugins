@@ -11,9 +11,14 @@ import {
   type TestDaemon,
 } from "./helpers.js";
 
-/** An egress proxy like the device's: refuses blocked.test (403), tunnels everything else. */
+/**
+ * An egress proxy like the device's: refuses blocked.test (403), refuses private.test as the
+ * device's sandbox proxy refuses a name resolving to a private address (its reason in the 403
+ * status phrase), tunnels everything else.
+ */
 async function startRefusingProxy(): Promise<{ url: string; server: Server }> {
   const refused = (host: string) => host.split(":")[0] === "blocked.test";
+  const privateName = (host: string) => host.split(":")[0] === "private.test";
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "");
     if (refused(url.host)) {
@@ -25,6 +30,14 @@ async function startRefusingProxy(): Promise<{ url: string; server: Server }> {
   });
   server.on("connect", (req, sock) => {
     const target = req.url ?? "";
+    if (privateName(target)) {
+      sock.end(
+        "HTTP/1.1 403 resolved to a private address\r\nContent-Type: text/plain\r\n" +
+          "X-Proxy-Error: blocked-by-sandbox-runtime\r\nConnection: close\r\n\r\n" +
+          "Connection to private.test blocked: resolved to a private address",
+      );
+      return;
+    }
     if (refused(target)) {
       sock.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
       return;
@@ -61,7 +74,11 @@ describe("browser daemon blocked hosts", () => {
     const v = await openViewer(d.socketPath, { maxWidth: 480, maxHeight: 300 });
     const blocked = v.next((m) => m.t === "blocked");
     const r = await request(d.socketPath, { op: "navigate", url: "https://blocked.test/page" });
-    expect(r).toMatchObject({ ok: false, error: "blocked", blockedHosts: ["blocked.test"] });
+    expect(r).toMatchObject({
+      ok: false,
+      error: "blocked",
+      blockedHosts: [{ host: "blocked.test", layer: "device" }],
+    });
     expect(await blocked).toMatchObject({ t: "blocked", host: "blocked.test" });
     await v.close();
   });
@@ -129,7 +146,10 @@ describe("browser daemon blocked hosts", () => {
         request(d.socketPath, { op: "navigate", url: `${fx.url}/refusing` }, A),
         request(d.socketPath, { op: "navigate", url: `${fx.url}/plain?again` }, B),
       ]);
-      expect(a).toMatchObject({ ok: true, blockedHosts: ["blocked.test"] });
+      expect(a).toMatchObject({
+        ok: true,
+        blockedHosts: [{ host: "blocked.test", layer: "device" }],
+      });
       expect(b).toMatchObject({ ok: true, blockedHosts: [] });
       await blocked;
       expect(await dialog).toMatchObject({ kind: "alert", message: "late from a" });
@@ -150,8 +170,31 @@ describe("browser daemon blocked hosts", () => {
     }
   });
 
+  it("a host refused for its private address is reported as the address layer, not offered to viewers", async () => {
+    const v = await openViewer(d.socketPath, { maxWidth: 480, maxHeight: 300 });
+    await v.next((m) => m.t === "state");
+    const r = await request(d.socketPath, { op: "navigate", url: "https://private.test/page" });
+    expect(r).toMatchObject({
+      ok: false,
+      error: "blocked",
+      message:
+        "private.test resolves to a private or local address on the device, which the browser never reaches from the sandbox.",
+      blockedHosts: [{ host: "private.test", layer: "address" }],
+    });
+    // allowing the name on the device would change nothing: the viewers are not offered it
+    const marker = v.after((m) => m.t === "state");
+    await request(d.socketPath, { op: "snapshot" });
+    await marker;
+    expect(v.messages.some((m) => m.t === "blocked" && m.host === "private.test")).toBe(false);
+    await v.close();
+  });
+
   it("a plain http navigation the proxy refuses is reported too", async () => {
     const r = await request(d.socketPath, { op: "navigate", url: "http://blocked.test/x" });
-    expect(r).toMatchObject({ ok: false, error: "blocked", blockedHosts: ["blocked.test"] });
+    expect(r).toMatchObject({
+      ok: false,
+      error: "blocked",
+      blockedHosts: [{ host: "blocked.test", layer: "device" }],
+    });
   });
 });
