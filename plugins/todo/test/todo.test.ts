@@ -5,7 +5,7 @@ import type {
   ToolHandler,
   ToolSpec,
 } from "@capybara-hq/plugin-sdk";
-import { validateUiContributions, validateUiView } from "@capybara-hq/plugin-sdk";
+import { CARD_TEXT_MAX, validateUiContributions, validateUiView } from "@capybara-hq/plugin-sdk";
 import { createDualReplicaHarness, type Harness, startTestPostgres } from "@capybara-hq/testing";
 import { Kysely, PostgresDialect } from "kysely";
 import pg from "pg";
@@ -18,6 +18,7 @@ import todo, {
   tasksCardView,
   tasksSectionView,
   tasksView,
+  todosCardText,
   writeHandler,
 } from "../src/index.js";
 
@@ -183,6 +184,23 @@ describe("todo 插件", { timeout: 60_000 }, () => {
     ).toBe("Todo list updated (3 items):\n[x] Plan\n[>] Building\n[ ] Ship");
   });
 
+  it("write returns a pinned card with text, cut to CARD_TEXT_MAX at a line boundary", () => {
+    const short = [{ content: "Plan", status: "pending" as const, activeForm: "Planning" }];
+    expect(todosCardText(short)).toBe(renderTodos(short));
+    const many = Array.from({ length: 100 }, (_, i) => ({
+      content: `Step ${i} ${"x".repeat(40)}`,
+      status: "pending" as const,
+      activeForm: "Working",
+    }));
+    expect(renderTodos(many).length).toBeGreaterThan(CARD_TEXT_MAX);
+    const cut = todosCardText(many);
+    expect(cut.length).toBeLessThanOrEqual(CARD_TEXT_MAX);
+    expect(cut.endsWith("\n…")).toBe(true);
+    // whole lines only: every line before the mark is a line of the full text
+    const full = renderTodos(many).split("\n");
+    for (const line of cut.split("\n").slice(0, -1)) expect(full).toContain(line);
+  });
+
   it("双副本：副本 A 写、副本 B 读一致；B 覆盖写后 A 读到新清单；会话互相隔离", async () => {
     const h = await createDualReplicaHarness({ extensions: [PLUGIN], pgUrl: pgc.url });
     harnesses.push(h);
@@ -205,7 +223,13 @@ describe("todo 插件", { timeout: 60_000 }, () => {
     });
     // the inline card under the call (display only), keyed by a snapshot of the list at this call
     const card1 = "card" in r1 ? r1.card : undefined;
-    expect(card1).toEqual({ view: "tasks-card", key: expect.any(String) });
+    // pinned (the run's latest list stays in view), with the checklist as text for channels
+    expect(card1).toEqual({
+      view: "tasks-card",
+      key: expect.any(String),
+      placement: "pinned",
+      text: "Todo list updated (2 items):\n[>] Planning\n[ ] Build",
+    });
     const key1 = card1?.key as string;
     expect(await readSnapshot(b, "conv-1", key1)).toEqual(first);
     // a snapshot is scoped by its conversation
