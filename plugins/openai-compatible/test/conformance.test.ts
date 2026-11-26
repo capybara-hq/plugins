@@ -6,6 +6,7 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import {
   assertExtensionSecretsReachable,
+  checkToolStream,
   describeModelProviderConformance,
   extensionDeploymentSecretValues,
   type FakeModelServer,
@@ -353,6 +354,38 @@ describe("openai-compatible: stream edge cases and errors", () => {
     });
     const done = complete(await drain(provider(), req({ model: "local/org/model-a" })));
     expect(done.content).toEqual([{ type: "text", text: "Hi" }]);
+  });
+
+  it("streams tool call input: a start per call, argument deltas, a synthesized id when absent", async () => {
+    next = () =>
+      sseChat({
+        model: "m",
+        toolCalls: [
+          { id: "call_a", name: "get_weather", args: '{"city":"Paris"}' },
+          { id: "", name: "get_weather", args: '{"city":"Rome"}' },
+        ],
+        finish: "tool_calls",
+        usage: usageFor("deepseek", { total: 5, output: 1 }),
+      });
+    const events = await drain(provider(), req());
+    const done = complete(events);
+    const starts = events.flatMap((e) => (e.type === "tool_call_start" ? [[e.id, e.name]] : []));
+    expect(starts).toEqual([
+      ["call_a", "get_weather"],
+      ["call_1", "get_weather"],
+    ]);
+    const input = (id: string) =>
+      events
+        .flatMap((e) => (e.type === "tool_call_delta" && e.id === id ? [e.input] : []))
+        .join("");
+    expect(JSON.parse(input("call_a"))).toEqual({ city: "Paris" });
+    expect(JSON.parse(input("call_1"))).toEqual({ city: "Rome" });
+    // The synthesized id is the one message_complete carries
+    expect(done.content.flatMap((b) => (b.type === "tool_call" ? [b.id] : []))).toEqual([
+      "call_a",
+      "call_1",
+    ]);
+    expect(checkToolStream(events, done)).toEqual([]);
   });
 
   it("finish_reason mapping: length -> max_tokens (partial tool calls dropped), content_filter -> refusal", async () => {

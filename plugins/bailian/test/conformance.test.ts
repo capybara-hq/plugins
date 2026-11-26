@@ -5,6 +5,7 @@ import {
   type ModelStreamEvent,
 } from "@capybara-hq/plugin-sdk";
 import {
+  checkToolStream,
   describeModelProviderConformance,
   type FakeModelServer,
   type FakeRequest,
@@ -216,6 +217,36 @@ describe("stream", () => {
       stopReason: "tool_use",
       usage: { inputTokens: 35, outputTokens: 40, cacheReadTokens: 3000, cacheWriteTokens: 2000 },
     });
+  });
+
+  it("streams tool call input: a start per call, argument deltas, a synthesized id when absent", async () => {
+    const provider = await withGeneration(() =>
+      sseGeneration({
+        toolCalls: [
+          { id: "call_a", name: "get_weather", args: '{"city":"Paris"}' },
+          { id: "", name: "get_weather", args: '{"city":"Rome"}' },
+        ],
+        finish: "tool_calls",
+      }),
+    );
+    const { events, done } = await run(provider, req({ model: "qwen-flash" }));
+    if (done?.type !== "message_complete") throw new Error("expected message_complete");
+    const starts = events.flatMap((e) => (e.type === "tool_call_start" ? [[e.id, e.name]] : []));
+    expect(starts).toEqual([
+      ["call_a", "get_weather"],
+      ["call_1", "get_weather"],
+    ]);
+    const input = (id: string) =>
+      events
+        .flatMap((e) => (e.type === "tool_call_delta" && e.id === id ? [e.input] : []))
+        .join("");
+    expect(JSON.parse(input("call_a"))).toEqual({ city: "Paris" });
+    expect(JSON.parse(input("call_1"))).toEqual({ city: "Rome" });
+    expect(done.content.flatMap((b) => (b.type === "tool_call" ? [b.id] : []))).toEqual([
+      "call_a",
+      "call_1",
+    ]);
+    expect(checkToolStream(events, done)).toEqual([]);
   });
 
   it("length drops partial tool calls and is max_tokens", async () => {

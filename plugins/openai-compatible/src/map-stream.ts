@@ -48,6 +48,8 @@ interface ToolAcc {
   id: string;
   name: string;
   args: string;
+  /** tool_call_start has been emitted (the id is then fixed). */
+  started: boolean;
 }
 
 const aborted = () => new ModelError("aborted", "Request aborted");
@@ -90,12 +92,25 @@ export async function* streamChat(
           yield { type: "text_delta", text: d.text };
         }
         for (const tc of delta.tool_calls ?? []) {
-          const acc = tools.get(tc.index) ?? { id: "", name: "", args: "" };
-          if (tc.id) acc.id = tc.id;
-          // 名字整体赋值：部分服务在每个增量里都重复带上 name
+          const acc = tools.get(tc.index) ?? { id: "", name: "", args: "", started: false };
+          // The id is fixed when the call starts; a later chunk never changes it
+          if (tc.id && !acc.started) acc.id = tc.id;
+          // Name assigned whole: some services repeat it in every delta
           if (tc.function?.name) acc.name = tc.function.name;
-          if (tc.function?.arguments) acc.args += tc.function.arguments;
+          const fragment = tc.function?.arguments;
+          if (fragment) acc.args += fragment;
           tools.set(tc.index, acc);
+          if (!acc.started) {
+            // Start once the name is known (an upstream may send the arguments first); an upstream
+            // that never sends an id gets a synthesized one, reused in message_complete
+            if (acc.name === "") continue;
+            acc.id = acc.id !== "" ? acc.id : `call_${tc.index}`;
+            acc.started = true;
+            yield { type: "tool_call_start", id: acc.id, name: acc.name };
+            if (acc.args !== "") yield { type: "tool_call_delta", id: acc.id, input: acc.args };
+          } else if (fragment) {
+            yield { type: "tool_call_delta", id: acc.id, input: fragment };
+          }
         }
         if (choice.finish_reason != null) finish = choice.finish_reason;
       }
