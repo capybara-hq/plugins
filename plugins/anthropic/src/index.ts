@@ -324,7 +324,7 @@ export function createAnthropicProvider(opts: AnthropicProviderOptions): ModelPr
 /** Anthropic 供应商插件：官方 SDK + 原生 Messages API（不经 OpenAI 兼容层）。 */
 export default defineExtension({
   name: "anthropic",
-  version: "0.1.0-rc.10",
+  version: "0.1.0-rc.11",
   sdk: "^0.1.0-rc.64",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
   // Default host; the platform's baseUrl is display-only here, an org's own one goes through ctx.net

@@ -1,5 +1,13 @@
 # @capybara-hq/plugin-anthropic
 
+## 0.1.0-rc.11
+
+### Patch Changes
+
+- d9101ee: The provider streams a tool call's input as it arrives: `tool_call_start` at the `tool_use` block
+  and a `tool_call_delta` per `input_json_delta` fragment (streaming tool input contract, SDK
+  0.1.0-rc.81); `message_complete` is unchanged.
+
 ## 0.1.0-rc.10
 
 ### Minor Changes
