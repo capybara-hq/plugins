@@ -6,6 +6,7 @@ import {
   type ModelStreamEvent,
 } from "@capybara-hq/plugin-sdk";
 import {
+  checkToolStream,
   describeModelProviderConformance,
   type FakeModelServer,
   type FakeResponse,
@@ -252,6 +253,28 @@ describe("openai: errors and edge cases", () => {
       expect(done.stopReason).toBe(kind === "incomplete" ? "max_tokens" : "end_turn");
     },
   );
+
+  it("function calls stream start and input deltas keyed by call_id", async () => {
+    next = () =>
+      sseResponse({
+        model: "gpt-5.5",
+        items: [
+          { type: "function_call", callId: "call_a", name: "weather", args: '{"city":"Paris"}' },
+          { type: "function_call", callId: "call_b", name: "time", args: '{"zone":"UTC"}' },
+        ],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      });
+    const events = await drain(provider(), req());
+    const starts = events.filter((e) => e.type === "tool_call_start");
+    expect(starts).toEqual([
+      { type: "tool_call_start", id: "call_a", name: "weather" },
+      { type: "tool_call_start", id: "call_b", name: "time" },
+    ]);
+    const deltas = events.filter((e) => e.type === "tool_call_delta");
+    expect(deltas.length).toBeGreaterThan(2);
+    expect(deltas.every((d) => d.id === "call_a" || d.id === "call_b")).toBe(true);
+    expect(checkToolStream(events.slice(0, -1), complete(events))).toEqual([]);
+  });
 
   it("500 -> server", async () => {
     next = () => errorJson(500, { message: "Internal", type: "server_error" });
