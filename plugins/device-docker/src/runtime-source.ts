@@ -30,7 +30,7 @@ export const OPERATION_AGENT = `${RUNTIME_DIR}/capybara-operation.py`;
 
 /** SHA-256 of `image/runtime/capybara-operation.py` (asserted by the tests). */
 export const OPERATION_AGENT_SHA256 =
-  "0459ca268c00950cfaf0838a9d505dc25d40b0b5b1e23ca6a042804b6c48417a";
+  "18ce1b975d55eac640585789d1cd7812b73138b46565e23fbbe1fd45a5ec5322";
 
 /** The SDK bundle version the staged files come from. */
 export const RUNTIME_BUNDLE_VERSION = 2;
@@ -50,7 +50,7 @@ const RUN_FILES = Object.freeze(["native-files.py"] as const);
  */
 // capybara:allow-module-state read-only digests of the staged files, never mutated
 export const STAGED_SDK_DIGESTS: Readonly<Record<SdkRuntimeFile, string>> = Object.freeze({
-  "native-files.py": "c1712198af4ffedc0b48f789c28ed4233dc9008521b897300731c4f903168950",
+  "native-files.py": "41cf54ea285d29c49b42b33efd99d11254ba07cee4832a9d6f9414dc99c31461",
   "linux-sandbox.py": "ceb5bb0971437978a7695091792bfafcf3dbf2e7c74e8425d8aceb76e442f848",
 });
 

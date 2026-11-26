@@ -150,6 +150,9 @@ def move_denied(source, destination, is_dir, entries=None):
 class ScopeDenied(Exception):
     pass
 
+class NotRegularFile(ValueError):
+    """A read or write named a FIFO, device, socket or other non-regular, non-directory file."""
+
 def units(value):
     return value.encode("utf-16-be", "surrogatepass")
 
@@ -525,7 +528,7 @@ class NativeFiles:
                     if stat.S_ISDIR(info.st_mode):
                         return None
                     if not stat.S_ISREG(info.st_mode):
-                        raise ValueError("Native reads require a regular file")
+                        raise NotRegularFile("Native reads require a regular file")
                     want = min(info.st_size, bound)
                     data = bytearray()
                     while len(data) < want:
@@ -544,7 +547,7 @@ class NativeFiles:
                     fd = self.open(path, write=True)
                 try:
                     if not stat.S_ISREG(os.fstat(fd).st_mode):
-                        raise ValueError("Native writes require a regular file")
+                        raise NotRegularFile("Native writes require a regular file")
                     os.ftruncate(fd, 0)
                     remaining = memoryview(data)
                     while remaining:
@@ -572,6 +575,7 @@ def main():
         response = {"result": result}
     except Exception as error:
         code = ("SCOPE_DENIED" if isinstance(error, ScopeDenied)
+                else "NOT_REGULAR_FILE" if isinstance(error, NotRegularFile)
                 else errno.errorcode.get(getattr(error, "errno", None), "INVALID_NATIVE_REQUEST"))
         # Do not expose symlink targets or other resolved paths in transport errors.
         response = {"error": {"code": code, "message": "Native operation failed; check the path, scope and filesystem access"}}

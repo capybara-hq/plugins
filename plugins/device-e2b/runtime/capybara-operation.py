@@ -206,7 +206,10 @@ def pin_under(base, relative, create):
 
 
 def native_error(native, error):
+    # NotRegularFile exists from the SDK helper of core#907 on; a staged older helper lacks it
+    not_regular = getattr(native, "NotRegularFile", None)
     code = ("SCOPE_DENIED" if isinstance(error, native.ScopeDenied)
+            else "NOT_REGULAR_FILE" if not_regular is not None and isinstance(error, not_regular)
             else errno.errorcode.get(getattr(error, "errno", None), "INVALID_NATIVE_REQUEST"))
     return {"error": {"code": code, "message": "Native operation failed"}}
 
