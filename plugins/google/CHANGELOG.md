@@ -1,5 +1,19 @@
 # @capybara-hq/plugin-google
 
+## 0.1.0-rc.4
+
+### Patch Changes
+
+- 2396551: Sign in with Google declares its tenant (the Workspace primary domain, placeholder `example.com`, with
+  `consumer` never trusted), so the admin console labels trusted domains and refuses `consumer`. The
+  sign-in guide and README turn the login on in the extension page's 「登录」 section (or
+  `login-sources.update`) instead of the removed `auth.loginSources` / `auth.trustedIdentitySources`, and
+  say that an unlinked account goes to the link page by default. Needs `@capybara-hq/plugin-sdk`
+  0.1.0-rc.77 and kernel 0.1.0-rc.94.
+- f535a1e: Slack and Lark ship a platform setup guide for their sign-in (`slack-sign-in`, `lark-sign-in`,
+  place `extension-deployment`) with the callback URL filled in; the Google sign-in guide now says
+  that `auth.loginSources` is kernel config, not a platform setting.
+
 ## 0.1.0-rc.3
 
 ### Patch Changes

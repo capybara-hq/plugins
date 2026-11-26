@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-theme-cyberpunk
 
+## 0.1.0-rc.18
+
+### Patch Changes
+
+- 5d9f131: The run HUD's key column is 12ch wide (was 10ch), so the info icon after "工具调用" is no longer
+  clipped where the CJK font is wide.
+
 ## 0.1.0-rc.17
 
 ### Patch Changes
