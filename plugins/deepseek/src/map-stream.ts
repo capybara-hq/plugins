@@ -69,6 +69,8 @@ interface ToolAcc {
   id: string;
   name: string;
   args: string;
+  /** tool_call_start has been emitted (the id is then fixed). */
+  started: boolean;
 }
 
 /**
@@ -108,11 +110,27 @@ export async function* streamChat(
           yield { type: "text_delta", text: delta.content };
         }
         for (const tc of delta.tool_calls ?? []) {
-          const acc = tools.get(tc.index) ?? { id: "", name: "", args: "" };
-          if (tc.id) acc.id = tc.id;
+          const acc = tools.get(tc.index) ?? { id: "", name: "", args: "", started: false };
+          // The id is fixed when the call starts (synthesized if absent); an id that arrives after the
+          // start is ignored, so message_complete carries the id the start event announced
+          if (tc.id && !acc.started) acc.id = tc.id;
+          // Name assigned whole: some services repeat it in every delta
           if (tc.function?.name) acc.name = tc.function.name;
-          if (tc.function?.arguments) acc.args += tc.function.arguments;
+          const fragment = tc.function?.arguments;
+          if (fragment) acc.args += fragment;
           tools.set(tc.index, acc);
+          if (!acc.started) {
+            // Start once the name is known (an upstream may send the arguments first); an upstream
+            // that never sends an id gets a synthesized one, reused in message_complete
+            // No name yet: keep the arguments, start (and flush them) once the name arrives
+            if (acc.name === "") continue;
+            acc.id = acc.id !== "" ? acc.id : `call_${tc.index}`;
+            acc.started = true;
+            yield { type: "tool_call_start", id: acc.id, name: acc.name };
+            if (acc.args !== "") yield { type: "tool_call_delta", id: acc.id, input: acc.args };
+          } else if (fragment) {
+            yield { type: "tool_call_delta", id: acc.id, input: fragment };
+          }
         }
         if (choice.finish_reason != null) finish = choice.finish_reason;
       }
@@ -151,9 +169,11 @@ export async function* streamChat(
       if (c.name === "") {
         throw new ModelError("invalid_request", `Tool call #${i} has no function name`);
       }
+      // A call without arguments streamed no fragment: announce its input once, as `{}`
+      if (c.args.trim() === "") yield { type: "tool_call_delta", id: c.id, input: "{}" };
       content.push({
         type: "tool_call",
-        id: c.id !== "" ? c.id : `call_${i}`,
+        id: c.id,
         name: c.name,
         input: parseArguments(c.args, c.name),
       });

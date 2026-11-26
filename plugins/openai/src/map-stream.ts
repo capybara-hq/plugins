@@ -170,6 +170,12 @@ export async function* streamResponses(
   try {
     stream = await open();
     let final: Response | null = null;
+    // Argument deltas name the output item (item id), not the call: map it to the call_id
+    // that message_complete carries.
+    const callIdByItem = new Map<string, string>();
+    // Item ids whose call has had a non-empty fragment; a call that ends without one (a tool
+    // with no arguments) gets a single "{}" so its input JSON is always complete.
+    const hasFragment = new Set<string>();
     // 终止事件之后不再读：服务端（或中间代理）不关连接时，继续读只会等到空闲超时。
     read: for await (const ev of stream) {
       if (signal.aborted) throw aborted();
@@ -184,6 +190,30 @@ export async function* streamResponses(
         case "response.reasoning_summary_text.delta":
           yield { type: "thinking_delta", text: ev.delta };
           break;
+        case "response.output_item.added":
+          // An item without an id cannot be matched to its argument deltas: by design that call
+          // does not stream (message_complete still carries it).
+          if (ev.item.type === "function_call" && ev.item.id !== undefined) {
+            callIdByItem.set(ev.item.id, ev.item.call_id);
+            yield { type: "tool_call_start", id: ev.item.call_id, name: ev.item.name };
+          }
+          break;
+        case "response.function_call_arguments.delta": {
+          const id = callIdByItem.get(ev.item_id);
+          if (id !== undefined && ev.delta !== "") {
+            hasFragment.add(ev.item_id);
+            yield { type: "tool_call_delta", id, input: ev.delta };
+          }
+          break;
+        }
+        case "response.output_item.done": {
+          const itemId = ev.item.type === "function_call" ? ev.item.id : undefined;
+          const id = itemId === undefined ? undefined : callIdByItem.get(itemId);
+          if (itemId !== undefined && id !== undefined && !hasFragment.has(itemId)) {
+            yield { type: "tool_call_delta", id, input: "{}" };
+          }
+          break;
+        }
         case "response.completed":
         case "response.incomplete":
           final = ev.response;

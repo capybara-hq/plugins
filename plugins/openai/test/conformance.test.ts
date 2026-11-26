@@ -6,6 +6,7 @@ import {
   type ModelStreamEvent,
 } from "@capybara-hq/plugin-sdk";
 import {
+  checkToolStream,
   describeModelProviderConformance,
   type FakeModelServer,
   type FakeResponse,
@@ -252,6 +253,88 @@ describe("openai: errors and edge cases", () => {
       expect(done.stopReason).toBe(kind === "incomplete" ? "max_tokens" : "end_turn");
     },
   );
+
+  it("function calls stream start and input deltas keyed by call_id", async () => {
+    next = () =>
+      sseResponse({
+        model: "gpt-5.5",
+        items: [
+          { type: "function_call", callId: "call_a", name: "weather", args: '{"city":"Paris"}' },
+          { type: "function_call", callId: "call_b", name: "time", args: '{"zone":"UTC"}' },
+        ],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      });
+    const events = await drain(provider(), req());
+    const starts = events.filter((e) => e.type === "tool_call_start");
+    expect(starts).toEqual([
+      { type: "tool_call_start", id: "call_a", name: "weather" },
+      { type: "tool_call_start", id: "call_b", name: "time" },
+    ]);
+    const deltas = events.filter((e) => e.type === "tool_call_delta");
+    expect(deltas.length).toBeGreaterThan(2);
+    expect(deltas.every((d) => d.id === "call_a" || d.id === "call_b")).toBe(true);
+    expect(checkToolStream(events, complete(events))).toEqual([]);
+  });
+
+  it("a call without arguments streams a single {} delta", async () => {
+    next = () =>
+      sseResponse({
+        model: "gpt-5.5",
+        items: [{ type: "function_call", callId: "call_z", name: "now", args: "" }],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      });
+    const events = await drain(provider(), req());
+    expect(events.filter((e) => e.type === "tool_call_delta")).toEqual([
+      { type: "tool_call_delta", id: "call_z", input: "{}" },
+    ]);
+    expect(checkToolStream(events, complete(events))).toEqual([]);
+  });
+
+  it("interleaved calls: deltas follow their own call", async () => {
+    const full = sseResponse({
+      model: "gpt-5.5",
+      items: [
+        { type: "function_call", callId: "call_a", name: "weather", args: '{"city":"Paris"}' },
+        { type: "function_call", callId: "call_b", name: "time", args: '{"zone":"UTC"}' },
+      ],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    });
+    if (!("sse" in full)) throw new Error("unexpected fixture");
+    const parsed = full.sse.map((e) => ({ e, d: JSON.parse(e.data) as Record<string, unknown> }));
+    const pick = (type: string, item_id?: string) =>
+      parsed.filter((x) => x.d.type === type && (item_id === undefined || x.d.item_id === item_id));
+    const added = pick("response.output_item.added");
+    const da = pick("response.function_call_arguments.delta", "fc_0");
+    const db = pick("response.function_call_arguments.delta", "fc_1");
+    const ordered = [
+      ...parsed.filter(
+        (x) => String(x.d.type).startsWith("response.cre") || x.d.type === "response.in_progress",
+      ),
+      added[0],
+      added[1],
+      da[0],
+      db[0],
+      da[1],
+      db[1],
+      da[2],
+      ...da.slice(3),
+      ...db.slice(2),
+      ...pick("response.output_item.done"),
+      ...pick("response.completed"),
+    ];
+    if (ordered.some((x) => x === undefined)) throw new Error("fixture lacks an event");
+    next = () => ({ status: 200, sse: ordered.map((x) => (x as NonNullable<typeof x>).e) });
+    const events = await drain(provider(), req());
+    const ids = events.filter((e) => e.type === "tool_call_delta").map((e) => e.id);
+    expect(ids.slice(0, 5)).toEqual(["call_a", "call_b", "call_a", "call_b", "call_a"]);
+    const join = (id: string) =>
+      events
+        .flatMap((e) => (e.type === "tool_call_delta" && e.id === id ? [e.input] : []))
+        .join("");
+    expect(JSON.parse(join("call_a"))).toEqual({ city: "Paris" });
+    expect(JSON.parse(join("call_b"))).toEqual({ zone: "UTC" });
+    expect(checkToolStream(events, complete(events))).toEqual([]);
+  });
 
   it("500 -> server", async () => {
     next = () => errorJson(500, { message: "Internal", type: "server_error" });
