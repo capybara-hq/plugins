@@ -402,6 +402,95 @@ describe("renderSend: connect / bind cards and links", () => {
   });
 });
 
+const progress = (
+  over: Partial<Extract<ChannelCard, { kind: "progress" }>> = {},
+): Extract<ChannelCard, { kind: "progress" }> => ({
+  kind: "progress",
+  state: "running",
+  title: "Working",
+  meta: "Elapsed 0:42",
+  status: "Reading the **invoices** now",
+  pinned: "Todo list updated (2 items):\n[x] Plan\n[>] Building",
+  steps: ["Read invoice-1.pdf", "Bash ls -la"],
+  pending: [{ text: "Approve: send the report", url: "https://cap.example/c/1#apr_1" }],
+  url: "https://cap.example/c/1",
+  urlText: "See the full process on the web",
+  ...over,
+});
+
+const FINISHED: ChannelCard = {
+  kind: "progress",
+  state: "finished",
+  title: "Worked for 2m 43s",
+  meta: "12 tools",
+  steps: [],
+  pending: [],
+  url: "https://cap.example/c/1",
+  urlText: "See the full process on the web",
+};
+
+describe("renderSend: progress card", () => {
+  it("renders a running progress card", () => {
+    const [c] = renderSend({ text: "", cards: [progress()] }, "en", "d");
+    const card = c as LarkCard;
+    expect(card.header).toEqual({
+      title: { tag: "plain_text", content: "Working · Elapsed 0:42" },
+      template: "blue",
+    });
+    const text = markdown(card);
+    expect(text).toContain("Reading the **invoices** now");
+    expect(text).toContain("\\[x\\] Plan");
+    expect(text).toContain("```\nRead invoice-1.pdf\nBash ls -la\n```");
+    expect(buttons(card).map(label)).toEqual([
+      "Approve: send the report",
+      "See the full process on the web",
+    ]);
+    expect(buttons(card).map((b) => behavior(b).default_url)).toEqual([
+      "https://cap.example/c/1#apr_1",
+      "https://cap.example/c/1",
+    ]);
+    // the update path renders the same card
+    expect(renderUpdate({ text: "", cards: [progress()] }, "en", "d")).toEqual(card);
+  });
+
+  it("renders a finished one: only the fields it carries, green head", () => {
+    const [c] = renderSend(
+      {
+        text: "",
+        cards: [FINISHED],
+      },
+      "en",
+      "d",
+    );
+    const card = c as LarkCard;
+    expect(card.header).toMatchObject({ template: "green" });
+    expect(markdown(card)).not.toContain("```");
+    expect(buttons(card).map(label)).toEqual(["See the full process on the web"]);
+  });
+
+  it("steps never become links or mentions", () => {
+    const steps = [
+      "Fetch https://evil.example/x",
+      "[click](https://evil.example/y)",
+      "<at id=all></at>",
+    ];
+    const [c] = renderSend({ text: "", cards: [progress({ steps })] }, "en", "d");
+    const text = markdown(c as LarkCard);
+    expect(text).not.toContain("https://evil.example");
+    expect(text).not.toContain("](");
+    expect(text).not.toMatch(AT_TAG);
+    expect(
+      buttons(c as LarkCard).some((b) => String(behavior(b).default_url).includes("evil")),
+    ).toBe(false);
+  });
+
+  it("an unknown card kind falls back to text and never throws", () => {
+    const future = { kind: "future", title: "x" } as unknown as ChannelCard;
+    const [c] = renderSend({ text: "hi", cards: [future] }, "en", "d");
+    expect(walk(c as LarkCard).length).toBeGreaterThan(0);
+  });
+});
+
 describe("renderUpdate", () => {
   it("returns the single card", () => {
     expect(markdown(renderUpdate({ text: "x" }, "en", "d"))).toBe("x");

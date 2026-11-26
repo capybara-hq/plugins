@@ -5,6 +5,7 @@ import {
   questionRenderableInline,
   questionStateLabel,
   questionTextReplyHint,
+  renderCardAsText,
 } from "@capybara-hq/plugin-sdk";
 import {
   type ActionValue,
@@ -15,7 +16,7 @@ import {
   SUBMIT_NAME,
   VALUE_KEY,
 } from "./actions.js";
-import { escapePlain, neutralizeAt, splitMarkdown, toCardMarkdown } from "./markdown.js";
+import { codeSafe, escapePlain, neutralizeAt, splitMarkdown, toCardMarkdown } from "./markdown.js";
 
 /**
  * 出站消息 → Lark 交互卡片（JSON 2.0）。**所有消息都发成卡片**（`msg_type: interactive`）：
@@ -145,6 +146,17 @@ const QUESTION_COLOR: Record<string, string> = {
   expired: "grey",
   cancelled: "grey",
 } as const;
+
+/** The progress card's head colour by run state (colour only on the head, no icons). */
+const PROGRESS_COLOR: Record<string, string> = {
+  running: "blue",
+  waiting: "orange",
+  finished: "green",
+  stopped: "grey",
+  failed: "red",
+};
+const STATUS_LIMIT = 1000;
+const STEP_LIMIT = 300;
 
 /** 截到 `n` 个码元以内（末尾加省略号），不拆代理对。 */
 function trunc(s: string, n: number): string {
@@ -379,6 +391,31 @@ function question(
   };
 }
 
+/**
+ * The run's progress card, edited in place: the head (title · meta, coloured by state), the status
+ * line and the pinned text as Markdown (like an answer), the latest steps in a code block (they may
+ * hold model-written arguments: never links), then the pending actions and the web link as link
+ * buttons. A finished card carries fewer fields; only the ones present are drawn.
+ */
+function progress(c: Extract<ChannelCard, { kind: "progress" }>): Rendered {
+  const head = c.meta ? `${c.title} · ${c.meta}` : c.title;
+  const elements: El[] = [];
+  if (c.status) elements.push(md(toCardMarkdown(trunc(c.status, STATUS_LIMIT))));
+  if (c.pinned) elements.push(md(toCardMarkdown(c.pinned)));
+  if (c.steps.length > 0) {
+    const lines = c.steps.map((x) => codeSafe(trunc(x.replace(/\s+/g, " "), STEP_LIMIT)));
+    elements.push(md(`\`\`\`\n${lines.join("\n")}\n\`\`\``));
+  }
+  elements.push(
+    ...actions([], ...c.pending.map((p) => link(p.text, p.url)), link(c.urlText, c.url)),
+  );
+  return {
+    header: { title: plain(trunc(head, 200)), template: PROGRESS_COLOR[c.state] ?? "grey" },
+    elements,
+    headline: c.title,
+  };
+}
+
 function renderOne(card: ChannelCard, locale: Locale, chat: ChatKind): Rendered {
   const t = T[locale];
   switch (card.kind) {
@@ -398,7 +435,22 @@ function renderOne(card: ChannelCard, locale: Locale, chat: ChatKind): Rendered 
         elements: [md(escapePlain(card.text)), ...actions([], link(t.bind, card.url))],
         headline: card.text,
       };
+    case "progress":
+      return progress(card);
+    default:
+      return fallback(card, locale);
   }
+}
+
+/** A card kind this plugin does not know (a newer kernel): the SDK's text form, never a throw. */
+function fallback(card: never, locale: Locale): Rendered {
+  let text: unknown;
+  try {
+    text = renderCardAsText(card, locale);
+  } catch {
+    text = undefined;
+  }
+  return { elements: [md(typeof text === "string" && text !== "" ? toCardMarkdown(text) : "…")] };
 }
 
 /** 会话列表 / 通知里的预览（纯文本）。 */
