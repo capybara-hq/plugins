@@ -322,7 +322,8 @@ describe("openai: errors and edge cases", () => {
       ...pick("response.output_item.done"),
       ...pick("response.completed"),
     ];
-    next = () => ({ status: 200, sse: ordered.map((x) => x.e) });
+    if (ordered.some((x) => x === undefined)) throw new Error("fixture lacks an event");
+    next = () => ({ status: 200, sse: ordered.map((x) => (x as NonNullable<typeof x>).e) });
     const events = await drain(provider(), req());
     const ids = events.filter((e) => e.type === "tool_call_delta").map((e) => e.id);
     expect(ids.slice(0, 5)).toEqual(["call_a", "call_b", "call_a", "call_b", "call_a"]);
