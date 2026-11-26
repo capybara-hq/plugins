@@ -352,9 +352,10 @@ describe("guides/slack-sign-in.md", () => {
         "`clientId`",
         "`clientSecret`",
         "`openid`",
-        "`auth.loginSources`",
-        "CAPYBARA_AUTH__LOGIN_SOURCES",
-        "`auth.trustedIdentitySources`",
+        "`login-sources.update`",
+        locale === "zh" ? "「在登录页显示」" : "**Show on the login page**",
+        locale === "zh" ? "「可信租户」" : "**Trusted tenants**",
+        locale === "zh" ? "「自动注册新账号」" : "**Create a new account**",
       ])
         expect(text, s).toContain(s);
     },

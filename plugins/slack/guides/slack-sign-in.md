@@ -24,10 +24,15 @@ workspace id and user id, the same for every app in that workspace.
 
 ::check capybara:public-url The platform has a public URL
 
-5. Add `slack` to the kernel config `auth.loginSources` (env `CAPYBARA_AUTH__LOGIN_SOURCES`), set
-   where the deployment's config lives, not in the admin console. To let a Slack sign-in join an
-   existing account with the same verified email, also add `slack:<workspace id>` (the `T…` id,
-   for example `slack:T0123ABCD`) to `auth.trustedIdentitySources`.
+5. In the **Sign-in** section of this page, turn on **Show on the login page** (or ask the agent
+   to call `login-sources.update`). To let a Slack sign-in join an existing account with the same
+   verified email, add the workspace ID (the `T…` id, for example `T0123ABCD`) under
+   **Trusted tenants** in the same section.
+
+By default, a person whose Slack account is not linked to an account yet goes to the link page on
+their first sign-in and links it by signing in with their username and password; to create a new
+account for them instead, choose **Create a new account** under **Unlinked accounts** in the same
+section.
 
 The redirect URL cannot be checked automatically: if Slack reports that the `redirect_uri` does not
 match at login, compare the app's redirect URL with the one above character by character.

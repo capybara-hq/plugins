@@ -27,8 +27,8 @@ export {
  *   Webhook inbound mode (Events API / Interactivity Request URLs, signed with the connection's
  *   `signingSecret`) is the alternative to Socket Mode.
  *   凭据（应用级令牌、机器人令牌）由内核按渠道连接配置传入。
- * - `identity-source@1`（Sign in with Slack，OpenID Connect）：部署级 `clientId` / `clientSecret`，
- *   经 `auth.loginSources` 启用。
+ * - `identity-source@1`（Sign in with Slack，OpenID Connect）：部署级 `clientId` / `clientSecret`,
+ *   enabled in the extension page's Sign-in section (or `login-sources.update`).
  * - `directory@1`（通讯录，`users.list`）：the overridable `directory.teamId` / `directory.botToken`.
  * - Setup checks (`permissions.setupChecks`): the live rows of the `slack-app` guide, read only.
  * 凭据都由内核按配置传入，故不需要 `secrets` 权限。`permissions.network` 只展示：OIDC 与 Web API 都在

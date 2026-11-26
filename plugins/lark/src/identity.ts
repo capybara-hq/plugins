@@ -1,4 +1,8 @@
-import type { ExternalIdentity, IdentitySource } from "@capybara-hq/plugin-sdk";
+import type {
+  ExternalIdentity,
+  IdentitySource,
+  IdentitySourceTenant,
+} from "@capybara-hq/plugin-sdk";
 import { createLarkApi, type LarkApi } from "./api.js";
 import { accountsBaseOf, apiBaseOf, LarkPlatform, type LarkPlatformConfig } from "./config.js";
 import { describeError } from "./errors.js";
@@ -20,6 +24,18 @@ function loginConfig(config: unknown): LarkPlatformConfig & { appId: string; app
   }
   return { ...c, appId: c.appId, appSecret: c.appSecret };
 }
+
+/**
+ * The tenant of a Lark sign-in, as the admin console labels and checks trusted tenants: the
+ * `tenant_key` that `source = lark:<tenant_key>` carries (the login app's own tenant).
+ */
+export const LARK_TENANT: IdentitySourceTenant = {
+  label: { zh: "飞书租户 key", en: "Lark tenant key" },
+  help: {
+    zh: "企业的 tenant_key：在飞书开放平台开发者后台查看，或调用企业信息接口（GET /open-apis/tenant/v2/tenant/query）读取。",
+    en: "The organization's tenant_key: shown in the Lark developer console, or read from the tenant info API (GET /open-apis/tenant/v2/tenant/query).",
+  },
+};
 
 /**
  * Lark 网页登录（`identity-source@1`，OAuth 2.0 授权码 + PKCE；文档均 2026-10-20 查阅）：
@@ -71,6 +87,7 @@ export function createLarkIdentitySource(): IdentitySource {
 
   return {
     label: { zh: "Lark", en: "Lark" },
+    tenant: LARK_TENANT,
 
     authorizeUrl({ config, redirectUri, state, codeChallenge, codeChallengeMethod }) {
       const c = loginConfig(config);

@@ -10,7 +10,7 @@ An IM platform is usually one extension offering all three extension points, sha
 | Extension point | Contract (SDK) | Config level | Enabled per org |
 |---|---|---|---|
 | `channel@1` (bot) | `channel.ts`, cards in `cards.ts` | one per **channel connection** (`connectionSchema`, created by an org admin under "Channels") | yes (`orgScoped`) |
-| `identity-source@1` (web login) | `identity.ts` | **deployment-level** (`config.deployment`, enabled through the kernel config `auth.loginSources`) | no |
+| `identity-source@1` (web login) | `identity.ts` | **deployment-level** (`config.deployment`, turned on in the extension page's 登录 (Sign-in) section or with `login-sources.update`) | no |
 | `directory@1` (directory sync) | `directory.ts` | **`directory` deployment key** (overridable by default: an org saves its own copy; read from the per-call `config`) | yes (`orgScoped`) |
 
 General extension authoring (manifest, two-level config, multi-replica rules, approval) is in `.agents/skills/writing-extensions`; this skill covers what is specific to these three extension points. The kernel side (gateway role, leader election and sharing, durable queues, dedupe, the webhook route, the login flow, the directory sync guards) is core's: [writing-channels in core](https://github.com/capybara-hq/core/tree/main/.agents/skills/writing-channels).
@@ -162,16 +162,18 @@ So an extension **keeps no shared state across calls** (module-level Maps, in-pr
 ```ts
 interface IdentitySource {
   label: { zh: string; en: string };
+  tenant?: IdentitySourceTenant; // { label, help?, pattern?, placeholder?, neverTrusted? }
   authorizeUrl(args: { config; redirectUri; state; nonce; codeChallenge?; codeChallengeMethod? }): string;
   callback(args: { config; redirectUri; query; nonce; signal; codeVerifier? }): Promise<ExternalIdentity>;
 }
 ```
 
-- Deployment-level: `config` is `config.deployment`; the login page shows the source once the extension name is in `auth.loginSources`. The callback address is `<http.publicUrl>/api/v1/auth/sso/<plugin name>/callback`.
+- Deployment-level: `config` is `config.deployment`; the login page shows the source once the super admin turns on 「在登录页显示」 (Show on the login page) in the extension page's 「登录」 (Sign-in) section, or the agent calls `login-sources.update`; trusted tenants and what happens to an unlinked account (the link page by default, or 「自动注册新账号」) are set there too. The callback address is `<http.publicUrl>/api/v1/auth/sso/<plugin name>/callback`.
 - State, nonce and PKCE verifier are generated and stored by the kernel (state is single-use and bound to the browser).
 - **`source` must be `` `${extension name}:${tenantId}` ``**: the kernel rejects a mismatch.
+- **Declare `tenant`** so the admin console can label and check trusted tenants: what the tenant id is called and where to find it, a `pattern` it must match, a `placeholder`, and `neverTrusted` for tenants that must never be trusted for email merge (Google: `consumer`). The kernel checks each trusted tenant with the SDK's `validateTenantId`; test the declaration with it (Slack `^T[A-Z0-9]+$`, Lark `tenant_key` without a pattern, Google a primary domain).
 - **`externalId` is the same kind of id as the channel's `sender.externalId`** (same app, same definition), or login and bot can't match people.
-- **`emailVerified` is true only when the platform docs explicitly say the email is verified** (Slack OIDC's `email_verified`); otherwise false (Lark login and both directories). It decides whether an existing account can be merged by email (only for sources the deployment trusts in `auth.trustedIdentitySources`).
+- **`emailVerified` is true only when the platform docs explicitly say the email is verified** (Slack OIDC's `email_verified`); otherwise false (Lark login and both directories). It decides whether an existing account can be merged by email (only for tenants the super admin lists as trusted in that section).
 - **Use PKCE if the platform supports it**: `codeChallenge` / `codeChallengeMethod` in the authorization URL, `codeVerifier` in the token exchange (Lark). If not, ignore them and say why in the README (Slack OIDC doesn't declare PKCE).
 - **Validate the ID token if there is one**: JWKS signature, `iss`, `aud = clientId`, not expired, `nonce` equal to the initiation's; userinfo's user / tenant must match it. Without an ID token (Lark), check that the user's tenant equals the login app's tenant and that `redirect_uri` matches strictly.
 - Request only the scopes login needs: an ungranted scope makes login fail for everyone (Lark 20027), so Lark login requests none.

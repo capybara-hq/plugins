@@ -1,12 +1,32 @@
 import { timingSafeEqual } from "node:crypto";
-import type { ExternalIdentity, IdentitySource } from "@capybara-hq/plugin-sdk";
+import type {
+  ExternalIdentity,
+  IdentitySource,
+  IdentitySourceTenant,
+} from "@capybara-hq/plugin-sdk";
 import { createRemoteJWKSet, type JWTPayload, type JWTVerifyGetKey, jwtVerify } from "jose";
-import { hostedDomainGate, toExternalIdentity } from "./claims.js";
+import { CONSUMER_TENANT, hostedDomainGate, toExternalIdentity } from "./claims.js";
 import { loginConfig } from "./config.js";
 import { readJsonCapped } from "./http.js";
 
 /** The scopes login requests: non-sensitive, no app verification needed. */
 export const GOOGLE_OIDC_SCOPES = "openid email profile";
+
+/**
+ * The tenant of a Google sign-in, as the admin console labels and checks trusted tenants: the
+ * verified `hd` claim (the Workspace or Cloud Identity primary domain); consumer accounts share the
+ * tenant `consumer`, which may never be trusted (anyone can create a Google account on any email).
+ */
+export const GOOGLE_TENANT: IdentitySourceTenant = {
+  label: { zh: "Google Workspace 主域名", en: "Google Workspace primary domain" },
+  help: {
+    zh: "Google Workspace 或 Cloud Identity 的主域名（ID 令牌里的 hd），在 Google 管理控制台的「账号」→「域名」里可以看到。",
+    en: "The primary domain of Google Workspace or Cloud Identity (the hd claim of the ID token), shown in the Google Admin console under Account → Domains.",
+  },
+  pattern: "^[a-z0-9.-]+\\.[a-z]{2,}$",
+  placeholder: "example.com",
+  neverTrusted: [CONSUMER_TENANT],
+};
 /** The token exchange's timeout; the kernel's 15-second signal also applies. */
 const REQUEST_TIMEOUT_MS = 10_000;
 /**
@@ -111,6 +131,7 @@ export function createGoogleIdentitySource(): IdentitySource {
 
   return {
     label: { zh: "Google", en: "Google" },
+    tenant: GOOGLE_TENANT,
 
     authorizeUrl({ config, redirectUri, state, nonce, codeChallenge, codeChallengeMethod }) {
       const c = loginConfig(config);

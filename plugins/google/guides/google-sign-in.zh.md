@@ -23,12 +23,15 @@
 ::check google-discovery Google 的登录端点与插件一致
 ::check google-client Google 接受这个客户端 ID 和密钥
 
-5. 把 `google` 加入内核配置 `auth.loginSources`（环境变量 `CAPYBARA_AUTH__LOGIN_SOURCES`），在部署的配置
-   所在处设置，而不是在管理后台。如果希望 Google 登录能并入邮箱相同且已验证的现有账号，再把
-   `google:<你的域>`（例如 `google:example.com`）加入 `auth.trustedIdentitySources`。
+5. 在本页的「登录」分区打开「在登录页显示」（也可以让智能体调用 `login-sources.update`）。如果希望 Google
+   登录能并入邮箱相同且已验证的现有账号，在同一分区的「可信租户」里填写你的主域名（例如 `example.com`）。
 
-> **不要把 `google:consumer` 加入 `auth.trustedIdentitySources`。** 任何人都能用任意邮箱地址注册 Google
-> 账号，而 Google 在那里只为 `@gmail.com` 地址担保；信任整个个人账号租户没有好处，只会给陌生人更多可乘之机。
+> **个人账号（`google:consumer`）永远不能设为可信租户**，该分区会拒绝 `consumer`：任何人都能用任意邮箱
+> 地址注册 Google 账号，而 Google 在那里只为 `@gmail.com` 地址担保；信任整个个人账号租户没有好处，只会给
+> 陌生人更多可乘之机。
+
+默认情况下，Google 账号还没有绑定账号的人第一次登录时会进入绑定页，用用户名和密码登录后完成绑定；如果希望
+直接为他们创建新账号，在同一分区的「未绑定的账号」里选择「自动注册新账号」。
 
 重定向 URI 无法自动检查：如果登录时 Google 显示 `redirect_uri_mismatch`，请把客户端里的重定向 URI 与上面的
 逐字比对。如果除少数人外所有人都收到 Google 的 `access_denied`，说明外部应用仍处于测试状态。

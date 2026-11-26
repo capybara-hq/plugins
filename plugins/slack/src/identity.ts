@@ -1,9 +1,27 @@
-import type { ExternalIdentity, IdentitySource } from "@capybara-hq/plugin-sdk";
+import type {
+  ExternalIdentity,
+  IdentitySource,
+  IdentitySourceTenant,
+} from "@capybara-hq/plugin-sdk";
 import { createRemoteJWKSet, type JWTPayload, jwtVerify } from "jose";
 import { SLACK_ISSUER, SlackPlatform, type SlackPlatformConfig } from "./config.js";
 
 /** Sign in with Slack 申请的 scope（https://docs.slack.dev/authentication/sign-in-with-slack/ ，2026-10-20 查阅）。 */
 export const SLACK_OIDC_SCOPES = "openid email profile";
+
+/**
+ * The tenant of a Slack sign-in, as the admin console labels and checks trusted tenants: the
+ * workspace (team) id `T…` that `source = slack:<team id>` carries (never the Enterprise Grid `E…`).
+ */
+export const SLACK_TENANT: IdentitySourceTenant = {
+  label: { zh: "Slack 工作区 ID", en: "Slack workspace ID" },
+  help: {
+    zh: "以 T 开头的工作区 ID：在 Slack 里点工作区名称 →「设置」→「关于此工作区」可以看到，也出现在网页版 Slack 的地址里（app.slack.com/client/T…）。",
+    en: "The workspace ID starting with T: in Slack, click the workspace name → Settings → About this workspace, or read it from the web app's address (app.slack.com/client/T…).",
+  },
+  pattern: "^T[A-Z0-9]+$",
+  placeholder: "T0123ABCD",
+};
 /** Slack 在 ID token / userInfo 里用的命名空间声明。 */
 const TEAM_CLAIM = "https://slack.com/team_id";
 const USER_CLAIM = "https://slack.com/user_id";
@@ -95,6 +113,7 @@ export function createSlackIdentitySource(): IdentitySource {
 
   return {
     label: { zh: "Slack", en: "Slack" },
+    tenant: SLACK_TENANT,
 
     authorizeUrl({ config, redirectUri, state, nonce }) {
       const c = loginConfig(config);

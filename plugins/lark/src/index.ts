@@ -22,7 +22,7 @@ export { createLarkIdentitySource } from "./identity.js";
  *   经 OpenAPI 发消息，所有消息与审批 / 提问 / 连接 / 绑定卡片都渲染为交互卡片（JSON 2.0）。凭据按渠道连接配置传入。
  *   Webhook inbound mode (event and card callback Request URLs, decrypted / verified with the
  *   connection's `encryptKey` or `verificationToken`) is the alternative to the long connection.
- * - `identity-source@1`（网页登录，OAuth 授权码 + PKCE）：部署级 `appId` / `appSecret`，经 `auth.loginSources` 启用。
+ * - `identity-source@1`（网页登录，OAuth 授权码 + PKCE）：部署级 `appId` / `appSecret`，enabled in the extension page's Sign-in section (or `login-sources.update`).
  * - `directory@1`（通讯录，按部门遍历）：the overridable `directory.appId` / `directory.appSecret`.
  * 凭据都由内核按配置传入，故不需要 `secrets` 权限。
  *

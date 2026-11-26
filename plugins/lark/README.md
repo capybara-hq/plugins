@@ -143,8 +143,9 @@ Use the same self-built app (see above):
    needs `open_id`, `tenant_key`, the name and the avatar. The email is included only when the user info has `email` / `enterprise_email` (depending on the app's
    field permissions and the user's earlier authorization), and left out otherwise. It needs `tenant:tenant:readonly` (already required by the bot) to check the user's tenant.
 3. Publish a version whose **availability scope** (可用范围) includes the people who will sign in (outside the scope, the token exchange fails with 20010).
-4. In the kernel config set `extensionConfig.lark.appId` / `appSecret` (`appSecret` goes through the secret store and is masked in logs), and add `lark` to
-   `auth.loginSources`.
+4. In the kernel config set `extensionConfig.lark.appId` / `appSecret` (`appSecret` goes through the secret store and is masked in logs), and turn on
+   「在登录页显示」 (Show on the login page) in the extension page's 「登录」 (Sign-in) section (or `login-sources.update`). An unlinked Lark account
+   goes to the link page on its first sign-in unless that section chooses 「自动注册新账号」 (Create a new account).
 
 Flow and choices (docs consulted 2026-10-20):
 
@@ -160,7 +161,7 @@ Flow and choices (docs consulted 2026-10-20):
 - Lark web authorization is not OIDC, so there is no ID token or nonce. Replay protection: the kernel's state is single-use and bound to the browser cookie, the authorization code is single-use
   and expires in 5 minutes, PKCE binds the authorization code to the verifier of this login attempt, the token exchange needs the App Secret, and `redirect_uri` must match strictly.
 - **Emails are always treated as unverified** (`emailVerified: false`): the docs do not say that `email` or `enterprise_email` is verified, so
-  Lark login does not merge into existing accounts by email (even if the tenant is in `auth.trustedIdentitySources`). The email is taken from `email`, and from
+  Lark login does not merge into existing accounts by email (even if its tenant key is a trusted tenant). The email is taken from `email`, and from
   `enterprise_email` when that is missing.
 
 ## Directory (directory)

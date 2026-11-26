@@ -16,8 +16,10 @@ extension's `sdk` range `^0.1.0-rc.52` makes an older kernel refuse the plugin a
 
 A super admin sets it up on the extension's platform page, guided by the setup guide
 `google-sign-in` (Google Cloud console steps, the redirect URI, two checks). There is no org config:
-the login page runs before any org is known. Login is offered once `google` is in
-`auth.loginSources`.
+the login page runs before any org is known. Login is offered once the super admin turns on
+「在登录页显示」 (Show on the login page) in the extension page's 「登录」 (Sign-in) section, or the
+agent calls `login-sources.update`. An unlinked Google account goes to the link page on its first
+sign-in unless that section chooses 「自动注册新账号」 (Create a new account).
 
 | Field | Default | What |
 |---|---|---|
@@ -43,9 +45,10 @@ Invalid config never fails startup: the login page shows the source as unavailab
 | `displayName` | `name`, else `given_name family_name`, else the email's local part, else `sub` |
 | `avatarUrl` | `picture` when it is an `https:` URL |
 
-Why the tenant is `hd`: trust in `auth.trustedIdentitySources` is per tenant, so the super admin can
-trust `google:example.com` (their own Workspace, whose admins control every address in it) without
-trusting every Google account. **Never list `google:consumer` in `auth.trustedIdentitySources`:**
+Why the tenant is `hd`: trusted tenants (the 「登录」 section) are per tenant, so the super admin can
+trust `example.com` (their own Workspace, whose admins control every address in it) without
+trusting every Google account. The source declares its tenant (`GOOGLE_TENANT`: a primary domain,
+placeholder `example.com`) with **`consumer` never trusted**, so the console refuses it:
 anyone can create a Google account on any email address, and Google vouches only for `@gmail.com`
 addresses there. The email domain is not required to equal
 `hd` (Workspace users on secondary domains are legitimate).

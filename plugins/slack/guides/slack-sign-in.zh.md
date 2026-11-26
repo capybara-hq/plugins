@@ -22,8 +22,11 @@ Slack 签名的 ID token。登录只会创建或进入账号：任何 Slack 工�
 
 ::check capybara:public-url 平台已设置公网地址
 
-5. 把 `slack` 加入内核配置 `auth.loginSources`（环境变量 `CAPYBARA_AUTH__LOGIN_SOURCES`），在部署的配置
-   所在处设置，而不是在管理后台。如果希望 Slack 登录能并入邮箱相同且已验证的现有账号，再把
-   `slack:<工作区 ID>`（`T…` 开头的 ID，例如 `slack:T0123ABCD`）加入 `auth.trustedIdentitySources`。
+5. 在本页的「登录」分区打开「在登录页显示」（也可以让智能体调用 `login-sources.update`）。如果希望 Slack
+   登录能并入邮箱相同且已验证的现有账号，在同一分区的「可信租户」里填写工作区 ID（`T…` 开头的 ID，例如
+   `T0123ABCD`）。
+
+默认情况下，Slack 账号还没有绑定账号的人第一次登录时会进入绑定页，用用户名和密码登录后完成绑定；如果希望
+直接为他们创建新账号，在同一分区的「未绑定的账号」里选择「自动注册新账号」。
 
 重定向 URL 无法自动检查：如果登录时 Slack 提示 `redirect_uri` 不匹配，请把应用里的重定向 URL 与上面的逐字比对。

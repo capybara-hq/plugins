@@ -30,11 +30,15 @@ opens an account; org membership still comes from invitations or directory sync.
 
 ::check capybara:public-url The platform has a public URL
 
-6. Add `lark` to the kernel config `auth.loginSources` (env `CAPYBARA_AUTH__LOGIN_SOURCES`), set
-   where the deployment's config lives, not in the admin console. Lark does not say its emails are
-   verified, so a Lark sign-in never joins an existing account by email, even when the tenant is in
-   `auth.trustedIdentitySources`; a person who already linked their Lark identity through the bot's
-   binding card signs in to that account.
+6. In the **Sign-in** section of this page, turn on **Show on the login page** (or ask the agent
+   to call `login-sources.update`). Lark does not say its emails are verified, so a Lark sign-in
+   never joins an existing account by email, even when the tenant key is under **Trusted tenants**.
+
+By default, a person whose Lark account is not linked to an account yet goes to the link page on
+their first sign-in and links it by signing in with their username and password; to create a new
+account for them instead, choose **Create a new account** under **Unlinked accounts** in the same
+section. A person who linked their Lark identity through the bot's binding card confirms it the
+same way once, then signs in to that account.
 
 The redirect URL cannot be checked automatically: if Lark refuses the redirect URL at login (20071
 on the token exchange), compare the app's redirect URL with the one above character by character.

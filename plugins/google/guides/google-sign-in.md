@@ -26,14 +26,20 @@ never on what the browser sends.
 ::check google-discovery Google's sign-in endpoints match the plugin
 ::check google-client Google accepts the client ID and secret
 
-5. Add `google` to the kernel config `auth.loginSources` (env `CAPYBARA_AUTH__LOGIN_SOURCES`), set
-   where the deployment's config lives, not in the admin console. To let a Google sign-in join an
-   existing account with the same verified email, also add `google:<your domain>` (for example
-   `google:example.com`) to `auth.trustedIdentitySources`.
+5. In the **Sign-in** section of this page, turn on **Show on the login page** (or ask the agent
+   to call `login-sources.update`). To let a Google sign-in join an existing account with the same
+   verified email, add your primary domain (for example `example.com`) under **Trusted tenants** in
+   the same section.
 
-> **Never add `google:consumer` to `auth.trustedIdentitySources`.** Anyone can create a Google
-> account on any email address, and Google vouches only for `@gmail.com` addresses there; trusting
-> the whole consumer tenant buys nothing and widens what a stranger could try.
+> **Consumer accounts (`google:consumer`) can never be trusted**, and the section refuses
+> `consumer`: anyone can create a Google account on any email address, and Google vouches only for
+> `@gmail.com` addresses there; trusting the whole consumer tenant would buy nothing and widen what
+> a stranger could try.
+
+By default, a person whose Google account is not linked to an account yet goes to the link page on
+their first sign-in and links it by signing in with their username and password; to create a new
+account for them instead, choose **Create a new account** under **Unlinked accounts** in the same
+section.
 
 The redirect URI cannot be checked automatically: if Google shows `redirect_uri_mismatch` at login,
 compare the client's redirect URI with the one above character by character. If Google answers
