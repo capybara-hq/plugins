@@ -5,6 +5,7 @@ import {
   type FakeOAuthServer,
   type FakeOidcClaims,
   kernelDb,
+  seedLoginSources,
   startFakeOAuthServer,
   startTestKernel,
   startTestPostgres,
@@ -48,11 +49,7 @@ beforeAll(async () => {
       {
         extensions: [MODEL_FAKE, GOOGLE],
         http: { port: 0, publicUrl: PUBLIC },
-        auth: {
-          cookieSecure: false,
-          loginSources: ["google"],
-          trustedIdentitySources: ["google:example.com"],
-        },
+        auth: { cookieSecure: false },
         extensionConfig: {
           google: {
             clientId: CLIENT_ID,
@@ -72,6 +69,11 @@ beforeAll(async () => {
     { resolveFrom: PLUGIN_DIR },
   );
   raw = createDb(pgc.url, 3);
+  // Google on the login page, example.com trusted for email merge, unlinked accounts sign up
+  // (the link page is the default).
+  await seedLoginSources(kernelDb(raw), [
+    { plugin: "google", signUp: "create", trustedTenants: ["example.com"] },
+  ]);
 }, 120_000);
 
 afterAll(async () => {

@@ -8,6 +8,7 @@ import {
   type KernelSchemaDb,
   kernelDb,
   TEST_PASSWORD as PW,
+  seedLoginSources,
   slackDmEvent,
   startFakeSlack,
   startTestPostgres,
@@ -92,7 +93,7 @@ describe("Slack 登录与通讯录接内核（双副本）", () => {
         },
       },
       config: {
-        auth: { cookieSecure: false, loginSources: ["slack"] },
+        auth: { cookieSecure: false },
         http: { publicUrl: PUBLIC },
         channels: { leaseTtlMs: 3000, scanIntervalMs: 300 },
         runtime: { jobLockMs: 2000, stalledIntervalMs: 1000 },
@@ -102,6 +103,8 @@ describe("Slack 登录与通讯录接内核（双副本）", () => {
     const raw = createDb(harness.dbUrl, 3);
     cleanups.push(() => raw.destroy());
     const db: KernelSchemaDb = kernelDb(raw);
+    // The login source is on, and an unlinked Slack account signs up (the link page is the default).
+    await seedLoginSources(db, [{ plugin: "slack", signUp: "create" }]);
 
     const call = async (jar: Jar, method: string, path: string, body?: unknown) => {
       const res = await harness.request(path, {
