@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pastNetworkChanges } from "../../daemon/actions.js";
+import { pastInterrupts, pastNetworkChanges } from "../../daemon/actions.js";
 
 const changed = () => new Error("page.goto: net::ERR_NETWORK_CHANGED at https://a.test/");
 const none = async () => ({ kind: "none" as const });
@@ -99,5 +99,77 @@ describe("navigations past changes of the device's network", () => {
     ).catch((e: unknown) => e);
     expect((err as Error).message).toContain("ERR_NAME_NOT_RESOLVED");
     expect(runs).toBe(1);
+  });
+});
+
+const URL_ = "http://127.0.0.1:4000/page";
+const interrupted = (to: string) =>
+  new Error(`page.goto: Navigation to "${URL_}" is interrupted by another navigation to "${to}"`);
+
+describe("navigations past the late error page of the tab's previous navigation", () => {
+  it("follows Chromium's own new run of the navigation after the error page interrupted it", async () => {
+    // the error page commits under the first run, nothing goes on, the second run is
+    // interrupted by Chromium starting the same address itself, and that one loads
+    const runs: string[] = [];
+    const follows = [{ kind: "none" as const }, { kind: "loaded" as const, response: "page" }];
+    const out = await pastInterrupts(
+      async () => {
+        runs.push("run");
+        throw interrupted(runs.length === 1 ? "chrome-error://chromewebdata/" : URL_);
+      },
+      async () => follows.shift() ?? { kind: "none" as const },
+      URL_,
+      3_000,
+      () => 0,
+    );
+    expect(out).toBe("page");
+    expect(runs).toEqual(["run", "run"]);
+  });
+
+  it("runs again after an abort until the deadline, then ends as a timeout", async () => {
+    let t = 0;
+    let runs = 0;
+    const err = await pastInterrupts(
+      async () => {
+        runs++;
+        t += 1_000;
+        throw interrupted("chrome-error://chromewebdata/");
+      },
+      async () => ({ kind: "failed" as const, url: URL_, error: "net::ERR_ABORTED" }),
+      URL_,
+      3_000,
+      () => t,
+    ).catch((e: unknown) => e);
+    expect((err as Error).name).toBe("TimeoutError");
+    expect(runs).toBe(3);
+  });
+
+  it("passes an interrupt by another address through: that navigation is not this one", async () => {
+    let runs = 0;
+    const err = await pastInterrupts(
+      async () => {
+        runs++;
+        throw interrupted("http://127.0.0.1:4000/other");
+      },
+      none,
+      URL_,
+      3_000,
+      () => 0,
+    ).catch((e: unknown) => e);
+    expect((err as Error).message).toContain('another navigation to "http://127.0.0.1:4000/other"');
+    expect(runs).toBe(1);
+  });
+
+  it("reports the real failure of the navigation that went on", async () => {
+    const err = await pastInterrupts(
+      async () => {
+        throw interrupted(URL_);
+      },
+      async () => ({ kind: "failed" as const, url: URL_, error: "net::ERR_CONNECTION_RESET" }),
+      URL_,
+      3_000,
+      () => 0,
+    ).catch((e: unknown) => e);
+    expect((err as Error).message).toBe(`net::ERR_CONNECTION_RESET at ${URL_}`);
   });
 });
