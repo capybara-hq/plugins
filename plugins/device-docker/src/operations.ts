@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { posix } from "node:path";
 import {
   type ExecResult,
+  nativeFailureText,
   parseSandboxBrowseScope,
   parseSandboxExecutionRef,
   parseSandboxOperationRef,
@@ -304,7 +305,8 @@ function checkedEnv(env: Record<string, string> | undefined): Record<string, str
   return out;
 }
 
-function nativeReply(result: AgentResult | null, restricted: boolean): unknown {
+/** The native helper reply of an agent result; exported for its unit test. */
+export function nativeReply(result: AgentResult | null, restricted: boolean): unknown {
   const error = refusalError(result);
   if (error) throw error;
   if (!result) {
@@ -318,7 +320,7 @@ function nativeReply(result: AgentResult | null, restricted: boolean): unknown {
     if (reply.error.code === "SCOPE_DENIED" || (restricted && reply.error.code === "EACCES")) {
       throw new SandboxScopeDeniedError("The native path is outside the operation scope");
     }
-    throw new Error(`Native operation failed (${reply.error.code})`);
+    throw new Error(nativeFailureText(reply.error.code));
   }
   return reply.result;
 }
