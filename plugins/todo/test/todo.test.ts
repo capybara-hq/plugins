@@ -184,21 +184,31 @@ describe("todo 插件", { timeout: 60_000 }, () => {
     ).toBe("Todo list updated (3 items):\n[x] Plan\n[>] Building\n[ ] Ship");
   });
 
-  it("write returns a pinned card with text, cut to CARD_TEXT_MAX at a line boundary", () => {
-    const short = [{ content: "Plan", status: "pending" as const, activeForm: "Planning" }];
-    expect(todosCardText(short)).toBe(renderTodos(short));
+  it("write returns a pinned card with text: a Markdown list, one item per line", () => {
+    expect(
+      todosCardText([
+        { content: "Plan", status: "completed", activeForm: "Planning" },
+        { content: "Build", status: "in_progress", activeForm: "Building\nnow" },
+        { content: "Ship", status: "pending", activeForm: "Shipping" },
+      ]),
+    ).toBe("Todos (1/3):\n\n- [x] Plan\n- [ ] **Building now** (in progress)\n- [ ] Ship");
+    expect(todosCardText([])).toBe("The todo list is empty.");
+  });
+
+  it("the pinned card text is cut on whole items to CARD_TEXT_MAX", () => {
     const many = Array.from({ length: 100 }, (_, i) => ({
       content: `Step ${i} ${"x".repeat(40)}`,
       status: "pending" as const,
       activeForm: "Working",
     }));
-    expect(renderTodos(many).length).toBeGreaterThan(CARD_TEXT_MAX);
     const cut = todosCardText(many);
     expect(cut.length).toBeLessThanOrEqual(CARD_TEXT_MAX);
-    expect(cut.endsWith("\n…")).toBe(true);
-    // whole lines only: every line before the mark is a line of the full text
-    const full = renderTodos(many).split("\n");
-    for (const line of cut.split("\n").slice(0, -1)) expect(full).toContain(line);
+    const lines = cut.split("\n");
+    expect(lines.at(-1)).toBe("- …");
+    // whole items only: every list line before the mark is an item of the list
+    const items = many.map((t) => `- [ ] ${t.content}`);
+    for (const line of lines.slice(2, -1)) expect(items).toContain(line);
+    expect(lines.length).toBeGreaterThan(10);
   });
 
   it("双副本：副本 A 写、副本 B 读一致；B 覆盖写后 A 读到新清单；会话互相隔离", async () => {
@@ -228,7 +238,7 @@ describe("todo 插件", { timeout: 60_000 }, () => {
       view: "tasks-card",
       key: expect.any(String),
       placement: "pinned",
-      text: "Todo list updated (2 items):\n[>] Planning\n[ ] Build",
+      text: "Todos (0/2):\n\n- [ ] **Planning** (in progress)\n- [ ] Build",
     });
     const key1 = card1?.key as string;
     expect(await readSnapshot(b, "conv-1", key1)).toEqual(first);
