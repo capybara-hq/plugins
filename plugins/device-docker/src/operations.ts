@@ -27,6 +27,7 @@ import {
   validateSandboxPathShape,
 } from "@capybara-hq/plugin-sdk";
 import { checkListPath } from "./listing.js";
+import { blockedHosts } from "./refusals.js";
 import {
   acceptedRuntimeDigests,
   OPERATION_AGENT,
@@ -95,6 +96,16 @@ export interface OperationTransport {
   appliedNetwork(h: SandboxHandle, signal: AbortSignal): Promise<AppliedNetwork | null>;
   /** Kills every foreground execution whose control path carries `uuid`. */
   killOperation(h: SandboxHandle, uuid: string, signal: AbortSignal): Promise<void>;
+  /**
+   * The proxy variables of one command whose egress proxy requests carry the operation tag `tag`
+   * (egress-proxy/proxy.mjs `operationTag`), so the proxy records its refusals for it.
+   */
+  taggedProxyEnv?(h: SandboxHandle, tag: string): Record<string, string>;
+  /**
+   * The refusals the instance's egress proxy recorded for `tag`, then forgotten (the control
+   * socket's `refusals`); throws when the proxy cannot answer (an instance without the control).
+   */
+  takeRefusals?(h: SandboxHandle, tag: string, signal: AbortSignal): Promise<unknown>;
   /** Test-only hooks (DockerSandboxTestOptions). */
   backgroundLaunchBarrier?: ((taskId: string) => string | undefined) | undefined;
   afterRevokeKill?: ((operationId: string) => Promise<void>) | undefined;
@@ -436,11 +447,13 @@ export function createOperations(deps: OperationDeps) {
     scope: SandboxOperationScope,
     signal: AbortSignal,
   ) => {
-    if (!appliedWithin(scope.network, await t.appliedNetwork(h, signal))) {
+    const applied = await t.appliedNetwork(h, signal);
+    if (!appliedWithin(scope.network, applied)) {
       throw new SandboxScopeDeniedError(
         "The instance's network allows more than this operation's network; device-docker cannot narrow it per operation, so the operation is refused",
       );
     }
+    return applied;
   };
 
   /** Consumes a foreground operation: a duplicate is an unknown outcome, never a repeat. */
@@ -504,12 +517,19 @@ export function createOperations(deps: OperationDeps) {
   ): Promise<ExecResult> => {
     args.signal.throwIfAborted();
     const input = { ...args, signal: undefined, env: args.env };
-    await checkNetwork(h, scope, args.signal);
+    const applied = await checkNetwork(h, scope, args.signal);
     await consume(h, scope, "exec", inputHash("exec", scope, input), args.signal);
     const ctl = operationControlPath(scope.tag, scope.operationId);
-    return t.execFull(
+    // a proxied instance: the command's proxy requests carry a tag of their own, so the refusals
+    // the proxy records for it can be reported (the caller's own variables still win)
+    const tag =
+      applied !== null && applied.mode !== "none" && t.taggedProxyEnv && t.takeRefusals
+        ? randomBytes(16).toString("hex")
+        : undefined;
+    const env = tag !== undefined ? { ...t.taggedProxyEnv?.(h, tag), ...args.env } : args.env;
+    const result = await t.execFull(
       h,
-      { ...args, tag: scope.tag },
+      { ...args, ...(env !== undefined && { env }), tag: scope.tag },
       ctl,
       [
         PYTHON,
@@ -523,6 +543,13 @@ export function createOperations(deps: OperationDeps) {
       ],
       randomBytes(16).toString("hex"),
     );
+    // Only a failed command asks (one control call through the Docker exec API): the hosts the
+    // proxy refused it, with the layer of each (the kernel turns an address refusal into the
+    // private-address note, a device one into a network ask). An unanswered ask reports nothing.
+    if (tag === undefined || result.exitCode === 0 || !t.takeRefusals) return result;
+    const refusals = await t.takeRefusals(h, tag, args.signal).catch(() => []);
+    const blocked = blockedHosts(refusals);
+    return blocked.length > 0 ? { ...result, network: { blocked } } : result;
   };
 
   /**

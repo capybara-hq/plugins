@@ -202,6 +202,16 @@ public network). This plugin version goes together with the approval-only profil
     for its TTL (at most 300 s, 256 names) when both queries succeeded. When encrypted DNS fails the name is refused with a reason
     naming the fake-IP resolver; the fake address is never dialled. The egress proxy container needs outbound HTTPS to those
     endpoints for this; only the IPv4 range is a signal.
+  - **Refusals carry their reason and are reported**: a refusal answers 403 with the reason as its status phrase, in the words
+    plugin-sdk's `sandboxProxyRefusalLayer` reads (`REFUSAL_REASONS` in `proxy.mjs`: `host is not on the allow list`, `address is
+    a private or reserved address`, `resolved to a private or reserved address`, `malformed host`, the fake-IP case), so a client
+    in the sandbox such as the browser daemon tells a closed address from a host off the list. Each command an operation runs gets
+    proxy variables with the credentials `capybara:<random tag>` (the proxy authenticates nobody), and the proxy records that
+    command's refusals under the tag (at most 64 per command, 256 commands); when the command fails (a non-zero exit, a timeout)
+    the provider takes them through the control socket (`node proxy.mjs control refusals`) and returns them in the exec result's
+    `network.blocked` with the SDK's layers (`address` for a closed address or a host no allowlist entry can name, which no grant
+    lifts; `device` for a host off the list, which the kernel can offer to allow). A command that succeeds, the SOCKS listener and
+    device services (no tag) report nothing; an instance whose proxy cannot answer reports nothing.
   - **What is enforced is that address list, nothing more.** The proxy does not know the deployment's own public addresses (a
     load balancer, the kernel's public URL, a corporate range reached over the internet) unless they are listed in `deniedCidrs`; in
     `open-public` mode any other public address is reachable, including the host's own public IP when it has one. Cloud metadata

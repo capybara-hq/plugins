@@ -39,6 +39,14 @@
 // a file the token is FENCE (the token the instance was created with), else 0. `control status`
 // prints the list and the token in force.
 //
+// Refusals (both modes): a 403 names its reason as the status phrase, in the words plugin-sdk's
+// `sandboxProxyRefusalLayer` reads (REFUSAL_REASONS), so a client in the sandbox (the browser
+// daemon) can tell a closed address from a host off the list. A request whose proxy credentials
+// carry an operation's tag (`capybara:<32 hex>`, see operationTag; the provider gives each command
+// its own) has its refusals recorded for that operation; the provider takes them through the
+// control socket (`control refusals`) and reports them in the command's exec result. The SOCKS
+// listener (no credentials) records none.
+//
 // Device services (src/services.ts) reach the network through this proxy like every command: the
 // provider's service manager hands a service the instance's HTTP_PROXY / HTTPS_PROXY
 // (http://<proxy>:3128), so a browser started with `--proxy-server` from them goes through the same
@@ -427,11 +435,32 @@ export function publicNameError(h) {
 // capybara:allow-module-state read-only constant list (egress proxy container, not the kernel)
 export const MODES = Object.freeze(["open-public", "allowlist"]);
 
+/**
+ * The reasons a refusal names, in the words of the device sandbox proxy that plugin-sdk's
+ * `sandboxProxyRefusalLayer` reads (copied: this container carries no SDK;
+ * test/egress-proxy-refusals.test.ts maps each through the SDK): a closed address or a host no
+ * allowlist entry can name is the `address` layer, a host off the list the `device` layer.
+ */
+// capybara:allow-module-state read-only constant table (egress proxy container, not the kernel)
+export const REFUSAL_REASONS = Object.freeze({
+  malformed: "malformed host",
+  literal: "address is a private or reserved address",
+  resolved: "resolved to a private or reserved address",
+  offList: "host is not on the allow list",
+  fakeIp: "resolved by a fake-IP resolver and encrypted DNS did not answer",
+});
+
 class Refused extends Error {
-  /** @param {number} status 400 malformed, 403 not allowed, 502 cannot resolve or connect */
-  constructor(status, message) {
+  /**
+   * @param {number} status 400 malformed, 403 not allowed, 502 cannot resolve or connect
+   * @param {string} message the English text the client gets as the body
+   * @param {string} [reason] one of {@link REFUSAL_REASONS}: the status phrase, and the reason a
+   *   recorded refusal carries (none for a failed lookup or connect)
+   */
+  constructor(status, message, reason) {
     super(message);
     this.status = status;
+    this.reason = reason;
   }
 }
 
@@ -563,6 +592,12 @@ export function createEgressState(cfg = {}) {
   const registry = new Set();
   /** Applies run one after another (a later one waits for the earlier to finish). */
   let chain = Promise.resolve();
+  /**
+   * The refusals of tagged operations (see {@link operationTag}), oldest operation first: at most
+   * MAX_REFUSAL_TAGS operations (the oldest goes first) of at most MAX_REFUSALS_PER_TAG each.
+   * @type {Map<string, { host: string; port: number; reason: string }[]>}
+   */
+  const refusals = new Map();
 
   const covers = (entry, p) => {
     if (p.mode === "allowlist" && !hostAllowed(entry.host, p.allowHosts)) return false;
@@ -598,6 +633,38 @@ export function createEgressState(cfg = {}) {
     /** Admitted connections not yet closed (tests). */
     get connections() {
       return registry.size;
+    },
+    /**
+     * Records a refusal for the operation `tag` (no tag or no reason: nothing recorded). The host
+     * is normalized, an IPv6 literal bracketed, as a device's exec report carries it.
+     * @param {string | null} tag
+     * @param {string} host
+     * @param {number} port
+     * @param {string | undefined} reason
+     */
+    recordRefusal(tag, host, port, reason) {
+      if (tag === null || reason === undefined) return;
+      const h = normalizeHost(host);
+      if (h.length === 0 || h.length > 253 || !/^[\x21-\x7e]+$/.test(h)) return;
+      if (!Number.isInteger(port) || port < 1 || port > 65535) return;
+      let list = refusals.get(tag);
+      if (list === undefined) {
+        while (refusals.size >= MAX_REFUSAL_TAGS) refusals.delete(refusals.keys().next().value);
+        list = [];
+        refusals.set(tag, list);
+      }
+      if (list.length < MAX_REFUSALS_PER_TAG) {
+        list.push({ host: isIP(h) === 6 ? `[${h}]` : h, port, reason });
+      }
+    },
+    /**
+     * The refusals recorded for `tag`, oldest first, which are then forgotten.
+     * @param {string} tag
+     */
+    takeRefusals(tag) {
+      const list = refusals.get(tag) ?? [];
+      refusals.delete(tag);
+      return list;
     },
     /**
      * Registers a request for `host` (before resolution) with its client side `client`; the entry
@@ -728,8 +795,9 @@ const CONTROL_DEADLINE_MS = 30_000;
 
 /**
  * The control listener (not listening): one JSON request line per connection,
- * `{"op":"apply","config":{...},"fence":N}` or `{"op":"status"}`, answered with one JSON line
- * `{"ok":true,"digest":...}` (status adds `mode`, `hosts` and `fence`) or
+ * `{"op":"apply","config":{...},"fence":N}`, `{"op":"status"}` or `{"op":"refusals","tag":T}`,
+ * answered with one JSON line `{"ok":true,"digest":...}` (status adds `mode`, `hosts` and
+ * `fence`; refusals answers `{"ok":true,"refusals":[{host,port,reason}]}` and forgets them) or
  * `{"ok":false,"error":...}` (a stale fence adds `"code":"stale-fence"` and the `fence` in force).
  * @param {ReturnType<typeof createEgressState>} state
  */
@@ -762,6 +830,14 @@ export function createControlServer(state) {
           fence: state.fence,
           connections: state.connections,
         });
+        return;
+      }
+      if (req?.op === "refusals") {
+        if (typeof req.tag !== "string" || !/^[0-9a-f]{32}$/.test(req.tag)) {
+          reply({ ok: false, error: "The refusals request carries no valid tag." });
+          return;
+        }
+        reply({ ok: true, refusals: state.takeRefusals(req.tag) });
         return;
       }
       if (req?.op !== "apply") {
@@ -854,9 +930,11 @@ async function controlMain(args, env) {
   const path = env.CONTROL_SOCKET || DEFAULT_CONTROL_SOCKET;
   const op = args[0];
   try {
-    if (op !== "apply" && op !== "status") throw new Error("usage: control apply|status");
-    // apply reads `{ config, fence }` as one JSON line on stdin
-    const request = op === "apply" ? { op, ...JSON.parse(await readLine(process.stdin)) } : { op };
+    if (op !== "apply" && op !== "status" && op !== "refusals") {
+      throw new Error("usage: control apply|status|refusals");
+    }
+    // apply reads `{ config, fence }`, refusals `{ tag }` as one JSON line on stdin
+    const request = op === "status" ? { op } : { op, ...JSON.parse(await readLine(process.stdin)) };
     const reply = await controlRequest(path, request);
     process.stdout.write(`${JSON.stringify(reply)}\n`);
     process.exitCode = reply?.ok === true ? 0 : 1;
@@ -880,7 +958,7 @@ export async function resolveTarget(host, opts) {
   const raw = String(host);
   // Control characters, spaces and other bytes no host name or IP literal contains.
   if (!/^[\x21-\x7e]+$/.test(raw) || /[/\\@?#%]/.test(raw)) {
-    throw new Refused(400, "Malformed host name.");
+    throw new Refused(400, "Malformed host name.", REFUSAL_REASONS.malformed);
   }
   const h = normalizeHost(raw);
   const pinned = Object.hasOwn(opts.testHosts, h) ? opts.testHosts[h] : undefined;
@@ -889,6 +967,7 @@ export async function resolveTarget(host, opts) {
       throw new Refused(
         403,
         `Outbound access to ${h} is blocked: it is a private or reserved address.`,
+        REFUSAL_REASONS.literal,
       );
     }
     return [h];
@@ -896,12 +975,19 @@ export async function resolveTarget(host, opts) {
   // Every mode: a name must have the shape of a public DNS name (pinned test names excepted).
   if (isIP(h) === 0 && pinned === undefined) {
     const err = publicNameError(h);
-    if (err !== null) throw new Refused(403, `Outbound access to ${h} is blocked: ${err}.`);
+    if (err !== null) {
+      throw new Refused(
+        403,
+        `Outbound access to ${h} is blocked: ${err}.`,
+        REFUSAL_REASONS.malformed,
+      );
+    }
   }
   if (mode === "allowlist" && !hostAllowed(h, opts.allowHosts)) {
     throw new Refused(
       403,
       `Outbound access to ${h} is blocked by the sandbox egress allowlist. Allowed hosts: ${opts.allowHosts.join(", ") || "(none)"}.`,
+      REFUSAL_REASONS.offList,
     );
   }
   if (pinned !== undefined) return [pinned];
@@ -920,7 +1006,7 @@ export async function resolveTarget(host, opts) {
       if (!opts.encryptedDns) throw new Error("no encrypted DNS");
       real = await opts.encryptedDns.resolve(h);
     } catch {
-      throw new Refused(403, FAKE_IP_REFUSAL);
+      throw new Refused(403, FAKE_IP_REFUSAL, REFUSAL_REASONS.fakeIp);
     }
     if (real.length === 0) throw new Refused(502, `Cannot resolve ${h}.`);
     addrs = real.map((address) => ({ address }));
@@ -929,6 +1015,7 @@ export async function resolveTarget(host, opts) {
     throw new Refused(
       403,
       `Outbound access to ${h} is blocked: it resolves to a private or reserved address.`,
+      REFUSAL_REASONS.resolved,
     );
   }
   return addrs.map((a) => a.address);
@@ -1254,9 +1341,32 @@ function proxyOptions(cfg) {
   };
 }
 
+/** The most operations whose refusals a proxy keeps, and the most refusals kept for each. */
+const MAX_REFUSAL_TAGS = 256;
+const MAX_REFUSALS_PER_TAG = 64;
+
+/**
+ * The operation a proxy request belongs to: the provider gives each command it runs a proxy URL
+ * with the credentials `capybara:<32 hex digits>` (a random tag, never a secret: the proxy
+ * authenticates nobody), which HTTP clients send as `Proxy-Authorization: Basic …`. Null for any
+ * other header (a device service, a client that dropped the credentials): its refusals are not
+ * recorded.
+ * @param {unknown} header
+ */
+export function operationTag(header) {
+  if (typeof header !== "string") return null;
+  const m = /^Basic ([A-Za-z0-9+/=]{1,128})$/.exec(header.trim());
+  if (m === null) return null;
+  const decoded = Buffer.from(m[1], "base64").toString("latin1");
+  const t = /^capybara:([0-9a-f]{32})$/.exec(decoded);
+  return t === null ? null : t[1];
+}
+
 /** The refusal when the list changed while a connection was being opened. */
 const CHANGED_REFUSAL = (h) =>
   `Outbound access to ${h} is blocked: the sandbox egress allowlist changed while connecting.`;
+/** A refusal because the list changed while connecting: the host is off the list now. */
+const changed = (h) => new Refused(403, CHANGED_REFUSAL(h), REFUSAL_REASONS.offList);
 
 /** A host for logs: quoted, every non-printable-ASCII character escaped, so nothing can forge log lines. */
 const q = (s) =>
@@ -1275,12 +1385,28 @@ const MAX_CONNECTIONS = 512;
  */
 export function createEgressProxy(cfg) {
   const opts = proxyOptions(cfg);
-  const refuse = (res, e, target) => {
+  /**
+   * Answers a refusal: its reason (one of REFUSAL_REASONS) is the status phrase, which the device
+   * sandbox's clients classify; a refusal of a known host is recorded for the request's operation.
+   */
+  const refuse = (res, e, target, req, host, port) => {
     const status = e instanceof Refused ? e.status : 502;
     const msg = e instanceof Refused ? e.message : "Upstream connection failed.";
+    const reason = e instanceof Refused ? e.reason : undefined;
     opts.log(`egress refused http ${q(target)}: ${msg}`);
-    if (!res.headersSent)
-      res.writeHead(status, { "content-type": "text/plain", connection: "close" });
+    if (host !== undefined) {
+      opts.state.recordRefusal(
+        operationTag(req.headers["proxy-authorization"]),
+        host,
+        port,
+        reason,
+      );
+    }
+    if (!res.headersSent) {
+      const head = { "content-type": "text/plain", connection: "close" };
+      if (reason !== undefined) res.writeHead(status, reason, head);
+      else res.writeHead(status, head);
+    }
     res.end(`${msg}\n`);
   };
 
@@ -1312,19 +1438,21 @@ export function createEgressProxy(cfg) {
     // registered before resolution: a list change closes it whatever stage it is in
     const entry = opts.state.admit(url.hostname, req.socket, res);
     let sock;
+    // the URL's host as the client named it (an IPv6 literal without its brackets)
+    const host = url.hostname.replace(/^\[(.*)\]$/, "$1");
     try {
       const ips = await resolveTarget(url.hostname, opts.check());
-      if (entry.revoked) throw new Refused(403, CHANGED_REFUSAL(normalizeHost(url.hostname)));
+      if (entry.revoked) throw changed(normalizeHost(url.hostname));
       sock = await connectAny(ips, port, undefined, opts.connect).catch(() => {
         throw new Refused(502, `Cannot connect to ${url.host}.`);
       });
     } catch (e) {
-      refuse(res, e, url.host);
+      refuse(res, e, url.host, req, host, port);
       return;
     }
     if (!opts.state.keep(entry, sock)) {
       sock.destroy();
-      refuse(res, new Refused(403, CHANGED_REFUSAL(normalizeHost(url.hostname))), url.host);
+      refuse(res, changed(normalizeHost(url.hostname)), url.host, req, host, port);
       return;
     }
     const headers = forwardHeaders(req.headers);
@@ -1352,9 +1480,19 @@ export function createEgressProxy(cfg) {
   server.on("connect", async (req, socket, head) => {
     socket.on("error", () => socket.destroy());
     const hp = splitHostPort(req.url);
-    const fail = (status, msg) => {
+    /** A refusal: its reason (REFUSAL_REASONS) is the status phrase, recorded for the operation. */
+    const fail = (status, msg, why) => {
       opts.log(`egress refused connect ${q(req.url)}: ${msg}`);
-      const reason = status === 403 ? "Forbidden" : status === 400 ? "Bad Request" : "Bad Gateway";
+      if (hp !== null) {
+        opts.state.recordRefusal(
+          operationTag(req.headers["proxy-authorization"]),
+          hp[0],
+          hp[1],
+          why,
+        );
+      }
+      const reason =
+        why ?? (status === 403 ? "Forbidden" : status === 400 ? "Bad Request" : "Bad Gateway");
       socket.end(
         `HTTP/1.1 ${status} ${reason}\r\ncontent-type: text/plain\r\nconnection: close\r\n\r\n${msg}\n`,
       );
@@ -1368,7 +1506,8 @@ export function createEgressProxy(cfg) {
     try {
       ips = await resolveTarget(hp[0], opts.check());
     } catch (e) {
-      fail(e instanceof Refused ? e.status : 502, e instanceof Refused ? e.message : "Failed.");
+      if (e instanceof Refused) fail(e.status, e.message, e.reason);
+      else fail(502, "Failed.");
       return;
     }
     if (entry.revoked) return;
@@ -1381,7 +1520,7 @@ export function createEgressProxy(cfg) {
     }
     if (!opts.state.keep(entry, up)) {
       up.destroy();
-      fail(403, CHANGED_REFUSAL(normalizeHost(hp[0])));
+      fail(403, CHANGED_REFUSAL(normalizeHost(hp[0])), REFUSAL_REASONS.offList);
       return;
     }
     socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
@@ -1576,7 +1715,7 @@ export function createSocksProxy(cfg) {
       }
       if (!opts.state.keep(entry, up)) {
         up.destroy();
-        deny(SOCKS5_NOT_ALLOWED, CHANGED_REFUSAL(normalizeHost(host)));
+        deny(SOCKS5_NOT_ALLOWED, changed(normalizeHost(host)).message);
         return;
       }
       deadline.removeEventListener("abort", onDeadline);

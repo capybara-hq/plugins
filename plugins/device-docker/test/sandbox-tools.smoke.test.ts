@@ -193,9 +193,12 @@ describe.skipIf(!dockerAvailable)(
       );
       expect(r.isError, why(r.content)).toBe(false);
       expect(r.content.startsWith(SANDBOX_STARTED_NOTICE)).toBe(true);
-      // the org default is open-public: the sandbox's only exit is its egress proxy
+      // the org default is open-public: the sandbox's only exit is its egress proxy, with the
+      // command's operation tag as its credentials (the proxy records its refusals under it)
       expect(r.content).toMatch(
-        new RegExp(`/workspace\\nsandbox\\nproxy=http://cap-device-${device}-egress:3128\\n`),
+        new RegExp(
+          `/workspace\\nsandbox\\nproxy=http://capybara:[0-9a-f]{32}@cap-device-${device}-egress:3128\\n`,
+        ),
       );
       // the proxy refuses the metadata address by resolved IP
       const blocked = await call(

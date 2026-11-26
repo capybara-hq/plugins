@@ -632,6 +632,41 @@ describe.skipIf(!dockerAvailable)(
       }
     });
 
+    it("a failed command reports the hosts its egress proxy refused, with the SDK's layers", async () => {
+      const hosts = ["allowed.example.com", METADATA_NAME];
+      const h = await newDevice(sbx, { kind: "allowlist", hosts });
+      // an off-list name (device), a listed name resolving to the metadata address (address), a
+      // reachable host; then a failure
+      const r = await run(
+        h,
+        instance({ kind: "allowlist", hosts }),
+        "curl -sS -m 20 https://denied.example.com/ -o /dev/null; " +
+          `curl -sS -m 20 http://${METADATA_NAME}/ -o /dev/null -w '%{http_code}\\n'; ` +
+          "curl -sS -m 20 http://allowed.example.com/ -o /dev/null; exit 7",
+        { cwd: "/workspace" },
+      );
+      expect(r.exitCode, r.stderr).toBe(7);
+      expect(r.network?.blocked).toEqual([
+        { host: "denied.example.com", port: 443, layer: "device" },
+        { host: METADATA_NAME, port: 80, layer: "address" },
+      ]);
+      // taken once: the next failure of another operation reports only its own refusals
+      const quiet = await run(h, instance({ kind: "allowlist", hosts }), "exit 3", {
+        cwd: "/workspace",
+      });
+      expect(quiet.exitCode).toBe(3);
+      expect(quiet.network).toBeUndefined();
+      // a command that succeeds asks nothing (its refusals are not reported)
+      const ok = await run(
+        h,
+        instance({ kind: "allowlist", hosts }),
+        "curl -sS -m 20 https://denied.example.com/ -o /dev/null || true",
+        { cwd: "/workspace" },
+      );
+      expect(ok.exitCode).toBe(0);
+      expect(ok.network).toBeUndefined();
+    });
+
     it("the sandbox reaches neither its internal network's gateway nor the Docker host directly", async () => {
       const port = 18900 + Math.floor(Math.random() * 90);
       const listener = `cap-perm-hostsvc-${RUN}`;
