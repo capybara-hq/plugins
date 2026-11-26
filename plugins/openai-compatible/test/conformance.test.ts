@@ -388,6 +388,77 @@ describe("openai-compatible: stream edge cases and errors", () => {
     expect(checkToolStream(events, done)).toEqual([]);
   });
 
+  it("a call without arguments streams one `{}` delta before message_complete", async () => {
+    next = ds({
+      model: "m",
+      toolCalls: [{ id: "call_z", name: "ping", args: "" }],
+      finish: "tool_calls",
+      usage: usageFor("deepseek", { total: 5, output: 1 }),
+    });
+    const events = await drain(provider(), req());
+    expect(events.flatMap((e) => (e.type === "tool_call_delta" ? [e.input] : []))).toEqual(["{}"]);
+    expect(checkToolStream(events, complete(events))).toEqual([]);
+  });
+
+  it("raw tool_calls chunks: arguments before the name, a late id, interleaved indexes", async () => {
+    const raw = (toolChunks: unknown[][]): FakeResponse => {
+      const chunk = (choices: unknown[], extra: Record<string, unknown> = {}) =>
+        JSON.stringify({ id: "c", object: "chat.completion.chunk", model: "m", choices, ...extra });
+      const data = toolChunks.map((tc) =>
+        chunk([{ index: 0, delta: { tool_calls: tc }, finish_reason: null }]),
+      );
+      data.push(chunk([{ index: 0, delta: {}, finish_reason: "tool_calls" }]));
+      data.push(chunk([], { usage: usageFor("deepseek", { total: 5, output: 1 }) }));
+      data.push("[DONE]");
+      return { status: 200, sse: data.map((d) => ({ data: d })) };
+    };
+    const inputs = (events: ModelStreamEvent[], id: string) =>
+      events.flatMap((e) => (e.type === "tool_call_delta" && e.id === id ? [e.input] : []));
+    const starts = (events: ModelStreamEvent[]) =>
+      events.flatMap((e) => (e.type === "tool_call_start" ? [[e.id, e.name]] : []));
+
+    // The name arrives in the second chunk: one start, the earlier arguments flushed after it
+    next = () =>
+      raw([
+        [{ index: 0, function: { arguments: '{"a"' } }],
+        [{ index: 0, id: "call_n", function: { name: "t", arguments: ":1}" } }],
+      ]);
+    let events = await drain(provider(), req());
+    expect(starts(events)).toEqual([["call_n", "t"]]);
+    expect(inputs(events, "call_n").join("")).toBe('{"a":1}');
+    expect(checkToolStream(events, complete(events))).toEqual([]);
+
+    // The id arrives after the start: the synthesized id stays, in message_complete too
+    next = () =>
+      raw([
+        [{ index: 0, function: { name: "t", arguments: '{"a"' } }],
+        [{ index: 0, id: "call_late", function: { arguments: ":1}" } }],
+      ]);
+    events = await drain(provider(), req());
+    expect(starts(events)).toEqual([["call_0", "t"]]);
+    expect(complete(events).content).toEqual([
+      { type: "tool_call", id: "call_0", name: "t", input: { a: 1 } },
+    ]);
+    expect(checkToolStream(events, complete(events))).toEqual([]);
+
+    // Two calls whose fragments alternate
+    next = () =>
+      raw([
+        [{ index: 0, id: "x", function: { name: "t", arguments: '{"a"' } }],
+        [{ index: 1, id: "y", function: { name: "t", arguments: '{"b"' } }],
+        [{ index: 0, function: { arguments: ":1}" } }],
+        [{ index: 1, function: { arguments: ":2}" } }],
+      ]);
+    events = await drain(provider(), req());
+    expect(starts(events)).toEqual([
+      ["x", "t"],
+      ["y", "t"],
+    ]);
+    expect(inputs(events, "x").join("")).toBe('{"a":1}');
+    expect(inputs(events, "y").join("")).toBe('{"b":2}');
+    expect(checkToolStream(events, complete(events))).toEqual([]);
+  });
+
   it("finish_reason mapping: length -> max_tokens (partial tool calls dropped), content_filter -> refusal", async () => {
     next = ds({
       model: "m",

@@ -249,6 +249,19 @@ describe("stream", () => {
     expect(checkToolStream(events, done)).toEqual([]);
   });
 
+  it("a call without arguments streams one `{}` delta before message_complete", async () => {
+    const provider = await withGeneration(() =>
+      sseGeneration({
+        toolCalls: [{ id: "call_z", name: "ping", args: "" }],
+        finish: "tool_calls",
+      }),
+    );
+    const { events, done } = await run(provider, req({ model: "qwen-flash" }));
+    if (done?.type !== "message_complete") throw new Error("expected message_complete");
+    expect(events.flatMap((e) => (e.type === "tool_call_delta" ? [e.input] : []))).toEqual(["{}"]);
+    expect(checkToolStream(events, done)).toEqual([]);
+  });
+
   it("length drops partial tool calls and is max_tokens", async () => {
     const provider = await withGeneration(() =>
       sseGeneration({

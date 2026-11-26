@@ -234,6 +234,19 @@ describe("ark: stream edge cases and errors", () => {
     expect(checkToolStream(events, done)).toEqual([]);
   });
 
+  it("a call without arguments streams one `{}` delta before message_complete", async () => {
+    next = () =>
+      sseChat({
+        model: SEED,
+        toolCalls: [{ id: "call_z", name: "ping", args: "" }],
+        finish: "tool_calls",
+        usage,
+      });
+    const events = await drain(provider(), req());
+    expect(events.flatMap((e) => (e.type === "tool_call_delta" ? [e.input] : []))).toEqual(["{}"]);
+    expect(checkToolStream(events, complete(events))).toEqual([]);
+  });
+
   it("finish_reason: length -> max_tokens (partial tool calls dropped), content_filter -> refusal", async () => {
     next = () =>
       sseChat({

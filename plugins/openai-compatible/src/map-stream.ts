@@ -93,7 +93,8 @@ export async function* streamChat(
         }
         for (const tc of delta.tool_calls ?? []) {
           const acc = tools.get(tc.index) ?? { id: "", name: "", args: "", started: false };
-          // The id is fixed when the call starts; a later chunk never changes it
+          // The id is fixed when the call starts (synthesized if absent); an id that arrives after the
+          // start is ignored, so message_complete carries the id the start event announced
           if (tc.id && !acc.started) acc.id = tc.id;
           // Name assigned whole: some services repeat it in every delta
           if (tc.function?.name) acc.name = tc.function.name;
@@ -103,6 +104,7 @@ export async function* streamChat(
           if (!acc.started) {
             // Start once the name is known (an upstream may send the arguments first); an upstream
             // that never sends an id gets a synthesized one, reused in message_complete
+            // No name yet: keep the arguments, start (and flush them) once the name arrives
             if (acc.name === "") continue;
             acc.id = acc.id !== "" ? acc.id : `call_${tc.index}`;
             acc.started = true;
@@ -154,10 +156,11 @@ export async function* streamChat(
       if (c.name === "") {
         throw new ModelError("invalid_request", `Tool call #${i} has no function name`);
       }
+      // A call without arguments streamed no fragment: announce its input once, as `{}`
+      if (c.args.trim() === "") yield { type: "tool_call_delta", id: c.id, input: "{}" };
       content.push({
         type: "tool_call",
-        // 个别服务不给 id：用稳定的序号兜底（同一条消息里唯一，回放时与 tool_result 对得上）
-        id: c.id !== "" ? c.id : `call_${i}`,
+        id: c.id,
         name: c.name,
         input: parseArguments(c.args, c.name),
       });
