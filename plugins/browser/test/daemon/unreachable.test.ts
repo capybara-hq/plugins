@@ -13,7 +13,8 @@ const NAV_TIMEOUT_MS = 3_000;
 
 /**
  * An egress proxy like the device's, with credentials (so Playwright answers its challenge, as on
- * a device): tunnels `hang.test` to a listener that accepts and never answers, answers 502 for
+ * a device): tunnels `hang.test` and its subdomains to a listener that accepts and never answers
+ * (resolving the waiters of {@link nextConnect} for that host), answers 502 for
  * `down.test` (the proxy could not connect) and forwards everything else.
  */
 async function startProxy(hangPort: number): Promise<{ url: string; server: Server }> {
@@ -45,8 +46,9 @@ async function startProxy(hangPort: number): Promise<{ url: string; server: Serv
       sock.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
       return;
     }
+    for (const w of connectWaiters.get(host ?? "")?.splice(0) ?? []) w();
     const target =
-      host === "hang.test"
+      host === "hang.test" || host?.endsWith(".hang.test") === true
         ? { port: hangPort, host: "127.0.0.1" }
         : { port: Number(port), host: host ?? "" };
     const up = connect(target.port, target.host, () => sock.write("HTTP/1.1 200 OK\r\n\r\n"));
@@ -61,18 +63,20 @@ async function startProxy(hangPort: number): Promise<{ url: string; server: Serv
 }
 
 let hang: TcpServer;
-/** Resolved at the hanging listener's next connection (a navigation to hang.test in flight). */
-const hangWaiters: (() => void)[] = [];
-const nextHangConnection = () => new Promise<void>((r) => hangWaiters.push(r));
+/**
+ * Resolved at the proxy's next CONNECT to `host` (a navigation to it in flight). Keyed by host:
+ * a connection the browser still holds for another test's host never resolves it.
+ */
+const connectWaiters = new Map<string, (() => void)[]>();
+const nextConnect = (host: string) =>
+  new Promise<void>((r) => connectWaiters.set(host, [...(connectWaiters.get(host) ?? []), r]));
 let proxy: Awaited<ReturnType<typeof startProxy>>;
 let fx: Awaited<ReturnType<typeof startFixtureServer>>;
 let d: TestDaemon;
 
 beforeAll(async () => {
   // accepts every connection and never answers (a TLS handshake that never completes)
-  hang = createTcpServer(() => {
-    for (const w of hangWaiters.splice(0)) w();
-  });
+  hang = createTcpServer(() => undefined);
   await new Promise<void>((r) => hang.listen(0, "127.0.0.1", r));
   const addr = hang.address();
   if (addr === null || typeof addr === "string") throw new Error("no address");
@@ -121,9 +125,10 @@ describe("browser daemon unreachable pages", () => {
   });
 
   it("the tab list answers while a navigation is still in flight", async () => {
-    const inFlight = nextHangConnection();
+    // a host of its own: the browser may still hold the earlier test's connection to hang.test
+    const inFlight = nextConnect("inflight.hang.test");
     const order: string[] = [];
-    const nav = request(d.socketPath, { op: "navigate", url: "https://hang.test/again" }).then(
+    const nav = request(d.socketPath, { op: "navigate", url: "https://inflight.hang.test/" }).then(
       (r) => {
         order.push("navigate");
         return r;
