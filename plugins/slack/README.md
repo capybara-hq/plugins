@@ -115,8 +115,10 @@ The super admin's page of the extension shows these steps as the platform setup 
 2. The login flow requests the scopes `openid`, `email` and `profile` in the authorization URL (`openid` is required; `email` gives the email and
    `email_verified`, `profile` gives the name and avatar). Do **not** add them to the app's Bot / User Token Scopes: Slack requires the
    Sign in with Slack scopes to be requested in a different OAuth flow from the other scopes; installing the app (bot) and signing in are two separate flows.
-3. Put the Client ID and Client Secret from **Basic Information → App Credentials** into the deployment-level config (see below), and add `slack`
-   to the kernel config `auth.loginSources`. "Slack" then appears on the login page.
+3. Put the Client ID and Client Secret from **Basic Information → App Credentials** into the deployment-level config (see below), and turn on
+   「在登录页显示」 (Show on the login page) in the extension page's 「登录」 (Sign-in) section (or `login-sources.update`). "Slack" then appears on the
+   login page; trusted workspace IDs (`T…`) go in the same section. An unlinked Slack account goes to the link page on its first sign-in unless that
+   section chooses 「自动注册新账号」 (Create a new account).
 
 How the plugin works: the authorization URL is `https://slack.com/openid/connect/authorize` (`response_type=code`, `state`, `nonce`);
 the callback exchanges the authorization code at `openid.connect.token` (`client_secret_post`) and **verifies the ID token** (JWKS

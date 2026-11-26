@@ -56,8 +56,9 @@ describe("setup guide lark-sign-in", () => {
         "`appSecret`",
         "`open_id`",
         "`tenant:tenant:readonly`",
-        "`auth.loginSources`",
-        "CAPYBARA_AUTH__LOGIN_SOURCES",
+        "`login-sources.update`",
+        locale === "zh" ? "「在登录页显示」" : "**Show on the login page**",
+        locale === "zh" ? "「自动注册新账号」" : "**Create a new account**",
         "20010",
       ])
         expect(text, s).toContain(s);

@@ -45,6 +45,8 @@ describe("setup guide google-sign-in", () => {
     expect(text).toContain("google-client");
     expect(text).toContain("https://cap.example/api/v1/auth/sso/google/callback");
     expect(text).toContain("google:consumer");
+    expect(text).toContain("login-sources.update");
+    expect(text).not.toContain("auth.loginSources");
   });
 
   it("the zh guide uses the platform terms", () => {

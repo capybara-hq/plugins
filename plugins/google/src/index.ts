@@ -30,8 +30,8 @@ const MANIFEST = Object.freeze({
 /**
  * Sign in with Google (`identity-source@1`). Deployment config only (the login page runs before
  * any org is known): the Web OAuth client, the allowed Workspace domains and whether consumer
- * accounts may sign in. Login is offered once the super admin adds `google` to
- * `auth.loginSources`. Two read-only setup checks verify Google's endpoints and the client. No
+ * accounts may sign in. Login is offered once the super admin turns it on in the extension page's
+ * Sign-in section (or `login-sources.update`). Two read-only setup checks verify Google's endpoints and the client. No
  * state, kv, hooks, tools, UI or migrations.
  */
 export default defineExtension({
