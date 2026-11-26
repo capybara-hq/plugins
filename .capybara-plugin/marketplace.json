@@ -89,7 +89,7 @@
     },
     {
       "name": "lark",
-      "version": "0.1.0-rc.15",
+      "version": "0.1.0-rc.16",
       "summary": {
         "en": "Lark (channel@1 bot over the Lark long connection with interactive cards, identity-source@1 web login, directory@1)"
       },
@@ -125,8 +125,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-lark",
-          "version": "0.1.0-rc.15",
-          "integrity": "sha512-uHQLlBcazVMylhY7Ips8hQkXPigTCK7imwxAUVew8RBmMD0PfZVMjYBbfvhgWVD3T3sM6z1WuoW7iAYKbUb6CA=="
+          "version": "0.1.0-rc.16",
+          "integrity": "sha512-rolPlKTVXxjvg0UK7z0534s7oS/yXWW/38bTM/rHwzaCC1Zdp+fooLJz/CPCB9pARs983NUv8evTsPQfjyFnoA=="
         }
       }
     },
@@ -230,7 +230,7 @@
     },
     {
       "name": "slack",
-      "version": "0.1.0-rc.16",
+      "version": "0.1.0-rc.17",
       "summary": {
         "en": "Slack (channel@1 bot over Socket Mode with Block Kit cards, identity-source@1 Sign in with Slack, directory@1)"
       },
@@ -269,14 +269,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-slack",
-          "version": "0.1.0-rc.16",
-          "integrity": "sha512-0dyQODEJrkRsxoqRJTinUPUzGijo5KTFli+h4F/oNy5rrRJDgdyP+qKSyANL+4/WoPhnbgC6dxKmXOKumy+EAw=="
+          "version": "0.1.0-rc.17",
+          "integrity": "sha512-pRS8XwUZ1dCzbDcmbGYORA2eXhPtujWr2uezUB0eoZmFNKWGLyph71waqxdq5A45jVOzWFAtIRg5qBxlCo1dfQ=="
         }
       }
     },
     {
       "name": "todo",
-      "version": "0.1.0-rc.13",
+      "version": "0.1.0-rc.14",
       "summary": {
         "en": "Todo list tool for agents: plugin__todo__write keeps a per-conversation todo list in PostgreSQL"
       },
@@ -300,8 +300,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-todo",
-          "version": "0.1.0-rc.13",
-          "integrity": "sha512-QApBFqo6PrFJlmR7Pokbkx6AmLZ8dIGApl+EneshGw6dpJbDYvyUaoRyvk2Os1pYyfQOTHnCc0FUEae5mrVj6g=="
+          "version": "0.1.0-rc.14",
+          "integrity": "sha512-HtGVlONC/l11Pw0lctdOMQc29ccUaVuU86LYx6cIq/plvfGKUXzSO9K/fAM3ED64eHNPSAUUYGRutloQY6HsfA=="
         }
       }
     },
@@ -452,7 +452,7 @@
     },
     {
       "name": "telegram",
-      "version": "0.1.0-rc.13",
+      "version": "0.1.0-rc.14",
       "summary": {
         "en": "Telegram (channel@1 bot over the Bot API: long polling or webhook, inline keyboard cards)",
         "zh": "Telegram 机器人渠道（channel@1，Bot API：长轮询或 webhook，内联键盘卡片）"
@@ -474,8 +474,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-telegram",
-          "version": "0.1.0-rc.13",
-          "integrity": "sha512-xgmSdDfkltDxF4/g9NSN0c07SvYH+VaZhSIHh8NZPLojmdHOl8XVJb5lxn6Bozj7PDJ4gAP6qy0POx+dwrEKQw=="
+          "version": "0.1.0-rc.14",
+          "integrity": "sha512-ZJk5l+KcBY6XCmVmKVsUWnN56WTOJZmLfLagTO3BrlfQ3Q7wFIG1ZJlSFdgNfPNBbEoa4MNlcEtlCATrUk7NlQ=="
         }
       }
     },
