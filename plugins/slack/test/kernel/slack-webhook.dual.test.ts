@@ -121,6 +121,9 @@ describe("Slack webhook inbound (dual replica, real plugin)", () => {
         botToken: slack.botToken,
         signingSecret: SIGNING_SECRET,
       },
+      // process display off: this test covers the streaming draft (the escape hatch); the native
+      // progress card is covered in slack.dual.test.ts
+      processDisplay: "off",
     });
     expect(ch.status, JSON.stringify(ch.json)).toBe(201);
     expect(JSON.stringify(ch.json)).not.toContain(SIGNING_SECRET);

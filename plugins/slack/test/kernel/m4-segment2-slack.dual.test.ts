@@ -305,6 +305,9 @@ describe("M4 第二段验收：Slack（双副本）", () => {
       name: "Acme Slack",
       agentId,
       config: { appToken: slack.appToken, botToken: slack.botToken },
+      // process display off: this test covers the streaming draft (the escape hatch); the native
+      // progress card is covered in slack.dual.test.ts
+      processDisplay: "off",
     });
     expect(ch.status, JSON.stringify(ch.json)).toBe(201);
     const channel = ch.json.channel as Json;
