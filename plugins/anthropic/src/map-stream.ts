@@ -235,9 +235,17 @@ export async function* streamMessages(
       acc.add(ev);
       // message_stop 之后不再读：服务端（或中间代理）不关连接时，继续读只会等到空闲超时。
       if (ev.type === "message_stop") break;
-      if (ev.type === "content_block_delta") {
+      if (ev.type === "content_block_start" && ev.content_block.type === "tool_use") {
+        yield { type: "tool_call_start", id: ev.content_block.id, name: ev.content_block.name };
+      } else if (ev.type === "content_block_delta") {
         const d = ev.delta;
-        if (d.type === "text_delta") yield { type: "text_delta", text: d.text };
+        if (d.type === "input_json_delta") {
+          // Fragments follow the tool_use block's start; the id is the one message_complete carries.
+          const block = acc.blocks.get(ev.index);
+          if (block?.kind === "tool_use" && d.partial_json !== "") {
+            yield { type: "tool_call_delta", id: block.id, input: d.partial_json };
+          }
+        } else if (d.type === "text_delta") yield { type: "text_delta", text: d.text };
         else if (d.type === "thinking_delta") yield { type: "thinking_delta", text: d.thinking };
         if (signal.aborted) throw aborted();
       }
