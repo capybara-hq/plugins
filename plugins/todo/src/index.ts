@@ -303,7 +303,7 @@ const title = { zh: "待办", en: "Todos" };
 
 export default defineExtension({
   name: "todo",
-  version: "0.1.0-rc.13",
+  version: "0.1.0-rc.14",
   sdk: "^0.1.0-rc.0",
   provides: [],
   migrations: "../migrations",
