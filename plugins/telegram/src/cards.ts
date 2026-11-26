@@ -7,7 +7,7 @@ import {
   renderCardAsText,
 } from "@capybara-hq/plugin-sdk";
 import { CALLBACK_PREFIX, type CardTokenStore } from "./actions.js";
-import { htmlLink, markdownToTelegramHtml } from "./html.js";
+import { escapeHtml, htmlLink, markdownToTelegramHtml } from "./html.js";
 
 export interface TelegramPost {
   html: string;
@@ -59,13 +59,75 @@ function isHttp(v: string): boolean {
 
 const urlButton = (text: string, url: string): Button[] => (isHttp(url) ? [{ text, url }] : []);
 
+const STEP_MAX = 300;
+
+/**
+ * The run's progress card as HTML: the title (+ meta) in bold, the status line and the pinned text
+ * as Markdown (model and extension text, like an answer), the latest steps in a `<pre>` block
+ * (model-written arguments: never links or mentions), and the links (pending actions, then the web
+ * link) as the HTML for when Telegram rejects the URL buttons. A finished card carries fewer
+ * fields; only the ones present are drawn.
+ */
+function progressText(c: Extract<ChannelCard, { kind: "progress" }>): {
+  body: string;
+  linkLine: string;
+} {
+  const parts = [
+    c.meta
+      ? `<b>${escapeHtml(c.title)}</b> · ${escapeHtml(c.meta)}`
+      : `<b>${escapeHtml(c.title)}</b>`,
+  ];
+  if (c.status) parts.push(markdownToTelegramHtml(c.status));
+  if (c.pinned) parts.push(markdownToTelegramHtml(c.pinned));
+  if (c.steps.length > 0) {
+    const steps = c.steps.map((x) => {
+      const chars = [...x.replace(/\s+/g, " ")];
+      return chars.length > STEP_MAX ? `${chars.slice(0, STEP_MAX - 1).join("")}…` : chars.join("");
+    });
+    parts.push(`<pre>${escapeHtml(steps.join("\n"))}</pre>`);
+  }
+  const links = [
+    ...c.pending.map((p) => ({ text: p.text, url: p.url })),
+    { text: c.urlText, url: c.url },
+  ];
+  return {
+    body: parts.join("\n"),
+    linkLine: links.map((l) => `${escapeHtml(l.text)}: ${htmlLink(l.url)}`).join("\n"),
+  };
+}
+
+/** The SDK's text form of a card, never a throw (a card kind this plugin does not know). */
+function safeCardAsText(card: ChannelCard, locale: Locale): string {
+  try {
+    const text: unknown = renderCardAsText(card, locale);
+    return typeof text === "string" && text !== "" ? text : "…";
+  } catch {
+    return "…";
+  }
+}
+
 /**
  * Card text without the line that carries the card's link (it becomes a URL button), and that line
  * as HTML with the link, for when Telegram rejects the button. The link line is the last one, or
- * the one before a pending question's text-reply hint.
+ * the one before a pending question's text-reply hint. A card kind this plugin does not know (a
+ * newer kernel) is the SDK's text form, without buttons.
  */
 function cardText(card: ChannelCard, locale: Locale): { body: string; linkLine?: string } {
-  const url = card.kind === "connect" || card.kind === "bind" ? card.url : card.webUrl;
+  let url: string;
+  switch (card.kind) {
+    case "progress":
+      return progressText(card);
+    case "connect":
+    case "bind":
+      url = card.url;
+      break;
+    case "approval":
+    case "question":
+      url = card.webUrl;
+      break;
+    default:
+      return { body: markdownToTelegramHtml(safeCardAsText(card, locale)) };
+  }
   const lines = renderCardAsText(card, locale).split("\n");
   let at = lines.length - 1;
   if (card.kind === "question" && card.state === "pending" && card.textReply !== undefined) at--;
@@ -163,6 +225,14 @@ async function keyboard(
       return [urlButton(t.connect, card.url)];
     case "bind":
       return [urlButton(t.bind, card.url)];
+    case "progress":
+      // one link per row: pending actions first, then the run on the web
+      return [
+        ...card.pending.map((p) => urlButton(clip(p.text), p.url)),
+        urlButton(clip(card.urlText), card.url),
+      ];
+    default:
+      return [];
   }
 }
 
@@ -181,7 +251,10 @@ export function cardHeadline(card: ChannelCard, locale: Locale): string | undefi
       return textOf(card.form.title, locale);
     case "bind":
       return card.text;
-    case "connect":
+    case "progress":
+      // the kernel sends the progress card with its title as the text
+      return card.title;
+    default:
       return undefined;
   }
 }

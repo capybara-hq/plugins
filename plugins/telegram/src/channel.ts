@@ -318,6 +318,8 @@ export function createTelegramChannel(o: TelegramChannelOptions): Channel {
       cards: true,
       edit: true,
       threads: true,
+      // the run's progress card is drawn natively (HTML + link buttons, cards.ts), edited in place
+      progress: true,
       minEditIntervalMs: MIN_EDIT_INTERVAL_MS,
       files: { ...FILE_LIMITS },
     },

@@ -283,3 +283,78 @@ describe("renderCards", () => {
     expect(p?.withoutUrlButtons).toBeUndefined();
   });
 });
+
+const WEB = "https://cap.example/c/1";
+const progress = (
+  over: Partial<Extract<ChannelCard, { kind: "progress" }>> = {},
+): Extract<ChannelCard, { kind: "progress" }> => ({
+  kind: "progress",
+  state: "running",
+  title: "Working",
+  meta: "Elapsed 0:42",
+  status: "Reading the **invoices** now",
+  pinned: "Todo list updated (2 items):\n[x] Plan\n[>] Building",
+  steps: ["Read invoice-1.pdf", "Bash ls -la"],
+  pending: [{ text: "Approve: send the report", url: `${WEB}#apr_1` }],
+  url: WEB,
+  urlText: "See the full process on the web",
+  ...over,
+});
+const FINISHED: ChannelCard = {
+  kind: "progress",
+  state: "finished",
+  title: "Worked for 2m 43s",
+  meta: "12 tools",
+  steps: [],
+  pending: [],
+  url: WEB,
+  urlText: "See the full process on the web",
+};
+
+describe("renderCards: progress card", () => {
+  it("renders a running progress card", async () => {
+    const [p] = await renderCards([progress()], "en", setup().tokens, log);
+    expect(p?.html).toBe(
+      [
+        "<b>Working</b> · Elapsed 0:42",
+        "Reading the <b>invoices</b> now",
+        "Todo list updated (2 items):\n[x] Plan\n[&gt;] Building",
+        "<pre>Read invoice-1.pdf\nBash ls -la</pre>",
+      ].join("\n"),
+    );
+    expect(buttons(p as never).map((b) => [b.text, b.url])).toEqual([
+      ["Approve: send the report", `${WEB}#apr_1`],
+      ["See the full process on the web", WEB],
+    ]);
+    // when Telegram rejects the URL buttons, the links move into the text
+    expect(p?.withoutUrlButtons?.html).toContain(
+      `See the full process on the web: <a href="${WEB}">${WEB}</a>`,
+    );
+    expect(p?.withoutUrlButtons?.replyMarkup).toBeUndefined();
+  });
+
+  it("renders a finished one: only the fields it carries", async () => {
+    const [p] = await renderCards([FINISHED], "en", setup().tokens, log);
+    expect(p?.html).toBe("<b>Worked for 2m 43s</b> · 12 tools");
+    expect(buttons(p as never).map((b) => b.text)).toEqual(["See the full process on the web"]);
+  });
+
+  it("steps never become links or mentions", async () => {
+    const steps = ["Fetch https://evil.example/x", '<a href="https://evil.example">x</a> @admin'];
+    const [p] = await renderCards([progress({ steps })], "en", setup().tokens, log);
+    const pre = p?.html.slice(p.html.indexOf("<pre>")) ?? "";
+    expect(pre).toBe(
+      '<pre>Fetch https://evil.example/x\n&lt;a href="https://evil.example"&gt;x&lt;/a&gt; @admin</pre>',
+    );
+    expect(p?.html).not.toContain('<a href="https://evil');
+    expect(buttons(p as never).some((b) => b.url?.includes("evil"))).toBe(false);
+    expect(p?.withoutUrlButtons?.html).not.toContain('<a href="https://evil');
+  });
+
+  it("an unknown card kind falls back to text and never throws", async () => {
+    const future = { kind: "future", title: "x" } as unknown as ChannelCard;
+    const [p] = await renderCards([future], "en", setup().tokens, log);
+    expect(typeof p?.html).toBe("string");
+    expect(p?.replyMarkup).toBeUndefined();
+  });
+});
