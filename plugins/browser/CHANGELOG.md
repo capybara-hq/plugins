@@ -1,5 +1,43 @@
 # @capybara-hq/plugin-browser
 
+## 0.1.0-rc.10
+
+### Patch Changes
+
+- d946859: Tab icons for sites with large favicons, and an icon slot that is never an empty grey square.
+  - www.baidu.com's favicon is a 64 px 32-bit ICO of 16958 bytes, over the 8 KiB cap, so it was
+    dropped. The browser now draws an oversized raster icon into a 32 px PNG, in an isolated world of
+    the tab's frame, and that PNG is checked against the same cap.
+  - The icon slot in the tab strip, the narrow tabs button and the tab menus always shows a
+    deliberate 14 px glyph: a spinner while the tab loads (`ViewerTab.loading`), a neutral globe after
+    load without an icon (and for the other conversations' tabs, which have none). The site's icon
+    replaces it in the same box when it arrives.
+- a41944f: A host the device's proxy refused is reported with the layer that refused it: a name that resolves
+  to a private or local address on the device (or a closed IP literal) is reported as `address`, so
+  the kernel writes the private-address note instead of offering a network ask or naming an
+  organization admin, and the panel no longer offers to allow such a host. Needs
+  `@capybara-hq/plugin-sdk` 0.1.0-rc.77 (`ServiceBlockedHost`, `sandboxProxyRefusalLayer`) and a
+  kernel that reads the layers.
+- 6de3967: "The device's network proxy is not reachable" is said only when the connection to the proxy could
+  not be made (refused, unreachable, unresolved); a proxy that took the connection and then reset it
+  is no longer reported as down.
+- a97f338: A navigation that fails at the connection level (`ERR_TIMED_OUT`, `ERR_CONNECTION_*`,
+  `ERR_NAME_NOT_RESOLVED`, a failed tunnel, ...) now asks the device's proxy about the host, as a
+  failed tunnel did: blocked by the network settings, could not connect, or no page in time. When
+  the proxy itself cannot be reached (`ERR_PROXY_CONNECTION_FAILED`, the device's network down or
+  being set up), the result says so as `network_unavailable`, not an address problem, with its own
+  next step.
+- 942022a: Device services roll onto an upgraded plugin's files on device-docker and device-e2b as on local
+  devices: the service manager records the digest of the files a service started from, reports it as
+  `filesDigest` (`sha256:…`, the SDK's digest), keeps a running service on the same files and, on
+  other files, stops it once the new files are there or were sent and checked, then starts it on
+  them. The browser daemon answers the kernel's roll check (capybara-hq/core#879) busy while the
+  person holds control or a handoff younger than 30 minutes waits, so a roll waits for a later
+  call (a handoff nobody ends no longer holds it).
+  A navigation the device's network change dropped (`ERR_NETWORK_CHANGED`: Wi-Fi, a VPN, a container
+  network) is followed if Chromium keeps it going and run again otherwise, a few times within its
+  deadline; a request it dropped has its host checked against the proxy, as a failed tunnel does.
+
 ## 0.1.0-rc.9
 
 ### Patch Changes

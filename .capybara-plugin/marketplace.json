@@ -89,7 +89,7 @@
     },
     {
       "name": "lark",
-      "version": "0.1.0-rc.14",
+      "version": "0.1.0-rc.15",
       "summary": {
         "en": "Lark (channel@1 bot over the Lark long connection with interactive cards, identity-source@1 web login, directory@1)"
       },
@@ -125,8 +125,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-lark",
-          "version": "0.1.0-rc.14",
-          "integrity": "sha512-H+WUt/3hrevia8hIMdCpwjSiYIYEoWJ67VesStEsciUPNCzsibi2/GUcRMr8HGmYdFfOuXdVVBiOb7kOIS4MNQ=="
+          "version": "0.1.0-rc.15",
+          "integrity": "sha512-uHQLlBcazVMylhY7Ips8hQkXPigTCK7imwxAUVew8RBmMD0PfZVMjYBbfvhgWVD3T3sM6z1WuoW7iAYKbUb6CA=="
         }
       }
     },
@@ -230,7 +230,7 @@
     },
     {
       "name": "slack",
-      "version": "0.1.0-rc.15",
+      "version": "0.1.0-rc.16",
       "summary": {
         "en": "Slack (channel@1 bot over Socket Mode with Block Kit cards, identity-source@1 Sign in with Slack, directory@1)"
       },
@@ -269,8 +269,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-slack",
-          "version": "0.1.0-rc.15",
-          "integrity": "sha512-RZUuxPbqmTdksJU7/nmdg+mBWMPA8uZhZGOS/+1T3zM2OX9VIjYr0y2F/ZMP6IvFCJWYC2yfCYdCJQPf+zpUXg=="
+          "version": "0.1.0-rc.16",
+          "integrity": "sha512-0dyQODEJrkRsxoqRJTinUPUzGijo5KTFli+h4F/oNy5rrRJDgdyP+qKSyANL+4/WoPhnbgC6dxKmXOKumy+EAw=="
         }
       }
     },
@@ -481,7 +481,7 @@
     },
     {
       "name": "theme-cyberpunk",
-      "version": "0.1.0-rc.17",
+      "version": "0.1.0-rc.18",
       "summary": {
         "en": "Cyberpunk theme and UI: neon yellow on deep blue-black, a run-state HUD, scanlines, a boot screen, a glitch CYBERBARA wordmark and opt-in synthesized sound",
         "zh": "赛博朋克主题与界面：深蓝黑底上的霓虹黄，运行状态 HUD、扫描线、启动画面、故障风 CYBERBARA 字标，以及可选的合成音效"
@@ -513,8 +513,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-theme-cyberpunk",
-          "version": "0.1.0-rc.17",
-          "integrity": "sha512-Hh6ZYPHXJHY8wDaX9rMGMxYNLiZgx3ggU7JJR67B0D3wNXnl8T9+yvu9WuTUBsnytxRGmauqWi36xhJSwOvXNw=="
+          "version": "0.1.0-rc.18",
+          "integrity": "sha512-/IsI96lEwzHY3SWreP7A1Fh6lI7yELNyhS7euho30DrYxDkfByodTSMc1OJaSxRQNOZyKG0S8Al9oUii6dd5xg=="
         }
       }
     },
@@ -785,7 +785,7 @@
     },
     {
       "name": "google",
-      "version": "0.1.0-rc.3",
+      "version": "0.1.0-rc.4",
       "summary": {
         "en": "Sign in with Google (OpenID Connect for Google Workspace accounts, hosted domain enforced on the verified ID token), plus connector templates for Gmail, Google Drive, Calendar, Sheets, Docs, Slides and BigQuery, each member connecting their own Google account",
         "zh": "使用 Google 登录（Google Workspace 账号通过 OpenID Connect 登录，托管域在校验过的 ID token 上强制检查），并提供 Gmail、Google Drive、Calendar、Sheets、Docs、Slides 和 BigQuery 的 connector 模板，每个成员连接自己的 Google 账号"
@@ -819,14 +819,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-google",
-          "version": "0.1.0-rc.3",
-          "integrity": "sha512-vCFXVsVjnkwDAHCoelBV1NkUX7pw30YRiOZAxwIRsrlmpkjjvIvqXpNCNQTJOIcpfsbbKPOeovxcphMz9toSkQ=="
+          "version": "0.1.0-rc.4",
+          "integrity": "sha512-oeAhkLDxfDPJT/67PEWoUhrbxfzfEpNpnxsWJf9y1S2ED29jUHC7rl3Qy4UXk40cjRPAxG3lps4UMMFKJq+mnw=="
         }
       }
     },
     {
       "name": "device-docker",
-      "version": "0.1.0-rc.30",
+      "version": "0.1.0-rc.31",
       "summary": {
         "en": "Devices as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with their files on volumes kept until the device is deleted: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist",
         "zh": "以 Docker 容器（runc 或 gVisor runsc）承载设备，经 Docker socket 代理访问；文件保存在卷上，直到设备被删除。网络默认开放公网（拒绝回环、私有、链路本地与元数据地址），也可用主机白名单"
@@ -853,14 +853,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-docker",
-          "version": "0.1.0-rc.30",
-          "integrity": "sha512-bhqSRr6r9gNI7aKYE0ANf3xeCYYIKCOFlvOZZLyM83AzaTn4A2K7zgbgZQZAGgs9b5M3cZhlemjVTAChBPZGuw=="
+          "version": "0.1.0-rc.31",
+          "integrity": "sha512-zv61zPKnrmrxhVL2+KEMtqh1RzoDdAp8TUqldohfz35UGGKZyiADkzk0big2WRyCTzo7GuUuRVOfqi6gjxjjGw=="
         }
       }
     },
     {
       "name": "device-e2b",
-      "version": "0.1.0-rc.30",
+      "version": "0.1.0-rc.31",
       "summary": {
         "en": "Devices as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, an allowlist or the open internet with local ranges denied (E2B's metadata service stays reachable)",
         "zh": "以 E2B 沙箱承载设备（E2B 云或自托管）：暂停沙箱保留文件，从已发布镜像构建模板，网络为出站白名单或开放公网（拒绝私有、回环与链路本地地址；E2B 元数据端点仍可达，见 README）"
@@ -886,8 +886,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-e2b",
-          "version": "0.1.0-rc.30",
-          "integrity": "sha512-KwXaRE8B3S6V4fDnPUwyiJzClDNSb4oDmk8BZx26z2ShnSFUHjjBiF/ThpUeUXNT8EhBhAzoHntft22uPSbONw=="
+          "version": "0.1.0-rc.31",
+          "integrity": "sha512-u5KGzvl0fGKAq7mt8ciD0hJLFqxxzg9dGUwNbB+smZXnmHs/9wmwAGTeIYgceme1uuFvlCkLkVekPBWMiG/QcA=="
         }
       }
     },
@@ -948,7 +948,7 @@
     },
     {
       "name": "browser",
-      "version": "0.1.0-rc.9",
+      "version": "0.1.0-rc.10",
       "summary": {
         "en": "A real browser in the conversation owner's device for agents: navigate, read and act on pages through tools, with a live view in the conversation panel and takeover by the person",
         "zh": "在对话所有者的设备中为智能体运行真实浏览器：通过工具打开、读取和操作网页，在对话面板中实时查看，并可由本人接管"
@@ -1012,8 +1012,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-browser",
-          "version": "0.1.0-rc.9",
-          "integrity": "sha512-4Y6iS+75KTsaBK7Ep0Ay2A6fbBCfCI/IItsnxvVfTfaOIZNKMUlm9faXaTLNkke9qWIbUnBlJet51DWN7cwVbQ=="
+          "version": "0.1.0-rc.10",
+          "integrity": "sha512-OAGZbrdhCJcDxtp0aK36saJ3LNyaVVCxQNjVGftB9Edqe7TwFxpARl6hxiMfOV7Dm/NdahIOMdaj72+reBhlRA=="
         }
       }
     }
