@@ -248,9 +248,6 @@ export const NO_TAB_TO_WAIT_ON =
 /** Playwright's error for a navigation that a network error page's late commit interrupted. */
 const ERROR_PAGE_INTERRUPT_RE = /is interrupted by another navigation to "chrome-error:/;
 
-/** The address of the navigation that interrupted this one, from Playwright's error. */
-const INTERRUPTED_BY_RE = /is interrupted by another navigation to "([^"]*)"/;
-
 /** How often a navigation runs while the device's network keeps changing under it. */
 const NETWORK_CHANGED_ATTEMPTS = 4;
 
@@ -2062,8 +2059,7 @@ export class BrowserSession {
   }
 
   /**
-   * `page.goto`, past the late error page of the tab's previous failed or stopped navigation
-   * (or another navigation to the same address):
+   * `page.goto`, past the late error page of the tab's previous failed or stopped navigation:
    * Chromium can commit that page after Playwright reported the failure (the Linux full build),
    * and its commit interrupts a navigation started meanwhile. Then this navigation is followed
    * when it went on in Chromium, and otherwise started once more (the error page is in now),
@@ -2078,11 +2074,7 @@ export class BrowserSession {
     try {
       return await page.goto(url, { waitUntil: "domcontentloaded" });
     } catch (e) {
-      const msg = firstLine(e);
-      // the same address again (Chromium restarting it after a network change, the address bar)
-      // lands on this navigation's page: followed like the error page's interrupt
-      const sameAddress = INTERRUPTED_BY_RE.exec(msg)?.[1] === url;
-      if (!ERROR_PAGE_INTERRUPT_RE.test(msg) && !sameAddress) throw e;
+      if (!ERROR_PAGE_INTERRUPT_RE.test(firstLine(e))) throw e;
       const out = await watch.follow(deadline);
       if (out.kind === "loaded") return out.response;
       // aborted: the error page took the frame from it, so it runs again; a real net error is its own
