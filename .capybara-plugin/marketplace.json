@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "anthropic",
-      "version": "0.1.0-rc.10",
+      "version": "0.1.0-rc.11",
       "summary": {
         "en": "Anthropic model provider (model-provider@2) using the official SDK and the native Messages API"
       },
@@ -34,8 +34,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-anthropic",
-          "version": "0.1.0-rc.10",
-          "integrity": "sha512-fOZuAzmJLRdHj/IwsVA71jyu45FmK3VSQYKlOZk6JYv6WbCX5cUrieduN+PGHwszFysQ4QxFj4XQ23QltQMh+g=="
+          "version": "0.1.0-rc.11",
+          "integrity": "sha512-du0wCj2z3asIZk1mpDOBAtlZSmqB1WQTr8doHb8uPSKGCqfkcCgSVrJWP8dbqW//BHO8un0uWLs74TBvk+f9ug=="
         }
       }
     },
@@ -169,7 +169,7 @@
     },
     {
       "name": "openai",
-      "version": "0.1.0-rc.12",
+      "version": "0.1.0-rc.13",
       "summary": {
         "en": "OpenAI model provider (model-provider@2) using the official SDK and the native Responses API"
       },
@@ -195,14 +195,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-openai",
-          "version": "0.1.0-rc.12",
-          "integrity": "sha512-bh4ydAdf7cJwod2crmd6q9mbAFYULtoSXm/FAWf5xOUvwfYCo6OWY+JD5fQGNZQDuD+0MV3wQbvSpYBA2/poNQ=="
+          "version": "0.1.0-rc.13",
+          "integrity": "sha512-96cLlSSDPNlAjeFjHYYVfupqUDYYmePMThmB1nhwDoNO15F3OXEUECRGUR8PbUSjjthZTQ7gmb+HfCx9CqBweg=="
         }
       }
     },
     {
       "name": "openai-compatible",
-      "version": "0.1.0-rc.12",
+      "version": "0.1.0-rc.13",
       "summary": {
         "en": "Model provider (model-provider@2) for Chat Completions-compatible services (vLLM, DeepSeek, Qwen, ...) using the official openai SDK"
       },
@@ -223,8 +223,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-openai-compatible",
-          "version": "0.1.0-rc.12",
-          "integrity": "sha512-4bO5W4xw97s1SPCfgWunqNzCiCoUUE35YdGX9GX+0CJ8bBRLQDZi6XaYHvOt1qZ+zQdwh8gRl9ILavwn4prEEw=="
+          "version": "0.1.0-rc.13",
+          "integrity": "sha512-IXdGfR9nhUXFWcF+3Bpmemn6M2e/EgC7x1jhKg84H23vKANviVcGvyTugyAjyd7K3vd0DD8aYAW1CMnTksUpJg=="
         }
       }
     },
@@ -339,7 +339,7 @@
     },
     {
       "name": "ark",
-      "version": "0.1.0-rc.12",
+      "version": "0.1.0-rc.13",
       "summary": {
         "en": "Model provider (model-provider@2) for Volcengine Ark chat, embedding and image generation models",
         "zh": "火山方舟对话、嵌入与图片生成模型（model-provider@2）"
@@ -371,14 +371,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-ark",
-          "version": "0.1.0-rc.12",
-          "integrity": "sha512-8yrnD2AKpsqT7RKrokyH95xW8z8un5z4c3rgsxtgW49kVZ9Y+rOpsf+mNGW/XM/rEATSvQTj3LMPDBGPPZdPyw=="
+          "version": "0.1.0-rc.13",
+          "integrity": "sha512-dmS7jJcPGTsWBzRC8rIe5T/GUrqfNNzlQeS5iIfoZdXGNPJqNrylHLp12eRZspaTPkZzpGgowV0MOhiQvwDzMA=="
         }
       }
     },
     {
       "name": "bailian",
-      "version": "0.1.0-rc.11",
+      "version": "0.1.0-rc.12",
       "summary": {
         "en": "Model provider (model-provider@2) for Alibaba Cloud Model Studio (Bailian) chat, embedding and image generation models",
         "zh": "阿里云百炼对话、嵌入与图片生成模型（model-provider@2）"
@@ -415,14 +415,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-bailian",
-          "version": "0.1.0-rc.11",
-          "integrity": "sha512-3LYmVw1KQL6qXYgU7XeymBvnRRZy8PM5OIP5CeUtypqMkBXHo1wR8leuwucLLLpRR5EgTJOWMdZNx5D99fp+rw=="
+          "version": "0.1.0-rc.12",
+          "integrity": "sha512-bEO6UTSlFJq5F+4ht/FQtgM2pOhRzaVY2+URWegR7lZ7utd9AhkTEoRAFnECUq3e7kI7/pJMoNyNX6KTMd9Xpw=="
         }
       }
     },
     {
       "name": "deepseek",
-      "version": "0.1.0-rc.11",
+      "version": "0.1.0-rc.12",
       "summary": {
         "en": "Model provider (model-provider@2) for DeepSeek chat models through the Chat Completions API",
         "zh": "DeepSeek 对话模型（model-provider@2），通过 Chat Completions API 调用"
@@ -445,8 +445,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-deepseek",
-          "version": "0.1.0-rc.11",
-          "integrity": "sha512-AUgib6r+8sdNEu9Fs8NvatbYTe/eihW3Zo6zILzTIUxgCHRkvIJ/QKoWcH4O32gaiyvlsmYBocIlD3m0ntUhyA=="
+          "version": "0.1.0-rc.12",
+          "integrity": "sha512-bDl3SWO/SO23PaY7Jc9km79kctaGYKqjWOTaXcb+olJNHCNwP4lEXuAY7jylBMaDxL3WttWdHDS6c/QjHFbUeA=="
         }
       }
     },

@@ -1,5 +1,11 @@
 # @capybara-hq/plugin-openai-compatible
 
+## 0.1.0-rc.13
+
+### Patch Changes
+
+- 324a502: Stream tool call input: emit `tool_call_start` and `tool_call_delta` events as the arguments arrive (an id the upstream omits is synthesized once and reused in `message_complete`).
+
 ## 0.1.0-rc.12
 
 ### Minor Changes
