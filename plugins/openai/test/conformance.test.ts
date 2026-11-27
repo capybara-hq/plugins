@@ -57,7 +57,7 @@ describeModelProviderConformance("openai (fixtures)", async () => {
     model: "gpt-5.5",
     expect: {
       thinking: true,
-      caching: false,
+      caching: true,
       imageGeneration: { model: "gpt-image-1-mini" },
     },
     teardown: () => server.stop(),
