@@ -114,6 +114,17 @@ describe("parseBlockActions", () => {
     });
   });
 
+  it("a boolean choice button answers with a boolean", () => {
+    const value = encodeActionValue({ k: "q", id: ID, key: "done", value: false });
+    const r = parseBlockActions(basePayload({ action_id: "cap_q_1", value }));
+    expect(r?.action).toEqual({
+      cardKind: "question",
+      cardId: ID,
+      action: "answer",
+      answer: { done: false },
+    });
+  });
+
   it("multi-select submit reads the checked options from state.values", () => {
     const value = encodeActionValue({
       k: "m",

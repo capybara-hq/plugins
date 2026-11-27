@@ -110,6 +110,11 @@ describe("parseCardAction", () => {
     expect(p?.action).toEqual({ cardKind: "approval", cardId: "apr_1", action: "deny" });
   });
 
+  it("a boolean value survives the button value round trip", () => {
+    const v = { k: "q" as const, chat: "d" as const, id: "q_1", key: "done", value: true };
+    expect(decodeActionValue(encodeActionValue(v))).toEqual(v);
+  });
+
   it("single-choice question button → answer", () => {
     const p = parseCardAction(
       callback({ action: { value: { [VALUE_KEY]: '["q","d","q_1","env","prod"]' } } }),

@@ -635,6 +635,57 @@ describe("connect (Socket Mode)", () => {
     expect(events).toHaveLength(1);
   });
 
+  it("a question choice button → card_action with the boolean answer, then ack", async () => {
+    const ch = channel();
+    await ch.send({
+      config: config(),
+      target: { chatId: "D1", chatType: "dm" },
+      message: {
+        text: "Confirm",
+        cards: [
+          {
+            kind: "question",
+            id: "q-1",
+            state: "pending",
+            webUrl: "https://cap.example/c",
+            form: {
+              title: "Browser handoff",
+              body: "Finish the login, then confirm",
+              fields: [
+                {
+                  key: "done",
+                  label: "Done",
+                  required: true,
+                  schema: { type: "boolean" },
+                  choices: [
+                    { value: true, label: "Done" },
+                    { value: false, label: "Cancel" },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      },
+      signal: signal(),
+      locale: "en",
+    });
+    const msg = slack.messages.at(-1);
+    if (!msg) throw new Error("no message");
+    expect(JSON.stringify(msg.blocks)).toContain("Finish the login, then confirm");
+    const btn = findSlackButton(msg.blocks, (b) => b.action_id === "cap_q_1");
+    const { events } = await connect();
+    const env = slack.pushInteractive(
+      slackBlockAction({ id: "U1", teamId: "T1" }, msg, btn as never, { actionTs: "1800.6" }),
+    );
+    await slack.waitForAck(env);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "card_action",
+      action: { cardKind: "question", cardId: "q-1", action: "answer", answer: { done: false } },
+    });
+  });
+
   it("profile lookup failure does not block the event", async () => {
     const { events } = await connect();
     const env = slack.pushEvent(slackDmEvent("U404", "hey", { ts: "8.1" }));

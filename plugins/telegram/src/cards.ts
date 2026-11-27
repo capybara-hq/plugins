@@ -3,6 +3,7 @@ import {
   type ChannelCard,
   type Locale,
   type Logger,
+  questionChoiceButtons,
   questionRenderableInline,
   renderCardAsText,
 } from "@capybara-hq/plugin-sdk";
@@ -204,7 +205,20 @@ async function keyboard(
     case "question": {
       const f = card.form.fields[0];
       const rows: Button[][] = [];
-      if (
+      const choices =
+        card.state === "pending" ? questionChoiceButtons(card.form, locale) : undefined;
+      if (choices) {
+        for (const b of choices.buttons) {
+          rows.push(
+            await callbackButton(tokens, b.label, {
+              cardKind: "question",
+              cardId: card.id,
+              action: "answer",
+              answer: { [choices.key]: b.value },
+            }),
+          );
+        }
+      } else if (
         card.state === "pending" &&
         f &&
         !f.multiSelect &&
