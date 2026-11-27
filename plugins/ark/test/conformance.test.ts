@@ -36,7 +36,11 @@ describeModelProviderConformance("ark (fixtures, seed)", async () => {
     plugin: PLUGIN,
     provider: createArkProvider({ apiKey: "ark-fixture", baseUrl: `${server.url}/api/v3` }),
     model: SEED,
-    expect: { thinking: true, caching: true, embedding: { model: EMBED, dimensions: 1024 } },
+    expect: {
+      thinking: true,
+      caching: false /* P2–P7 declare the cache */,
+      embedding: { model: EMBED, dimensions: 1024 },
+    },
     teardown: () => server.stop(),
   };
 });
@@ -47,7 +51,7 @@ describeModelProviderConformance("ark (fixtures, deepseek)", async () => {
     plugin: PLUGIN,
     provider: createArkProvider({ apiKey: "ark-fixture", baseUrl: `${server.url}/api/v3` }),
     model: DEEPSEEK,
-    expect: { thinking: true, caching: true },
+    expect: { thinking: true, caching: false /* P2–P7 declare the cache */ },
     teardown: () => server.stop(),
   };
 });
@@ -634,7 +638,7 @@ describe.skipIf(!live?.chat)("live", { timeout: 120_000 }, () => {
   }));
 
   it("live: a growing conversation maps the implicit cache usage", async () => {
-    if (!live?.chat?.capabilities.caching) return;
+    if (!live?.chat?.cache?.mechanism) return;
     const provider = live.provider as ModelProvider;
     const nonce = Math.random().toString(36).slice(2);
     const lines = (tag: string, n: number) =>

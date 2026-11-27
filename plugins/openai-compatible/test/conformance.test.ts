@@ -58,7 +58,7 @@ for (const dialect of ["generic", "deepseek", "qwen", "ark"] as const) {
         apiKeys: { [dialect]: "sk-fixture" },
       }),
       model: `${dialect}/${m.id}`,
-      expect: { thinking: dialect !== "generic", caching: true },
+      expect: { thinking: dialect !== "generic", caching: false /* P2–P7 declare the cache */ },
       teardown: () => server.stop(),
     };
   });
@@ -325,7 +325,6 @@ describe("openai-compatible: stream edge cases and errors", () => {
       tools: true,
       vision: true,
       reasoning: false,
-      caching: false,
       midConversationSystem: false,
       documents: false,
     });

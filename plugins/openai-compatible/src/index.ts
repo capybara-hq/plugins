@@ -243,7 +243,6 @@ function modelInfo(ep: Endpoint, m: EndpointModelConfig): ModelInfo {
       // construction is guarded here too
       documents: (m.documents ?? false) && ep.dialect.pdfInput,
       reasoning,
-      caching: m.caching ?? ep.dialect.caching,
       midConversationSystem: ep.midConversationSystem,
     },
     ...(m.streamIdleTimeoutMs !== undefined ? { streamIdleTimeoutMs: m.streamIdleTimeoutMs } : {}),

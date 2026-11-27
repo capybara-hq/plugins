@@ -127,7 +127,6 @@ const NO_CAPABILITIES = {
   tools: false,
   vision: false,
   reasoning: false,
-  caching: false,
   midConversationSystem: false,
 };
 
@@ -188,7 +187,6 @@ function mapModel(raw: RawModel, id: string, kind: ModelKind): ModelInfo {
       // deepseek-v4-flash-ga answered without seeing it. So documents follow image input.
       documents: input.includes("image"),
       reasoning,
-      caching: cachesAutomatically(id, raw.features?.cache),
       // `[system]` user turns, see map-request.ts
       midConversationSystem: false,
     },

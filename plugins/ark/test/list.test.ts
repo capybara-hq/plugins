@@ -78,7 +78,6 @@ describe("ark listModels", () => {
         documents: true,
         reasoning: true,
         // implicit context cache: the entry has features.cache
-        caching: true,
         midConversationSystem: false,
       },
     });
@@ -95,7 +94,7 @@ describe("ark listModels", () => {
     const ds = by(DEEPSEEK);
     expect(ds).toMatchObject({
       publisher: "DeepSeek",
-      capabilities: { vision: false, documents: false, reasoning: true, caching: true },
+      capabilities: { vision: false, documents: false, reasoning: true },
     });
     expect(ds?.parameters.find((p) => p.key === "effort")?.schema).toEqual({
       type: "string",
@@ -123,7 +122,7 @@ describe("ark listModels", () => {
       contextWindow: 32768,
       maxOutputTokens: 4096,
       // no features.cache and not a DeepSeek model
-      capabilities: { tools: false, reasoning: false, caching: false },
+      capabilities: { tools: false, reasoning: false },
     });
   });
 

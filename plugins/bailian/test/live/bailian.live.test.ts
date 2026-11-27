@@ -151,7 +151,7 @@ for (const [label, model] of [
       model: model?.id ?? "",
       expect: {
         thinking: model?.capabilities.reasoning ?? false,
-        caching: model?.capabilities.caching ?? false,
+        caching: model?.cache?.mechanism !== undefined,
         ...(embedding?.embedding
           ? {
               embedding: { model: embedding.id, dimensions: embedding.embedding.defaultDimensions },
@@ -188,7 +188,7 @@ for (const [label, model] of [
   ["multimodal-generation", vision],
   ["text-generation", textOnly],
 ] as const) {
-  describe.skipIf(!provider || !model?.capabilities.caching)(
+  describe.skipIf(!provider || !model?.cache?.mechanism)(
     `live history cache, ${label}`,
     { timeout: 180_000 },
     () => {

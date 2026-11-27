@@ -154,7 +154,6 @@ export function mapModel(raw: RawModel): Mapped {
       // VU / request_modality from the list (live 2026-11-08)
       vision: kind === "chat" && isVision(raw),
       reasoning,
-      caching: kind === "chat" && features.includes("cache"),
       // Mid-conversation system turns go out as in-place "[system] " user text: whether every
       // hosted model keeps a native mid-history system message in position is not established.
       midConversationSystem: false,

@@ -150,7 +150,6 @@ function mapModelInfo(m: Anthropic.ModelInfo): ModelInfo {
       // PDF 文档块（纯文本文档块所有模型都收，但内核按 documents 一并把关）
       documents: caps?.pdf_input?.supported === true,
       reasoning: adaptive,
-      caching: true,
       // 中途 system 一律转成 "[system]" user 文本，不用原生 role: "system"（R38）
       midConversationSystem: false,
     },
