@@ -635,6 +635,20 @@ function proxyModeOf(plan: InstancePlan): ProxyMode {
 }
 
 /**
+ * Whether an egress proxy container runs another image than the configured one (pure). The image
+ * id decides when both are known: the configured reference may name a newer build under the same
+ * tag (a moving tag, a local rebuild), and a container made from the same image under another
+ * reference is current. Without an id on either side the references are compared.
+ */
+export function proxyImageStale(
+  proxy: { id?: string | undefined; ref?: string | undefined },
+  configured: { id?: string | undefined; ref: string },
+): boolean {
+  if (proxy.id !== undefined && configured.id !== undefined) return proxy.id !== configured.id;
+  return proxy.ref !== undefined && proxy.ref !== configured.ref;
+}
+
+/**
  * 沙箱里的硬时限比 `timeoutMs` 多出的秒数：正常情况下插件这边先按 `timeoutMs` 杀掉命令；内核副本崩溃
  * （插件这边的计时随之消失、断开连接也不结束命令）时由沙箱里的 `timeout` 兜底。
  */
@@ -1239,12 +1253,21 @@ export function createDockerSandbox(
    * older build lacks it: its instances are made without the control (the proxy swap and recreate
    * paths), never with a control the proxy cannot answer. The image is pulled when missing.
    */
-  const egressImageHasControl = async (signal: AbortSignal): Promise<boolean> => {
+  const egressImageHasControl = async (signal: AbortSignal): Promise<boolean> =>
+    (await configuredEgressImage(signal)).control;
+
+  /**
+   * The configured egress proxy image as the daemon has it now: its id and whether it carries this
+   * version's egress control. The image is pulled when missing; a failure throws.
+   */
+  const configuredEgressImage = async (
+    signal: AbortSignal,
+  ): Promise<{ id: string | undefined; control: boolean }> => {
     // the socket proxy allows the image reference in the path as is (slashes included)
     const path = `/images/${cfg.egressProxyImage}/json`;
-    const inspectImage = () =>
-      api.json<{ Config?: { Labels?: Record<string, string> | null } }>("GET", path, { signal });
-    let img: { Config?: { Labels?: Record<string, string> | null } };
+    type Img = { Id?: string; Config?: { Labels?: Record<string, string> | null } };
+    const inspectImage = () => api.json<Img>("GET", path, { signal });
+    let img: Img;
     try {
       img = await inspectImage();
     } catch (e) {
@@ -1252,8 +1275,24 @@ export function createDockerSandbox(
       await pull(cfg.egressProxyImage, signal);
       img = await inspectImage();
     }
-    return hasControl(img.Config?.Labels);
+    return {
+      id: typeof img.Id === "string" && img.Id !== "" ? img.Id : undefined,
+      control: hasControl(img.Config?.Labels),
+    };
   };
+
+  type ProxyContainer = {
+    Image?: string;
+    State: { Running: boolean; Paused?: boolean };
+    Config: { Labels: Record<string, string> | null; Image?: string };
+  };
+
+  /** Whether a proxy container (as inspected) runs another image than the configured one. */
+  const proxyStale = (c: ProxyContainer, configured: { id: string | undefined }): boolean =>
+    proxyImageStale(
+      { id: c.Image || undefined, ref: c.Config.Image },
+      { id: configured.id, ref: cfg.egressProxyImage },
+    );
 
   /**
    * On resume the egress proxy (and the internal network) must exist and run; `false` when only a
@@ -1281,6 +1320,10 @@ export function createDockerSandbox(
     // from the possibly wider labels when that volume is gone)
     const remake = async (): Promise<boolean> => {
       if (control && !(await egressConfOk(name, signal))) return false;
+      // An image without this version's control would ignore the config volume and start from the
+      // create-time labels, which may be wider than the list in force: only a recreate (which
+      // builds without the control) gives the instance a network then.
+      if (control && !(await egressImageHasControl(signal))) return false;
       // a concurrent auto-start may create it at the same moment: a name conflict is fine
       try {
         return await createEgress(name, mode, allowHosts, signal, true, control, fence);
@@ -1289,22 +1332,33 @@ export function createDockerSandbox(
         throw e;
       }
     };
-    let c: {
-      State: { Running: boolean; Paused?: boolean };
-      Config: { Labels: Record<string, string> | null; Image?: string };
+    const inspectProxy = async (): Promise<ProxyContainer | null> => {
+      try {
+        return await api.json<ProxyContainer>("GET", `/containers/${enc(n.egress)}/json`, {
+          signal,
+        });
+      } catch (e) {
+        if (!isStatus(e, 404)) throw e;
+        return null;
+      }
     };
-    try {
-      c = await api.json("GET", `/containers/${enc(n.egress)}/json`, { signal });
-    } catch (e) {
-      if (!isStatus(e, 404)) throw e;
-      return remake();
-    }
+    const c = await inspectProxy();
+    if (c === null) return remake();
     if (control && !hadControl(c.Config.Labels)) return false;
-    // a proxy on another image than the configured one (an older build) is replaced
-    if (c.Config.Image !== undefined && c.Config.Image !== cfg.egressProxyImage) {
-      await api
-        .json("DELETE", `/containers/${enc(n.egress)}`, { query: { force: true }, signal })
-        .catch(ignore(404));
+    // A proxy on another image than the configured one (an older build, or an earlier build under
+    // the same tag) is replaced: only the proxy container, on the same config volume and networks,
+    // with the instance's create-time token (a config file on the volume carries the token in
+    // force and wins). The configured image is resolved (pulled when missing) before anything is
+    // removed, so a failure there leaves the running proxy as it is.
+    const configured = await configuredEgressImage(signal);
+    if (proxyStale(c, configured)) {
+      // a concurrent use may have replaced it already: never remove a proxy on the current image
+      const again = await inspectProxy();
+      if (again !== null && proxyStale(again, configured)) {
+        await api
+          .json("DELETE", `/containers/${enc(n.egress)}`, { query: { force: true }, signal })
+          .catch(ignore(404));
+      }
       return remake();
     }
     if (c.State.Paused) await unpause(n.egress, signal);
@@ -1718,16 +1772,17 @@ export function createDockerSandbox(
     if (!sameIncarnation(h, labels)) return;
     const net = labelNetwork(labels);
     if (net === null || net.mode === "none") return;
+    let proxy: ProxyContainer | null = null;
     try {
-      const e = await api.json<{ State: { Running: boolean }; Config: { Image?: string } }>(
+      proxy = await api.json<ProxyContainer>(
         "GET",
         `/containers/${enc(sandboxResourceNames(h.id).egress)}/json`,
         { signal },
       );
-      if (e.State.Running && e.Config.Image === cfg.egressProxyImage) return;
     } catch (e) {
       if (!isStatus(e, 404)) throw e;
     }
+    if (proxy?.State.Running && !proxyStale(proxy, await configuredEgressImage(signal))) return;
     const ok = await ensureEgressRunning(
       h.id,
       net.mode,

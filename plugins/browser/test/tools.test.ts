@@ -17,8 +17,13 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import {
+  AUTH_SIGN_IN_TEXT,
+  blockedByDialogText,
+  DIALOG_QUOTE_CHARS,
   DOWNLOAD_BLOCKED_PREFIX,
+  dialogQuote,
   MAX_TABS_PER_CONVERSATION,
+  type PendingDialogView,
   REPLY_TOO_LARGE_MESSAGE,
   type ToolOp,
   type ToolReply,
@@ -34,6 +39,7 @@ import {
   TAKEN_OVER_MESSAGE,
   TOOL_TIMEOUT_MS,
 } from "../src/browser.js";
+import { registerDialogTool } from "../src/dialog.js";
 import { registerHandoffTool, shortReason } from "../src/handoff.js";
 import { serviceSpecLoader } from "../src/service.js";
 import { registerBrowserTools, SCREENSHOT_MAX_BYTES } from "../src/tools.js";
@@ -96,6 +102,7 @@ function fake(
   };
   registerBrowserTools({ tools: reg }, deps);
   registerHandoffTool({ tools: reg }, deps);
+  registerDialogTool({ tools: reg }, deps);
   return {
     deps,
     log,
@@ -150,6 +157,7 @@ const POLICIES: Record<string, "allow" | "ask"> = {
   browser_upload: "ask",
   browser_click_at: "ask",
   browser_type_at: "ask",
+  browser_dialog: "ask",
 };
 
 describe("browser tools", () => {
@@ -658,7 +666,7 @@ describe("browser_handoff", () => {
     const r = await f.run(
       "browser_handoff",
       { message: "Please sign in." },
-      call({ resume: { state: first.state, answer: { done: true } } }),
+      call({ resume: { state: first.state, answer: { done: true }, outcome: "answered" } }),
     );
     expect(f.requests.slice(1).map((q) => q.op)).toEqual(["handoff_clear", "snapshot"]);
     // Done hands the browser back (a takeover the person still holds ends before the snapshot)
@@ -671,7 +679,13 @@ describe("browser_handoff", () => {
     const f = fake();
     for (const answer of [null, { done: false }]) {
       await expect(
-        f.run("browser_handoff", { message: "m" }, call({ resume: { state: {}, answer } })),
+        f.run(
+          "browser_handoff",
+          { message: "m" },
+          call({
+            resume: { state: {}, answer, outcome: answer === null ? "expired" : "answered" },
+          }),
+        ),
       ).rejects.toThrow(
         new ToolError(
           "The user cancelled the handoff; ask the user how to continue, or try another approach.",
@@ -686,7 +700,11 @@ describe("browser_handoff", () => {
   it("the cancel error ends with the tab count of the clear's reply", async () => {
     const f = fake(() => ({ ok: true, blockedHosts: [], tabs: { open: 2, max: 6 } }));
     const e = (await f
-      .run("browser_handoff", { message: "m" }, call({ resume: { state: {}, answer: null } }))
+      .run(
+        "browser_handoff",
+        { message: "m" },
+        call({ resume: { state: {}, answer: null, outcome: "expired" } }),
+      )
       .catch((x: unknown) => x)) as Error;
     expect(e.message).toBe(
       "The user cancelled the handoff; ask the user how to continue, or try another approach.\nTabs open in this conversation: 2 of 6.",
@@ -702,12 +720,16 @@ describe("browser_handoff", () => {
     const r = await f.run(
       "browser_handoff",
       { message: "m" },
-      call({ resume: { state: {}, answer: { done: true } } }),
+      call({ resume: { state: {}, answer: { done: true }, outcome: "answered" } }),
     );
     expect(textOf(r)).toContain("tree");
     const g = fake(boom);
     await expect(
-      g.run("browser_handoff", { message: "m" }, call({ resume: { state: {}, answer: null } })),
+      g.run(
+        "browser_handoff",
+        { message: "m" },
+        call({ resume: { state: {}, answer: null, outcome: "expired" } }),
+      ),
     ).rejects.toThrow(/cancelled the handoff/);
     const aborted = new AbortController();
     aborted.abort();
@@ -716,7 +738,10 @@ describe("browser_handoff", () => {
       h.run(
         "browser_handoff",
         { message: "m" },
-        call({ signal: aborted.signal, resume: { state: {}, answer: { done: true } } }),
+        call({
+          signal: aborted.signal,
+          resume: { state: {}, answer: { done: true }, outcome: "answered" },
+        }),
       ),
     ).rejects.toThrow("relay dropped");
   });
@@ -728,7 +753,7 @@ describe("browser_handoff", () => {
     await f.run(
       "browser_handoff",
       { message: "m" },
-      call({ ...sub, resume: { state: {}, answer: { done: true } } }),
+      call({ ...sub, resume: { state: {}, answer: { done: true }, outcome: "answered" } }),
     );
     expect(f.sent.map((q) => [q.op, q.conversationId, q.rootConversationId])).toEqual([
       ["handoff_notice", "child", "root"],
@@ -776,5 +801,108 @@ describe("service spec", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("browser_dialog and dialog lines", () => {
+  const CONFIRM: PendingDialogView = {
+    id: "d3",
+    tabId: "t1",
+    kind: "confirm",
+    message: "Delete\r\n  this   draft?",
+  };
+
+  it("spec: key, ask policy, required dialogId and message, keyArgs", () => {
+    const f = fake();
+    const spec = f.tools.get("browser_dialog")?.spec as ToolSpec;
+    expect(spec.defaultPolicy).toBe("ask");
+    expect(spec.keyArgs).toEqual(["action", "message", "text"]);
+    expect((spec.inputSchema as { required: string[] }).required).toEqual([
+      "dialogId",
+      "message",
+      "action",
+    ]);
+    expect(validateToolSpec(spec)).toEqual([]);
+  });
+
+  it("accept maps to op dialog with dialogId, message and text", async () => {
+    const f = fake();
+    await f.run("browser_dialog", {
+      dialogId: "d3",
+      message: "Your name?",
+      action: "accept",
+      text: "Bo",
+    });
+    expect(f.requests[0]).toEqual({
+      op: "dialog",
+      dialogId: "d3",
+      message: "Your name?",
+      action: "accept",
+      text: "Bo",
+    });
+  });
+
+  it("the dialog line names the id and the normalized 300-character quote", async () => {
+    const long = `${"x".repeat(DIALOG_QUOTE_CHARS)}tail`;
+    const f = fake(() => ({
+      ok: true,
+      page: PAGE,
+      blockedHosts: [],
+      dialog: { ...CONFIRM, message: long },
+    }));
+    const r = textOf(await f.run("browser_snapshot", {}));
+    expect(r).toContain(
+      `confirm dialog d3: ${JSON.stringify("x".repeat(DIALOG_QUOTE_CHARS))} (cut)`,
+    );
+    expect(r).toContain("browser_dialog (dialogId d3");
+    const g = fake(() => ({ ok: true, page: PAGE, blockedHosts: [], dialog: CONFIRM }));
+    expect(textOf(await g.run("browser_snapshot", {}))).toContain('d3: "Delete this draft?"');
+    expect(dialogQuote(CONFIRM.message)).toBe("Delete this draft?");
+  });
+
+  it("toResult renders prompt, beforeunload and auth lines", async () => {
+    const line = async (d: PendingDialogView) =>
+      textOf(
+        await fake(() => ({ ok: true, page: PAGE, blockedHosts: [], dialog: d })).run(
+          "browser_snapshot",
+          {},
+        ),
+      );
+    expect(await line({ ...CONFIRM, kind: "prompt", defaultValue: "Ann" })).toContain(
+      '(default value "Ann")',
+    );
+    expect(await line({ ...CONFIRM, kind: "beforeunload" })).toContain(
+      "The page asks whether to leave (it may have unsaved changes)",
+    );
+    const auth = await line({
+      id: "d4",
+      tabId: "t1",
+      kind: "auth",
+      message: "HTTP sign-in for https://intra.example",
+      origin: "https://intra.example",
+      realm: "Team",
+    });
+    expect(auth).toContain(AUTH_SIGN_IN_TEXT);
+    expect(auth).toContain('realm "Team"; page-supplied');
+  });
+
+  it("stale, mismatching or missing dialogs and an auth accept come back as the daemon's actionable text", async () => {
+    for (const message of [
+      "The dialog changed; call browser_snapshot to see the current one.",
+      "No dialog is open on this tab; call browser_snapshot to see the page.",
+      AUTH_SIGN_IN_TEXT,
+    ]) {
+      const f = fake(() => ({ ok: false, error: "failed", message, blockedHosts: [] }));
+      await expect(
+        f.run("browser_dialog", { dialogId: "d9", message: "x", action: "accept" }),
+      ).rejects.toThrow(message);
+    }
+  });
+
+  it("dialog_open names browser_dialog", async () => {
+    const message = blockedByDialogText(CONFIRM);
+    const f = fake(() => ({ ok: false, error: "dialog_open", message, blockedHosts: [] }));
+    const e = await f.run("browser_click", { ref: "e1" }).catch((x: unknown) => x as Error);
+    expect((e as Error).message).toContain("browser_dialog (dialogId d3");
   });
 });

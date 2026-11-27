@@ -88,6 +88,7 @@ const T = {
       skipped: "Skipped (replied instead)",
       expired: "Expired",
       cancelled: "Cancelled",
+      woken: "Wait ended",
     },
   },
   zh: {
@@ -125,6 +126,7 @@ const T = {
       skipped: "已跳过（已直接回复）",
       expired: "已过期",
       cancelled: "已取消",
+      woken: "等待已结束",
     },
   },
 } as const;

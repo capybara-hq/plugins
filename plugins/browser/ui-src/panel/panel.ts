@@ -5,22 +5,26 @@
 // whole UI from the daemon's first `state` message; nothing else survives an iframe remount (the
 // opaque-origin sandbox has no usable storage). The host keeps the frame mounted across its full
 // mode and tells the panel the mode it draws (`panel-mode` after `init` and on every change).
-// Every viewer is the conversation owner's, so any non-compact panel is interactive while the
-// person holds control, whichever panel took it; in the watch state (the agent drives) the panel
-// is read-only, and the daemon drops input anyway. Takeover input (pointer, cursor, keys, IME,
-// paste) lives in input.ts.
+// Every viewer is the conversation owner's, so any panel is interactive while the person holds
+// control, whichever panel took it (a compact one takes over inside its drawer, with a takeover
+// bar for the phone viewport, the soft keyboard and hand back: dialogs spec §7.2); in the watch
+// state (the agent drives) the panel is read-only, and the daemon drops input anyway. Takeover
+// input (pointer, touch, cursor, keys, IME, paste) lives in input.ts. A page dialog the daemon
+// holds shows as a box over the picture until it is answered (dialogs spec §8).
 //
 // Tabs are owned per conversation (tab ownership spec §5): the strip shows the tabs of this
 // conversation's tree (its own first, then one "Sub-task" group per sub-agent conversation), and
 // the shown tab is this viewer's own choice, which a click changes also in the watch state. Other
 // trees' tabs are listed under "Other conversations", each movable here ("Move here", an adopt).
 import type {
+  PendingDialogView,
   ViewerFrame,
   ViewerHandoff,
   ViewerIn,
   ViewerOtherTab,
   ViewerOut,
   ViewerTab,
+  ViewerViewport,
 } from "../../daemon/protocol.js";
 import { decodeFrame, isIconDataUrl, VIEWPORT } from "../../daemon/protocol.js";
 import { type Locale, type StringKey, t } from "./i18n.js";
@@ -60,23 +64,31 @@ export interface Rect {
   h: number;
 }
 
-/** The largest 16:10 rectangle centred in a panel of the given size. */
-export function letterbox(width: number, height: number): Rect {
+/** The largest rectangle of the page's aspect (16:10 by default) centred in a panel. */
+export function letterbox(width: number, height: number, aspect = ASPECT): Rect {
   let w = width;
-  let h = Math.round(w / ASPECT);
+  let h = Math.round(w / aspect);
   if (h > height) {
     h = height;
-    w = Math.round(h * ASPECT);
+    w = Math.round(h * aspect);
   }
   return { x: Math.round((width - w) / 2), y: Math.round((height - h) / 2), w, h };
 }
 
-/** Maps a point inside the drawn picture (rect-relative CSS pixels) to viewport coordinates. */
-export function mapPoint(px: number, py: number, rect: Rect): { x: number; y: number } {
+/**
+ * Maps a point inside the drawn picture (rect-relative CSS pixels) to coordinates of the page's
+ * viewport (the desktop one unless the person chose the phone profile).
+ */
+export function mapPoint(
+  px: number,
+  py: number,
+  rect: Rect,
+  vp: { width: number; height: number } = VIEWPORT,
+): { x: number; y: number } {
   const clamp = (v: number, max: number) => Math.max(0, Math.min(max, v));
   return {
-    x: Math.round(clamp(px / rect.w, 1) * VIEWPORT.width),
-    y: Math.round(clamp(py / rect.h, 1) * VIEWPORT.height),
+    x: Math.round(clamp(px / rect.w, 1) * vp.width),
+    y: Math.round(clamp(py / rect.h, 1) * vp.height),
   };
 }
 
@@ -177,18 +189,30 @@ export function mountPanel(opts: PanelOptions): void {
   let image: CanvasImageSource | null = null;
   /** The layer the panel shows now (see `renderLoading`). */
   let layer: "idle" | "skeleton" | "app" = "skeleton";
+  /** The page's viewport (the daemon's `state.viewport`): input and the picture follow it. */
+  let viewport: ViewerViewport = { width: VIEWPORT.width, height: VIEWPORT.height, mobile: false };
+  /** The held dialog the box shows (its fields keep what the person typed across states). */
+  let boxDialog: PendingDialogView | null = null;
+  /** The newest permission request of the tree (the strip's). */
+  let permission: { origin: string; permission: string; grantable: boolean } | null = null;
+  let permissionTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The phone width was suggested in this takeover already (once per takeover). */
+  let phoneHinted = false;
 
   /**
-   * Watch only on a phone (the host's compact size class, a pushed page): the device's screen,
-   * never the panel's width, so a narrow side panel on a desktop still offers take over.
+   * A phone (the host's compact size class, a pushed page): the device's screen, never the
+   * panel's width. It takes over inside its drawer (no full mode) with the takeover bar.
    */
   const compact = (): boolean => {
     const sw = win.screen?.width ?? 0;
     return sw > 0 && sw < COMPACT_BELOW;
   };
+  /** A touch screen (the takeover bar and its 44 px targets show there too). */
+  const coarse = (): boolean => win.matchMedia?.("(pointer: coarse)").matches === true;
   const text = (key: StringKey) => t(locale, key);
-  /** The person drives the page from this panel: any non-compact panel while they hold control. */
-  const interactive = (): boolean => !compact() && control === "user";
+  /** The person drives the page from this panel: any panel while they hold control. */
+  const interactive = (): boolean => control === "user";
+  const aspect = (): number => viewport.width / viewport.height;
   /** The browser runs but this conversation's tree owns no tab: the tree's empty state. */
   const treeEmpty = (): boolean => mode === "live" && lastState !== null && tabs.length === 0;
 
@@ -204,7 +228,12 @@ export function mountPanel(opts: PanelOptions): void {
     interactive: () => interactive(),
     toPage: (clientX, clientY) => {
       const r = view.getBoundingClientRect();
-      return mapPoint(clientX - r.left, clientY - r.top, { x: 0, y: 0, w: r.width, h: r.height });
+      return mapPoint(
+        clientX - r.left,
+        clientY - r.top,
+        { x: 0, y: 0, w: r.width, h: r.height },
+        viewport,
+      );
     },
     label: t(locale, "view"),
   });
@@ -238,6 +267,16 @@ export function mountPanel(opts: PanelOptions): void {
     set("handoff-label", "handoff");
     set("handoff-done", "handoffDone");
     set("handoff-cancel", "handoffCancel");
+    set("permission-label", "permAsk");
+    set("permission-allow", "permAllow");
+    set("phonehint-text", "phoneHint");
+    set("phonehint-go", "phoneWidth");
+    set("keyboard", "keyboard");
+    set("touch-handback", "handback");
+    $("pdialog-user").setAttribute("aria-label", text("dlgUsername"));
+    $("pdialog-user").setAttribute("placeholder", text("dlgUsername"));
+    $("pdialog-pass").setAttribute("aria-label", text("dlgPassword"));
+    $("pdialog-pass").setAttribute("placeholder", text("dlgPassword"));
     input.sink.setAttribute("aria-label", text("view"));
     $("lock").setAttribute("aria-label", text("secure"));
     $("lock").setAttribute("title", text("secure"));
@@ -264,6 +303,8 @@ export function mountPanel(opts: PanelOptions): void {
     let icon = "";
     let lead: StringKey | null = null;
     let detail: StringKey | null = null;
+    // a parked long wait of the tree: what the agent waits for and until when
+    let waitingDetail: string | null = null;
     if (mode === "connecting") lead = "statusConnecting";
     else if (mode === "live" && control === "user") {
       if (interactive()) {
@@ -278,29 +319,39 @@ export function mountPanel(opts: PanelOptions): void {
       icon = loading ? ICONS.spin : ICONS.dot;
       lead = "statusAgent";
       if (loading) detail = "statusLoading";
+      const waiting = lastState?.waiting;
+      if (waiting !== undefined && !loading) {
+        lead = "statusWaiting";
+        const until = new Date(waiting.until);
+        const time = Number.isNaN(until.getTime())
+          ? ""
+          : ` (${text("statusWaitingUntil")} ${until.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })})`;
+        waitingDetail = `${waiting.label}${time}`;
+      }
     }
     el.setAttribute("data-tone", tone);
     $("status-icon").innerHTML = icon;
     $("status-lead").textContent = lead === null ? "" : text(lead);
-    $("status-detail").textContent = detail === null ? "" : ` · ${text(detail)}`;
+    $("status-detail").textContent =
+      waitingDetail !== null ? ` · ${waitingDetail}` : detail === null ? "" : ` · ${text(detail)}`;
   }
 
   function renderChrome(): void {
-    const watchOnly = compact();
     // the watch state is read-only: navigation and tabs only while the person drives
     const readOnly = !interactive();
     const isLive = mode === "live";
-    $("takeover").hidden = watchOnly || !isLive || control === "user";
-    $("handback").hidden = watchOnly || !isLive || control !== "user";
-    // the takeover slot stays reserved unless hand back takes it or the device only watches
-    $("takeover").toggleAttribute("data-gone", watchOnly || (isLive && control === "user"));
+    // a compact or touch screen hands back from the takeover bar
+    const bar = isLive && control === "user" && (compact() || coarse());
+    $("touchbar").hidden = !bar;
+    $("viewport-toggle").textContent = text(viewport.mobile ? "desktopWidth" : "phoneWidth");
+    $("takeover").hidden = !isLive || control === "user";
+    $("handback").hidden = !isLive || control !== "user" || bar;
+    // the takeover slot stays reserved unless hand back takes it
+    $("takeover").toggleAttribute("data-gone", isLive && control === "user");
     // the active tab shows a verification page (the daemon's tab blocker, cleared on its next
     // navigation)
     const verifying =
-      isLive &&
-      control === "agent" &&
-      tabs.find((x) => x.active)?.blocker?.kind === "verification" &&
-      !watchOnly;
+      isLive && control === "agent" && tabs.find((x) => x.active)?.blocker?.kind === "verification";
     $("verify").hidden = !verifying;
     // one primary action: while a verification waits, take over steps back
     $("takeover").className = verifying ? "secondary" : "primary";
@@ -333,8 +384,109 @@ export function mountPanel(opts: PanelOptions): void {
     }
     $("blocked").hidden = blockedHost === "";
     $("blocked-host").textContent = blockedHost;
+    if (!isLive || control !== "user" || viewport.mobile) $("phonehint").hidden = true;
+    renderDialogBox();
+    renderPermission();
     renderStatus();
     renderLoading();
+  }
+
+  /**
+   * The held dialog of the shown tab as a box over the picture: the page's text as text, and for
+   * the person in control the answer controls (confirm, prompt, leave-page, sign-in); watching,
+   * the same box read-only. Fields keep what the person typed while the same dialog stays.
+   */
+  function renderDialogBox(): void {
+    const d =
+      mode === "live" && lastState !== null
+        ? ((lastState.dialogs ?? []).find((x) => x.tabId === lastState?.shown) ?? null)
+        : null;
+    const box = $("pdialog");
+    box.hidden = d === null;
+    if (d === null) {
+      boxDialog = null;
+      return;
+    }
+    const fresh = boxDialog?.id !== d.id;
+    boxDialog = d;
+    const kinds: Record<PendingDialogView["kind"], StringKey> = {
+      confirm: "dlgConfirm",
+      prompt: "dlgPrompt",
+      beforeunload: "dlgLeave",
+      auth: "dlgAuth",
+    };
+    $("pdialog-kind").textContent = text(kinds[d.kind]);
+    $("pdialog-msg").textContent = d.kind === "auth" ? (d.origin ?? "") : d.message;
+    const realm = $("pdialog-realm");
+    realm.hidden = d.kind !== "auth" || (d.realm ?? "") === "";
+    realm.textContent = `${text("dlgRealm")} ${d.realm ?? ""}`;
+    const answering = interactive();
+    const field = $<HTMLInputElement>("pdialog-text");
+    field.hidden = d.kind !== "prompt" || !answering;
+    if (fresh) field.value = d.defaultValue ?? "";
+    for (const id of ["pdialog-user", "pdialog-pass"]) {
+      const input = $<HTMLInputElement>(id);
+      input.hidden = d.kind !== "auth" || !answering;
+      if (fresh) input.value = "";
+    }
+    const labels: Record<PendingDialogView["kind"], [StringKey, StringKey]> = {
+      confirm: ["dlgOk", "dlgCancel"],
+      prompt: ["dlgOk", "dlgCancel"],
+      beforeunload: ["dlgLeaveGo", "dlgLeaveStay"],
+      auth: ["dlgSignIn", "dlgCancel"],
+    };
+    const [yes, no] = labels[d.kind];
+    $("pdialog-yes").textContent = text(yes);
+    $("pdialog-no").textContent = text(no);
+    $("pdialog-yes").hidden = !answering;
+    $("pdialog-no").hidden = !answering;
+    const hint = $("pdialog-hint");
+    hint.hidden = answering;
+    hint.textContent = text("dlgReadOnly");
+  }
+
+  /** Answers the box's dialog; the password goes only into this message and is cleared at once. */
+  function answerDialog(action: "accept" | "dismiss"): void {
+    const d = boxDialog;
+    if (d === null || !interactive()) return;
+    const pass = $<HTMLInputElement>("pdialog-pass");
+    const msg: ViewerIn = { t: "dialog", id: d.id, action };
+    if (action === "accept" && d.kind === "prompt")
+      msg.text = $<HTMLInputElement>("pdialog-text").value;
+    if (action === "accept" && d.kind === "auth") {
+      msg.username = $<HTMLInputElement>("pdialog-user").value;
+      msg.password = pass.value;
+    }
+    pass.value = "";
+    send(msg);
+  }
+
+  /** The permission strip: the origin and the permission, 允许 for a grantable one in control. */
+  function renderPermission(): void {
+    const p = permission;
+    $("permission").hidden = p === null || mode !== "live";
+    if (p === null) return;
+    const names: Record<string, StringKey> = {
+      notifications: "permNotifications",
+      "clipboard-read": "permClipboard",
+      geolocation: "permGeolocation",
+      camera: "permCamera",
+      microphone: "permMicrophone",
+    };
+    $("permission-origin").textContent = p.origin;
+    const key = names[p.permission];
+    $("permission-name").textContent = key === undefined ? p.permission : text(key);
+    $("permission-allow").hidden = !p.grantable || !interactive();
+  }
+
+  function showPermission(m: Extract<ViewerOut, { t: "permission" }>): void {
+    permission = { origin: m.origin, permission: m.permission, grantable: m.grantable };
+    renderPermission();
+    if (permissionTimer !== undefined) clearTimeout(permissionTimer);
+    permissionTimer = setTimeout(() => {
+      permission = null;
+      renderPermission();
+    }, STRIP_MS);
   }
 
   /**
@@ -581,12 +733,20 @@ export function mountPanel(opts: PanelOptions): void {
     $("handoff-message").textContent = pendingHandoff?.message ?? "";
     tabs = s.tabs;
     otherTabs = s.otherTabs;
+    if (s.viewport !== undefined) viewport = s.viewport;
     // the tree lost its last tab: its next first tab starts from the idle layer, not a stale frame
     if (tabs.length === 0) image = null;
     const was = control;
     control = s.control;
     // the take over ended elsewhere (another panel handed back, the agent resumed): leave full
     if (full && was === "user" && control === "agent") askMode(false);
+    if (control === "agent") phoneHinted = false;
+    // a phone screen that just took over: suggest the phone width once (never switched for the
+    // person: a switch reflows the page)
+    if (was === "agent" && control === "user" && compact() && !viewport.mobile && !phoneHinted) {
+      phoneHinted = true;
+      $("phonehint").hidden = false;
+    }
     // and an allow's pending reopen no longer takes over again on this connection's successors
     if (was === "user" && control === "agent" && pendingNav?.sentOn === sock) pendingNav = null;
     const active = tabs.find((x) => x.active);
@@ -615,8 +775,8 @@ export function mountPanel(opts: PanelOptions): void {
     const flash = $("flash");
     const r = view.getBoundingClientRect();
     const st = stage.getBoundingClientRect();
-    flash.style.left = `${r.left - st.left + (x / VIEWPORT.width) * r.width}px`;
-    flash.style.top = `${r.top - st.top + (y / VIEWPORT.height) * r.height}px`;
+    flash.style.left = `${r.left - st.left + (x / viewport.width) * r.width}px`;
+    flash.style.top = `${r.top - st.top + (y / viewport.height) * r.height}px`;
     flash.hidden = false;
     win.setTimeout(() => {
       flash.hidden = true;
@@ -638,7 +798,7 @@ export function mountPanel(opts: PanelOptions): void {
       p.sentOn = sock;
       // the person allowed it while driving: a daemon restarted by the allow starts with the
       // agent in control, so take it over again (input is dropped in the watch state)
-      if (control !== "user" && !compact()) takeover();
+      if (control !== "user") takeover();
       send({ t: "nav", url: p.url });
     }
   }
@@ -682,13 +842,14 @@ export function mountPanel(opts: PanelOptions): void {
     const box = letterbox(
       Math.max(0, Math.floor(st.width) - 2 * STAGE_PAD),
       Math.max(0, Math.floor(st.height) - 2 * STAGE_PAD),
+      aspect(),
     );
     view.style.width = `${box.w}px`;
     view.style.height = `${box.h}px`;
     const dpr = win.devicePixelRatio || 1;
-    const cap = control === "user" || full ? VIEWPORT.width : SIDE_MAX_WIDTH;
+    const cap = control === "user" || full ? viewport.width : SIDE_MAX_WIDTH;
     const w = Math.max(1, Math.min(cap, Math.round(box.w * Math.min(dpr, MAX_DPR))));
-    return { w, h: Math.max(1, Math.round(w / ASPECT)) };
+    return { w, h: Math.max(1, Math.round(w / aspect())) };
   }
 
   /** The box changed (width, the host's new height, a strip shown or hidden). */
@@ -867,6 +1028,9 @@ export function mountPanel(opts: PanelOptions): void {
       case "dialog":
         showDialog(msg);
         break;
+      case "permission":
+        showPermission(msg);
+        break;
       case "notice":
         // a refused "Move here": the tab's conversation is using it right now, or this
         // conversation keeps the most tabs it may
@@ -916,7 +1080,8 @@ export function mountPanel(opts: PanelOptions): void {
 
   function takeover(): void {
     send({ t: "takeover" });
-    askMode(true);
+    // a phone takes over inside its drawer (the host keeps no full mode there)
+    if (!compact()) askMode(true);
     input.focus();
     renderChrome();
   }
@@ -1050,6 +1215,30 @@ export function mountPanel(opts: PanelOptions): void {
     closeMenu();
   });
   $("handback").addEventListener("click", handback);
+  $("touch-handback").addEventListener("click", handback);
+  $("viewport-toggle").addEventListener("click", () => {
+    if (!interactive()) return;
+    $("phonehint").hidden = true;
+    send({ t: "viewport", profile: viewport.mobile ? "desktop" : "phone" });
+  });
+  $("phonehint-go").addEventListener("click", () => {
+    $("phonehint").hidden = true;
+    if (interactive()) send({ t: "viewport", profile: "phone" });
+  });
+  $("keyboard").addEventListener("click", () => input.keyboard());
+  $("pdialog-yes").addEventListener("click", () => answerDialog("accept"));
+  $("pdialog-no").addEventListener("click", () => answerDialog("dismiss"));
+  for (const id of ["pdialog-text", "pdialog-pass"])
+    $(id).addEventListener("keydown", (e) => {
+      if ((e as KeyboardEvent).key === "Enter") answerDialog("accept");
+    });
+  $("permission-allow").addEventListener("click", () => {
+    const p = permission;
+    if (p === null || !p.grantable || !interactive()) return;
+    send({ t: "permission", origin: p.origin, permission: p.permission, allow: true });
+    permission = null;
+    renderPermission();
+  });
   $("handoff-done").addEventListener("click", () => void answerHandoff(true));
   $("handoff-cancel").addEventListener("click", () => void answerHandoff(false));
   $("allow").addEventListener("click", () => void allowHost());

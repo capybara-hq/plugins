@@ -1,4 +1,5 @@
 import { defineExtension } from "@capybara-hq/plugin-sdk";
+import { registerDialogTool } from "./dialog.js";
 import { registerHandoffTool } from "./handoff.js";
 import { registerRoutes } from "./routes.js";
 import { panelScriptLoader, serviceSpecLoader } from "./service.js";
@@ -13,7 +14,7 @@ import { registerBrowserTools } from "./tools.js";
 export default defineExtension({
   name: "browser",
   version: "0.1.0-rc.11",
-  sdk: "^0.1.0-rc.75",
+  sdk: "^0.1.0-rc.83",
   provides: [],
   ui: [
     {
@@ -42,6 +43,7 @@ export default defineExtension({
       "browser_type_at",
       "browser_wait",
       "browser_handoff",
+      "browser_dialog",
     ],
     http: [
       { method: "GET", path: "/ui/browser", access: "public" },
@@ -72,6 +74,7 @@ export default defineExtension({
     const deps = { deviceAccess, serviceSpec: serviceSpecLoader(), log: ctx.log };
     registerBrowserTools(ctx, deps);
     registerHandoffTool(ctx, deps);
+    registerDialogTool(ctx, deps);
     registerRoutes(ctx, { deviceAccess, panelScript: panelScriptLoader() });
   },
 });

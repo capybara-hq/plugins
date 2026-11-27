@@ -694,7 +694,8 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
         await docker("rm", "-f", `${name}-egress`);
         expect((await sh(h.id, get)).stdout).toBe("hello-egress");
         expect((await inspect(name)).Id).toBe(id);
-        // a proxy on another image than the configured one is replaced at the next use
+        // a proxy on another image than the configured one is replaced at the next use (another
+        // build: the image id decides, so the same image under another tag would count as current)
         const other = createDockerSandbox(
           { ...cfg, egressProxyImage: `${images.egressImage}-other` },
           {
@@ -702,7 +703,23 @@ describe.skipIf(!dockerAvailable)("device-docker", { timeout: 120_000 }, () => {
             egressTestHosts: { "allowed.example.com": targetIp, "denied.example.com": targetIp },
           },
         );
-        await docker("tag", images.egressImage, `${images.egressImage}-other`);
+        const tmp = `cap-test-${RUN}-${randomUUID().slice(0, 8)}`;
+        await docker(
+          "create",
+          "--label",
+          `${TEST_LABEL}=${RUN}`,
+          "--name",
+          tmp,
+          images.egressImage,
+        );
+        await docker(
+          "commit",
+          "--change",
+          "LABEL dev.capybara.test.build=other",
+          tmp,
+          `${images.egressImage}-other`,
+        );
+        await docker("rm", "-f", tmp);
         try {
           expect(
             (

@@ -5,7 +5,7 @@
     "zh": "Docker 设备",
     "en": "Docker devices"
   },
-  "version": "0.1.0-rc.33",
+  "version": "0.1.0-rc.34",
   "publisher": "Capybara",
   "icon": "./icon.svg",
   "description": {

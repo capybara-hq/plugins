@@ -12,6 +12,7 @@ import {
 import {
   type BlockedHost,
   DOWNLOAD_BLOCKED_PREFIX,
+  dialogLine,
   type TabCount,
   type ToolErrorCode,
   type ToolOp,
@@ -130,6 +131,11 @@ function deviceAccessCode(e: unknown): string | undefined {
   return typeof code === "string" ? code : undefined;
 }
 
+/** The `DeviceAccessError` code of `e`, if it is one (any SDK copy). */
+export function deviceAccessErrorCode(e: unknown): string | undefined {
+  return deviceAccessCode(e);
+}
+
 /** Actionable text for a `DeviceAccessError` code; other errors pass through unchanged. */
 export function deviceAccessToolError(e: unknown): unknown {
   switch (deviceAccessCode(e)) {
@@ -164,6 +170,9 @@ function daemonToolError(code: ToolErrorCode, message: string, tail: string): To
   switch (code) {
     case "taken_over":
       return new ToolError(TAKEN_OVER_MESSAGE + tail);
+    case "dialog_open":
+      // the daemon's message names the dialog and how to answer it with browser_dialog
+      return new ToolError(`${message} Then call this tool again if it is still needed.${tail}`);
     case "no_such_ref":
       return new ToolError(`${message} Call browser_snapshot for the current element refs.${tail}`);
     case "timeout":
@@ -304,6 +313,42 @@ export async function runRequest(
     waitUntil = Date.now() + RESTART_WAIT_MS;
     pauseMs = RESTART_PAUSE_FIRST_MS;
   }
+  return finishReply(deps, call, reply);
+}
+
+/**
+ * One request to a running daemon only (`ifRunning`: never starts the service or resumes the
+ * device; watched waits, browser long waits spec §6.1). The owner check, the conversation fields,
+ * then the reply as {@link runRequest} handles it. A stopped device or service rejects with the
+ * kernel's `DeviceAccessError` `not_running`, passed on as it is.
+ */
+export async function requestIfRunning(
+  deps: BrowserDeps,
+  call: ToolCallContext,
+  req: ToolOp,
+  timeoutMs: number,
+): Promise<OkReply> {
+  assertOwner(call);
+  const sent: ToolRequest = {
+    ...req,
+    conversationId: call.conversationId,
+    rootConversationId: call.rootConversationId,
+  };
+  const body = new TextEncoder().encode(JSON.stringify(sent));
+  let reply: ToolReply;
+  try {
+    reply = parseReply(
+      await deps.deviceAccess.request(call, { service: SERVICE, body, timeoutMs, ifRunning: true }),
+    );
+  } catch (e) {
+    if (deviceAccessCode(e) === "not_running") throw e;
+    throw failure(deps, call, e, false);
+  }
+  return finishReply(deps, call, reply);
+}
+
+/** The refused hosts reported, then the ok reply, or the failure reply as an actionable ToolError. */
+function finishReply(deps: BrowserDeps, call: ToolCallContext, reply: ToolReply): OkReply {
   // each host with the layer the daemon read from the device's proxy: the kernel asks about a
   // `device` host it can offer and writes the private-address note for an `address` one
   const hosts: ServiceBlockedHost[] = Array.isArray(reply.blockedHosts)
@@ -338,8 +383,8 @@ function pageLine(page: NonNullable<OkReply["page"]>): string {
 
 /**
  * The tool result of an ok reply: the takeover note when the person had control (spec §9), the
- * page line (or that the conversation has no tab yet), the daemon's text, the tab count line, and
- * the screenshot as an image block.
+ * page line (or that the conversation has no tab yet), the daemon's text, the pending dialog's
+ * line (dialogs spec §5), the tab count line, and the screenshot as an image block.
  */
 export function toResult(reply: OkReply): ToolResult {
   const lines: string[] = [];
@@ -351,6 +396,8 @@ export function toResult(reply: OkReply): ToolResult {
     );
   lines.push(reply.page === undefined ? NO_TAB_MESSAGE : pageLine(reply.page));
   if (reply.text !== undefined && reply.text !== "") lines.push(reply.text);
+  // a dialog still pending on one of the conversation's tabs: every result names it
+  if (reply.dialog !== undefined) lines.push(dialogLine(reply.dialog));
   const tabs = tabCountOf(reply);
   if (tabs !== undefined) lines.push(tabsLine(tabs));
   return {

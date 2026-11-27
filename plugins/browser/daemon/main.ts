@@ -119,6 +119,9 @@ const dec = new TextDecoder();
 const REQUEST_OPS = new Set<string>([
   "handoff_notice",
   "handoff_clear",
+  "watch_start",
+  "watch_poll",
+  "watch_end",
   "navigate",
   "tabs",
   "snapshot",
@@ -133,6 +136,7 @@ const REQUEST_OPS = new Set<string>([
   "type_at",
   "wait",
   "screenshot",
+  "dialog",
 ]);
 
 /** The cap on downloads in progress from BROWSER_DOWNLOAD_MAX_BYTES, else the default. */
@@ -310,6 +314,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         proxy: plan.proxy,
         clock,
         usage: state,
+        // a pending long wait's watch is its conversation's park
+        parks: state,
+        singleProcess: plan.build === "chromium-headless-shell",
         workspace: workspace === undefined || workspace === "" ? undefined : workspace,
         downloadsTmp: plan.downloadsTmp,
         downloadMaxBytes: downloadMaxBytes(opts.env),
@@ -317,6 +324,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         ...(opts.navigationTimeoutMs === undefined
           ? {}
           : { navigationTimeoutMs: opts.navigationTimeoutMs }),
+      });
+      await session.ready;
+      // hand back restores the desktop viewport ahead of every conversation's next request (the
+      // listener runs inside the hand back, before any request can pass the control check)
+      state.onChange(() => {
+        if (state.control === "agent") void session.restoreDesktop();
       });
       // a shipped browser of another revision runs: the next tool result says so
       if (plan.shippedDir !== undefined)
@@ -470,6 +483,57 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     };
   }
 
+  /**
+   * A long wait's bookkeeping from the plugin server (browser long waits spec §6.2): not agent
+   * input, so allowed during a takeover, never queued behind actions and never dropping a pending
+   * handoff. `watch_start` and `watch_poll` take neither the hand back note nor the conversation's
+   * unreported notes (their replies are discarded by the kernel); `watch_end` is an ordinary
+   * reply that does. A poll never starts the browser: without one the watch is unknown.
+   */
+  async function watchOp(
+    req: Extract<ToolRequest, { op: "watch_start" | "watch_poll" | "watch_end" }>,
+  ): Promise<ToolReply> {
+    if (typeof req.watchId !== "string" || req.watchId === "")
+      return fail("The watch needs a watchId.");
+    if (req.op === "watch_poll") {
+      const session = live;
+      return {
+        ok: true,
+        watch: session === undefined ? { state: "unknown" } : session.watchPoll(req),
+        blockedHosts: [],
+      };
+    }
+    let session: BrowserSession;
+    try {
+      session = await browser();
+    } catch (e) {
+      return launchFailure(e);
+    }
+    if (req.op === "watch_end") {
+      const reply = await session.run(req);
+      if (reply.ok) {
+        const since = state.takeHandbackNote(req.conversationId);
+        if (since !== undefined) reply.userControlledSince = since;
+      }
+      return reply;
+    }
+    let watch: ReturnType<BrowserSession["watchStart"]>;
+    try {
+      watch = session.watchStart(req);
+    } catch (e) {
+      if (e instanceof ActionError)
+        return { ok: false, error: e.code, message: e.message, blockedHosts: [] };
+      throw e;
+    }
+    const page = session.currentPage(req.conversationId);
+    return {
+      ok: true,
+      ...(page === undefined ? {} : { page: await session.pageInfo(page) }),
+      watch,
+      blockedHosts: [],
+    };
+  }
+
   /** Whether a request names its conversation and the root of its tree (non-empty strings). */
   const namesConversation = (raw: object): boolean => {
     const r = raw as { conversationId?: unknown; rootConversationId?: unknown };
@@ -509,6 +573,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
 
   async function conversationRequest(req: ToolRequest): Promise<ToolReply> {
     if (req.op === "handoff_notice" || req.op === "handoff_clear") return handoffOp(req);
+    if (req.op === "watch_start" || req.op === "watch_poll" || req.op === "watch_end")
+      return watchOp(req);
     // A browser tool call after a handoff notice means that conversation's run moved on: a run
     // aborted while waiting never sends handoff_clear, so the notice would stay up. Other
     // conversations' handoffs stay.
