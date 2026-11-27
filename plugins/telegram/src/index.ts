@@ -12,7 +12,7 @@ export { TelegramConnection, TelegramDeployment } from "./config.js";
  */
 export default defineExtension({
   name: "telegram",
-  version: "0.1.0-rc.14",
+  version: "0.1.0-rc.15",
   sdk: "^0.1.0-rc.64",
   provides: [CHANNEL_EXTENSION_POINT],
   permissions: { network: ["api.telegram.org"] },

@@ -89,7 +89,7 @@
     },
     {
       "name": "lark",
-      "version": "0.1.0-rc.16",
+      "version": "0.1.0-rc.17",
       "summary": {
         "en": "Lark (channel@1 bot over the Lark long connection with interactive cards, identity-source@1 web login, directory@1)"
       },
@@ -125,8 +125,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-lark",
-          "version": "0.1.0-rc.16",
-          "integrity": "sha512-rolPlKTVXxjvg0UK7z0534s7oS/yXWW/38bTM/rHwzaCC1Zdp+fooLJz/CPCB9pARs983NUv8evTsPQfjyFnoA=="
+          "version": "0.1.0-rc.17",
+          "integrity": "sha512-0Eau3vn5mVpFDIMByxqpUjEX+vqUfrvwfLnpBIlkyZs9kbi+1S28JieGOZcASq8XtxoORPpwKWSEwbed3CjuUA=="
         }
       }
     },
@@ -230,7 +230,7 @@
     },
     {
       "name": "slack",
-      "version": "0.1.0-rc.17",
+      "version": "0.1.0-rc.18",
       "summary": {
         "en": "Slack (channel@1 bot over Socket Mode with Block Kit cards, identity-source@1 Sign in with Slack, directory@1)"
       },
@@ -269,14 +269,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-slack",
-          "version": "0.1.0-rc.17",
-          "integrity": "sha512-pRS8XwUZ1dCzbDcmbGYORA2eXhPtujWr2uezUB0eoZmFNKWGLyph71waqxdq5A45jVOzWFAtIRg5qBxlCo1dfQ=="
+          "version": "0.1.0-rc.18",
+          "integrity": "sha512-efez7abdkxTgwiudZqhylNWiFup81zaOSfC7yQdo3dhKrNk+Ypubm4E5lJD5eG9KD+a4Gj8174U/i3uphcNTRg=="
         }
       }
     },
     {
       "name": "todo",
-      "version": "0.1.0-rc.14",
+      "version": "0.1.0-rc.15",
       "summary": {
         "en": "Todo list tool for agents: plugin__todo__write keeps a per-conversation todo list in PostgreSQL"
       },
@@ -300,8 +300,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-todo",
-          "version": "0.1.0-rc.14",
-          "integrity": "sha512-HtGVlONC/l11Pw0lctdOMQc29ccUaVuU86LYx6cIq/plvfGKUXzSO9K/fAM3ED64eHNPSAUUYGRutloQY6HsfA=="
+          "version": "0.1.0-rc.15",
+          "integrity": "sha512-mfGmDbr14cPfp8CIqlChgSze/kdQVl2ij4Px5nlf4EOQA74qWhmNnjrJOK0vfXdkJP4J4D97zMBTiwupaHJb9Q=="
         }
       }
     },
@@ -452,7 +452,7 @@
     },
     {
       "name": "telegram",
-      "version": "0.1.0-rc.14",
+      "version": "0.1.0-rc.15",
       "summary": {
         "en": "Telegram (channel@1 bot over the Bot API: long polling or webhook, inline keyboard cards)",
         "zh": "Telegram 机器人渠道（channel@1，Bot API：长轮询或 webhook，内联键盘卡片）"
@@ -474,8 +474,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-telegram",
-          "version": "0.1.0-rc.14",
-          "integrity": "sha512-ZJk5l+KcBY6XCmVmKVsUWnN56WTOJZmLfLagTO3BrlfQ3Q7wFIG1ZJlSFdgNfPNBbEoa4MNlcEtlCATrUk7NlQ=="
+          "version": "0.1.0-rc.15",
+          "integrity": "sha512-FAt5qZSBx1XmSLOItTOawU35F8liSpNEwnp4gPKlfeQMuRj6IwMleNZtZqYATQHGEQq+nfGSualhOcWsTKG0FA=="
         }
       }
     },
@@ -893,7 +893,7 @@
     },
     {
       "name": "device-local",
-      "version": "0.1.0-rc.12",
+      "version": "0.1.0-rc.13",
       "summary": {
         "en": "Devices on people's own computers: a machine connected with capybara-device serves the device over the dial-in channel, and its owner limits it there",
         "zh": "在自己的电脑上使用设备：用 capybara-device 连接的电脑通过拨入通道为设备服务，由电脑的所有者在本机限制它"
@@ -916,8 +916,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-local",
-          "version": "0.1.0-rc.12",
-          "integrity": "sha512-ncQmaRGa48fNjFD5rHQL94yEzBKv0pTS+4vy1uoK9SMWqSJw4/NUfVHs18Li0N2X92yRUystyuGHuJ0/oD4HPA=="
+          "version": "0.1.0-rc.13",
+          "integrity": "sha512-gZOI8bmP5sfADZkEbB1nuPf+32qVFNJm92RyiFuLhiNNluLWN5ABy4DJehvjFy6bgs+J5Jhu88byfDt0EIrlww=="
         }
       }
     },
@@ -948,7 +948,7 @@
     },
     {
       "name": "browser",
-      "version": "0.1.0-rc.11",
+      "version": "0.1.0-rc.12",
       "summary": {
         "en": "A real browser in the conversation owner's device for agents: navigate, read and act on pages through tools, with a live view in the conversation panel and takeover by the person",
         "zh": "在对话所有者的设备中为智能体运行真实浏览器：通过工具打开、读取和操作网页，在对话面板中实时查看，并可由本人接管"
@@ -969,6 +969,7 @@
           "permissions.http.public:GET /ui/panel.js",
           "permissions.tools:browser_click",
           "permissions.tools:browser_click_at",
+          "permissions.tools:browser_dialog",
           "permissions.tools:browser_handoff",
           "permissions.tools:browser_hover",
           "permissions.tools:browser_navigate",
@@ -993,6 +994,7 @@
           "permissions.http.public:GET /ui/panel.js",
           "permissions.tools:browser_click",
           "permissions.tools:browser_click_at",
+          "permissions.tools:browser_dialog",
           "permissions.tools:browser_handoff",
           "permissions.tools:browser_hover",
           "permissions.tools:browser_navigate",
@@ -1012,8 +1014,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-browser",
-          "version": "0.1.0-rc.11",
-          "integrity": "sha512-XFujffiSKA5qaY/OaV0jsLOTw8Kn8SDUedUYkbyjlkK0XLRLDDvvlXnA5O+uv1WjRVgvXAuSRgAMBjccWifPgw=="
+          "version": "0.1.0-rc.12",
+          "integrity": "sha512-S8SbjtU3ZH8Qn/gdf2VSxBVoXrng7rXb5MdgrHfVxmGKeq14h0MqWv6uJ63rDfIJAamCyo84t9V5EKXktXv15w=="
         }
       }
     }

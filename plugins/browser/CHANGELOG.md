@@ -1,5 +1,27 @@
 # @capybara-hq/plugin-browser
 
+## 0.1.0-rc.12
+
+### Patch Changes
+
+- b71a5e9: A deleted conversation's tabs close right away: the daemon handles the kernel's conversation-deleted
+  notice (SDK `parseConversationDeleted`) by closing the tabs of the conversation and of its
+  sub-agent conversations, forgetting their state (handoffs and parks included) and dropping them
+  from the session file, so a restart does not restore them. The profile (logins) is never touched;
+  the idle close stays the backstop. The session file's restore window is the SDK's
+  `DEVICE_SERVICE_RESTORE_MAX_AGE_MS`. Needs `@capybara-hq/plugin-sdk` 0.1.0-rc.83.
+- 198fa25: Page dialogs, HTTP sign-in, permission prompts, phone viewport and touch takeover (plugins#208):
+  confirm, prompt and leave-page dialogs are held until answered (new tool `browser_dialog`, the
+  panel's dialog box), HTTP Basic sign-in from the panel with credentials kept in the daemon's
+  memory, refused permission requests reported (notifications and clipboard can be allowed), and a
+  phone viewport with touch input and a soft keyboard for a takeover from a phone.
+- 1f286ab: Long waits (plugins#207): browser_wait takes up to 24 h and two new conditions, `urlContains` and
+  `download`. A wait over 60 s needs a condition and parks the run as a watched input wait (core#939):
+  the daemon arms a watch on the conversation's active tab, the kernel polls it every 10 s without
+  starting the service or resuming the device, and the run resumes when the condition holds, a
+  decision dialog opens, the tab closes, the time passes or the person ends the wait from its card.
+  The panel's status line says what the agent waits for and until when.
+
 ## 0.1.0-rc.11
 
 ### Patch Changes

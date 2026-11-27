@@ -1,5 +1,13 @@
 # @capybara-hq/plugin-telegram
 
+## 0.1.0-rc.15
+
+### Patch Changes
+
+- a81be16: Render a question form's `choices` as buttons (the first primary, a click answers at once, a boolean
+  stays a boolean) and show its `body` text on the card; a form without choices is unchanged
+  (plugins#241).
+
 ## 0.1.0-rc.14
 
 ### Patch Changes
