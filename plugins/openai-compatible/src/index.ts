@@ -236,7 +236,8 @@ function makeClient(
 function cacheOf(dialect: Dialect, caching: boolean | undefined): { cache?: ModelCacheInfo } {
   if (caching === false) return {};
   const cache = dialect.cache ?? (caching === true ? IMPLICIT_CACHE : undefined);
-  return cache === undefined ? {} : { cache };
+  // A copy per model info: no two share one object.
+  return cache === undefined ? {} : { cache: { ...cache, ttlOptions: [...cache.ttlOptions] } };
 }
 
 function modelInfo(ep: Endpoint, m: EndpointModelConfig): ModelInfo {

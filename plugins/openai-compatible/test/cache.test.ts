@@ -62,11 +62,35 @@ describe("cache declarations", () => {
   });
 });
 
+describe("implicit cache objects", () => {
+  it("are not shared between model infos", async () => {
+    const provider = createOpenAICompatibleProvider({
+      endpoints: [
+        {
+          name: "e",
+          baseUrl: "http://127.0.0.1:1/v1",
+          dialect: "ark",
+          models: [
+            { ...base, id: "a" },
+            { ...base, id: "b" },
+          ],
+        },
+      ],
+      apiKeys: {},
+    });
+    const [a, b] = await provider.listModels();
+    expect(a?.cache).toEqual(b?.cache);
+    expect(a?.cache).not.toBe(b?.cache);
+    expect(a?.cache?.ttlOptions).not.toBe(b?.cache?.ttlOptions);
+  });
+});
+
 describe("qwen usage tiers", () => {
   it("reports the write under its 300 s tier, and none when nothing is written", () => {
     const u = DIALECTS.qwen.usage({
       prompt_tokens: 2000,
       completion_tokens: 5,
+      total_tokens: 2005,
       prompt_tokens_details: { cached_tokens: 0, cache_creation_input_tokens: 1900 },
     });
     expect(u.cacheWriteTokens).toBe(1900);
@@ -74,6 +98,7 @@ describe("qwen usage tiers", () => {
     const hit = DIALECTS.qwen.usage({
       prompt_tokens: 2000,
       completion_tokens: 5,
+      total_tokens: 2005,
       prompt_tokens_details: { cached_tokens: 1900, cache_creation_input_tokens: 0 },
     });
     expect(hit.cacheWriteByTtl).toBeUndefined();
