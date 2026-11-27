@@ -104,7 +104,7 @@ export function providerConfig(
  */
 const plugin = defineExtension({
   name: "device-e2b",
-  version: "0.1.0-rc.34",
+  version: "0.1.0-rc.35",
   // device-provider@1 (report, networkAllowlist, scopes with projectRoot / writeRoots) is the
   // rc.51 SDK's.
   sdk: "^0.1.0-rc.64",

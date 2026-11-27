@@ -826,7 +826,7 @@
     },
     {
       "name": "device-docker",
-      "version": "0.1.0-rc.34",
+      "version": "0.1.0-rc.35",
       "summary": {
         "en": "Devices as Docker containers (runc or gVisor runsc) behind a Docker socket proxy, with their files on volumes kept until the device is deleted: the public network is open by default, with loopback, private, link-local and metadata ranges refused, or a host allowlist",
         "zh": "以 Docker 容器（runc 或 gVisor runsc）承载设备，经 Docker socket 代理访问；文件保存在卷上，直到设备被删除。网络默认开放公网（拒绝回环、私有、链路本地与元数据地址），也可用主机白名单"
@@ -853,14 +853,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-docker",
-          "version": "0.1.0-rc.34",
-          "integrity": "sha512-FOYFio9VPBzGic0RqpFDN6qMmyuWEA2PHl2ZsIknHfvHYqMQsv6NCoESbWo2SAVGzmt6c3YRC1u8C02m3SDAEg=="
+          "version": "0.1.0-rc.35",
+          "integrity": "sha512-9Aegf1i/JFzEURfO6L7DbPkVlYgrmQ3TkHSx4OS8fHr9C53MM5kSRHOyv1UfDTNbXlyKn6NOHn/oy1kiwQSkDQ=="
         }
       }
     },
     {
       "name": "device-e2b",
-      "version": "0.1.0-rc.34",
+      "version": "0.1.0-rc.35",
       "summary": {
         "en": "Devices as E2B sandboxes (E2B cloud or self-hosted): files kept by pausing the sandbox, templates built from the published image, an allowlist or the open internet with local ranges denied (E2B's metadata service stays reachable)",
         "zh": "以 E2B 沙箱承载设备（E2B 云或自托管）：暂停沙箱保留文件，从已发布镜像构建模板，网络为出站白名单或开放公网（拒绝私有、回环与链路本地地址；E2B 元数据端点仍可达，见 README）"
@@ -886,8 +886,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-e2b",
-          "version": "0.1.0-rc.34",
-          "integrity": "sha512-RKxjcTNdmLfk8Tt/Rm+/6pUwBvVL9g8qQxIt/8CDbFAfnWhKTeFIcttXRQ3tjwHmx/bjeEcfWPHKPPVHHfbRmA=="
+          "version": "0.1.0-rc.35",
+          "integrity": "sha512-4lUdYh1NYju/MCFOwblWHg0tV2DqmVrmRARH6SSJqC7zanWLXca955qK5J9jTj0r2CseZlGLVBZY4ylLA2LYkg=="
         }
       }
     },
@@ -948,7 +948,7 @@
     },
     {
       "name": "browser",
-      "version": "0.1.0-rc.12",
+      "version": "0.1.0-rc.13",
       "summary": {
         "en": "A real browser in the conversation owner's device for agents: navigate, read and act on pages through tools, with a live view in the conversation panel and takeover by the person",
         "zh": "在对话所有者的设备中为智能体运行真实浏览器：通过工具打开、读取和操作网页，在对话面板中实时查看，并可由本人接管"
@@ -1014,8 +1014,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-browser",
-          "version": "0.1.0-rc.12",
-          "integrity": "sha512-S8SbjtU3ZH8Qn/gdf2VSxBVoXrng7rXb5MdgrHfVxmGKeq14h0MqWv6uJ63rDfIJAamCyo84t9V5EKXktXv15w=="
+          "version": "0.1.0-rc.13",
+          "integrity": "sha512-8TYssX94gvsU7kd/vbQq3BOH5O5udRotCAiIBNRPY70Xg47uszQYN+ejNXPgkiT5XWoRG0O2KAXMoVAspE/uuA=="
         }
       }
     }

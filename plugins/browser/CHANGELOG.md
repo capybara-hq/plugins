@@ -1,5 +1,20 @@
 # @capybara-hq/plugin-browser
 
+## 0.1.0-rc.13
+
+### Patch Changes
+
+- 84bb5d6: A page's own fetch, XHR or subresource that gets an HTTP Basic challenge now completes with its 401
+  for the page to handle instead of hanging in the full Chromium build: the daemon keeps its credential
+  route installed for the session and the vendored playwright-core cancels a site challenge no stored
+  credentials match. Stored credentials still go only to the exact origin they were entered for.
+  
+  Stored credentials no longer follow a signed request that redirects out of their origin (the
+  vendored playwright-core replayed the route's headers on every redirect hop), and a cross-origin
+  frame embedded in the signed-in site's page no longer gets them.
+- ac3d848: Document that Chromium runs with `--no-sandbox` in device-docker devices: the device container is
+  the isolation boundary (plugins#286).
+
 ## 0.1.0-rc.12
 
 ### Patch Changes
