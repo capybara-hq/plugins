@@ -83,6 +83,12 @@ A real browser in the person's device for agents (browser use spec,
   nothing larger is downloaded). First start there: one download into the install directory (about 377 MB, 16 s on a fast
   link), one restart, then about 2 s to launch. Nothing spoofs a fingerprint, solves a CAPTCHA or
   hides automation beyond Playwright's own flags (`navigator.webdriver` stays true).
+- Chromium runs with `--no-sandbox` (Playwright's default, `chromiumSandbox: false`) on Linux devices.
+  This is a decision (plugins#286): the device container is the isolation boundary (`CapDrop: ALL`,
+  `no-new-privileges`, Docker's default seccomp profile, egress through the proxy), and the agent can
+  already run arbitrary commands in that container, so a renderer escape gains nothing beyond what
+  the agent has. Chromium's sandbox would need user namespaces or a custom seccomp profile for every
+  command in the device (rejected), or a separate browser container (not planned now).
 - Where the browser comes from (plugins#209: never from a place the service or an agent command
   could write once it runs): the provider's install directory `CAPYBARA_SERVICE_INSTALL`
   (device-local) is filled on the first start, sealed with `.sealed`, and the daemon answers
