@@ -133,6 +133,7 @@ const REQUEST_OPS = new Set<string>([
   "type_at",
   "wait",
   "screenshot",
+  "dialog",
 ]);
 
 /** The cap on downloads in progress from BROWSER_DOWNLOAD_MAX_BYTES, else the default. */
@@ -310,6 +311,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         proxy: plan.proxy,
         clock,
         usage: state,
+        singleProcess: plan.build === "chromium-headless-shell",
         workspace: workspace === undefined || workspace === "" ? undefined : workspace,
         downloadsTmp: plan.downloadsTmp,
         downloadMaxBytes: downloadMaxBytes(opts.env),
@@ -317,6 +319,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         ...(opts.navigationTimeoutMs === undefined
           ? {}
           : { navigationTimeoutMs: opts.navigationTimeoutMs }),
+      });
+      await session.ready;
+      // hand back restores the desktop viewport ahead of every conversation's next request (the
+      // listener runs inside the hand back, before any request can pass the control check)
+      state.onChange(() => {
+        if (state.control === "agent") void session.restoreDesktop();
       });
       // a shipped browser of another revision runs: the next tool result says so
       if (plan.shippedDir !== undefined)

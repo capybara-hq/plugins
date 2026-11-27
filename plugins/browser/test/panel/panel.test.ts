@@ -58,6 +58,8 @@ const state = (over: Partial<Omit<StateMsg, "tabs">> & { tabs?: TabIn[] } = {}):
     t: "state",
     otherTabs: [],
     handoffs: [],
+    dialogs: [],
+    viewport: { width: 1280, height: 800, mobile: false },
     loading: false,
     secure: true,
     control: "agent",
@@ -876,11 +878,15 @@ describe("panel", () => {
     expect($(s, "empty").textContent).toContain(t("en", "emptyTitle"));
   });
 
-  it("a phone (the host's compact size class) is watch-only", async () => {
+  it("a phone (the host's compact size class) takes over inside its drawer", async () => {
     const s = setup({ width: 390, screen: 390 });
     const sock = await live(s);
-    expect(($(s, "takeover") as HTMLElement).hidden).toBe(true);
     expect(sock.sent[0]).toMatchObject({ t: "hello" });
+    expect(($(s, "takeover") as HTMLElement).hidden).toBe(false);
+    $(s, "takeover").click();
+    expect(sock.sent).toContainEqual({ t: "takeover" });
+    // no full mode on a phone
+    expect(modes(s)).toEqual([]);
   });
 
   it("closes the stream after 60 s hidden and reconnects when visible", async () => {
@@ -1565,5 +1571,206 @@ describe("i18n", () => {
       }
       if (locale === "zh") expect(texts.join(" ")).not.toMatch(/agent|企业/i);
     }
+  });
+});
+
+describe("page dialogs, permissions and touch takeover", () => {
+  const confirm = {
+    id: "d3",
+    tabId: "t1",
+    kind: "confirm" as const,
+    message: "Delete this draft?",
+  };
+  const withDialog = (d: Record<string, unknown>, control: "agent" | "user" = "user") =>
+    state({ control, dialogs: [d as never] });
+
+  it("confirm box shows the message and answers with control", async () => {
+    const s = setup();
+    const sock = await live(s, withDialog(confirm));
+    expect(($(s, "pdialog") as HTMLElement).hidden).toBe(false);
+    expect($(s, "pdialog-msg").textContent).toBe("Delete this draft?");
+    expect($(s, "pdialog-yes").textContent).toBe(t("en", "dlgOk"));
+    $(s, "pdialog-yes").click();
+    expect(sock.sent).toContainEqual({ t: "dialog", id: "d3", action: "accept" });
+    sock.push(state({ control: "user" }));
+    expect(($(s, "pdialog") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("read-only box without control shows the take-over hint; an alert stays an informational strip", async () => {
+    const s = setup({ locale: "zh" });
+    const sock = await live(s, withDialog(confirm, "agent"));
+    expect(($(s, "pdialog-yes") as HTMLElement).hidden).toBe(true);
+    expect($(s, "pdialog-hint").textContent).toBe("接管后可回答");
+    $(s, "pdialog-yes").click();
+    expect(sock.sent.some((m) => m.t === "dialog")).toBe(false);
+    sock.push({ t: "dialog", kind: "alert", message: "Saved" });
+    expect(($(s, "dialog") as HTMLElement).hidden).toBe(false);
+    expect($(s, "dialog-text").textContent).toBe("Saved");
+  });
+
+  it("prompt box fills the default value and keeps what the person typed across states", async () => {
+    const s = setup();
+    const prompt = { id: "d4", tabId: "t1", kind: "prompt", message: "Name?", defaultValue: "Ann" };
+    const sock = await live(s, withDialog(prompt));
+    const field = $(s, "pdialog-text") as HTMLInputElement;
+    expect(field.value).toBe("Ann");
+    field.value = "Bo";
+    sock.push(withDialog(prompt));
+    expect(field.value).toBe("Bo");
+    $(s, "pdialog-yes").click();
+    expect(sock.sent).toContainEqual({ t: "dialog", id: "d4", action: "accept", text: "Bo" });
+  });
+
+  it("auth form sends credentials and clears the password field", async () => {
+    const s = setup();
+    const auth = {
+      id: "d5",
+      tabId: "t1",
+      kind: "auth",
+      message: "HTTP sign-in for https://intra.example",
+      origin: "https://intra.example",
+      realm: "Team <b>area</b>",
+    };
+    const sock = await live(s, withDialog(auth));
+    const pass = $(s, "pdialog-pass") as HTMLInputElement;
+    expect(pass.type).toBe("password");
+    expect(pass.getAttribute("autocomplete")).toBe("off");
+    expect($(s, "pdialog-realm").textContent).toContain("Team <b>area</b>");
+    ($(s, "pdialog-user") as HTMLInputElement).value = "ann";
+    pass.value = "pw-1";
+    $(s, "pdialog-yes").click();
+    expect(sock.sent).toContainEqual({
+      t: "dialog",
+      id: "d5",
+      action: "accept",
+      username: "ann",
+      password: "pw-1",
+    });
+    expect(pass.value).toBe("");
+  });
+
+  it("page text renders as text", async () => {
+    const s = setup();
+    await live(s, withDialog({ ...confirm, message: '<img src=x onerror="alert(1)">' }));
+    expect($(s, "pdialog-msg").textContent).toBe('<img src=x onerror="alert(1)">');
+    expect($(s, "pdialog").querySelector("img")).toBeNull();
+  });
+
+  it("permission strip offers allow only for grantable permissions and only with control", async () => {
+    const s = setup({ locale: "zh" });
+    const sock = await live(s, state({ control: "agent" }));
+    sock.push({
+      t: "permission",
+      origin: "https://a.example",
+      permission: "notifications",
+      grantable: true,
+    });
+    expect(($(s, "permission") as HTMLElement).hidden).toBe(false);
+    expect($(s, "permission-name").textContent).toBe("通知");
+    expect(($(s, "permission-allow") as HTMLElement).hidden).toBe(true);
+    sock.push(state({ control: "user" }));
+    expect(($(s, "permission-allow") as HTMLElement).hidden).toBe(false);
+    $(s, "permission-allow").click();
+    expect(sock.sent).toContainEqual({
+      t: "permission",
+      origin: "https://a.example",
+      permission: "notifications",
+      allow: true,
+    });
+    sock.push({
+      t: "permission",
+      origin: "https://a.example",
+      permission: "camera",
+      grantable: false,
+    });
+    expect(($(s, "permission-allow") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("a compact takeover shows the takeover bar; the phone toggle sends viewport; the hint shows once per takeover", async () => {
+    const s = setup({ width: 390, screen: 390, locale: "zh" });
+    const sock = await live(s);
+    sock.push(state({ control: "user" }));
+    expect(($(s, "touchbar") as HTMLElement).hidden).toBe(false);
+    expect(($(s, "handback") as HTMLElement).hidden).toBe(true);
+    expect(($(s, "phonehint") as HTMLElement).hidden).toBe(false);
+    expect($(s, "viewport-toggle").textContent).toBe("手机宽度");
+    $(s, "viewport-toggle").click();
+    expect(sock.sent).toContainEqual({ t: "viewport", profile: "phone" });
+    expect(($(s, "phonehint") as HTMLElement).hidden).toBe(true);
+    sock.push(state({ control: "user", viewport: { width: 390, height: 844, mobile: true } }));
+    expect($(s, "viewport-toggle").textContent).toBe("桌面宽度");
+    // the same takeover: no second hint
+    sock.push(state({ control: "user" }));
+    expect(($(s, "phonehint") as HTMLElement).hidden).toBe(true);
+    $(s, "touch-handback").click();
+    expect(sock.sent).toContainEqual({ t: "handback" });
+    sock.push(state({ control: "agent" }));
+    sock.push(state({ control: "user" }));
+    expect(($(s, "phonehint") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("touch pointer events map through the phone viewport", async () => {
+    const s = setup({ width: 390, screen: 390 });
+    const sock = await live(
+      s,
+      state({ control: "user", viewport: { width: 390, height: 844, mobile: true } }),
+    );
+    const view = $(s, "view");
+    view.getBoundingClientRect = () =>
+      ({ left: 10, top: 20, width: 195, height: 422, right: 205, bottom: 442 }) as DOMRect;
+    const P = s.dom.window.PointerEvent;
+    view.dispatchEvent(
+      new P("pointerdown", {
+        pointerType: "touch",
+        pointerId: 7,
+        clientX: 10 + 97.5,
+        clientY: 20 + 211,
+        bubbles: true,
+      }),
+    );
+    s.dom.window.dispatchEvent(
+      new P("pointerup", { pointerType: "touch", pointerId: 7, clientX: 107, clientY: 231 }),
+    );
+    expect(sock.sent).toContainEqual({
+      t: "touch",
+      kind: "start",
+      points: [{ id: 7, x: 195, y: 422 }],
+    });
+    expect(sock.sent).toContainEqual({ t: "touch", kind: "end", points: [] });
+    // a mouse pointer is not a touch
+    view.dispatchEvent(new P("pointerdown", { pointerType: "mouse", pointerId: 1, bubbles: true }));
+    expect(sock.sent.filter((m) => m.t === "touch")).toHaveLength(2);
+  });
+
+  it("the keyboard button focuses the sink; its text goes as char, delete and line break as keys", async () => {
+    const s = setup({ width: 390, screen: 390 });
+    const sock = await live(s, state({ control: "user" }));
+    $(s, "keyboard").click();
+    const sink = s.dom.window.document.getElementById("input-sink") as HTMLTextAreaElement;
+    expect(s.dom.window.document.activeElement).toBe(sink);
+    const IE = s.dom.window.InputEvent;
+    sink.value = "hi";
+    sink.dispatchEvent(new IE("input", { inputType: "insertText", data: "hi" }));
+    expect(sink.value).toBe("");
+    sink.dispatchEvent(new IE("input", { inputType: "deleteContentBackward" }));
+    sink.dispatchEvent(new IE("input", { inputType: "insertLineBreak" }));
+    const keys = sock.sent.filter((m) => m.t === "key");
+    expect(keys).toEqual([
+      { t: "key", kind: "char", key: "hi", text: "hi" },
+      { t: "key", kind: "down", key: "Backspace", code: "Backspace" },
+      { t: "key", kind: "up", key: "Backspace", code: "Backspace" },
+      { t: "key", kind: "down", key: "Enter", code: "Enter" },
+      { t: "key", kind: "up", key: "Enter", code: "Enter" },
+    ]);
+  });
+
+  it("the picture keeps the page's aspect (portrait in phone)", () => {
+    expect(letterbox(400, 400, 390 / 844)).toEqual({ x: 108, y: 0, w: 185, h: 400 });
+    expect(mapPoint(185, 400, { x: 0, y: 0, w: 185, h: 400 }, { width: 390, height: 844 })).toEqual(
+      {
+        x: 390,
+        y: 844,
+      },
+    );
   });
 });

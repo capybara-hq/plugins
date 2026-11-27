@@ -3,7 +3,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { encodeServiceMessage, ServiceMessageDecoder } from "@capybara-hq/plugin-sdk";
+import {
+  DEVICE_SERVICE_MACH_CHROMIUM,
+  DEVICE_SERVICE_MACH_ENV,
+  encodeServiceMessage,
+  ServiceMessageDecoder,
+} from "@capybara-hq/plugin-sdk";
 import { type Daemon, type DaemonOptions, startDaemon } from "../../daemon/main.js";
 import {
   decodeFrame,
@@ -34,6 +39,16 @@ export type ViewerMsg = ViewerOut | TestFrame;
  */
 export const TEST_BROWSERS = join(tmpdir(), "capybara-playwright-browsers");
 
+/**
+ * The daemon environment of the tests: empty, or with BROWSER_TEST_FULL_CHROMIUM=1 the full
+ * Chromium on macOS too (where the headless shell runs as one process otherwise; Linux and CI run
+ * the full build anyway). A larger download into TEST_BROWSERS.
+ */
+export const TEST_ENV: Record<string, string> =
+  process.env.BROWSER_TEST_FULL_CHROMIUM === "1"
+    ? { [DEVICE_SERVICE_MACH_ENV]: DEVICE_SERVICE_MACH_CHROMIUM }
+    : {};
+
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
@@ -53,7 +68,7 @@ export async function startTestDaemon(
   const daemon = await startDaemon({
     socketPath,
     stateDir,
-    env: {},
+    env: TEST_ENV,
     browsersPath: TEST_BROWSERS,
     // A stop waits for Chromium to close and flush the profile, however long a loaded machine
     // takes: the daemon's default grace (3 s) kills it, which loses what was not yet written (a

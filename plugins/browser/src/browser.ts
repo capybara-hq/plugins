@@ -12,6 +12,7 @@ import {
 import {
   type BlockedHost,
   DOWNLOAD_BLOCKED_PREFIX,
+  dialogLine,
   type TabCount,
   type ToolErrorCode,
   type ToolOp,
@@ -164,6 +165,9 @@ function daemonToolError(code: ToolErrorCode, message: string, tail: string): To
   switch (code) {
     case "taken_over":
       return new ToolError(TAKEN_OVER_MESSAGE + tail);
+    case "dialog_open":
+      // the daemon's message names the dialog and how to answer it with browser_dialog
+      return new ToolError(`${message} Then call this tool again if it is still needed.${tail}`);
     case "no_such_ref":
       return new ToolError(`${message} Call browser_snapshot for the current element refs.${tail}`);
     case "timeout":
@@ -338,8 +342,8 @@ function pageLine(page: NonNullable<OkReply["page"]>): string {
 
 /**
  * The tool result of an ok reply: the takeover note when the person had control (spec §9), the
- * page line (or that the conversation has no tab yet), the daemon's text, the tab count line, and
- * the screenshot as an image block.
+ * page line (or that the conversation has no tab yet), the daemon's text, the pending dialog's
+ * line (dialogs spec §5), the tab count line, and the screenshot as an image block.
  */
 export function toResult(reply: OkReply): ToolResult {
   const lines: string[] = [];
@@ -351,6 +355,8 @@ export function toResult(reply: OkReply): ToolResult {
     );
   lines.push(reply.page === undefined ? NO_TAB_MESSAGE : pageLine(reply.page));
   if (reply.text !== undefined && reply.text !== "") lines.push(reply.text);
+  // a dialog still pending on one of the conversation's tabs: every result names it
+  if (reply.dialog !== undefined) lines.push(dialogLine(reply.dialog));
   const tabs = tabCountOf(reply);
   if (tabs !== undefined) lines.push(tabsLine(tabs));
   return {

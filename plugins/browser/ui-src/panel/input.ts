@@ -6,7 +6,12 @@
 // - Cursor: the daemon answers the page's cursor under the pointer; the picture shows it.
 // - Press indicator: shown at the pointer on mousedown, before any frame comes back.
 // - Keys and text: a visually hidden textarea holds the focus, so the IME (Chinese input) composes
-//   there and paste works: keys go as `down` / `up`, composed and pasted text as `char`.
+//   there and paste works: keys go as `down` / `up`, composed and pasted text as `char`. On a
+//   touch screen `keyboard()` focuses it to raise the soft keyboard; its text goes as `char` and
+//   its delete and line break (which carry no usable key) as Backspace and Enter.
+// - Touch: one-finger and multi-finger touches go as `touch` messages in viewport coordinates
+//   (the daemon dispatches them, or turns a tap into a click and a pan into a scroll); the
+//   browser's own mouse emulation of a touch is suppressed.
 // Nothing here acts in the watch state: `interactive()` gates every event.
 import {
   clipCodePoints,
@@ -45,6 +50,8 @@ export interface InputController {
   cursor(value: unknown): void;
   /** Moves the keyboard focus to the input (takeover). */
   focus(): void;
+  /** Raises the soft keyboard (focuses the input sink on a touch screen). */
+  keyboard(): void;
   /** The element that holds the keyboard focus while driving. */
   readonly sink: HTMLTextAreaElement;
 }
@@ -143,6 +150,8 @@ export function mountInput(opts: InputOptions): InputController {
 
   function applyCursor(): void {
     view.style.cursor = interactive() ? cursor : "default";
+    // the page gets the touches while the person drives (no scroll or zoom of the panel)
+    view.style.touchAction = interactive() ? "none" : "";
   }
 
   // ---- pointer ----
@@ -226,6 +235,35 @@ export function mountInput(opts: InputOptions): InputController {
   );
   view.addEventListener("contextmenu", (e) => e.preventDefault());
 
+  // ---- touch ----
+
+  /** The touches on the picture now, by pointer id, in viewport coordinates. */
+  const touches = new Map<number, { x: number; y: number }>();
+  const touchPoints = () => [...touches].map(([id, p]) => ({ id, x: p.x, y: p.y }));
+  const isTouch = (e: PointerEvent) => e.pointerType === "touch";
+
+  view.addEventListener("pointerdown", (e) => {
+    if (!isTouch(e) || !interactive()) return;
+    // no mouse events emulated from this touch (they would click twice)
+    e.preventDefault();
+    touches.set(e.pointerId, opts.toPage(e.clientX, e.clientY));
+    send({ t: "touch", kind: "start", points: touchPoints() });
+  });
+  view.addEventListener("pointermove", (e) => {
+    if (!isTouch(e) || !touches.has(e.pointerId) || !interactive()) return;
+    e.preventDefault();
+    touches.set(e.pointerId, opts.toPage(e.clientX, e.clientY));
+    send({ t: "touch", kind: "move", points: touchPoints() });
+  });
+  const touchEnd = (kind: "end" | "cancel") => (e: PointerEvent) => {
+    if (!isTouch(e) || !touches.has(e.pointerId)) return;
+    touches.delete(e.pointerId);
+    if (!interactive()) return;
+    send({ t: "touch", kind, points: kind === "cancel" ? [] : touchPoints() });
+  };
+  win.addEventListener("pointerup", touchEnd("end"));
+  win.addEventListener("pointercancel", touchEnd("cancel"));
+
   // ---- keys and text ----
 
   const composing = (e: KeyboardEvent) => e.isComposing || e.key === "Process" || e.keyCode === 229;
@@ -273,12 +311,23 @@ export function mountInput(opts: InputOptions): InputController {
     if (interactive()) sendText(e.data ?? "");
     sink.value = "";
   });
+  /** A key a soft keyboard edit stands for, pressed and released. */
+  function tapKey(key: "Backspace" | "Enter"): void {
+    send({ t: "key", kind: "down", key, code: key });
+    send({ t: "key", kind: "up", key, code: key });
+  }
   sink.addEventListener("input", (e) => {
     const ie = e as InputEvent;
     // composition text is sent once, at compositionend; other insertions (dictation, the emoji
     // picker) as they come
     if (ie.isComposing || (ie.inputType ?? "").includes("Composition")) return;
-    if (interactive()) sendText(sink.value);
+    if (interactive()) {
+      // a soft keyboard's delete and line break come as edits of the (always empty) field
+      if (ie.inputType === "deleteContentBackward") tapKey("Backspace");
+      else if (ie.inputType === "insertLineBreak" || ie.inputType === "insertParagraph")
+        tapKey("Enter");
+      else sendText(sink.value);
+    }
     sink.value = "";
   });
   sink.addEventListener("paste", (e) => {
@@ -315,6 +364,11 @@ export function mountInput(opts: InputOptions): InputController {
     },
     focus() {
       focusWanted = !interactive();
+      sink.focus();
+    },
+    keyboard() {
+      if (!interactive()) return;
+      sink.value = "";
       sink.focus();
     },
   };
