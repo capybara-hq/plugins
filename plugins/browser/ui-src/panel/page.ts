@@ -166,6 +166,23 @@ export const PANEL_HTML = `<!doctype html>
   .strip .label { color: var(--cb-muted, #5E5E5A); }
   .strip:not(:has(button)) { padding-right: 12px; }
 
+  /* a held page dialog: a box over the picture until it is answered */
+  #pdialog { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(360px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: var(--cb-radius-md, 8px); background: var(--cb-raised, #fff); box-shadow: var(--cb-shadow-float, 0 8px 24px rgba(26,26,24,.12)), 0 0 0 1px var(--cb-line-soft, #E8E7E2); }
+  #pdialog .kind { margin: 0; color: var(--cb-muted, #5E5E5A); font-size: var(--cb-type-micro-size, 11px); line-height: var(--cb-type-micro-line, 14px); }
+  #pdialog .msg { margin: 0; font-family: var(--cb-font-prose, system-ui, sans-serif); overflow-wrap: anywhere; white-space: pre-wrap; max-height: 9em; overflow: auto; }
+  #pdialog .realm { margin: 0; color: var(--cb-muted, #5E5E5A); overflow-wrap: anywhere; }
+  #pdialog input { height: 32px; padding: 0 10px; border: 0; border-radius: var(--radius); box-shadow: inset 0 0 0 1px var(--cb-line, #D9D8D2); background: var(--cb-panel, #fff); }
+  #pdialog .actions { display: flex; justify-content: flex-end; gap: 6px; }
+  #pdialog .hint { margin: 0; color: var(--cb-muted, #5E5E5A); }
+
+  /* the takeover bar of a compact or touch screen: viewport, keyboard, hand back */
+  #touchbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 12px; }
+  #touchbar .grow { flex: 1; }
+  @media (max-width: 599px), (pointer: coarse) {
+    #touchbar button, #pdialog button, #pdialog input, #permission button, #phonehint button { min-height: 44px; }
+    #touchbar button, #pdialog button { padding: 0 16px; }
+  }
+
   /* menus (narrow: tabs, more) */
   .menu { position: absolute; z-index: 2; min-width: 180px; max-width: calc(100% - 24px); max-height: 60%; overflow: auto; padding: 4px; border-radius: var(--cb-radius-md, 8px); background: var(--cb-raised, #fff); box-shadow: var(--cb-shadow-float, 0 8px 24px rgba(26,26,24,.08)), 0 0 0 1px var(--cb-line-soft, #E8E7E2); }
   .menu button { display: flex; width: 100%; justify-content: flex-start; gap: 8px; padding: 0 8px; text-align: left; overflow: hidden; text-overflow: ellipsis; }
@@ -212,12 +229,25 @@ export const PANEL_HTML = `<!doctype html>
   <p id="status" class="row" role="status"><span class="ico" id="status-icon"></span><span class="lead" id="status-lead"></span><span class="detail" id="status-detail"></span></p>
   <div id="verify" class="warn" hidden><span class="ico">${ICONS.pause}</span><div class="text"><span class="title" id="verify-title"></span><span class="body" id="verify-body"></span></div><div class="actions"><button type="button" id="verify-go" class="primary"></button></div></div>
   <div id="handoff" class="warn" hidden><span class="ico">${ICONS.pause}</span><div class="text"><span class="title" id="handoff-label"></span><span class="body" id="handoff-message"></span></div><div class="actions"><button type="button" id="handoff-done" class="primary"></button><button type="button" id="handoff-cancel" class="secondary"></button></div></div>
+  <div id="touchbar" hidden><button type="button" id="viewport-toggle" class="secondary"></button><button type="button" id="keyboard" class="secondary"></button><span class="grow"></span><button type="button" id="touch-handback" class="outline"></button></div>
   <div id="stage">
     <canvas id="view" tabindex="0"></canvas>
     <div id="flash" hidden></div>
+    <div id="pdialog" role="dialog" aria-modal="false" hidden>
+      <p class="kind" id="pdialog-kind"></p>
+      <p class="msg" id="pdialog-msg"></p>
+      <p class="realm" id="pdialog-realm" hidden></p>
+      <input id="pdialog-text" type="text" autocomplete="off" spellcheck="false" hidden>
+      <input id="pdialog-user" type="text" autocomplete="off" spellcheck="false" hidden>
+      <input id="pdialog-pass" type="password" autocomplete="off" hidden>
+      <div class="actions"><button type="button" id="pdialog-no" class="secondary"></button><button type="button" id="pdialog-yes" class="primary"></button></div>
+      <p class="hint" id="pdialog-hint" hidden></p>
+    </div>
     <div id="strips">
       <div id="blocked" class="strip" hidden><p><span id="blocked-label" class="label"></span> <span id="blocked-host"></span></p><button type="button" id="allow" class="primary"></button></div>
       <div id="dialog" class="strip" hidden><p><span id="dialog-label" class="label"></span> <span id="dialog-text"></span></p></div>
+      <div id="permission" class="strip" hidden><p><span id="permission-origin"></span> <span id="permission-label" class="label"></span> <span id="permission-name"></span></p><button type="button" id="permission-allow" class="primary"></button></div>
+      <div id="phonehint" class="strip" hidden><p id="phonehint-text"></p><button type="button" id="phonehint-go" class="primary"></button></div>
       <div id="notice" class="strip" role="alert" hidden><p><span id="notice-text"></span></p></div>
     </div>
   </div>

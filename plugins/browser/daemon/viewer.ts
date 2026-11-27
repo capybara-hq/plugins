@@ -32,6 +32,7 @@ import {
   VIEWER_TEXT_MAX_CHARS,
   VIEWER_UNACKED_FRAMES,
   VIEWPORT,
+  VIEWPORT_PROFILES,
   type ViewerCursor,
   type ViewerIn,
   type ViewerOut,
@@ -52,6 +53,8 @@ export interface ViewerTransport {
 
 /** How often the daemon pings a viewer (the path's own round trip, for the pacing). */
 export const VIEWER_PING_MS = 1000;
+/** The longest the first frame's capture may take (a page a dialog holds never answers it). */
+const FIRST_FRAME_MS = 1000;
 /** A screencast restart (new quality or scale) waits at least this long after the last one. */
 const RESTART_MIN_MS = 500;
 /** Chromium is let encode the next frame at most this often while frames wait for the viewer. */
@@ -144,6 +147,8 @@ export class ViewerSession {
   private draining = false;
   private stateQueued = false;
   private lastControl: "agent" | "user" = "agent";
+  /** The viewport the screencast was started for (a profile switch restarts it). */
+  private streamedViewport = "";
 
   constructor(opts: {
     browser: BrowserSession;
@@ -247,6 +252,37 @@ export class ViewerSession {
           this.choice = m.tabId;
           this.queueState();
         }
+        return;
+      case "dialog":
+        // straight, not on the input chain: the person's own click that opened the dialog may
+        // still wait there for this answer
+        if (this.state.control !== "user") return;
+        void this.browser.answerFromViewer(this.root, m).catch(() => undefined);
+        return;
+      case "permission":
+        if (this.state.control !== "user" || m.allow !== true) return;
+        void this.browser.grantPermission(this.root, m.origin, m.permission);
+        return;
+      case "viewport":
+        // in order with the person's input: touches sent before the switch keep their profile
+        this.input(() => this.browser.setProfile(m.profile));
+        return;
+      case "touch":
+        this.input(async () => {
+          const page = this.shownPage();
+          if (page === undefined) return;
+          this.concern(this.browser.tabIdOf(page));
+          const vp = this.browser.viewport;
+          const points: { id: number; x: number; y: number }[] = [];
+          for (const q of Array.isArray(m.points) ? m.points.slice(0, 10) : []) {
+            const at = point(q, vp);
+            const id = Number(q?.id);
+            if (at !== null && Number.isFinite(id)) points.push({ id, ...at });
+          }
+          const kind = m.kind;
+          if (kind !== "start" && kind !== "move" && kind !== "end" && kind !== "cancel") return;
+          await this.browser.touch(page, kind, points);
+        });
         return;
       case "tab":
         if (m.action === "adopt") {
@@ -366,7 +402,7 @@ export class ViewerSession {
   /** A pointer move: coalesced while one waits (the newest position wins), then the cursor. */
   private move(m: Extract<ViewerIn, { t: "mouse" }>): void {
     if (this.state.control !== "user") return;
-    const p = point(m);
+    const p = point(m, this.browser.viewport);
     if (p === null) return;
     if (this.moveSlot !== undefined) {
       this.moveSlot.x = p.x;
@@ -465,7 +501,8 @@ export class ViewerSession {
 
   private setSize(w: unknown, h: unknown): void {
     this.maxWidth = clampDim(w, VIEWPORT.width);
-    this.maxHeight = clampDim(h, VIEWPORT.height);
+    // a portrait phone viewport is taller than the desktop one
+    this.maxHeight = clampDim(h, Math.max(VIEWPORT.height, VIEWPORT_PROFILES.phone.height));
   }
 
   /** Pings the viewer every VIEWER_PING_MS (its pong measures the path, see the pacing). */
@@ -541,6 +578,11 @@ export class ViewerSession {
           url: clip(t.url, 200),
         })),
         handoffs: m.handoffs.map((h) => ({ ...h, message: clip(h.message, 200) })),
+        dialogs: m.dialogs.map((d) => ({
+          ...d,
+          message: clip(d.message, 200),
+          ...(d.defaultValue === undefined ? {} : { defaultValue: clip(d.defaultValue, 200) }),
+        })),
       };
     } else if (m.t === "dialog") {
       small = { ...m, message: clip(m.message, 200) };
@@ -581,6 +623,13 @@ export class ViewerSession {
       this.queueState();
     } else if (e.root !== this.root) return;
     else if (e.type === "blocked") this.send({ t: "blocked", host: e.host, url: e.url });
+    else if (e.type === "permission")
+      this.send({
+        t: "permission",
+        origin: e.origin,
+        permission: e.permission,
+        grantable: e.grantable,
+      });
     else this.send({ t: "dialog", kind: e.kind, message: e.message });
   }
 
@@ -640,10 +689,14 @@ export class ViewerSession {
     const tree = all.filter((t) => t.root === this.root);
     this.shown = this.computeShown(tree);
     this.pinShownOwner();
-    // the screencast follows the shown tab
-    if (this.browser.pageById(this.shown) !== this.page) {
+    // the screencast follows the shown tab and the viewport profile
+    const viewport = this.browser.viewport;
+    const vpKey = `${viewport.width}x${viewport.height}`;
+    if (this.browser.pageById(this.shown) !== this.page || vpKey !== this.streamedViewport) {
       void this.serial(async () => {
-        if (this.browser.pageById(this.shown) === this.page) return;
+        const key = `${this.browser.viewport.width}x${this.browser.viewport.height}`;
+        if (this.browser.pageById(this.shown) === this.page && key === this.streamedViewport)
+          return;
         await this.detach();
         await this.attach();
       });
@@ -689,13 +742,15 @@ export class ViewerSession {
       ...(waiting === undefined
         ? {}
         : { waiting: { label: waiting.label.slice(0, 200), until: waiting.until } }),
+      dialogs: this.browser.dialogsOf(this.root),
+      viewport,
     });
   }
 
   private get scale(): number {
+    const vp = this.browser.viewport;
     return (
-      Math.min(1, this.maxWidth / VIEWPORT.width, this.maxHeight / VIEWPORT.height) *
-      this.frameQuality.shrink
+      Math.min(1, this.maxWidth / vp.width, this.maxHeight / vp.height) * this.frameQuality.shrink
     );
   }
 
@@ -709,16 +764,22 @@ export class ViewerSession {
     // the tree owns no tab: no frames (the panel shows its empty state)
     const page = this.shownPage();
     if (page === undefined) return;
+    this.streamedViewport = `${this.browser.viewport.width}x${this.browser.viewport.height}`;
     const cdp = await this.browser.context.newCDPSession(page);
     this.page = page;
     this.cdp = cdp;
     cdp.on("Page.screencastFrame", (f: ScreencastFrame) => this.onFrame(cdp, f));
     this.cursorResolver = new CursorResolver(this.browser.context, page, cdp);
-    // Screencast is silent on a static page: the first frame is a screenshot.
-    const first = await captureFitting(cdp, {
-      maxBytes: this.jpegBudget,
-      maxScale: this.scale,
-    }).catch(() => null);
+    // Screencast is silent on a static page: the first frame is a screenshot. A page a JS dialog
+    // holds never answers a capture: bounded, the screencast starts anyway.
+    let timer: unknown;
+    const first = await Promise.race([
+      captureFitting(cdp, { maxBytes: this.jpegBudget, maxScale: this.scale }).catch(() => null),
+      new Promise<null>((r) => {
+        timer = this.clock.schedule(() => r(null), FIRST_FRAME_MS);
+      }),
+    ]);
+    this.clock.cancel(timer);
     if (first !== null && this.cdp === cdp) {
       // like any frame: it waits for room (the transport, the pacer), the newest wins
       this.pending = {
@@ -737,8 +798,8 @@ export class ViewerSession {
     await cdp.send("Page.startScreencast", {
       format: "jpeg",
       quality: this.frameQuality.quality,
-      maxWidth: Math.max(16, Math.floor(VIEWPORT.width * this.scale)),
-      maxHeight: Math.max(16, Math.floor(VIEWPORT.height * this.scale)),
+      maxWidth: Math.max(16, Math.floor(this.browser.viewport.width * this.scale)),
+      maxHeight: Math.max(16, Math.floor(this.browser.viewport.height * this.scale)),
       everyNthFrame: 1,
     });
   }
@@ -853,7 +914,7 @@ export class ViewerSession {
 
   private async mouse(m: Extract<ViewerIn, { t: "mouse" }>): Promise<void> {
     const page = this.shownPage();
-    const p = point(m);
+    const p = point(m, this.browser.viewport);
     if (p === null || page === undefined) return;
     this.concern(this.browser.tabIdOf(page));
     const { x, y } = p;
@@ -909,13 +970,19 @@ export class ViewerSession {
 const handoffKey = (h: { conversationId: string; callId: string }) =>
   `${h.conversationId}\u0000${h.callId}`;
 
-/** A viewer's pointer position inside the viewport (whatever the panel's rounding), or null. */
-function point(m: { x: unknown; y: unknown }): { x: number; y: number } | null {
-  const x = Number(m.x);
-  const y = Number(m.y);
+/**
+ * A viewer's pointer position inside the current viewport (whatever the panel's rounding), or
+ * null.
+ */
+function point(
+  m: { x?: unknown; y?: unknown } | null | undefined,
+  vp: { width: number; height: number } = VIEWPORT,
+): { x: number; y: number } | null {
+  const x = Number(m?.x);
+  const y = Number(m?.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
   return {
-    x: Math.max(0, Math.min(VIEWPORT.width - 1, x)),
-    y: Math.max(0, Math.min(VIEWPORT.height - 1, y)),
+    x: Math.max(0, Math.min(vp.width - 1, x)),
+    y: Math.max(0, Math.min(vp.height - 1, y)),
   };
 }

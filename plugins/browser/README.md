@@ -21,7 +21,8 @@ A real browser in the person's device for agents (browser use spec,
 - Tools (`plugin__browser__<name>`): `browser_navigate`, `browser_tabs`, `browser_snapshot`,
   `browser_screenshot`, `browser_wait` and `browser_handoff` declare `defaultPolicy: "allow"`;
   `browser_click`, `browser_type`, `browser_select`, `browser_press`, `browser_scroll`,
-  `browser_hover`, `browser_upload`, `browser_click_at` and `browser_type_at` declare `ask`.
+  `browser_hover`, `browser_upload`, `browser_click_at`, `browser_type_at` and `browser_dialog`
+  declare `ask`.
   Each call runs only for the conversation's owner, starts the `browser` service through
   `ctx.deviceAccess.ensureService` (files: every file under `ui/service/`, read once per
   extension instance), sends one `ToolRequest` and reports the hosts the device refused with
@@ -174,6 +175,57 @@ A real browser in the person's device for agents (browser use spec,
   (a stale one is replaced), and Chromium encodes the next frame at most every 500 ms while one
   waits. JSON messages (state, cursor, pings, dialogs) never wait behind a held frame.
 
+## Page dialogs, HTTP sign-in, permissions
+
+Dialogs spec, `docs/superpowers/specs/2026-11-25-browser-dialogs-and-touch-design.md` in
+capybara-hq/core.
+
+- **Held decision dialogs.** An alert is closed at once and noted (`The page showed an alert:
+  "…" (closed).`). A confirm, prompt or leave-page (beforeunload) dialog is held until answered,
+  one per tab, with no timer and no default: the request that opened it replies at once with
+  `reply.dialog` (and leaves its conversation's queue: its own late failure comes as a note), and
+  every later reply of that conversation names it (its active tab's first). While it is held the
+  tab's snapshot returns the dialog line instead of the tree, other actions on the tab, a
+  screenshot too (a modal dialog stops the page's renderer, even a capture never answers), fail at
+  once with `dialog_open`, and the tab is pinned (a park: no idle close, no eviction, no adopt).
+  Actions on other tabs go on, except in a one-process browser (the macOS headless shell), where a
+  held dialog stops every page: there every acting request is refused at once meanwhile (the
+  owner's naming its dialog, others a generic text) instead of hanging.
+- **`browser_dialog`** `{ dialogId, message, action: accept | dismiss, text? }` (`ask`) answers
+  one dialog of the conversation's own tabs (another conversation's is refused with the adopt
+  text). `message` must match the dialog's quote: CRLF as LF, whitespace runs as one space,
+  trimmed, cut to 300 code points; the tool results quote exactly that (JSON string), so an
+  approval covers exactly the dialog it shows. A prompt accepted without text takes its default.
+  It runs beside the action queue and is refused while the person holds control.
+- **HTTP Basic sign-in.** A main-frame `401` with `WWW-Authenticate: Basic` becomes an auth dialog
+  (origin and the page-supplied realm; not blocking: the headless shell shows the 401 body, the
+  full build fails the navigation, which the reply then reports as the dialog instead of an
+  error). The agent can only dismiss it and is told to call `browser_handoff`; another scheme is
+  noted as unsupported. The person signs in from the panel while holding control: the username and
+  password go over the viewer stream straight to the daemon (the kernel relays bytes), are kept
+  as the header value in the daemon's memory only (never a reply, note, log line, viewer message or
+  file, and gone when the daemon stops) and are added by a `context.route` only to requests to that
+  exact origin from pages whose top-level document has that origin, and to top-level navigations
+  to it that the page itself or the daemon (address bar, tool, history, reload) starts: never to a
+  cross-site page's request, a redirect into the origin or a service worker. A `401` to a signed
+  request drops the credentials and asks again. They are device-wide by origin, like the profile.
+- **Permission requests.** An init script wraps `Notification.requestPermission`, the clipboard
+  reads, the geolocation error callbacks and `getUserMedia`, and reports a refusal through a
+  binding with a per-daemon random name (the page gets the very same result). Any page can call
+  the binding, so only a known permission name is read: the origin is the calling frame's, at most
+  5 reports per page load and 50 origin–permission pairs. The owner's next reply notes it once per
+  pair; the tree's viewers get a `permission` strip, and the person in control may allow
+  notifications or clipboard reading for that origin (`grantPermissions`, for the daemon's life,
+  only for a pair recorded on a tab of the viewer's tree). Geolocation, camera and microphone are
+  reported as unavailable.
+- **Phone viewport and touch.** Only the person in control switches (`viewport` `phone`: 390×844,
+  scale 2, mobile, touch, a mobile user agent from the browser's own version); every tab and tabs
+  opened meanwhile get it (a tab's first document may keep the desktop user agent until a reload).
+  Hand back restores the desktop profile ahead of every conversation's next request, so the agent
+  always acts on 1280×800. Touch input is dispatched as touch events in phone and becomes a click
+  (tap) or a scroll (one-finger pan) in desktop. Viewer input clamps and the screencast follow the
+  profile; the profile switch is ordered with the person's input.
+
 ## Tabs
 
 Tab ownership spec, `docs/superpowers/specs/2026-11-25-browser-tab-ownership-design.md` in
@@ -209,9 +261,15 @@ shared by every conversation, the tabs are not.
 
 ## The panel (`ui-src/panel/`)
 
-- Every viewer is the owner's: any non-compact panel is interactive (keys, pointer, Esc) while the
+- Every viewer is the owner's: any panel is interactive (keys, pointer, touch, Esc) while the
   person holds control, whichever panel took it, and may ask for frames up to the full viewport
-  then. In the watch state the panel takes no page input (no pointer, keys, address bar,
+  then. A phone takes over inside its drawer (no full mode) and, like a touch screen, shows a
+  takeover bar: 手机宽度 / 桌面宽度, 键盘 (raises the soft keyboard; its text, delete and line
+  break reach the page) and 交还智能体, with 44 px targets; the phone width is suggested once per
+  takeover, never switched for the person. A held page dialog shows as a box over the picture
+  (page text as text): answer controls for the person in control (确定 / 取消, a prompt field, 离开 /
+  留下, username + password + 登录 / 取消; the password field is cleared after sending), read-only
+  with 接管后可回答 otherwise. Permission requests show a strip with 允许 for a grantable one. In the watch state the panel takes no page input (no pointer, keys, address bar,
   navigation or tab open / close; the cursor is the arrow), but a click on a tab of the strip shows
   that tab, and 其他对话 / Other conversations › 移到此对话 / Move here moves another conversation's
   tab here. Nothing is kept in storage (the sandboxed iframe has none);
