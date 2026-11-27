@@ -1,5 +1,15 @@
 # @capybara-hq/plugin-theme-cyberpunk
 
+## 0.1.0-rc.19
+
+### Patch Changes
+
+- 12c390a: Move to plugin-sdk 0.1.0-rc.84, whose `ModelInfo.cache` replaces `capabilities.caching`. The models
+  no longer report `caching`; the per-model cache declaration follows in the next changes.
+  
+  The cyberpunk theme drops its rule for the removed `status-bar` part, which the new host no
+  longer knows.
+
 ## 0.1.0-rc.18
 
 ### Patch Changes

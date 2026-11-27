@@ -1,5 +1,20 @@
 # @capybara-hq/plugin-openai-compatible
 
+## 0.1.0-rc.15
+
+### Patch Changes
+
+- 40aa238: Each model declares its prompt cache. `qwen` declares the explicit 5-minute DashScope cache
+  (guaranteed, refreshed on a hit, 1024-token minimum) and reports a write under its 300 s tier
+  (`cacheWriteByTtl`); `deepseek` and `ark` declare an implicit, non-guaranteed cache; `generic`
+  declares none. The model's `caching` setting still switches it: `false` declares none, `true` on
+  `generic` declares an implicit cache.
+- 12c390a: Move to plugin-sdk 0.1.0-rc.84, whose `ModelInfo.cache` replaces `capabilities.caching`. The models
+  no longer report `caching`; the per-model cache declaration follows in the next changes.
+  
+  The cyberpunk theme drops its rule for the removed `status-bar` part, which the new host no
+  longer knows.
+
 ## 0.1.0-rc.14
 
 ### Patch Changes

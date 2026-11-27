@@ -1,5 +1,19 @@
 # @capybara-hq/plugin-bailian
 
+## 0.1.0-rc.14
+
+### Patch Changes
+
+- 1d8759f: Chat models with Bailian's `cache` feature declare their prompt cache: explicit, 5 minutes renewed
+  on every hit, from 1024 tokens. Qwen4 models also declare a 1-hour option: `cacheTtl: 3600` is sent
+  as `parameters.prompt_cache_options.ttl`, and the written tokens come back by tier in
+  `cacheWriteByTtl`.
+- 12c390a: Move to plugin-sdk 0.1.0-rc.84, whose `ModelInfo.cache` replaces `capabilities.caching`. The models
+  no longer report `caching`; the per-model cache declaration follows in the next changes.
+  
+  The cyberpunk theme drops its rule for the removed `status-bar` part, which the new host no
+  longer knows.
+
 ## 0.1.0-rc.13
 
 ### Patch Changes

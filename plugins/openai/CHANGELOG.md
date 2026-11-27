@@ -1,5 +1,19 @@
 # @capybara-hq/plugin-openai
 
+## 0.1.0-rc.15
+
+### Patch Changes
+
+- cdf5a60: Declare the prompt cache per chat model. GPT-5.6 and later offer 30m and 12h lifetimes: `cacheTtl`
+  1800 / 43200 maps to `prompt_cache_options.ttl` (never sent to earlier models), and the usage
+  write split by tier maps to `cacheWriteByTtl`. Earlier models declare an implicit cache with no
+  guaranteed lifetime.
+- 12c390a: Move to plugin-sdk 0.1.0-rc.84, whose `ModelInfo.cache` replaces `capabilities.caching`. The models
+  no longer report `caching`; the per-model cache declaration follows in the next changes.
+  
+  The cyberpunk theme drops its rule for the removed `status-bar` part, which the new host no
+  longer knows.
+
 ## 0.1.0-rc.14
 
 ### Patch Changes
