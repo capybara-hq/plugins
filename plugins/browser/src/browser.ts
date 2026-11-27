@@ -39,16 +39,7 @@ export const SERVICE = "browser";
 
 /** What a tool handler needs: the kernel's device access and the daemon's service spec. */
 export interface BrowserDeps {
-  deviceAccess: Pick<DeviceAccessCtx, "ensureService" | "reportBlockedHosts"> & {
-    /**
-     * `ctx.deviceAccess.request`; `ifRunning` (watched waits, core#939): only a running instance
-     * with the service running answers, else `DeviceAccessError` `not_running`.
-     */
-    request(
-      call: ToolCallContext,
-      req: { service: string; body: Uint8Array; timeoutMs: number; ifRunning?: boolean },
-    ): Promise<Uint8Array>;
-  };
+  deviceAccess: Pick<DeviceAccessCtx, "ensureService" | "request" | "reportBlockedHosts">;
   /** The daemon's service spec (its files are read once per extension instance). */
   serviceSpec: () => Promise<DeviceServiceSpec>;
   /** Where the cause of an unrecognised failure goes (never to the model). */

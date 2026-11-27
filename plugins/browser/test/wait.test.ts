@@ -1,11 +1,14 @@
 import {
   DeviceAccessError,
   type DeviceServiceSpec,
+  type InputRequired,
   type ToolCallContext,
   ToolError,
   type ToolHandler,
   type ToolResult,
   type ToolSpec,
+  type ToolWatchContext,
+  type ToolWatcher,
   validateInputForm,
 } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
@@ -21,7 +24,6 @@ import {
   WATCHED_TAB_CLOSED,
   watchIdOf,
 } from "../src/wait.js";
-import type { WatchContext, WatchedInputRequired, Watcher } from "../src/watched-wait-sdk.js";
 
 /**
  * browser_wait's long waits (browser long waits spec §6.1): a wait over 60 s with a condition
@@ -76,7 +78,7 @@ function fake(answer: (req: ToolRequest) => ToolReply | Error) {
     serviceSpec: async () => SPEC,
   };
   let handler: ToolHandler | undefined;
-  let watcher: Watcher | undefined;
+  let watcher: ToolWatcher | undefined;
   let spec: ToolSpec | undefined;
   registerBrowserTools(
     {
@@ -95,7 +97,7 @@ function fake(answer: (req: ToolRequest) => ToolReply | Error) {
     log,
     sent,
     spec: () => spec as ToolSpec,
-    watcher: () => watcher as Watcher,
+    watcher: () => watcher as ToolWatcher,
     run: (input: unknown, c: unknown = call()) => (handler as ToolHandler)(input, c as never),
   };
 }
@@ -158,7 +160,7 @@ describe("browser_wait: short waits", () => {
 describe("browser_wait: long waits park the run", () => {
   it("arms a watch and returns a watched InputRequired with one end button", async () => {
     const f = fake((r) => (r.op === "watch_start" ? ok({ watch: { state: "pending" } }) : ok()));
-    const r = (await f.run({ text: "Paid", timeoutMs: 3_600_000 })) as WatchedInputRequired;
+    const r = (await f.run({ text: "Paid", timeoutMs: 3_600_000 })) as InputRequired;
     expect(f.sent[0]).toMatchObject({
       op: {
         op: "watch_start",
@@ -220,8 +222,8 @@ describe("browser_wait: long waits park the run", () => {
 });
 
 describe("browser_wait: the watcher", () => {
-  const ctx = (state: unknown = { watchId: KEY.slice(0, 32) }): WatchContext =>
-    ({ ...call(), state }) as unknown as WatchContext;
+  const ctx = (state: unknown = { watchId: KEY.slice(0, 32) }): ToolWatchContext =>
+    ({ ...call(), state }) as unknown as ToolWatchContext;
 
   it("polls with ifRunning, from the watch context's conversation, and never ensures", async () => {
     const f = fake(() => ok({ watch: { state: "pending" } }));
@@ -244,7 +246,7 @@ describe("browser_wait: the watcher", () => {
   });
 
   it("a stopped device settles; any other failure throws", async () => {
-    const stopped = fake(() => new DeviceAccessError("not_running" as never, "not running"));
+    const stopped = fake(() => new DeviceAccessError("not_running", "not running"));
     expect(await stopped.watcher()(ctx())).toBe("settle");
     const broken = fake(() => new Error("socket closed"));
     await expect(broken.watcher()(ctx())).rejects.toThrow();
@@ -301,7 +303,7 @@ describe("browser_wait: the resumed call", () => {
   });
 
   it("a stopped device: the device-stopped ToolError, and no ensureService", async () => {
-    const f = fake(() => new DeviceAccessError("not_running" as never, "not running"));
+    const f = fake(() => new DeviceAccessError("not_running", "not running"));
     await expect(f.run({ text: "Paid", timeoutMs: 600_000 }, resumed("woken"))).rejects.toThrow(
       new ToolError(DEVICE_STOPPED_WHILE_WAITING),
     );

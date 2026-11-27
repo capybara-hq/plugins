@@ -1,7 +1,12 @@
 // The browser's agent tools (browser use spec §9): each one request to the daemon in the
 // conversation's device. Read-only and navigation tools declare `allow`; tools that act on a page
 // declare `ask`, so the conversation's permission profile decides.
-import { ToolError, type ToolHandler, type ToolSpec } from "@capybara-hq/plugin-sdk";
+import {
+  type ExtensionContext,
+  ToolError,
+  type ToolHandler,
+  type ToolSpec,
+} from "@capybara-hq/plugin-sdk";
 import type { ToolOp } from "../daemon/protocol.js";
 import { REPLY_TOO_LARGE_MESSAGE, VIEWPORT } from "../daemon/protocol.js";
 import {
@@ -12,7 +17,6 @@ import {
   toResult,
 } from "./browser.js";
 import { WAIT_DEFAULT_MS, WAIT_MAX_MS, waitHandler, waitWatcher } from "./wait.js";
-import type { WatchTools } from "./watched-wait-sdk.js";
 
 export { WAIT_INLINE_MAX_MS, WAIT_MAX_MS } from "./wait.js";
 
@@ -404,7 +408,10 @@ function handler(
 }
 
 /** Registers the browser tools other than browser_handoff (see handoff.ts). */
-export function registerBrowserTools(ctx: { tools: WatchTools }, deps: BrowserDeps): void {
+export function registerBrowserTools(
+  ctx: { tools: Pick<ExtensionContext["tools"], "register"> },
+  deps: BrowserDeps,
+): void {
   ctx.tools.register(
     NAVIGATE,
     handler(deps, (i) => {

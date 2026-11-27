@@ -666,7 +666,7 @@ describe("browser_handoff", () => {
     const r = await f.run(
       "browser_handoff",
       { message: "Please sign in." },
-      call({ resume: { state: first.state, answer: { done: true } } }),
+      call({ resume: { state: first.state, answer: { done: true }, outcome: "answered" } }),
     );
     expect(f.requests.slice(1).map((q) => q.op)).toEqual(["handoff_clear", "snapshot"]);
     // Done hands the browser back (a takeover the person still holds ends before the snapshot)
@@ -679,7 +679,13 @@ describe("browser_handoff", () => {
     const f = fake();
     for (const answer of [null, { done: false }]) {
       await expect(
-        f.run("browser_handoff", { message: "m" }, call({ resume: { state: {}, answer } })),
+        f.run(
+          "browser_handoff",
+          { message: "m" },
+          call({
+            resume: { state: {}, answer, outcome: answer === null ? "expired" : "answered" },
+          }),
+        ),
       ).rejects.toThrow(
         new ToolError(
           "The user cancelled the handoff; ask the user how to continue, or try another approach.",
@@ -694,7 +700,11 @@ describe("browser_handoff", () => {
   it("the cancel error ends with the tab count of the clear's reply", async () => {
     const f = fake(() => ({ ok: true, blockedHosts: [], tabs: { open: 2, max: 6 } }));
     const e = (await f
-      .run("browser_handoff", { message: "m" }, call({ resume: { state: {}, answer: null } }))
+      .run(
+        "browser_handoff",
+        { message: "m" },
+        call({ resume: { state: {}, answer: null, outcome: "expired" } }),
+      )
       .catch((x: unknown) => x)) as Error;
     expect(e.message).toBe(
       "The user cancelled the handoff; ask the user how to continue, or try another approach.\nTabs open in this conversation: 2 of 6.",
@@ -710,12 +720,16 @@ describe("browser_handoff", () => {
     const r = await f.run(
       "browser_handoff",
       { message: "m" },
-      call({ resume: { state: {}, answer: { done: true } } }),
+      call({ resume: { state: {}, answer: { done: true }, outcome: "answered" } }),
     );
     expect(textOf(r)).toContain("tree");
     const g = fake(boom);
     await expect(
-      g.run("browser_handoff", { message: "m" }, call({ resume: { state: {}, answer: null } })),
+      g.run(
+        "browser_handoff",
+        { message: "m" },
+        call({ resume: { state: {}, answer: null, outcome: "expired" } }),
+      ),
     ).rejects.toThrow(/cancelled the handoff/);
     const aborted = new AbortController();
     aborted.abort();
@@ -724,7 +738,10 @@ describe("browser_handoff", () => {
       h.run(
         "browser_handoff",
         { message: "m" },
-        call({ signal: aborted.signal, resume: { state: {}, answer: { done: true } } }),
+        call({
+          signal: aborted.signal,
+          resume: { state: {}, answer: { done: true }, outcome: "answered" },
+        }),
       ),
     ).rejects.toThrow("relay dropped");
   });
@@ -736,7 +753,7 @@ describe("browser_handoff", () => {
     await f.run(
       "browser_handoff",
       { message: "m" },
-      call({ ...sub, resume: { state: {}, answer: { done: true } } }),
+      call({ ...sub, resume: { state: {}, answer: { done: true }, outcome: "answered" } }),
     );
     expect(f.sent.map((q) => [q.op, q.conversationId, q.rootConversationId])).toEqual([
       ["handoff_notice", "child", "root"],

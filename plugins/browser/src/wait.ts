@@ -3,7 +3,15 @@
 // invocation arms a watch in the daemon and returns a watched InputRequired; the watcher polls the
 // watch (its heartbeat) through `ifRunning` requests, which never start the service or resume the
 // device; the resumed invocation ends the watch and reports what happened.
-import { ToolError, type ToolHandler, type ToolResult } from "@capybara-hq/plugin-sdk";
+import {
+  type InputRequired,
+  type ToolCallContext,
+  ToolError,
+  type ToolHandler,
+  type ToolResult,
+  type ToolWatchContext,
+  type ToolWatcher,
+} from "@capybara-hq/plugin-sdk";
 import type { ToolOp, WaitCondition, WatchState } from "../daemon/protocol.js";
 import {
   type BrowserDeps,
@@ -15,12 +23,6 @@ import {
   toResult,
 } from "./browser.js";
 import { WAIT_FORM } from "./i18n.js";
-import type {
-  WatchContext,
-  WatchedCall,
-  WatchedInputRequired,
-  Watcher,
-} from "./watched-wait-sdk.js";
 
 /** The longest wait that runs in the call (the daemon's own cap on `op: "wait"`). */
 export const WAIT_INLINE_MAX_MS = 60_000;
@@ -155,7 +157,7 @@ function resultWith(reply: OkReply, line: string): ToolResult {
 
 /** The handler of browser_wait. */
 export function waitHandler(deps: BrowserDeps): ToolHandler {
-  const handler = async (input: unknown, call: WatchedCall): Promise<unknown> => {
+  return async (input, call) => {
     const i = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
     const conditions = conditionsOf(i);
     if (conditions.length > 1)
@@ -173,12 +175,12 @@ export function waitHandler(deps: BrowserDeps): ToolHandler {
       return resume(deps, call, resumed);
     if (timeoutMs <= WAIT_INLINE_MAX_MS) {
       const req = inlineWait(i, timeoutMs);
-      return toResult(await runRequest(deps, call as never, req, timeoutMs + REQUEST_TIMEOUT_MS));
+      return toResult(await runRequest(deps, call, req, timeoutMs + REQUEST_TIMEOUT_MS));
     }
     const condition = conditions[0];
     if (condition === undefined) throw new ToolError(LONG_WAIT_NEEDS_CONDITION);
     const watchId = watchIdOf(call);
-    const started = await runRequest(deps, call as never, {
+    const started = await runRequest(deps, call, {
       op: "watch_start",
       watchId,
       condition,
@@ -187,7 +189,7 @@ export function waitHandler(deps: BrowserDeps): ToolHandler {
     const state: WaitState = { watchId, startedAt: new Date().toISOString(), condition };
     // already decided at the start (the text is on the page): no need to park
     if (watchOf(started).state !== "pending") return resume(deps, call, state);
-    const asking: WatchedInputRequired = {
+    const asking: InputRequired = {
       kind: "input_required",
       form: {
         title: formTitle(condition),
@@ -206,19 +208,18 @@ export function waitHandler(deps: BrowserDeps): ToolHandler {
     };
     return asking;
   };
-  return handler as unknown as ToolHandler;
 }
 
 /** The watcher of browser_wait: one `watch_poll` (the watch's heartbeat), never starting anything. */
-export function waitWatcher(deps: BrowserDeps): Watcher {
-  return async (ctx: WatchContext) => {
+export function waitWatcher(deps: BrowserDeps): ToolWatcher {
+  return async (ctx: ToolWatchContext) => {
     const state = ctx.state as WaitState | null;
     if (typeof state?.watchId !== "string") return "settle";
     let reply: OkReply;
     try {
       reply = await requestIfRunning(
         deps,
-        ctx as never,
+        ctx,
         { op: "watch_poll", watchId: state.watchId },
         WATCH_POLL_TIMEOUT_MS,
       );
@@ -232,14 +233,18 @@ export function waitWatcher(deps: BrowserDeps): Watcher {
 }
 
 /** The resumed invocation: end the watch and say what happened. */
-async function resume(deps: BrowserDeps, call: WatchedCall, state: WaitState): Promise<ToolResult> {
+async function resume(
+  deps: BrowserDeps,
+  call: ToolCallContext,
+  state: WaitState,
+): Promise<ToolResult> {
   const elapsed = formatDuration(Date.now() - Date.parse(state.startedAt));
   const c = state.condition;
   let reply: OkReply;
   try {
     reply = await requestIfRunning(
       deps,
-      call as never,
+      call,
       { op: "watch_end", watchId: state.watchId },
       WATCH_END_TIMEOUT_MS,
     );
@@ -267,7 +272,7 @@ async function resume(deps: BrowserDeps, call: WatchedCall, state: WaitState): P
     if (!("download" in c) && !("navigation" in c)) {
       const now = await requestIfRunning(
         deps,
-        call as never,
+        call,
         { op: "wait", timeoutMs: CHECK_NOW_MS, ...c } as ToolOp,
         CHECK_NOW_MS + REQUEST_TIMEOUT_MS,
       ).catch(() => undefined);
@@ -276,9 +281,7 @@ async function resume(deps: BrowserDeps, call: WatchedCall, state: WaitState): P
     throw new ToolError(WAIT_LOST);
   }
   // not met: pending, or ended at the device's deadline
-  const outcome =
-    call.resume?.outcome ??
-    (call.resume?.answer !== null && call.resume?.answer !== undefined ? "answered" : "expired");
+  const outcome = call.resume?.outcome ?? "expired";
   if (watch.state === "ended" && watch.reason === "deadline")
     throw new ToolError(
       `${capitalize(pendingCondition(c))} did not happen within ${elapsed}. Check the page with browser_snapshot, then retry or call browser_wait.`,

@@ -48,8 +48,7 @@ A real browser in the person's device for agents (browser use spec,
   (one 结束等待 / End wait button, `watch.deadlineMs`). The tool's watcher (`src/wait.ts`) sends
   `watch_poll` with `ifRunning` (a stopped device or service settles the wait, nothing is started
   or resumed); the resumed invocation sends `watch_end` with `ifRunning` and maps the latched state
-  and `resume.outcome` to the result or an actionable error. The SDK types of the watched wait are
-  spelled in `src/watched-wait-sdk.ts` until the SDK release that ships them is pinned here.
+  and `resume.outcome` to the result or an actionable error.
 - `browser_screenshot` asks for at most 2 MiB and retries once at half that when the reply did
   not fit in one service message. A refused host's error ends with one next step (the user is
   asked to allow it); a service start that fails has its own text.
