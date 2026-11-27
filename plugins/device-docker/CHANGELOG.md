@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-device-docker
 
+## 0.1.0-rc.35
+
+### Patch Changes
+
+- ac3d848: Document that Chromium runs with `--no-sandbox` in device-docker devices: the device container is
+  the isolation boundary (plugins#286).
+
 ## 0.1.0-rc.34
 
 ### Patch Changes
