@@ -238,6 +238,14 @@ describe("renderCard: question", () => {
     expect(allText(blocks)).not.toContain("也可以直接回复文字");
   });
 
+  it("woken (a watched wait ended): 等待已结束 / Wait ended, no inputs", () => {
+    const zh = renderCard(question(false, 3, { state: "woken" }), "zh") as Block[];
+    expect(allText(zh)).toContain("等待已结束");
+    expect(buttons(zh).map((b) => b.text.text)).toEqual(["详情"]);
+    const en = renderCard(question(false, 3, { state: "woken" }), "en") as Block[];
+    expect(allText(en)).toContain("Wait ended");
+  });
+
   it("an unknown future state shows its name, never undefined", () => {
     const blocks = renderCard(question(false, 3, { state: "withdrawn" }), "en") as Block[];
     expect(allText(blocks)).toContain("withdrawn");

@@ -344,6 +344,16 @@ describe("renderSend: question card", () => {
     expect(buttons(card as LarkCard).map(label)).toEqual(["详情"]);
   });
 
+  it("woken (a watched wait ended): 等待已结束 / Wait ended, grey header, no inputs", () => {
+    const c = { ...question(false, ["a"]), state: "woken" } as unknown as ChannelCard;
+    const [zh] = renderSend({ text: "", cards: [c] }, "zh", "d");
+    expect(zh?.header).toMatchObject({ template: "grey" });
+    expect(markdown(zh as LarkCard)).toContain("等待已结束");
+    expect(buttons(zh as LarkCard).map(label)).toEqual(["详情"]);
+    const [en] = renderSend({ text: "", cards: [c] }, "en", "d");
+    expect(markdown(en as LarkCard)).toContain("Wait ended");
+  });
+
   it("an unknown future state shows its name, never undefined", () => {
     const c = { ...question(false, ["a"]), state: "withdrawn" } as unknown as ChannelCard;
     const [card] = renderSend({ text: "", cards: [c] }, "en", "d");
