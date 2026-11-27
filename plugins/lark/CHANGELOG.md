@@ -1,5 +1,15 @@
 # @capybara-hq/plugin-lark
 
+## 0.1.0-rc.17
+
+### Patch Changes
+
+- 1f286ab: Question cards label the new `woken` state (a watched wait its watcher ended, core#939):
+  等待已结束 / Wait ended, grey.
+- a81be16: Render a question form's `choices` as buttons (the first primary, a click answers at once, a boolean
+  stays a boolean) and show its `body` text on the card; a form without choices is unchanged
+  (plugins#241).
+
 ## 0.1.0-rc.16
 
 ### Patch Changes

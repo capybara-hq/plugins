@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-device-local
 
+## 0.1.0-rc.13
+
+### Patch Changes
+
+- 9d7e8c2: Device service file digests are computed with the SDK's `deviceServiceFilesDigest` instead of the
+  package's own copy of the algorithm (the same bytes, so no running service restarts or rolls).
+
 ## 0.1.0-rc.12
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-browser",
-  "version": "0.1.0-rc.11",
+  "version": "0.1.0-rc.12",
   "description": "A real browser in the person's device for agents: navigate, read and act on pages through tools, with a live view in the conversation and takeover by the person",
   "license": "Apache-2.0",
   "repository": {
