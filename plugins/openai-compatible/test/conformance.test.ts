@@ -105,13 +105,80 @@ describe.skipIf(!liveReady)("live", { timeout: 120_000 }, () => {
         apiKeys: { live: LIVE.apiKey ?? "" },
       }),
       model: `live/${LIVE.model}`,
-      // DeepSeek 的磁盘缓存对重复前缀稳定命中；其余服务的隐式缓存不保证命中
-      expect: { thinking: dialect !== "generic", caching: dialect === "deepseek" },
+      // DeepSeek's disk cache and Qwen's explicit markers hit a repeated prefix reliably; the
+      // other services' implicit caches do not guarantee a hit
+      expect: {
+        thinking: dialect !== "generic",
+        caching: dialect === "deepseek" || dialect === "qwen",
+      },
       cachePrefixTokens: 2000,
       teardown: async () => {},
     }),
   );
 });
+
+/**
+ * History caching on the dialects that send cache fields (qwen: explicit markers on the history
+ * tail; ark: implicit cache with a per-conversation prompt_cache_key): the second turn reads the
+ * first request's history, not just the system prompt, from the cache. The prefix is unique per
+ * run so an earlier run's entry cannot answer.
+ */
+describe.skipIf(!liveReady || (LIVE.dialect !== "qwen" && LIVE.dialect !== "ark"))(
+  "live history cache",
+  { timeout: 120_000 },
+  () => {
+    it("the second turn reads the first turn's history from the cache", async () => {
+      const provider = createOpenAICompatibleProvider({
+        endpoints: [
+          {
+            name: "live",
+            baseUrl: LIVE.baseUrl ?? "",
+            dialect: LIVE.dialect ?? "generic",
+            models: [model(LIVE.model ?? "", { reasoning: true })],
+          },
+        ],
+        apiKeys: { live: LIVE.apiKey ?? "" },
+      });
+      const run = async (r: ModelRequest) => {
+        for await (const e of provider.stream(r, { signal: AbortSignal.timeout(100_000) })) {
+          if (e.type === "message_complete") return e;
+        }
+        throw new Error("no message_complete");
+      };
+      const nonce = Math.random().toString(36).slice(2);
+      const lines = (tag: string, n: number) =>
+        Array.from(
+          { length: n },
+          (_, i) => `${tag} ${i}: reference note ${i * 7} (${nonce}).`,
+        ).join("\n");
+      const first: ModelRequest = {
+        model: `live/${LIVE.model}`,
+        system: [{ text: `You answer in one word.\n${lines("Rule", 200)}`, cache: true }],
+        messages: [
+          { role: "user", content: [{ type: "text", text: `${lines("Fact", 200)}\nSay OK.` }] },
+        ],
+        tools: [],
+        maxOutputTokens: 64,
+        params: { thinking: "off" },
+      };
+      const r1 = await run(first);
+      const r2 = await run({
+        ...first,
+        messages: [
+          ...first.messages,
+          { role: "assistant", content: r1.content.filter((b) => b.type === "text") },
+          { role: "user", content: [{ type: "text", text: "Again: say OK." }] },
+        ],
+      });
+      console.info(
+        `[plugin-openai-compatible] live history cache (${LIVE.dialect}, ${LIVE.model}): first ${JSON.stringify(r1.usage)}, second ${JSON.stringify(r2.usage)}`,
+      );
+      const total1 = r1.usage.inputTokens + r1.usage.cacheReadTokens + r1.usage.cacheWriteTokens;
+      // the system prompt alone is about half of the first request
+      expect(r2.usage.cacheReadTokens).toBeGreaterThan(total1 * 0.6);
+    });
+  },
+);
 
 // Core's tool rename (spec §15): a continued conversation keeps the release candidate's tool
 // names in its history while the tool list carries the new ones; the API must accept that.
