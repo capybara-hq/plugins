@@ -2,6 +2,8 @@ import type { Logger, ModelInfo, ModelKind, ModelParameter } from "@capybara-hq/
 import type { Target } from "./config.js";
 import { requestJson } from "./http.js";
 import {
+  CACHE_5M,
+  CACHE_5M_1H,
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_OUTPUT_TOKENS,
   EMBEDDING_MODELS,
@@ -166,6 +168,10 @@ export function mapModel(raw: RawModel): Mapped {
         : [],
     ...(reasoning ? { streamIdleTimeoutMs: REASONING_STREAM_IDLE_MS } : {}),
   };
+  if (kind === "chat" && features.includes("cache")) {
+    const c = id.startsWith("qwen4") ? CACHE_5M_1H : CACHE_5M;
+    out.cache = { ...c, ttlOptions: [...c.ttlOptions] };
+  }
   const retires = retiresAt(raw);
   if (retires !== undefined) out.retiresAt = retires;
   if (kind === "embedding") {

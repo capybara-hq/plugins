@@ -231,6 +231,51 @@ for (const [label, model] of [
   );
 }
 
+/**
+ * Qwen4 declares the 1 h option: the conformance suite's per-TTL cases run against it, and a 1 h
+ * request writes its tokens to the 1 h tier (`cacheWriteByTtl`).
+ */
+const qwen4 = models.find((m) => m.cache?.ttlOptions.includes(3600));
+if (provider && !qwen4) skipped("qwen4 1 h cache", "no listed model declares the 1 h option");
+
+describe.skipIf(!provider || !qwen4)("live qwen4 1 h cache", { timeout: 180_000 }, () => {
+  describeModelProviderConformance(`bailian (live, ${qwen4?.id})`, async () => ({
+    plugin: PLUGIN,
+    provider: provider as ModelProvider,
+    model: qwen4?.id ?? "",
+    expect: { thinking: qwen4?.capabilities.reasoning ?? false, caching: true },
+    cachePrefixTokens: 2000,
+    teardown: async () => {},
+  }));
+
+  it(`${qwen4?.id}: a 1h request writes to the 1 h tier and the repeat reads it`, async () => {
+    const p = provider as ModelProvider;
+    const nonce = Math.random().toString(36).slice(2);
+    const req: ModelRequest = {
+      model: qwen4?.id ?? "",
+      system: [
+        {
+          text: `You answer in one word.\n${Array.from({ length: 150 }, (_, i) => `Rule ${i}: note ${i * 7} (${nonce}).`).join("\n")}`,
+          cache: true,
+        },
+      ],
+      messages: [{ role: "user", content: [{ type: "text", text: "Say OK." }] }],
+      tools: [],
+      maxOutputTokens: 16,
+      params: qwen4?.capabilities.reasoning ? { thinking: "off" } : {},
+      cacheTtl: 3600,
+    };
+    const r1 = await usageOf(p, req);
+    const r2 = await usageOf(p, req);
+    console.info(
+      `[plugin-bailian] live qwen4 1h ${qwen4?.id}: first ${JSON.stringify(r1.usage)}, repeat ${JSON.stringify(r2.usage)}`,
+    );
+    expect(r1.usage.cacheWriteTokens).toBeGreaterThan(0);
+    expect(r1.usage.cacheWriteByTtl).toEqual([{ ttl: 3600, tokens: r1.usage.cacheWriteTokens }]);
+    expect(r2.usage.cacheReadTokens).toBeGreaterThan(0);
+  });
+});
+
 const IMAGE_MODEL = process.env.CAPYBARA_TEST_BAILIAN_IMAGE_MODEL ?? "wanx2.0-t2i-turbo";
 const imageModel = models.find((m) => m.id === IMAGE_MODEL && m.imageGeneration !== undefined);
 if (provider && !imageModel) {

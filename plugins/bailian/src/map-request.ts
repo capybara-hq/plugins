@@ -5,7 +5,7 @@ import {
   type ModelRequest,
 } from "@capybara-hq/plugin-sdk";
 import type { Endpoint } from "./list.js";
-import { PROVIDER } from "./tables.js";
+import { CACHE_TTL_1H_SECONDS, PROVIDER } from "./tables.js";
 
 /*
  * DashScope native generation (https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-dashscope,
@@ -244,6 +244,8 @@ export function buildRequest(req: ModelRequest, endpoint: Endpoint): NativeBody 
     if (thinking === "on") parameters.preserve_thinking = true;
   }
   if (typeof req.params.temperature === "number") parameters.temperature = req.params.temperature;
+  // A top-level `prompt_cache_options` is silently ignored: it goes in `parameters`
+  if (req.cacheTtl === CACHE_TTL_1H_SECONDS) parameters.prompt_cache_options = { ttl: "1h" };
   const history = mapMessages(req.messages, req, endpoint);
   markLastBlock(history, endpoint);
   return {

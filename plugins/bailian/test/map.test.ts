@@ -82,6 +82,23 @@ const history: ModelMessage[] = [
   },
 ];
 
+describe("cacheTtl", () => {
+  it("3600 asks for the 1 h cache in parameters.prompt_cache_options, never at the top level", () => {
+    for (const endpoint of ["text", "multimodal"] as const) {
+      const body = buildRequest(req({ model: "qwen4-max", cacheTtl: 3600 }), endpoint);
+      expect(body.parameters.prompt_cache_options).toEqual({ ttl: "1h" });
+      expect(body).not.toHaveProperty("prompt_cache_options");
+    }
+  });
+
+  it("300 or no ttl sends no cache option", () => {
+    for (const cacheTtl of [300, undefined]) {
+      const body = buildRequest(req({ ...(cacheTtl ? { cacheTtl } : {}) }), "text");
+      expect(body.parameters).not.toHaveProperty("prompt_cache_options");
+    }
+  });
+});
+
 describe("buildRequest (text-generation)", () => {
   it("maps the native body", () => {
     const body = buildRequest(

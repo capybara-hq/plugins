@@ -27,7 +27,7 @@ const PLUGIN = "bailian";
 
 // Fixture conformance on both native endpoints: a vision model (multimodal-generation) and a
 // text-only one (text-generation), each with thinking and an embedding model.
-for (const model of ["qwen3.8-flash", "qwen-flash"]) {
+for (const model of ["qwen3.8-flash", "qwen-flash", "qwen4-max"]) {
   describeModelProviderConformance(`bailian (fixtures, ${model})`, async () => {
     const server = await startFakeModelServer(bailianRoutes());
     return {
@@ -36,7 +36,7 @@ for (const model of ["qwen3.8-flash", "qwen-flash"]) {
       model,
       expect: {
         thinking: true,
-        caching: false, // P2–P7 declare the cache
+        caching: true,
         embedding: { model: "text-embedding-v4", dimensions: 512 },
       },
       teardown: () => server.stop(),
@@ -59,7 +59,7 @@ for (const imageModel of ["qwen-image-2.0", "wanx2.0-t2i-turbo"]) {
       model: "qwen-flash",
       expect: {
         thinking: true,
-        caching: false /* P2–P7 declare the cache */,
+        caching: true,
         imageGeneration: { model: imageModel },
       },
       teardown: async () => {
@@ -177,6 +177,54 @@ describe("stream", () => {
     const { error } = await run(provider, req({ model: "nope" }));
     expect(kindOf(error)).toBe("invalid_request");
     expect(server?.requests.some((r) => r.path.includes("generation"))).toBe(false);
+  });
+
+  it("maps the Qwen4 TTL split of the written tokens to cacheWriteByTtl", async () => {
+    const provider = await withGeneration(() =>
+      sseGeneration({
+        text: "ok",
+        finish: "stop",
+        usage: {
+          input_tokens: 3044,
+          output_tokens: 13,
+          prompt_tokens_details: {
+            cached_tokens: 0,
+            cache_creation_input_tokens: 3030,
+            cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 3030 },
+          },
+        },
+      }),
+    );
+    const { done } = await run(provider);
+    expect(done?.usage).toEqual({
+      inputTokens: 14,
+      outputTokens: 13,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 3030,
+      cacheWriteByTtl: [{ ttl: 3600, tokens: 3030 }],
+    });
+  });
+
+  it("splits written tokens across both tiers and leaves out zero entries", async () => {
+    const provider = await withGeneration(() =>
+      sseGeneration({
+        text: "ok",
+        finish: "stop",
+        usage: {
+          input_tokens: 100,
+          output_tokens: 1,
+          prompt_tokens_details: {
+            cache_creation_input_tokens: 60,
+            cache_creation: { ephemeral_5m_input_tokens: 20, ephemeral_1h_input_tokens: 40 },
+          },
+        },
+      }),
+    );
+    const { done } = await run(provider);
+    expect(done?.usage?.cacheWriteByTtl).toEqual([
+      { ttl: 300, tokens: 20 },
+      { ttl: 3600, tokens: 40 },
+    ]);
   });
 
   it("accumulates text, thinking and tool calls by index; usage subtracts cache tokens", async () => {

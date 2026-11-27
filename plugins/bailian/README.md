@@ -35,8 +35,14 @@ into it.
   is skipped with one warning.
 - Chat uses text-generation for text models and multimodal-generation for vision models, with SSE;
   the endpoint is looked up per model and cached in `ctx.kv` for 24 hours. Parameters: `thinking`,
-  `temperature`, `maxOutputTokens`. Explicit prompt caching marks the system prompt; usage
-  `input_tokens` includes cached and cache-written tokens.
+  `temperature`, `maxOutputTokens`. Prompt caching is explicit: a `cache_control` marker
+  after the system prompt and on the last block of the history. Chat models with the list's `cache`
+  feature declare a 5-minute cache (every hit restarts the 5 minutes, from 1024 tokens); Qwen4
+  models also declare a 1-hour option (`cacheTtl: 3600` goes out as
+  `parameters.prompt_cache_options: { ttl: "1h" }`; a top-level field is ignored) and report the
+  written tokens by tier in `cacheWriteByTtl`. Whether a hit renews the 1-hour entry is not
+  verified, so `refreshOnHit` is false for them. Usage `input_tokens` includes cached and
+  cache-written tokens.
 
 - Image generation models come from a bundled table (the list tags them `IG` but carries no sizes
   or limits); an `IG` model missing from it stays list-only. Sync multimodal-generation:
