@@ -1,5 +1,19 @@
 # @capybara-hq/plugin-anthropic
 
+## 0.1.0-rc.12
+
+### Patch Changes
+
+- 937f213: Every model declares its prompt cache (`ModelInfo.cache`): explicit breakpoints, 5 minutes or 1
+  hour, with the per-model minimum cacheable length. `ModelRequest.cacheTtl: 3600` puts `ttl: "1h"` on
+  every `cache_control` the request sends, and the usage's per-TTL write split is reported as
+  `cacheWriteByTtl`. The model cache key in `ctx.kv` moves to `models:v5:`.
+- 12c390a: Move to plugin-sdk 0.1.0-rc.84, whose `ModelInfo.cache` replaces `capabilities.caching`. The models
+  no longer report `caching`; the per-model cache declaration follows in the next changes.
+  
+  The cyberpunk theme drops its rule for the removed `status-bar` part, which the new host no
+  longer knows.
+
 ## 0.1.0-rc.11
 
 ### Patch Changes

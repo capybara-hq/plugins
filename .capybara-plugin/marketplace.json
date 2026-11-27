@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "anthropic",
-      "version": "0.1.0-rc.11",
+      "version": "0.1.0-rc.12",
       "summary": {
         "en": "Anthropic model provider (model-provider@2) using the official SDK and the native Messages API"
       },
@@ -34,8 +34,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-anthropic",
-          "version": "0.1.0-rc.11",
-          "integrity": "sha512-du0wCj2z3asIZk1mpDOBAtlZSmqB1WQTr8doHb8uPSKGCqfkcCgSVrJWP8dbqW//BHO8un0uWLs74TBvk+f9ug=="
+          "version": "0.1.0-rc.12",
+          "integrity": "sha512-ABCkExMaGJUxcbDClv2mip931CmQGvbPcy9KV73vYEWUFGf/chU9I1irEKItIbx0I/yJRG1144GkpO3hfcmGrQ=="
         }
       }
     },
@@ -169,7 +169,7 @@
     },
     {
       "name": "openai",
-      "version": "0.1.0-rc.14",
+      "version": "0.1.0-rc.15",
       "summary": {
         "en": "OpenAI model provider (model-provider@2) using the official SDK and the native Responses API"
       },
@@ -195,14 +195,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-openai",
-          "version": "0.1.0-rc.14",
-          "integrity": "sha512-Ybde3qfkz0PruixbxzgxrlVYTahz2eplRj4ioeTP20yFQcoPTLbm5hoBuj64nZTKlvTtmYQ+gvK6ofYUWY2NTw=="
+          "version": "0.1.0-rc.15",
+          "integrity": "sha512-D6iGu0lJMoXxHAPubBxPdF7NK8qxZhzF4DP27fI3p2oA3OvEaysQlU3EhMiGYgB31zjl9dqJMjIgVBaXHL711Q=="
         }
       }
     },
     {
       "name": "openai-compatible",
-      "version": "0.1.0-rc.14",
+      "version": "0.1.0-rc.15",
       "summary": {
         "en": "Model provider (model-provider@2) for Chat Completions-compatible services (vLLM, DeepSeek, Qwen, ...) using the official openai SDK"
       },
@@ -223,8 +223,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-openai-compatible",
-          "version": "0.1.0-rc.14",
-          "integrity": "sha512-BbB4lSBy4kEZA2kLOBDz00oOOjmQ4IaPPthmho00M15ZGcvDRMTuilw+244lbYPALZ3Kxzo1zNPWFI8STqUyDw=="
+          "version": "0.1.0-rc.15",
+          "integrity": "sha512-GwDNf+46SwFdDOodWGJokorOWQCvO+0QJx5NhsXChWCnpezmLFiXxgmIuG2V1KNQnRSCvH1SJBUE5EsOTFRvKA=="
         }
       }
     },
@@ -339,7 +339,7 @@
     },
     {
       "name": "ark",
-      "version": "0.1.0-rc.14",
+      "version": "0.1.0-rc.15",
       "summary": {
         "en": "Model provider (model-provider@2) for Volcengine Ark chat, embedding and image generation models",
         "zh": "火山方舟对话、嵌入与图片生成模型（model-provider@2）"
@@ -371,14 +371,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-ark",
-          "version": "0.1.0-rc.14",
-          "integrity": "sha512-sMyvv8eTeOHnR5WzxRxdYCXMnIn3uiS1kQokSFvojWy8Jk70t/kqMshUgisL+Tl8g3C0SFGwJYqvonWK+NI2jQ=="
+          "version": "0.1.0-rc.15",
+          "integrity": "sha512-IgsN+PARqkaO6wt5ndM+28UESleVEp0btmH/rUvNAsWp47IghYObGOikYkjHWVlWTApuFefKLkro+fKsS5HHPQ=="
         }
       }
     },
     {
       "name": "bailian",
-      "version": "0.1.0-rc.13",
+      "version": "0.1.0-rc.14",
       "summary": {
         "en": "Model provider (model-provider@2) for Alibaba Cloud Model Studio (Bailian) chat, embedding and image generation models",
         "zh": "阿里云百炼对话、嵌入与图片生成模型（model-provider@2）"
@@ -415,14 +415,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-bailian",
-          "version": "0.1.0-rc.13",
-          "integrity": "sha512-TglGdOPeJTUVSxm+KQOdWDrxRnjhFVEatvfQFVkSwOElxocNyEFBm7K3GSQmmuY2ISgxJQceA7Yvjlb0JNpKiA=="
+          "version": "0.1.0-rc.14",
+          "integrity": "sha512-m1e6FaD0ouHq/2vJkyQPyj3pz4PH7QpYNRlftOJYBaKve8EqKGz/uH44UGBtI+tROmDhdnZ5xn3FFlyyQIYCkA=="
         }
       }
     },
     {
       "name": "deepseek",
-      "version": "0.1.0-rc.12",
+      "version": "0.1.0-rc.13",
       "summary": {
         "en": "Model provider (model-provider@2) for DeepSeek chat models through the Chat Completions API",
         "zh": "DeepSeek 对话模型（model-provider@2），通过 Chat Completions API 调用"
@@ -445,8 +445,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-deepseek",
-          "version": "0.1.0-rc.12",
-          "integrity": "sha512-bDl3SWO/SO23PaY7Jc9km79kctaGYKqjWOTaXcb+olJNHCNwP4lEXuAY7jylBMaDxL3WttWdHDS6c/QjHFbUeA=="
+          "version": "0.1.0-rc.13",
+          "integrity": "sha512-i6cPL8gTGCvPRdC5UzlKnJdYjrGfPUQHrpdJDp8q8cekMu6GReJQHBFb5dt3U+zlUfOX75IwoIlTPfeJwr/ACg=="
         }
       }
     },
@@ -481,7 +481,7 @@
     },
     {
       "name": "theme-cyberpunk",
-      "version": "0.1.0-rc.18",
+      "version": "0.1.0-rc.19",
       "summary": {
         "en": "Cyberpunk theme and UI: neon yellow on deep blue-black, a run-state HUD, scanlines, a boot screen, a glitch CYBERBARA wordmark and opt-in synthesized sound",
         "zh": "赛博朋克主题与界面：深蓝黑底上的霓虹黄，运行状态 HUD、扫描线、启动画面、故障风 CYBERBARA 字标，以及可选的合成音效"
@@ -513,8 +513,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-theme-cyberpunk",
-          "version": "0.1.0-rc.18",
-          "integrity": "sha512-/IsI96lEwzHY3SWreP7A1Fh6lI7yELNyhS7euho30DrYxDkfByodTSMc1OJaSxRQNOZyKG0S8Al9oUii6dd5xg=="
+          "version": "0.1.0-rc.19",
+          "integrity": "sha512-t5008G/sssCN7QkTM0px0TFfLbQgGvcB7XsQ5wr9g7InnRiRtI4UZt5HyKWEPgbAofdgl9UMxpBbVYh/O/Io/Q=="
         }
       }
     },

@@ -308,7 +308,7 @@ function platformOf(config: unknown): PlatformDefaults {
 /** OpenAI-compatible (Chat Completions) provider plugin: vLLM, DeepSeek, Qwen, ...; dialects stay in this plugin. */
 export default defineExtension({
   name: PROVIDER,
-  version: "0.1.0-rc.14",
+  version: "0.1.0-rc.15",
   sdk: "^0.1.0-rc.64",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
   // No network permission: every endpoint comes from config, there is no fixed host. Org-set

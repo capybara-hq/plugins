@@ -1,5 +1,17 @@
 # @capybara-hq/plugin-deepseek
 
+## 0.1.0-rc.13
+
+### Patch Changes
+
+- 37490a4: Every chat model now declares its prompt cache (implicit, no ttl choice, minimum 256 tokens), so
+  the kernel knows DeepSeek caches automatically.
+- 12c390a: Move to plugin-sdk 0.1.0-rc.84, whose `ModelInfo.cache` replaces `capabilities.caching`. The models
+  no longer report `caching`; the per-model cache declaration follows in the next changes.
+  
+  The cyberpunk theme drops its rule for the removed `status-bar` part, which the new host no
+  longer knows.
+
 ## 0.1.0-rc.12
 
 ### Patch Changes
