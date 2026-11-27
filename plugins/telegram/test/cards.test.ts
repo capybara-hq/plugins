@@ -135,6 +135,41 @@ describe("renderCards", () => {
     });
   });
 
+  it("choices: one button per choice answering with the value, and the body in the text", async () => {
+    const { tokens, data } = setup();
+    const card: ChannelCard = {
+      kind: "question",
+      id: "q9",
+      state: "pending",
+      webUrl: "https://cap.example/c/9",
+      form: {
+        title: "Browser handoff",
+        body: "Finish the login, then confirm",
+        fields: [
+          {
+            key: "done",
+            label: "Done",
+            required: true,
+            schema: { type: "boolean" },
+            choices: [
+              { value: true, label: "Done" },
+              { value: false, label: "Cancel" },
+            ],
+          },
+        ],
+      },
+    };
+    const [p] = await renderCards([card], "en", tokens, log);
+    expect(buttons(p as never).map((x) => x.text)).toEqual(["Done", "Cancel", "Open on web"]);
+    expect(p?.html).toContain("Finish the login, then confirm");
+    expect([...data.values()].map((v) => JSON.parse(v))).toContainEqual({
+      cardKind: "question",
+      cardId: "q9",
+      action: "answer",
+      answer: { done: false },
+    });
+  });
+
   it("multi-select, allowOther and over-long questions give a URL button only", async () => {
     for (const c of [
       question({ multiSelect: true }),

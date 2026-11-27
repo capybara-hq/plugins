@@ -13,7 +13,7 @@ import type { CardAction, ChannelTarget } from "@capybara-hq/plugin-sdk";
 export type ActionValue =
   | { k: "a"; id: string; action: "approve"; scope: "once" | "session" | "always" }
   | { k: "a"; id: string; action: "deny" }
-  | { k: "q"; id: string; key: string; value: string }
+  | { k: "q"; id: string; key: string; value: string | boolean }
   | { k: "m"; id: string; key: string; options: string[] };
 
 /** Slack 按钮 `value` 的长度上限。 */
@@ -67,7 +67,12 @@ export function decodeActionValue(s: string): ActionValue | null {
     if (a[2] === "deny" && a.length === 3) return { k, id, action: "deny" };
     return null;
   }
-  if (k === "q" && a.length === 4 && nonEmpty(a[2]) && typeof a[3] === "string") {
+  if (
+    k === "q" &&
+    a.length === 4 &&
+    nonEmpty(a[2]) &&
+    (typeof a[3] === "string" || typeof a[3] === "boolean")
+  ) {
     return { k, id, key: a[2], value: a[3] };
   }
   if (

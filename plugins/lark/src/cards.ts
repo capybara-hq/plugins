@@ -2,6 +2,8 @@ import {
   type ChannelCard,
   ChannelSendError,
   type OutboundMessage,
+  questionBody,
+  questionChoiceButtons,
   questionRenderableInline,
   questionStateLabel,
   questionTextReplyHint,
@@ -311,6 +313,22 @@ function questionInputs(
   const f = c.form.fields[0];
   // With textReply the Other path is a plain reply, so a field with allowOther still gets its
   // controls, never an Other button.
+  // choices (core#867): one button per choice, first primary; a click answers at once
+  const choices = questionChoiceButtons(c.form, locale);
+  if (choices) {
+    try {
+      const buttons = choices.buttons.map((b) =>
+        callbackButton(
+          b.label,
+          { k: "q", chat, id: c.id, key: choices.key, value: b.value },
+          b.primary ? "primary" : undefined,
+        ),
+      );
+      return actions(buttons, web);
+    } catch {
+      return actions([], web);
+    }
+  }
   const inline = questionRenderableInline(c.form, { textReply: c.textReply !== undefined });
   if (!inline || !f || !("enum" in f.schema)) return actions([], web);
   const options = f.schema.enum;
@@ -372,6 +390,8 @@ function question(
     if (label !== title) lines.push(escapePlain(label));
     if (f.description !== undefined) lines.push(`*${escapePlain(textOf(f.description, locale))}*`);
   }
+  const body = questionBody(c.form, locale);
+  if (body !== undefined) lines.push(escapePlain(body));
   const elements: El[] = lines.length > 0 ? [md(lines.join("\n"))] : [];
   if (c.state === "pending") {
     elements.push(...questionInputs(c, locale, chat));

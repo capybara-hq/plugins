@@ -21,7 +21,7 @@ export type ChatKind = "d" | "g";
 export type ActionValue =
   | { k: "a"; chat: ChatKind; id: string; action: "approve"; scope: "once" | "session" | "always" }
   | { k: "a"; chat: ChatKind; id: string; action: "deny" }
-  | { k: "q"; chat: ChatKind; id: string; key: string; value: string }
+  | { k: "q"; chat: ChatKind; id: string; key: string; value: string | boolean }
   | { k: "m"; chat: ChatKind; id: string; key: string; options: string[] };
 
 export const ACTION_VALUE_MAX = 2000;
@@ -78,7 +78,12 @@ export function decodeActionValue(s: string): ActionValue | null {
     if (a[3] === "deny" && a.length === 4) return { k, chat, id, action: "deny" };
     return null;
   }
-  if (k === "q" && a.length === 5 && nonEmpty(a[3]) && typeof a[4] === "string") {
+  if (
+    k === "q" &&
+    a.length === 5 &&
+    nonEmpty(a[3]) &&
+    (typeof a[4] === "string" || typeof a[4] === "boolean")
+  ) {
     return { k, chat, id, key: a[3], value: a[4] };
   }
   if (

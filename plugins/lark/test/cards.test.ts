@@ -264,6 +264,48 @@ describe("renderSend: approval card", () => {
   });
 });
 
+const confirm = (): ChannelCard => ({
+  kind: "question",
+  id: "q_1",
+  state: "pending",
+  webUrl: "https://cap.example/c/1",
+  form: {
+    title: { zh: "浏览器交接", en: "Browser handoff" },
+    body: { zh: "完成登录后确认", en: "Finish the login, then confirm" },
+    fields: [
+      {
+        key: "done",
+        label: "Done",
+        required: true,
+        schema: { type: "boolean" },
+        choices: [
+          { value: true, label: { zh: "完成", en: "Done" } },
+          { value: false, label: { zh: "取消", en: "Cancel" } },
+        ],
+      },
+    ],
+  },
+});
+
+describe("renderSend: question choices and body", () => {
+  it("one button per choice, the first primary, and the body text", () => {
+    const [card] = renderSend({ text: "", cards: [confirm()] }, "en", "d");
+    if (!card) throw new Error("no card");
+    const bs = buttons(card);
+    expect(bs.map(label)).toEqual(["Done", "Cancel", "Answer on the web"]);
+    expect(bs[0]?.type).toBe("primary");
+    expect(bs[1]?.type).toBe("default");
+    expect(actionOf(bs[0] as El)).toEqual({
+      k: "q",
+      chat: "d",
+      id: "q_1",
+      key: "done",
+      value: true,
+    });
+    expect(JSON.stringify(card)).toContain("Finish the login, then confirm");
+  });
+});
+
 describe("renderSend: question card", () => {
   it("single choice inline: one button per option", () => {
     const [card] = renderSend({ text: "", cards: [question(false, ["dev", "prod"])] }, "en", "d");
