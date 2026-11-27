@@ -248,3 +248,40 @@ describe("ark buildRequest", () => {
     ).toThrow(/attachment reference/);
   });
 });
+
+describe("ark prompt_cache_key", () => {
+  const history: ModelMessage[] = [
+    { role: "user", content: [{ type: "text", text: "Hi" }] },
+    { role: "assistant", content: [{ type: "text", text: "Hello." }] },
+    { role: "user", content: [{ type: "text", text: "More" }] },
+  ];
+
+  it("stays the same while the conversation grows and with tools added", () => {
+    const first = buildRequest(req({ messages: history.slice(0, 1) }), { orgId: "org-a" });
+    const later = buildRequest(
+      req({
+        messages: history,
+        tools: [{ name: "weather", description: "Weather", inputSchema: { type: "object" } }],
+      }),
+      { orgId: "org-a" },
+    );
+    expect(first.prompt_cache_key).toMatch(/^cap-[0-9a-f]{32}$/);
+    expect(later.prompt_cache_key).toBe(first.prompt_cache_key);
+  });
+
+  it("differs per conversation, org, model and system prompt, and carries no prompt text", () => {
+    const base = buildRequest(req(), { orgId: "org-a" }).prompt_cache_key;
+    const other = [
+      buildRequest(req({ messages: [{ role: "user", content: [{ type: "text", text: "Yo" }] }] }), {
+        orgId: "org-a",
+      }),
+      buildRequest(req(), { orgId: "org-b" }),
+      buildRequest(req(), {}),
+      buildRequest(req({ model: DEEPSEEK }), { orgId: "org-a" }),
+      buildRequest(req({ system: [{ text: "Other.", cache: true }] }), { orgId: "org-a" }),
+    ].map((b) => b.prompt_cache_key);
+    for (const k of other) expect(k).not.toBe(base);
+    expect(String(base)).not.toContain("Hi");
+    expect(String(base)).not.toContain("org-a");
+  });
+});

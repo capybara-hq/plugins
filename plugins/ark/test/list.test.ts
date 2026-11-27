@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import extension, { createArkProvider } from "../src/index.js";
 import { signV4 } from "../src/sign.js";
+import { cachesAutomatically } from "../src/tables.js";
 import {
   DEEPSEEK,
   EMBED,
@@ -76,7 +77,8 @@ describe("ark listModels", () => {
         vision: true,
         documents: true,
         reasoning: true,
-        caching: false,
+        // implicit context cache: the entry has features.cache
+        caching: true,
         midConversationSystem: false,
       },
     });
@@ -120,8 +122,19 @@ describe("ark listModels", () => {
       displayName: "mystery-chat",
       contextWindow: 32768,
       maxOutputTokens: 4096,
-      capabilities: { tools: false, reasoning: false },
+      // no features.cache and not a DeepSeek model
+      capabilities: { tools: false, reasoning: false, caching: false },
     });
+  });
+
+  it("reports caching from the entry's features.cache, else for DeepSeek models", () => {
+    expect(cachesAutomatically("doubao-seed-2-1-pro-260915", { prefix_cache: true })).toBe(true);
+    expect(cachesAutomatically("kimi-k3-1-pro-261024", { session_cache: true })).toBe(true);
+    expect(
+      cachesAutomatically("qwen3-32b-20250429", { prefix_cache: false, session_cache: false }),
+    ).toBe(false);
+    expect(cachesAutomatically("deepseek-v4-pro-ga-260813", undefined)).toBe(true);
+    expect(cachesAutomatically("mystery-chat-260101", null)).toBe(false);
   });
 
   it("lists the multimodal embedding models with the bundled facts", async () => {

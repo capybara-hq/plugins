@@ -7,6 +7,7 @@ import {
   type ProviderOpaque,
 } from "@capybara-hq/plugin-sdk";
 import type OpenAI from "openai";
+import { conversationCacheKey } from "./cache-key.js";
 import { replaysReasoning } from "./tables.js";
 
 export const PROVIDER = "ark";
@@ -172,7 +173,7 @@ function mapMessages(messages: ModelMessage[], req: ModelRequest): Message[] {
  * thinking unbounded (a 60-token max_tokens produced 1302 reasoning tokens), so it would not hold
  * the kernel's output budget. The two cannot be sent together.
  */
-export function buildRequest(req: ModelRequest): ChatBody {
+export function buildRequest(req: ModelRequest, scope: { orgId?: string } = {}): ChatBody {
   const system = req.system.map((s) => s.text).join("\n\n");
   const body: ChatBody = {
     model: req.model,
@@ -183,6 +184,8 @@ export function buildRequest(req: ModelRequest): ChatBody {
     max_completion_tokens: req.maxOutputTokens,
     stream: true,
     stream_options: { include_usage: true },
+    // Implicit prefix caching needs no marker; the key only keeps a conversation on one cache
+    prompt_cache_key: conversationCacheKey(req, scope.orgId),
   };
   if (req.tools.length > 0) {
     body.tools = req.tools.map((tool) => ({

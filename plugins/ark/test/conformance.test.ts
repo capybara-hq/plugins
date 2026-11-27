@@ -36,7 +36,7 @@ describeModelProviderConformance("ark (fixtures, seed)", async () => {
     plugin: PLUGIN,
     provider: createArkProvider({ apiKey: "ark-fixture", baseUrl: `${server.url}/api/v3` }),
     model: SEED,
-    expect: { thinking: true, caching: false, embedding: { model: EMBED, dimensions: 1024 } },
+    expect: { thinking: true, caching: true, embedding: { model: EMBED, dimensions: 1024 } },
     teardown: () => server.stop(),
   };
 });
@@ -628,6 +628,41 @@ describe.skipIf(!live?.chat)("live", { timeout: 120_000 }, () => {
     cachePrefixTokens: 8000,
     teardown: async () => {},
   }));
+
+  it("live: the second turn reads the first turn's history from the implicit cache", async () => {
+    if (!live?.chat?.capabilities.caching) return;
+    const provider = live.provider as ModelProvider;
+    const nonce = Math.random().toString(36).slice(2);
+    const lines = (tag: string, n: number) =>
+      Array.from({ length: n }, (_, i) => `${tag} ${i}: reference note ${i * 7} (${nonce}).`).join(
+        "\n",
+      );
+    const first = req({
+      model: live.chat.id,
+      system: [{ text: `You answer in one word.\n${lines("Rule", 200)}`, cache: true }],
+      messages: [
+        { role: "user", content: [{ type: "text", text: `${lines("Fact", 200)}\nSay OK.` }] },
+      ],
+      maxOutputTokens: 64,
+      params: { thinking: "off" },
+    });
+    const d1 = complete(await drain(provider, first));
+    const second: ModelRequest = {
+      ...first,
+      messages: [
+        ...first.messages,
+        { role: "assistant", content: d1.content.filter((b) => b.type === "text") },
+        { role: "user", content: [{ type: "text", text: "Again: say OK." }] },
+      ],
+    };
+    const d2 = complete(await drain(provider, second));
+    console.info(
+      `[plugin-ark] live history cache ${live.chat.id}: first ${JSON.stringify(d1.usage)}, second ${JSON.stringify(d2.usage)}`,
+    );
+    const total1 = d1.usage.inputTokens + d1.usage.cacheReadTokens;
+    // the system prompt alone is about half of the first request; hits are not guaranteed
+    expect(d2.usage.cacheReadTokens).toBeGreaterThan(total1 * 0.6);
+  });
 
   it("live: a two-turn tool call replays the thinking to the same model", async () => {
     const provider = live?.provider as ModelProvider;

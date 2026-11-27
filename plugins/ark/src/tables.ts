@@ -49,11 +49,26 @@ export function embeddingInfo(id: string): ModelEmbeddingInfo | undefined {
 export const replaysReasoning = (model: string): boolean => model.startsWith("deepseek-");
 
 /**
- * Automatic prefix caching on the Chat API: live, deepseek-v4-flash-ga reported cached_tokens on
- * a repeated 10k-token prefix, doubao-seed-2-0-lite never did (its `features.cache` means the
- * explicit context cache, which this plugin does not use). Unverified vendors: false.
+ * Implicit context cache on the Chat API: Volcengine enables it automatically, and it cannot be
+ * switched off, for the models its model list marks under "上下文缓存能力 / 隐式缓存"
+ * (https://docs.volcengine.com/docs/ark/context-cache, https://docs.volcengine.com/docs/82379/1330310,
+ * read 2026-11-27: every current doubao-seed, deepseek, kimi and glm chat model). The model list
+ * API has no implicit-cache field; its `features.cache` (`prefix_cache` / `session_cache`, the
+ * explicit cache modes of the Responses API) is set on exactly those models and false on the old
+ * open-source ones absent from the page (qwen3, glm-4.5 air), so it decides. Live 2026-11-27 on
+ * cn-beijing: doubao-seed-2-1-pro-260915, doubao-seed-2-0-lite-260428, glm-5-2-260617 and
+ * kimi-k3-1-pro-261024 each read about 90-99% of a repeated 7k-10k-token prefix from the cache on
+ * the next turn (the 2026-11-08 miss of doubao-seed-2-0-lite no longer reproduces). Hits are not
+ * guaranteed and some models need a longer prefix (128 to 8960 tokens, 1024 by default). An entry
+ * without `features.cache` falls back to the DeepSeek models seen caching earlier.
  */
-export const cachesAutomatically = (model: string): boolean => model.startsWith("deepseek-");
+export function cachesAutomatically(
+  model: string,
+  cache: { prefix_cache?: unknown; session_cache?: unknown } | null | undefined,
+): boolean {
+  if (cache != null) return cache.prefix_cache === true || cache.session_cache === true;
+  return model.startsWith("deepseek-");
+}
 
 /** The model's vendor by its name (display only; the list has no vendor field). */
 export function publisherOf(name: string): string | undefined {

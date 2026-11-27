@@ -167,7 +167,13 @@ export function createArkProvider(defaults: ArkDefaults): ModelProvider {
       } catch (e) {
         throw toModelError(e, opts.signal);
       }
-      yield* streamChat(client, req, opts.signal, (msg, fields) => defaults.log?.warn(msg, fields));
+      yield* streamChat(
+        client,
+        req,
+        opts.signal,
+        (msg, fields) => defaults.log?.warn(msg, fields),
+        opts.orgId !== undefined ? { orgId: opts.orgId } : {},
+      );
     },
     async embed(req, opts) {
       const { apiKey, baseUrl } = resolve(defaults, opts.config);

@@ -86,9 +86,10 @@ export async function* streamChat(
   req: ModelRequest,
   signal: AbortSignal,
   warn: (msg: string, fields?: Record<string, unknown>) => void = () => {},
+  scope: { orgId?: string } = {},
 ): AsyncGenerator<ModelStreamEvent> {
   if (signal.aborted) throw aborted();
-  const body = buildRequest(req);
+  const body = buildRequest(req, scope);
   const open = () => client.chat.completions.create(body, { signal });
   let stream: Awaited<ReturnType<typeof open>> | undefined;
   try {
