@@ -38,7 +38,7 @@ describeModelProviderConformance("ark (fixtures, seed)", async () => {
     model: SEED,
     expect: {
       thinking: true,
-      caching: false /* P2–P7 declare the cache */,
+      caching: true,
       embedding: { model: EMBED, dimensions: 1024 },
     },
     teardown: () => server.stop(),
@@ -51,7 +51,7 @@ describeModelProviderConformance("ark (fixtures, deepseek)", async () => {
     plugin: PLUGIN,
     provider: createArkProvider({ apiKey: "ark-fixture", baseUrl: `${server.url}/api/v3` }),
     model: DEEPSEEK,
-    expect: { thinking: true, caching: false /* P2–P7 declare the cache */ },
+    expect: { thinking: true, caching: true },
     teardown: () => server.stop(),
   };
 });
@@ -618,10 +618,9 @@ describe.skipIf(!live?.chat)("live", { timeout: 120_000 }, () => {
     model: live?.chat?.id ?? "",
     expect: {
       thinking: true,
-      // Ark's implicit cache does not guarantee a hit, so the suite's hit case (two identical
-      // requests, the second must read the cache) would flake: opted out here. Cache usage
-      // mapping is checked by the history test below and the fixture suites. Until the per-model
-      // cache declaration (core#957 §9.3) can say "not guaranteed".
+      // The cache is declared (implicit, guaranteed: false) but a hit is not promised, so the
+      // suite's hit case (the second identical request must read the cache) would flake: opted
+      // out here. The history test below and the fixture suites check the usage mapping.
       caching: false,
       ...(live?.embed?.embedding
         ? {

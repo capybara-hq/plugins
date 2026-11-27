@@ -156,3 +156,22 @@ export function imageGenerationInfo(id: string): ModelImageGenerationInfo | unde
   const info = IMAGE_FAMILIES.find(([prefix]) => id.startsWith(prefix))?.[1];
   return info === undefined ? undefined : structuredClone(info);
 }
+
+/**
+ * The shortest prefix (tokens) the implicit cache stores, per model
+ * (https://docs.volcengine.com/docs/ark/context-cache; 2048 for `deepseek-v4-flash-ga-260731`
+ * confirmed live: no hit at 1447 tokens, a hit at 3827). The default is 1024.
+ */
+const CACHE_MIN_TOKENS: Record<string, number> = {
+  "deepseek-v4-1-flash-261017": 128,
+  "deepseek-v4-1-flash-economy-261017": 128,
+  "deepseek-v4-1-flash-260910": 256,
+  "kimi-k3-1-pro-261024": 256,
+  "doubao-seed-2-1-turbo-260628": 2048,
+  "glm-5-2-260617": 2048,
+  "deepseek-v4-pro-ga-260813": 2048,
+  "deepseek-v4-flash-ga-260731": 2048,
+  "glm-5-3-flash-260828": 8960,
+};
+
+export const cacheMinTokens = (model: string): number => CACHE_MIN_TOKENS[model] ?? 1024;

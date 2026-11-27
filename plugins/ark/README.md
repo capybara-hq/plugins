@@ -35,7 +35,9 @@ with `auth` before any request.
   endpoint-to-model mapping without a signed request per stream. Ark accepted the absence live;
   multi-turn tool use through a DeepSeek endpoint may still be refused with a 400.
 - Chat uses `max_completion_tokens`; encrypted reasoning content (`encrypted_content`) is replayed
-  opaquely. Automatic caching is declared only for `deepseek-*` models.
+  opaquely. Models with Ark's implicit context cache (the list's `features.cache`, else `deepseek-*`) declare
+  an implicit, non-guaranteed `cache` with the model's minimum cacheable prefix (1024 tokens unless
+  `src/tables.ts` knows better); there is no lifetime to choose and no cache writes are reported.
 - Embeddings use `/embeddings/multimodal`, which fuses all inputs of a request into one vector, so
   the provider sends one input per call (batch 1, sequential). Dimensions are 1024 or 2048
   (default 2048) for `doubao-embedding-vision-250615` and `-251215`.
