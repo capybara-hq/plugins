@@ -13,7 +13,6 @@ import { storeOver } from "./store.js";
 export { createInstanceBindings, InstanceBindingError, nextGeneration } from "./bindings.js";
 export {
   failureOf,
-  filesDigestOf,
   machineCall,
   ON_MACHINE_PREFIX,
   POLICY_REFUSAL_PREFIX,

@@ -2,6 +2,8 @@ import {
   type ChannelCard,
   ChannelSendError,
   type OutboundMessage,
+  questionBody,
+  questionChoiceButtons,
   questionRenderableInline,
   questionStateLabel,
   questionTextReplyHint,
@@ -86,6 +88,7 @@ const T = {
       skipped: "Skipped (replied instead)",
       expired: "Expired",
       cancelled: "Cancelled",
+      woken: "Wait ended",
     },
   },
   zh: {
@@ -123,6 +126,7 @@ const T = {
       skipped: "已跳过（已直接回复）",
       expired: "已过期",
       cancelled: "已取消",
+      woken: "等待已结束",
     },
   },
 } as const;
@@ -291,6 +295,23 @@ function questionInputs(c: Extract<ChannelCard, { kind: "question" }>, locale: L
   const f = c.form.fields[0];
   // With textReply the Other path is a plain reply, so a field with allowOther still gets its
   // controls, never an Other button.
+  // choices (core#867): one button per choice, first primary; a click answers at once
+  const choices = questionChoiceButtons(c.form, locale);
+  if (choices) {
+    try {
+      const els = choices.buttons.map((b, i) =>
+        button(
+          `cap_q_${i}`,
+          b.label,
+          encodeActionValue({ k: "q", id: c.id, key: choices.key, value: b.value }),
+          b.primary ? "primary" : undefined,
+        ),
+      );
+      return [actions([...els, web])];
+    } catch {
+      return [actions([web])];
+    }
+  }
   const inline = questionRenderableInline(c.form, { textReply: c.textReply !== undefined });
   if (!inline || !f || !("enum" in f.schema)) return [actions([web])];
   const options = f.schema.enum;
@@ -344,6 +365,8 @@ function questionBlocks(c: Extract<ChannelCard, { kind: "question" }>, locale: L
     if (label !== title) lines.push(esc(label));
     if (f.description !== undefined) lines.push(`_${esc(textOf(f.description, locale))}_`);
   }
+  const body = questionBody(c.form, locale);
+  if (body !== undefined) lines.push(esc(body));
   const blocks: Block[] = [section(lines.join("\n"))];
   if (c.state === "pending") {
     blocks.push(...questionInputs(c, locale));

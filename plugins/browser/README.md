@@ -40,6 +40,15 @@ A real browser in the person's device for agents (browser use spec,
   resume it clears the notice (with Done also handing the browser back, so a takeover the person
   still holds ends) and returns the page snapshot, or fails with "The user cancelled the handoff;
   ask the user how to continue, or try another approach.".
+- `browser_wait` (browser long waits spec, `2026-11-25-browser-long-waits-design.md` in core): at
+  most one condition (`text`, `ref`, `urlContains`, `navigation`, `download`) and `timeoutMs` up
+  to 24 h. A wait of 60 s or less is one `op: "wait"` in the call. A longer one needs a condition:
+  the first invocation sends `watch_start` (watch id: the first 32 hex characters of the call's
+  idempotency key; `remainingMs`, never an absolute time) and returns a watched `InputRequired`
+  (one 结束等待 / End wait button, `watch.deadlineMs`). The tool's watcher (`src/wait.ts`) sends
+  `watch_poll` with `ifRunning` (a stopped device or service settles the wait, nothing is started
+  or resumed); the resumed invocation sends `watch_end` with `ifRunning` and maps the latched state
+  and `resume.outcome` to the result or an actionable error.
 - `browser_screenshot` asks for at most 2 MiB and retries once at half that when the reply did
   not fit in one service message. A refused host's error ends with one next step (the user is
   asked to allow it); a service start that fails has its own text.
@@ -53,6 +62,16 @@ A real browser in the person's device for agents (browser use spec,
   the viewer with 4404 (the panel's "not running" state).
 
 ## The daemon (`daemon/`)
+
+- Long waits (`daemon/watches.ts`): `watch_start` binds a watch to the conversation's active tab
+  (refused without one) and latches the first outcome, checked every 500 ms: met, or ended by a
+  confirm / prompt dialog on the tab (`dialog`), the tab closing (`tab_closed`) or its remaining
+  time on the device's clock (`deadline`); a download watch is met when the owner's next download
+  is saved (`detail`: its path). `watch_poll` answers the state and is the heartbeat: a watch not
+  polled for 10 minutes is dropped. At most 16 watches (a 17th drops the oldest latched one, else
+  the oldest). A pending watch is the conversation's park. Watch ops bypass the takeover refusal
+  and never drop a pending handoff; `watch_start` and `watch_poll` take neither the hand back note
+  nor the unreported notes, `watch_end` does. Viewers of the tree get `state.waiting`.
 
 - Chromium starts on the daemon's first start. On Linux devices (device-docker, device-e2b) it is
   the full Chromium build in its new headless mode, so the browser presents as an ordinary Chrome:
@@ -235,6 +254,13 @@ shared by every conversation, the tabs are not.
 - **Idle close.** A conversation's tabs close after 15 minutes without a request, without an open
   panel showing it and without a pending park; its per-conversation state goes with them. The
   profile is never touched.
+- **Deleted conversations.** The kernel's conversation-deleted notice (a kernel request body, SDK
+  `parseConversationDeleted`) closes the tabs of the conversation and of its sub-agent
+  conversations at once, parked ones included, forgets their state and drops them from the
+  session file; it answers `{ ok: true, closed }` and a repeat closes nothing. The kernel keeps the
+  notice owed while the device is offline or the service is stopped within the restore window
+  (`DEVICE_SERVICE_RESTORE_MAX_AGE_MS`, also the session file's limit); the idle close is the
+  backstop. The profile is never touched.
 - **Takeover per device.** While the person controls the browser from any conversation's panel,
   every conversation's agent requests are refused. Afterwards only the conversations whose tabs the
   takeover concerned are told that the user had control.

@@ -27,7 +27,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.81",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.83",
     "@larksuiteoapi/node-sdk": "^1.76.0",
     "zod": "^4.6.7"
   },

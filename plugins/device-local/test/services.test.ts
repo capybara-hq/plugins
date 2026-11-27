@@ -1,7 +1,12 @@
-import { DeviceOfflineError, type DeviceStream } from "@capybara-hq/plugin-sdk";
+import {
+  DEVICE_SERVICE_FILES_DIGEST_VECTOR,
+  DeviceOfflineError,
+  type DeviceStream,
+  deviceServiceFilesDigest,
+} from "@capybara-hq/plugin-sdk";
 import { DEVICE_SERVICE_ARGV_PROBE, runDeviceServiceConformance } from "@capybara-hq/testing";
 import { describe, expect, it } from "vitest";
-import { createDeviceLocalProvider, filesDigestOf, type LocalDeviceHandle } from "../src/index.js";
+import { createDeviceLocalProvider, type LocalDeviceHandle } from "../src/index.js";
 import { fakeDialIn, fakeLog, LIMITS, memoryStore, ROOTS, rejection, signal } from "./fakes.js";
 
 const DEVICE = "dev-1";
@@ -145,7 +150,7 @@ describe("device-local services", () => {
         files: { "echo.mjs": "AQID" },
         env: { A: "b" },
       },
-      filesDigest: filesDigestOf(SPEC.files),
+      filesDigest: deviceServiceFilesDigest(SPEC.files),
       network: { kind: "allowlist", hosts: ["example.com"] },
     });
   });
@@ -158,29 +163,20 @@ describe("device-local services", () => {
     const status = await provider.ensureService?.(HANDLE, SPEC, signal());
     expect(status?.state).toBe("running");
     expect(m.requests).toHaveLength(1);
-    expect(m.requests[0]).toMatchObject({ filesDigest: filesDigestOf(SPEC.files) });
+    expect(m.requests[0]).toMatchObject({ filesDigest: deviceServiceFilesDigest(SPEC.files) });
     expect(m.requests[0]).not.toHaveProperty("spec.files");
   });
 
-  it("the digest covers paths and bytes, sorted by path", () => {
-    // the SDK's pinned vector (DEVICE_SERVICE_FILES_DIGEST_VECTOR, capybara-hq/core#879), copied
-    // until this package's SDK range has it and filesDigestOf becomes the SDK's function
-    const vector = {
-      "main.js": "console.log(1)\n",
-      "lib/a.js": "export const a = 1;\n",
-      empty: "",
-    };
-    expect(
-      filesDigestOf(
-        Object.fromEntries(
-          Object.entries(vector).map(([k, v]) => [k, new TextEncoder().encode(v)]),
-        ),
-      ),
-    ).toBe("sha256:7b3959ff2e10237b9f1a255bbecb5dacebd31422fe734b2867403e42913432a5");
-    const a = filesDigestOf({ b: new Uint8Array([1]), a: new Uint8Array([2]) });
-    expect(a).toBe(filesDigestOf({ a: new Uint8Array([2]), b: new Uint8Array([1]) }));
-    expect(a).toMatch(/^sha256:[0-9a-f]{64}$/);
-    expect(a).not.toBe(filesDigestOf({ a: new Uint8Array([1]), b: new Uint8Array([2]) }));
+  it("the digest sent is the SDK's, on the SDK's pinned vector", async () => {
+    const files = Object.fromEntries(
+      Object.entries(DEVICE_SERVICE_FILES_DIGEST_VECTOR.files).map(([k, v]) => [
+        k,
+        new TextEncoder().encode(v),
+      ]),
+    );
+    const { m, provider } = setup();
+    await provider.ensureService?.(HANDLE, { ...SPEC, files }, signal());
+    expect(m.requests[0]).toMatchObject({ filesDigest: DEVICE_SERVICE_FILES_DIGEST_VECTOR.digest });
   });
 
   it("an old machine's invalid answer to the files-less ensure is retried once with files", async () => {
@@ -228,12 +224,12 @@ describe("device-local services", () => {
       startedAt: expect.any(String),
       stateDir: STATE_DIR,
       codeDir,
-      filesDigest: filesDigestOf(SPEC.files),
+      filesDigest: deviceServiceFilesDigest(SPEC.files),
     });
     // an ifRunning ensure (the kernel's look before a launch review) carries it too
     expect(
       await provider.ensureService?.(HANDLE, { ...SPEC, files: {} }, signal(), { ifRunning: true }),
-    ).toHaveProperty("filesDigest", filesDigestOf(SPEC.files));
+    ).toHaveProperty("filesDigest", deviceServiceFilesDigest(SPEC.files));
     expect(await provider.serviceStatus?.(HANDLE, "tx.echo", signal())).toHaveProperty(
       "codeDir",
       codeDir,

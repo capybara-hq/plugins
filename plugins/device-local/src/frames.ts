@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   type DialInChannel,
   FileSystemGoneError,
@@ -160,7 +159,7 @@ export type ServiceBody =
         files?: Record<string, string>;
         env?: Record<string, string>;
       };
-      /** `sha256:` + hex over the files ({@link filesDigestOf}); sent with or without `files`. */
+      /** `sha256:` + hex over the files ({@link deviceServiceFilesDigest}); sent with or without `files`. */
       filesDigest?: string;
       network: { kind: "open-public" | "allowlist"; hosts: string[] };
     }
@@ -176,17 +175,6 @@ export class ServiceOpRefusedError extends ToolError {
   ) {
     super(message);
   }
-}
-
-/** `sha256:` + hex of the files sorted by path: path, NUL, byte length, NUL, bytes. */
-export function filesDigestOf(files: Record<string, Uint8Array>): string {
-  const h = createHash("sha256");
-  for (const path of Object.keys(files).sort()) {
-    const data = files[path] as Uint8Array;
-    h.update(`${path}\0${data.byteLength}\0`);
-    h.update(data);
-  }
-  return `sha256:${h.digest("hex")}`;
 }
 
 /** How a capybara-device from before service ids refuses one ("Invalid device service name"). */

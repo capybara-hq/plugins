@@ -303,6 +303,8 @@ export function mountPanel(opts: PanelOptions): void {
     let icon = "";
     let lead: StringKey | null = null;
     let detail: StringKey | null = null;
+    // a parked long wait of the tree: what the agent waits for and until when
+    let waitingDetail: string | null = null;
     if (mode === "connecting") lead = "statusConnecting";
     else if (mode === "live" && control === "user") {
       if (interactive()) {
@@ -317,11 +319,21 @@ export function mountPanel(opts: PanelOptions): void {
       icon = loading ? ICONS.spin : ICONS.dot;
       lead = "statusAgent";
       if (loading) detail = "statusLoading";
+      const waiting = lastState?.waiting;
+      if (waiting !== undefined && !loading) {
+        lead = "statusWaiting";
+        const until = new Date(waiting.until);
+        const time = Number.isNaN(until.getTime())
+          ? ""
+          : ` (${text("statusWaitingUntil")} ${until.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })})`;
+        waitingDetail = `${waiting.label}${time}`;
+      }
     }
     el.setAttribute("data-tone", tone);
     $("status-icon").innerHTML = icon;
     $("status-lead").textContent = lead === null ? "" : text(lead);
-    $("status-detail").textContent = detail === null ? "" : ` · ${text(detail)}`;
+    $("status-detail").textContent =
+      waitingDetail !== null ? ` · ${waitingDetail}` : detail === null ? "" : ` · ${text(detail)}`;
   }
 
   function renderChrome(): void {

@@ -720,6 +720,8 @@ export class ViewerSession {
     tabs.sort((a, b) => (order.get(a.group) ?? 0) - (order.get(b.group) ?? 0));
     const shownTab = tree.find((t) => t.id === this.shown);
     const last = this.browser.lastClickOf(this.shown);
+    // the newest pending long wait of the tree (the panel's status line)
+    const waiting = this.browser.watches.waitingOf(this.root);
     this.send({
       t: "state",
       tabs,
@@ -737,6 +739,9 @@ export class ViewerSession {
         message: h.message,
         tabIds: this.browser.tabsOf(h.conversationId),
       })),
+      ...(waiting === undefined
+        ? {}
+        : { waiting: { label: waiting.label.slice(0, 200), until: waiting.until } }),
       dialogs: this.browser.dialogsOf(this.root),
       viewport,
     });

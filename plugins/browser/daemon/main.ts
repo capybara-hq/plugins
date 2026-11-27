@@ -7,6 +7,7 @@ import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import {
   encodeServiceMessage,
+  parseConversationDeleted,
   parseViewerContext,
   ServiceMessageDecoder,
 } from "@capybara-hq/plugin-sdk";
@@ -33,6 +34,7 @@ import {
 } from "./chromium.js";
 import { restoreCookies, saveCookies } from "./cookie-file.js";
 import {
+  CONVERSATION_DELETED_MESSAGE,
   DEFAULT_FRAME_MAX_BYTES,
   DOWNLOAD_BLOCKED_PREFIX,
   MAX_TABS_PER_CONVERSATION,
@@ -43,7 +45,7 @@ import {
   type ToolRequest,
   type ViewerIn,
 } from "./protocol.js";
-import { SessionFile } from "./session-file.js";
+import { RESTORE_MAX_AGE_MS, SessionFile, withoutTree } from "./session-file.js";
 import { type Clock, DaemonState, systemClock } from "./state.js";
 import { ViewerSession } from "./viewer.js";
 
@@ -119,6 +121,9 @@ const dec = new TextDecoder();
 const REQUEST_OPS = new Set<string>([
   "handoff_notice",
   "handoff_clear",
+  "watch_start",
+  "watch_poll",
+  "watch_end",
   "navigate",
   "tabs",
   "snapshot",
@@ -169,6 +174,12 @@ function parse(raw: Uint8Array): unknown {
  */
 export const HANDOFF_HOLDS_ROLL_MS = 30 * 60_000;
 
+/**
+ * How long a conversation-deleted notice waits for a browser that is still launching (its tabs
+ * are restored by then); the kernel's request gives the answer 10 s.
+ */
+const NOTICE_LAUNCH_WAIT_MS = 5_000;
+
 /** Whether a request body is the kernel's roll check ({@link ROLL_CHECK_REQUEST}). */
 function isRollCheck(body: unknown): boolean {
   return (
@@ -211,7 +222,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
 
   let closing = false;
   const sessionFile = new SessionFile(opts.stateDir, clock);
-  const saved = sessionFile.read();
+  /** The session to restore at the first launch (a deleted conversation's part dropped). */
+  let saved = sessionFile.read();
   /** The running browser session, once its launch finished (the tab counts read it). */
   let live: BrowserSession | undefined;
   const state = new DaemonState({
@@ -311,6 +323,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         proxy: plan.proxy,
         clock,
         usage: state,
+        // a pending long wait's watch is its conversation's park
+        parks: state,
         singleProcess: plan.build === "chromium-headless-shell",
         workspace: workspace === undefined || workspace === "" ? undefined : workspace,
         downloadsTmp: plan.downloadsTmp,
@@ -478,6 +492,57 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     };
   }
 
+  /**
+   * A long wait's bookkeeping from the plugin server (browser long waits spec §6.2): not agent
+   * input, so allowed during a takeover, never queued behind actions and never dropping a pending
+   * handoff. `watch_start` and `watch_poll` take neither the hand back note nor the conversation's
+   * unreported notes (their replies are discarded by the kernel); `watch_end` is an ordinary
+   * reply that does. A poll never starts the browser: without one the watch is unknown.
+   */
+  async function watchOp(
+    req: Extract<ToolRequest, { op: "watch_start" | "watch_poll" | "watch_end" }>,
+  ): Promise<ToolReply> {
+    if (typeof req.watchId !== "string" || req.watchId === "")
+      return fail("The watch needs a watchId.");
+    if (req.op === "watch_poll") {
+      const session = live;
+      return {
+        ok: true,
+        watch: session === undefined ? { state: "unknown" } : session.watchPoll(req),
+        blockedHosts: [],
+      };
+    }
+    let session: BrowserSession;
+    try {
+      session = await browser();
+    } catch (e) {
+      return launchFailure(e);
+    }
+    if (req.op === "watch_end") {
+      const reply = await session.run(req);
+      if (reply.ok) {
+        const since = state.takeHandbackNote(req.conversationId);
+        if (since !== undefined) reply.userControlledSince = since;
+      }
+      return reply;
+    }
+    let watch: ReturnType<BrowserSession["watchStart"]>;
+    try {
+      watch = session.watchStart(req);
+    } catch (e) {
+      if (e instanceof ActionError)
+        return { ok: false, error: e.code, message: e.message, blockedHosts: [] };
+      throw e;
+    }
+    const page = session.currentPage(req.conversationId);
+    return {
+      ok: true,
+      ...(page === undefined ? {} : { page: await session.pageInfo(page) }),
+      watch,
+      blockedHosts: [],
+    };
+  }
+
   /** Whether a request names its conversation and the root of its tree (non-empty strings). */
   const namesConversation = (raw: object): boolean => {
     const r = raw as { conversationId?: unknown; rootConversationId?: unknown };
@@ -501,6 +566,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     if (!namesConversation(raw)) return fail(NO_CONVERSATION_MESSAGE);
     const req = raw as ToolRequest;
     const conv = req.conversationId;
+    const deletedIn = () => deletedTree(conv) ?? deletedTree(req.rootConversationId);
+    if (deletedIn() !== undefined) return fail(CONVERSATION_DELETED_MESSAGE);
     // in use from arrival to reply (queued requests and wait included): adopt is refused meanwhile
     state.requestArrived(conv, req.rootConversationId);
     let reply: ToolReply;
@@ -510,6 +577,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       reply = fail(e instanceof ActionError ? e.message : String(e));
     } finally {
       state.requestFinished(conv);
+      // deleted while the request ran: a tab it opened after the notice closes now
+      const tree = deletedIn();
+      if (tree !== undefined) void forgetDeleted(tree).catch(() => undefined);
     }
     // the conversation's own tab count after the request (the result's last line)
     return { ...reply, tabs: { open: live?.countOf(conv) ?? 0, max: MAX_TABS_PER_CONVERSATION } };
@@ -517,6 +587,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
 
   async function conversationRequest(req: ToolRequest): Promise<ToolReply> {
     if (req.op === "handoff_notice" || req.op === "handoff_clear") return handoffOp(req);
+    if (req.op === "watch_start" || req.op === "watch_poll" || req.op === "watch_end")
+      return watchOp(req);
     // A browser tool call after a handoff notice means that conversation's run moved on: a run
     // aborted while waiting never sends handoff_clear, so the notice would stay up. Other
     // conversations' handoffs stay.
@@ -581,7 +653,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         // older kernel, a panel's own message) closes the stream, and a later message of that
         // shape is never read as context
         const ctx = parseViewerContext(raw);
-        if (ctx === null) {
+        // a deleted conversation's viewer (the kernel closes it too) is never served
+        if (
+          ctx === null ||
+          deletedTree(ctx.conversationId) !== undefined ||
+          deletedTree(ctx.rootConversationId) !== undefined
+        ) {
           sock.destroy();
           return;
         }
@@ -628,6 +705,16 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       if (kind === "request") {
         if (handled) return;
         handled = true;
+        // the kernel's conversation-deleted notice: closes the tree's tabs and forgets its state
+        // (no browser start, no activity, any control state); the profile is never touched
+        const deleted = parseConversationDeleted(raw);
+        if (deleted !== null) {
+          forgetDeleted(deleted.conversationId)
+            .then((closed) => write(sock, { ok: true, closed }))
+            .catch((e) => write(sock, fail(e instanceof Error ? e.message : String(e))))
+            .finally(() => sock.end());
+          return;
+        }
         const body = parse(raw);
         // the kernel's roll check: answered from the control state alone (no browser start, no
         // activity), busy while a restart would lose what the person is doing
@@ -674,6 +761,40 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       }
       for (const m of msgs) onMessage(m);
     });
+  }
+
+  /**
+   * Conversations the kernel's notice deleted, with when: for the restore window their requests
+   * are refused and their viewers closed, and a request that was already running when the notice
+   * came has the tabs it opened closed when it ends.
+   */
+  const deleted = new Map<string, number>();
+
+  /** The deleted conversation `id` is (or undefined), forgetting entries past the window. */
+  function deletedTree(id: string): string | undefined {
+    const now = clock.now();
+    for (const [c, at] of deleted) if (now - at > RESTORE_MAX_AGE_MS) deleted.delete(c);
+    return deleted.has(id) ? id : undefined;
+  }
+
+  /**
+   * The kernel's conversation-deleted notice (SDK `parseConversationDeleted`): forgets the
+   * conversation and every conversation whose tree root it is, closes their tabs in the running
+   * (or launching) browser, and drops them from the session still to restore and from the file
+   * (a coming save rewrites it too). Idempotent: a repeat closes nothing. Returns the tabs closed.
+   */
+  async function forgetDeleted(conversationId: string): Promise<number> {
+    if (!deleted.has(conversationId)) deleted.set(conversationId, clock.now());
+    const forgotten = state.forgetTree(conversationId);
+    if (saved !== undefined) saved = withoutTree(saved, conversationId);
+    sessionFile.dropTree(conversationId);
+    const session =
+      live ??
+      (current === undefined
+        ? undefined
+        : await within(current, NOTICE_LAUNCH_WAIT_MS).catch(() => undefined));
+    if (session === undefined) return 0;
+    return session.forgetTree(conversationId, forgotten);
   }
 
   if (existsSync(opts.socketPath)) unlinkSync(opts.socketPath);

@@ -7,12 +7,16 @@
 
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DEVICE_SERVICE_RESTORE_MAX_AGE_MS } from "@capybara-hq/plugin-sdk";
 import type { BrowserSession } from "./actions.js";
 import { HANDOFF_MAX_CHARS, MAX_TABS } from "./protocol.js";
 import { type Clock, type DaemonState, HANDOFF_PARK } from "./state.js";
 
-/** A session file older than this is not restored. */
-export const RESTORE_MAX_AGE_MS = 10 * 60_000;
+/**
+ * A session file older than this is not restored: the SDK's restore window, for which the kernel
+ * keeps a deleted conversation's notice owed while the service does not run.
+ */
+export const RESTORE_MAX_AGE_MS = DEVICE_SERVICE_RESTORE_MAX_AGE_MS;
 
 /** The session file format; a file of another one (an older daemon's) is not restored. */
 export const SESSION_FILE_VERSION = 2;
@@ -170,6 +174,29 @@ export class SessionFile {
     });
   }
 
+  /**
+   * Removes a deleted conversation and the conversations whose tree root it is from the file on
+   * disk, keeping its save time (a restore window never grows), so a later start does not restore
+   * their tabs. Nothing to do without a file or after {@link forget}.
+   */
+  dropTree(conversationId: string): void {
+    if (this.forgotten) return;
+    let raw: SavedSession;
+    try {
+      raw = JSON.parse(readFileSync(this.file, "utf8")) as SavedSession;
+    } catch {
+      return;
+    }
+    const next = withoutTree(raw, conversationId);
+    if (next === raw) return;
+    try {
+      writeFileSync(`${this.file}.tmp`, JSON.stringify(next), { mode: 0o600 });
+      renameSync(`${this.file}.tmp`, this.file);
+    } catch {
+      // a full or read-only disk: the idle close stays the backstop
+    }
+  }
+
   /** Removes the file and stops saving (an idle stop). */
   forget(): void {
     this.forgotten = true;
@@ -205,4 +232,27 @@ export class SessionFile {
       if (id !== undefined) session.setActive(c.id, id);
     }
   }
+}
+
+/**
+ * The saved session without a deleted conversation and the conversations whose tree root it is
+ * (tabs and per-conversation state); `saved` itself when it holds none of them.
+ */
+export function withoutTree(saved: SavedSession, conversationId: string): SavedSession {
+  const hit = (owner: unknown, root: unknown) =>
+    owner === conversationId || root === conversationId;
+  if (!Array.isArray(saved.tabs) || !Array.isArray(saved.conversations)) return saved;
+  const tabs = saved.tabs.filter((t) => !hit(t?.owner, t?.root));
+  const conversations = saved.conversations.filter((c) => !hit(c?.id, c?.root));
+  if (tabs.length === saved.tabs.length && conversations.length === saved.conversations.length)
+    return saved;
+  // an active index points into `tabs`: re-point each kept conversation's active tab
+  const kept = conversations.map((c) => {
+    if (c.active === undefined) return c;
+    const tab = saved.tabs[c.active];
+    const at = tab === undefined ? -1 : tabs.indexOf(tab);
+    const { active: _active, ...rest } = c;
+    return at < 0 ? rest : { ...rest, active: at };
+  });
+  return { ...saved, tabs, conversations: kept };
 }

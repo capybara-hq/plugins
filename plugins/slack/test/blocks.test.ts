@@ -138,6 +138,47 @@ describe("renderCard: approval", () => {
   });
 });
 
+const confirm = (): ChannelCard => ({
+  kind: "question",
+  id: ID,
+  state: "pending",
+  webUrl: WEB,
+  form: {
+    title: { en: "Browser handoff", zh: "浏览器交接" },
+    body: { en: "Finish the login, then confirm", zh: "完成登录后确认" },
+    fields: [
+      {
+        key: "done",
+        label: "Done",
+        required: true,
+        schema: { type: "boolean" },
+        choices: [
+          { value: true, label: { en: "Done", zh: "完成" } },
+          { value: false, label: { en: "Cancel", zh: "取消" } },
+        ],
+      },
+    ],
+  },
+});
+
+describe("renderCard: question choices and body", () => {
+  it("draws one button per choice (first primary) and shows the body", () => {
+    const blocks = renderCard(confirm(), "en") as Block[];
+    const bs = buttons(blocks);
+    expect(bs.map((b) => b.text.text)).toEqual(["Done", "Cancel", "Answer on the web"]);
+    expect(bs[0]?.style).toBe("primary");
+    expect(bs[1]?.style).toBeUndefined();
+    expect(decodeActionValue(bs[1]?.value ?? "")).toEqual({
+      k: "q",
+      id: ID,
+      key: "done",
+      value: false,
+    });
+    expect(allText(blocks)).toContain("Finish the login, then confirm");
+    expect((renderCard(confirm(), "zh") as Block[]).length).toBe(blocks.length);
+  });
+});
+
 describe("renderCard: question", () => {
   it("inline single-select: one button per option plus a web link", () => {
     const blocks = renderCard(question(false, 3), "en") as Block[];
@@ -236,6 +277,14 @@ describe("renderCard: question", () => {
     expect(buttons(blocks).map((b) => b.text.text)).toEqual(["详情"]);
     expect(allText(blocks)).toContain("已跳过（已直接回复）");
     expect(allText(blocks)).not.toContain("也可以直接回复文字");
+  });
+
+  it("woken (a watched wait ended): 等待已结束 / Wait ended, no inputs", () => {
+    const zh = renderCard(question(false, 3, { state: "woken" }), "zh") as Block[];
+    expect(allText(zh)).toContain("等待已结束");
+    expect(buttons(zh).map((b) => b.text.text)).toEqual(["详情"]);
+    const en = renderCard(question(false, 3, { state: "woken" }), "en") as Block[];
+    expect(allText(en)).toContain("Wait ended");
   });
 
   it("an unknown future state shows its name, never undefined", () => {

@@ -2,6 +2,8 @@ import {
   type ChannelCard,
   ChannelSendError,
   type OutboundMessage,
+  questionBody,
+  questionChoiceButtons,
   questionRenderableInline,
   questionStateLabel,
   questionTextReplyHint,
@@ -90,6 +92,7 @@ const T = {
       skipped: "Skipped (replied instead)",
       expired: "Expired",
       cancelled: "Cancelled",
+      woken: "Wait ended",
     },
   },
   zh: {
@@ -128,6 +131,7 @@ const T = {
       skipped: "已跳过（已直接回复）",
       expired: "已过期",
       cancelled: "已取消",
+      woken: "等待已结束",
     },
   },
 } as const;
@@ -147,6 +151,7 @@ const QUESTION_COLOR: Record<string, string> = {
   skipped: "grey",
   expired: "grey",
   cancelled: "grey",
+  woken: "grey",
 } as const;
 
 /** The progress card's head colour by run state (colour only on the head, no icons). */
@@ -311,6 +316,22 @@ function questionInputs(
   const f = c.form.fields[0];
   // With textReply the Other path is a plain reply, so a field with allowOther still gets its
   // controls, never an Other button.
+  // choices (core#867): one button per choice, first primary; a click answers at once
+  const choices = questionChoiceButtons(c.form, locale);
+  if (choices) {
+    try {
+      const buttons = choices.buttons.map((b) =>
+        callbackButton(
+          b.label,
+          { k: "q", chat, id: c.id, key: choices.key, value: b.value },
+          b.primary ? "primary" : undefined,
+        ),
+      );
+      return actions(buttons, web);
+    } catch {
+      return actions([], web);
+    }
+  }
   const inline = questionRenderableInline(c.form, { textReply: c.textReply !== undefined });
   if (!inline || !f || !("enum" in f.schema)) return actions([], web);
   const options = f.schema.enum;
@@ -372,6 +393,8 @@ function question(
     if (label !== title) lines.push(escapePlain(label));
     if (f.description !== undefined) lines.push(`*${escapePlain(textOf(f.description, locale))}*`);
   }
+  const body = questionBody(c.form, locale);
+  if (body !== undefined) lines.push(escapePlain(body));
   const elements: El[] = lines.length > 0 ? [md(lines.join("\n"))] : [];
   if (c.state === "pending") {
     elements.push(...questionInputs(c, locale, chat));
