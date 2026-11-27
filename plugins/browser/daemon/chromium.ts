@@ -464,6 +464,8 @@ export async function ensureChromium(
   build: ChromiumBuild = chromiumBuild(process.platform),
   /** Install even over a complete install: one this process did not make is never trusted. */
   fresh = false,
+  /** `browsersPath` is the provider's sealed install directory (not a shipped cache). */
+  sealedInstall = false,
 ): Promise<string> {
   const { registry, exe, executablePath, directory } = await registryBrowser(browsersPath, build);
   // Installed means Playwright's marker: another process installing into the same directory has
@@ -472,7 +474,12 @@ export async function ensureChromium(
   if (!fresh && marked && existsSync(executablePath)) return executablePath;
   if (!install)
     throw new Error(
-      `the browser in ${browsersPath} is incomplete and read only for the browser service; delete the device and create it again`,
+      sealedInstall
+        ? // the provider's sealed install (device-local): kept per machine and browser revision by
+          // a capybara-device with the install cache, per device before; either way installed again
+          // under new files or a capybara-device that installs differently, never by deleting the device
+          `the browser installed for this device lacks the ${build} build it needs now and is read only for the browser service; ask the user to update capybara-device on that machine, which installs the browser again`
+        : `the browser in ${browsersPath} is incomplete and read only for the browser service; delete the device and create it again`,
     );
   // The registry's lock makes this wait for an install already running, which it then finds
   // done. A marked install without its executable (removed since) is installed again.
@@ -537,6 +544,8 @@ export async function launchChromium(
           plan.browsersPath,
           plan.install === undefined && plan.shipped !== true,
           plan.build,
+          false,
+          plan.install?.sealed === true,
         )
       : await shippedExecutable(plan.browsersPath, plan.shippedDir, plan.build);
   const pw = await loadPlaywright(plan.browsersPath);

@@ -34,6 +34,17 @@ describe("the browser install key (plugins#311)", () => {
     expect(of("1255", "1255", "9")).toBe(of("1255", "1255"));
     expect(of("1256", "1255")).not.toBe(of("1255", "1255"));
     expect(() => browserInstallKey(JSON.stringify({ browsers: [] }))).toThrow(/no revision/);
+    // a revision per host OS would make the key lie: refused at build time
+    expect(() =>
+      browserInstallKey(
+        JSON.stringify({
+          browsers: [
+            { name: "chromium", revision: "1255", revisionOverrides: { "mac14-arm64": "1250" } },
+            { name: "chromium-headless-shell", revision: "1255" },
+          ],
+        }),
+      ),
+    ).toThrow(/revisionOverrides/);
   });
 });
 

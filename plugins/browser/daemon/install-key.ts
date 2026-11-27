@@ -8,17 +8,26 @@
 export const INSTALL_KEY_FILE = "capybara-install-key";
 
 /** What an install key may hold (the SDK's DEVICE_SERVICE_INSTALL_KEY_RE). */
-export const INSTALL_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
+export const INSTALL_KEY_RE = /^[a-z0-9][a-z0-9._+-]{0,127}$/;
 
 /**
  * The key for a browsers.json: both builds the daemon may install (which one depends on the
  * device's sandbox, known only when it runs), each with its revision, e.g.
- * `chromium-1255+chromium-headless-shell-1255`. Throws when either is missing.
+ * `chromium-1255+chromium-headless-shell-1255`. Throws when either is missing, or when either has
+ * `revisionOverrides` (a revision per host OS, which the key and the provider's platform scope
+ * would not name: the key must never lie about what is installed).
  */
 export function browserInstallKey(browsersJson: string): string {
-  const json = JSON.parse(browsersJson) as { browsers?: { name?: unknown; revision?: unknown }[] };
+  const json = JSON.parse(browsersJson) as {
+    browsers?: { name?: unknown; revision?: unknown; revisionOverrides?: unknown }[];
+  };
   const parts = ["chromium", "chromium-headless-shell"].map((name) => {
-    const revision = json.browsers?.find((b) => b.name === name)?.revision;
+    const entry = json.browsers?.find((b) => b.name === name);
+    if (entry?.revisionOverrides !== undefined)
+      throw new Error(
+        `browsers.json gives ${name} revisionOverrides; extend browserInstallKey to name the revision per host OS`,
+      );
+    const revision = entry?.revision;
     if (typeof revision !== "string" || !/^\d+$/.test(revision))
       throw new Error(`browsers.json names no revision of ${name}`);
     return `${name}-${revision}`;

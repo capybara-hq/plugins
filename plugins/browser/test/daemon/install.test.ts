@@ -61,7 +61,11 @@ describe("chromium in the provider's install directory (plugins#209)", () => {
         platform: process.platform,
       });
       expect(sealed.install).toEqual({ sealed: true });
-      await expect(launchChromium(sealed)).rejects.toThrow(/incomplete and read only/);
+      // the sealed install is the provider's: deleting the device would not help (the install may
+      // be the machine's), updating capybara-device does
+      await expect(launchChromium(sealed)).rejects.toThrow(
+        /lacks the chromium(-headless-shell)? build it needs now.*update capybara-device/,
+      );
       expect(existsSync(join(dir, "__dirlock"))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
