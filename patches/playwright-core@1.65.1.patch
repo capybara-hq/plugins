@@ -1,5 +1,5 @@
 diff --git a/lib/coreBundle.js b/lib/coreBundle.js
-index c09d4f45f03b4cb41bbec4c42c30ed092272b6a9..345a3665f4b50ed1b8c89aee65da6a1eeb681a22 100644
+index c09d4f45f03b4cb41bbec4c42c30ed092272b6a9..a83aed89198b865eb0377d932d053e90224edb22 100644
 --- a/lib/coreBundle.js
 +++ b/lib/coreBundle.js
 @@ -37903,6 +37903,11 @@ var init_crNetworkManager = __esm({
@@ -14,7 +14,20 @@ index c09d4f45f03b4cb41bbec4c42c30ed092272b6a9..345a3665f4b50ed1b8c89aee65da6a1e
          }
          const { username, password } = credentials || { username: void 0, password: void 0 };
          sessionInfo.session._sendMayFail("Fetch.continueWithAuth", {
-@@ -37988,6 +37993,11 @@ var init_crNetworkManager = __esm({
+@@ -37926,8 +37931,12 @@ var init_crNetworkManager = __esm({
+           const existingRequest = this._requestIdToRequest.get(requestId);
+           const alreadyContinuedParams = existingRequest?._originalRequestRoute?._alreadyContinuedParams;
+           if (alreadyContinuedParams && !event.redirectedRequestId) {
++            // capybara patch (plugins#292 review): a redirect hop paused before its
++            // requestWillBeSent lands here too (a subresource's hop carries no redirectedRequestId)
++            const headers = alreadyContinuedParams.headers && crossedOrigin(existingRequest.request, event.request.url) ? alreadyContinuedParams.headers.filter((h) => h.name.toLowerCase() !== "authorization") : alreadyContinuedParams.headers;
+             sessionInfo.session._sendMayFail("Fetch.continueRequest", {
+               ...alreadyContinuedParams,
++              headers,
+               requestId: event.requestId
+             });
+             return;
+@@ -37988,6 +37997,11 @@ var init_crNetworkManager = __esm({
              if (headersOverride) {
                const originalHeaders = Object.entries(requestPausedEvent.request.headers).map(([name, value2]) => ({ name, value: value2 }));
                headersOverride = removeCookieHeader(applyHeadersOverrides(originalHeaders, headersOverride));
@@ -26,7 +39,7 @@ index c09d4f45f03b4cb41bbec4c42c30ed092272b6a9..345a3665f4b50ed1b8c89aee65da6a1e
              }
              requestPausedSessionInfo.session._sendMayFail("Fetch.continueRequest", { requestId: requestPausedEvent.requestId, headers: headersOverride });
            } else {
-@@ -53329,6 +53339,22 @@ function validateBrowserContextOptions(options, browserOptions) {
+@@ -53329,6 +53343,22 @@ function validateBrowserContextOptions(options, browserOptions) {
      throw new Error(`"recordVideo.fps" must be a positive number, got ${options.recordVideo.fps}`);
    verifyGeolocation(options.geolocation);
  }
