@@ -375,11 +375,14 @@ describe("browser daemon: restart", () => {
     expect(two.daemon.state.handoffs()).toMatchObject([
       { conversationId: "sub", rootConversationId: "c1", callId: "h1", message: "Sign in" },
     ]);
-    // each conversation gets its own tabs and its active tab back
-    const own = await request(two.socketPath, { op: "tabs", action: "list" });
-    expect(own).toMatchObject({ ok: true, page: { url: `${fx.url}/b` }, tabs: { open: 2 } });
-    const subs = await request(two.socketPath, { op: "tabs", action: "list" }, sub);
-    expect(subs).toMatchObject({ ok: true, page: { url: `${fx.url}/s` }, tabs: { open: 1 } });
+    // each conversation gets its own tabs and its active tab back (a restored tab's navigation
+    // runs without the start waiting for it: its address shows once it commits)
+    await expect
+      .poll(() => request(two.socketPath, { op: "tabs", action: "list" }))
+      .toMatchObject({ ok: true, page: { url: `${fx.url}/b` }, tabs: { open: 2 } });
+    await expect
+      .poll(() => request(two.socketPath, { op: "tabs", action: "list" }, sub))
+      .toMatchObject({ ok: true, page: { url: `${fx.url}/s` }, tabs: { open: 1 } });
   });
 
   it("restores nothing after an idle stop or from an old session file", async () => {
