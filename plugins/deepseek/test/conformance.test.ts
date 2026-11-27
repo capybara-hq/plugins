@@ -36,7 +36,7 @@ describeModelProviderConformance("deepseek (fixtures)", async () => {
       baseUrl: server.url,
     }),
     model: "deepseek-flash",
-    expect: { thinking: true, caching: false /* P2–P7 declare the cache */ },
+    expect: { thinking: true, caching: true },
     teardown: () => server.stop(),
   };
 });
@@ -62,7 +62,7 @@ describe.skipIf(!LIVE_KEY)("live", { timeout: 120_000 }, () => {
       plugin: PLUGIN,
       provider,
       model: flash?.id ?? "deepseek-flash",
-      expect: { thinking: true, caching: false /* P2–P7 declare the cache */ },
+      expect: { thinking: true, caching: true },
       cachePrefixTokens: 2000,
       teardown: async () => {},
     };

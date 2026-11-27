@@ -73,6 +73,23 @@ describe("deepseek listModels", () => {
     expect(server.requests.at(-1)?.headers.authorization).toBe("Bearer sk-default");
   });
 
+  it("every chat model declares the implicit prompt cache", async () => {
+    next = () => ({ status: 200, json: MODELS_BODY });
+    const models = await provider().listModels();
+    expect(models.length).toBeGreaterThan(0);
+    for (const m of models) {
+      expect(m.cache).toEqual({
+        mechanism: "implicit",
+        ttlOptions: [],
+        ttlIsMinimum: false,
+        refreshOnHit: false,
+        ttlClock: "unknown",
+        minTokens: 256,
+        guaranteed: false,
+      });
+    }
+  });
+
   it("skips null and malformed entries with a warning, never failing the list", async () => {
     next = () => ({
       status: 200,

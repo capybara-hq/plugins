@@ -32,6 +32,9 @@ the super admin set it.
   response and a small bundled table fills in missing limits.
 - Thinking mode: parameters `thinking` (`off` / `on`) and `effort`; `reasoning_content` is replayed
   as the API requires, and automatic prefix caching is reported in usage.
+- Prompt cache: every chat model declares an implicit cache (no request option, no ttl choice, no
+  guarantee, refresh and expiry unknown). DeepSeek documents no minimum; measured, the cache unit
+  is 128 tokens and the first hit came at a 262-token prompt, so the declared minimum is 256.
 - Chat only; no embeddings.
 
 ## Verified live (2026-11-08)

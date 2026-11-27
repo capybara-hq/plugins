@@ -97,6 +97,17 @@ function mapModel(raw: RawModel & { id: string }): ModelInfo {
       // `[system]` user turns, see map-request.ts
       midConversationSystem: false,
     },
+    cache: {
+      mechanism: "implicit",
+      ttlOptions: [],
+      ttlIsMinimum: false,
+      refreshOnHit: false,
+      ttlClock: "unknown",
+      // DeepSeek documents no minimum; measured: the cache unit is 128 tokens and the first hit
+      // came at a 262-token prompt, so a prefix of at least 256 tokens is cacheable.
+      minTokens: 256,
+      guaranteed: false,
+    },
     ...(reasoning ? { streamIdleTimeoutMs: REASONING_IDLE_TIMEOUT_MS } : {}),
     parameters: parameters(raw),
   };
