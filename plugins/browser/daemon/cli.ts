@@ -31,7 +31,11 @@ async function main(): Promise<void> {
     stateDir,
     env: process.env,
     onIdle: () => stop(0, "idle"),
-    onBrowserGone: () => stop(1, "Chromium exited"),
+    // the daemon stays: the next request or viewer launches Chromium again
+    onBrowserGone: () =>
+      process.stderr.write(
+        "browser daemon: Chromium exited unexpectedly; relaunched on next use\n",
+      ),
     // installed and sealed: the next start runs the browser read only
     onSealed: () => stop(0, "browser installed and sealed; restart to run it"),
   });
