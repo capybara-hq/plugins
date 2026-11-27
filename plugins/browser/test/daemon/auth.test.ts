@@ -197,6 +197,8 @@ describe("HTTP Basic auth", () => {
     // the other origin's page fetches (with credentials), loads an image and posts a form there
     ok(await request(d.socketPath, { op: "navigate", url: `${other.url}/cross` }));
     await expect.poll(() => seen.some((x) => x.path === "/form"), { timeout: 30_000 }).toBe(true);
+    // the form post's navigation settles (its 401 page commits) before the next navigation
+    ok(await request(d.socketPath, { op: "wait", urlContains: "/form", timeoutMs: 30_000 }));
     for (const path of ["/fetch", "/img", "/form"]) {
       const hit = seen.find((x) => x.path === path);
       expect(hit, path).toBeDefined();
