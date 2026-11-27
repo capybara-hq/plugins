@@ -16,6 +16,7 @@ import {
   ActionError,
   BrowserSession,
   DEFAULT_DOWNLOAD_MAX_BYTES,
+  type LostTab,
   proxyRefusal,
   TAKEN_OVER_MESSAGE,
 } from "./actions.js";
@@ -34,6 +35,8 @@ import {
 } from "./chromium.js";
 import { restoreCookies, saveCookies } from "./cookie-file.js";
 import {
+  BROWSER_CRASHED_MESSAGE,
+  BROWSER_RESTARTED_NOTE,
   CONVERSATION_DELETED_MESSAGE,
   DEFAULT_FRAME_MAX_BYTES,
   DOWNLOAD_BLOCKED_PREFIX,
@@ -45,7 +48,13 @@ import {
   type ToolRequest,
   type ViewerIn,
 } from "./protocol.js";
-import { RESTORE_MAX_AGE_MS, SessionFile, withoutTree } from "./session-file.js";
+import {
+  RESTORE_MAX_AGE_MS,
+  type SavedSession,
+  SESSION_FILE_VERSION,
+  SessionFile,
+  withoutTree,
+} from "./session-file.js";
 import { type Clock, DaemonState, systemClock } from "./state.js";
 import { ViewerSession } from "./viewer.js";
 
@@ -69,7 +78,10 @@ export interface DaemonOptions {
   downloadWaitMs?: number;
   /** How long a navigation may take before it is stopped (default 30 s). */
   navigationTimeoutMs?: number;
-  /** Called when Chromium exits without the daemon closing it. */
+  /**
+   * Called when Chromium exits without the daemon closing it (a crash). The daemon keeps running:
+   * the next request or viewer launches Chromium again, reopening the tabs the crash closed.
+   */
   onBrowserGone?: () => void;
   /** How long a stop waits for Chromium to close before killing it (default 3 s). */
   browserCloseGraceMs?: number;
@@ -256,6 +268,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     | { launch: Promise<BrowserSession>; pid: number | undefined; ctx: BrowserContext }
     | undefined;
   let restored = false;
+  /** The conversations to tell, after the next restore, that a crash reopened their tabs. */
+  let crashNotes = new Set<string>();
+  /** Sessions whose browser crashed: a request that ran on one answers BROWSER_CRASHED_MESSAGE. */
+  const crashed = new WeakSet<BrowserSession>();
+  /** The viewer streams (a crash ends them: each viewer is bound to its browser's session). */
+  const streams = new Set<Socket>();
 
   /** Resolves with `value`, or undefined once `ms` passed. */
   function within<T>(value: Promise<T>, ms: number): Promise<T | undefined> {
@@ -266,6 +284,28 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         timer = clock.schedule(() => r(undefined), ms);
       }),
     ]).finally(() => clock.cancel(timer));
+  }
+
+  /**
+   * Keeps the tabs a crash closed for the next launch to reopen, each for its owner, the active
+   * ones active again (the session file's shape; the crash's own saves already dropped them).
+   */
+  function reopenAfterCrash(lost: LostTab[]): void {
+    if (lost.length === 0) return;
+    const conversations: SavedSession["conversations"] = [];
+    for (const t of lost) {
+      if (conversations.some((c) => c.id === t.owner)) continue;
+      const active = lost.findLastIndex((x) => x.owner === t.owner && x.active);
+      conversations.push({ id: t.owner, root: t.root, ...(active < 0 ? {} : { active }) });
+    }
+    saved = {
+      version: SESSION_FILE_VERSION,
+      savedAt: clock.now(),
+      tabs: lost.map((t) => ({ url: t.url, owner: t.owner, root: t.root })),
+      conversations,
+    };
+    restored = false;
+    crashNotes = new Set(lost.map((t) => t.owner));
   }
 
   /**
@@ -310,16 +350,34 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     ): Promise<BrowserSession> {
       // before the process id lookup: a Chromium that exits during it is still reported
       let gone = false;
+      let pid: number | undefined;
+      let session: BrowserSession | undefined;
+      /** Undoes this session's listeners on the shared state (a crashed one must not save). */
+      const unlisten: (() => void)[] = [];
       ctx.on("close", () => {
         gone = true;
         if (running?.launch === starting) running = undefined;
-        if (!closing && !failed()) opts.onBrowserGone?.();
+        if (closing || failed()) return;
+        // Chromium went away on its own (a crash): the daemon stays and launches it again on the
+        // next use; a launch still setting up fails on its own and is retried the same way
+        if (current === starting) current = undefined;
+        for (const off of unlisten.splice(0)) off();
+        if (session !== undefined) {
+          crashed.add(session);
+          if (live === session) live = undefined;
+          reopenAfterCrash(session.lostTabs());
+        }
+        // the crashed browser's leftover processes (its group) go with it
+        if (pid !== undefined) killChromium(pid);
+        // each viewer shows the crashed session: the panel reconnects to the next one
+        for (const s of streams) s.destroy();
+        opts.onBrowserGone?.();
       });
-      const pid = await within(browserProcessId(ctx), BROWSER_CLOSE_GRACE_MS);
+      pid = await within(browserProcessId(ctx), BROWSER_CLOSE_GRACE_MS);
       setPid(pid);
       if (!gone) running = { launch: starting, pid, ctx };
       const workspace = opts.env[SERVICE_WORKSPACE_ENV];
-      const session = new BrowserSession(ctx, {
+      session = new BrowserSession(ctx, {
         proxy: plan.proxy,
         clock,
         usage: state,
@@ -337,9 +395,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       await session.ready;
       // hand back restores the desktop viewport ahead of every conversation's next request (the
       // listener runs inside the hand back, before any request can pass the control check)
-      state.onChange(() => {
-        if (state.control === "agent") void session.restoreDesktop();
-      });
+      const s = session;
+      unlisten.push(
+        state.onChange(() => {
+          if (state.control === "agent") void s.restoreDesktop();
+        }),
+      );
       // a shipped browser of another revision runs: the next tool result says so
       if (plan.shippedDir !== undefined)
         session.note(shippedRevisionNote(plan.shippedDir, browserRevision(plan.build)));
@@ -350,16 +411,22 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       // A launch that finishes after a stop only gets closed (stopBrowser): no tabs restored and
       // no saves, which would write back the session file an idle stop just forgot.
       if (!closing) await restoreCookies(ctx, opts.stateDir);
+      let reopened = false;
       if (!restored && !closing) {
         restored = true;
         if (saved !== undefined) await sessionFile.restoreTabs(session, saved);
+        // the tabs a crash closed are open again: their conversations' next replies say so
+        reopened = crashNotes.size > 0;
+        for (const conv of crashNotes) session.noteTo(conv, BROWSER_RESTARTED_NOTE);
+        crashNotes = new Set();
       }
-      if (!closing) {
-        const save = () => sessionFile.save(session, state);
-        session.on(save);
-        state.onChange(save);
+      if (!closing && !gone) {
+        const save = () => sessionFile.save(s, state);
+        unlisten.push(session.on(save), state.onChange(save));
+        // the reopened tabs are the session now (the crash's last saves had none of them)
+        if (reopened) save();
       }
-      if (!failed()) live = session;
+      if (!failed() && !gone) live = session;
       return session;
     }
   }
@@ -602,7 +669,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     } catch (e) {
       return launchFailure(e);
     }
-    const reply = await session.run(req, { takenOver: () => state.control === "user" });
+    let reply = await session.run(req, { takenOver: () => state.control === "user" });
+    // the browser crashed under the request: what it did is unknown, and the next call relaunches
+    if (!reply.ok && crashed.has(session))
+      reply = { ...fail(BROWSER_CRASHED_MESSAGE), blockedHosts: reply.blockedHosts };
     if (reply.ok) {
       const since = state.takeHandbackNote(req.conversationId);
       if (since !== undefined) reply.userControlledSince = since;
@@ -627,6 +697,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
 
     const end = () => {
       sockets.delete(sock);
+      streams.delete(sock);
       if (viewer !== undefined) {
         const v = viewer;
         viewer = undefined;
@@ -667,6 +738,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
           rootConversationId: ctx.rootConversationId,
         };
         const viewerContext = context;
+        streams.add(sock);
         opened = true;
         state.viewerOpened();
         browser().then(

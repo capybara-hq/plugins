@@ -168,7 +168,9 @@ describe("HTTP Basic auth", () => {
     const next = ok(
       await request(d.socketPath, { op: "wait", text: "the secret page", timeoutMs: 30_000 }),
     );
-    expect(next.text).toContain(`The user signed in to ${site.url} (HTTP auth).`);
+    expect(next.text).toContain(
+      `HTTP sign-in to ${site.url}: the site accepted the credentials the user entered (status 200).`,
+    );
     // the page's own subresource and a same-origin navigation are signed
     ok(await request(d.socketPath, { op: "navigate", url: `${site.url}/next` }));
     expect(seen.some((s) => s.path === "/own.png" && s.auth === GOOD)).toBe(true);
@@ -184,6 +186,58 @@ describe("HTTP Basic auth", () => {
         false,
       );
     }
+    await v.close();
+  });
+
+  it("wrong credentials are reported as rejected with the new dialog, once, never as signed in", async () => {
+    const d = await daemon();
+    const r = ok(await request(d.socketPath, { op: "navigate", url: `${site.url}/secret` }));
+    const v = await openViewer(d.socketPath, { maxWidth: 640, maxHeight: 400 });
+    v.send({ t: "takeover" });
+    await v.next(stateWith((s) => s.control === "user"));
+    // two wrong attempts: each time the site answers 401 and challenges again
+    let dialog = r.dialog as PendingDialogView;
+    for (const wrong of ["wrong-one", "wrong-two"]) {
+      const before = dialog.id;
+      v.send({ t: "dialog", id: before, action: "accept", username: USER, password: wrong });
+      const s = (await v.after(
+        stateWith((x) => x.dialogs.length === 1 && x.dialogs[0]?.id !== before),
+      )) as State;
+      dialog = s.dialogs[0] as PendingDialogView;
+    }
+    v.send({ t: "handback" });
+    await v.after(stateWith((s) => s.control === "agent"));
+    const next = ok(await request(d.socketPath, { op: "snapshot" }));
+    const text = next.text ?? "";
+    expect(text).not.toContain("accepted");
+    expect(text).not.toContain("signed in to");
+    // one line, for the last attempt, naming the open challenge
+    expect(text.split(`HTTP sign-in to ${site.url}:`)).toHaveLength(2);
+    expect(text).toContain(
+      `HTTP sign-in to ${site.url}: the site rejected the credentials the user entered and asks to sign in again (dialog ${dialog.id})`,
+    );
+    expect(next.dialog).toMatchObject({ id: dialog.id, kind: "auth", origin: site.url });
+    // neither the wrong passwords nor the notes repeat in a later reply
+    const later = ok(await request(d.socketPath, { op: "snapshot" }));
+    expect(later.text ?? "").not.toContain("HTTP sign-in to");
+    for (const m of [JSON.stringify(next), ...v.messages.map((x) => JSON.stringify(x))]) {
+      expect(m).not.toContain("wrong-one");
+      expect(m).not.toContain("wrong-two");
+    }
+    // the right credentials then: accepted
+    v.send({ t: "takeover" });
+    await v.after(stateWith((s) => s.control === "user"));
+    v.send({ t: "dialog", id: dialog.id, action: "accept", username: USER, password: PASSWORD });
+    await v.after(stateWith((s) => s.dialogs.length === 0));
+    v.send({ t: "handback" });
+    await v.after(stateWith((s) => s.control === "agent"));
+    const signed = ok(
+      await request(d.socketPath, { op: "wait", text: "the secret page", timeoutMs: 30_000 }),
+    );
+    expect(signed.text).toContain(
+      `HTTP sign-in to ${site.url}: the site accepted the credentials the user entered (status 200).`,
+    );
+    expect(signed.text).not.toContain("rejected");
     await v.close();
   });
 

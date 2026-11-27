@@ -165,6 +165,26 @@ export const MAX_DIALOG_CHARS = 4096;
 const DEFAULT_WAIT_MS = 10_000;
 const MAX_UNREPORTED = 20;
 
+/** How long a conversation's request waits for its restored tabs to load. */
+export const RESTORE_NAV_WAIT_MS = 10_000;
+
+/**
+ * How recently a tab must have closed on its own to count as one a crash took: Chromium's tabs
+ * close moments before its context reports the close.
+ */
+export const LOST_TAB_WINDOW_MS = 5_000;
+
+/** An owned tab that closed without the session closing it ({@link BrowserSession.lostTabs}). */
+export interface LostTab {
+  url: string;
+  owner: string;
+  root: string;
+  /** It was its owner's active tab. */
+  active: boolean;
+  /** When it closed (the session's clock). */
+  at: number;
+}
+
 export const TAKEN_OVER_MESSAGE = "The user is controlling the browser; call wait or handoff.";
 
 /** `s` cut to `max` characters, with an ellipsis when cut. */
@@ -990,6 +1010,12 @@ export class BrowserSession {
     conv: string;
     resolve: (path: string | undefined) => void;
   }>();
+  /** The restore navigation of each restored tab, until it settles (see restoredTabsOf). */
+  private readonly restoring = new Map<string, Promise<void>>();
+  /** Pages the session closes itself (a tab close, a popup past a cap): never "lost". */
+  private readonly closedOnPurpose = new WeakSet<Page>();
+  /** Owned tabs that closed without the session closing them, newest last (see lostTabs). */
+  private readonly lost: LostTab[] = [];
   /** The dialog each tab holds until answered (one per tab: JS dialogs are modal per page). */
   private readonly held = new Map<string, HeldDialog>();
   private dialogSeq = 0;
@@ -1220,6 +1246,34 @@ export class BrowserSession {
         ...(this.loadingTabs.has(id) ? { loading: true as const } : {}),
       };
     });
+  }
+
+  private recordLost(o: TabOwner, id: string, page: Page): void {
+    const url = page.url();
+    if (!/^https?:\/\//i.test(url)) return;
+    this.lost.push({
+      url,
+      owner: o.owner,
+      root: o.root,
+      active: this.activeOf.get(o.owner) === id,
+      at: this.clock.now(),
+    });
+    if (this.lost.length > MAX_TABS) this.lost.shift();
+  }
+
+  /**
+   * The owned http(s) tabs that closed without the session closing them in the last
+   * {@link LOST_TAB_WINDOW_MS}, in the order they closed: after a crash, the tabs the browser had.
+   */
+  lostTabs(): LostTab[] {
+    const since = this.clock.now() - LOST_TAB_WINDOW_MS;
+    return this.lost.filter((t) => t.at >= since).map((t) => ({ ...t }));
+  }
+
+  /** Closes a tab on purpose (the agent's or a viewer's close). */
+  async closeTab(page: Page): Promise<void> {
+    this.closedOnPurpose.add(page);
+    await page.close();
   }
 
   /** Makes a tab the conversation's active tab (it must own it). */
@@ -1463,8 +1517,40 @@ export class BrowserSession {
     } catch {
       // not a URL a tab opens: the tab stays blank
     }
-    if (target !== undefined) void this.viewerNav(page, { url: target });
+    if (target !== undefined) {
+      const nav: Promise<void> = this.viewerNav(page, { url: target }).finally(() => {
+        if (this.restoring.get(id) === nav) this.restoring.delete(id);
+      });
+      this.restoring.set(id, nav);
+    }
     return id;
+  }
+
+  /**
+   * Waits, at most {@link RESTORE_NAV_WAIT_MS}, for the restore navigations of the conversation's
+   * tabs: its first request after a restart (or a crash) must not race them (a navigation of its
+   * own would be interrupted by the restore's). Other conversations' tabs are not waited for.
+   */
+  private async restoredTabsOf(conv: string): Promise<void> {
+    const navs = this.tabsOf(conv)
+      .map((id) => this.restoring.get(id))
+      .filter((n) => n !== undefined);
+    if (navs.length === 0) return;
+    await this.boundedWait(Promise.all(navs), RESTORE_NAV_WAIT_MS);
+  }
+
+  private async boundedWait(p: Promise<unknown>, ms: number): Promise<void> {
+    let timer: unknown;
+    await Promise.race([
+      p.then(
+        () => undefined,
+        () => undefined,
+      ),
+      new Promise<void>((r) => {
+        timer = this.clock.schedule(r, ms);
+      }),
+    ]);
+    this.clock.cancel(timer);
   }
 
   /**
@@ -1633,6 +1719,11 @@ export class BrowserSession {
     // fires on the opener, `noopener` popups included: the popup is its opener's owner's
     page.on("popup", (p) => this.onPopup(page, p));
     page.on("close", () => {
+      // a tab of a conversation that closed without the session closing it (a crash closes
+      // them all, before the context's close): reopened if the browser is launched again
+      const lostOwner = this.owners.get(id);
+      if (lostOwner !== undefined && !this.closing.has(id) && !this.closedOnPurpose.has(page))
+        this.recordLost(lostOwner, id, page);
       this.pendingNavs.delete(page);
       this.pages.delete(id);
       this.closing.delete(id);
@@ -1667,6 +1758,7 @@ export class BrowserSession {
     const o = this.owners.get(this.tabIdOf(opener));
     if (o === undefined || this.owners.has(id) || popup.isClosed()) return;
     const closeIt = (why: string) => {
+      this.closedOnPurpose.add(popup);
       popup.close().catch(() => undefined);
       this.noteTo(
         o.owner,
@@ -1874,11 +1966,60 @@ export class BrowserSession {
     this.signIn(origin, m.username, m.password);
     for (const [id, x] of [...this.held])
       if (x.view.kind === "auth" && x.view.origin === origin) this.clearHeld(id);
-    this.noteTo(h.owner.owner, `The user signed in to ${origin} (HTTP auth).`);
-    // the page that asked, opened again (the full build shows an error page in its place)
-    const page = this.pageById(h.view.tabId);
-    if (page !== undefined)
-      await this.viewerNav(page, h.atUrl === undefined ? { action: "reload" } : { url: h.atUrl });
+    const tabId = h.view.tabId;
+    // the page that asked, opened again (the full build shows an error page in its place); the
+    // note says what the site answered then, never that the user signed in before it did
+    const page = this.pageById(tabId);
+    if (page === undefined) {
+      this.authNote(
+        h.owner.owner,
+        origin,
+        "the user entered credentials, but the tab closed before the site answered.",
+      );
+      return;
+    }
+    await this.viewerNav(page, h.atUrl === undefined ? { action: "reload" } : { url: h.atUrl });
+    this.authNote(h.owner.owner, origin, this.authOutcome(page, tabId, origin));
+  }
+
+  /**
+   * What the site answered the credentials the person entered, after the tab loaded again with
+   * them: rejected when the tab holds a new auth dialog for the origin, its document answered
+   * 401 / 407 or the 401 to a signed request dropped them; accepted when the tab shows a document
+   * of the origin with another status; unknown otherwise (the load failed or went elsewhere).
+   */
+  private authOutcome(page: Page, tabId: string, origin: string): string {
+    const again = this.held.get(tabId);
+    if (again?.view.kind === "auth" && again.view.origin === origin)
+      return `the site rejected the credentials the user entered and asks to sign in again (dialog ${again.view.id}); ask the user to sign in again with browser_handoff, or dismiss the dialog.`;
+    const status = this.docStatus.get(tabId);
+    if (status === 401 || status === 407 || !this.credentials.has(origin))
+      return `the site rejected the credentials the user entered${status === undefined ? "" : ` (status ${status})`}; ask the user to sign in again with browser_handoff.`;
+    if (status !== undefined && !page.isClosed() && originOf(page.url()) === origin)
+      return `the site accepted the credentials the user entered (status ${status}).`;
+    return "the user entered credentials, but the page did not load, so whether the site accepted them is unknown; call browser_snapshot to check.";
+  }
+
+  /**
+   * The outcome note of a sign-in to `origin` for a conversation: it replaces the outcome of an
+   * earlier attempt for the same origin that no reply carried yet (each attempt says only what
+   * the site answered last). Never carries the credentials.
+   */
+  private authNote(conversationId: string, origin: string, outcome: string): void {
+    const prefix = `HTTP sign-in to ${origin}: `;
+    const stale = (n: string) => n.startsWith(prefix);
+    const waiting = this.unreported.get(conversationId);
+    if (waiting !== undefined) {
+      const kept = waiting.filter((n) => !stale(n));
+      if (kept.length === 0) this.unreported.delete(conversationId);
+      else this.unreported.set(conversationId, kept);
+    }
+    for (const c of this.collectors) {
+      if (c.conv !== conversationId) continue;
+      const kept = c.notes.filter((n) => !stale(n));
+      c.notes.splice(0, c.notes.length, ...kept);
+    }
+    this.noteTo(conversationId, `${prefix}${outcome}`);
   }
 
   // ---- HTTP Basic auth (dialogs spec §4)
@@ -2719,6 +2860,7 @@ export class BrowserSession {
     try {
       // a restore to the desktop profile (hand back) runs ahead of every request
       await this.viewportGate;
+      await this.restoredTabsOf(conv);
       // the tab list and adopt only read and move what the session tracks: they answer while an
       // action runs (wait runs beside the queue too); a dialog answer must not wait behind the
       // action its dialog holds
@@ -3393,7 +3535,7 @@ export class BrowserSession {
       }
       case "close": {
         const page = this.ownTab(conv, req.tabId);
-        await page.close();
+        await this.closeTab(page);
         return {};
       }
       case "adopt": {

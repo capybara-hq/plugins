@@ -41,6 +41,17 @@
  */
 export const ROLL_CHECK_REQUEST = '{"capybara":"roll-check"}';
 
+/**
+ * The reply of a request that was running when Chromium crashed: the daemon stays up and launches
+ * it again on the next use, with the tabs that closed in the crash reopened.
+ */
+export const BROWSER_CRASHED_MESSAGE =
+  "The browser in the device stopped unexpectedly while this ran (it crashed). It starts again on the next browser call, with this conversation's tabs reopened; call browser_snapshot to see the page, and retry if the action did not happen.";
+
+/** The note to each conversation whose tabs a relaunch after a crash reopened. */
+export const BROWSER_RESTARTED_NOTE =
+  "The browser in the device stopped unexpectedly (it crashed) and was started again: this conversation's tabs were reopened at their last addresses, and anything typed into them but not submitted is gone.";
+
 /** A request of a conversation the kernel's notice deleted (or of its tree). */
 export const CONVERSATION_DELETED_MESSAGE =
   "This conversation was deleted; its browser tabs are closed.";

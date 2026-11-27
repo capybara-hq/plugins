@@ -289,7 +289,7 @@ export class ViewerSession {
             else if (m.action === "switch" && m.tabId !== undefined) this.switchTo(m.tabId);
             else if (m.action === "close" && m.tabId !== undefined && this.inTree(m.tabId)) {
               this.concern(m.tabId);
-              await this.browser.tabById(m.tabId).close();
+              await this.browser.closeTab(this.browser.tabById(m.tabId));
             }
           } catch {
             // a stale tab id or a cap: the next state message shows the real tabs
