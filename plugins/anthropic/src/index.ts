@@ -68,10 +68,10 @@ const trimSlashes = (url: string) => url.replace(/\/+$/, "");
 /**
  * The kv key of a cached model. The cache holds the mapped ModelInfo; the version in the key goes up
  * whenever its shape changes, so an upgrade never reads a shape an older version wrote (old keys
- * expire by TTL). v3: `capabilities.documents`. v5: `cache`. v4: keyed by the endpoint too (sha256 of the base
+ * expire by TTL). v3: `capabilities.documents`. v4: keyed by the endpoint too (sha256 of the base
  * URL, trailing slashes ignored): `ctx.kv` is extension-wide, so an org's own endpoint must not
  * write entries other orgs read. Keyed by endpoint, not by API key: entries hold capability
- * metadata only, never anything a key grants.
+ * metadata only, never anything a key grants. v5: `cache`.
  */
 const modelCacheKey = (baseUrl: string, id: string) =>
   `models:v5:${createHash("sha256").update(trimSlashes(baseUrl)).digest("hex")}:${id}`;
