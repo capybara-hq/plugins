@@ -8,6 +8,7 @@ import {
   internalNetworkCreateBody,
   internalNetworkHardened,
   planInstance,
+  proxyImageStale,
   sandboxEnv,
   updateDecision,
 } from "../src/provider.js";
@@ -306,5 +307,37 @@ describe("instance network hardening (no Docker)", () => {
     expect(engineSupported("25.0.0")).toBe(true);
     expect(engineSupported("24.0.9")).toBe(false);
     expect(engineSupported("not-a-version")).toBe(false);
+  });
+});
+
+describe("proxyImageStale", () => {
+  const REF = "ghcr.io/capybara-hq/capybara-sandbox-egress:0.1.0-rc.31";
+  const NEW = "sha256:2222";
+  const OLD = "sha256:1111";
+
+  it("the same tag on an earlier build (another image id) is stale", () => {
+    expect(proxyImageStale({ id: OLD, ref: REF }, { id: NEW, ref: REF })).toBe(true);
+  });
+
+  it("the configured image under the same reference is current", () => {
+    expect(proxyImageStale({ id: NEW, ref: REF }, { id: NEW, ref: REF })).toBe(false);
+  });
+
+  it("the image id decides over the reference: the same image under another name is current", () => {
+    expect(proxyImageStale({ id: NEW, ref: "local/egress:dev" }, { id: NEW, ref: REF })).toBe(
+      false,
+    );
+    expect(
+      proxyImageStale(
+        { id: OLD, ref: "ghcr.io/capybara-hq/capybara-sandbox-egress:0.1.0-rc.30" },
+        { id: NEW, ref: REF },
+      ),
+    ).toBe(true);
+  });
+
+  it("without an id on either side the references are compared", () => {
+    expect(proxyImageStale({ ref: "egress:rc.30" }, { id: NEW, ref: REF })).toBe(true);
+    expect(proxyImageStale({ id: OLD, ref: REF }, { ref: REF })).toBe(false);
+    expect(proxyImageStale({}, { id: NEW, ref: REF })).toBe(false);
   });
 });

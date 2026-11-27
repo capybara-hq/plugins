@@ -63,6 +63,7 @@ describe.skipIf(!dockerAvailable)(
     let blackhole: StartedTestContainer;
     let cfg: DockerSandboxConfig;
     let sbx: DockerSandboxProvider;
+    let testOptions: Parameters<typeof createDockerSandbox>[1];
 
     beforeAll(async () => {
       [images, proxy] = await Promise.all([
@@ -111,10 +112,11 @@ describe.skipIf(!dockerAvailable)(
         deniedCidrs: ["198.51.100.0/24"],
       };
       const ip = target.getIpAddress(netName);
-      sbx = createDockerSandbox(cfg, {
+      testOptions = {
         labels: { [TEST_LABEL]: RUN },
         egressTestHosts: { [A]: ip, [B]: ip, [SLOW]: blackhole.getIpAddress(netName) },
-      });
+      };
+      sbx = createDockerSandbox(cfg, testOptions);
     }, 1_200_000);
 
     afterAll(async () => {
@@ -381,6 +383,72 @@ describe.skipIf(!dockerAvailable)(
         expect((await status(name)).hosts).toEqual([B]);
       } finally {
         await sbx.destroy(h, sig(), null);
+      }
+    });
+
+    it("a proxy on an earlier build of the configured tag is replaced on resume and at the next use, keeping the list in force", async () => {
+      // The configured reference stays the same while the image under it moves (a new build under
+      // the tag): the provider compares image ids, not references.
+      const ref = `${images.egressImage}-moving`;
+      const imageId = async (image: string) =>
+        (JSON.parse(await docker("image", "inspect", image))[0] as { Id: string }).Id;
+      // an earlier build: the same proxy with one more label, so another image id
+      const tmp = `cap-test-${RUN}-${randomUUID().slice(0, 8)}`;
+      await docker("create", "--label", `${TEST_LABEL}=${RUN}`, "--name", tmp, images.egressImage);
+      await docker("commit", "--change", "LABEL dev.capybara.test.build=older", tmp, ref);
+      await docker("rm", "-f", tmp);
+      const olderId = await imageId(ref);
+      const currentId = await imageId(images.egressImage);
+      expect(olderId).not.toBe(currentId);
+      const moving = createDockerSandbox({ ...cfg, egressProxyImage: ref }, testOptions);
+      const name = sbxName();
+      const h = await newSandbox(moving, name, [A, B]);
+      try {
+        const id = (await inspect(name)).Id;
+        // narrowed in place: the config volume holds [A], the labels keep the wider [A, B]
+        expect(await moving.update(h, limits(allow([A])), sig(), { token: 2 })).toBe("updated");
+        const proxyImage = async () =>
+          (JSON.parse(await docker("inspect", `${name}-egress`))[0] as { Image: string }).Image;
+        expect(await proxyImage()).toBe(olderId);
+        await moving.suspend(h, sig());
+        // the tag moves to the current build while the instance sleeps
+        await docker("tag", images.egressImage, ref);
+        expect(await moving.resume(h, sig())).toBe("resumed");
+        expect(await proxyImage()).toBe(currentId);
+        const p = await inspect(`${name}-egress`);
+        expect(p.Config.Labels).toMatchObject({
+          "dev.capybara.sandbox.egress-control": "2",
+          "dev.capybara.sandbox.fence": "1",
+        });
+        expect(p.Mounts).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ Name: `${name}-egress-conf`, Destination: "/config" }),
+          ]),
+        );
+        // the list (and the token) in force come from the config volume, never from the labels
+        expect(await status(name)).toMatchObject({ hosts: [A], fence: 2 });
+        expect(await reaches(name, B)).toBe(false);
+        expect(await reaches(name, A)).toBe(true);
+        expect((await inspect(name)).Id).toBe(id);
+        // a running instance: the tag moves again and the next command replaces the proxy first
+        await docker("tag", olderId, ref);
+        const r = await moving.exec(h, {
+          command: "true",
+          timeoutMs: 30_000,
+          maxOutputBytes: 1024,
+          signal: sig(),
+          tag: "t",
+          actor: { accountId: "a", conversationId: "c" },
+        });
+        expect(r.exitCode).toBe(0);
+        expect(await proxyImage()).toBe(olderId);
+        expect(await status(name)).toMatchObject({ hosts: [A], fence: 2 });
+        expect(await reaches(name, B)).toBe(false);
+        expect((await inspect(name)).Id).toBe(id);
+      } finally {
+        await moving.destroy(h, sig(), null);
+        await docker("rmi", "-f", ref).catch(() => undefined);
+        await docker("rmi", "-f", olderId).catch(() => undefined);
       }
     });
 
