@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { BrowserContext } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -65,6 +65,16 @@ describe("browser daemon profile", () => {
     await request(first.socketPath, { op: "navigate", url: `${fx.url}/set` });
     await first.stop();
     expect(existsSync(join(first.stateDir, "cookies.json"))).toBe(true);
+    // Chromium sometimes wins the race with the 1 ms grace and writes its Cookies file before the
+    // kill. Remove that file from the (stopped) profile so the premise holds on every run: only
+    // cookies.json has the cookie.
+    const profileDefault = join(first.stateDir, "profile", "Default");
+    for (const dir of [profileDefault, join(profileDefault, "Network")]) {
+      if (!existsSync(dir)) continue;
+      for (const name of readdirSync(dir)) {
+        if (name.startsWith("Cookies")) unlinkSync(join(dir, name));
+      }
+    }
 
     // the second start merges the file (and removes it), then the page deletes the cookie
     let ctx: BrowserContext | undefined;
