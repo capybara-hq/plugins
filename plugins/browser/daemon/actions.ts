@@ -45,10 +45,13 @@ import {
   type ToolReply,
   type ToolRequest,
   VIEWPORT,
+  type WaitCondition,
+  type WatchState,
 } from "./protocol.js";
 import { takeSnapshot } from "./snapshot.js";
 import { type Clock, systemClock } from "./state.js";
 import { isVerificationPage, type TabBlocker, VERIFICATION_NOTE } from "./verification.js";
+import { parseCondition, Watches, type WatchParks } from "./watches.js";
 
 /**
  * Something the viewers follow. `active`: a conversation's active tab changed. `blocked` and
@@ -774,6 +777,7 @@ export function bareUrl(raw: string): string {
 /** The operations that act on the conversation's active tab (they get one when it has none). */
 export function isActing(req: ToolOp): boolean {
   if (req.op === "handoff_notice" || req.op === "handoff_clear") return false;
+  if (req.op === "watch_start" || req.op === "watch_poll" || req.op === "watch_end") return false;
   if (req.op === "tabs") return req.action !== "list" && req.action !== "adopt";
   return true;
 }
@@ -861,6 +865,13 @@ export class BrowserSession {
   /** Each tab's latest agent click; `seq` grows with every click (viewers flash only new ones). */
   private readonly clicks = new Map<string, { x: number; y: number; seq: number }>();
   private clickSeq = 0;
+  /** Parked long waits (browser long waits spec §6.2), bound to tabs of this session. */
+  readonly watches: Watches;
+  /** Short download waits: resolved with the saved path when a download of `conv` is saved. */
+  private readonly downloadWaiters = new Set<{
+    conv: string;
+    resolve: (path: string | undefined) => void;
+  }>();
 
   constructor(
     ctx: BrowserContext,
@@ -876,6 +887,8 @@ export class BrowserSession {
       navigationTimeoutMs?: number;
       /** Who is in use, pinned or idle (DaemonState); default: nobody busy, everybody idle. */
       usage?: TabUsage;
+      /** Where a pending watch's park goes (DaemonState); default: nowhere. */
+      parks?: WatchParks;
     },
   ) {
     this.ctx = ctx;
@@ -887,6 +900,12 @@ export class BrowserSession {
     this.clock = opts.clock ?? systemClock;
     this.navigationTimeoutMs = opts.navigationTimeoutMs ?? NAVIGATION_TIMEOUT_MS;
     this.usage = opts.usage ?? NO_USAGE;
+    this.watches = new Watches({
+      clock: this.clock,
+      check: (page, c) => this.conditionHolds(page, c),
+      ...(opts.parks === undefined ? {} : { parks: opts.parks }),
+      onChange: () => this.emit({ type: "state" }),
+    });
     ctx.setDefaultTimeout(ACTION_TIMEOUT_MS);
     ctx.setDefaultNavigationTimeout(this.navigationTimeoutMs);
     ctx.on("page", (p) => {
@@ -1383,6 +1402,7 @@ export class BrowserSession {
       this.owners.delete(id);
       if (o !== undefined) this.activeMovedOff(o.owner, id);
       this.usage.tabClosed(id);
+      this.watches.tabClosed(id);
       this.emit({ type: "state" });
     });
   }
@@ -1433,6 +1453,8 @@ export class BrowserSession {
     const settle = kind === "alert" ? d.accept() : d.dismiss();
     settle.catch(() => undefined);
     const o = this.owners.get(this.tabIdOf(page));
+    // a decision dialog ends a long wait on its tab (browser long waits spec §6.2)
+    if (kind !== "alert") this.watches.dialog(this.tabIdOf(page), message);
     this.noteTo(
       o?.owner,
       `The page showed ${kind === "alert" ? "an alert" : `a ${kind}`} dialog: ${JSON.stringify(message)} (${kind === "alert" ? "closed" : "dismissed"}).`,
@@ -1521,6 +1543,11 @@ export class BrowserSession {
         }
         target = this.saveDownload(workspace, safeFileName(d.suggestedFilename()), tmp);
         note(`Downloaded ${shown} to ${target}.`);
+        // a download wait of the owner (short or a long wait's watch) is met
+        if (owner !== undefined) {
+          this.watches.downloadSaved(owner, target);
+          for (const w of [...this.downloadWaiters]) if (w.conv === owner) w.resolve(target);
+        }
       } catch (e) {
         note(
           `The download of ${shown} was not saved: ${e instanceof ActionError ? e.message : firstLine(e)}`,
@@ -1832,6 +1859,7 @@ export class BrowserSession {
       // action runs (wait runs beside the queue too)
       const beside =
         req.op === "wait" ||
+        req.op === "watch_end" ||
         (req.op === "tabs" && (req.action === "list" || req.action === "adopt"));
       const out = await (beside
         ? this.exec(req)
@@ -1867,6 +1895,7 @@ export class BrowserSession {
         blockedHosts: blockedHostsOf(c),
         ...(text === "" ? {} : { text }),
         ...(out.image === undefined ? {} : { image: out.image }),
+        ...(out.watch === undefined ? {} : { watch: out.watch }),
       };
     } catch (e) {
       await this.settleProbes(c);
@@ -2282,7 +2311,9 @@ export class BrowserSession {
     }
   }
 
-  private async exec(req: ToolRequest): Promise<{ text?: string; image?: string }> {
+  private async exec(
+    req: ToolRequest,
+  ): Promise<{ text?: string; image?: string; watch?: WatchState }> {
     const conv = req.conversationId;
     const root = req.rootConversationId;
     const activePage = () => this.pageFor(conv, root);
@@ -2382,6 +2413,9 @@ export class BrowserSession {
       case "wait":
         // never claims or opens a tab (it also runs while the person holds control)
         return this.waitOp(req, this.currentPage(conv));
+      case "watch_end":
+        // an ordinary reply: it carries the conversation's notes (main adds the hand back note)
+        return { watch: this.watchEnd(req) };
       case "screenshot": {
         const page = await activePage();
         const maxBytes = Math.min(MAX_SCREENSHOT_BYTES, Math.floor(req.maxBytes));
@@ -2526,6 +2560,72 @@ export class BrowserSession {
     }
   }
 
+  /** The saved path of the conversation's next download within `ms`, else undefined. */
+  private nextDownload(conv: string, ms: number): Promise<string | undefined> {
+    return new Promise((resolve) => {
+      let timer: unknown;
+      const w = {
+        conv,
+        resolve: (path: string | undefined) => {
+          this.downloadWaiters.delete(w);
+          this.clock.cancel(timer);
+          resolve(path);
+        },
+      };
+      this.downloadWaiters.add(w);
+      timer = this.clock.schedule(() => w.resolve(undefined), ms);
+    });
+  }
+
+  /** Whether a watch's condition holds on the page now (text, ref, URL part). */
+  private async conditionHolds(page: Page, c: WaitCondition): Promise<boolean> {
+    if ("text" in c) return this.bounded(page.getByText(c.text).first().isVisible(), false);
+    if ("ref" in c)
+      return REF_RE.test(c.ref) && this.bounded(page.getByRef(c.ref).first().isVisible(), false);
+    if ("urlContains" in c) return page.url().includes(c.urlContains);
+    return false;
+  }
+
+  /**
+   * Arms a long wait's watch on the conversation's active tab (browser long waits spec §6.2);
+   * a conversation without a tab cannot be watched. Idempotent per watch id.
+   */
+  watchStart(req: Extract<ToolRequest, { op: "watch_start" }>): WatchState {
+    const conv = req.conversationId;
+    if (!this.watches.owns(req.watchId, conv)) return { state: "unknown" };
+    const condition = parseCondition(req.condition);
+    if (typeof condition === "string") throw new ActionError("failed", condition);
+    if ("ref" in condition && !REF_RE.test(condition.ref))
+      throw new ActionError(
+        "no_such_ref",
+        `${JSON.stringify(condition.ref)} is not an element ref; refs look like e12.`,
+      );
+    const page = this.currentPage(conv);
+    if (page === undefined) throw new ActionError("failed", NO_TAB_TO_WAIT_ON);
+    const remaining = Number(req.remainingMs);
+    return this.watches.start({
+      id: req.watchId,
+      conv,
+      root: req.rootConversationId,
+      tabId: this.tabIdOf(page),
+      page,
+      condition,
+      remainingMs: Number.isFinite(remaining) ? remaining : 0,
+    });
+  }
+
+  /** A long wait's poll (its heartbeat); another conversation's watch reads as unknown. */
+  watchPoll(req: Extract<ToolRequest, { op: "watch_poll" }>): WatchState {
+    if (!this.watches.owns(req.watchId, req.conversationId)) return { state: "unknown" };
+    return this.watches.poll(req.watchId);
+  }
+
+  /** Ends a long wait's watch, answering its last state. */
+  private watchEnd(req: Extract<ToolRequest, { op: "watch_end" }>): WatchState {
+    if (!this.watches.owns(req.watchId, req.conversationId)) return { state: "unknown" };
+    return this.watches.end(req.watchId);
+  }
+
   private async waitOp(
     req: Extract<ToolRequest, { op: "wait" }>,
     page: Page | undefined,
@@ -2535,7 +2635,13 @@ export class BrowserSession {
       ? Math.max(0, Math.min(MAX_WAIT_MS, Math.floor(asked)))
       : DEFAULT_WAIT_MS;
     if (page === undefined) {
-      if (req.text !== undefined || req.ref !== undefined || req.navigation === true)
+      if (
+        req.text !== undefined ||
+        req.ref !== undefined ||
+        req.navigation === true ||
+        req.urlContains !== undefined ||
+        req.download === true
+      )
         throw new ActionError("failed", NO_TAB_TO_WAIT_ON);
       await new Promise<void>((r) => this.clock.schedule(r, timeout));
       return {};
@@ -2573,6 +2679,26 @@ export class BrowserSession {
         });
       return {};
     }
+    if (req.urlContains !== undefined) {
+      const part = req.urlContains;
+      await page
+        .waitForURL((u) => u.href.includes(part), { timeout, waitUntil: "commit" })
+        .catch((e) => {
+          throw e instanceof Error && e.name === "TimeoutError"
+            ? new ActionError(
+                "timeout",
+                `The URL did not contain ${JSON.stringify(part)} within ${timeout} ms.`,
+              )
+            : e;
+        });
+      return {};
+    }
+    if (req.download === true) {
+      const path = await this.nextDownload(req.conversationId, timeout);
+      if (path === undefined)
+        throw new ActionError("timeout", `No download finished within ${timeout} ms.`);
+      return { text: `Waited for the download: ${path}.` };
+    }
     if (req.navigation === true) {
       await page
         .waitForEvent("framenavigated", { predicate: (f) => f === page.mainFrame(), timeout })
@@ -2590,6 +2716,7 @@ export class BrowserSession {
 
   /** Closes the browser (flushes the profile). */
   async close(): Promise<void> {
+    this.watches.dispose();
     this.listeners.clear();
     if (this.downloadPoll !== undefined) this.clock.cancel(this.downloadPoll);
     await this.ctx.close().catch(() => undefined);

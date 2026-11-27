@@ -1031,6 +1031,16 @@ describe("design states", () => {
     expect($(s, "stage").getAttribute("data-control")).toBe("user");
   });
 
+  it("the status line shows a parked long wait: what the agent waits for and until when", async () => {
+    const s = setup();
+    const until = new Date(Date.now() + 3_600_000).toISOString();
+    await live(s, state({ waiting: { label: 'text "Paid"', until } }));
+    const time = new Date(until).toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit" });
+    expect($(s, "status").textContent).toBe(
+      `${t("en", "statusWaiting")} · text "Paid" (${t("en", "statusWaitingUntil")} ${time})`,
+    );
+  });
+
   it("a page that asks for a human check shows the verify strip; 去验证 takes over", async () => {
     const s = setup();
     const url = "https://search.example.com/verify";

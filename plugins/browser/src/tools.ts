@@ -11,16 +11,16 @@ import {
   TOOL_TIMEOUT_MS,
   toResult,
 } from "./browser.js";
+import { WAIT_DEFAULT_MS, WAIT_MAX_MS, waitHandler, waitWatcher } from "./wait.js";
+import type { WatchTools } from "./watched-wait-sdk.js";
+
+export { WAIT_INLINE_MAX_MS, WAIT_MAX_MS } from "./wait.js";
 
 /**
  * The largest screenshot the daemon may return, in decoded bytes: below the kernel's image limit
  * and small enough for every provider's request path (base64 inside the reply).
  */
 export const SCREENSHOT_MAX_BYTES = 2 * 1024 * 1024;
-
-/** The longest browser_wait, in milliseconds (the daemon's own cap). */
-export const WAIT_MAX_MS = 60_000;
-const WAIT_DEFAULT_MS = 10_000;
 
 const REF = {
   type: "string",
@@ -325,27 +325,39 @@ const WAIT: ToolSpec = {
   name: "browser_wait",
   title: "Wait",
   description:
-    "Wait until a text appears on the page, an element ref appears, a navigation finishes, or " +
-    "the time cap passes (at most 60000 ms; call it again to wait longer). Use it after an " +
-    "action that loads content slowly, " +
-    "or while the user controls the browser. To have the user do something in the browser, use " +
-    "browser_handoff instead.",
+    "Wait until a text appears on the page, an element ref appears, the URL contains a string, " +
+    "a navigation finishes or a download finishes, or until the time cap passes. Pass at most " +
+    "one condition. A wait of 60000 ms or less runs in the call. A longer wait needs a condition: " +
+    "it parks the run without using turns and returns when the condition holds or the time " +
+    "passes, so prefer one long wait over repeated short ones; the user can end it early. A long " +
+    "wait also ends when the device reaches its running limit (often 2 hours) or the input " +
+    "timeout; in a scheduled task it holds the task's next runs back. Use it after an action " +
+    "that loads content slowly, or while the user controls the browser. To have the user do " +
+    "something in the browser, use browser_handoff instead.",
   inputSchema: {
     type: "object",
     properties: {
       text: { type: "string", description: "Wait for this text on the page." },
       ref: REF,
+      urlContains: {
+        type: "string",
+        description: 'Wait until the active tab\'s URL contains this string, e.g. "/orders/paid".',
+      },
       navigation: { type: "boolean", description: "Wait for the next navigation to finish." },
+      download: {
+        type: "boolean",
+        description: "Wait for the next download to finish saving into the workspace.",
+      },
       timeoutMs: {
         type: "integer",
         minimum: 0,
         maximum: WAIT_MAX_MS,
-        description: `The time cap in milliseconds (default ${WAIT_DEFAULT_MS}).`,
+        description: `The time cap in milliseconds (default ${WAIT_DEFAULT_MS}); over 60000 needs a condition.`,
       },
     },
     additionalProperties: false,
   },
-  keyArgs: ["text", "timeoutMs"],
+  keyArgs: ["text", "urlContains", "timeoutMs"],
   defaultPolicy: "allow",
   // any tool may start the device first (see TOOL_TIMEOUT_MS)
   timeoutMs: TOOL_TIMEOUT_MS,
@@ -392,10 +404,7 @@ function handler(
 }
 
 /** Registers the browser tools other than browser_handoff (see handoff.ts). */
-export function registerBrowserTools(
-  ctx: { tools: { register(spec: ToolSpec, handler: ToolHandler): void } },
-  deps: BrowserDeps,
-): void {
+export function registerBrowserTools(ctx: { tools: WatchTools }, deps: BrowserDeps): void {
   ctx.tools.register(
     NAVIGATE,
     handler(deps, (i) => {
@@ -519,22 +528,6 @@ export function registerBrowserTools(
       text: need(str(i.text), "text", "browser_type_at"),
     })),
   );
-  ctx.tools.register(
-    WAIT,
-    handler(
-      deps,
-      (i) =>
-        defined({
-          op: "wait" as const,
-          text: str(i.text),
-          ref: str(i.ref),
-          navigation: i.navigation === true ? true : undefined,
-          timeoutMs: Math.max(
-            0,
-            Math.min(WAIT_MAX_MS, Math.floor(num(i.timeoutMs) ?? WAIT_DEFAULT_MS)),
-          ),
-        }),
-      (r) => (r.op === "wait" ? r.timeoutMs : 0) + REQUEST_TIMEOUT_MS,
-    ),
-  );
+  // a long wait parks the run; its watcher polls the daemon's watch (browser long waits spec §6)
+  ctx.tools.register(WAIT, waitHandler(deps), { watch: waitWatcher(deps) });
 }

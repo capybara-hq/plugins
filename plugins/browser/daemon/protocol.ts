@@ -182,6 +182,44 @@ export const CONVERSATION_IDLE_MS = 15 * 60_000;
  */
 export const EVICT_MIN_IDLE_MS = 5 * 60_000;
 
+/**
+ * Long waits (browser long waits spec §6.2): the most watches the daemon keeps; a start past it
+ * drops the oldest latched watch, else the oldest one.
+ */
+export const MAX_WATCHES = 16;
+/**
+ * A watch not polled for this long is dropped (below the daemon's IDLE_STOP_MS): each poll is the
+ * watch's heartbeat, so a watch whose run ended or was skipped costs at most this long.
+ */
+export const WATCH_HEARTBEAT_MS = 10 * 60_000;
+/** The longest condition text a watch or wait keeps (a text, a ref or a URL part). */
+export const WAIT_CONDITION_MAX_CHARS = 2000;
+
+/**
+ * One wait condition: a text appears, an element ref appears, the active tab's URL contains a
+ * string, the next navigation finishes, or the next download finishes saving into the workspace.
+ */
+export type WaitCondition =
+  | { text: string }
+  | { ref: string }
+  | { urlContains: string }
+  | { navigation: true }
+  | { download: true };
+
+/**
+ * A watch's latched state (`watch_start` / `watch_poll` / `watch_end` replies). `met` with `at`
+ * (ISO) and, for a download, `detail` (the saved path); `ended` with `reason`: `dialog` (a dialog
+ * opened on the watched tab; `detail` its message), `tab_closed`, or `deadline` (its remaining
+ * time passed on the device's clock); `unknown`: the daemon has no such watch (never started,
+ * dropped without polls, evicted, or the browser restarted).
+ */
+export interface WatchState {
+  state: "pending" | "met" | "ended" | "unknown";
+  reason?: "dialog" | "tab_closed" | "deadline";
+  at?: string;
+  detail?: string;
+}
+
 /** The failure message of a request without its conversation fields. */
 export const NO_CONVERSATION_MESSAGE = "the request names no conversation";
 
@@ -216,7 +254,8 @@ export interface RequestConversation {
  * Acting operations (navigate, snapshot, screenshot, the element and coordinate actions, wait,
  * `tabs open` / `switch` / `close`) act on the conversation's active tab; a conversation with no
  * live tab first claims an unowned tab, else gets a new one (subject to the caps). Non-acting
- * operations never open a tab: `tabs list`, `tabs adopt`, `handoff_notice`, `handoff_clear`.
+ * operations never open a tab: `tabs list`, `tabs adopt`, `handoff_notice`, `handoff_clear` and
+ * the watch operations (`watch_start` binds to the active tab, refused without one).
  *
  * `tabs list` lists the conversation's own tabs, then the tree's other tabs, then other trees'
  * tabs (titles clipped to 120 characters, URLs without query or fragment outside its own).
@@ -241,7 +280,15 @@ export type ToolOp =
   | { op: "upload"; ref: string; path: string }
   | { op: "click_at"; x: number; y: number }
   | { op: "type_at"; x: number; y: number; text: string }
-  | { op: "wait"; text?: string; ref?: string; navigation?: boolean; timeoutMs: number }
+  | {
+      op: "wait";
+      text?: string;
+      ref?: string;
+      navigation?: boolean;
+      urlContains?: string;
+      download?: boolean;
+      timeoutMs: number;
+    }
   | { op: "screenshot"; fullPage?: boolean; maxBytes: number }
   /**
    * The plugin server's handoff bookkeeping (not agent input, so allowed during a takeover). Per
@@ -252,7 +299,20 @@ export type ToolOp =
    * also ends a takeover, so the request that follows is not refused as taken over.
    */
   | { op: "handoff_notice"; callId: string; message: string }
-  | { op: "handoff_clear"; callId: string; handback?: boolean };
+  | { op: "handoff_clear"; callId: string; handback?: boolean }
+  /**
+   * Long waits (browser long waits spec §6.2): the plugin server's bookkeeping of a parked
+   * browser_wait, not agent input (allowed during a takeover, never queued behind actions, never
+   * drops a pending handoff). `watch_start` arms a watch on the conversation's active tab
+   * (idempotent per `watchId`) that latches the first outcome within `remainingMs` (the device's
+   * clock); `watch_poll` returns the latched state and is its heartbeat; `watch_end` returns it
+   * and forgets the watch. A pending watch is the conversation's park. Neither `watch_start` nor
+   * `watch_poll` takes the hand back note or the conversation's unreported notes; `watch_end`
+   * does, as an ordinary reply.
+   */
+  | { op: "watch_start"; watchId: string; condition: WaitCondition; remainingMs: number }
+  | { op: "watch_poll"; watchId: string }
+  | { op: "watch_end"; watchId: string };
 
 /** A request as it travels on the socket: an operation and its conversation. */
 export type ToolRequest = ToolOp & RequestConversation;
@@ -312,6 +372,8 @@ export type ToolReply =
        */
       userControlledSince?: string;
       tabs?: TabCount;
+      /** The watch of a `watch_start` / `watch_poll` / `watch_end` request. */
+      watch?: WatchState;
     }
   | {
       ok: false;
@@ -437,6 +499,11 @@ export type ViewerOut =
       lastClick?: { x: number; y: number; seq: number };
       /** The tree's pending handoffs, oldest first (the newest is last). */
       handoffs: ViewerHandoff[];
+      /**
+       * The newest pending watch of the viewer's tree (a parked long wait): what the agent waits
+       * for (`label`, at most 200 characters) and until when (ISO).
+       */
+      waiting?: { label: string; until: string };
     }
   /**
    * A host the device refused for a page of the viewer's tree. `url`: the page to open once the
