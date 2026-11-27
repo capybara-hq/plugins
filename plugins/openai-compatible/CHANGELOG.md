@@ -1,5 +1,13 @@
 # @capybara-hq/plugin-openai-compatible
 
+## 0.1.0-rc.14
+
+### Patch Changes
+
+- d895495: The `qwen` dialect sends DashScope's explicit cache markers (the last cached system block and the
+  last block of the history), so long conversations cache their history; the `ark` dialect defaults
+  `caching` to true and sends a per-conversation `prompt_cache_key`.
+
 ## 0.1.0-rc.13
 
 ### Patch Changes

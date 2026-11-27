@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-ark",
-  "version": "0.1.0-rc.13",
+  "version": "0.1.0-rc.14",
   "description": "Model provider (model-provider@2) for Volcengine Ark chat, embedding and image generation models",
   "license": "Apache-2.0",
   "repository": {

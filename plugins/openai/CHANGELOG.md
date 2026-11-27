@@ -1,5 +1,12 @@
 # @capybara-hq/plugin-openai
 
+## 0.1.0-rc.14
+
+### Patch Changes
+
+- a50be22: Requests carry a `prompt_cache_key` hashed from the org and the system prompt: the conversations of
+  one agent keep sharing their cached prefix, and orgs sharing an API key never share cache entries.
+
 ## 0.1.0-rc.13
 
 ### Patch Changes
