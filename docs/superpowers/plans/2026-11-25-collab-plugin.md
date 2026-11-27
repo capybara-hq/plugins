@@ -19,7 +19,7 @@ React (client entry), vitest (+ jsdom, `@capybara-hq/testing` kernel), capybara-
 
 **Spec:** core `docs/superpowers/specs/2026-11-25-collaboration-design.md` (§3, §5–§7) and
 `2026-11-25-plugin-full-pages-design.md`; kernel contracts from core plans
-`2026-11-25-collaboration-kernel.md` (B1, B3, C1–C4) and `2026-11-25-plugin-full-pages.md` (F1, F5).
+`2026-11-25-collaboration-kernel.md` (B1, B3, C1–C4; core PR #981) and `2026-11-25-plugin-full-pages.md` (F1, F5).
 
 ## Global Constraints
 
