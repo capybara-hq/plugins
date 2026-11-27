@@ -41,6 +41,10 @@
  */
 export const ROLL_CHECK_REQUEST = '{"capybara":"roll-check"}';
 
+/** A request of a conversation the kernel's notice deleted (or of its tree). */
+export const CONVERSATION_DELETED_MESSAGE =
+  "This conversation was deleted; its browser tabs are closed.";
+
 /** The fixed viewport; viewers never change it (§8). */
 export const VIEWPORT = { width: 1280, height: 800 } as const;
 

@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { encodeConversationDeleted } from "@capybara-hq/plugin-sdk";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { ToolReply } from "../../daemon/protocol.js";
+import { CONVERSATION_DELETED_MESSAGE, type ToolReply } from "../../daemon/protocol.js";
 import {
   conv,
   openViewer,
@@ -100,6 +100,22 @@ describe("conversation-deleted notice", () => {
     ok(await request(d.socketPath, { op: "navigate", url: `${fx.url}/get` }, X));
     const snap = ok(await request(d.socketPath, { op: "snapshot" }, X));
     expect(snap.text ?? "").toContain("cookie: kept=v1");
+  });
+
+  it("refuses the deleted tree's later requests and viewers for the restore window", async () => {
+    const d = await daemon();
+    ok(await request(d.socketPath, { op: "navigate", url: `${fx.url}/a` }, R));
+    expect(await notice(d, "r")).toEqual({ ok: true, closed: 1 });
+    // a request that passed the kernel's checks before the deletion committed opens nothing
+    for (const c of [R, S]) {
+      const r = await request(d.socketPath, { op: "navigate", url: `${fx.url}/a` }, c);
+      expect(r).toMatchObject({ ok: false, message: CONVERSATION_DELETED_MESSAGE });
+    }
+    expect(d.daemon.state.conversationIds).toEqual([]);
+    const v = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 }, S);
+    await v.closed;
+    // another conversation is unaffected
+    ok(await request(d.socketPath, { op: "navigate", url: `${fx.url}/a` }, X));
   });
 
   it("closes them during a takeover of another conversation's panel", async () => {

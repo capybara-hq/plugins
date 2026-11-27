@@ -34,6 +34,7 @@ import {
 } from "./chromium.js";
 import { restoreCookies, saveCookies } from "./cookie-file.js";
 import {
+  CONVERSATION_DELETED_MESSAGE,
   DEFAULT_FRAME_MAX_BYTES,
   DOWNLOAD_BLOCKED_PREFIX,
   MAX_TABS_PER_CONVERSATION,
@@ -44,7 +45,7 @@ import {
   type ToolRequest,
   type ViewerIn,
 } from "./protocol.js";
-import { SessionFile, withoutTree } from "./session-file.js";
+import { RESTORE_MAX_AGE_MS, SessionFile, withoutTree } from "./session-file.js";
 import { type Clock, DaemonState, systemClock } from "./state.js";
 import { ViewerSession } from "./viewer.js";
 
@@ -501,6 +502,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     if (!namesConversation(raw)) return fail(NO_CONVERSATION_MESSAGE);
     const req = raw as ToolRequest;
     const conv = req.conversationId;
+    const deletedIn = () => deletedTree(conv) ?? deletedTree(req.rootConversationId);
+    if (deletedIn() !== undefined) return fail(CONVERSATION_DELETED_MESSAGE);
     // in use from arrival to reply (queued requests and wait included): adopt is refused meanwhile
     state.requestArrived(conv, req.rootConversationId);
     let reply: ToolReply;
@@ -510,6 +513,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       reply = fail(e instanceof ActionError ? e.message : String(e));
     } finally {
       state.requestFinished(conv);
+      // deleted while the request ran: a tab it opened after the notice closes now
+      const tree = deletedIn();
+      if (tree !== undefined) void forgetDeleted(tree).catch(() => undefined);
     }
     // the conversation's own tab count after the request (the result's last line)
     return { ...reply, tabs: { open: live?.countOf(conv) ?? 0, max: MAX_TABS_PER_CONVERSATION } };
@@ -581,7 +587,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         // older kernel, a panel's own message) closes the stream, and a later message of that
         // shape is never read as context
         const ctx = parseViewerContext(raw);
-        if (ctx === null) {
+        // a deleted conversation's viewer (the kernel closes it too) is never served
+        if (
+          ctx === null ||
+          deletedTree(ctx.conversationId) !== undefined ||
+          deletedTree(ctx.rootConversationId) !== undefined
+        ) {
           sock.destroy();
           return;
         }
@@ -687,12 +698,27 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   }
 
   /**
+   * Conversations the kernel's notice deleted, with when: for the restore window their requests
+   * are refused and their viewers closed, and a request that was already running when the notice
+   * came has the tabs it opened closed when it ends.
+   */
+  const deleted = new Map<string, number>();
+
+  /** The deleted conversation `id` is (or undefined), forgetting entries past the window. */
+  function deletedTree(id: string): string | undefined {
+    const now = clock.now();
+    for (const [c, at] of deleted) if (now - at > RESTORE_MAX_AGE_MS) deleted.delete(c);
+    return deleted.has(id) ? id : undefined;
+  }
+
+  /**
    * The kernel's conversation-deleted notice (SDK `parseConversationDeleted`): forgets the
    * conversation and every conversation whose tree root it is, closes their tabs in the running
    * (or launching) browser, and drops them from the session still to restore and from the file
    * (a coming save rewrites it too). Idempotent: a repeat closes nothing. Returns the tabs closed.
    */
   async function forgetDeleted(conversationId: string): Promise<number> {
+    if (!deleted.has(conversationId)) deleted.set(conversationId, clock.now());
     const forgotten = state.forgetTree(conversationId);
     if (saved !== undefined) saved = withoutTree(saved, conversationId);
     sessionFile.dropTree(conversationId);
