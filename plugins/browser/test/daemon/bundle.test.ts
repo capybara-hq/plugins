@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -67,5 +67,13 @@ describe("bundled daemon", () => {
     const exited = new Promise<number | null>((r) => child?.once("exit", (code) => r(code)));
     child.kill("SIGTERM");
     expect(await exited).toBe(0);
+  });
+
+  it("ships the patched playwright-core (a site challenge nobody answers is cancelled)", () => {
+    const core = readFileSync(
+      join(out, "vendor", "playwright-core", "lib", "coreBundle.js"),
+      "utf8",
+    );
+    expect(core).toContain("capybara patch (plugins#292)");
   });
 });

@@ -1,0 +1,64 @@
+diff --git a/lib/coreBundle.js b/lib/coreBundle.js
+index c09d4f45f03b4cb41bbec4c42c30ed092272b6a9..a83aed89198b865eb0377d932d053e90224edb22 100644
+--- a/lib/coreBundle.js
++++ b/lib/coreBundle.js
+@@ -37903,6 +37903,11 @@ var init_crNetworkManager = __esm({
+         } else if (credentials) {
+           response2 = "ProvideCredentials";
+           this._attemptedAuthentications.add(attemptKey);
++        } else if (!isProxy) {
++          // capybara patch (plugins#292): no site credentials match, so cancel the challenge and let
++          // the request complete with its 401; "Default" leaves a subresource's challenge hanging in
++          // headless Chromium
++          response2 = "CancelAuth";
+         }
+         const { username, password } = credentials || { username: void 0, password: void 0 };
+         sessionInfo.session._sendMayFail("Fetch.continueWithAuth", {
+@@ -37926,8 +37931,12 @@ var init_crNetworkManager = __esm({
+           const existingRequest = this._requestIdToRequest.get(requestId);
+           const alreadyContinuedParams = existingRequest?._originalRequestRoute?._alreadyContinuedParams;
+           if (alreadyContinuedParams && !event.redirectedRequestId) {
++            // capybara patch (plugins#292 review): a redirect hop paused before its
++            // requestWillBeSent lands here too (a subresource's hop carries no redirectedRequestId)
++            const headers = alreadyContinuedParams.headers && crossedOrigin(existingRequest.request, event.request.url) ? alreadyContinuedParams.headers.filter((h) => h.name.toLowerCase() !== "authorization") : alreadyContinuedParams.headers;
+             sessionInfo.session._sendMayFail("Fetch.continueRequest", {
+               ...alreadyContinuedParams,
++              headers,
+               requestId: event.requestId
+             });
+             return;
+@@ -37988,6 +37997,11 @@ var init_crNetworkManager = __esm({
+             if (headersOverride) {
+               const originalHeaders = Object.entries(requestPausedEvent.request.headers).map(([name, value2]) => ({ name, value: value2 }));
+               headersOverride = removeCookieHeader(applyHeadersOverrides(originalHeaders, headersOverride));
++              // capybara patch (plugins#292 review): the route's headers are replayed on every
++              // redirect hop; once the chain leaves the origin of its first request, an
++              // Authorization header is never sent again (as a browser drops it)
++              if (redirectedFrom && crossedOrigin(redirectedFrom.request, requestWillBeSentEvent.request.url))
++                headersOverride = headersOverride.filter((h) => h.name.toLowerCase() !== "authorization");
+             }
+             requestPausedSessionInfo.session._sendMayFail("Fetch.continueRequest", { requestId: requestPausedEvent.requestId, headers: headersOverride });
+           } else {
+@@ -53329,6 +53343,22 @@ function validateBrowserContextOptions(options, browserOptions) {
+     throw new Error(`"recordVideo.fps" must be a positive number, got ${options.recordVideo.fps}`);
+   verifyGeolocation(options.geolocation);
+ }
++// capybara patch (plugins#292 review): whether a redirect chain (its last hop `request`, then
++// `nextUrl`) has left the origin of its first request
++function crossedOrigin(request2, nextUrl) {
++  const originOf = (u) => {
++    try {
++      return new URL(u).origin;
++    } catch {
++      return void 0;
++    }
++  };
++  const urls = [nextUrl];
++  for (let r = request2; r; r = r.redirectedFrom())
++    urls.push(r.url());
++  const first = originOf(urls[urls.length - 1]);
++  return first === void 0 || urls.some((u) => originOf(u) !== first);
++}
+ function findMatchingHttpCredentials(credentials, url3) {
+   const origin = new URL(url3).origin.toLowerCase();
+   return credentials?.find((c) => !c.origin || c.origin.toLowerCase() === origin);

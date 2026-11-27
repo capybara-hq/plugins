@@ -18,3 +18,5 @@ overrides:
   "@capybara-hq/testing": 0.1.0-rc.45
   # the scripted model built against the same SDK (an older one imports SDK exports since removed)
   "@capybara-hq/plugin-model-fake": 0.1.0-rc.84
+patchedDependencies:
+  playwright-core@1.65.1: patches/playwright-core@1.65.1.patch

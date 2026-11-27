@@ -998,8 +998,6 @@ export class BrowserSession {
    * kept in this process's memory only, never in a reply, note, log, viewer message or file.
    */
   private readonly credentials = new Map<string, string>();
-  /** Whether the credential route is installed (only while credentials exist). */
-  private authRouted = false;
   /** Pages whose main frame got a sign-in challenge (a 401 with WWW-Authenticate). */
   private readonly challenged = new WeakSet<Page>();
   /** Requests the route signed (a 401 to one of them means the credentials are wrong). */
@@ -1089,7 +1087,24 @@ export class BrowserSession {
       });
     });
     for (const p of ctx.pages()) this.track(p);
-    this.ready = this.installPermissionReports();
+    this.ready = Promise.all([this.installPermissionReports(), this.installAuthRoute()]).then(
+      () => undefined,
+    );
+  }
+
+  /**
+   * The credential route, installed for the session's lifetime (plugins#292): it signs the
+   * requests {@link authHeaderFor} allows, and while any route exists Playwright answers every
+   * site challenge itself, cancelling one no credentials match (the patched playwright-core,
+   * patches/), so a page's fetch, XHR or subresource that gets a Basic challenge completes with
+   * its 401 instead of hanging in the full build. Never fails the session.
+   */
+  private async installAuthRoute(): Promise<void> {
+    try {
+      await this.ctx.route((u) => this.credentials.has(u.origin), this.onAuthRoute);
+    } catch {
+      // a closing browser: nothing to sign
+    }
   }
 
   /**
@@ -1848,7 +1863,7 @@ export class BrowserSession {
     const origin = h.view.origin;
     if (origin === undefined || typeof m.username !== "string" || typeof m.password !== "string")
       return;
-    await this.signIn(origin, m.username, m.password);
+    this.signIn(origin, m.username, m.password);
     for (const [id, x] of [...this.held])
       if (x.view.kind === "auth" && x.view.origin === origin) this.clearHeld(id);
     this.noteTo(h.owner.owner, `The user signed in to ${origin} (HTTP auth).`);
@@ -1909,25 +1924,16 @@ export class BrowserSession {
     return firstLine(e).includes("ERR_INVALID_AUTH_CREDENTIALS") && this.challenged.has(page);
   }
 
-  /** Stores the person's credentials for exactly `origin` and routes them (memory only). */
-  private async signIn(origin: string, username: string, password: string): Promise<void> {
+  /** Stores the person's credentials for exactly `origin` (memory only; the route signs). */
+  private signIn(origin: string, username: string, password: string): void {
     this.credentials.set(
       origin,
       `Basic ${Buffer.from(`${username}:${password}`, "utf8").toString("base64")}`,
     );
-    if (this.authRouted) return;
-    this.authRouted = true;
-    await this.ctx
-      .route((u) => this.credentials.has(u.origin), this.onAuthRoute)
-      .catch(() => {
-        this.authRouted = false;
-      });
   }
 
   private forgetCredentials(origin: string): void {
-    if (!this.credentials.delete(origin) || this.credentials.size > 0 || !this.authRouted) return;
-    this.authRouted = false;
-    void this.ctx.unroute(() => true, this.onAuthRoute).catch(() => undefined);
+    this.credentials.delete(origin);
   }
 
   private readonly onAuthRoute = async (route: Route): Promise<void> => {
@@ -1945,10 +1951,13 @@ export class BrowserSession {
 
   /**
    * The Authorization value a request gets, only where a browser's own page would send it: a
-   * request to the signed-in origin from a page whose top-level document has that origin, or a
-   * top-level navigation to it that this page started from that origin or that the daemon runs
+   * request to the signed-in origin from a frame whose own document has that origin inside a page
+   * whose top-level document has it too (an iframe's navigation: its parent frame's document), or
+   * a top-level navigation to it that this page started from that origin or that the daemon runs
    * (the agent's or the person's address bar, history, reload). Never a service worker's request,
-   * a cross-site page's request (fetch, image, form post) or a redirect into the origin.
+   * a cross-site page's or embedded cross-origin frame's request (fetch, image, form post), or a
+   * redirect into the origin. A redirect out of the origin drops the header on every later hop
+   * (the patched playwright-core, which replays a route's headers on redirects).
    */
   private authHeaderFor(r: Request): string | undefined {
     const origin = originOf(r.url());
@@ -1962,12 +1971,18 @@ export class BrowserSession {
     }
     const page = frame.page();
     const top = originOf(page.mainFrame().url());
-    if (!(r.isNavigationRequest() && frame === page.mainFrame())) {
-      return top === origin ? value : undefined;
-    }
     let root = r;
     for (let f = r.redirectedFrom(); f !== null; f = f.redirectedFrom()) root = f;
     if (originOf(root.url()) !== origin) return undefined;
+    if (!r.isNavigationRequest()) {
+      return top === origin && originOf(frame.url()) === origin ? value : undefined;
+    }
+    if (frame !== page.mainFrame()) {
+      const parent = frame.parentFrame();
+      return top === origin && parent !== null && originOf(parent.url()) === origin
+        ? value
+        : undefined;
+    }
     if (top === origin || (this.ownNavs.get(page) ?? 0) > 0) return value;
     return undefined;
   }
