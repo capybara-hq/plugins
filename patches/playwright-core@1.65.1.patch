@@ -1,0 +1,16 @@
+diff --git a/lib/coreBundle.js b/lib/coreBundle.js
+index c09d4f45f03b4cb41bbec4c42c30ed092272b6a9..052c7860fe1f50b20cb0f38e950a721a2f38e350 100644
+--- a/lib/coreBundle.js
++++ b/lib/coreBundle.js
+@@ -37903,6 +37903,11 @@ var init_crNetworkManager = __esm({
+         } else if (credentials) {
+           response2 = "ProvideCredentials";
+           this._attemptedAuthentications.add(attemptKey);
++        } else if (!isProxy) {
++          // capybara patch (plugins#292): no site credentials match, so cancel the challenge and let
++          // the request complete with its 401; "Default" leaves a subresource's challenge hanging in
++          // headless Chromium
++          response2 = "CancelAuth";
+         }
+         const { username, password } = credentials || { username: void 0, password: void 0 };
+         sessionInfo.session._sendMayFail("Fetch.continueWithAuth", {

@@ -72,7 +72,6 @@ beforeAll(async () => {
 <img src=${at("/img")}>
 <form method="post" action=${at("/form")} id="f"></form>
 <script>
-  // (the full build never settles a fetch the site answers with a sign-in challenge)
   fetch(${at("/fetch")}, { credentials: "include", mode: "no-cors" }).catch(() => {});
   setTimeout(() => document.getElementById("f").submit(), 200);
 </script>`);
