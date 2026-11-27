@@ -6,6 +6,7 @@ import {
   type ModelRequest,
 } from "@capybara-hq/plugin-sdk";
 import type OpenAI from "openai";
+import { conversationCacheKey } from "./cache-key.js";
 import type { ChatBody, Dialect, ModelTraits } from "./dialects.js";
 
 type Message = OpenAI.Chat.ChatCompletionMessageParam;
@@ -17,6 +18,8 @@ export interface ChatTarget {
   midConversationSystem: boolean;
   /** 部署配置里该模型的属性（请求级，对所有消息相同）。 */
   model: ModelTraits;
+  /** The org the call is made for (part of the `prompt_cache_key` hash). */
+  orgId?: string;
 }
 
 type Part = OpenAI.Chat.ChatCompletionContentPart;
@@ -120,20 +123,69 @@ function mapMessages(messages: ModelMessage[], req: ModelRequest, t: ChatTarget)
   return out;
 }
 
+const EPHEMERAL = { type: "ephemeral" } as const;
+
+/** A text part with DashScope's cache marker (not in the SDK's types). */
+type MarkedText = OpenAI.Chat.ChatCompletionContentPartText & { cache_control?: typeof EPHEMERAL };
+
+/**
+ * The system prompt: one string (blocks joined by a blank line), or, with DashScope's explicit
+ * cache, one text part per block with the marker on the last block marked `cache: true`.
+ */
+function systemMessage(req: ModelRequest, t: ChatTarget): Message | null {
+  if (req.system.length === 0) return null;
+  if (t.dialect.cacheFields !== "dashscope") {
+    const text = req.system.map((s) => s.text).join("\n\n");
+    return text === "" ? null : { role: "system", content: text };
+  }
+  const lastCached = req.system.map((s) => s.cache).lastIndexOf(true);
+  const content: MarkedText[] = req.system.map((s, i) => ({
+    type: "text",
+    text: s.text,
+    ...(i === lastCached ? { cache_control: EPHEMERAL } : {}),
+  }));
+  return { role: "system", content } as Message;
+}
+
+/**
+ * DashScope's history marker on the last content block of the last message, as bailian's native
+ * mapping does (see plugins/bailian/src/map-request.ts for the evidence): each turn it moves to
+ * the new last block, the previous turn's entry sits one block before the new messages, and the
+ * cache matches on the rendered prompt, so a string content that becomes one marked text part
+ * still hits. Only text is marked; an empty or non-text last block gets none.
+ */
+function markLastBlock(messages: Message[]): void {
+  const last = messages[messages.length - 1] as { role: string; content?: unknown } | undefined;
+  if (last === undefined || last.role === "system") return;
+  if (typeof last.content === "string") {
+    if (last.content !== "") {
+      last.content = [{ type: "text", text: last.content, cache_control: EPHEMERAL }];
+    }
+    return;
+  }
+  if (!Array.isArray(last.content)) return;
+  const i = last.content.length - 1;
+  const part = last.content[i] as { type?: string; text?: string } | undefined;
+  if (part?.type !== "text" || part.text === "") return;
+  last.content[i] = { ...part, cache_control: EPHEMERAL };
+}
+
 /** model-provider@2 请求 → Chat Completions 流式请求体。纯函数。 */
 export function buildRequest(req: ModelRequest, t: ChatTarget): ChatBody {
-  const system = req.system.map((s) => s.text).join("\n\n");
+  const system = systemMessage(req, t);
+  const history = mapMessages(req.messages, req, t);
+  // DeepSeek's disk cache and vLLM prefix caching need nothing; Qwen and Ark: see cacheFields
+  if (t.dialect.cacheFields === "dashscope") markLastBlock(history);
   const body: ChatBody = {
     model: t.upstreamModel,
-    // 前缀缓存由服务自动处理（DeepSeek 磁盘缓存、Qwen 隐式缓存、vLLM prefix caching），不打标记
-    messages: [
-      ...(system !== "" ? [{ role: "system" as const, content: system }] : []),
-      ...mapMessages(req.messages, req, t),
-    ],
+    messages: [...(system !== null ? [system] : []), ...history],
     max_tokens: req.maxOutputTokens,
     stream: true,
     stream_options: { include_usage: true },
   };
+  if (t.dialect.cacheFields === "routing-key") {
+    body.prompt_cache_key = conversationCacheKey(req, t.orgId);
+  }
   if (req.tools.length > 0) {
     body.tools = req.tools.map((tool) => ({
       type: "function",

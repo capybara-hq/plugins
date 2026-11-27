@@ -51,6 +51,14 @@ export interface Dialect {
   /** 未配置 `caching` 时的默认值（服务是否有自动前缀缓存）。 */
   caching: boolean;
   /**
+   * Prompt-cache request fields of the service. `"dashscope"`: explicit `cache_control` markers
+   * on the last system block marked `cache: true` and on the last content block of the history
+   * (DashScope's explicit cache; explicit and implicit caching are mutually exclusive per
+   * request). `"routing-key"`: a per-conversation `prompt_cache_key` (Ark's routing affinity
+   * for its implicit cache). Absent: nothing is sent, the service caches prefixes on its own.
+   */
+  cacheFields?: "dashscope" | "routing-key";
+  /**
    * Chat Completions 是否接受 PDF 的 `file` 内容（`{type: "file", file: {filename, file_data}}`）。
    * 为 false 的方言不能给模型开启 `documents`（配置校验拒绝）。图片一律用 `image_url`（data URL），
    * 是否支持按模型在部署配置里声明 `vision`。
@@ -294,6 +302,9 @@ const deepseek: Dialect = {
  * - `enable_thinking: boolean`；默认值因模型而异（Qwen3 商业版默认关，Qwen3.5 及以后默认开），所以 thinking 旋钮不给默认值；
  * - 思考增量在 `delta.reasoning_content`；历史里的 `reasoning_content` 只在 `preserve_thinking` 时被读取，默认不回传；
  * - 用量：`prompt_tokens` 含 `prompt_tokens_details.cached_tokens`（命中）与 `cache_creation_input_tokens`（显式缓存写入）；
+ * - Explicit cache (context-cache page, read 2026-11-27): `cache_control: {type: "ephemeral"}` on
+ *   content blocks of any message, at most 4, a 20-block lookback; the history gets a marker on
+ *   its last block (see map-request.ts), since a request with markers gets no implicit cache;
  * - temperature 默认值因模型而异，不给默认值；
  * - system 消息的位置规则文档未写明，按保守做法转成 user 文本（端点可改）。
  * - 媒体（https://www.alibabacloud.com/help/en/model-studio/vision ，
@@ -305,8 +316,9 @@ const deepseek: Dialect = {
 const qwen: Dialect = {
   name: "qwen",
   midConversationSystem: false,
-  // 隐式缓存自动生效（不保证命中）
+  // Explicit cache markers (map-request.ts): 5 minutes, refreshed on every hit
   caching: true,
+  cacheFields: "dashscope",
   pdfInput: true,
   parameters: (m) => [...(m.reasoning ? [thinkingKnob()] : []), temperature(2), maxOutput(m)],
   applyParams(body, params) {
@@ -341,7 +353,11 @@ const qwen: Dialect = {
  * - 用量：`prompt_tokens_details.cached_tokens` 为命中的输入 token，`prompt_tokens` 含之；无缓存写入计数；
  * - `reasoning_effort`（none…max）的支持模型与默认值文档未能确认，不实现；temperature 默认值未确认，不给默认值；
  * - 历史 `reasoning_content` 的回放规则、system 消息的位置规则未能确认，保守处理：不回放思考，
- *   中途 system 转成 user 文本（端点可改）；是否有自动缓存未确认，`caching` 默认 false。
+ *   中途 system 转成 user 文本（端点可改）。
+ * - Implicit context cache (https://docs.volcengine.com/docs/ark/context-cache, read 2026-11-27):
+ *   automatic on every current doubao-seed, deepseek, kimi and glm chat model, not on the old
+ *   open-source ones, so `caching` defaults to true (a model without it is set false in the
+ *   deployment config); `prompt_cache_key` routes one conversation to one cache.
  * - 媒体（2026-10-21 核实）：视觉模型的图片走 Chat API 的 `image_url`；文档理解（PDF）只见于
  *   Responses API 的 `input_file`（https://docs.byteplus.com/docs/ModelArk/1902647 ），Chat API 收 PDF
  *   未能确认，`pdfInput: false`。图片收 base64 data URL 的写法官方页面未能直接读到（页面由脚本渲染），
@@ -350,7 +366,8 @@ const qwen: Dialect = {
 const ark: Dialect = {
   name: "ark",
   midConversationSystem: false,
-  caching: false,
+  caching: true,
+  cacheFields: "routing-key",
   pdfInput: false,
   parameters: (m) => [...(m.reasoning ? [thinkingKnob()] : []), temperature(2), maxOutput(m)],
   applyParams(body, params) {

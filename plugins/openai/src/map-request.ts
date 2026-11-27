@@ -8,6 +8,7 @@ import {
   type ProviderOpaque,
 } from "@capybara-hq/plugin-sdk";
 import type OpenAI from "openai";
+import { promptCacheKey } from "./cache-key.js";
 
 export const PROVIDER = "openai";
 
@@ -226,7 +227,11 @@ function wantsSummary(req: ModelRequest, traits: ModelTraits): boolean {
 }
 
 /** model-provider@2 请求 → OpenAI Responses API 请求。纯函数。非推理模型忽略 effort / thinking。 */
-export function buildRequest(req: ModelRequest, traits: ModelTraits): OpenAIParams {
+export function buildRequest(
+  req: ModelRequest,
+  traits: ModelTraits,
+  scope: { orgId?: string } = {},
+): OpenAIParams {
   const params: OpenAIParams = {
     model: req.model,
     input: mapMessages(req.messages, req.model),
@@ -234,9 +239,10 @@ export function buildRequest(req: ModelRequest, traits: ModelTraits): OpenAIPara
     // 不在服务端保存；推理状态以 encrypted_content 随历史回放
     store: false,
   };
-  // 缓存是自动的（按前缀），不需要标记
+  // Caching is automatic (by prefix) and needs no marker; the key groups requests, see cache-key.ts
   const instructions = req.system.map((s) => s.text).join("\n\n");
   if (instructions !== "") params.instructions = instructions;
+  params.prompt_cache_key = promptCacheKey(scope.orgId, instructions);
   if (traits.reasoning) {
     params.include = ["reasoning.encrypted_content"];
     const effort = req.params.effort;

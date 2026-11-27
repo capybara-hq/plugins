@@ -185,7 +185,13 @@ function protocolViolation(dialect: Dialect, b: Body, thinks: boolean): string |
   for (const m of b.messages) {
     if (!Array.isArray(m.content)) continue;
     for (const part of m.content as Record<string, unknown>[]) {
-      if (m.role !== "user") return "content parts are only expected in user messages";
+      // text parts are valid in any message (qwen sends its cache markers on them)
+      if (m.role !== "user" && part.type !== "text") {
+        return "only text parts are expected outside user messages";
+      }
+      if (part.cache_control !== undefined && dialect !== "qwen") {
+        return "cache_control is not expected for this dialect";
+      }
       if (part.type === "image_url") {
         const url = (part.image_url as { url?: unknown } | undefined)?.url;
         if (parseDataUrl(url)?.[0].startsWith("image/") !== true)
@@ -265,7 +271,13 @@ export function chatRoutes(dialect: Dialect): (req: FakeRequest) => FakeResponse
     const usage = (total: number, output: number, cached = 0) =>
       usageFor(dialect, { total, output, cached });
 
-    const system = b.messages[0]?.role === "system" ? String(b.messages[0].content) : "";
+    const head = b.messages[0];
+    const system =
+      head?.role !== "system"
+        ? ""
+        : Array.isArray(head.content)
+          ? (head.content as { text?: string }[]).map((p) => p.text ?? "").join("\n\n")
+          : String(head.content);
     if (system.length > 4000) {
       const seen = cachedPrefixes.has(system);
       cachedPrefixes.add(system);

@@ -36,7 +36,7 @@ describeModelProviderConformance("ark (fixtures, seed)", async () => {
     plugin: PLUGIN,
     provider: createArkProvider({ apiKey: "ark-fixture", baseUrl: `${server.url}/api/v3` }),
     model: SEED,
-    expect: { thinking: true, caching: false, embedding: { model: EMBED, dimensions: 1024 } },
+    expect: { thinking: true, caching: true, embedding: { model: EMBED, dimensions: 1024 } },
     teardown: () => server.stop(),
   };
 });
@@ -614,7 +614,11 @@ describe.skipIf(!live?.chat)("live", { timeout: 120_000 }, () => {
     model: live?.chat?.id ?? "",
     expect: {
       thinking: true,
-      caching: live?.chat?.capabilities.caching ?? false,
+      // Ark's implicit cache does not guarantee a hit, so the suite's hit case (two identical
+      // requests, the second must read the cache) would flake: opted out here. Cache usage
+      // mapping is checked by the history test below and the fixture suites. Until the per-model
+      // cache declaration (core#957 §9.3) can say "not guaranteed".
+      caching: false,
       ...(live?.embed?.embedding
         ? {
             embedding: {
@@ -628,6 +632,48 @@ describe.skipIf(!live?.chat)("live", { timeout: 120_000 }, () => {
     cachePrefixTokens: 8000,
     teardown: async () => {},
   }));
+
+  it("live: a growing conversation maps the implicit cache usage", async () => {
+    if (!live?.chat?.capabilities.caching) return;
+    const provider = live.provider as ModelProvider;
+    const nonce = Math.random().toString(36).slice(2);
+    const lines = (tag: string, n: number) =>
+      Array.from({ length: n }, (_, i) => `${tag} ${i}: reference note ${i * 7} (${nonce}).`).join(
+        "\n",
+      );
+    const first = req({
+      model: live.chat.id,
+      system: [{ text: `You answer in one word.\n${lines("Rule", 200)}`, cache: true }],
+      messages: [
+        { role: "user", content: [{ type: "text", text: `${lines("Fact", 200)}\nSay OK.` }] },
+      ],
+      maxOutputTokens: 64,
+      params: { thinking: "off" },
+    });
+    const d1 = complete(await drain(provider, first));
+    const second: ModelRequest = {
+      ...first,
+      messages: [
+        ...first.messages,
+        { role: "assistant", content: d1.content.filter((b) => b.type === "text") },
+        { role: "user", content: [{ type: "text", text: "Again: say OK." }] },
+      ],
+    };
+    const d2 = complete(await drain(provider, second));
+    console.info(
+      `[plugin-ark] live history cache ${live.chat.id}: first ${JSON.stringify(d1.usage)}, second ${JSON.stringify(d2.usage)}`,
+    );
+    // A hit is not guaranteed (implicit cache, core#957 §9.3): check only the usage mapping.
+    // Ark reports no cache writes; the three input kinds never overlap, so the longer second
+    // request's mapped total input exceeds the first one's whatever was read from the cache.
+    for (const u of [d1.usage, d2.usage]) {
+      expect(u.cacheWriteTokens).toBe(0);
+      expect(u.cacheReadTokens).toBeGreaterThanOrEqual(0);
+      expect(u.inputTokens).toBeGreaterThanOrEqual(0);
+    }
+    const total = (u: typeof d1.usage) => u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens;
+    expect(total(d2.usage)).toBeGreaterThan(total(d1.usage));
+  });
 
   it("live: a two-turn tool call replays the thinking to the same model", async () => {
     const provider = live?.provider as ModelProvider;

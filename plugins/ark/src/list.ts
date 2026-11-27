@@ -41,6 +41,7 @@ interface RawModel {
   features?: {
     thinking?: { types?: unknown } | null;
     tools?: { function_calling?: unknown } | null;
+    cache?: { prefix_cache?: unknown; session_cache?: unknown } | null;
   } | null;
 }
 
@@ -187,7 +188,7 @@ function mapModel(raw: RawModel, id: string, kind: ModelKind): ModelInfo {
       // deepseek-v4-flash-ga answered without seeing it. So documents follow image input.
       documents: input.includes("image"),
       reasoning,
-      caching: cachesAutomatically(id),
+      caching: cachesAutomatically(id, raw.features?.cache),
       // `[system]` user turns, see map-request.ts
       midConversationSystem: false,
     },

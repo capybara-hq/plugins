@@ -1,6 +1,6 @@
 import { isModelError, type ModelMessage, type ModelRequest } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
-import { buildRequest } from "../src/map-request.js";
+import { buildRequest, type NativeMessage } from "../src/map-request.js";
 
 const req = (over: Partial<ModelRequest> = {}): ModelRequest => ({
   model: "qwen-flash",
@@ -11,6 +11,31 @@ const req = (over: Partial<ModelRequest> = {}): ModelRequest => ({
   params: {},
   ...over,
 });
+
+const MARK = { cache_control: { type: "ephemeral" } };
+
+/**
+ * The history without its moving cache marker: the last message's marker leaves it on the next
+ * turn, and a string content that carried it as one text part goes back to a string.
+ */
+function unmarked(messages: NativeMessage[]): unknown[] {
+  return messages.map((m, i) => {
+    if (i === 0 && m.role === "system") return m;
+    if (typeof m.content === "string") return m;
+    const marked = m.content.some((p) => "cache_control" in p);
+    const parts = m.content.map((p) => {
+      const { cache_control: _, ...rest } = p as { cache_control?: unknown };
+      return rest;
+    });
+    const only = parts[0] as { type?: string; text?: string } | undefined;
+    // a string content (text-generation, or a tool result) took the marker as one text part
+    const wasString = only?.type === "text" || m.role === "tool";
+    if (marked && parts.length === 1 && wasString && typeof only?.text === "string") {
+      return { ...m, content: only.text };
+    }
+    return { ...m, content: parts };
+  });
+}
 
 const weather = {
   name: "get_weather",
@@ -104,7 +129,31 @@ describe("buildRequest (text-generation)", () => {
       { role: "user", content: "[system] Keep it short." },
       // another model's thinking is dropped whole
       { role: "assistant", content: "It is sunny." },
-      { role: "user", content: "Thanks\n\nBye" },
+      // the history cache marker on the last block
+      { role: "user", content: [{ type: "text", text: "Thanks\n\nBye", ...MARK }] },
+    ]);
+  });
+
+  it("marks the last block of a tool result turn", () => {
+    const body = buildRequest(req({ messages: history.slice(0, 3), tools: [weather] }), "text");
+    expect(body.input.messages.at(-1)).toEqual({
+      role: "tool",
+      tool_call_id: "call_1",
+      content: [{ type: "text", text: "Sunny", ...MARK }],
+    });
+    // the earlier messages carry no marker
+    expect(JSON.stringify(body.input.messages.slice(1, -1))).not.toContain("cache_control");
+  });
+
+  it("uses at most two markers: the system prompt and the history tail", () => {
+    const body = buildRequest(req({ messages: history, tools: [weather] }), "text");
+    expect(JSON.stringify(body).split("cache_control").length - 1).toBe(2);
+  });
+
+  it("marks the history tail without a system prompt", () => {
+    const body = buildRequest(req({ system: [] }), "text");
+    expect(body.input.messages).toEqual([
+      { role: "user", content: [{ type: "text", text: "Hi", ...MARK }] },
     ]);
   });
 
@@ -213,8 +262,29 @@ describe("buildRequest (multimodal-generation)", () => {
       },
       { role: "user", content: [{ image: "data:image/png;base64,AAAA" }, { text: "Color?" }] },
       { role: "assistant", content: [{ text: "Red." }] },
-      { role: "user", content: [{ text: "[system] Be brief." }] },
+      { role: "user", content: [{ text: "[system] Be brief.", ...MARK }] },
     ]);
+  });
+
+  it("leaves a trailing image part unmarked", () => {
+    const body = buildRequest(
+      req({
+        model: "qwen3.8-flash",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "image", mediaType: "image/png", source: { kind: "base64", data: "AAAA" } },
+            ],
+          },
+        ],
+      }),
+      "multimodal",
+    );
+    expect(body.input.messages.at(-1)).toEqual({
+      role: "user",
+      content: [{ image: "data:image/png;base64,AAAA" }],
+    });
   });
 });
 
@@ -257,13 +327,15 @@ describe("an assistant turn left empty", () => {
     for (let n = 1; n < onlyOtherThinking.length; n++) {
       const a = buildRequest(req({ messages: onlyOtherThinking.slice(0, n) }), "text");
       const b = buildRequest(req({ messages: onlyOtherThinking }), "text");
-      expect(b.input.messages.slice(0, a.input.messages.length)).toEqual(a.input.messages);
+      expect(unmarked(b.input.messages).slice(0, a.input.messages.length)).toEqual(
+        unmarked(a.input.messages),
+      );
     }
   });
 });
 
 describe("append-only", () => {
-  it("the mapping of a request is a prefix of the mapping of the same request plus new messages", () => {
+  it("the mapping of a request is a prefix of the mapping of the same request plus new messages, except the moving cache marker", () => {
     for (const endpoint of ["text", "multimodal"] as const) {
       const params = { thinking: "on" as const };
       for (let n = 1; n < history.length; n++) {
@@ -272,7 +344,9 @@ describe("append-only", () => {
           endpoint,
         );
         const b = buildRequest(req({ messages: history, tools: [weather], params }), endpoint);
-        expect(b.input.messages.slice(0, a.input.messages.length)).toEqual(a.input.messages);
+        expect(unmarked(b.input.messages).slice(0, a.input.messages.length)).toEqual(
+          unmarked(a.input.messages),
+        );
       }
     }
   });

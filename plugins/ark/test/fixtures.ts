@@ -543,8 +543,13 @@ export function arkRoutes(): (req: FakeRequest) => FakeResponse {
 
     const system = b.messages[0]?.role === "system" ? String(b.messages[0].content) : "";
     if (system.length > 4000) {
-      // Only DeepSeek models cache a prefix automatically on Ark's chat API (live 2026-11-08)
-      const seen = deepseek && cachedPrefixes.has(system);
+      // Implicit caching on the models whose list entry has `features.cache` (live 2026-11-27)
+      const entries = MODELS_BODY.data as unknown as {
+        id?: string;
+        features?: { cache?: { prefix_cache?: boolean } };
+      }[];
+      const entry = entries.find((m) => m.id === model);
+      const seen = entry?.features?.cache?.prefix_cache === true && cachedPrefixes.has(system);
       cachedPrefixes.add(system);
       return sseChat({
         model,

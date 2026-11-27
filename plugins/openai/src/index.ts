@@ -239,6 +239,7 @@ export function createOpenAIProvider(opts: OpenAIProviderOptions): ModelProvider
       yield* streamResponses(client, req, {
         signal: call.signal,
         traits: { reasoning: m.reasoning, reasoningSummary },
+        ...(call.orgId !== undefined ? { orgId: call.orgId } : {}),
       });
     },
   };

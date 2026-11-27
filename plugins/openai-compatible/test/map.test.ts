@@ -12,6 +12,29 @@ import { buildRequest, type ChatTarget } from "../src/map-request.js";
 
 const MODEL = "ep/upstream-model";
 
+type Part = { type?: string; text?: string; cache_control?: unknown };
+
+/**
+ * The messages without the qwen dialect's cache markers: the system parts joined back into one
+ * string, and the marked last message back to its string content. A no-op for other dialects.
+ */
+function plain(messages: unknown[]): unknown[] {
+  return messages.map((raw, i) => {
+    const m = raw as { role: string; content?: unknown };
+    if (!Array.isArray(m.content)) return m;
+    const all = m.content as Part[];
+    const parts = all.map(({ cache_control: _, ...p }) => p);
+    if (i === 0 && m.role === "system") {
+      return { ...m, content: parts.map((p) => p.text ?? "").join("\n\n") };
+    }
+    const marked = all.some((p) => p.cache_control !== undefined);
+    if (marked && parts.length === 1 && parts[0]?.type === "text") {
+      return { ...m, content: parts[0].text };
+    }
+    return { ...m, content: parts };
+  });
+}
+
 const target = (dialect: DialectName, over: Partial<ChatTarget> = {}): ChatTarget => ({
   upstreamModel: "upstream-model",
   dialect: DIALECTS[dialect],
@@ -87,7 +110,7 @@ describe.each(["generic", "deepseek", "qwen", "ark"] as const)("buildRequest (%s
     for (const t of turns) {
       history = [...history, ...t];
       const body = buildRequest(req(history, { tools: [weather] }), target(dialect));
-      const msgs = JSON.parse(JSON.stringify(body.messages)) as unknown[];
+      const msgs = JSON.parse(JSON.stringify(plain(body.messages))) as unknown[];
       if (prev !== null) expect(msgs.slice(0, prev.length)).toEqual(prev);
       expect(msgs.length).toBeGreaterThan(prev?.length ?? 0);
       prev = msgs;
@@ -100,7 +123,7 @@ describe.each(["generic", "deepseek", "qwen", "ark"] as const)("buildRequest (%s
     expect(body.stream).toBe(true);
     expect(body.stream_options).toEqual({ include_usage: true });
     expect(body.max_tokens).toBe(1024);
-    expect(body.messages[0]).toEqual({
+    expect(plain(body.messages)[0]).toEqual({
       role: "system",
       content: "Stable system.\n\nVolatile part.",
     });
@@ -139,7 +162,7 @@ describe.each(["generic", "deepseek", "qwen", "ark"] as const)("buildRequest (%s
 
   it("maps a tool round trip to assistant tool_calls + role tool", () => {
     const body = buildRequest(req([...(turns[0] ?? []), ...(turns[1] ?? [])]), target(dialect));
-    const assistant = body.messages[2] as unknown as Record<string, unknown>;
+    const assistant = plain(body.messages)[2] as unknown as Record<string, unknown>;
     expect(assistant.role).toBe("assistant");
     expect(assistant.content).toBe("Let me check.");
     expect(assistant.tool_calls).toEqual([
@@ -149,7 +172,11 @@ describe.each(["generic", "deepseek", "qwen", "ark"] as const)("buildRequest (%s
         function: { name: "get_weather", arguments: '{"city":"Paris"}' },
       },
     ]);
-    expect(body.messages[3]).toEqual({ role: "tool", tool_call_id: "call_1", content: "Sunny" });
+    expect(plain(body.messages)[3]).toEqual({
+      role: "tool",
+      tool_call_id: "call_1",
+      content: "Sunny",
+    });
   });
 
   it("parameter declarations are valid for reasoning and non-reasoning models", () => {
@@ -164,6 +191,79 @@ describe.each(["generic", "deepseek", "qwen", "ark"] as const)("buildRequest (%s
   });
 });
 
+describe("qwen cache markers", () => {
+  const MARK = { cache_control: { type: "ephemeral" } };
+  const history = [...(turns[0] ?? []), ...(turns[1] ?? [])];
+
+  it("marks the last cached system block and the last block of the history", () => {
+    const body = buildRequest(req(history, { tools: [weather] }), target("qwen"));
+    expect(body.messages[0]).toEqual({
+      role: "system",
+      content: [
+        { type: "text", text: "Stable system.", ...MARK },
+        { type: "text", text: "Volatile part." },
+      ],
+    });
+    expect(body.messages.at(-1)).toEqual({
+      role: "tool",
+      tool_call_id: "call_1",
+      content: [{ type: "text", text: "Sunny", ...MARK }],
+    });
+    expect(JSON.stringify(body).split("cache_control").length - 1).toBe(2);
+  });
+
+  it("marks the trailing text part of a user message with media", () => {
+    const body = buildRequest(
+      req([
+        {
+          role: "user",
+          content: [
+            { type: "image", mediaType: "image/png", source: { kind: "base64", data: "AAAA" } },
+            { type: "text", text: "What is it?" },
+          ],
+        },
+      ]),
+      target("qwen"),
+    );
+    expect(body.messages.at(-1)).toEqual({
+      role: "user",
+      content: [
+        { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+        { type: "text", text: "What is it?", ...MARK },
+      ],
+    });
+  });
+
+  it("other dialects send no markers; only ark sends prompt_cache_key", () => {
+    for (const d of ["generic", "deepseek", "ark"] as const) {
+      const body = buildRequest(req(history), target(d));
+      expect(JSON.stringify(body)).not.toContain("cache_control");
+      // the system prompt stays one string and the last message keeps its plain content
+      expect(body.messages[0]).toEqual({
+        role: "system",
+        content: "Stable system.\n\nVolatile part.",
+      });
+      expect(body.messages.at(-1)).toEqual({
+        role: "tool",
+        tool_call_id: "call_1",
+        content: "Sunny",
+      });
+      expect("prompt_cache_key" in body).toBe(d === "ark");
+    }
+    expect("prompt_cache_key" in buildRequest(req(history), target("qwen"))).toBe(false);
+  });
+
+  it("ark: prompt_cache_key is fixed for a growing conversation and differs per org", () => {
+    const key = (h: ModelMessage[], orgId?: string) =>
+      buildRequest(req(h), target("ark", orgId !== undefined ? { orgId } : {})).prompt_cache_key;
+    const k = key(turns[0] ?? [], "org-a");
+    expect(k).toMatch(/^cap-[0-9a-f]{32}$/);
+    expect(key(history, "org-a")).toBe(k);
+    expect(key(history, "org-b")).not.toBe(k);
+    expect(key(history)).not.toBe(k);
+  });
+});
+
 describe("mid-conversation system", () => {
   const msgs: ModelMessage[] = [
     { role: "user", content: [{ type: "text", text: "Hi" }] },
@@ -175,7 +275,7 @@ describe("mid-conversation system", () => {
     "%s uses a [system] user message by default",
     (d) => {
       const body = buildRequest(req(msgs), target(d));
-      expect(body.messages.at(-1)).toEqual({ role: "user", content: "[system] Be brief." });
+      expect(plain(body.messages).at(-1)).toEqual({ role: "user", content: "[system] Be brief." });
     },
   );
 
@@ -193,7 +293,7 @@ describe("mid-conversation system", () => {
     for (const params of [{}, { thinking: "off" }]) {
       const body = buildRequest(req(history, { tools: [weather], params }), target("deepseek"));
       const on = params.thinking !== "off";
-      expect(body.messages).toEqual([
+      expect(plain(body.messages)).toEqual([
         { role: "system", content: "Stable system.\n\nVolatile part." },
         { role: "user", content: "Start A and B." },
         {
@@ -216,12 +316,12 @@ describe("mid-conversation system", () => {
 
   it("deepseek: the endpoint can still opt in to in-place role system", () => {
     const body = buildRequest(req(msgs), target("deepseek", { midConversationSystem: true }));
-    expect(body.messages.at(-1)).toEqual({ role: "system", content: "Be brief." });
+    expect(plain(body.messages).at(-1)).toEqual({ role: "system", content: "Be brief." });
   });
 
   it("the endpoint can opt in to native mid-conversation system", () => {
     const body = buildRequest(req(msgs), target("generic", { midConversationSystem: true }));
-    expect(body.messages.at(-1)).toEqual({ role: "system", content: "Be brief." });
+    expect(plain(body.messages).at(-1)).toEqual({ role: "system", content: "Be brief." });
   });
 });
 
@@ -444,7 +544,7 @@ describe("media blocks", () => {
         req([user({ type: "text", text: "Look:" }, image, { type: "text", text: "What is it?" })]),
         target(dialect),
       );
-      expect(body.messages.at(-1)).toEqual({
+      expect(plain(body.messages).at(-1)).toEqual({
         role: "user",
         content: [
           { type: "text", text: "Look:" },
@@ -460,7 +560,7 @@ describe("media blocks", () => {
       req([user({ type: "text", text: "a" }, { type: "text", text: "b" })]),
       target("generic"),
     );
-    expect(body.messages.at(-1)).toEqual({ role: "user", content: "a\n\nb" });
+    expect(plain(body.messages).at(-1)).toEqual({ role: "user", content: "a\n\nb" });
   });
 
   it.each(["generic", "qwen"] as const)(
@@ -474,7 +574,7 @@ describe("media blocks", () => {
         type: "file",
         file: { filename, file_data: `data:application/pdf;base64,${PDF}` },
       });
-      expect(body.messages.at(-1)).toEqual({
+      expect(plain(body.messages).at(-1)).toEqual({
         role: "user",
         content: [part("report.pdf"), part("scan.pdf"), part("document.pdf")],
       });
@@ -505,7 +605,7 @@ describe("media blocks", () => {
         target(dialect),
       );
       // 只有文本片段时仍是字符串内容（不收内容数组的服务也能用）
-      expect(body.messages.at(-1)).toEqual({
+      expect(plain(body.messages).at(-1)).toEqual({
         role: "user",
         content: '[Attached file "notes.md" (text/markdown)]\n# Héllo\n',
       });
@@ -517,7 +617,7 @@ describe("media blocks", () => {
       req([user({ type: "tool_result", callId: "c1", content: "ok", isError: false }, image)]),
       target("generic"),
     );
-    expect(body.messages.slice(-2)).toEqual([
+    expect(plain(body.messages).slice(-2)).toEqual([
       { role: "tool", tool_call_id: "c1", content: "ok" },
       {
         role: "user",
@@ -551,12 +651,12 @@ describe("media blocks", () => {
       ]),
       target("generic"),
     );
-    expect(JSON.stringify(body.messages.at(-1))).not.toContain("image");
+    expect(JSON.stringify(plain(body.messages).at(-1))).not.toContain("image");
   });
 
-  it("an earlier request with media is an exact prefix of a later one", () => {
+  it("an earlier request with media is a prefix of a later one, except the moving cache marker", () => {
     const first = [user(image, { type: "text", text: "What is it?" })];
-    const earlier = buildRequest(req(first), target("qwen")).messages;
+    const earlier = plain(buildRequest(req(first), target("qwen")).messages);
     const later = buildRequest(
       req([
         ...first,
@@ -565,6 +665,6 @@ describe("media blocks", () => {
       ]),
       target("qwen"),
     ).messages;
-    expect(later.slice(0, earlier.length)).toEqual(earlier);
+    expect(plain(later).slice(0, earlier.length)).toEqual(earlier);
   });
 });

@@ -281,6 +281,7 @@ export function createOpenAICompatibleProvider(
           dialect: ep.dialect,
           midConversationSystem: ep.midConversationSystem,
           model: { reasoning: m.reasoning ?? false, maxOutputTokens: m.maxOutputTokens },
+          ...(call.orgId !== undefined ? { orgId: call.orgId } : {}),
         },
       });
     },
