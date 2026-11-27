@@ -37,7 +37,7 @@ const WATCH_END_TIMEOUT_MS = 10_000;
 
 /** A long wait without a condition. */
 export const LONG_WAIT_NEEDS_CONDITION =
-  "A wait longer than 60000 ms needs a condition (text, ref, urlContains, navigation or download); to continue later without one, finish and let the user or a scheduled task start a new run.";
+  "A wait longer than 60000 ms needs a condition: pass one of text, ref, urlContains, navigation or download. To continue later without one, finish and let the user or a scheduled task start a new run.";
 /** The device or the daemon stopped while a long wait was parked. */
 export const DEVICE_STOPPED_WHILE_WAITING =
   "The device stopped while waiting (it was suspended or reached its running limit); the page state is gone. Call browser_wait again if still needed.";
