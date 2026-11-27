@@ -7,6 +7,7 @@
 // root of the owner's tree, or is unowned; each conversation has its own active tab and its own
 // action queue. Notes, refused hosts, dialogs and clicks belong to the owner of their page.
 
+import { randomBytes } from "node:crypto";
 import {
   closeSync,
   constants as fsc,
@@ -33,22 +34,39 @@ import type {
   Page,
   Request,
   Response,
+  Route,
 } from "playwright-core";
 import { fetchIcon, iconForPanel, iconUrlOf } from "./favicon.js";
+import { PERMISSION_REPORTS_PER_LOAD, permissionInitScript } from "./permissions.js";
 import {
+  AUTH_SIGN_IN_TEXT,
   type BlockedHost,
+  blockedByDialogText,
+  clipCodePoints,
+  DIALOG_QUOTE_CHARS,
+  type DialogKind,
+  dialogMessageMatches,
+  dialogQuote,
   EVICT_MIN_IDLE_MS,
+  GRANTABLE_PERMISSIONS,
   MAX_TABS,
   MAX_TABS_PER_CONVERSATION,
+  type PendingDialogView,
+  REPORTED_PERMISSIONS,
+  type ReportedPermission,
   type ToolErrorCode,
   type ToolOp,
   type ToolReply,
   type ToolRequest,
   VIEWPORT,
+  VIEWPORT_PROFILES,
+  type ViewerViewport,
+  type ViewportProfile,
 } from "./protocol.js";
 import { takeSnapshot } from "./snapshot.js";
 import { type Clock, systemClock } from "./state.js";
 import { isVerificationPage, type TabBlocker, VERIFICATION_NOTE } from "./verification.js";
+import { mobileUserAgent, type TouchAction, TouchTranslator } from "./viewport.js";
 
 /**
  * Something the viewers follow. `active`: a conversation's active tab changed. `blocked` and
@@ -60,8 +78,15 @@ export type SessionEvent =
   | { type: "blocked"; host: string; url: string; root: string }
   | {
       type: "dialog";
-      kind: "alert" | "confirm" | "prompt" | "file";
+      kind: "alert" | "file";
       message: string;
+      root: string;
+    }
+  | {
+      type: "permission";
+      origin: string;
+      permission: ReportedPermission;
+      grantable: boolean;
       root: string;
     };
 
@@ -539,8 +564,11 @@ export async function captureFitting(
     ? { x: 0, y: 0, width: content.width, height: Math.min(content.height, 16_384) }
     : { x: vv.pageX, y: vv.pageY, width: vv.clientWidth, height: vv.clientHeight };
   const maxScale = Math.min(1, opts.maxScale ?? 1);
+  // a zoomed-out visual viewport (a mobile page without a viewport tag) shows its CSS pixels
+  // smaller: the capture follows what is shown, not the layout's size
+  const zoom = opts.fullPage === true ? 1 : vv.scale > 0 && vv.scale < 1 ? vv.scale : 1;
   for (const s of SCALES) {
-    const scale = s * maxScale;
+    const scale = s * maxScale * zoom;
     if (scale * area.width < 16) break;
     for (const quality of QUALITIES) {
       const shot = await cdp.send("Page.captureScreenshot", {
@@ -714,6 +742,14 @@ export interface TabUsage {
   seen(conversationId: string, root: string): void;
   /** Whether the daemon keeps state for the conversation (it has not idle closed). */
   known(conversationId: string): boolean;
+  /** Starts a park (a held dialog pins its tab: dialogs spec §3, R2). */
+  park(
+    conversationId: string,
+    root: string,
+    spec: { kind: string; key: string; tabId: string },
+  ): void;
+  /** Ends a park; an unknown one changes nothing. */
+  unpark(conversationId: string, kind: string, key: string): void;
 }
 
 /** Usage for a session without a daemon state: nobody busy, everybody idle for good. */
@@ -726,7 +762,86 @@ const NO_USAGE: TabUsage = {
   tabClosed: () => undefined,
   seen: () => undefined,
   known: () => true,
+  park: () => undefined,
+  unpark: () => undefined,
 };
+
+/** The park kind of a held decision dialog (key: the dialog id; it pins the dialog's tab). */
+export const DIALOG_PARK = "dialog";
+
+/** A dialog held until answered: its view, the Playwright dialog (none for auth), its owner. */
+interface HeldDialog {
+  view: PendingDialogView;
+  dialog: Dialog | undefined;
+  owner: TabOwner;
+  /** For `auth`: the document the 401 answered (a later navigation away clears the dialog). */
+  atUrl?: string;
+}
+
+/** Whether a held dialog blocks its page (JS dialogs are modal; an auth dialog is not). */
+const blocks = (h: HeldDialog | undefined): h is HeldDialog =>
+  h !== undefined && h.view.kind !== "auth";
+
+/** A held dialog's order (its id's number grows). */
+const seqOf = (h: HeldDialog) => Number(h.view.id.slice(1));
+
+/**
+ * The operations a JS dialog blocks on its tab (they fail fast with `dialog_open`). A screenshot
+ * too: a modal dialog stops the page's renderer, so even a capture never answers.
+ */
+const BLOCKED_OPS = new Set<ToolOp["op"]>([
+  "screenshot",
+  "navigate",
+  "click",
+  "hover",
+  "type",
+  "select",
+  "press",
+  "scroll",
+  "upload",
+  "click_at",
+  "type_at",
+]);
+
+/**
+ * The refusal while another conversation's page holds a dialog in a browser that runs as one
+ * process (the headless shell on macOS): the dialog stops every page until it is answered.
+ */
+export const PAUSED_BY_DIALOG_MESSAGE =
+  "A dialog on another conversation's page pauses the whole browser on this device (it runs as one process) until the user or that conversation answers it; retry later.";
+
+/** The refusal of a dialog answer naming a dialog that is no longer the pending one. */
+export const DIALOG_CHANGED_MESSAGE =
+  "The dialog changed; call browser_snapshot to see the current one.";
+/** The refusal of a dialog answer when the conversation has no pending dialog. */
+export const NO_DIALOG_MESSAGE =
+  "No dialog is open on this tab; call browser_snapshot to see the page.";
+
+/** The most origin–permission pairs the daemon records (reports beyond are dropped). */
+export const MAX_PERMISSION_PAIRS = 50;
+
+/** The origin of a URL, or undefined (an opaque origin counts as none). */
+function originOf(raw: string): string | undefined {
+  try {
+    const o = new URL(raw).origin;
+    return o === "null" ? undefined : o;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The scheme and Basic realm of a `WWW-Authenticate` value (realm clipped). */
+export function authChallenge(header: string): { scheme: string; realm: string } {
+  const scheme = /^\s*([A-Za-z0-9!#$%&'*+.^_`|~-]+)/.exec(header)?.[1] ?? "";
+  const realm = /realm\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^\s,]+))/i.exec(header);
+  return {
+    scheme,
+    realm: clipCodePoints(
+      (realm?.[1] ?? realm?.[2] ?? "").replace(/\\(.)/g, "$1"),
+      DIALOG_QUOTE_CHARS,
+    ),
+  };
+}
 
 /**
  * Whether a tab is the unowned blank tab Chromium starts with (or one a conversation left): it is
@@ -773,7 +888,8 @@ export function bareUrl(raw: string): string {
 
 /** The operations that act on the conversation's active tab (they get one when it has none). */
 export function isActing(req: ToolOp): boolean {
-  if (req.op === "handoff_notice" || req.op === "handoff_clear") return false;
+  if (req.op === "handoff_notice" || req.op === "handoff_clear" || req.op === "dialog")
+    return false;
   if (req.op === "tabs") return req.action !== "list" && req.action !== "adopt";
   return true;
 }
@@ -861,6 +977,48 @@ export class BrowserSession {
   /** Each tab's latest agent click; `seq` grows with every click (viewers flash only new ones). */
   private readonly clicks = new Map<string, { x: number; y: number; seq: number }>();
   private clickSeq = 0;
+  /** The dialog each tab holds until answered (one per tab: JS dialogs are modal per page). */
+  private readonly held = new Map<string, HeldDialog>();
+  private dialogSeq = 0;
+  /** Wakes a conversation's actions racing a dialog of its tabs (dialogs spec §3). */
+  private readonly dialogWaiters = new Map<string, Set<() => void>>();
+  /**
+   * HTTP Basic credentials by exact origin, as the header value: typed by the person in the panel,
+   * kept in this process's memory only, never in a reply, note, log, viewer message or file.
+   */
+  private readonly credentials = new Map<string, string>();
+  /** Whether the credential route is installed (only while credentials exist). */
+  private authRouted = false;
+  /** Pages whose main frame got a sign-in challenge (a 401 with WWW-Authenticate). */
+  private readonly challenged = new WeakSet<Page>();
+  /** Requests the route signed (a 401 to one of them means the credentials are wrong). */
+  private readonly signed = new WeakSet<Request>();
+  /** Navigations the daemon itself runs on a page (goto, history, reload): their roots are trusted. */
+  private readonly ownNavs = new WeakMap<Page, number>();
+  /** The permission binding's per-daemon name (any page can call it: its payload is untrusted). */
+  private readonly permissionBinding = `__cbPermission_${randomBytes(8).toString("hex")}`;
+  /** Permission reports per page load (capped at PERMISSION_REPORTS_PER_LOAD). */
+  private readonly permissionCount = new WeakMap<Page, number>();
+  /** Origin–permission pairs the daemon recorded (deduplicated notes; grants only for these). */
+  private readonly permissionPairs = new Set<string>();
+  /** The pairs recorded on each tab (a viewer grants only for pairs of its tree's tabs). */
+  private readonly tabPermissions = new Map<string, Set<string>>();
+  /** The viewport profile the person chose (desktop while the agent drives). */
+  private profile: ViewportProfile = "desktop";
+  /** The profile the pages have now (the chosen one once applied). */
+  private applied: ViewportProfile = "desktop";
+  /** The CDP sessions holding the phone overrides, per page (detached on restore). */
+  private readonly profileSessions = new Map<Page, Promise<CDPSession | undefined>[]>();
+  /** Every agent request waits for this (a restore to desktop after hand back). */
+  private viewportGate: Promise<void> = Promise.resolve();
+  private mobileUa: string | undefined;
+  /** The pages' own user agent (given back when the phone profile ends). */
+  private desktopUa: string | undefined;
+  /** The desktop translation of a viewer's touch input (tap, pan). */
+  private readonly touchTranslator: TouchTranslator;
+  /** Resolves once the permission binding and init script are installed (never rejects). */
+  readonly ready: Promise<void>;
+  private readonly singleProcess: boolean;
 
   constructor(
     ctx: BrowserContext,
@@ -876,6 +1034,11 @@ export class BrowserSession {
       navigationTimeoutMs?: number;
       /** Who is in use, pinned or idle (DaemonState); default: nobody busy, everybody idle. */
       usage?: TabUsage;
+      /**
+       * The browser runs as one process (the headless shell): a held JS dialog stops every page,
+       * so while one is held, acting requests on any tab are refused at once instead of hanging.
+       */
+      singleProcess?: boolean;
     },
   ) {
     this.ctx = ctx;
@@ -887,6 +1050,8 @@ export class BrowserSession {
     this.clock = opts.clock ?? systemClock;
     this.navigationTimeoutMs = opts.navigationTimeoutMs ?? NAVIGATION_TIMEOUT_MS;
     this.usage = opts.usage ?? NO_USAGE;
+    this.singleProcess = opts.singleProcess === true;
+    this.touchTranslator = new TouchTranslator(() => this.clock.now());
     ctx.setDefaultTimeout(ACTION_TIMEOUT_MS);
     ctx.setDefaultNavigationTimeout(this.navigationTimeoutMs);
     ctx.on("page", (p) => {
@@ -905,6 +1070,22 @@ export class BrowserSession {
       });
     });
     for (const p of ctx.pages()) this.track(p);
+    this.ready = this.installPermissionReports();
+  }
+
+  /**
+   * The permission report (dialogs spec §6): an init script wraps the request APIs and calls the
+   * binding with the permission name when the page was refused. Never fails the session.
+   */
+  private async installPermissionReports(): Promise<void> {
+    try {
+      await this.ctx.exposeBinding(this.permissionBinding, (source, name: unknown) => {
+        this.onPermissionReport(source.page, source.frame.url(), name);
+      });
+      await this.ctx.addInitScript({ content: permissionInitScript(this.permissionBinding) });
+    } catch {
+      // a closing browser: no reports
+    }
   }
 
   get context(): BrowserContext {
@@ -1315,6 +1496,9 @@ export class BrowserSession {
     const id = `t${this.nextId++}`;
     this.ids.set(page, id);
     this.pages.set(id, page);
+    // a page opened while the person shows the phone profile gets it too (after Playwright's own
+    // setup of the page, which ran before the page event)
+    if (this.profile === "phone") void this.applyPhone(page);
     const refresh = () => {
       page
         .title()
@@ -1351,6 +1535,17 @@ export class BrowserSession {
       this.pendingNavs.delete(page);
       // a new document: a verification shown before is gone (refresh looks at the new one)
       this.blockers.delete(id);
+      // its permission reports count afresh; an auth dialog of another document is gone
+      this.permissionCount.delete(page);
+      // (not for the error page the full build commits for the refused challenge)
+      const auth = this.held.get(id);
+      if (
+        auth?.view.kind === "auth" &&
+        auth.atUrl !== docUrl(f.url()) &&
+        !f.url().startsWith("chrome-error:")
+      )
+        this.clearHeld(id);
+      this.reapplyPhone(page);
       refresh();
     });
     page.on("domcontentloaded", refresh);
@@ -1375,8 +1570,10 @@ export class BrowserSession {
         this.checkBlocked(page, r.url(), this.pageToOpen(page, r));
     });
     page.on("response", (r) => {
-      if (r.request().isNavigationRequest() && r.frame() === page.mainFrame())
+      if (r.request().isNavigationRequest() && r.frame() === page.mainFrame()) {
         this.docStatus.set(id, r.status());
+        if (r.status() === 401) this.onUnauthorized(page, id, r);
+      }
       if (this.proxy !== undefined && r.status() === 403 && r.url().startsWith("http:")) {
         this.checkBlocked(page, r.url(), this.pageToOpen(page, r.request()));
       }
@@ -1405,6 +1602,9 @@ export class BrowserSession {
       this.tabUsedAt.delete(id);
       this.gainedAt.delete(id);
       this.clicks.delete(id);
+      this.clearHeld(id);
+      this.tabPermissions.delete(id);
+      this.profileSessions.delete(page);
       const o = this.owners.get(id);
       this.owners.delete(id);
       if (o !== undefined) this.activeMovedOff(o.owner, id);
@@ -1446,24 +1646,565 @@ export class BrowserSession {
     });
   }
 
+  /**
+   * A page dialog (dialogs spec §3): an alert only informs, so it is closed at once and noted; a
+   * confirm, prompt or beforeunload is held until answered (by the person in control or the
+   * agent's browser_dialog) and pins its tab. A dialog of an unowned page has nobody to answer it:
+   * it gets the safe answer (dismissed; a beforeunload accepted), as before.
+   */
   private onDialog(page: Page, d: Dialog): void {
     const type = d.type();
-    if (type === "beforeunload") {
+    const id = this.tabIdOf(page);
+    const o = this.owners.get(id);
+    const message = clip(d.message(), MAX_DIALOG_CHARS);
+    if (type === "alert") {
       d.accept().catch(() => undefined);
+      this.noteTo(
+        o?.owner,
+        `The page showed an alert: ${JSON.stringify(dialogQuote(message))} (closed).`,
+      );
+      if (o !== undefined) this.emit({ type: "dialog", kind: "alert", message, root: o.root });
       return;
     }
-    const kind = type === "confirm" || type === "prompt" ? type : "alert";
-    const message = clip(d.message(), MAX_DIALOG_CHARS);
-    // An alert only informs; a confirm or prompt is dismissed, the safe answer, and the agent
-    // learns it so it can act differently.
-    const settle = kind === "alert" ? d.accept() : d.dismiss();
-    settle.catch(() => undefined);
-    const o = this.owners.get(this.tabIdOf(page));
-    this.noteTo(
-      o?.owner,
-      `The page showed ${kind === "alert" ? "an alert" : `a ${kind}`} dialog: ${JSON.stringify(message)} (${kind === "alert" ? "closed" : "dismissed"}).`,
+    const kind: DialogKind = type === "confirm" || type === "prompt" ? type : "beforeunload";
+    if (o === undefined) {
+      (kind === "beforeunload" ? d.accept() : d.dismiss()).catch(() => undefined);
+      return;
+    }
+    this.clearHeld(id);
+    const view: PendingDialogView = {
+      id: `d${++this.dialogSeq}`,
+      tabId: id,
+      kind,
+      message,
+      ...(kind === "prompt" ? { defaultValue: clip(d.defaultValue(), MAX_DIALOG_CHARS) } : {}),
+    };
+    this.held.set(id, { view, dialog: d, owner: o });
+    this.usage.park(o.owner, o.root, { kind: DIALOG_PARK, key: view.id, tabId: id });
+    this.wakeDialogWaiters(o.owner);
+    this.emit({ type: "state" });
+  }
+
+  /** Forgets the tab's held dialog (answered, its tab closed or navigated away) and its park. */
+  private clearHeld(tabId: string): void {
+    const h = this.held.get(tabId);
+    if (h === undefined) return;
+    this.held.delete(tabId);
+    if (h.view.kind !== "auth") this.usage.unpark(h.owner.owner, DIALOG_PARK, h.view.id);
+    this.emit({ type: "state" });
+  }
+
+  private wakeDialogWaiters(conversationId: string): void {
+    for (const wake of [...(this.dialogWaiters.get(conversationId) ?? [])]) wake();
+  }
+
+  /** The held dialogs of a viewer's tree, in tab order. */
+  dialogsOf(root: string): PendingDialogView[] {
+    return this.live()
+      .map(([id]) => this.held.get(id))
+      .filter(
+        (h): h is HeldDialog => h !== undefined && this.owners.get(h.view.tabId)?.root === root,
+      )
+      .map((h) => h.view);
+  }
+
+  /** The pending dialog a reply of the conversation carries: its active tab's, else its newest. */
+  private dialogFor(conversationId: string): PendingDialogView | undefined {
+    const active = this.activeTabOf(conversationId);
+    const own = active === undefined ? undefined : this.held.get(active);
+    if (own !== undefined) return own.view;
+    let best: HeldDialog | undefined;
+    for (const id of this.tabsOf(conversationId)) {
+      const h = this.held.get(id);
+      if (h !== undefined && (best === undefined || seqOf(h) > seqOf(best))) best = h;
+    }
+    return best?.view;
+  }
+
+  /**
+   * Runs `fn` and resolves early (undefined) when a dialog opens on one of the conversation's
+   * tabs: the request that opened it replies at once and frees its queue (dialogs spec §3, R4).
+   * The action's promise is left to settle; a failure after the dialog is noted to the
+   * conversation (a timeout of an action held by the dialog is no news).
+   */
+  private async raceDialog<T>(
+    conversationId: string,
+    op: string,
+    fn: () => Promise<T>,
+  ): Promise<T | undefined> {
+    let wake!: () => void;
+    const opened = new Promise<"dialog">((r) => {
+      wake = () => r("dialog");
+    });
+    const waiters = this.dialogWaiters.get(conversationId) ?? new Set();
+    waiters.add(wake);
+    this.dialogWaiters.set(conversationId, waiters);
+    const done = fn();
+    try {
+      const out = await Promise.race([done, opened]);
+      if (out !== "dialog") return out as T;
+      done.catch((e: unknown) => {
+        if (isTimeout(e)) return;
+        const why = e instanceof ActionError ? e.message : firstLine(e);
+        this.noteTo(conversationId, `The ${op} that opened a dialog failed afterwards: ${why}`);
+      });
+      return undefined;
+    } finally {
+      waiters.delete(wake);
+      if (waiters.size === 0) this.dialogWaiters.delete(conversationId);
+    }
+  }
+
+  /**
+   * Answers a held dialog (dialogs spec §5): for the agent (`browser_dialog`) only on its own
+   * tabs and only when `message` matches the dialog's quote. An auth dialog takes only `dismiss`
+   * from the agent.
+   */
+  private async dialogOp(req: Extract<ToolRequest, { op: "dialog" }>): Promise<{ text: string }> {
+    const conv = req.conversationId;
+    const h = [...this.held.values()].find((x) => x.view.id === req.dialogId);
+    if (h === undefined || this.pageById(h.view.tabId) === undefined) {
+      const any = this.tabsOf(conv).some((id) => this.held.has(id));
+      throw new ActionError("failed", any ? DIALOG_CHANGED_MESSAGE : NO_DIALOG_MESSAGE);
+    }
+    if (this.owners.get(h.view.tabId)?.owner !== conv)
+      throw new ActionError("failed", notYourTab(h.view.tabId));
+    if (typeof req.message !== "string" || !dialogMessageMatches(req.message, h.view.message))
+      throw new ActionError("failed", DIALOG_CHANGED_MESSAGE);
+    const action = req.action === "accept" ? "accept" : "dismiss";
+    if (h.view.kind === "auth") {
+      if (action === "accept") throw new ActionError("failed", AUTH_SIGN_IN_TEXT);
+      this.clearHeld(h.view.tabId);
+      return { text: `Dismissed the sign-in request of ${h.view.origin ?? "the site"}.` };
+    }
+    await this.settleDialog(h, action, typeof req.text === "string" ? req.text : undefined);
+    const name = h.view.kind === "beforeunload" ? "leave-page" : h.view.kind;
+    return {
+      text: `${action === "accept" ? "Accepted" : "Dismissed"} the ${name} dialog ${JSON.stringify(dialogQuote(h.view.message))}.`,
+    };
+  }
+
+  /** Accepts or dismisses a held JS dialog and forgets it. */
+  private async settleDialog(
+    h: HeldDialog,
+    action: "accept" | "dismiss",
+    text: string | undefined,
+  ): Promise<void> {
+    this.clearHeld(h.view.tabId);
+    const d = h.dialog;
+    if (d === undefined) return;
+    try {
+      // a prompt accepted without text takes its default value, as a person pressing OK does
+      if (action === "accept")
+        await d.accept(h.view.kind === "prompt" ? (text ?? d.defaultValue()) : undefined);
+      else await d.dismiss();
+    } catch {
+      // the page closed or moved on meanwhile: the dialog is gone either way
+    }
+  }
+
+  /**
+   * A viewer's answer to a held dialog of its tree (control is checked by the viewer). A stale id
+   * or a dialog outside the tree changes nothing. An auth accept stores the credentials for the
+   * dialog's origin (device-wide, memory only) and reloads the tab.
+   */
+  async answerFromViewer(
+    root: string,
+    m: { id: unknown; action: unknown; text?: unknown; username?: unknown; password?: unknown },
+  ): Promise<void> {
+    const h = [...this.held.values()].find((x) => x.view.id === m.id);
+    if (h === undefined || this.owners.get(h.view.tabId)?.root !== root) return;
+    const action = m.action === "accept" ? "accept" : "dismiss";
+    if (h.view.kind !== "auth") {
+      await this.settleDialog(h, action, typeof m.text === "string" ? m.text : undefined);
+      return;
+    }
+    if (action === "dismiss") {
+      this.clearHeld(h.view.tabId);
+      return;
+    }
+    const origin = h.view.origin;
+    if (origin === undefined || typeof m.username !== "string" || typeof m.password !== "string")
+      return;
+    await this.signIn(origin, m.username, m.password);
+    for (const [id, x] of [...this.held])
+      if (x.view.kind === "auth" && x.view.origin === origin) this.clearHeld(id);
+    this.noteTo(h.owner.owner, `The user signed in to ${origin} (HTTP auth).`);
+    // the page that asked, opened again (the full build shows an error page in its place)
+    const page = this.pageById(h.view.tabId);
+    if (page !== undefined)
+      await this.viewerNav(page, h.atUrl === undefined ? { action: "reload" } : { url: h.atUrl });
+  }
+
+  // ---- HTTP Basic auth (dialogs spec §4)
+
+  /**
+   * A main-frame document answered 401: Chromium already cancelled the challenge and shows the
+   * body. A Basic challenge becomes an auth dialog on the tab (unless a JS dialog is held there);
+   * a 401 to a request the credentials signed means they are wrong: they are dropped. Another
+   * scheme is noted as unsupported.
+   */
+  private onUnauthorized(page: Page, id: string, r: Response): void {
+    const origin = originOf(r.url());
+    if (origin !== undefined && this.signed.has(r.request())) this.forgetCredentials(origin);
+    const o = this.owners.get(id);
+    if (origin === undefined || o === undefined) return;
+    const header = r.headers()["www-authenticate"];
+    if (header === undefined) return;
+    this.challenged.add(page);
+    const { scheme, realm } = authChallenge(header);
+    if (scheme.toLowerCase() !== "basic") {
+      this.noteTo(
+        o.owner,
+        `The site asks for ${clip(scheme, 40) || "an unknown"} sign-in, which the browser cannot do; ask the user how to continue.`,
+      );
+      return;
+    }
+    if (blocks(this.held.get(id))) return;
+    this.clearHeld(id);
+    this.held.set(id, {
+      view: {
+        id: `d${++this.dialogSeq}`,
+        tabId: id,
+        kind: "auth",
+        message: `HTTP sign-in for ${origin}`,
+        origin,
+        realm,
+      },
+      dialog: undefined,
+      owner: o,
+      atUrl: docUrl(r.url()),
+    });
+    this.emit({ type: "state" });
+  }
+
+  /**
+   * Whether a navigation failed on a sign-in challenge the tab's page got (an auth dialog, or the
+   * note of an unsupported scheme): the full build fails such a navigation where the headless
+   * shell shows the 401 body; the reply names the dialog or carries the note instead.
+   */
+  private signInAsked(page: Page, e: unknown): boolean {
+    return firstLine(e).includes("ERR_INVALID_AUTH_CREDENTIALS") && this.challenged.has(page);
+  }
+
+  /** Stores the person's credentials for exactly `origin` and routes them (memory only). */
+  private async signIn(origin: string, username: string, password: string): Promise<void> {
+    this.credentials.set(
+      origin,
+      `Basic ${Buffer.from(`${username}:${password}`, "utf8").toString("base64")}`,
     );
-    if (o !== undefined) this.emit({ type: "dialog", kind, message, root: o.root });
+    if (this.authRouted) return;
+    this.authRouted = true;
+    await this.ctx
+      .route((u) => this.credentials.has(u.origin), this.onAuthRoute)
+      .catch(() => {
+        this.authRouted = false;
+      });
+  }
+
+  private forgetCredentials(origin: string): void {
+    if (!this.credentials.delete(origin) || this.credentials.size > 0 || !this.authRouted) return;
+    this.authRouted = false;
+    void this.ctx.unroute(() => true, this.onAuthRoute).catch(() => undefined);
+  }
+
+  private readonly onAuthRoute = async (route: Route): Promise<void> => {
+    const r = route.request();
+    const value = this.authHeaderFor(r);
+    if (value === undefined) {
+      await route.fallback().catch(() => undefined);
+      return;
+    }
+    this.signed.add(r);
+    await route
+      .fallback({ headers: { ...r.headers(), authorization: value } })
+      .catch(() => undefined);
+  };
+
+  /**
+   * The Authorization value a request gets, only where a browser's own page would send it: a
+   * request to the signed-in origin from a page whose top-level document has that origin, or a
+   * top-level navigation to it that this page started from that origin or that the daemon runs
+   * (the agent's or the person's address bar, history, reload). Never a service worker's request,
+   * a cross-site page's request (fetch, image, form post) or a redirect into the origin.
+   */
+  private authHeaderFor(r: Request): string | undefined {
+    const origin = originOf(r.url());
+    const value = origin === undefined ? undefined : this.credentials.get(origin);
+    if (value === undefined || r.serviceWorker() !== null) return undefined;
+    let frame: ReturnType<Request["frame"]>;
+    try {
+      frame = r.frame();
+    } catch {
+      return undefined;
+    }
+    const page = frame.page();
+    const top = originOf(page.mainFrame().url());
+    if (!(r.isNavigationRequest() && frame === page.mainFrame())) {
+      return top === origin ? value : undefined;
+    }
+    let root = r;
+    for (let f = r.redirectedFrom(); f !== null; f = f.redirectedFrom()) root = f;
+    if (originOf(root.url()) !== origin) return undefined;
+    if (top === origin || (this.ownNavs.get(page) ?? 0) > 0) return value;
+    return undefined;
+  }
+
+  /** Runs a navigation the daemon starts on a page (its root request is trusted for auth). */
+  private async ownNav<T>(page: Page, fn: () => Promise<T>): Promise<T> {
+    this.ownNavs.set(page, (this.ownNavs.get(page) ?? 0) + 1);
+    try {
+      return await fn();
+    } finally {
+      this.ownNavs.set(page, Math.max(0, (this.ownNavs.get(page) ?? 1) - 1));
+    }
+  }
+
+  // ---- permission requests (dialogs spec §6)
+
+  /**
+   * A page reported a refused permission request through the binding. Nothing in the payload is
+   * trusted but a known permission name: the origin is the calling frame's, reports are capped per
+   * page load and in distinct pairs, and only a pair recorded here can be granted later.
+   */
+  private onPermissionReport(page: Page, frameUrl: string, name: unknown): void {
+    if (typeof name !== "string" || !(REPORTED_PERMISSIONS as readonly string[]).includes(name))
+      return;
+    const permission = name as ReportedPermission;
+    const id = this.ids.get(page);
+    const o = id === undefined ? undefined : this.owners.get(id);
+    const origin = originOf(frameUrl);
+    if (id === undefined || o === undefined || origin === undefined) return;
+    const count = (this.permissionCount.get(page) ?? 0) + 1;
+    this.permissionCount.set(page, count);
+    if (count > PERMISSION_REPORTS_PER_LOAD) return;
+    const pair = `${origin}\u0000${permission}`;
+    const fresh = !this.permissionPairs.has(pair);
+    if (fresh && this.permissionPairs.size >= MAX_PERMISSION_PAIRS) return;
+    this.permissionPairs.add(pair);
+    const onTab = this.tabPermissions.get(id) ?? new Set();
+    onTab.add(pair);
+    this.tabPermissions.set(id, onTab);
+    const grantable = GRANTABLE_PERMISSIONS.includes(permission);
+    if (fresh)
+      this.noteTo(
+        o.owner,
+        `The page asked for ${permission} permission, which was denied.${grantable ? " The user can allow it from the browser panel." : " The device's browser cannot provide it."}`,
+      );
+    this.emit({ type: "permission", origin, permission, grantable, root: o.root });
+  }
+
+  /**
+   * Grants a permission the person allowed in the panel, for the daemon's life (never written to
+   * the profile): only grantable ones, only for a pair recorded on a tab of the viewer's tree.
+   */
+  async grantPermission(root: string, origin: unknown, permission: unknown): Promise<boolean> {
+    if (typeof origin !== "string" || typeof permission !== "string") return false;
+    if (!(GRANTABLE_PERMISSIONS as readonly string[]).includes(permission)) return false;
+    const pair = `${origin}\u0000${permission}`;
+    const inTree = [...this.tabPermissions].some(
+      ([id, pairs]) => pairs.has(pair) && this.owners.get(id)?.root === root,
+    );
+    if (!inTree) return false;
+    try {
+      await this.ctx.grantPermissions([permission], { origin });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // ---- viewport profiles and touch (dialogs spec §7)
+
+  /** The viewport the pages have now (a switch counts once applied). */
+  get viewport(): ViewerViewport {
+    const p = VIEWPORT_PROFILES[this.applied];
+    return { width: p.width, height: p.height, mobile: p.mobile };
+  }
+
+  /** Switches every tab (and tabs opened later) to the profile (the person's choice). */
+  setProfile(profile: ViewportProfile): Promise<void> {
+    if (profile !== "desktop" && profile !== "phone") return this.viewportGate;
+    if (profile === this.profile) return this.viewportGate;
+    this.profile = profile;
+    this.touchTranslator.reset();
+    const pages = this.live().map(([, p]) => p);
+    const run = async () => {
+      if (profile === "phone") await Promise.all(pages.map((p) => this.applyPhone(p)));
+      else await this.restoreAll();
+      if (this.profile === profile) this.applied = profile;
+    };
+    const next = this.viewportGate.then(run, run);
+    this.viewportGate = next.catch(() => undefined);
+    this.emit({ type: "state" });
+    // once applied: the viewers' screencast restarts on the new size
+    void this.viewportGate.then(() => this.emit({ type: "state" }));
+    return this.viewportGate;
+  }
+
+  /**
+   * Back to the desktop profile (hand back): every agent request of any conversation waits for
+   * it, so the agent always acts on 1280x800.
+   */
+  restoreDesktop(): Promise<void> {
+    return this.setProfile("desktop");
+  }
+
+  /**
+   * The CDP session that holds a page's profile overrides (the newest of its sessions), made on
+   * first use; `fresh` makes a new one (after a navigation, a renderer swapped in for another site
+   * follows no session made before). Sessions are kept: a detach drops every device metric of the
+   * page, Playwright's included, which it does not send again; the restore ends them in order.
+   */
+  private profileSession(page: Page, fresh = false): Promise<CDPSession | undefined> {
+    const list = this.profileSessions.get(page) ?? [];
+    const last = list.at(-1);
+    if (last !== undefined && !fresh) return last;
+    const made = (async () => {
+      try {
+        const cdp = await this.ctx.newCDPSession(page);
+        // the agent's user agent, given back on restore (read before any override)
+        this.desktopUa ??= await this.bounded(
+          cdp
+            .send("Runtime.evaluate", { expression: "navigator.userAgent", returnByValue: true })
+            .then((r) => (typeof r.result.value === "string" ? r.result.value : undefined)),
+          undefined,
+        );
+        this.mobileUa ??= mobileUserAgent(this.desktopUa ?? "");
+        return cdp;
+      } catch {
+        return undefined;
+      }
+    })();
+    list.push(made);
+    this.profileSessions.set(page, list);
+    return made;
+  }
+
+  /**
+   * Applies the phone profile to a page: Playwright's own viewport first (its emulation, which it
+   * may send again on a navigation, then agrees on the size, and the restore is a real change for
+   * it), then the mobile metrics, touch and user agent through the page's profile session.
+   */
+  private async applyPhone(page: Page, fresh = false): Promise<CDPSession | undefined> {
+    const cdp = await this.profileSession(page, fresh);
+    if (cdp === undefined || this.profile !== "phone" || page.isClosed()) return undefined;
+    try {
+      await page.setViewportSize({
+        width: VIEWPORT_PROFILES.phone.width,
+        height: VIEWPORT_PROFILES.phone.height,
+      });
+      const p = VIEWPORT_PROFILES.phone;
+      await cdp.send("Emulation.setDeviceMetricsOverride", {
+        width: p.width,
+        height: p.height,
+        deviceScaleFactor: p.scale,
+        mobile: true,
+        screenWidth: p.width,
+        screenHeight: p.height,
+      });
+      await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
+      await cdp.send("Emulation.setUserAgentOverride", {
+        userAgent: this.mobileUa ?? mobileUserAgent(""),
+      });
+      return cdp;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * A page back on desktop: its older profile sessions end (each detach drops the page's
+   * metrics), the newest sends the desktop values and the agent's user agent, and Playwright gets
+   * its own 1280x800 again.
+   */
+  private async applyDesktop(page: Page): Promise<void> {
+    const list = this.profileSessions.get(page) ?? [];
+    const sessions = await Promise.all(list);
+    this.profileSessions.set(page, list.slice(-1));
+    for (const old of sessions.slice(0, -1)) await old?.detach().catch(() => undefined);
+    if (page.isClosed()) return;
+    const cdp = sessions.at(-1);
+    if (cdp !== undefined) {
+      await cdp
+        .send("Emulation.setDeviceMetricsOverride", {
+          width: VIEWPORT.width,
+          height: VIEWPORT.height,
+          deviceScaleFactor: 1,
+          mobile: false,
+          screenWidth: VIEWPORT.width,
+          screenHeight: VIEWPORT.height,
+        })
+        .catch(() => undefined);
+      await cdp
+        .send("Emulation.setTouchEmulationEnabled", { enabled: false })
+        .catch(() => undefined);
+      if (this.desktopUa !== undefined)
+        await cdp
+          .send("Emulation.setUserAgentOverride", { userAgent: this.desktopUa })
+          .catch(() => undefined);
+    }
+    await page.setViewportSize({ ...VIEWPORT }).catch(() => undefined);
+  }
+
+  /**
+   * A page navigated while the phone profile is on: Playwright may send its own metrics again,
+   * and a renderer swapped in keeps no overrides, so they go again on a fresh session (in the
+   * profile chain: a restore waits for it).
+   */
+  private reapplyPhone(page: Page): void {
+    if (this.profile !== "phone") return;
+    const run = () => this.applyPhone(page, true).then(() => undefined);
+    const next = this.viewportGate.then(run, run);
+    this.viewportGate = next.catch(() => undefined);
+  }
+
+  /** Every page that got the phone profile back on desktop. */
+  private async restoreAll(): Promise<void> {
+    await Promise.all([...this.profileSessions.keys()].map((page) => this.applyDesktop(page)));
+  }
+
+  /**
+   * A viewer's touch input on a page: touch events in the phone profile; in desktop a tap clicks
+   * and a one-finger pan scrolls (anything else is ignored).
+   */
+  async touch(
+    page: Page,
+    kind: "start" | "move" | "end" | "cancel",
+    points: { id: number; x: number; y: number }[],
+  ): Promise<void> {
+    if (this.profile === "phone") {
+      const cdp = await this.profileSession(page);
+      if (cdp === undefined) return;
+      const type =
+        kind === "start"
+          ? "touchStart"
+          : kind === "move"
+            ? "touchMove"
+            : kind === "end"
+              ? "touchEnd"
+              : "touchCancel";
+      await cdp
+        .send("Input.dispatchTouchEvent", {
+          type,
+          touchPoints: points.map((p) => ({ x: p.x, y: p.y, id: p.id })),
+        })
+        .catch(() => undefined);
+      return;
+    }
+    for (const a of this.touchTranslator.feed(kind, points)) await this.runTouchAction(page, a);
+  }
+
+  private async runTouchAction(page: Page, a: TouchAction): Promise<void> {
+    try {
+      if (a.kind === "click") await page.mouse.click(a.x, a.y);
+      else {
+        await page.mouse.move(a.x, a.y);
+        await page.mouse.wheel(a.dx, a.dy);
+      }
+    } catch {
+      // the page closed or moved on under the finger
+    }
   }
 
   /**
@@ -1854,18 +2595,28 @@ export class BrowserSession {
     this.collectors.add(c);
     let reply: ToolReply;
     try {
+      // a restore to the desktop profile (hand back) runs ahead of every request
+      await this.viewportGate;
       // the tab list and adopt only read and move what the session tracks: they answer while an
-      // action runs (wait runs beside the queue too)
+      // action runs (wait runs beside the queue too); a dialog answer must not wait behind the
+      // action its dialog holds
       const beside =
         req.op === "wait" ||
+        req.op === "dialog" ||
         (req.op === "tabs" && (req.action === "list" || req.action === "adopt"));
-      const out = await (beside
-        ? this.exec(req)
-        : this.serial(conv, () => {
-            if (opts.takenOver?.() === true)
-              throw new ActionError("taken_over", TAKEN_OVER_MESSAGE);
-            return this.exec(req);
-          }));
+      // an action on a tab a JS dialog blocks fails fast, before it waits on the queue
+      this.refuseIfBlocked(req);
+      const out =
+        (await (beside
+          ? req.op === "wait"
+            ? this.raceDialog(conv, req.op, () => this.exec(req))
+            : this.exec(req)
+          : this.serial(conv, () => {
+              if (opts.takenOver?.() === true)
+                throw new ActionError("taken_over", TAKEN_OVER_MESSAGE);
+              this.refuseIfBlocked(req);
+              return this.raceDialog(conv, req.op, () => this.exec(req));
+            }))) ?? {};
       await this.settleProbes(c);
       await this.settleDownloads(c);
       // from here on, notes go to later replies (none is lost between this one and the next)
@@ -1879,6 +2630,8 @@ export class BrowserSession {
       // (not for the tab list or adopt, which run beside a navigation and only read the tabs)
       const verifying =
         page === undefined ||
+        blocks(this.held.get(this.tabIdOf(page))) ||
+        req.op === "dialog" ||
         (req.op === "tabs" && (req.action === "list" || req.action === "adopt"))
           ? false
           : await this.checkVerification(page, this.tabIdOf(page));
@@ -1887,12 +2640,14 @@ export class BrowserSession {
         ...c.notes,
         ...(out.text === undefined ? [] : [out.text]),
       ].join("\n");
+      const dialog = this.dialogFor(conv);
       reply = {
         ok: true,
         ...(page === undefined ? {} : { page: await this.pageInfo(page) }),
         blockedHosts: blockedHostsOf(c),
         ...(text === "" ? {} : { text }),
         ...(out.image === undefined ? {} : { image: out.image }),
+        ...(dialog === undefined ? {} : { dialog }),
       };
     } catch (e) {
       await this.settleProbes(c);
@@ -1915,6 +2670,39 @@ export class BrowserSession {
     }
     this.emit({ type: "state" });
     return reply;
+  }
+
+  /**
+   * Refuses an operation a JS dialog on the conversation's active tab blocks (`dialog_open`). In a
+   * one-process browser any held JS dialog stops every page: every acting request is refused (the
+   * conversation's own dialog named, another conversation's never).
+   */
+  private refuseIfBlocked(req: ToolRequest): void {
+    const conv = req.conversationId;
+    const activeHeld = this.held.get(this.activeTabOf(conv) ?? "");
+    // the blocked tab's own snapshot reads no page (the dialog's text), and a switch only moves
+    // the active tab
+    const harmless =
+      req.op === "wait" ||
+      (req.op === "tabs" && req.action === "switch") ||
+      (req.op === "snapshot" && blocks(activeHeld));
+    if (this.singleProcess && isActing(req) && !harmless) {
+      const own = this.dialogFor(conv);
+      if (own !== undefined && own.kind !== "auth")
+        throw new ActionError("dialog_open", blockedByDialogText(own));
+      if ([...this.held.values()].some(blocks))
+        throw new ActionError("failed", PAUSED_BY_DIALOG_MESSAGE);
+    }
+    if (!BLOCKED_OPS.has(req.op)) return;
+    const tab = this.activeTabOf(conv);
+    const h = tab === undefined ? undefined : this.held.get(tab);
+    if (blocks(h)) throw new ActionError("dialog_open", blockedByDialogText(h.view));
+  }
+
+  /** The JS dialog that blocks a page, if any. */
+  private blockingDialog(page: Page): PendingDialogView | undefined {
+    const h = this.held.get(this.tabIdOf(page));
+    return blocks(h) ? h.view : undefined;
   }
 
   /**
@@ -2001,10 +2789,14 @@ export class BrowserSession {
 
   async pageInfo(page: Page): Promise<{ url: string; title: string; tabId: string }> {
     const known = this.titles.get(this.tabIdOf(page)) ?? "";
-    const title = await this.bounded(
-      page.title().catch(() => known),
-      known,
-    );
+    // a page a JS dialog blocks answers no query: its known title
+    const title =
+      this.blockingDialog(page) !== undefined
+        ? known
+        : await this.bounded(
+            page.title().catch(() => known),
+            known,
+          );
     return {
       url: clip(page.url(), MAX_URL_CHARS),
       title: clip(title, MAX_TITLE_CHARS),
@@ -2094,9 +2886,12 @@ export class BrowserSession {
     const deadline = Date.now() + this.navigationTimeoutMs;
     const watch = new NavWatch(page, url, () => this.pendingNavs.get(page));
     try {
-      res = await this.gotoPastNetworkChange(page, url, watch, deadline);
+      res = await this.ownNav(page, () => this.gotoPastNetworkChange(page, url, watch, deadline));
     } catch (e) {
       const msg = firstLine(e);
+      // a sign-in the browser could not answer: the reply names the auth dialog (the full build
+      // fails the navigation where the headless shell shows the 401 body)
+      if (this.signInAsked(page, e)) return;
       // a URL that is a file download: it is saved and reported (onDownload), not an error
       if (msg.includes("Download is starting")) {
         await download.catch(() => undefined);
@@ -2318,20 +3113,24 @@ export class BrowserSession {
         if (req.url !== undefined) {
           await this.goto(page, normalizeUrl(req.url));
         } else if (req.action === "back" || req.action === "forward") {
-          const r = await (req.action === "back" ? page.goBack() : page.goForward()).catch(
-            async (e: unknown) => {
-              if (isTimeout(e)) throw await this.navigationTimedOut(page, page.url());
-              throw e;
-            },
-          );
+          const r = await this.ownNav(page, () =>
+            req.action === "back" ? page.goBack() : page.goForward(),
+          ).catch(async (e: unknown) => {
+            if (this.signInAsked(page, e)) return null;
+            if (isTimeout(e)) throw await this.navigationTimedOut(page, page.url());
+            throw e;
+          });
           if (r === null && page.url() === "about:blank") {
             return { text: `No ${req.action === "back" ? "earlier" : "later"} page in this tab.` };
           }
         } else if (req.action === "reload") {
-          await page.reload({ waitUntil: "domcontentloaded" }).catch(async (e: unknown) => {
-            if (isTimeout(e)) throw await this.navigationTimedOut(page, page.url());
-            throw e;
-          });
+          await this.ownNav(page, () => page.reload({ waitUntil: "domcontentloaded" })).catch(
+            async (e: unknown) => {
+              if (this.signInAsked(page, e)) return null;
+              if (isTimeout(e)) throw await this.navigationTimedOut(page, page.url());
+              throw e;
+            },
+          );
         } else {
           throw new ActionError(
             "failed",
@@ -2342,8 +3141,15 @@ export class BrowserSession {
       }
       case "tabs":
         return this.tabsOp(req);
-      case "snapshot":
-        return { text: await takeSnapshot(await activePage()) };
+      case "snapshot": {
+        const page = await activePage();
+        // the tree read evaluates in the page, which a modal dialog blocks
+        const blocking = this.blockingDialog(page);
+        if (blocking !== undefined) return { text: blockedByDialogText(blocking) };
+        return { text: await takeSnapshot(page) };
+      }
+      case "dialog":
+        return this.dialogOp(req);
       case "click":
       case "hover": {
         const page = await activePage();
@@ -2544,9 +3350,9 @@ export class BrowserSession {
   ): Promise<void> {
     try {
       if (nav.url !== undefined) await this.goto(page, normalizeUrl(nav.url));
-      else if (nav.action === "back") await page.goBack();
-      else if (nav.action === "forward") await page.goForward();
-      else if (nav.action === "reload") await page.reload();
+      else if (nav.action === "back") await this.ownNav(page, () => page.goBack());
+      else if (nav.action === "forward") await this.ownNav(page, () => page.goForward());
+      else if (nav.action === "reload") await this.ownNav(page, () => page.reload());
     } catch {
       // the page shows the failure; a refused host arrives as a blocked message
     }
@@ -2560,6 +3366,8 @@ export class BrowserSession {
     const timeout = Number.isFinite(asked)
       ? Math.max(0, Math.min(MAX_WAIT_MS, Math.floor(asked)))
       : DEFAULT_WAIT_MS;
+    // a page a dialog blocks changes nothing until it is answered: the reply names the dialog
+    if (page !== undefined && this.blockingDialog(page) !== undefined) return {};
     if (page === undefined) {
       if (req.text !== undefined || req.ref !== undefined || req.navigation === true)
         throw new ActionError("failed", NO_TAB_TO_WAIT_ON);

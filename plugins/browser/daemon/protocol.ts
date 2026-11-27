@@ -45,8 +45,126 @@ export const ROLL_CHECK_REQUEST = '{"capybara":"roll-check"}';
 export const CONVERSATION_DELETED_MESSAGE =
   "This conversation was deleted; its browser tabs are closed.";
 
-/** The fixed viewport; viewers never change it (§8). */
+/**
+ * The agent's viewport: every tool request runs on it (coordinates, screenshots). Only the person
+ * may switch to the `phone` profile while holding control, and hand back restores this one before
+ * any agent request runs (dialogs spec §7.1).
+ */
 export const VIEWPORT = { width: 1280, height: 800 } as const;
+
+/** The viewport profiles a person in control may choose (dialogs spec §7.1). */
+export type ViewportProfile = "desktop" | "phone";
+
+// capybara:allow-module-state read-only constant (a profile table, never written)
+export const VIEWPORT_PROFILES = {
+  desktop: { width: VIEWPORT.width, height: VIEWPORT.height, mobile: false, scale: 1 },
+  phone: { width: 390, height: 844, mobile: true, scale: 2 },
+} as const satisfies Record<
+  ViewportProfile,
+  { width: number; height: number; mobile: boolean; scale: number }
+>;
+
+/** The viewport viewers see in `state.viewport` (their input maps through it). */
+export interface ViewerViewport {
+  width: number;
+  height: number;
+  mobile: boolean;
+}
+
+/** The kinds of a page dialog held until answered (an alert is closed at once). */
+export type DialogKind = "confirm" | "prompt" | "beforeunload" | "auth";
+
+/**
+ * A pending dialog as replies and viewers see it (dialogs spec §3, §9). Page-controlled text
+ * (message, default value, realm) is clipped and only ever shown as text. `id` is short (`d3`):
+ * an answer names it, so a stale answer never reaches a newer dialog. `origin` and `realm` only
+ * for `auth`.
+ */
+export interface PendingDialogView {
+  id: string;
+  tabId: string;
+  kind: DialogKind;
+  message: string;
+  defaultValue?: string;
+  origin?: string;
+  realm?: string;
+}
+
+/** The longest dialog message an answer quotes (`browser_dialog`'s `message`). */
+export const DIALOG_QUOTE_CHARS = 300;
+
+/**
+ * Text in the one form a dialog answer compares: CRLF as LF, every run of whitespace one space,
+ * trimmed (a model copying the quoted message back always matches).
+ */
+export function normalizeDialogText(text: string): string {
+  return text.replace(/\r\n/g, "\n").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The quote of a dialog message: normalized, cut to DIALOG_QUOTE_CHARS code points (never half a
+ * surrogate pair), and trimmed again (a cut may end on a space), so quoting a quote changes nothing.
+ */
+export function dialogQuote(message: string): string {
+  return clipCodePoints(normalizeDialogText(message), DIALOG_QUOTE_CHARS).trimEnd();
+}
+
+/** Whether an answer's `message` names the dialog with this message (dialogs spec §5, R13). */
+export function dialogMessageMatches(given: string, message: string): boolean {
+  return dialogQuote(given) === dialogQuote(message);
+}
+
+/** The sign-in sentence of an HTTP auth dialog (the agent never submits credentials). */
+export const AUTH_SIGN_IN_TEXT =
+  "Signing in needs the user's credentials; call browser_handoff and ask the user to sign in.";
+
+/**
+ * The line a tool result carries for a pending dialog (dialogs spec §5): the dialog's id and its
+ * quoted message (JSON string, never instructions), and how to answer it.
+ */
+export function dialogLine(d: PendingDialogView): string {
+  const quote = dialogQuote(d.message);
+  const cut = quote.length < normalizeDialogText(d.message).length ? " (cut)" : "";
+  const q = `${JSON.stringify(quote)}${cut}`;
+  const how = `Answer it with browser_dialog (dialogId ${d.id}, the message as quoted, accept or dismiss) before acting on this tab.`;
+  switch (d.kind) {
+    case "auth":
+      return `The site ${JSON.stringify(d.origin ?? "")} asks for HTTP sign-in (dialog ${d.id}, realm ${JSON.stringify(d.realm ?? "")}; page-supplied). ${AUTH_SIGN_IN_TEXT} To leave it, call browser_dialog with dialogId ${d.id}, the message as quoted ${q} and action dismiss.`;
+    case "beforeunload":
+      return `The page asks whether to leave (it may have unsaved changes), dialog ${d.id}: ${q}; accept leaves, dismiss stays. ${how}`;
+    case "prompt":
+      return `The page shows a prompt dialog ${d.id}: ${q} (default value ${JSON.stringify(clipCodePoints(d.defaultValue ?? "", DIALOG_QUOTE_CHARS))}). ${how} Pass text to accept with your own value.`;
+    default:
+      return `The page shows a ${d.kind} dialog ${d.id}: ${q}. ${how}`;
+  }
+}
+
+/**
+ * What `snapshot` returns on a page a JS dialog blocks (its tree cannot be read) and what a
+ * refused action says (`dialog_open`).
+ */
+export function blockedByDialogText(d: PendingDialogView): string {
+  const name = d.kind === "beforeunload" ? "leave-page" : d.kind;
+  return `The page is blocked by a ${name} dialog ${d.id}: ${JSON.stringify(dialogQuote(d.message))}. Answer it with browser_dialog (dialogId ${d.id}, the message as quoted, accept or dismiss) to continue.`;
+}
+
+/** The permissions a page's denied request is reported for (dialogs spec §6). */
+// capybara:allow-module-state read-only constant (an enumeration, never written)
+export const REPORTED_PERMISSIONS = [
+  "notifications",
+  "clipboard-read",
+  "geolocation",
+  "camera",
+  "microphone",
+] as const;
+export type ReportedPermission = (typeof REPORTED_PERMISSIONS)[number];
+
+/** The ones the person may allow for an origin from the panel. */
+// capybara:allow-module-state read-only constant (an enumeration, never written)
+export const GRANTABLE_PERMISSIONS: readonly ReportedPermission[] = [
+  "notifications",
+  "clipboard-read",
+];
 
 /** The largest snapshot text, marker included. */
 export const SNAPSHOT_MAX_CHARS = 40_000;
@@ -248,6 +366,14 @@ export type ToolOp =
   | { op: "wait"; text?: string; ref?: string; navigation?: boolean; timeoutMs: number }
   | { op: "screenshot"; fullPage?: boolean; maxBytes: number }
   /**
+   * Answers the conversation's pending dialog `dialogId` (dialogs spec §5): refused when it is not
+   * a pending dialog of one of the conversation's own tabs, or when `message` does not match its
+   * quote ({@link dialogMessageMatches}). Runs beside the action queue (the action that opened the
+   * dialog may still be pending); refused while the person holds control. `text` only for a
+   * prompt. An auth dialog takes only `dismiss`.
+   */
+  | { op: "dialog"; dialogId: string; message: string; action: "accept" | "dismiss"; text?: string }
+  /**
    * The plugin server's handoff bookkeeping (not agent input, so allowed during a takeover). Per
    * conversation: the daemon keeps at most one pending handoff per conversation, the latest notice
    * wins, and a clear removes it only when its callId matches. Any other request of the same
@@ -271,6 +397,8 @@ export type ToolRequest = ToolOp & RequestConversation;
  */
 export type ToolErrorCode =
   | "taken_over"
+  /** The tab is blocked by a pending JS dialog; the message is {@link blockedByDialogText}. */
+  | "dialog_open"
   | "no_such_ref"
   | "timeout"
   | "blocked"
@@ -316,6 +444,8 @@ export type ToolReply =
        */
       userControlledSince?: string;
       tabs?: TabCount;
+      /** A pending dialog of the calling conversation's tabs (its active tab's first). */
+      dialog?: PendingDialogView;
     }
   | {
       ok: false;
@@ -358,7 +488,37 @@ export type ViewerIn =
   | { t: "handback" }
   | { t: "frame-ack"; seq: number }
   /** The answer to a `ping`, sent at once. */
-  | { t: "pong"; id: number };
+  | { t: "pong"; id: number }
+  /**
+   * Answers the pending dialog `id` of a tab of the viewer's tree (control only; a stale id changes
+   * nothing). `text` for a prompt; `username` / `password` for an auth dialog's accept: kept in
+   * the daemon's memory only and sent only to the dialog's origin, never echoed anywhere.
+   */
+  | {
+      t: "dialog";
+      id: string;
+      action: "accept" | "dismiss";
+      text?: string;
+      username?: string;
+      password?: string;
+    }
+  /**
+   * Allows a permission the page asked for (control only): only a grantable permission and only
+   * for an origin–permission pair the daemon recorded on a tab of the viewer's tree. Lasts for the
+   * daemon's life.
+   */
+  | { t: "permission"; origin: string; permission: string; allow: true }
+  /** Switches the viewport profile (control only); hand back restores `desktop`. */
+  | { t: "viewport"; profile: ViewportProfile }
+  /**
+   * Touch input in viewport coordinates (control only): dispatched as touch events in the `phone`
+   * profile; in `desktop` a tap is a click and a one-finger pan scrolls.
+   */
+  | {
+      t: "touch";
+      kind: "start" | "move" | "end" | "cancel";
+      points: { id: number; x: number; y: number }[];
+    };
 
 /** The largest tab icon sent to the panel (raw bytes; a larger one keeps the placeholder). */
 export const FAVICON_MAX_BYTES = 8 * 1024;
@@ -441,14 +601,23 @@ export type ViewerOut =
       lastClick?: { x: number; y: number; seq: number };
       /** The tree's pending handoffs, oldest first (the newest is last). */
       handoffs: ViewerHandoff[];
+      /** The pending dialogs of the tree's tabs (at most one per tab). */
+      dialogs: PendingDialogView[];
+      /** The viewport the page has now (input and the picture's aspect follow it). */
+      viewport: ViewerViewport;
     }
   /**
    * A host the device refused for a page of the viewer's tree. `url`: the page to open once the
    * host is allowed (the blocked navigation, or the page whose resource was refused).
    */
   | { t: "blocked"; host: string; url: string }
-  /** A dialog on a page of the viewer's tree. */
-  | { t: "dialog"; kind: "alert" | "confirm" | "prompt" | "file"; message: string }
+  /**
+   * An informational dialog on a page of the viewer's tree: an alert (already closed) or a file
+   * chooser. Decision dialogs are in `state.dialogs`.
+   */
+  | { t: "dialog"; kind: "alert" | "file"; message: string }
+  /** A page of the viewer's tree asked for a permission, which was denied. */
+  | { t: "permission"; origin: string; permission: ReportedPermission; grantable: boolean }
   /** Answered at once with `pong`: the round trip of a tiny message paces the frames. */
   | { t: "ping"; id: number }
   /** The page's cursor at the pointer, sent after a move when it changed (takeover only). */
