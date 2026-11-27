@@ -36,9 +36,11 @@ export default defineConfig({
   ssr: { resolve: { conditions: conditions.filter((c) => c !== "module") } },
   test: {
     hookTimeout: 120_000,
-    // CI runners are loaded: dual-replica tests that start child processes time out near the 5s
-    // default there (not a regression), so CI gets more.
-    testTimeout: process.env.CI ? 30_000 : 5_000,
+    // One budget for CI and a developer's machine. A test that starts child processes or Chromium
+    // (the browser daemon's restart cases launch it two or three times, the full build on macOS
+    // takes seconds each under load) runs past the 5 s default whenever the machine is busy; a
+    // test that hangs still fails, only after 30 s.
+    testTimeout: 30_000,
     projects: [
       {
         extends: true,
