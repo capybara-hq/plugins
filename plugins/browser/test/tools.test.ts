@@ -236,6 +236,38 @@ describe("browser tools", () => {
     expect(f.log.filter((l) => l.startsWith("ensure"))).toHaveLength(RESTART_ATTEMPTS + 1);
   });
 
+  it("an installing reply is asked again within the call and passes once the browser runs", async () => {
+    let n = 0;
+    const installing = (done: number): ToolReply => ({
+      ok: false,
+      error: "installing",
+      message: `The browser is being installed in the device (${done} of 180 MB downloaded); this happens once per browser version. Call the tool again in a moment.`,
+      blockedHosts: [],
+    });
+    const f = fake(() =>
+      n++ < 2 ? installing(n * 60) : { ok: true, page: PAGE, blockedHosts: [] },
+    );
+    f.deps.installWait = { maxMs: 10_000, firstPauseMs: 1 };
+    const r = await f.run("browser_snapshot", {});
+    expect(textOf(r)).toContain("Example");
+    expect(f.log.filter((l) => l.startsWith("request"))).toHaveLength(3);
+  });
+
+  it("a long install ends the call with the daemon's progress, never a service timeout", async () => {
+    const f = fake(() => ({
+      ok: false,
+      error: "installing",
+      message:
+        "The browser is being installed in the device (120 of 180 MB downloaded); this happens once per browser version. Call the tool again in a moment.",
+      blockedHosts: [],
+    }));
+    f.deps.installWait = { maxMs: 5, firstPauseMs: 1 };
+    await expect(f.run("browser_navigate", { url: "https://example.com/" })).rejects.toThrow(
+      /being installed in the device \(120 of 180 MB downloaded\).*Call the tool again/,
+    );
+    expect(f.log.filter((l) => l.startsWith("request")).length).toBeGreaterThanOrEqual(1);
+  });
+
   it("a failed request without a restart is not retried", async () => {
     const f = fake();
     f.failRequest(0, new Error("boom"));

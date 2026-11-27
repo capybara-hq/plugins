@@ -27,6 +27,7 @@ import {
   chromiumLaunchPlan,
   HEADLESS_SHELL_NOTE,
   killChromium,
+  type LaunchHooks,
   type LaunchPlan,
   launchChromium,
   playwrightDownloadHosts,
@@ -34,6 +35,7 @@ import {
   shippedRevisionNote,
 } from "./chromium.js";
 import { restoreCookies, saveCookies } from "./cookie-file.js";
+import { downloadedBytes, installingMessage } from "./install-progress.js";
 import {
   BROWSER_CRASHED_MESSAGE,
   BROWSER_RESTARTED_NOTE,
@@ -86,7 +88,12 @@ export interface DaemonOptions {
   /** How long a stop waits for Chromium to close before killing it (default 3 s). */
   browserCloseGraceMs?: number;
   /** Installs and launches Chromium (default: launchChromium); tests make it fail. */
-  launch?: (plan: LaunchPlan) => Promise<BrowserContext>;
+  launch?: (plan: LaunchPlan, hooks?: LaunchHooks) => Promise<BrowserContext>;
+  /**
+   * How long a request waits for a launch that installs the browser before it answers
+   * `installing` (default {@link INSTALL_ANSWER_MS}).
+   */
+  installAnswerMs?: number;
   /**
    * Called once the first start installed the browser into the provider's install directory and
    * sealed it ({@link BrowserInstalledError}): the process should exit, so the next start (the
@@ -95,6 +102,12 @@ export interface DaemonOptions {
    */
   onSealed?: () => void;
 }
+
+/**
+ * How long a request waits for the first start's browser install before it answers `installing`
+ * with the download's progress (an install takes from seconds to minutes).
+ */
+export const INSTALL_ANSWER_MS = 2_000;
 
 /** How long a daemon that sealed its install with no request waiting stays before it exits. */
 export const SEALED_EXIT_GRACE_MS = 2_000;
@@ -258,6 +271,13 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   if (saved !== undefined) sessionFile.restoreState(state, saved);
 
   const launch = opts.launch ?? launchChromium;
+  /** The browser download's size, once the installing launch reports it. */
+  let downloadTotal: number | undefined;
+  const launchHooks: LaunchHooks = {
+    onDownloadTotal: (bytes) => {
+      downloadTotal = bytes;
+    },
+  };
   const closeGraceMs = opts.browserCloseGraceMs ?? BROWSER_CLOSE_GRACE_MS;
   let current: Promise<BrowserSession> | undefined;
   /**
@@ -315,7 +335,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   function browser(): Promise<BrowserSession> {
     if (current !== undefined) return current;
     if (closing) return Promise.reject(new Error("The browser daemon is stopping."));
-    const starting: Promise<BrowserSession> = launch(plan).then(async (ctx) => {
+    const starting: Promise<BrowserSession> = launch(plan, launchHooks).then(async (ctx) => {
       let pid: number | undefined;
       let failed = false;
       try {
@@ -485,6 +505,45 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   }
 
   /**
+   * The browser for a request, or the reply to give instead: a launch's failure, or `installing`
+   * while this process installs the browser into the provider's unsealed install directory and
+   * that has not finished within {@link INSTALL_ANSWER_MS} (never a request left waiting on a
+   * download of minutes; the plugin retries).
+   */
+  async function browserFor(): Promise<BrowserSession | ToolReply> {
+    const starting = browser();
+    if (plan.install?.sealed !== false) {
+      try {
+        return await starting;
+      } catch (e) {
+        return launchFailure(e);
+      }
+    }
+    const settled = await within(
+      starting.then(
+        (session) => ({ session }),
+        (error: unknown) => ({ error }),
+      ),
+      opts.installAnswerMs ?? INSTALL_ANSWER_MS,
+    );
+    if (settled === undefined) {
+      const tmp = opts.env.TMPDIR;
+      const downloaded = tmp === undefined || tmp === "" ? undefined : downloadedBytes(tmp);
+      return {
+        ok: false,
+        error: "installing",
+        message: installingMessage({
+          ...(downloaded === undefined ? {} : { downloaded }),
+          ...(downloadTotal === undefined ? {} : { total: downloadTotal }),
+        }),
+        blockedHosts: [],
+      };
+    }
+    if ("error" in settled) return launchFailure(settled.error);
+    return settled.session;
+  }
+
+  /**
    * Closes Chromium; one that has not closed within the grace is killed, and the stop waits at
    * most one more grace for that. A launch still running after the grace (an install included)
    * is abandoned: it closes in the background when it finishes, and in the service the process
@@ -545,12 +604,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       // hold ends here and the snapshot the plugin asks for next is not refused
       if (req.handback === true) state.handback();
     }
-    let session: BrowserSession;
-    try {
-      session = await browser();
-    } catch (e) {
-      return launchFailure(e);
-    }
+    const session = await browserFor();
+    if (!(session instanceof BrowserSession)) return session;
     const page = session.currentPage(conv);
     return {
       ok: true,
@@ -579,12 +634,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         blockedHosts: [],
       };
     }
-    let session: BrowserSession;
-    try {
-      session = await browser();
-    } catch (e) {
-      return launchFailure(e);
-    }
+    const session = await browserFor();
+    if (!(session instanceof BrowserSession)) return session;
     if (req.op === "watch_end") {
       const reply = await session.run(req);
       if (reply.ok) {
@@ -663,12 +714,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     if (state.control === "user" && req.op !== "wait") {
       return { ok: false, error: "taken_over", message: TAKEN_OVER_MESSAGE, blockedHosts: [] };
     }
-    let session: BrowserSession;
-    try {
-      session = await browser();
-    } catch (e) {
-      return launchFailure(e);
-    }
+    const session = await browserFor();
+    if (!(session instanceof BrowserSession)) return session;
     let reply = await session.run(req, { takenOver: () => state.control === "user" });
     // the browser crashed under the request: what it did is unknown, and the next call relaunches
     if (!reply.ok && crashed.has(session))
