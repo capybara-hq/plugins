@@ -136,13 +136,15 @@ export function toComplete(r: Response, model: string): Complete {
   const input = u?.input_tokens ?? 0;
   const cached = u?.input_tokens_details?.cached_tokens ?? 0;
   const written = u?.input_tokens_details?.cache_write_tokens ?? 0;
-  const byTtl = cacheWriteByTtl(
+  const split = cacheWriteByTtl(
     (
       u?.input_tokens_details as
         | { cache_write_tokens_details?: Parameters<typeof cacheWriteByTtl>[0] }
         | undefined
     )?.cache_write_tokens_details,
   );
+  // A split that does not sum to the written tokens is dropped.
+  const byTtl = split?.reduce((n, e) => n + e.tokens, 0) === written ? split : undefined;
   return {
     type: "message_complete",
     content,

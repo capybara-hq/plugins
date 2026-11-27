@@ -160,6 +160,18 @@ describe("cacheWriteByTtl", () => {
     ]);
   });
 
+  it("drops a split that does not sum to the written tokens", () => {
+    const u = complete({
+      input_tokens_details: {
+        cached_tokens: 0,
+        cache_write_tokens: 900,
+        cache_write_tokens_details: { ttl_30m_tokens: 300, ttl_12h_tokens: 400 },
+      },
+    }).usage;
+    expect(u.cacheWriteTokens).toBe(900);
+    expect(u).not.toHaveProperty("cacheWriteByTtl");
+  });
+
   it("no details -> no cacheWriteByTtl", () => {
     const u = complete({
       input_tokens_details: { cached_tokens: 0, cache_write_tokens: 50 },
