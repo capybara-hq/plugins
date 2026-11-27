@@ -138,6 +138,11 @@ internal network `<name>-net` and the egress proxy's config volume `<name>-egres
   (`User: 0:0`, with all capabilities dropped too): the sandbox user cannot signal them, and `kill 1`, `pkill sleep` and `kill -9 -1` cannot stop
   the container. Every exec specifies the user explicitly; a manual `docker exec` without `-u` runs as root (with no capabilities).
 - `CapDrop: ALL`, `no-new-privileges`, a read-only root filesystem, `Init` (reaps zombie processes), `PidsLimit` 1024, private IPC.
+- **Chromium runs without its own sandbox** (`--no-sandbox`, plugins#286). The container is the boundary: the agent can already
+  run arbitrary commands in it, so a browser renderer escape gains nothing beyond that. Chromium's sandbox needs unprivileged
+  user namespaces, which Docker's default seccomp profile blocks without `CAP_SYS_ADMIN`; enabling it would mean a wider seccomp
+  profile for every command in the device (rejected) or a separate browser container (not planned now). The provider
+  refuses any `SecurityOpt` other than `no-new-privileges` for services.
 - cpu → `NanoCpus`; memory → `Memory` (`MemorySwap` the same value, so no swap is used).
 - `/tmp` is tmpfs (`nosuid,nodev`), sized at half the memory and no more than `diskMb`, and counts against the memory quota; it is cleared after suspension.
 - `/dev/shm`: `ShmSize = min(1 GiB, memoryMb / 4)` for every instance (Chromium and other shared-memory users); it
