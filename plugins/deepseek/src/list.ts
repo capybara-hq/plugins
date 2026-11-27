@@ -94,7 +94,6 @@ function mapModel(raw: RawModel & { id: string }): ModelInfo {
       // No document input is documented for Chat Completions
       documents: false,
       reasoning,
-      caching: true,
       // `[system]` user turns, see map-request.ts
       midConversationSystem: false,
     },

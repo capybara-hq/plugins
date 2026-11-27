@@ -44,7 +44,6 @@ describe("deepseek listModels", () => {
         vision: true,
         documents: false,
         reasoning: true,
-        caching: true,
         midConversationSystem: false,
       },
     });

@@ -39,7 +39,11 @@ describeModelProviderConformance("openai (fixtures)", async () => {
       imageModels: ["gpt-image-1-mini"],
     }),
     model: "gpt-5.5",
-    expect: { thinking: true, caching: true, imageGeneration: { model: "gpt-image-1-mini" } },
+    expect: {
+      thinking: true,
+      caching: false /* P2–P7 declare the cache */,
+      imageGeneration: { model: "gpt-image-1-mini" },
+    },
     teardown: () => server.stop(),
   };
 });
@@ -63,7 +67,7 @@ describe.skipIf(!LIVE_KEY || !LIVE_MODEL)("live", { timeout: 120_000 }, () => {
       models: [gpt(LIVE_MODEL ?? "", { documents: true })],
     }),
     model: LIVE_MODEL ?? "",
-    expect: { thinking: true, caching: true },
+    expect: { thinking: true, caching: false /* P2–P7 declare the cache */ },
     teardown: async () => {},
   }));
 });
@@ -754,7 +758,6 @@ describe("openai: errors and edge cases", () => {
           tools: true,
           vision: true,
           reasoning: true,
-          caching: true,
           midConversationSystem: true,
           documents: false,
         },
@@ -784,7 +787,6 @@ describe("openai: errors and edge cases", () => {
           tools: true,
           vision: true,
           reasoning: false,
-          caching: true,
           midConversationSystem: true,
           documents: false,
         },

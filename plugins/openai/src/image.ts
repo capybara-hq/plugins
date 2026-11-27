@@ -74,7 +74,6 @@ export function imageModelInfo(id: string): ModelInfo {
       tools: false,
       vision: false,
       reasoning: false,
-      caching: false,
       midConversationSystem: false,
       documents: false,
     },

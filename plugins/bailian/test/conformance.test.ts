@@ -36,7 +36,7 @@ for (const model of ["qwen3.8-flash", "qwen-flash"]) {
       model,
       expect: {
         thinking: true,
-        caching: true,
+        caching: false, // P2–P7 declare the cache
         embedding: { model: "text-embedding-v4", dimensions: 512 },
       },
       teardown: () => server.stop(),
@@ -57,7 +57,11 @@ for (const imageModel of ["qwen-image-2.0", "wanx2.0-t2i-turbo"]) {
         { imagePoll: { initialMs: 1, maxMs: 4 } },
       ),
       model: "qwen-flash",
-      expect: { thinking: true, caching: true, imageGeneration: { model: imageModel } },
+      expect: {
+        thinking: true,
+        caching: false /* P2–P7 declare the cache */,
+        imageGeneration: { model: imageModel },
+      },
       teardown: async () => {
         await server.stop();
         await images.stop();

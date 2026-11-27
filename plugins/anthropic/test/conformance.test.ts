@@ -58,7 +58,7 @@ describeModelProviderConformance("anthropic (fixtures)", async () => {
       serverFallbacks: "default",
     }),
     model: "claude-opus-5-5",
-    expect: { thinking: true, caching: true },
+    expect: { thinking: true, caching: false /* P2–P7 declare the cache */ },
     teardown: () => server.stop(),
   };
 });
@@ -82,7 +82,7 @@ describe.skipIf(!LIVE_KEY)("live", { timeout: 120_000 }, () => {
       serverFallbacks: "default",
     }),
     model: "claude-haiku-5-5",
-    expect: { thinking: true, caching: true },
+    expect: { thinking: true, caching: false /* P2–P7 declare the cache */ },
     cachePrefixTokens: 6000,
     teardown: async () => {},
   }));
@@ -863,7 +863,6 @@ describe("anthropic: errors and edge cases", () => {
         tools: true,
         vision: true,
         reasoning: true,
-        caching: true,
         midConversationSystem: false,
         documents: true,
       },

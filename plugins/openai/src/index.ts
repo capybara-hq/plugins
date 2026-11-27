@@ -135,7 +135,6 @@ function modelInfo(m: ModelConfig, reasoningSummary: "auto" | "off"): ModelInfo 
       vision: m.vision,
       reasoning: m.reasoning,
       // 前缀缓存是自动的
-      caching: true,
       // 中途 system 以 developer 输入项实现
       midConversationSystem: true,
       documents: m.documents ?? false,

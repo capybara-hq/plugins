@@ -57,7 +57,6 @@ describe("listModels", () => {
         tools: true,
         vision: true,
         reasoning: true,
-        caching: true,
         midConversationSystem: false,
         documents: false,
       },
@@ -80,7 +79,7 @@ describe("listModels", () => {
     expect(ds).toMatchObject({
       kind: "chat",
       publisher: "deepseek",
-      capabilities: { tools: true, vision: false, reasoning: false, caching: false },
+      capabilities: { tools: true, vision: false, reasoning: false },
     });
     expect(ds?.streamIdleTimeoutMs).toBeUndefined();
     expect(ds?.parameters.map((p) => p.key)).toEqual(["temperature", "maxOutputTokens"]);
