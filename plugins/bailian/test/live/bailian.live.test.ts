@@ -2,6 +2,8 @@ import {
   isModelError,
   type ModelInfo,
   type ModelProvider,
+  type ModelRequest,
+  type ModelUsage,
   validateImageGenerateResult,
 } from "@capybara-hq/plugin-sdk";
 import { describeModelProviderConformance } from "@capybara-hq/testing";
@@ -160,6 +162,73 @@ for (const [label, model] of [
       teardown: async () => {},
     }));
   });
+}
+
+async function usageOf(
+  p: ModelProvider,
+  req: ModelRequest,
+): Promise<{ text: string; usage: ModelUsage }> {
+  for await (const e of p.stream(req, { signal: AbortSignal.timeout(120_000) })) {
+    if (e.type === "message_complete") {
+      const text = e.content.map((b) => (b.type === "text" ? b.text : "")).join("");
+      return { text, usage: e.usage };
+    }
+  }
+  throw new Error("no message_complete");
+}
+
+const total = (u: ModelUsage) => u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens;
+
+/**
+ * History caching: the second turn of a conversation reads the whole first request (system prompt
+ * and the first user turn) from the cache, not just the system prompt, through the marker on the
+ * history tail. The prefix is unique per run so an earlier run's entry cannot answer.
+ */
+for (const [label, model] of [
+  ["multimodal-generation", vision],
+  ["text-generation", textOnly],
+] as const) {
+  describe.skipIf(!provider || !model?.capabilities.caching)(
+    `live history cache, ${label}`,
+    { timeout: 180_000 },
+    () => {
+      it(`${model?.id}: the second turn reads the first turn's history from the cache`, async () => {
+        const p = provider as ModelProvider;
+        const nonce = Math.random().toString(36).slice(2);
+        const lines = (tag: string, n: number) =>
+          Array.from(
+            { length: n },
+            (_, i) => `${tag} ${i}: reference note ${i * 7} (${nonce}).`,
+          ).join("\n");
+        const first: ModelRequest = {
+          model: model?.id ?? "",
+          system: [{ text: `You answer in one word.\n${lines("Rule", 150)}`, cache: true }],
+          messages: [
+            { role: "user", content: [{ type: "text", text: `${lines("Fact", 150)}\nSay OK.` }] },
+          ],
+          tools: [],
+          maxOutputTokens: 16,
+          params: model?.capabilities.reasoning ? { thinking: "off" } : {},
+        };
+        const r1 = await usageOf(p, first);
+        const second: ModelRequest = {
+          ...first,
+          messages: [
+            ...first.messages,
+            { role: "assistant", content: [{ type: "text", text: r1.text || "OK" }] },
+            { role: "user", content: [{ type: "text", text: "Again: say OK." }] },
+          ],
+        };
+        const r2 = await usageOf(p, second);
+        console.info(
+          `[plugin-bailian] live history cache ${model?.id}: first ${JSON.stringify(r1.usage)}, second ${JSON.stringify(r2.usage)}`,
+        );
+        expect(r1.usage.cacheWriteTokens).toBeGreaterThan(0);
+        // the system prompt alone is about half of the first request
+        expect(r2.usage.cacheReadTokens).toBeGreaterThanOrEqual(total(r1.usage) * 0.9);
+      });
+    },
+  );
 }
 
 const IMAGE_MODEL = process.env.CAPYBARA_TEST_BAILIAN_IMAGE_MODEL ?? "wanx2.0-t2i-turbo";

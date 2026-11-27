@@ -165,9 +165,12 @@ function mapMessages(
   return out;
 }
 
+const EPHEMERAL = { type: "ephemeral" } as const;
+
 /**
  * The system message as parts, with an explicit cache marker (`cache_control: { type:
- * "ephemeral" }`, a 5-minute cache) after the last block the kernel marked `cache: true`. Live
+ * "ephemeral" }`, a 5-minute cache refreshed on every hit) after the last block the kernel marked
+ * `cache: true`: the system prompt and tools are shared by every conversation of the agent. Live
  * 2026-11-08: implicit caching did not hit for a repeated 5k-token prompt, the explicit marker
  * did (both endpoints); models without explicit caching ignore the field.
  */
@@ -179,9 +182,42 @@ function systemMessage(req: ModelRequest, endpoint: Endpoint): NativeMessage | n
   });
   const content: Part[] = req.system.map((s, i) => ({
     ...textPart(s.text, endpoint),
-    ...(i === lastCached ? { cache_control: { type: "ephemeral" as const } } : {}),
+    ...(i === lastCached ? { cache_control: EPHEMERAL } : {}),
   }));
   return { role: "system", content };
+}
+
+/**
+ * The history cache marker: `cache_control` on the last content block of the last message, as
+ * DashScope documents for multi-turn conversations
+ * (https://help.aliyun.com/zh/model-studio/context-cache). Explicit and implicit caching are
+ * mutually exclusive within one request, so with only the system marker the history got neither.
+ * Each turn the marker moves to the new last block: the previous turn's entry ends where this
+ * turn's new messages begin, one block before them, well within the 20-block lookback, so the
+ * whole earlier history is read from the cache and only the new messages are written. The bytes
+ * of earlier messages change only by the marker leaving them (a string content becomes one text
+ * part while it carries the marker); the cache matches on the rendered prompt, not on the JSON
+ * (live 2026-11-27, qwen-plus and glm-5.1 on text-generation, qwen3.8-flash on
+ * multimodal-generation: each turn read the whole previous request from the cache). DashScope has
+ * no top-level automatic marker like Anthropic's (a top-level `cache_control` was ignored, live
+ * 2026-11-27). Known gap, live 2026-11-27: qwen-plus / qwen-flash read only the system entry
+ * after an assistant turn with two or more parallel tool calls (glm-5.1, deepseek-v4-pro and
+ * qwen3.8-flash do not). With the system marker this makes 2 of the 4 markers allowed.
+ */
+function markLastBlock(messages: NativeMessage[], endpoint: Endpoint): void {
+  const last = messages[messages.length - 1];
+  if (last === undefined || last.role === "system") return;
+  if (typeof last.content === "string") {
+    if (last.content === "") return;
+    last.content = [{ ...textPart(last.content, endpoint), cache_control: EPHEMERAL }];
+    return;
+  }
+  const i = last.content.length - 1;
+  const part = last.content[i];
+  if (part === undefined) return;
+  // only text parts: the docs show a marker after media for qwen3-vl-plus alone
+  if (!("text" in part) || part.text === "") return;
+  last.content[i] = { ...part, cache_control: EPHEMERAL };
 }
 
 /** model-provider@2 request → native streaming body. Pure. */
@@ -208,11 +244,11 @@ export function buildRequest(req: ModelRequest, endpoint: Endpoint): NativeBody 
     if (thinking === "on") parameters.preserve_thinking = true;
   }
   if (typeof req.params.temperature === "number") parameters.temperature = req.params.temperature;
+  const history = mapMessages(req.messages, req, endpoint);
+  markLastBlock(history, endpoint);
   return {
     model: req.model,
-    input: {
-      messages: [...(system !== null ? [system] : []), ...mapMessages(req.messages, req, endpoint)],
-    },
+    input: { messages: [...(system !== null ? [system] : []), ...history] },
     parameters,
   };
 }
