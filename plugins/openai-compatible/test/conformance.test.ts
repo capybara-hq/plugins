@@ -118,16 +118,17 @@ describe.skipIf(!liveReady)("live", { timeout: 120_000 }, () => {
 });
 
 /**
- * History caching on the dialects that send cache fields (qwen: explicit markers on the history
- * tail; ark: implicit cache with a per-conversation prompt_cache_key): the second turn reads the
- * first request's history, not just the system prompt, from the cache. The prefix is unique per
+ * History caching on the dialects that send cache fields. qwen (explicit markers on the history
+ * tail): the second turn reads the first request's history, not just the system prompt, from the
+ * cache. ark (implicit cache with a per-conversation prompt_cache_key): a hit is not guaranteed,
+ * so only the usage mapping is checked. The prefix is unique per
  * run so an earlier run's entry cannot answer.
  */
 describe.skipIf(!liveReady || (LIVE.dialect !== "qwen" && LIVE.dialect !== "ark"))(
   "live history cache",
   { timeout: 120_000 },
   () => {
-    it("the second turn reads the first turn's history from the cache", async () => {
+    it("the second turn reads the history from the cache (qwen) / maps cache usage (ark)", async () => {
       const provider = createOpenAICompatibleProvider({
         endpoints: [
           {
@@ -173,9 +174,17 @@ describe.skipIf(!liveReady || (LIVE.dialect !== "qwen" && LIVE.dialect !== "ark"
       console.info(
         `[plugin-openai-compatible] live history cache (${LIVE.dialect}, ${LIVE.model}): first ${JSON.stringify(r1.usage)}, second ${JSON.stringify(r2.usage)}`,
       );
-      const total1 = r1.usage.inputTokens + r1.usage.cacheReadTokens + r1.usage.cacheWriteTokens;
-      // the system prompt alone is about half of the first request
-      expect(r2.usage.cacheReadTokens).toBeGreaterThan(total1 * 0.6);
+      const total = (u: typeof r1.usage) => u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens;
+      if (LIVE.dialect === "qwen") {
+        // explicit markers: the whole first request is read back (the system prompt alone is
+        // about half of it)
+        expect(r2.usage.cacheReadTokens).toBeGreaterThan(total(r1.usage) * 0.6);
+      } else {
+        // Ark's implicit cache does not guarantee a hit (core#957 §9.3): only the usage mapping
+        expect(r2.usage.cacheWriteTokens).toBe(0);
+        expect(r2.usage.cacheReadTokens).toBeGreaterThanOrEqual(0);
+        expect(total(r2.usage)).toBeGreaterThan(total(r1.usage));
+      }
     });
   },
 );

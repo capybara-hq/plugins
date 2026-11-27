@@ -614,7 +614,11 @@ describe.skipIf(!live?.chat)("live", { timeout: 120_000 }, () => {
     model: live?.chat?.id ?? "",
     expect: {
       thinking: true,
-      caching: live?.chat?.capabilities.caching ?? false,
+      // Ark's implicit cache does not guarantee a hit, so the suite's hit case (two identical
+      // requests, the second must read the cache) would flake: opted out here. Cache usage
+      // mapping is checked by the history test below and the fixture suites. Until the per-model
+      // cache declaration (core#957 §9.3) can say "not guaranteed".
+      caching: false,
       ...(live?.embed?.embedding
         ? {
             embedding: {
@@ -629,7 +633,7 @@ describe.skipIf(!live?.chat)("live", { timeout: 120_000 }, () => {
     teardown: async () => {},
   }));
 
-  it("live: the second turn reads the first turn's history from the implicit cache", async () => {
+  it("live: a growing conversation maps the implicit cache usage", async () => {
     if (!live?.chat?.capabilities.caching) return;
     const provider = live.provider as ModelProvider;
     const nonce = Math.random().toString(36).slice(2);
@@ -659,9 +663,16 @@ describe.skipIf(!live?.chat)("live", { timeout: 120_000 }, () => {
     console.info(
       `[plugin-ark] live history cache ${live.chat.id}: first ${JSON.stringify(d1.usage)}, second ${JSON.stringify(d2.usage)}`,
     );
-    const total1 = d1.usage.inputTokens + d1.usage.cacheReadTokens;
-    // the system prompt alone is about half of the first request; hits are not guaranteed
-    expect(d2.usage.cacheReadTokens).toBeGreaterThan(total1 * 0.6);
+    // A hit is not guaranteed (implicit cache, core#957 §9.3): check only the usage mapping.
+    // Ark reports no cache writes; the three input kinds never overlap, so the longer second
+    // request's mapped total input exceeds the first one's whatever was read from the cache.
+    for (const u of [d1.usage, d2.usage]) {
+      expect(u.cacheWriteTokens).toBe(0);
+      expect(u.cacheReadTokens).toBeGreaterThanOrEqual(0);
+      expect(u.inputTokens).toBeGreaterThanOrEqual(0);
+    }
+    const total = (u: typeof d1.usage) => u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens;
+    expect(total(d2.usage)).toBeGreaterThan(total(d1.usage));
   });
 
   it("live: a two-turn tool call replays the thinking to the same model", async () => {
