@@ -558,7 +558,7 @@ const SCALES = [1, 0.75, 0.5, 0.35, 0.25, 0.15];
  */
 export async function captureFitting(
   cdp: CDPSession,
-  opts: { maxBytes: number; maxScale?: number; fullPage?: boolean },
+  opts: { maxBytes: number; maxScale?: number; fullPage?: boolean; deviceScale?: number },
 ): Promise<JpegCapture | null> {
   const metrics = await cdp.send("Page.getLayoutMetrics");
   const vv = metrics.cssVisualViewport;
@@ -570,6 +570,8 @@ export async function captureFitting(
   // a zoomed-out visual viewport (a mobile page without a viewport tag) shows its CSS pixels
   // smaller: the capture follows what is shown, not the layout's size
   const zoom = opts.fullPage === true ? 1 : vv.scale > 0 && vv.scale < 1 ? vv.scale : 1;
+  // a session emulating a device scale captures at it: the image stays in CSS pixels
+  const device = opts.deviceScale !== undefined && opts.deviceScale > 0 ? opts.deviceScale : 1;
   for (const s of SCALES) {
     const scale = s * maxScale * zoom;
     if (scale * area.width < 16) break;
@@ -577,7 +579,7 @@ export async function captureFitting(
       const shot = await cdp.send("Page.captureScreenshot", {
         format: "jpeg",
         quality,
-        clip: { ...area, scale },
+        clip: { ...area, scale: scale / device },
         captureBeyondViewport: opts.fullPage === true,
       });
       const bytes = Buffer.from(shot.data, "base64");
@@ -1020,6 +1022,12 @@ export class BrowserSession {
   private readonly profileSessions = new Map<Page, Promise<CDPSession | undefined>[]>();
   /** Every agent request waits for this (a restore to desktop after hand back). */
   private viewportGate: Promise<void> = Promise.resolve();
+  /** The clipped captures queued or running (a profile change waits for them: see `capture`). */
+  private readonly captures = new Set<Promise<unknown>>();
+  /** The profile sessions that sent device metrics (a capture through one puts them back). */
+  private readonly withMetrics = new WeakSet<CDPSession>();
+  /** The newest clipped capture (they run one at a time). */
+  private captureTail: Promise<unknown> = Promise.resolve();
   private mobileUa: string | undefined;
   /** The pages' own user agent (given back when the phone profile ends). */
   private desktopUa: string | undefined;
@@ -1532,7 +1540,7 @@ export class BrowserSession {
     this.pages.set(id, page);
     // a page opened while the person shows the phone profile gets it too (after Playwright's own
     // setup of the page, which ran before the page event)
-    if (this.profile === "phone") void this.applyPhone(page);
+    if (this.profile === "phone") this.queueProfileChange(() => this.applyPhone(page));
     const refresh = () => {
       page
         .title()
@@ -2066,13 +2074,11 @@ export class BrowserSession {
     this.profile = profile;
     this.touchTranslator.reset();
     const pages = this.live().map(([, p]) => p);
-    const run = async () => {
+    this.queueProfileChange(async () => {
       if (profile === "phone") await Promise.all(pages.map((p) => this.applyPhone(p)));
       else await this.restoreAll();
       if (this.profile === profile) this.applied = profile;
-    };
-    const next = this.viewportGate.then(run, run);
-    this.viewportGate = next.catch(() => undefined);
+    });
     this.emit({ type: "state" });
     // once applied: the viewers' screencast restarts on the new size
     void this.viewportGate.then(() => this.emit({ type: "state" }));
@@ -2140,6 +2146,7 @@ export class BrowserSession {
         screenWidth: p.width,
         screenHeight: p.height,
       });
+      this.withMetrics.add(cdp);
       await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
       await cdp.send("Emulation.setUserAgentOverride", {
         userAgent: this.mobileUa ?? mobileUserAgent(""),
@@ -2172,6 +2179,7 @@ export class BrowserSession {
           screenWidth: VIEWPORT.width,
           screenHeight: VIEWPORT.height,
         })
+        .then(() => this.withMetrics.add(cdp))
         .catch(() => undefined);
       await cdp
         .send("Emulation.setTouchEmulationEnabled", { enabled: false })
@@ -2191,9 +2199,81 @@ export class BrowserSession {
    */
   private reapplyPhone(page: Page): void {
     if (this.profile !== "phone") return;
-    const run = () => this.applyPhone(page, true).then(() => undefined);
+    this.queueProfileChange(() => this.applyPhone(page, true));
+  }
+
+  /**
+   * Queues a change of the pages' device metrics in the profile chain (the viewport gate): it runs
+   * after the changes before it and once the clipped captures in flight are done (bounded: a
+   * capture of a page a JS dialog holds never answers).
+   */
+  private queueProfileChange(change: () => Promise<unknown>): void {
+    const run = async () => {
+      await this.bounded(Promise.allSettled([...this.captures]), []);
+      await change();
+    };
     const next = this.viewportGate.then(run, run);
-    this.viewportGate = next.catch(() => undefined);
+    this.viewportGate = next.then(
+      () => undefined,
+      () => undefined,
+    );
+  }
+
+  /**
+   * A clipped capture of a page (`captureFitting`, plugins#298). Chromium captures a clip by
+   * replacing the page's device emulation with a temporary one built from the capturing session's
+   * own metrics and, when done, puts back that session's metrics as they were at the start: from
+   * a session without metrics the page is left with none (at the view size of the start, the
+   * window's on macOS), a profile change in between is lost, and a second capture meanwhile reads
+   * the temporary metrics. So a capture goes through the page's metrics session, runs alone (each
+   * waits for the one before, bounded: a capture of a page a JS dialog holds never answers),
+   * starts once no profile change is queued, and a change waits for the captures queued before it.
+   */
+  async capture(
+    page: Page,
+    opts: { maxBytes: number; maxScale?: number; fullPage?: boolean },
+  ): Promise<JpegCapture | null> {
+    for (;;) {
+      const gate = this.viewportGate;
+      await gate;
+      if (gate === this.viewportGate) break;
+    }
+    const before = this.captureTail;
+    const shot = (async () => {
+      await this.bounded(before, undefined);
+      const cdp = await this.metricsSession(page);
+      if (cdp === undefined) throw new ActionError("failed", "The tab is gone.");
+      const scale = VIEWPORT_PROFILES[this.applied].scale;
+      return captureFitting(cdp, { ...opts, deviceScale: scale });
+    })();
+    this.captureTail = shot.catch(() => undefined);
+    this.captures.add(shot);
+    try {
+      return await shot;
+    } finally {
+      this.captures.delete(shot);
+    }
+  }
+
+  /**
+   * The session a page's captures go through: its profile session, holding the metrics of the
+   * profile applied (sent now if it never sent any). A capture puts back the metrics of its own
+   * session when done, so on this one it puts back the page's real metrics.
+   */
+  private async metricsSession(page: Page): Promise<CDPSession | undefined> {
+    const cdp = await this.profileSession(page);
+    if (cdp === undefined || this.withMetrics.has(cdp)) return cdp;
+    const p = VIEWPORT_PROFILES[this.applied];
+    await cdp.send("Emulation.setDeviceMetricsOverride", {
+      width: p.width,
+      height: p.height,
+      deviceScaleFactor: p.scale,
+      mobile: p.mobile,
+      screenWidth: p.width,
+      screenHeight: p.height,
+    });
+    this.withMetrics.add(cdp);
+    return cdp;
   }
 
   /** Every page that got the phone profile back on desktop. */
@@ -3268,25 +3348,20 @@ export class BrowserSession {
         const maxBytes = Math.min(MAX_SCREENSHOT_BYTES, Math.floor(req.maxBytes));
         if (!(maxBytes > 0))
           throw new ActionError("failed", "screenshot needs a positive maxBytes.");
-        const cdp = await this.ctx.newCDPSession(page);
-        try {
-          const shot = await captureFitting(cdp, {
-            maxBytes,
-            ...(req.fullPage === true ? { fullPage: true } : {}),
-          });
-          if (shot === null) {
-            throw new ActionError(
-              "failed",
-              `The page does not fit in a ${maxBytes}-byte screenshot even at the smallest size; use snapshot instead.`,
-            );
-          }
-          return {
-            image: shot.data,
-            text: `Screenshot ${shot.width}x${shot.height} (viewport ${VIEWPORT.width}x${VIEWPORT.height}).`,
-          };
-        } finally {
-          await cdp.detach().catch(() => undefined);
+        const shot = await this.capture(page, {
+          maxBytes,
+          ...(req.fullPage === true ? { fullPage: true } : {}),
+        });
+        if (shot === null) {
+          throw new ActionError(
+            "failed",
+            `The page does not fit in a ${maxBytes}-byte screenshot even at the smallest size; use snapshot instead.`,
+          );
         }
+        return {
+          image: shot.data,
+          text: `Screenshot ${shot.width}x${shot.height} (viewport ${VIEWPORT.width}x${VIEWPORT.height}).`,
+        };
       }
     }
     throw new ActionError(

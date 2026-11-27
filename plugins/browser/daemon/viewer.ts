@@ -15,14 +15,7 @@
 // owner of the tab it shows (they do not idle while it is open).
 
 import type { CDPSession, Page } from "playwright-core";
-import {
-  type BrowserSession,
-  captureFitting,
-  clip,
-  isStartBlank,
-  jpegSize,
-  type SessionEvent,
-} from "./actions.js";
+import { type BrowserSession, clip, isStartBlank, jpegSize, type SessionEvent } from "./actions.js";
 import { CursorResolver } from "./cursor.js";
 import {
   clipCodePoints,
@@ -774,7 +767,9 @@ export class ViewerSession {
     // holds never answers a capture: bounded, the screencast starts anyway.
     let timer: unknown;
     const first = await Promise.race([
-      captureFitting(cdp, { maxBytes: this.jpegBudget, maxScale: this.scale }).catch(() => null),
+      this.browser
+        .capture(page, { maxBytes: this.jpegBudget, maxScale: this.scale })
+        .catch(() => null),
       new Promise<null>((r) => {
         timer = this.clock.schedule(() => r(null), FIRST_FRAME_MS);
       }),
