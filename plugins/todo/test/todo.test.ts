@@ -5,7 +5,12 @@ import type {
   ToolHandler,
   ToolSpec,
 } from "@capybara-hq/plugin-sdk";
-import { CARD_TEXT_MAX, validateUiContributions, validateUiView } from "@capybara-hq/plugin-sdk";
+import {
+  CARD_BADGE_MAX,
+  CARD_TEXT_MAX,
+  validateUiContributions,
+  validateUiView,
+} from "@capybara-hq/plugin-sdk";
 import { createDualReplicaHarness, type Harness, startTestPostgres } from "@capybara-hq/testing";
 import { Kysely, PostgresDialect } from "kysely";
 import pg from "pg";
@@ -18,6 +23,7 @@ import todo, {
   tasksCardView,
   tasksSectionView,
   tasksView,
+  todosBadge,
   todosCardText,
   writeHandler,
 } from "../src/index.js";
@@ -195,6 +201,20 @@ describe("todo 插件", { timeout: 60_000 }, () => {
     expect(todosCardText([])).toBe("The todo list is empty.");
   });
 
+  it("the pinned card's badge is the views' badge, within CARD_BADGE_MAX, none on an empty list", () => {
+    const todos = [
+      { content: "Plan", status: "completed", activeForm: "Planning" },
+      { content: "Build", status: "in_progress", activeForm: "Building" },
+      { content: "Ship", status: "pending", activeForm: "Shipping" },
+    ] as const;
+    expect(todosBadge([...todos])).toBe("1/3");
+    expect(todosBadge([...todos])).toBe(tasksView([...todos]).badge);
+    expect(todosBadge([])).toBeUndefined();
+    const most = Array.from({ length: 100 }, () => ({ ...todos[0] }));
+    expect(todosBadge(most)).toBe("100/100");
+    expect((todosBadge(most) ?? "").length).toBeLessThanOrEqual(CARD_BADGE_MAX);
+  });
+
   it("the pinned card text is cut on whole items to CARD_TEXT_MAX", () => {
     const many = Array.from({ length: 100 }, (_, i) => ({
       content: `Step ${i} ${"x".repeat(40)}`,
@@ -239,6 +259,7 @@ describe("todo 插件", { timeout: 60_000 }, () => {
       key: expect.any(String),
       placement: "pinned",
       text: "Todos (0/2):\n\n- [ ] **Planning** (in progress)\n- [ ] Build",
+      badge: "0/2",
     });
     const key1 = card1?.key as string;
     expect(await readSnapshot(b, "conv-1", key1)).toEqual(first);
