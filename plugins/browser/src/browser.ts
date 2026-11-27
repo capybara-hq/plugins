@@ -44,7 +44,23 @@ export interface BrowserDeps {
   serviceSpec: () => Promise<DeviceServiceSpec>;
   /** Where the cause of an unrecognised failure goes (never to the model). */
   log?: { warn(msg: string, meta?: Record<string, unknown>): void };
+  /**
+   * How long one tool call keeps asking while the daemon answers `installing`, and its first
+   * pause (default {@link INSTALL_WAIT_MS} and {@link INSTALL_PAUSE_FIRST_MS}).
+   */
+  installWait?: { maxMs: number; firstPauseMs: number };
 }
+
+/**
+ * How long one tool call keeps asking a daemon that is installing the browser (it answers at
+ * once with the download's progress) before it passes that answer on: a short install finishes
+ * inside the call, a long one tells the model how far it got instead of a service timeout.
+ */
+export const INSTALL_WAIT_MS = 30_000;
+
+/** The first pause between those asks; they double up to {@link INSTALL_PAUSE_MAX_MS}. */
+export const INSTALL_PAUSE_FIRST_MS = 500;
+const INSTALL_PAUSE_MAX_MS = 4_000;
 
 /**
  * What the model is told when the daemon still restarts after a fresh browser install (its start
@@ -249,7 +265,10 @@ function failure(deps: BrowserDeps, call: ToolCallContext, e: unknown, starting:
  * exits: capybara-hq/plugins#209) starts the service again, reviewed like every start, at most
  * {@link RESTART_ATTEMPTS} times, all in this call: while `ensureService` still reports the old
  * process (its start time) no request goes to it, and a request failing while the new one comes
- * up is retried, both with growing pauses for at most {@link RESTART_WAIT_MS}.
+ * up is retried, both with growing pauses for at most {@link RESTART_WAIT_MS}. An `installing`
+ * reply (the daemon's first start is still downloading the browser, capybara-hq/plugins#311) is
+ * asked again with growing pauses for at most {@link INSTALL_WAIT_MS}, then passed on as an
+ * actionable error that says how far the download got.
  *
  * Every request carries the call's conversation and the root of its conversation tree, taken
  * from the kernel's tool call context and written after the operation, so no operation field
@@ -268,6 +287,13 @@ export async function runRequest(
   let exiting: { startedAt: string | null } | undefined;
   let waitUntil = 0;
   let pauseMs = RESTART_PAUSE_FIRST_MS;
+  // set at the first `installing` reply: when this call stops asking, and the next pause
+  const installWait = deps.installWait ?? {
+    maxMs: INSTALL_WAIT_MS,
+    firstPauseMs: INSTALL_PAUSE_FIRST_MS,
+  };
+  let installUntil: number | undefined;
+  let installPauseMs = installWait.firstPauseMs;
   const waitMore = async () => {
     if (call.signal.aborted || Date.now() + pauseMs > waitUntil) return false;
     await pause(pauseMs, call.signal);
@@ -305,6 +331,16 @@ export async function runRequest(
         if (!call.signal.aborted) throw new ToolError(RESTARTING_MESSAGE);
       }
       throw failure(deps, call, e, false);
+    }
+    // the daemon is installing the browser: asked again after a pause while this call may wait,
+    // else its answer (with the download's progress) goes to the model
+    if (!reply.ok && reply.error === "installing") {
+      installUntil ??= Date.now() + installWait.maxMs;
+      if (call.signal.aborted || Date.now() + installPauseMs > installUntil) break;
+      await pause(installPauseMs, call.signal);
+      installPauseMs = Math.min(installPauseMs * 2, INSTALL_PAUSE_MAX_MS);
+      if (call.signal.aborted) break;
+      continue;
     }
     if (reply.ok || reply.error !== "restart") break;
     if (restarts >= RESTART_ATTEMPTS) throw new ToolError(RESTARTING_MESSAGE);

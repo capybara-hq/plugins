@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -88,6 +88,62 @@ describe("browser daemon: a browser just installed into the install directory", 
     expect(await pending).toMatchObject({ ok: false, error: "restart" });
     // the reply is out: the daemon asks to exit (the next start runs the sealed browser)
     await expect.poll(() => sealed).toBeGreaterThan(0);
+  });
+});
+
+describe("browser daemon: a request while the first start installs the browser (plugins#311)", () => {
+  it("answers installing at once with the download's progress, then restart once sealed", async () => {
+    const install = mkdtempSync(join(tmpdir(), "cbd-inst-"));
+    const tmp = mkdtempSync(join(tmpdir(), "cbd-tmp-"));
+    cleanup.push(() => {
+      removeDir(install);
+      removeDir(tmp);
+    });
+    let release!: () => void;
+    const installing = new Promise<void>((r) => {
+      release = r;
+    });
+    let reportTotal!: () => void;
+    const stateDir = mkdtempSync(join(tmpdir(), "cbd-"));
+    const socketPath = join(stateDir, "sock");
+    // no browsersPath: the plan is the provider's unsealed install directory
+    const daemon = await startDaemon({
+      socketPath,
+      stateDir,
+      env: { CAPYBARA_SERVICE_INSTALL: install, TMPDIR: tmp },
+      installAnswerMs: 0,
+      launch: async (_plan, hooks) => {
+        reportTotal = () => hooks?.onDownloadTotal?.(10 * 1024 * 1024);
+        await installing;
+        throw new BrowserInstalledError();
+      },
+    });
+    daemon.ready.catch(() => undefined);
+    cleanup.push(async () => {
+      await daemon.close();
+      removeDir(stateDir);
+    });
+    // nothing downloaded yet
+    const first = await request(socketPath, { op: "navigate", url: "https://example.com/" });
+    expect(first).toMatchObject({ ok: false, error: "installing" });
+    expect(first.ok ? "" : first.message).toContain("starting the download");
+    // Playwright's zip in the service's temporary directory, and its size from the progress line
+    mkdirSync(join(tmp, "playwright-download-x1"));
+    writeFileSync(
+      join(tmp, "playwright-download-x1", "chromium.zip"),
+      Buffer.alloc(3 * 1024 * 1024),
+    );
+    reportTotal();
+    const second = await request(socketPath, { op: "snapshot" });
+    expect(second).toMatchObject({ ok: false, error: "installing" });
+    expect(second.ok ? "" : second.message).toContain("(3 of 10 MB downloaded)");
+    // sealed: the waiting and the next requests answer restart as before
+    release();
+    await expect(daemon.ready).rejects.toBeInstanceOf(BrowserInstalledError);
+    expect(await request(socketPath, { op: "snapshot" })).toMatchObject({
+      ok: false,
+      error: "restart",
+    });
   });
 });
 

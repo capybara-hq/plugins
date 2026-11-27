@@ -4,13 +4,16 @@
 //   It cannot be bundled: it forks lib/entry/oopBrowserDownload.js to install browsers and reads
 //   package.json, browsers.json and a wasm file next to itself. daemon.mjs imports it by relative
 //   path, so the directory needs no node_modules (which npm leaves out of published packages).
+// - capybara-install-key: the Chromium revisions it installs (daemon/install-key.ts), which a
+//   capybara-device with the machine-wide install cache keys the browser install by.
 // Every file under the output directory is one service file; the service entry is daemon.mjs.
 
-import { cpSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { browserInstallKey, INSTALL_KEY_FILE } from "./install-key.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -58,7 +61,9 @@ export async function buildDaemon(outDir = join(here, "..", "dist", "service")):
       return !VENDOR_SKIP.some((re) => re.test(rel));
     },
   });
-  process.stderr.write(`daemon built into ${outDir} (playwright-core ${version})\n`);
+  const key = browserInstallKey(readFileSync(join(pkgDir, "browsers.json"), "utf8"));
+  writeFileSync(join(outDir, INSTALL_KEY_FILE), `${key}\n`);
+  process.stderr.write(`daemon built into ${outDir} (playwright-core ${version}, ${key})\n`);
 }
 
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]) {

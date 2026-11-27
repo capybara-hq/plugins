@@ -27,6 +27,7 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEVICE_SERVICE_MACH_CHROMIUM, DEVICE_SERVICE_MACH_ENV } from "@capybara-hq/plugin-sdk";
 import type { BrowserContext } from "playwright-core";
+import { progressLineTotal } from "./install-progress.js";
 import { VIEWPORT } from "./protocol.js";
 
 /**
@@ -482,17 +483,51 @@ export async function ensureChromium(
   return executablePath;
 }
 
+/** What a launch reports while it installs the browser. */
+export interface LaunchHooks {
+  /** The size of the browser's download, once Playwright reports it. */
+  onDownloadTotal?: (bytes: number) => void;
+}
+
+/**
+ * Runs `fn` while Playwright's download progress lines (printed on stdout with console.log, the
+ * service's output) pass their total to `onTotal`; console.log is restored afterwards.
+ */
+async function withDownloadTotal<T>(
+  onTotal: ((bytes: number) => void) | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (onTotal === undefined) return fn();
+  const log = console.log;
+  console.log = (...args: unknown[]) => {
+    const total = progressLineTotal(args.map(String).join(" "));
+    if (total !== undefined) onTotal(total);
+    log.apply(console, args);
+  };
+  try {
+    return await fn();
+  } finally {
+    console.log = log;
+  }
+}
+
 /**
  * Installs (when needed) and launches Chromium on the plan's profile. Into the provider's unsealed
  * install directory it installs, seals it and throws {@link BrowserInstalledError} without
  * launching: a browser runs only from a place this process can no longer write.
  */
-export async function launchChromium(plan: LaunchPlan): Promise<BrowserContext> {
+export async function launchChromium(
+  plan: LaunchPlan,
+  hooks: LaunchHooks = {},
+): Promise<BrowserContext> {
   if (plan.unavailable !== undefined) throw new Error(plan.unavailable);
   if (plan.install?.sealed === false) {
     // unsealed: whatever is there was not installed by this process (the provider empties it at
-    // every unsealed start, this is the second line), so it is installed afresh before the seal
-    await ensureChromium(plan.browsersPath, true, plan.build, true);
+    // every unsealed start, or hands out a fresh directory; this is the second line), so it is
+    // installed afresh before the seal
+    await withDownloadTotal(hooks.onDownloadTotal, () =>
+      ensureChromium(plan.browsersPath, true, plan.build, true),
+    );
     sealInstall(plan.browsersPath);
     throw new BrowserInstalledError();
   }

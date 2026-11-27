@@ -476,7 +476,12 @@ export type ToolErrorCode =
   | "unreachable"
   | "network_unavailable"
   | "failed"
-  | "restart";
+  | "restart"
+  /**
+   * The daemon's first start is still installing the browser (download and unpacking): the
+   * message says how far it got; the plugin retries for a while, then passes it on.
+   */
+  | "installing";
 
 /**
  * The calling conversation's own tab count after the request, and MAX_TABS_PER_CONVERSATION. On

@@ -101,6 +101,16 @@ A real browser in the person's device for agents (browser use spec,
   else: without such a place the browser does not start and says how to get one (update
   capybara-device; recreate a cloud device on the current image). It never installs where it
   could rewrite the browser itself.
+- One browser download per machine and browser revision (plugins#311): the service files carry
+  `capybara-install-key` (both Chromium builds' revisions, e.g.
+  `chromium-1255+chromium-headless-shell-1255`). A capybara-device with the machine-wide install
+  cache keys the install directory by it, so a plugin upgrade that keeps the revisions, and every
+  other device of the same deployment and OS user, reuse the sealed browser (verified before each
+  reuse) instead of downloading it again; an older capybara-device ignores the file. While the
+  first start still installs, a request answers `installing` within 2 s with how far the download
+  got; the plugin asks again with growing pauses for at most 30 s within the tool call, then
+  passes that answer to the model ("The browser is being installed in the device (120 of 180 MB
+  downloaded) … Call the tool again in a moment.") instead of waiting into the service timeout.
 - Uploads are read by the daemon (opened without following a final link, accepted only when the
   resolved path lies in the workspace and names the very file opened) and handed to Chromium from
   memory, at most 50 MiB; downloads are copied from Playwright's private file into an exclusively

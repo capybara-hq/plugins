@@ -29,7 +29,12 @@ describe("chromium in the provider's install directory (plugins#209)", () => {
       };
       const registry = (mod.registry ?? mod.default?.registry)?.registry;
       if (registry === undefined) throw new Error("no registry");
+      const log = console.log;
       const install = vi.spyOn(registry, "install").mockImplementation(async () => {
+        // Playwright's progress line on stdout (no TTY): its total reaches the launch's hook
+        console.log(
+          "|                                                                                |   0% of 180.3 MiB",
+        );
         writeFileSync(executable, "fresh");
         writeFileSync(marker, "");
       });
@@ -38,7 +43,12 @@ describe("chromium in the provider's install directory (plugins#209)", () => {
         env,
         platform: process.platform,
       });
-      await expect(launchChromium(plan)).rejects.toBeInstanceOf(BrowserInstalledError);
+      const totals: number[] = [];
+      await expect(
+        launchChromium(plan, { onDownloadTotal: (b) => totals.push(b) }),
+      ).rejects.toBeInstanceOf(BrowserInstalledError);
+      expect(totals).toEqual([Math.round(180.3 * 1024 * 1024)]);
+      expect(console.log).toBe(log);
       expect(install).toHaveBeenCalledWith(expect.anything(), { gc: false, force: true });
       expect(readFileSync(executable, "utf8")).toBe("fresh");
       expect(existsSync(join(dir, ".sealed"))).toBe(true);
