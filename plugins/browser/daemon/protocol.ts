@@ -41,6 +41,10 @@
  */
 export const ROLL_CHECK_REQUEST = '{"capybara":"roll-check"}';
 
+/** A request of a conversation the kernel's notice deleted (or of its tree). */
+export const CONVERSATION_DELETED_MESSAGE =
+  "This conversation was deleted; its browser tabs are closed.";
+
 /**
  * The agent's viewport: every tool request runs on it (coordinates, screenshots). Only the person
  * may switch to the `phone` profile while holding control, and hand back restores this one before

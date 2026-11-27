@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BrowserSession, TabOwner } from "../../daemon/actions.js";
-import { SessionFile } from "../../daemon/session-file.js";
+import { SessionFile, withoutTree } from "../../daemon/session-file.js";
 import { DaemonState, systemClock } from "../../daemon/state.js";
 import { removeDir } from "./helpers.js";
 
@@ -120,5 +120,50 @@ describe("daemon session file", () => {
       JSON.stringify({ savedAt: Date.now(), tabs: ["https://a.test/"], active: 0 }),
     );
     expect(new SessionFile(dir, systemClock).read()).toBeUndefined();
+  });
+});
+
+describe("a deleted conversation in the session file", () => {
+  const saved = {
+    version: 2 as const,
+    savedAt: 1234,
+    tabs: [
+      { url: "https://a.test/", owner: "r", root: "r" },
+      { url: "https://x.test/", owner: "x", root: "x" },
+      { url: "https://s.test/", owner: "s", root: "r" },
+      { url: "https://y.test/", owner: "x", root: "x" },
+    ],
+    conversations: [
+      { id: "r", root: "r", active: 0 },
+      { id: "s", root: "r", handoff: { callId: "h", message: "m" } },
+      { id: "x", root: "x", active: 3 },
+    ],
+  };
+
+  it("drops the tree's tabs and conversations and re-points the kept active tabs", () => {
+    expect(withoutTree(saved, "r")).toEqual({
+      ...saved,
+      tabs: [
+        { url: "https://x.test/", owner: "x", root: "x" },
+        { url: "https://y.test/", owner: "x", root: "x" },
+      ],
+      conversations: [{ id: "x", root: "x", active: 1 }],
+    });
+    // nothing of the tree: the same object
+    expect(withoutTree(saved, "zz")).toBe(saved);
+  });
+
+  it("rewrites the file keeping its save time, and leaves an unreadable one alone", () => {
+    const dir = tmp();
+    const file = join(dir, "session.json");
+    writeFileSync(file, JSON.stringify(saved));
+    const f = new SessionFile(dir, systemClock);
+    f.dropTree("r");
+    const after = JSON.parse(readFileSync(file, "utf8"));
+    expect(after.savedAt).toBe(1234);
+    expect(after.conversations).toEqual([{ id: "x", root: "x", active: 1 }]);
+    writeFileSync(file, "not json");
+    f.dropTree("x");
+    expect(readFileSync(file, "utf8")).toBe("not json");
   });
 });

@@ -352,6 +352,34 @@ export class DaemonState {
     this.emit();
   }
 
+  // ---- deleted conversations
+
+  /**
+   * Forgets a deleted conversation and every conversation whose tree root it is (the kernel's
+   * conversation-deleted notice): their requests' counts, pins, parks (tab parks included),
+   * handoffs, hand back notes and idle countdowns, as the idle close does and more (a deleted
+   * conversation keeps no park). Returns the conversations it forgot.
+   */
+  forgetTree(conversationId: string): string[] {
+    const gone: string[] = [];
+    for (const [id, e] of this.conversations) {
+      if (id !== conversationId && e.root !== conversationId) continue;
+      if (e.idleTimer !== undefined) this.clock.cancel(e.idleTimer);
+      e.idleTimer = undefined;
+      gone.push(id);
+    }
+    for (const id of [conversationId, ...gone]) {
+      this.conversations.delete(id);
+      this.notes.delete(id);
+      this.concerned.delete(id);
+    }
+    if (gone.length > 0) {
+      this.armIdle();
+      this.emit();
+    }
+    return gone;
+  }
+
   // ---- takeover
 
   /**
