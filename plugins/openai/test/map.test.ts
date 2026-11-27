@@ -34,8 +34,38 @@ describe("buildRequest: fixed parameters", () => {
     expect(params.model).toBe("gpt-5.5");
     expect(params.instructions).toBe("stable\n\nvolatile");
     expect(params.input).toEqual([{ role: "user", content: [{ type: "input_text", text: "Hi" }] }]);
-    // 缓存是自动的：不发任何缓存标记
+    // caching is automatic: no cache markers
     expect(JSON.stringify(params)).not.toContain("cache_control");
+  });
+
+  it("prompt_cache_key: one per org and system prompt, fixed as the conversation grows", () => {
+    const key = (req: ModelRequest, orgId?: string) =>
+      buildRequest(req, REASONING, orgId !== undefined ? { orgId } : {}).prompt_cache_key;
+    const k = key(base(), "org-a");
+    expect(k).toMatch(/^cap-[0-9a-f]{32}$/);
+    // another conversation of the same agent, and a longer history, share the key
+    expect(
+      key(
+        base({ messages: [{ role: "user", content: [{ type: "text", text: "Other" }] }] }),
+        "org-a",
+      ),
+    ).toBe(k);
+    expect(
+      key(
+        base({
+          messages: [
+            ...base().messages,
+            { role: "assistant", content: [{ type: "text", text: "Hello" }] },
+            { role: "user", content: [{ type: "text", text: "More" }] },
+          ],
+        }),
+        "org-a",
+      ),
+    ).toBe(k);
+    expect(key(base(), "org-b")).not.toBe(k);
+    expect(key(base())).not.toBe(k);
+    expect(key(base({ system: [{ text: "Another agent.", cache: true }] }), "org-a")).not.toBe(k);
+    expect(String(k)).not.toContain("org-a");
   });
 
   it("no instructions when there is no system text", () => {

@@ -160,12 +160,18 @@ const aborted = () => new ModelError("aborted", "Request aborted");
 export async function* streamResponses(
   client: OpenAI,
   req: ModelRequest,
-  opts: { signal: AbortSignal; traits: ModelTraits },
+  opts: { signal: AbortSignal; traits: ModelTraits; orgId?: string },
 ): AsyncGenerator<ModelStreamEvent> {
   const { signal } = opts;
   if (signal.aborted) throw aborted();
   const open = () =>
-    client.responses.create({ ...buildRequest(req, opts.traits), stream: true }, { signal });
+    client.responses.create(
+      {
+        ...buildRequest(req, opts.traits, opts.orgId !== undefined ? { orgId: opts.orgId } : {}),
+        stream: true,
+      },
+      { signal },
+    );
   let stream: Awaited<ReturnType<typeof open>> | undefined;
   try {
     stream = await open();
