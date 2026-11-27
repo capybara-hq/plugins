@@ -190,7 +190,7 @@ describe("anthropic org-overridable config", () => {
     });
     expect(server.requests.length - before).toBe(2);
     expect([...kv.store.keys()].sort()).toEqual(
-      [`models:v4:${hash(a)}:claude-haiku-5-5`, `models:v4:${hash(b)}:claude-haiku-5-5`].sort(),
+      [`models:v5:${hash(a)}:claude-haiku-5-5`, `models:v5:${hash(b)}:claude-haiku-5-5`].sort(),
     );
     // each reads its own entry back
     await p.listModels({

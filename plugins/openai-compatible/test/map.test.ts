@@ -480,7 +480,13 @@ describe("usage", () => {
         total_tokens: 107,
         prompt_tokens_details: { cached_tokens: 20, cache_creation_input_tokens: 30 } as never,
       }),
-    ).toEqual({ inputTokens: 50, outputTokens: 7, cacheReadTokens: 20, cacheWriteTokens: 30 });
+    ).toEqual({
+      inputTokens: 50,
+      outputTokens: 7,
+      cacheReadTokens: 20,
+      cacheWriteTokens: 30,
+      cacheWriteByTtl: [{ ttl: 300, tokens: 30 }],
+    });
   });
 
   it("ark: prompt_tokens minus prompt_tokens_details.cached_tokens, no cache write", () => {

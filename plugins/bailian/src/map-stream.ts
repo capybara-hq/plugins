@@ -100,6 +100,11 @@ export interface RawUsage {
   prompt_tokens_details?: {
     cached_tokens?: number;
     cache_creation_input_tokens?: number;
+    /** Qwen4: the written tokens by TTL tier. */
+    cache_creation?: {
+      ephemeral_5m_input_tokens?: number;
+      ephemeral_1h_input_tokens?: number;
+    };
   };
 }
 
@@ -108,11 +113,23 @@ const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0
 export function usageOf(raw: RawUsage | null): ModelUsage {
   const cached = num(raw?.prompt_tokens_details?.cached_tokens);
   const written = num(raw?.prompt_tokens_details?.cache_creation_input_tokens);
+  const tiers = raw?.prompt_tokens_details?.cache_creation;
+  const m5 = num(tiers?.ephemeral_5m_input_tokens);
+  const h1 = num(tiers?.ephemeral_1h_input_tokens);
+  // Only a split that sums to the written tokens is reported
+  const byTtl =
+    m5 + h1 > 0 && m5 + h1 === written
+      ? [
+          ...(m5 > 0 ? [{ ttl: 300, tokens: m5 }] : []),
+          ...(h1 > 0 ? [{ ttl: 3600, tokens: h1 }] : []),
+        ]
+      : [];
   return {
     inputTokens: Math.max(0, num(raw?.input_tokens) - cached - written),
     outputTokens: num(raw?.output_tokens),
     cacheReadTokens: cached,
     cacheWriteTokens: written,
+    ...(byTtl.length > 0 ? { cacheWriteByTtl: byTtl } : {}),
   };
 }
 

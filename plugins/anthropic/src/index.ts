@@ -20,6 +20,7 @@ import {
   ui,
 } from "@capybara-hq/plugin-sdk";
 import { z } from "zod";
+import { cacheInfoOf } from "./cache.js";
 import { toModelError } from "./errors.js";
 import type { ServerFallbacks } from "./map-request.js";
 import { streamMessages } from "./map-stream.js";
@@ -70,10 +71,10 @@ const trimSlashes = (url: string) => url.replace(/\/+$/, "");
  * expire by TTL). v3: `capabilities.documents`. v4: keyed by the endpoint too (sha256 of the base
  * URL, trailing slashes ignored): `ctx.kv` is extension-wide, so an org's own endpoint must not
  * write entries other orgs read. Keyed by endpoint, not by API key: entries hold capability
- * metadata only, never anything a key grants.
+ * metadata only, never anything a key grants. v5: `cache`.
  */
 const modelCacheKey = (baseUrl: string, id: string) =>
-  `models:v4:${createHash("sha256").update(trimSlashes(baseUrl)).digest("hex")}:${id}`;
+  `models:v5:${createHash("sha256").update(trimSlashes(baseUrl)).digest("hex")}:${id}`;
 /** 思考阶段可能长时间不发事件。 */
 const STREAM_IDLE_TIMEOUT_MS = 300_000;
 const FALLBACK_CONTEXT_WINDOW = 200_000;
@@ -154,6 +155,7 @@ function mapModelInfo(m: Anthropic.ModelInfo): ModelInfo {
       midConversationSystem: false,
     },
     streamIdleTimeoutMs: STREAM_IDLE_TIMEOUT_MS,
+    cache: cacheInfoOf(m.id),
     parameters: parametersOf(effortLevels(caps?.effort), adaptive),
   };
 }

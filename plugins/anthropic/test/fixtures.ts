@@ -18,6 +18,7 @@ interface Usage {
   output_tokens: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
+  cache_creation?: { ephemeral_5m_input_tokens: number; ephemeral_1h_input_tokens: number };
 }
 
 const chunks = (s: string, n: number): string[] => {
@@ -53,6 +54,7 @@ export function sseMessage(opts: {
           output_tokens: 1,
           cache_read_input_tokens: opts.usage.cache_read_input_tokens ?? 0,
           cache_creation_input_tokens: opts.usage.cache_creation_input_tokens ?? 0,
+          ...(opts.usage.cache_creation ? { cache_creation: opts.usage.cache_creation } : {}),
         },
       },
     }),
@@ -141,6 +143,7 @@ export function sseMessage(opts: {
         output_tokens: opts.usage.output_tokens,
         cache_read_input_tokens: opts.usage.cache_read_input_tokens ?? 0,
         cache_creation_input_tokens: opts.usage.cache_creation_input_tokens ?? 0,
+        ...(opts.usage.cache_creation ? { cache_creation: opts.usage.cache_creation } : {}),
       },
     }),
   );

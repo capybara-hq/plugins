@@ -9,6 +9,7 @@ import {
 import type { ArkEndpoint } from "./endpoints.js";
 import { fetchError, httpError } from "./errors.js";
 import {
+  cacheMinTokens,
   cachesAutomatically,
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_OUTPUT,
@@ -190,6 +191,20 @@ function mapModel(raw: RawModel, id: string, kind: ModelKind): ModelInfo {
       // `[system]` user turns, see map-request.ts
       midConversationSystem: false,
     },
+    ...(cachesAutomatically(id, raw.features?.cache)
+      ? {
+          // implicit: Volcengine stores prefixes on its own, no lifetime to choose, hits not promised
+          cache: {
+            mechanism: "implicit" as const,
+            ttlOptions: [],
+            ttlIsMinimum: false,
+            refreshOnHit: false,
+            ttlClock: "unknown" as const,
+            minTokens: cacheMinTokens(id),
+            guaranteed: false,
+          },
+        }
+      : {}),
     ...(reasoning ? { streamIdleTimeoutMs: REASONING_IDLE_TIMEOUT_MS } : {}),
     parameters: params,
   };

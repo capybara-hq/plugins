@@ -27,6 +27,22 @@ const gpt = (id: string, over: Partial<ModelConfig> = {}): ModelConfig => ({
 });
 
 // ---- 夹具模式 ----
+describeModelProviderConformance("openai (fixtures, GPT-5.6)", async () => {
+  const server = await startFakeModelServer(openaiRoutes());
+  return {
+    plugin: "openai",
+    provider: createOpenAIProvider({
+      netFetch: refusingNetFetch,
+      apiKey: "sk-fixture",
+      baseUrl: `${server.url}/v1`,
+      models: [gpt("gpt-5.6-luna", { documents: true })],
+    }),
+    model: "gpt-5.6-luna",
+    expect: { thinking: true, caching: true },
+    teardown: () => server.stop(),
+  };
+});
+
 describeModelProviderConformance("openai (fixtures)", async () => {
   const server = await startFakeModelServer(openaiRoutes());
   return {
@@ -41,7 +57,7 @@ describeModelProviderConformance("openai (fixtures)", async () => {
     model: "gpt-5.5",
     expect: {
       thinking: true,
-      caching: false /* P2–P7 declare the cache */,
+      caching: true,
       imageGeneration: { model: "gpt-image-1-mini" },
     },
     teardown: () => server.stop(),
@@ -67,7 +83,8 @@ describe.skipIf(!LIVE_KEY || !LIVE_MODEL)("live", { timeout: 120_000 }, () => {
       models: [gpt(LIVE_MODEL ?? "", { documents: true })],
     }),
     model: LIVE_MODEL ?? "",
-    expect: { thinking: true, caching: false /* P2–P7 declare the cache */ },
+    // the live model is expected to be GPT-5.6 or later, which caches with a lifetime floor
+    expect: { thinking: true, caching: true },
     teardown: async () => {},
   }));
 });
@@ -761,6 +778,15 @@ describe("openai: errors and edge cases", () => {
           midConversationSystem: true,
           documents: false,
         },
+        cache: {
+          mechanism: "implicit",
+          ttlOptions: [],
+          ttlIsMinimum: false,
+          refreshOnHit: false,
+          ttlClock: "unknown",
+          minTokens: 1024,
+          guaranteed: false,
+        },
         parameters: [
           {
             key: "effort",
@@ -791,6 +817,15 @@ describe("openai: errors and edge cases", () => {
           documents: false,
         },
         streamIdleTimeoutMs: 60_000,
+        cache: {
+          mechanism: "implicit",
+          ttlOptions: [],
+          ttlIsMinimum: false,
+          refreshOnHit: false,
+          ttlClock: "unknown",
+          minTokens: 1024,
+          guaranteed: false,
+        },
         parameters: [],
       },
     ]);

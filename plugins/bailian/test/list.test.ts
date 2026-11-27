@@ -1,4 +1,4 @@
-import { isModelError, type ModelInfo } from "@capybara-hq/plugin-sdk";
+import { isModelError, type ModelInfo, validateModelCache } from "@capybara-hq/plugin-sdk";
 import { checkDeclaredParameters, startFakeModelServer } from "@capybara-hq/testing";
 import { describe, expect, it, vi } from "vitest";
 import { createBailianProvider } from "../src/index.js";
@@ -71,6 +71,42 @@ describe("listModels", () => {
       minimum: 0,
       maximum: 1.99,
     });
+  });
+
+  it("declares the explicit prompt cache of chat models with the cache feature", async () => {
+    const { list } = await listWith();
+    expect(byId(list, "qwen-flash")?.cache).toEqual({
+      mechanism: "explicit",
+      ttlOptions: [300],
+      defaultTtl: 300,
+      ttlIsMinimum: false,
+      refreshOnHit: true,
+      ttlClock: "unknown",
+      minTokens: 1024,
+      guaranteed: true,
+    });
+    expect(byId(list, "qwen3.8-flash")?.cache).toMatchObject({
+      ttlOptions: [300],
+      refreshOnHit: true,
+    });
+    // Qwen4 also takes the 1 h option; a hit renewal within the hour is unverified
+    expect(byId(list, "qwen4-max")?.cache).toEqual({
+      mechanism: "explicit",
+      ttlOptions: [300, 3600],
+      defaultTtl: 300,
+      ttlIsMinimum: false,
+      refreshOnHit: false,
+      ttlClock: "unknown",
+      minTokens: 1024,
+      guaranteed: true,
+    });
+    for (const m of list) if (m.cache !== undefined) expect(validateModelCache(m.cache)).toBeNull();
+  });
+
+  it("declares no cache without the cache feature, and on no other kind", async () => {
+    const { list } = await listWith();
+    expect(byId(list, "deepseek-v4-pro")?.cache).toBeUndefined();
+    for (const m of list.filter((x) => x.kind !== "chat")) expect(m.cache).toBeUndefined();
   });
 
   it("maps a plain chat model and a hosted vendor's model", async () => {

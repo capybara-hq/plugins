@@ -1,4 +1,4 @@
-import { assertValidDeclarations, isModelError } from "@capybara-hq/plugin-sdk";
+import { assertValidDeclarations, isModelError, validateModelCache } from "@capybara-hq/plugin-sdk";
 import {
   type FakeModelServer,
   type FakeRequest,
@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import extension, { createArkProvider } from "../src/index.js";
 import { signV4 } from "../src/sign.js";
-import { cachesAutomatically } from "../src/tables.js";
+import { cacheMinTokens, cachesAutomatically } from "../src/tables.js";
 import {
   DEEPSEEK,
   EMBED,
@@ -134,6 +134,36 @@ describe("ark listModels", () => {
     ).toBe(false);
     expect(cachesAutomatically("deepseek-v4-pro-ga-260813", undefined)).toBe(true);
     expect(cachesAutomatically("mystery-chat-260101", null)).toBe(false);
+  });
+
+  it("declares the implicit cache on the chat models that cache automatically", async () => {
+    next = () => ({ status: 200, json: MODELS_BODY });
+    const models = await provider().listModels();
+    const by = (id: string) => models.find((m) => m.id === id);
+    const implicit = {
+      mechanism: "implicit",
+      ttlOptions: [],
+      ttlIsMinimum: false,
+      refreshOnHit: false,
+      ttlClock: "unknown",
+      guaranteed: false,
+    };
+    // 2048 measured live on deepseek-v4-flash-ga-260731; 1024 is the default
+    expect(by(DEEPSEEK)?.cache).toEqual({ ...implicit, minTokens: 2048 });
+    expect(by(SEED)?.cache).toEqual({ ...implicit, minTokens: 1024 });
+    // no features.cache and not a DeepSeek model
+    expect(by("mystery-chat-260101")?.cache).toBeUndefined();
+    expect(by(EMBED)?.cache).toBeUndefined();
+    expect(models.find((m) => m.kind === "image_generation")?.cache).toBeUndefined();
+    for (const m of models) expect(validateModelCache(m.cache)).toBeNull();
+  });
+
+  it("knows the per-model minimum cacheable prefix", () => {
+    expect(cacheMinTokens("deepseek-v4-1-flash-261017")).toBe(128);
+    expect(cacheMinTokens("kimi-k3-1-pro-261024")).toBe(256);
+    expect(cacheMinTokens("glm-5-2-260617")).toBe(2048);
+    expect(cacheMinTokens("glm-5-3-flash-260828")).toBe(8960);
+    expect(cacheMinTokens("doubao-seed-2-1-pro-260915")).toBe(1024);
   });
 
   it("lists the multimodal embedding models with the bundled facts", async () => {

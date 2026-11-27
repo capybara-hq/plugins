@@ -15,6 +15,7 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import type OpenAI from "openai";
 import { z } from "zod";
+import { cacheInfo } from "./cache.js";
 import { generateOpenAIImage, imageModelInfo, KNOWN_IMAGE_MODEL_IDS } from "./image.js";
 import { streamResponses } from "./map-stream.js";
 import { isolatedOpenAI } from "./openai-client.js";
@@ -134,12 +135,13 @@ function modelInfo(m: ModelConfig, reasoningSummary: "auto" | "off"): ModelInfo 
       tools: true,
       vision: m.vision,
       reasoning: m.reasoning,
-      // 前缀缓存是自动的
+      // Prefix caching is automatic; `cache` below declares its lifetime
       // 中途 system 以 developer 输入项实现
       midConversationSystem: true,
       documents: m.documents ?? false,
     },
     ...(m.streamIdleTimeoutMs !== undefined ? { streamIdleTimeoutMs: m.streamIdleTimeoutMs } : {}),
+    cache: cacheInfo(m.id),
     parameters: m.reasoning ? reasoningParameters(m, reasoningSummary) : [],
   };
 }

@@ -1,11 +1,13 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import {
+  type CacheWriteByTtl,
   type ContentBlock,
   ModelError,
   type ModelRequest,
   type ModelStreamEvent,
   type StopReason,
 } from "@capybara-hq/plugin-sdk";
+import { writeByTtlOf } from "./cache.js";
 import { toModelError } from "./errors.js";
 import { type BuiltRequest, buildRequest, PROVIDER, type ServerFallbacks } from "./map-request.js";
 
@@ -83,7 +85,13 @@ class MessageAccumulator {
   stopReason: string | null = null;
   started = false;
   stopped = false;
-  readonly usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  readonly usage: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    byTtl: CacheWriteByTtl[] | undefined;
+  } = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, byTtl: undefined };
   readonly blocks = new Map<number, BlockAcc>();
 
   add(ev: StreamEvent): void {
@@ -96,6 +104,7 @@ class MessageAccumulator {
         this.usage.output = u.output_tokens ?? 0;
         this.usage.cacheRead = u.cache_read_input_tokens ?? 0;
         this.usage.cacheWrite = u.cache_creation_input_tokens ?? 0;
+        this.usage.byTtl = writeByTtlOf(u.cache_creation);
         break;
       }
       case "content_block_start": {
@@ -197,6 +206,10 @@ class MessageAccumulator {
           break;
       }
     }
+    const byTtl =
+      this.usage.byTtl?.reduce((n, e) => n + e.tokens, 0) === this.usage.cacheWrite
+        ? this.usage.byTtl
+        : undefined;
     return {
       type: "message_complete",
       content,
@@ -207,6 +220,8 @@ class MessageAccumulator {
         outputTokens: this.usage.output,
         cacheReadTokens: this.usage.cacheRead,
         cacheWriteTokens: this.usage.cacheWrite,
+        // The split comes from message_start; a later total that disagrees with it voids the split
+        ...(byTtl ? { cacheWriteByTtl: byTtl } : {}),
       },
     };
   }

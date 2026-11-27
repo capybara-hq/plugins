@@ -8,6 +8,8 @@ import {
   type ModelRequest,
 } from "@capybara-hq/plugin-sdk";
 
+import { cacheControlOf } from "./cache.js";
+
 export const PROVIDER = "anthropic";
 export const SERVER_FALLBACK_BETA = "server-side-fallback-2026-07-01";
 
@@ -189,7 +191,7 @@ export function buildRequest(
     params.system = req.system.map((s) => {
       if (!s.cache) return { type: "text", text: s.text };
       breakpoints++;
-      return { type: "text", text: s.text, cache_control: { type: "ephemeral" } };
+      return { type: "text", text: s.text, cache_control: cacheControlOf(req.cacheTtl) };
     });
   }
   // 历史缓存：用顶层自动 cache_control（API 把断点放在最后一个可缓存的块上），而不是给最后一条消息的
@@ -197,7 +199,7 @@ export function buildRequest(
   // 违反「发给模型的历史只追加」（较早请求的 messages 必须是较晚请求的逐字节前缀）。
   // 顶层断点也占用一个名额：system 已用满 4 个时不加。
   if (params.messages.length > 0 && breakpoints < MAX_CACHE_BREAKPOINTS) {
-    params.cache_control = { type: "ephemeral" };
+    params.cache_control = cacheControlOf(req.cacheTtl);
   }
   const effort = req.params.effort;
   // 取值已由内核按声明（Models API 给出的档位）处理过

@@ -1,4 +1,8 @@
-import type { ModelEmbeddingInfo, ModelImageGenerationInfo } from "@capybara-hq/plugin-sdk";
+import type {
+  ModelCacheInfo,
+  ModelEmbeddingInfo,
+  ModelImageGenerationInfo,
+} from "@capybara-hq/plugin-sdk";
 
 /** The plugin's name: the `provider` of its opaque blocks and the vendor parameter prefix. */
 export const PROVIDER = "bailian";
@@ -210,3 +214,32 @@ export const IMAGE_MODELS: Readonly<Record<string, ImageModelInfo>> = {
 /** Task polling: the first wait, doubled per poll up to the cap (all inside one call). */
 export const IMAGE_POLL_INITIAL_MS = 1000;
 export const IMAGE_POLL_MAX_MS = 5000;
+
+/**
+ * The explicit prompt cache of a chat model with the list's `cache` feature (live 2026-11-28): a
+ * 5-minute entry whose every hit restarts the 5 minutes, created from 1024 tokens, with the
+ * written tokens reported.
+ */
+export const CACHE_5M: Readonly<ModelCacheInfo> = {
+  mechanism: "explicit",
+  ttlOptions: [300],
+  defaultTtl: 300,
+  ttlIsMinimum: false,
+  refreshOnHit: true,
+  ttlClock: "unknown",
+  minTokens: 1024,
+  guaranteed: true,
+};
+
+/**
+ * Qwen4 models also take the 1 h option on the native endpoint (live 2026-11-28). Whether a hit
+ * within the hour renews the 1 h entry is unverified, so `refreshOnHit` is false.
+ */
+export const CACHE_5M_1H: Readonly<ModelCacheInfo> = {
+  ...CACHE_5M,
+  ttlOptions: [300, 3600],
+  refreshOnHit: false,
+};
+
+/** The 1 h option of a request, as the native `parameters.prompt_cache_options.ttl`. */
+export const CACHE_TTL_1H_SECONDS = 3600;

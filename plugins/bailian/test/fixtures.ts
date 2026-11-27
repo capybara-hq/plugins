@@ -54,6 +54,18 @@ export const SPECIAL_MODELS: RawModel[] = [
     inference_offline_info: null,
   },
   {
+    // Qwen4: the native endpoint accepts the 1 h cache option (live 2026-11-28)
+    model: "qwen4-max",
+    name: "Qwen4-Max",
+    provider: "qwen",
+    inference_provider: "aliyun-bailian",
+    capabilities: ["TG", "VU", "Reasoning"],
+    features: ["function-calling", "cache"],
+    inference_metadata: vision,
+    model_info: limits(1_000_000, 65_536),
+    inference_offline_info: null,
+  },
+  {
     model: "qwen-flash",
     name: "Qwen-Flash",
     description: "速度快、成本低",
@@ -418,12 +430,23 @@ export function bailianRoutes(
     if (cached !== undefined) {
       const key = String(cached.text);
       const n = Math.ceil(key.length / 4);
+      const hit = cacheSeen.has(key);
+      const oneHour = (body.parameters.prompt_cache_options as { ttl?: string } | undefined)?.ttl;
+      // Qwen4 reports the written tokens by TTL tier
+      const split = body.model.startsWith("qwen4")
+        ? {
+            cache_creation: {
+              ephemeral_5m_input_tokens: !hit && oneHour !== "1h" ? n : 0,
+              ephemeral_1h_input_tokens: !hit && oneHour === "1h" ? n : 0,
+            },
+          }
+        : {};
       usage = {
         input_tokens: n + 10,
         output_tokens: 5,
-        prompt_tokens_details: cacheSeen.has(key)
-          ? { cached_tokens: n, cache_creation_input_tokens: 0 }
-          : { cached_tokens: 0, cache_creation_input_tokens: n },
+        prompt_tokens_details: hit
+          ? { cached_tokens: n, cache_creation_input_tokens: 0, ...split }
+          : { cached_tokens: 0, cache_creation_input_tokens: n, ...split },
       };
       cacheSeen.add(key);
     }

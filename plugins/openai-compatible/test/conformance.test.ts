@@ -14,6 +14,7 @@ import {
   startFakeModelServer,
 } from "@capybara-hq/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { DIALECTS } from "../src/dialects.js";
 import plugin, {
   createOpenAICompatibleProvider,
   type EndpointConfig,
@@ -58,7 +59,10 @@ for (const dialect of ["generic", "deepseek", "qwen", "ark"] as const) {
         apiKeys: { [dialect]: "sk-fixture" },
       }),
       model: `${dialect}/${m.id}`,
-      expect: { thinking: dialect !== "generic", caching: false /* P2–P7 declare the cache */ },
+      expect: {
+        thinking: dialect !== "generic",
+        caching: dialect === "deepseek" || dialect === "qwen",
+      },
       teardown: () => server.stop(),
     };
   });
@@ -105,11 +109,11 @@ describe.skipIf(!liveReady)("live", { timeout: 120_000 }, () => {
         apiKeys: { live: LIVE.apiKey ?? "" },
       }),
       model: `live/${LIVE.model}`,
-      // DeepSeek's disk cache and Qwen's explicit markers hit a repeated prefix reliably; the
-      // other services' implicit caches do not guarantee a hit
+      // Only dialects that declare a cache can hit one: DeepSeek's disk cache and Qwen's explicit
+      // markers hit a repeated prefix reliably; Ark's implicit cache does not guarantee a hit
       expect: {
         thinking: dialect !== "generic",
-        caching: dialect === "deepseek" || dialect === "qwen",
+        caching: DIALECTS[dialect].cache !== undefined && dialect !== "ark",
       },
       cachePrefixTokens: 2000,
       teardown: async () => {},
