@@ -169,7 +169,7 @@
     },
     {
       "name": "openai",
-      "version": "0.1.0-rc.13",
+      "version": "0.1.0-rc.14",
       "summary": {
         "en": "OpenAI model provider (model-provider@2) using the official SDK and the native Responses API"
       },
@@ -195,14 +195,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-openai",
-          "version": "0.1.0-rc.13",
-          "integrity": "sha512-96cLlSSDPNlAjeFjHYYVfupqUDYYmePMThmB1nhwDoNO15F3OXEUECRGUR8PbUSjjthZTQ7gmb+HfCx9CqBweg=="
+          "version": "0.1.0-rc.14",
+          "integrity": "sha512-Ybde3qfkz0PruixbxzgxrlVYTahz2eplRj4ioeTP20yFQcoPTLbm5hoBuj64nZTKlvTtmYQ+gvK6ofYUWY2NTw=="
         }
       }
     },
     {
       "name": "openai-compatible",
-      "version": "0.1.0-rc.13",
+      "version": "0.1.0-rc.14",
       "summary": {
         "en": "Model provider (model-provider@2) for Chat Completions-compatible services (vLLM, DeepSeek, Qwen, ...) using the official openai SDK"
       },
@@ -223,8 +223,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-openai-compatible",
-          "version": "0.1.0-rc.13",
-          "integrity": "sha512-IXdGfR9nhUXFWcF+3Bpmemn6M2e/EgC7x1jhKg84H23vKANviVcGvyTugyAjyd7K3vd0DD8aYAW1CMnTksUpJg=="
+          "version": "0.1.0-rc.14",
+          "integrity": "sha512-BbB4lSBy4kEZA2kLOBDz00oOOjmQ4IaPPthmho00M15ZGcvDRMTuilw+244lbYPALZ3Kxzo1zNPWFI8STqUyDw=="
         }
       }
     },
@@ -339,7 +339,7 @@
     },
     {
       "name": "ark",
-      "version": "0.1.0-rc.13",
+      "version": "0.1.0-rc.14",
       "summary": {
         "en": "Model provider (model-provider@2) for Volcengine Ark chat, embedding and image generation models",
         "zh": "火山方舟对话、嵌入与图片生成模型（model-provider@2）"
@@ -371,14 +371,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-ark",
-          "version": "0.1.0-rc.13",
-          "integrity": "sha512-dmS7jJcPGTsWBzRC8rIe5T/GUrqfNNzlQeS5iIfoZdXGNPJqNrylHLp12eRZspaTPkZzpGgowV0MOhiQvwDzMA=="
+          "version": "0.1.0-rc.14",
+          "integrity": "sha512-sMyvv8eTeOHnR5WzxRxdYCXMnIn3uiS1kQokSFvojWy8Jk70t/kqMshUgisL+Tl8g3C0SFGwJYqvonWK+NI2jQ=="
         }
       }
     },
     {
       "name": "bailian",
-      "version": "0.1.0-rc.12",
+      "version": "0.1.0-rc.13",
       "summary": {
         "en": "Model provider (model-provider@2) for Alibaba Cloud Model Studio (Bailian) chat, embedding and image generation models",
         "zh": "阿里云百炼对话、嵌入与图片生成模型（model-provider@2）"
@@ -415,8 +415,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-bailian",
-          "version": "0.1.0-rc.12",
-          "integrity": "sha512-bEO6UTSlFJq5F+4ht/FQtgM2pOhRzaVY2+URWegR7lZ7utd9AhkTEoRAFnECUq3e7kI7/pJMoNyNX6KTMd9Xpw=="
+          "version": "0.1.0-rc.13",
+          "integrity": "sha512-TglGdOPeJTUVSxm+KQOdWDrxRnjhFVEatvfQFVkSwOElxocNyEFBm7K3GSQmmuY2ISgxJQceA7Yvjlb0JNpKiA=="
         }
       }
     },
