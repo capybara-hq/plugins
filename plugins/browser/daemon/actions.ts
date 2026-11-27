@@ -1250,16 +1250,42 @@ export class BrowserSession {
    */
   async closeConversation(conversationId: string): Promise<void> {
     const ids = this.tabsOf(conversationId).filter((id) => !this.usage.tabParked(id));
+    await this.closeAndForget([conversationId], ids);
+  }
+
+  /**
+   * Closes every tab of a deleted conversation and of the conversations whose tree root it is,
+   * parked tabs included, and forgets what the session keeps for each of them (the kernel's
+   * conversation-deleted notice). `also`: more conversations of that tree the caller knows (the
+   * daemon state's, which may own no tab). Never touches the profile. Returns how many tabs it
+   * closed.
+   */
+  async forgetTree(conversationId: string, also: readonly string[] = []): Promise<number> {
+    const convs = new Set<string>([conversationId, ...also]);
+    const ids: string[] = [];
+    for (const [id, o] of this.owners) {
+      if (o.owner !== conversationId && o.root !== conversationId) continue;
+      convs.add(o.owner);
+      if (!this.closing.has(id)) ids.push(id);
+    }
+    await this.closeAndForget([...convs], ids);
+    return ids.length;
+  }
+
+  /** Closes `ids` (their owners dropped first) and forgets the session's state of `convs`. */
+  private async closeAndForget(convs: string[], ids: string[]): Promise<void> {
     // from now on these tabs are nobody's: a request arriving before they closed gets a new tab
     for (const id of ids) {
       this.closing.add(id);
       this.owners.delete(id);
     }
-    this.activeOf.delete(conversationId);
-    this.queues.delete(this.queueKey(conversationId));
-    this.unreported.delete(conversationId);
-    this.claiming.delete(conversationId);
-    this.actedSeq.delete(conversationId);
+    for (const c of convs) {
+      this.activeOf.delete(c);
+      this.queues.delete(this.queueKey(c));
+      this.unreported.delete(c);
+      this.claiming.delete(c);
+      this.actedSeq.delete(c);
+    }
     await Promise.all(
       ids.map((id) =>
         this.pages

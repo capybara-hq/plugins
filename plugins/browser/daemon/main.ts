@@ -7,6 +7,7 @@ import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import {
   encodeServiceMessage,
+  parseConversationDeleted,
   parseViewerContext,
   ServiceMessageDecoder,
 } from "@capybara-hq/plugin-sdk";
@@ -43,7 +44,7 @@ import {
   type ToolRequest,
   type ViewerIn,
 } from "./protocol.js";
-import { SessionFile } from "./session-file.js";
+import { SessionFile, withoutTree } from "./session-file.js";
 import { type Clock, DaemonState, systemClock } from "./state.js";
 import { ViewerSession } from "./viewer.js";
 
@@ -168,6 +169,12 @@ function parse(raw: Uint8Array): unknown {
  */
 export const HANDOFF_HOLDS_ROLL_MS = 30 * 60_000;
 
+/**
+ * How long a conversation-deleted notice waits for a browser that is still launching (its tabs
+ * are restored by then); the kernel's request gives the answer 10 s.
+ */
+const NOTICE_LAUNCH_WAIT_MS = 5_000;
+
 /** Whether a request body is the kernel's roll check ({@link ROLL_CHECK_REQUEST}). */
 function isRollCheck(body: unknown): boolean {
   return (
@@ -210,7 +217,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
 
   let closing = false;
   const sessionFile = new SessionFile(opts.stateDir, clock);
-  const saved = sessionFile.read();
+  /** The session to restore at the first launch (a deleted conversation's part dropped). */
+  let saved = sessionFile.read();
   /** The running browser session, once its launch finished (the tab counts read it). */
   let live: BrowserSession | undefined;
   const state = new DaemonState({
@@ -620,6 +628,16 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       if (kind === "request") {
         if (handled) return;
         handled = true;
+        // the kernel's conversation-deleted notice: closes the tree's tabs and forgets its state
+        // (no browser start, no activity, any control state); the profile is never touched
+        const deleted = parseConversationDeleted(raw);
+        if (deleted !== null) {
+          forgetDeleted(deleted.conversationId)
+            .then((closed) => write(sock, { ok: true, closed }))
+            .catch((e) => write(sock, fail(e instanceof Error ? e.message : String(e))))
+            .finally(() => sock.end());
+          return;
+        }
         const body = parse(raw);
         // the kernel's roll check: answered from the control state alone (no browser start, no
         // activity), busy while a restart would lose what the person is doing
@@ -666,6 +684,25 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       }
       for (const m of msgs) onMessage(m);
     });
+  }
+
+  /**
+   * The kernel's conversation-deleted notice (SDK `parseConversationDeleted`): forgets the
+   * conversation and every conversation whose tree root it is, closes their tabs in the running
+   * (or launching) browser, and drops them from the session still to restore and from the file
+   * (a coming save rewrites it too). Idempotent: a repeat closes nothing. Returns the tabs closed.
+   */
+  async function forgetDeleted(conversationId: string): Promise<number> {
+    const forgotten = state.forgetTree(conversationId);
+    if (saved !== undefined) saved = withoutTree(saved, conversationId);
+    sessionFile.dropTree(conversationId);
+    const session =
+      live ??
+      (current === undefined
+        ? undefined
+        : await within(current, NOTICE_LAUNCH_WAIT_MS).catch(() => undefined));
+    if (session === undefined) return 0;
+    return session.forgetTree(conversationId, forgotten);
   }
 
   if (existsSync(opts.socketPath)) unlinkSync(opts.socketPath);

@@ -183,6 +183,13 @@ shared by every conversation, the tabs are not.
 - **Idle close.** A conversation's tabs close after 15 minutes without a request, without an open
   panel showing it and without a pending park; its per-conversation state goes with them. The
   profile is never touched.
+- **Deleted conversations.** The kernel's conversation-deleted notice (a kernel request body, SDK
+  `parseConversationDeleted`) closes the tabs of the conversation and of its sub-agent
+  conversations at once, parked ones included, forgets their state and drops them from the
+  session file; it answers `{ ok: true, closed }` and a repeat closes nothing. The kernel keeps the
+  notice owed while the device is offline or the service is stopped within the restore window
+  (`DEVICE_SERVICE_RESTORE_MAX_AGE_MS`, also the session file's limit); the idle close is the
+  backstop. The profile is never touched.
 - **Takeover per device.** While the person controls the browser from any conversation's panel,
   every conversation's agent requests are refused. Afterwards only the conversations whose tabs the
   takeover concerned are told that the user had control.

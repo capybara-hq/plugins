@@ -234,3 +234,31 @@ describe("daemon state: the idle close per conversation", () => {
     expect(state.takeHandbackNote("a")).toBeUndefined();
   });
 });
+
+describe("a deleted conversation (the kernel's notice)", () => {
+  it("forgets the conversation and its tree, never another tree, and fires no idle close", () => {
+    const { clock, state, closed } = make();
+    state.requestArrived("r", "r");
+    state.requestFinished("r");
+    state.noticeHandoff("s", "r", "h1", "Sign in");
+    state.park("s", "r", { kind: "dialog", key: "d1", tabId: "t2" });
+    state.requestArrived("x", "x");
+    state.requestFinished("x");
+    state.viewerOpened();
+    state.takeover(["r", "x"]);
+    expect(state.forgetTree("r").sort()).toEqual(["r", "s"]);
+    expect(state.conversationIds).toEqual(["x"]);
+    expect(state.handoffs()).toEqual([]);
+    expect(state.tabParked("t2")).toBe(false);
+    // the takeover stays the person's; only x is told on hand back
+    expect(state.control).toBe("user");
+    state.handback();
+    expect(state.takeHandbackNote("r")).toBeUndefined();
+    expect(state.takeHandbackNote("x")).toBeDefined();
+    // their idle countdowns are gone: only x's closes
+    clock.advance(CONVERSATION_IDLE_MS);
+    expect(closed).toEqual(["x"]);
+    // a repeat forgets nothing
+    expect(state.forgetTree("r")).toEqual([]);
+  });
+});
