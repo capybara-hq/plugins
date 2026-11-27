@@ -1,5 +1,5 @@
 diff --git a/lib/coreBundle.js b/lib/coreBundle.js
-index c09d4f45f03b4cb41bbec4c42c30ed092272b6a9..052c7860fe1f50b20cb0f38e950a721a2f38e350 100644
+index c09d4f45f03b4cb41bbec4c42c30ed092272b6a9..345a3665f4b50ed1b8c89aee65da6a1eeb681a22 100644
 --- a/lib/coreBundle.js
 +++ b/lib/coreBundle.js
 @@ -37903,6 +37903,11 @@ var init_crNetworkManager = __esm({
@@ -14,3 +14,38 @@ index c09d4f45f03b4cb41bbec4c42c30ed092272b6a9..052c7860fe1f50b20cb0f38e950a721a
          }
          const { username, password } = credentials || { username: void 0, password: void 0 };
          sessionInfo.session._sendMayFail("Fetch.continueWithAuth", {
+@@ -37988,6 +37993,11 @@ var init_crNetworkManager = __esm({
+             if (headersOverride) {
+               const originalHeaders = Object.entries(requestPausedEvent.request.headers).map(([name, value2]) => ({ name, value: value2 }));
+               headersOverride = removeCookieHeader(applyHeadersOverrides(originalHeaders, headersOverride));
++              // capybara patch (plugins#292 review): the route's headers are replayed on every
++              // redirect hop; once the chain leaves the origin of its first request, an
++              // Authorization header is never sent again (as a browser drops it)
++              if (redirectedFrom && crossedOrigin(redirectedFrom.request, requestWillBeSentEvent.request.url))
++                headersOverride = headersOverride.filter((h) => h.name.toLowerCase() !== "authorization");
+             }
+             requestPausedSessionInfo.session._sendMayFail("Fetch.continueRequest", { requestId: requestPausedEvent.requestId, headers: headersOverride });
+           } else {
+@@ -53329,6 +53339,22 @@ function validateBrowserContextOptions(options, browserOptions) {
+     throw new Error(`"recordVideo.fps" must be a positive number, got ${options.recordVideo.fps}`);
+   verifyGeolocation(options.geolocation);
+ }
++// capybara patch (plugins#292 review): whether a redirect chain (its last hop `request`, then
++// `nextUrl`) has left the origin of its first request
++function crossedOrigin(request2, nextUrl) {
++  const originOf = (u) => {
++    try {
++      return new URL(u).origin;
++    } catch {
++      return void 0;
++    }
++  };
++  const urls = [nextUrl];
++  for (let r = request2; r; r = r.redirectedFrom())
++    urls.push(r.url());
++  const first = originOf(urls[urls.length - 1]);
++  return first === void 0 || urls.some((u) => originOf(u) !== first);
++}
+ function findMatchingHttpCredentials(credentials, url3) {
+   const origin = new URL(url3).origin.toLowerCase();
+   return credentials?.find((c) => !c.origin || c.origin.toLowerCase() === origin);

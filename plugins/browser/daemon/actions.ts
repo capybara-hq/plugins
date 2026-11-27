@@ -1951,10 +1951,13 @@ export class BrowserSession {
 
   /**
    * The Authorization value a request gets, only where a browser's own page would send it: a
-   * request to the signed-in origin from a page whose top-level document has that origin, or a
-   * top-level navigation to it that this page started from that origin or that the daemon runs
+   * request to the signed-in origin from a frame whose own document has that origin inside a page
+   * whose top-level document has it too (an iframe's navigation: its parent frame's document), or
+   * a top-level navigation to it that this page started from that origin or that the daemon runs
    * (the agent's or the person's address bar, history, reload). Never a service worker's request,
-   * a cross-site page's request (fetch, image, form post) or a redirect into the origin.
+   * a cross-site page's or embedded cross-origin frame's request (fetch, image, form post), or a
+   * redirect into the origin. A redirect out of the origin drops the header on every later hop
+   * (the patched playwright-core, which replays a route's headers on redirects).
    */
   private authHeaderFor(r: Request): string | undefined {
     const origin = originOf(r.url());
@@ -1968,12 +1971,18 @@ export class BrowserSession {
     }
     const page = frame.page();
     const top = originOf(page.mainFrame().url());
-    if (!(r.isNavigationRequest() && frame === page.mainFrame())) {
-      return top === origin ? value : undefined;
-    }
     let root = r;
     for (let f = r.redirectedFrom(); f !== null; f = f.redirectedFrom()) root = f;
     if (originOf(root.url()) !== origin) return undefined;
+    if (!r.isNavigationRequest()) {
+      return top === origin && originOf(frame.url()) === origin ? value : undefined;
+    }
+    if (frame !== page.mainFrame()) {
+      const parent = frame.parentFrame();
+      return top === origin && parent !== null && originOf(parent.url()) === origin
+        ? value
+        : undefined;
+    }
     if (top === origin || (this.ownNavs.get(page) ?? 0) > 0) return value;
     return undefined;
   }
