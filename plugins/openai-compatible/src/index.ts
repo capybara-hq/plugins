@@ -3,6 +3,7 @@ import {
   defineExtension,
   type ExtensionNet,
   MODEL_PROVIDER_EXTENSION_POINT_V2,
+  type ModelCacheInfo,
   ModelError,
   type ModelInfo,
   type ModelProvider,
@@ -12,7 +13,7 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import type OpenAI from "openai";
 import { z } from "zod";
-import { DIALECTS, type Dialect, PROVIDER } from "./dialects.js";
+import { DIALECTS, type Dialect, IMPLICIT_CACHE, PROVIDER } from "./dialects.js";
 import { streamChat } from "./map-stream.js";
 import { isolatedOpenAI } from "./openai-client.js";
 
@@ -33,7 +34,10 @@ const EndpointModelSchema = z.object({
    */
   documents: ui(z.boolean().optional(), { label: { zh: "PDF 输入", en: "PDF input" } }),
   reasoning: ui(z.boolean().optional(), { label: { zh: "推理", en: "Reasoning" } }),
-  /** 未给时取方言默认（服务是否有自动前缀缓存）。 */
+  /**
+   * Prompt caching of the model: false declares none, true on `generic` declares an implicit
+   * (non-guaranteed) cache, unset takes the dialect's declaration.
+   */
   caching: ui(z.boolean().optional(), { label: { zh: "提示缓存", en: "Prompt caching" } }),
   streamIdleTimeoutMs: ui(z.number().int().positive().optional(), {
     label: { zh: "流空闲超时", en: "Stream idle timeout" },
@@ -229,6 +233,12 @@ function makeClient(
   });
 }
 
+function cacheOf(dialect: Dialect, caching: boolean | undefined): { cache?: ModelCacheInfo } {
+  if (caching === false) return {};
+  const cache = dialect.cache ?? (caching === true ? IMPLICIT_CACHE : undefined);
+  return cache === undefined ? {} : { cache };
+}
+
 function modelInfo(ep: Endpoint, m: EndpointModelConfig): ModelInfo {
   const reasoning = m.reasoning ?? false;
   return {
@@ -247,6 +257,7 @@ function modelInfo(ep: Endpoint, m: EndpointModelConfig): ModelInfo {
     },
     ...(m.streamIdleTimeoutMs !== undefined ? { streamIdleTimeoutMs: m.streamIdleTimeoutMs } : {}),
     parameters: ep.dialect.parameters({ reasoning, maxOutputTokens: m.maxOutputTokens }),
+    ...cacheOf(ep.dialect, m.caching),
   };
 }
 

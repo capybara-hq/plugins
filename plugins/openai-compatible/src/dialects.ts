@@ -1,5 +1,6 @@
 import {
   type ContentBlock,
+  type ModelCacheInfo,
   ModelError,
   type ModelParameter,
   type ModelRequest,
@@ -48,8 +49,8 @@ export interface Dialect {
   name: DialectName;
   /** 中途 system 是否以原位置的 `role: "system"` 发送；否则转成 `[system] ` 开头的 user 文本。端点可覆盖。 */
   midConversationSystem: boolean;
-  /** 未配置 `caching` 时的默认值（服务是否有自动前缀缓存）。 */
-  caching: boolean;
+  /** The prompt cache the dialect's service has (the default when a model's `caching` is not set); undefined = none. */
+  cache: ModelCacheInfo | undefined;
   /**
    * Prompt-cache request fields of the service. `"dashscope"`: explicit `cache_control` markers
    * on the last system block marked `cache: true` and on the last content block of the history
@@ -187,6 +188,16 @@ function openaiStyleUsage(raw: RawUsage | null | undefined): ModelUsage {
 
 // ---- 方言 ----
 
+/** An implicit cache the service runs on its own: no lifetime is known, a hit is best-effort. */
+export const IMPLICIT_CACHE: ModelCacheInfo = {
+  mechanism: "implicit",
+  ttlOptions: [],
+  ttlIsMinimum: false,
+  refreshOnHit: false,
+  ttlClock: "unknown",
+  guaranteed: false,
+};
+
 /**
  * 通用：标准旋钮只有 temperature、maxOutputTokens；不处理 `reasoning_content`。
  * 媒体按 OpenAI Chat Completions 规格（https://developers.openai.com/api/docs/guides/images-vision ，
@@ -197,7 +208,7 @@ const generic: Dialect = {
   name: "generic",
   // 许多开源模型的 chat template（如 Qwen3）在 system 不在开头时直接报错，默认转成 user 文本；端点可改
   midConversationSystem: false,
-  caching: false,
+  cache: undefined,
   pdfInput: true,
   parameters: (m) => [temperature(2), maxOutput(m)],
   applyParams(body, params) {
@@ -234,8 +245,9 @@ const deepseek: Dialect = {
   // `[system] ` user turns (like generic / ark) it quoted them in order (6/6). Consecutive user
   // messages are accepted (test/live/deepseek-system-notices.live.test.ts).
   midConversationSystem: false,
-  // 磁盘缓存自动生效
-  caching: true,
+  // Automatic disk cache. minTokens 256 measured in P0; a hit within the (undeclared) lifetime
+  // is not promised
+  cache: { ...IMPLICIT_CACHE, minTokens: 256 },
   pdfInput: false,
   parameters: (m) => [
     ...(m.reasoning
@@ -316,8 +328,18 @@ const deepseek: Dialect = {
 const qwen: Dialect = {
   name: "qwen",
   midConversationSystem: false,
-  // Explicit cache markers (map-request.ts): 5 minutes, refreshed on every hit
-  caching: true,
+  // Explicit cache markers (map-request.ts): 5 minutes, refreshed on every hit; the one tier is
+  // never chosen by a request (no options above 300)
+  cache: {
+    mechanism: "explicit",
+    ttlOptions: [300],
+    defaultTtl: 300,
+    ttlIsMinimum: false,
+    refreshOnHit: true,
+    ttlClock: "unknown",
+    minTokens: 1024,
+    guaranteed: true,
+  },
   cacheFields: "dashscope",
   pdfInput: true,
   parameters: (m) => [...(m.reasoning ? [thinkingKnob()] : []), temperature(2), maxOutput(m)],
@@ -338,6 +360,7 @@ const qwen: Dialect = {
       outputTokens: num(raw?.completion_tokens),
       cacheReadTokens: cached,
       cacheWriteTokens: created,
+      ...(created > 0 ? { cacheWriteByTtl: [{ ttl: 300, tokens: created }] } : {}),
     };
   },
 };
@@ -366,7 +389,7 @@ const qwen: Dialect = {
 const ark: Dialect = {
   name: "ark",
   midConversationSystem: false,
-  caching: true,
+  cache: IMPLICIT_CACHE,
   cacheFields: "routing-key",
   pdfInput: false,
   parameters: (m) => [...(m.reasoning ? [thinkingKnob()] : []), temperature(2), maxOutput(m)],
