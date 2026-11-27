@@ -2,6 +2,7 @@ import {
   DeviceOfflineError,
   type DeviceProvider,
   type DeviceServiceStatus,
+  deviceServiceFilesDigest,
   type ExecResult,
   type ExtensionContext,
   type FileSystemHandle,
@@ -28,7 +29,6 @@ import type { BackgroundReadOutputResult } from "@capybara-hq/plugin-sdk/device-
 import { createInstanceBindings } from "./bindings.js";
 import {
   EXEC_DEADLINE_MARGIN_MS,
-  filesDigestOf,
   machineCall,
   OP_DEADLINE_MS,
   SERVICE_OP_DEADLINE_MS,
@@ -594,7 +594,7 @@ export function createDeviceLocalProvider(
             opts,
           ),
         );
-      const filesDigest = filesDigestOf(spec.files);
+      const filesDigest = deviceServiceFilesDigest(spec.files);
       const send = async (files?: Record<string, string>) =>
         statusOf(
           await serviceCall(
