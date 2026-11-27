@@ -5,6 +5,7 @@ import {
   type ModelProvider,
   type ModelRequest,
   type ModelStreamEvent,
+  type ModelUsage,
 } from "@capybara-hq/plugin-sdk";
 import {
   checkToolStream,
@@ -42,7 +43,7 @@ const memoryKv = (): Kv & { store: Map<string, string>; ttls: number[] } => {
 
 /** The kv key of a cached model: by endpoint (sha256 of the base URL) and id. */
 const cacheKey = (baseUrl: string, id: string) =>
-  `models:v4:${createHash("sha256").update(baseUrl).digest("hex")}:${id}`;
+  `models:v5:${createHash("sha256").update(baseUrl).digest("hex")}:${id}`;
 
 // ---- 夹具模式 ----
 describeModelProviderConformance("anthropic (fixtures)", async () => {
@@ -58,7 +59,7 @@ describeModelProviderConformance("anthropic (fixtures)", async () => {
       serverFallbacks: "default",
     }),
     model: "claude-opus-5-5",
-    expect: { thinking: true, caching: false /* P2–P7 declare the cache */ },
+    expect: { thinking: true, caching: true },
     teardown: () => server.stop(),
   };
 });
@@ -82,10 +83,89 @@ describe.skipIf(!LIVE_KEY)("live", { timeout: 120_000 }, () => {
       serverFallbacks: "default",
     }),
     model: "claude-haiku-5-5",
-    expect: { thinking: true, caching: false /* P2–P7 declare the cache */ },
+    expect: { thinking: true, caching: true },
     cachePrefixTokens: 6000,
     teardown: async () => {},
   }));
+});
+
+// cacheTtl 3600: the first request writes to the 1h tier, the second reads the same prefix
+describe.skipIf(!LIVE_KEY)("live cacheTtl 3600", { timeout: 120_000 }, () => {
+  it("writes the 1h tier, then reads it", async () => {
+    const provider = createAnthropicProvider({
+      kv: memoryKv(),
+      net: { fetch },
+      apiKey: LIVE_KEY ?? "",
+      models: ["claude-haiku-5-5"],
+      serverFallbacks: "default",
+    });
+    const salt = `${Date.now()}-${Math.random()}`;
+    const prefix = Array.from(
+      { length: 700 },
+      (_, i) => `Fact ${i} (${salt}): item ${i} is blue.`,
+    ).join("\n");
+    const run = async () => {
+      let usage: ModelUsage | undefined;
+      const req: ModelRequest = {
+        model: "claude-haiku-5-5",
+        system: [{ text: prefix, cache: true }],
+        messages: [{ role: "user", content: [{ type: "text", text: "Say ok." }] }],
+        tools: [],
+        maxOutputTokens: 50,
+        params: {},
+        cacheTtl: 3600,
+      };
+      for await (const e of provider.stream(req, { signal: new AbortController().signal })) {
+        if (e.type === "message_complete") usage = e.usage;
+      }
+      return usage;
+    };
+    const first = await run();
+    console.info("[live 1h] first usage", JSON.stringify(first));
+    expect(first?.cacheWriteByTtl).toEqual([{ ttl: 3600, tokens: first?.cacheWriteTokens }]);
+    const second = await run();
+    console.info("[live 1h] second usage", JSON.stringify(second));
+    expect(second?.cacheReadTokens).toBeGreaterThan(0);
+  });
+});
+
+// Review Focus 5: the highest effort with toolChoice none and a 20000 output cap (thinking budget < max_tokens)
+describe.skipIf(!LIVE_KEY)("live highest effort + toolChoice none", { timeout: 120_000 }, () => {
+  it("succeeds with effort at its highest value and maxOutputTokens 20000", async () => {
+    const provider = createAnthropicProvider({
+      kv: memoryKv(),
+      net: { fetch },
+      apiKey: LIVE_KEY ?? "",
+      models: ["claude-haiku-5-5"],
+      serverFallbacks: "default",
+    });
+    const [info] = await provider.listModels();
+    const effort = info?.parameters.find((p) => p.key === "effort");
+    const levels = (effort?.schema as { enum: string[] } | undefined)?.enum ?? [];
+    const highest = levels.at(-1) as string;
+    const events: ModelStreamEvent[] = [];
+    const req: ModelRequest = {
+      model: "claude-haiku-5-5",
+      system: [{ text: "Be brief.", cache: false }],
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Summarize: cats sleep a lot." }] },
+      ],
+      tools: [
+        {
+          name: "noop",
+          description: "Does nothing.",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+      toolChoice: "none",
+      maxOutputTokens: 20_000,
+      params: { effort: highest },
+    };
+    for await (const e of provider.stream(req, { signal: new AbortController().signal }))
+      events.push(e);
+    console.info("[live focus5] effort", highest, "last", events.at(-1)?.type);
+    expect(events.at(-1)?.type).toBe("message_complete");
+  });
 });
 
 // 收尾调用的形状：历史里有 tool_use / tool_result，照常声明工具，toolChoice none → API 接受且模型只回文本
@@ -867,6 +947,7 @@ describe("anthropic: errors and edge cases", () => {
         documents: true,
       },
       streamIdleTimeoutMs: 300_000,
+      cache: expect.objectContaining({ mechanism: "explicit", minTokens: 512 }),
       parameters: [
         {
           key: "effort",

@@ -30,7 +30,7 @@ interface ModelProvider {
 
 - `ModelInfo.kind` (`ModelKind`: `chat` default, `embedding`, `rerank`, `image_generation`, ...; absent means `chat`). The chat-only fields (`contextWindow`, `maxOutputTokens`, `capabilities`, `parameters`) stay required for every kind. A model with `kind: "embedding"` sets `embedding: { dimensions: number[], defaultDimensions, maxInputTokens, maxBatch }`, and the provider then implements `embed`.
 
-No mutable in-process state: caches such as model info go in `ctx.kv` with a TTL (anthropic's `models:v3:<id>`, 3600 seconds; bump the version when the ModelInfo shape changes); accumulators within one call are local variables.
+No mutable in-process state: caches such as model info go in `ctx.kv` with a TTL (anthropic's `models:v5:<sha256(baseUrl)>:<id>`, 3600 seconds; bump the version when the ModelInfo shape changes); accumulators within one call are local variables.
 
 ## Embedding models (`embed`)
 
@@ -108,8 +108,8 @@ The kernel guarantees the history sent to the model is append-only: an earlier r
   - Cost: when request-level settings change between requests (tools appear, thinking switches), earlier turns serialize differently, the provider's prefix cache is invalidated before the change and input is billed again; correctness is unaffected.
 - Mid-conversation `system` messages: use a native representation that needs no surrounding context (openai: an in-place `developer` input item, `midConversationSystem: true`); if the native form has placement rules needing lookahead, **don't use it**: convert in place to a user text block `"[system] " + text` and report `midConversationSystem: false` (anthropic). The same when the API accepts the native form but the model does not keep it in position: DeepSeek takes `role: "system"` anywhere yet reads mid-conversation ones out of order, so the deepseek dialect sends `[system]` user turns (a live test pins it).
 - Provider-private blocks (thinking, reasoning items) are replayed as they are; ones that can't be replayed are dropped whole.
-- Cache TTL and usage: `ModelRequest.cacheTtl` (seconds, one of the declared `cache.ttls`) is mapped to the vendor's option only where the model declares more than one TTL; `ModelUsage.cacheWriteByTtl` reports cache writes per TTL when the vendor splits them (zero entries left out).
-- History caching: prefer a mechanism that leaves sent bytes alone. anthropic uses the automatic top-level `cache_control` (not added when system already used all 4 breakpoints); openai, DeepSeek and Ark cache prefixes automatically (openai and Ark get a stable `prompt_cache_key`). A marker on "the last block of the last message" moves next turn and changes the sent bytes of that block, so use it only where the vendor documents it for multi-turn caching, has no automatic alternative, and a live test shows the next turn reading the whole earlier history: DashScope (bailian, the openai-compatible `qwen` dialect), whose explicit and implicit caches exclude each other per request and whose cache matches the rendered prompt rather than the JSON (live 2026-11-27). The moving marker is the only allowed difference; prefix tests compare the mappings without it.
+- Cache TTL and usage: `ModelRequest.cacheTtl` (seconds, one of the model's declared `cache.ttlOptions`) is mapped to the vendor's option only where the model declares more than one TTL; `ModelUsage.cacheWriteByTtl` reports cache writes per TTL when the vendor splits them (zero entries left out).
+- History caching: prefer a mechanism that leaves sent bytes alone. anthropic uses the automatic top-level `cache_control` (not added when system already used all 4 breakpoints); `cacheTtl: 3600` puts `ttl: "1h"` on every `cache_control` it sends, and `usage.cache_creation` becomes `cacheWriteByTtl`; openai, DeepSeek and Ark cache prefixes automatically (openai and Ark get a stable `prompt_cache_key`). A marker on "the last block of the last message" moves next turn and changes the sent bytes of that block, so use it only where the vendor documents it for multi-turn caching, has no automatic alternative, and a live test shows the next turn reading the whole earlier history: DashScope (bailian, the openai-compatible `qwen` dialect), whose explicit and implicit caches exclude each other per request and whose cache matches the rendered prompt rather than the JSON (live 2026-11-27). The moving marker is the only allowed difference; prefix tests compare the mappings without it.
 - Parameters the model doesn't support are neither declared nor sent: anthropic declares `thinking` only for models the Models API reports as supporting adaptive thinking, and takes `effort` levels from the per-level `supported`.
 
 ## Opaque replay: only to the same provider and model
@@ -184,7 +184,7 @@ When more than the threshold passes between two stream events, the kernel's watc
 
 ## Tests: fixture mode and live-API mode
 
-Every provider runs `@capybara-hq/testing`'s conformance suite `describeModelProviderConformance(name, setup)` (streaming text, tool round trip, thinking replay, caching, usage, mid-conversation system, abort). Both modes live in `test/conformance.test.ts`:
+Every provider runs `@capybara-hq/testing`'s conformance suite `describeModelProviderConformance(name, setup)` (streaming text, tool round trip, thinking replay, "declares a valid cache", caching, "cache ttl options", usage, mid-conversation system, abort). Both modes live in `test/conformance.test.ts`:
 
 ```ts
 import { describeModelProviderConformance, startFakeModelServer } from "@capybara-hq/testing";
@@ -199,7 +199,7 @@ describeModelProviderConformance("my (fixtures)", async () => {
     plugin: "my-provider", // the extension name (checks vendor parameter key prefixes)
     provider: createMyProvider({ apiKey: "sk-fixture", baseUrl: server.url, /* … */ }),
     model: "my-model",
-    expect: { thinking: true, caching: true },
+    expect: { thinking: true, caching: true }, // caching: true needs a declared `cache` the target can hit
     teardown: () => server.stop(),
   };
 });
@@ -211,7 +211,7 @@ describe.skipIf(!LIVE_KEY)("live", () => {
     plugin: "my-provider", // the extension name (checks vendor parameter key prefixes)
     provider: createMyProvider({ apiKey: LIVE_KEY ?? "" }),
     model: "my-cheap-model",
-    expect: { thinking: true, caching: true },
+    expect: { thinking: true, caching: true }, // caching: true needs a declared `cache` the target can hit
     cachePrefixTokens: 6000, // the stable prefix must exceed the model's minimum cacheable length
     teardown: async () => {},
   }));
