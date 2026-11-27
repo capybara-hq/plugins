@@ -8,6 +8,7 @@ import {
   type ProviderOpaque,
 } from "@capybara-hq/plugin-sdk";
 import type OpenAI from "openai";
+import { cacheOptions } from "./cache.js";
 import { promptCacheKey } from "./cache-key.js";
 
 export const PROVIDER = "openai";
@@ -243,6 +244,13 @@ export function buildRequest(
   const instructions = req.system.map((s) => s.text).join("\n\n");
   if (instructions !== "") params.instructions = instructions;
   params.prompt_cache_key = promptCacheKey(scope.orgId, instructions);
+  const cacheOpts = cacheOptions(req.model, req.cacheTtl);
+  // The installed SDK types the ttl as "30m" only; the API also accepts "12h"
+  if (cacheOpts !== undefined) {
+    params.prompt_cache_options = cacheOpts as NonNullable<
+      OpenAI.Responses.ResponseCreateParams["prompt_cache_options"]
+    >;
+  }
   if (traits.reasoning) {
     params.include = ["reasoning.encrypted_content"];
     const effort = req.params.effort;

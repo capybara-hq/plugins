@@ -6,6 +6,7 @@ import {
   type StopReason,
 } from "@capybara-hq/plugin-sdk";
 import type OpenAI from "openai";
+import { cacheWriteByTtl } from "./cache.js";
 import { kindFromCode, toModelError } from "./errors.js";
 import {
   buildRequest,
@@ -135,6 +136,13 @@ export function toComplete(r: Response, model: string): Complete {
   const input = u?.input_tokens ?? 0;
   const cached = u?.input_tokens_details?.cached_tokens ?? 0;
   const written = u?.input_tokens_details?.cache_write_tokens ?? 0;
+  const byTtl = cacheWriteByTtl(
+    (
+      u?.input_tokens_details as
+        | { cache_write_tokens_details?: Parameters<typeof cacheWriteByTtl>[0] }
+        | undefined
+    )?.cache_write_tokens_details,
+  );
   return {
     type: "message_complete",
     content,
@@ -145,6 +153,7 @@ export function toComplete(r: Response, model: string): Complete {
       outputTokens: u?.output_tokens ?? 0,
       cacheReadTokens: cached,
       cacheWriteTokens: written,
+      ...(byTtl !== undefined ? { cacheWriteByTtl: byTtl } : {}),
     },
   };
 }

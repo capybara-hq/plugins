@@ -18,6 +18,8 @@ export interface Usage {
   output_tokens: number;
   cached_tokens?: number;
   cache_write_tokens?: number;
+  /** GPT-5.6+: the write split by lifetime tier. */
+  cache_write_tokens_details?: { ttl_30m_tokens: number; ttl_12h_tokens: number };
 }
 
 const chunks = (s: string, n: number): string[] => {
@@ -178,6 +180,9 @@ export function sseResponse(opts: {
     input_tokens_details: {
       cached_tokens: opts.usage.cached_tokens ?? 0,
       cache_write_tokens: opts.usage.cache_write_tokens ?? 0,
+      ...(opts.usage.cache_write_tokens_details !== undefined
+        ? { cache_write_tokens_details: opts.usage.cache_write_tokens_details }
+        : {}),
     },
     output_tokens: opts.usage.output_tokens,
     output_tokens_details: { reasoning_tokens: 0 },
@@ -223,7 +228,15 @@ interface Body {
   store?: boolean;
   stream?: boolean;
   max_output_tokens?: number;
+  prompt_cache_options?: { ttl?: string; mode?: string };
 }
+
+/** Whether the id is GPT-5.6 or later (the models that accept `prompt_cache_options`). */
+const fixtureAcceptsCacheOptions = (id: string): boolean => {
+  const m = /^gpt-(\d+)(?:\.(\d+))?/.exec(id);
+  if (m?.[1] === undefined) return false;
+  return Number(m[1]) > 5 || (Number(m[1]) === 5 && Number(m[2] ?? 0) >= 6);
+};
 
 /** 违反协议约束时返回 400（夹具也替真实接口把关）。 */
 function protocolViolation(b: Body): string | null {
@@ -232,6 +245,8 @@ function protocolViolation(b: Body): string | null {
   if (!b.include?.includes("reasoning.encrypted_content"))
     return "include must contain reasoning.encrypted_content";
   if (typeof b.max_output_tokens !== "number") return "max_output_tokens is required";
+  if (b.prompt_cache_options !== undefined && !fixtureAcceptsCacheOptions(b.model))
+    return "prompt_cache_options is not supported on this model";
   if (b.input.some((i) => i.role === "system")) return "system role items are not expected";
   for (const [n, i] of b.input.entries()) {
     if (i.type === "reasoning" && i.encrypted_content !== "enc-fixture-1")
@@ -329,6 +344,20 @@ export function openaiRoutes(): (req: FakeRequest) => FakeResponse {
       // 缓存是自动的：相同前缀第二次起命中；input_tokens 含缓存命中部分
       const seen = cachedPrefixes.has(instructions);
       cachedPrefixes.add(instructions);
+      if (fixtureAcceptsCacheOptions(model)) {
+        // GPT-5.6+: the first request writes at the requested tier (30m by default), a repeat reads
+        const twelveHours = b.prompt_cache_options?.ttl === "12h";
+        return text("Hello.", {
+          input_tokens: 5010,
+          output_tokens: 3,
+          cached_tokens: seen ? 5000 : 0,
+          cache_write_tokens: seen ? 10 : 5010,
+          cache_write_tokens_details: {
+            ttl_30m_tokens: twelveHours ? 0 : seen ? 10 : 5010,
+            ttl_12h_tokens: twelveHours ? (seen ? 10 : 5010) : 0,
+          },
+        });
+      }
       return text("Hello.", {
         input_tokens: 5010,
         output_tokens: 3,
