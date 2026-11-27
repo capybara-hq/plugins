@@ -121,7 +121,8 @@ describe("todo in a kernel", () => {
       isError: false,
       content: "Todo list updated (3 items):\n[x] Plan\n[>] Building\n[ ] Ship",
       display: { summary: { zh: "更新待办（3 项）", en: "Updated todos (3 items)" } },
-      card: { plugin: "todo", view: "tasks-card", key: expect.any(String) },
+      // the pinned card records the views' badge: a finished run's process head shows it
+      card: { plugin: "todo", view: "tasks-card", key: expect.any(String), badge: "1/3" },
     });
 
     // a second write: the first call's card still shows the list as of that call (review M1)

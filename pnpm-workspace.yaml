@@ -13,8 +13,8 @@ overrides:
   # one plugin-client instance: the host global and the hooks' context are shared by every plugin
   "@capybara-hq/plugin-client": 0.1.0-rc.9
   # one kernel and test kit that match it: an older kernel imports SDK exports R3 removed
-  "@capybara-hq/kernel": 0.1.0-rc.98
+  "@capybara-hq/kernel": 0.1.0-rc.100
   "@capybara-hq/plugin-tools": 0.1.0-rc.25
-  "@capybara-hq/testing": 0.1.0-rc.44
+  "@capybara-hq/testing": 0.1.0-rc.45
   # the scripted model built against the same SDK (an older one imports SDK exports since removed)
-  "@capybara-hq/plugin-model-fake": 0.1.0-rc.82
+  "@capybara-hq/plugin-model-fake": 0.1.0-rc.84

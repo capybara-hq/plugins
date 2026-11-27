@@ -1,4 +1,5 @@
 import {
+  CARD_BADGE_MAX,
   CARD_TEXT_MAX,
   defineExtension,
   type ExtensionContext,
@@ -199,11 +200,19 @@ export const TASKS_CARD = "tasks-card";
 const TASKS_ALL = [TASKS_PANEL, TASKS_SECTION, TASKS_CARD] as const;
 
 const label = (t: Todo) => (t.status === "in_progress" ? t.activeForm : t.content);
-/** done/total; no badge on an empty list (a "0/0" says nothing). */
-const badge = (todos: Todo[]): Pick<UiView, "badge"> =>
-  todos.length === 0
-    ? {}
-    : { badge: `${todos.filter((t) => t.status === "completed").length}/${todos.length}` };
+/**
+ * The badge done/total shown by every view and recorded on the pinned card (`card.badge`), cut to
+ * {@link CARD_BADGE_MAX}; undefined on an empty list (a "0/0" says nothing).
+ */
+export function todosBadge(todos: Todo[]): string | undefined {
+  if (todos.length === 0) return undefined;
+  const done = todos.filter((t) => t.status === "completed").length;
+  return `${done}/${todos.length}`.slice(0, CARD_BADGE_MAX);
+}
+const badge = (todos: Todo[]): Pick<UiView, "badge"> => {
+  const b = todosBadge(todos);
+  return b === undefined ? {} : { badge: b };
+};
 
 /**
  * The panel: badge done/total and a checklist (in-progress items show activeForm); each item's
@@ -284,8 +293,15 @@ export function writeHandler(db: Db, ui: Pick<ExtensionContext["ui"], "invalidat
           en: `Updated todos (${todos.length} items)`,
         },
       },
-      // pinned: the run keeps its latest list in view; `text` is what channels show for it
-      card: { view: TASKS_CARD, key: snapshot, placement: "pinned", text: todosCardText(todos) },
+      // pinned: the run keeps its latest list in view; `text` is what channels show for it, and
+      // `badge` (the views' badge) is what a finished run's process head shows after the title
+      card: {
+        view: TASKS_CARD,
+        key: snapshot,
+        placement: "pinned",
+        text: todosCardText(todos),
+        ...badge(todos),
+      },
     };
   };
 }
