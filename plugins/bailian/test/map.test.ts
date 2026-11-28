@@ -225,9 +225,7 @@ describe("buildRequest (text-generation)", () => {
   });
 
   it("refuses an image on the text endpoint and an unresolved ref", () => {
-    const image = (
-      source: { kind: "base64"; data: string } | { kind: "ref"; attachmentId: string },
-    ) =>
+    const image = (source: { kind: "base64"; data: string } | { kind: "ref"; fileId: string }) =>
       req({
         messages: [{ role: "user", content: [{ type: "image", mediaType: "image/png", source }] }],
       });
@@ -242,7 +240,7 @@ describe("buildRequest (text-generation)", () => {
     const e2 = (() => {
       try {
         buildRequest(
-          image({ kind: "ref", attachmentId: "00000000-0000-4000-8000-000000000000" }),
+          image({ kind: "ref", fileId: "00000000-0000-4000-8000-000000000000" }),
           "multimodal",
         );
       } catch (e) {

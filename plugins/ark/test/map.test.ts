@@ -238,7 +238,7 @@ describe("ark buildRequest", () => {
                 {
                   type: "image",
                   mediaType: "image/png",
-                  source: { kind: "ref", attachmentId: "5f0c3a8e-0000-4000-8000-000000000000" },
+                  source: { kind: "ref", fileId: "5f0c3a8e-0000-4000-8000-000000000000" },
                 },
               ],
             },
