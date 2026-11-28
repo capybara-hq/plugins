@@ -13,5 +13,27 @@
     "en": "Project tracker for people and agents: projects, requirements, tasks and bugs with workflows, gates, decisions and artifacts, assigned to a person and an agent",
     "zh": "人与智能体共用的项目协作：项目、需求、任务和缺陷，带工作流、关卡、决策与产物，可同时指派给成员和智能体"
   },
-  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/collab#readme"
+  "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/collab#readme",
+  "skills": [
+    {
+      "path": "./skills/collab-workflow"
+    },
+    {
+      "path": "./skills/prd-writing"
+    },
+    {
+      "path": "./skills/test-planning"
+    }
+  ],
+  "agents": [
+    {
+      "path": "./agents/product.md"
+    },
+    {
+      "path": "./agents/engineer.md"
+    },
+    {
+      "path": "./agents/qa.md"
+    }
+  ]
 }
