@@ -897,6 +897,49 @@ describe("panel", () => {
     ).toBeGreaterThanOrEqual(2);
   });
 
+  it("hides the loopback strip once its port is in the granted list", async () => {
+    let ports: { port: number; database: boolean }[] = [];
+    const s = setup({
+      ports: (method) =>
+        new Response(JSON.stringify(method === "GET" ? { ports } : { ok: true }), { status: 200 }),
+    });
+    const sock = await live(s, state({ control: "user" }));
+    const refusal = {
+      t: "blocked",
+      host: "127.0.0.1",
+      url: "http://127.0.0.1:3100/",
+      port: 3100,
+      kind: "loopback",
+    } as const;
+    sock.push(refusal);
+    expect(($(s, "loopback") as HTMLElement).hidden).toBe(false);
+    // the port is granted elsewhere (Full access); the next read of the list drops the strip
+    ports = [{ port: 3100, database: false }];
+    sock.push(refusal);
+    await vi.waitFor(() => expect(($(s, "loopback") as HTMLElement).hidden).toBe(true));
+    expect($(s, "ports-list").textContent).toContain("3100");
+  });
+
+  it("never raises the loopback strip for a port already granted", async () => {
+    const s = setup({
+      ports: (method) =>
+        new Response(
+          JSON.stringify(method === "GET" ? { ports: [{ port: 3100, database: false }] } : {}),
+          { status: 200 },
+        ),
+    });
+    const sock = await live(s, state({ control: "user" }));
+    await vi.waitFor(() => expect(($(s, "ports") as HTMLElement).hidden).toBe(false));
+    sock.push({
+      t: "blocked",
+      host: "127.0.0.1",
+      url: "http://127.0.0.1:3100/",
+      port: 3100,
+      kind: "loopback",
+    });
+    expect(($(s, "loopback") as HTMLElement).hidden).toBe(true);
+  });
+
   it("ignores a click right after the strip appears or changes port, and names the asking page", async () => {
     let now = 1_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
