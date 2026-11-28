@@ -45,7 +45,8 @@ describe("chromium launch plan", () => {
     expect(plan.profileDir).toBe("/s/profile");
     expect(plan.browsersPath).toBe("/s/browsers");
     expect(plan.args).toContain("--proxy-server=http://egress:3128");
-    expect(plan.args).toContain("--proxy-bypass-list=a.test;b.test");
+    // loopback goes through the proxy too (Playwright's rule for its own proxy option)
+    expect(plan.args).toContain("--proxy-bypass-list=a.test;b.test;<-loopback>");
     expect(plan.args).not.toContain("--single-process");
     expect(plan.args.some((a) => a.startsWith("--remote-debugging-port"))).toBe(false);
   });
@@ -119,6 +120,21 @@ describe("chromium launch plan", () => {
       const plan = chromiumLaunchPlan({ stateDir: "/s", env: {}, platform });
       expect(plan.args).toContain("--disable-auto-reload");
     }
+  });
+
+  it("sends loopback direct only when NO_PROXY names a loopback host", () => {
+    const direct = chromiumLaunchPlan({
+      stateDir: "/s",
+      env: { HTTPS_PROXY: "http://egress:3128", NO_PROXY: "localhost,a.test" },
+      platform: "linux",
+    });
+    expect(direct.args).toContain("--proxy-bypass-list=localhost;a.test");
+    const proxied = chromiumLaunchPlan({
+      stateDir: "/s",
+      env: { HTTPS_PROXY: "http://egress:3128" },
+      platform: "linux",
+    });
+    expect(proxied.args).toContain("--proxy-bypass-list=<-loopback>");
   });
 
   it("gives proxy credentials to Playwright, not to the flag", () => {

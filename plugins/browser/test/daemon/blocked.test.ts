@@ -1,8 +1,10 @@
-import { createServer, type Server } from "node:http";
+import { createServer, request as httpRequest, type Server } from "node:http";
 import { connect } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  CONV,
   conv,
+  holdingPorts,
   openViewer,
   removeDir,
   request,
@@ -14,7 +16,7 @@ import {
 /**
  * An egress proxy like the device's: refuses blocked.test (403), refuses private.test as the
  * device's sandbox proxy refuses a name resolving to a private address (its reason in the 403
- * status phrase), tunnels everything else.
+ * status phrase), tunnels or forwards everything else.
  */
 async function startRefusingProxy(): Promise<{ url: string; server: Server }> {
   const refused = (host: string) => host.split(":")[0] === "blocked.test";
@@ -26,7 +28,16 @@ async function startRefusingProxy(): Promise<{ url: string; server: Server }> {
       res.end(`Outbound access to ${url.hostname} is blocked by the sandbox egress allowlist.\n`);
       return;
     }
-    res.writeHead(502).end("fixture proxy forwards nothing over plain HTTP\n");
+    // the fixture pages (loopback, which goes through the proxy as on a device)
+    const up = httpRequest(
+      { host: url.hostname, port: url.port, path: url.pathname + url.search, headers: req.headers },
+      (r) => {
+        res.writeHead(r.statusCode ?? 502, r.headers);
+        r.pipe(res);
+      },
+    );
+    up.on("error", () => res.writeHead(502).end());
+    req.pipe(up);
   });
   server.on("connect", (req, sock) => {
     const target = req.url ?? "";
@@ -116,7 +127,11 @@ describe("browser daemon blocked hosts", () => {
       // the daemon is shared by this file: a late note of an earlier test's blocked host may
       // still arrive, so wait for the one this page caused
       const blocked = v.after((m) => m.t === "blocked" && m.url.startsWith(fx.url));
-      await request(d.socketPath, { op: "navigate", url: `${fx.url}/page` });
+      await request(
+        d.socketPath,
+        { op: "navigate", url: `${fx.url}/page` },
+        holdingPorts(CONV, fx.url),
+      );
       expect(await blocked).toEqual({ t: "blocked", host: "blocked.test", url: `${fx.url}/page` });
       await v.close();
     } finally {
@@ -134,7 +149,11 @@ describe("browser daemon blocked hosts", () => {
     try {
       const A = conv("own-a");
       const B = conv("own-b");
-      await request(d.socketPath, { op: "navigate", url: `${fx.url}/plain` }, B);
+      await request(
+        d.socketPath,
+        { op: "navigate", url: `${fx.url}/plain` },
+        holdingPorts(B, fx.url),
+      );
       const va = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 }, A);
       const vb = await openViewer(d.socketPath, { maxWidth: 320, maxHeight: 200 }, B);
       await va.next((m) => m.t === "state");
@@ -143,7 +162,11 @@ describe("browser daemon blocked hosts", () => {
       const dialog = va.after((m) => m.t === "dialog");
       // B browses at the same time as A's page is refused
       const [a, b] = await Promise.all([
-        request(d.socketPath, { op: "navigate", url: `${fx.url}/refusing` }, A),
+        request(
+          d.socketPath,
+          { op: "navigate", url: `${fx.url}/refusing` },
+          holdingPorts(A, fx.url),
+        ),
         request(d.socketPath, { op: "navigate", url: `${fx.url}/plain?again` }, B),
       ]);
       expect(a).toMatchObject({

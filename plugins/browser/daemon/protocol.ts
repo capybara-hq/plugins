@@ -379,6 +379,13 @@ export const REPLY_TOO_LARGE_MESSAGE =
 export interface RequestConversation {
   conversationId: string;
   rootConversationId: string;
+  /**
+   * The local ports the root's tree holds now (the kernel's live loopback port grants, sent by the
+   * plugin server with every request): the whole set, which replaces the daemon's copy for the
+   * root; absent leaves it unchanged. A tab reaches `localhost`, `127.0.0.1` or `[::1]` on a port
+   * only while its owner's root holds it.
+   */
+  loopbackPorts?: number[];
 }
 
 /**
@@ -494,14 +501,19 @@ export interface TabCount {
 }
 
 /**
- * A host the device's network proxy refused during a request, with the layer that refused it:
- * `address` when the proxy said the destination's address is closed (a name resolving to a private
- * or local address, or a closed IP literal: no host grant reaches it), else `device` (the device's
- * network settings). The plugin server reports these to the kernel as they are.
+ * A host the device's network proxy refused during a request, with the refused port and the layer
+ * that refused it: `address` when the proxy said the destination's address is closed (a name
+ * resolving to a private or local address, or a closed IP literal: no host grant reaches it), else
+ * `device` (the device's network settings). `class: "loopback"` marks an `address` refusal of
+ * `localhost`, `127.0.0.1` or `[::1]` (the proxy's, or the daemon's own for a tab whose root does
+ * not hold the port): a port the conversation can be granted. The plugin server reports these to
+ * the kernel as they are.
  */
 export interface BlockedHost {
   host: string;
+  port: number;
   layer: "device" | "address";
+  class?: "loopback";
 }
 
 export type ToolReply =
@@ -691,9 +703,11 @@ export type ViewerOut =
     }
   /**
    * A host the device refused for a page of the viewer's tree. `url`: the page to open once the
-   * host is allowed (the blocked navigation, or the page whose resource was refused).
+   * host is allowed (the blocked navigation, or the page whose resource was refused). With
+   * `kind: "loopback"`, a local port (`port`) the tree does not hold: the panel offers to open it
+   * for the conversation.
    */
-  | { t: "blocked"; host: string; url: string }
+  | { t: "blocked"; host: string; url: string; port?: number; kind?: "loopback" }
   /**
    * An informational dialog on a page of the viewer's tree: an alert (already closed) or a file
    * chooser. Decision dialogs are in `state.dialogs`.

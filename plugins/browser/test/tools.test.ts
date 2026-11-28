@@ -280,8 +280,8 @@ describe("browser tools", () => {
       ok: true,
       page: PAGE,
       blockedHosts: [
-        { host: "cdn.example.net", layer: "device" },
-        { host: "intranet.example.net", layer: "address" },
+        { host: "cdn.example.net", port: 443, layer: "device" },
+        { host: "intranet.example.net", port: 443, layer: "address" },
       ],
     }));
     await f.run("browser_navigate", { url: "https://example.com" });
@@ -316,7 +316,7 @@ describe("browser tools", () => {
       ok: false,
       error: "blocked",
       message: "The device's network settings block a.example.",
-      blockedHosts: [{ host: "a.example", layer: "device" }],
+      blockedHosts: [{ host: "a.example", port: 443, layer: "device" }],
     }));
     await expect(f.run("browser_navigate", { url: "https://a.example" })).rejects.toBeInstanceOf(
       ToolError,
@@ -457,7 +457,7 @@ describe("browser tools", () => {
       ok: false,
       error: "blocked",
       message: "The device's network settings block x.test.",
-      blockedHosts: [{ host: "x.test", layer: "device" }],
+      blockedHosts: [{ host: "x.test", port: 443, layer: "device" }],
     }));
     const e = await f.run("browser_navigate", { url: "https://x.test" }).catch((x: unknown) => x);
     expect((e as Error).message).toBe(
@@ -470,7 +470,7 @@ describe("browser tools", () => {
       ok: false,
       error: "blocked",
       message: `${DOWNLOAD_BLOCKED_PREFIX}cdn.playwright.dev.`,
-      blockedHosts: [{ host: "cdn.playwright.dev", layer: "device" }],
+      blockedHosts: [{ host: "cdn.playwright.dev", port: 443, layer: "device" }],
     }));
     const e = await f.run("browser_snapshot", {}).catch((x: unknown) => x);
     expect((e as Error).message).toBe(

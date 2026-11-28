@@ -2,6 +2,8 @@ import { createServer, request as httpRequest, type Server } from "node:http";
 import { connect, createServer as createTcpServer, type Server as TcpServer } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  CONV,
+  holdingPorts,
   removeDir,
   request,
   startFixtureServer,
@@ -102,7 +104,13 @@ afterAll(async () => {
 
 describe("browser daemon unreachable pages", () => {
   it("a navigation that gets no answer is stopped at its timeout, and the next requests answer", async () => {
-    expect(await request(d.socketPath, { op: "navigate", url: `${fx.url}/page` })).toMatchObject({
+    expect(
+      await request(
+        d.socketPath,
+        { op: "navigate", url: `${fx.url}/page` },
+        holdingPorts(CONV, fx.url),
+      ),
+    ).toMatchObject({
       ok: true,
       page: { title: "Before" },
     });
@@ -156,7 +164,11 @@ describe("browser daemon unreachable pages", () => {
   it("a page answered with 204 says so at once instead of an abort", async () => {
     // right after the failed navigation of the test before: on the Linux build its error page
     // commits late and must not interrupt this navigation
-    const before = await request(d.socketPath, { op: "navigate", url: `${fx.url}/page` });
+    const before = await request(
+      d.socketPath,
+      { op: "navigate", url: `${fx.url}/page` },
+      holdingPorts(CONV, fx.url),
+    );
     expect(before.ok ? "ok" : before.message).toBe("ok");
     const r = await request(d.socketPath, { op: "navigate", url: `${fx.url}/empty` });
     expect(r).toMatchObject({ ok: false, error: "failed" });

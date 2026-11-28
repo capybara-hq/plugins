@@ -103,6 +103,15 @@ export const conv = (id: string, root = id): RequestConversation => ({
 });
 
 /**
+ * `of` holding the local ports of `urls` (the loopback grants the plugin server sends with each
+ * request): behind a proxy, a tab reaches a loopback fixture server only on a port its root holds.
+ */
+export const holdingPorts = (of: RequestConversation, ...urls: string[]): RequestConversation => ({
+  ...of,
+  loopbackPorts: urls.map((u) => Number(new URL(u).port)),
+});
+
+/**
  * One tool request of a conversation (default {@link CONV}) on its own connection, as the provider
  * makes it.
  */
