@@ -1,7 +1,10 @@
 import {
+  Avatar,
+  type AvatarProps,
   type JsonValue,
   type PrincipalOption,
   type QueryState,
+  Stack,
   Text,
   useAction,
   useLocale,
@@ -106,17 +109,47 @@ export function isNotFound(value: unknown): value is NotFound {
   return typeof value === "object" && value !== null && "notFound" in value;
 }
 
-/** The avatar shape the forwarded components take (a preset draws as the initial). */
-export function imageAvatar(avatar: AvatarValue): { kind: "image"; src: string } | null {
-  return avatar !== null && avatar.kind === "image" ? avatar : null;
+/**
+ * An avatar as the forwarded `Avatar` / `PrincipalPicker` take it. The host's components are the
+ * design's, which draw a preset animal on a square (agent) avatar and the initial on a circle; the
+ * published plugin-client types still name only images, so a preset is passed through that type.
+ */
+export function avatarValue(avatar: AvatarValue): AvatarProps["value"] {
+  return avatar as AvatarProps["value"];
+}
+
+/** The image route of an avatar, for `PersonName` (a person: a preset draws as the initial anyway). */
+export function avatarUrl(avatar: AvatarValue): string | null {
+  return avatar !== null && avatar.kind === "image" ? avatar.src : null;
 }
 
 export function personOption(p: PersonRef): PrincipalOption {
-  return { kind: "person", id: p.id, name: p.name, avatar: imageAvatar(p.avatar) };
+  return { kind: "person", id: p.id, name: p.name, avatar: avatarValue(p.avatar) };
 }
 
 export function agentOption(a: AgentRef): PrincipalOption {
-  return { kind: "agent", id: a.id, name: a.name, avatar: imageAvatar(a.avatar) };
+  return { kind: "agent", id: a.id, name: a.name, avatar: avatarValue(a.avatar) };
+}
+
+/**
+ * An agent on one line: its square avatar (a preset animal, an image or the initial), the name and
+ * an optional muted `secondary`. `PersonName` takes only an image route and draws a circle, so it
+ * would drop an agent's preset.
+ */
+export function AgentName({ agent, secondary }: { agent: AgentRef; secondary?: string }) {
+  return (
+    <Stack direction="row" gap={4} align="center">
+      <Avatar value={avatarValue(agent.avatar)} name={agent.name} size={16} />
+      <Text truncate title={agent.name}>
+        {agent.name}
+      </Text>
+      {secondary !== undefined && (
+        <Text tone="muted" truncate>
+          {secondary}
+        </Text>
+      )}
+    </Stack>
+  );
 }
 
 export const AGENT_STATE_LABEL: Record<AgentState, Copy> = {

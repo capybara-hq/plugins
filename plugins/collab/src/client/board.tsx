@@ -25,7 +25,7 @@ import { COPY, type Copy, PRIORITY_LABEL } from "./i18n.js";
 import { ItemForm } from "./item-form.js";
 import {
   AGENT_STATE_LABEL,
-  imageAvatar,
+  avatarValue,
   isNotFound,
   pageHref,
   useCollabAction,
@@ -94,8 +94,6 @@ export function ProjectFrame(props: {
         ...(props.project?.description && { description: props.project.description }),
         actions,
       }}
-      variant={view === "board" ? "cards" : "records"}
-      listLabel={t(view === "board" ? COPY.board : COPY.itemsTable)}
       loading={props.loading}
       filterCount={(params.type !== undefined ? 1 : 0) + (mine ? 1 : 0)}
       filters={
@@ -280,7 +278,7 @@ function CardBody({ card, gateTarget }: { card: Card; gateTarget: string | null 
         <Stack direction="row" gap={4} align="center">
           {card.responsible !== null && (
             <Avatar
-              value={imageAvatar(card.responsible.avatar)}
+              value={avatarValue(card.responsible.avatar)}
               name={card.responsible.name}
               size={16}
               shape="circle"
@@ -288,7 +286,7 @@ function CardBody({ card, gateTarget }: { card: Card; gateTarget: string | null 
           )}
           {card.agent !== null && (
             <>
-              <Avatar value={imageAvatar(card.agent.avatar)} name={card.agent.name} size={16} />
+              <Avatar value={avatarValue(card.agent.avatar)} name={card.agent.name} size={16} />
               <Text variant="small" tone="muted" truncate>
                 {card.agentState === null
                   ? card.agent.name

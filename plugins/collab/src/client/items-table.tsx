@@ -12,7 +12,8 @@ import { ProjectFrame } from "./board.js";
 import { COPY, PRIORITY_LABEL } from "./i18n.js";
 import {
   AGENT_STATE_LABEL,
-  imageAvatar,
+  AgentName,
+  avatarUrl,
   isNotFound,
   TruncatedNote,
   useCollabQuery,
@@ -132,7 +133,7 @@ export function ItemsTable(props: {
               ) : (
                 <PersonName
                   name={r.responsible.name}
-                  avatarUrl={imageAvatar(r.responsible.avatar)?.src ?? null}
+                  avatarUrl={avatarUrl(r.responsible.avatar)}
                   size={16}
                 />
               ),
@@ -145,10 +146,8 @@ export function ItemsTable(props: {
               r.agent === null ? (
                 <Text tone="faint">{t(COPY.none)}</Text>
               ) : (
-                <PersonName
-                  name={r.agent.name}
-                  avatarUrl={imageAvatar(r.agent.avatar)?.src ?? null}
-                  size={16}
+                <AgentName
+                  agent={r.agent}
                   {...(r.agentState !== null && { secondary: t(AGENT_STATE_LABEL[r.agentState]) })}
                 />
               ),
