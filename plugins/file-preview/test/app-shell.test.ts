@@ -179,6 +179,18 @@ describe("the main flow", () => {
     expect(seen?.aborted).toBe(false);
   });
 
+  it("paints no ground before init: Canvas would flash light in the host's dark pane", () => {
+    const render = vi.fn<Renderer>(async () => {});
+    stops.push(startApp({ loadRenderer: async () => render }));
+    const css = [...document.head.querySelectorAll("style")].map((e) => e.textContent).join("\n");
+    const preInit =
+      /:root:not\(\[data-theme\]\) body, :root:not\(\[data-theme\]\) \.cap-status \{([^}]*)\}/;
+    expect(preInit.exec(css)?.[1]).toContain("background: transparent;");
+    // init sets data-theme: the theme's ground takes over
+    post(init);
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+  });
+
   it("ctx.lifetime outlives the render: not aborted once it settled, aborted on teardown", async () => {
     let seen: { signal: AbortSignal; lifetime: AbortSignal } | undefined;
     const render = vi.fn<Renderer>(async (_f, ctx) => {

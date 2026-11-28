@@ -1617,6 +1617,17 @@ describe("fonts", () => {
     expect(withSystemFaces(sans)).toBe(sans);
   });
 
+  it("paints no ground before init: a light canvas would flash in the host's dark panel", () => {
+    const css = /<style>([\s\S]*)<\/style>/.exec(PANEL_HTML)?.[1] ?? "";
+    // the body's ground becomes the canvas even while the body is hidden; Canvas is light
+    const preInit = /body:not\(\[data-ready\]\) \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(preInit).toContain("visibility: hidden");
+    expect(preInit).toMatch(/background: transparent;/);
+    // the root declares the light scheme before init, as the host's frame does (normal), so the
+    // browser keeps the canvas transparent instead of painting one in the document's scheme
+    expect(/:root \{([^}]*)\}/.exec(css)?.[1]).toContain("color-scheme: light;");
+  });
+
   it("the empty state's heading uses the body text's face, and the fallbacks name Windows faces", () => {
     const css = /<style>([\s\S]*)<\/style>/.exec(PANEL_HTML)?.[1] ?? "";
     const rule = (selector: string) =>

@@ -32,6 +32,9 @@ const BASE_CSS = `
 :root { color-scheme: light dark; scrollbar-color: ${THEME.scrollThumb} transparent; }
 html, body { height: 100%; margin: 0; }
 body { font: 14px/1.5 ${THEME.font}; color: ${THEME.foreground}; background: ${THEME.background}; }
+/* before applyTheme (the host's init) no ground: it would be Canvas, light on a light system whatever
+   the host's theme; transparent, the host's pane shows through */
+:root:not([data-theme]) body, :root:not([data-theme]) .cap-status { background: transparent; }
 #root { position: relative; height: 100%; overflow: auto; }
 .cap-content { height: 100%; }
 .cap-status { position: absolute; inset: 0; background: ${THEME.background}; }
