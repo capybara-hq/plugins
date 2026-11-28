@@ -453,7 +453,7 @@ async function openSession(
   if (client.getServerCapabilities()?.resources) {
     session.listResources = () =>
       guarded(async () => {
-        const out: { uri: string; name: string; description?: string; mimeType?: string }[] = [];
+        const out: Awaited<ReturnType<NonNullable<ConnectorSession["listResources"]>>> = [];
         let cursor: string | undefined;
         for (let page = 0; page < MAX_PAGES; page++) {
           const r = await client.listResources(cursor === undefined ? {} : { cursor }, opts());
@@ -463,6 +463,7 @@ async function openSession(
               name: x.name,
               ...(typeof x.description === "string" && { description: x.description }),
               ...(typeof x.mimeType === "string" && { mimeType: x.mimeType }),
+              ...(typeof x.size === "number" && { size: x.size }),
             });
           }
           cursor = r.nextCursor;

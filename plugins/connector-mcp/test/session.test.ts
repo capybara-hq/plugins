@@ -533,6 +533,36 @@ describe("认证", () => {
 });
 
 describe("resources", () => {
+  it("passes through resource sizes, including zero, and leaves unknown sizes absent", async () => {
+    const server = await fake({
+      tools: [],
+      resources: [
+        { uri: "docs://empty", name: "Empty" },
+        { uri: "docs://report", name: "Report" },
+        { uri: "docs://unknown", name: "Unknown" },
+      ],
+    });
+    const net = plainNet();
+    const session = await open(server, {
+      async net(url, init, opts) {
+        const response = await net(url, init, opts);
+        const request = JSON.parse(String(init?.body ?? "null")) as { method?: string } | null;
+        if (request?.method !== "resources/list") return response;
+        // The published test fixture does not yet expose Resource.size.
+        const reply = (await response.json()) as { result: { resources: { size?: number }[] } };
+        const [empty, report] = reply.result.resources;
+        if (empty) empty.size = 0;
+        if (report) report.size = 12;
+        return Response.json(reply);
+      },
+    });
+    expect(await session.listResources?.()).toEqual([
+      { uri: "docs://empty", name: "Empty", size: 0 },
+      { uri: "docs://report", name: "Report", size: 12 },
+      { uri: "docs://unknown", name: "Unknown" },
+    ]);
+  });
+
   it("服务声明 resources → listResources / readResource 可用", async () => {
     const server = await fake({
       tools: [],
