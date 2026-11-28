@@ -3,7 +3,7 @@ import { sql } from "kysely";
 import { outboxFor } from "../events/outbox.js";
 import type { CollabDb } from "../store/db.js";
 import type { Actor, Decision, Item } from "../store/types.js";
-import { requireRole } from "./access.js";
+import { isArchived, requireRole } from "./access.js";
 import {
   closeDecision,
   currentAddressee,
@@ -13,7 +13,7 @@ import {
 import { CollabError } from "./errors.js";
 import { actorJson, addActivity, isAgent, loadProject } from "./internal.js";
 import { type AdditionGuard, type MoveOptions, transitionIn } from "./items.js";
-import { statusesForType } from "./workflow.js";
+import { checkTransition, statusesForType } from "./workflow.js";
 
 /** One answer a decision offers. */
 export interface DecisionOption {
@@ -51,9 +51,11 @@ export interface DecisionAnswer {
 /**
  * How an answer ended: `answered`; `closed` when the decision was no longer open (an earlier
  * click won, or it was canceled or expired: see `decision.state`); `superseded` when the item
- * moved past the gate since it was requested (the gate is canceled, nothing moves).
+ * moved past the gate since it was requested (the gate is canceled, nothing moves);
+ * `disallowed` when an approved gate's move is no longer in the workflow (canceled likewise);
+ * `archived` when the project was archived (the decision is canceled: archived is read-only).
  */
-export type AnswerOutcome = "answered" | "closed" | "superseded";
+export type AnswerOutcome = "answered" | "closed" | "superseded" | "disallowed" | "archived";
 
 export interface AnswerResult {
   decision: Decision;
@@ -69,7 +71,7 @@ const MAX_WHY_CHARS = 1000;
 const MAX_ANSWER_CHARS = 2000;
 const MAX_DEADLINE_HOURS = 24 * 30;
 /** Open questions one asker (person, or person and agent) may have on one item. */
-export const MAX_OPEN_QUESTIONS = 5;
+const MAX_OPEN_QUESTIONS = 5;
 /** A decision still open this long after it was asked expires. */
 export const DECISION_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000;
 /**
@@ -366,6 +368,27 @@ export async function answerDecision(
       await closeDecision(tx, orgId, actor, current, "canceled", "superseded", opts.decisions);
       return { decision: { ...current, state: "canceled" }, item, outcome: "superseded" };
     }
+    if (await isArchived(tx, orgId, item.project_id)) {
+      await closeDecision(tx, orgId, actor, current, "canceled", "archived", opts.decisions);
+      return { decision: { ...current, state: "canceled" }, item, outcome: "archived" };
+    }
+    // The workflow may have changed since the request: a move it no longer allows cancels the
+    // gate instead of failing every later answer.
+    if (
+      current.kind === "gate" &&
+      answer.optionId === GATE_APPROVE &&
+      current.gate_target &&
+      item.status_key !== current.gate_target
+    ) {
+      const statuses = await statusesForType(tx, orgId, item.project_id, item.type);
+      try {
+        checkTransition(statuses, item.status_key, current.gate_target);
+      } catch (error) {
+        if (!(error instanceof CollabError) || error.code !== "invalid_transition") throw error;
+        await closeDecision(tx, orgId, actor, current, "canceled", "disallowed", opts.decisions);
+        return { decision: { ...current, state: "canceled" }, item, outcome: "disallowed" };
+      }
+    }
     const options = current.options as DecisionOption[];
     if (answer.optionId !== undefined && !options.some((o) => o.id === answer.optionId)) {
       throw new CollabError("invalid_input", "Pick one of the decision's options.");
@@ -432,6 +455,23 @@ export async function answerDecision(
   });
 }
 
+/** What the asker is told when a decision expires, by kind. */
+async function expiryText(
+  tx: CollabDb,
+  orgId: string,
+  projectKey: string,
+  item: Item,
+  decision: Decision,
+): Promise<string> {
+  if (decision.kind !== "gate") {
+    return `Question: "${decision.question}" expired unanswered after 30 days.`;
+  }
+  const statuses = await statusesForType(tx, orgId, item.project_id, item.type);
+  const target = statuses.find((s) => s.key === decision.gate_target);
+  const name = target ? target.name_en : (decision.gate_target ?? "?");
+  return `The confirmation request to move ${projectKey}-${item.number} to "${name}" expired unanswered after 30 days. Request the move again if it is still needed.`;
+}
+
 /**
  * Expires a decision still open {@link DECISION_EXPIRY_MS} after it was asked (its expiry job).
  * The asking pair, if it still holds the item, gets an `item.updated` saying so. Returns the
@@ -473,7 +513,7 @@ export async function expireDecision(
       actor,
       decision,
       item,
-      `Question: "${decision.question}" expired unanswered after 30 days.`,
+      await expiryText(tx, orgId, project.key, item, decision),
       false,
     );
     return { ...decision, state: "expired" };

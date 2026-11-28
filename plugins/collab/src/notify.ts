@@ -1,8 +1,9 @@
 import type { ExtensionContext } from "@capybara-hq/plugin-sdk";
 import { sql } from "kysely";
-import { ITEM_PANEL, ITEM_PROPERTIES, PROJECTS } from "./constants.js";
+import { AGENT_ITEMS, ITEM_PANEL, ITEM_PROPERTIES, PROJECTS } from "./constants.js";
+import { decisionHooks } from "./decisions-queue.js";
 import { assign } from "./domain/assignment.js";
-import { CollabError } from "./domain/errors.js";
+import { ARCHIVED_TOAST, CollabError } from "./domain/errors.js";
 import { type EmitterCtx, emitting } from "./events/emitter.js";
 import {
   type NotifyCtx,
@@ -54,7 +55,7 @@ export async function invalidateItems(
   ctx: Pick<ExtensionContext, "ui" | "log">,
   orgId: string,
 ): Promise<void> {
-  for (const contribution of [PROJECTS, ITEM_PANEL, ITEM_PROPERTIES]) {
+  for (const contribution of [PROJECTS, ITEM_PANEL, ITEM_PROPERTIES, AGENT_ITEMS]) {
     try {
       await ctx.ui.invalidate({ orgId, contribution });
     } catch (err) {
@@ -110,13 +111,22 @@ async function stopAgent(
       };
     }
     const responsible = item.responsible_account_id;
+    // Like every UI write: decision jobs queued in the write (a reassignment can re-address a
+    // gate), events and notices after the commit, then the follow-ups.
+    const follow = decisionHooks(ctx, args.orgId);
     try {
       await notifying(ctx, args.orgId, () =>
-        assign(db, args.orgId, { accountId: args.accountId }, itemId, item.version, {
-          responsibleAccountId: responsible,
-          executingAgentId: null,
-        }),
+        assign(
+          db,
+          args.orgId,
+          { accountId: args.accountId },
+          itemId,
+          item.version,
+          { responsibleAccountId: responsible, executingAgentId: null },
+          follow.hooks,
+        ),
       );
+      await follow.flush();
     } catch (err) {
       if (
         err instanceof CollabError &&
@@ -127,10 +137,13 @@ async function stopAgent(
       }
       if (err instanceof CollabError) {
         return {
-          toast: {
-            zh: `无法停止智能体：${err.message}`,
-            en: `Could not stop the agent: ${err.message}`,
-          },
+          toast:
+            err.code === "archived"
+              ? ARCHIVED_TOAST
+              : {
+                  zh: "无法停止智能体，请在事项页面查看。",
+                  en: "Could not stop the agent. Open the item's page.",
+                },
         };
       }
       throw err;

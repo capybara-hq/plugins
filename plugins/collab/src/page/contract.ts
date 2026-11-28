@@ -171,7 +171,7 @@ export interface ProjectBoardResult {
   cards: BoardCard[];
   /** More items matched than the board shows (use the table). */
   truncated: boolean;
-  /** The viewer may create and move items (owner or member). */
+  /** The viewer may create and move items (owner or member, and the project is not archived). */
   canEdit: boolean;
 }
 export interface BoardColumn extends StatusInfo {
@@ -294,8 +294,8 @@ export interface ArtifactRow {
   kind: string;
   name: string;
   version: number;
-  /** An http(s) link; null for a stored file. */
-  url: string | null;
+  /** An http(s) link. */
+  url: string;
   author: ActorRef;
   createdAt: string;
 }

@@ -78,7 +78,8 @@ CREATE TABLE IF NOT EXISTS items (
   requester_account_id text NOT NULL,
   responsible_account_id text,
   executing_agent_id text,
-  priority integer NOT NULL DEFAULT 3,
+  -- 0 none, 1 urgent, 2 high, 3 medium, 4 low.
+  priority integer NOT NULL DEFAULT 3 CHECK (priority BETWEEN 0 AND 4),
   labels text[] NOT NULL DEFAULT '{}',
   parent_id uuid REFERENCES items (id) ON DELETE SET NULL,
   fields jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -98,14 +99,9 @@ CREATE INDEX IF NOT EXISTS items_org_responsible ON items (org_id, responsible_a
 CREATE INDEX IF NOT EXISTS items_org_agent ON items (org_id, executing_agent_id);
 CREATE INDEX IF NOT EXISTS items_parent ON items (parent_id);
 CREATE INDEX IF NOT EXISTS items_org_project_status ON items (org_id, project_id, status_key);
-
-CREATE TABLE IF NOT EXISTS item_watchers (
-  org_id text NOT NULL,
-  item_id uuid NOT NULL REFERENCES items (id) ON DELETE CASCADE,
-  account_id text NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (item_id, account_id)
-);
+-- The conversation panels find the item a conversation serves by its last work conversation.
+CREATE INDEX IF NOT EXISTS items_org_agent_conversation ON items (org_id, agent_conversation_id)
+  WHERE agent_conversation_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS item_links (
   org_id text NOT NULL,
@@ -156,8 +152,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
   kind text NOT NULL,
   name text NOT NULL,
   version integer NOT NULL DEFAULT 1,
-  storage_key text,
-  url text,
+  -- An http(s) link (stored files are a follow-up).
+  url text NOT NULL,
   author jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );

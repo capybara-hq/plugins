@@ -82,7 +82,7 @@ const RESULT_BUDGET_BYTES = 900 * 1024;
 const COMMENT_CLIP_CHARS = 4000;
 
 /** The bytes left for one result. */
-export class Budget {
+class Budget {
   private left: number;
   constructor(bytes = RESULT_BUDGET_BYTES) {
     this.left = bytes;
@@ -113,7 +113,7 @@ function clipChars(text: string, max: number): { text: string; clipped: boolean 
 }
 
 /** A malformed query (the host answers it as a failed query). */
-export class QueryParamsError extends Error {}
+class QueryParamsError extends Error {}
 
 type Params = Record<string, unknown>;
 
@@ -176,7 +176,7 @@ const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() 
 const isoOf = (d: Date): string => d.toISOString();
 
 /** The project with the viewer's role, or null when it is missing or hidden from them. */
-export async function viewerProject(
+async function viewerProject(
   db: CollabDb,
   orgId: string,
   accountId: string,
@@ -195,7 +195,7 @@ export async function viewerProject(
 }
 
 /** The item `<KEY>-<n>` with its project and the viewer's role, or null when missing or hidden. */
-export async function viewerItem(
+async function viewerItem(
   db: CollabDb,
   orgId: string,
   accountId: string,
@@ -550,7 +550,7 @@ async function projectBoard(
     ...head,
     cards,
     truncated: truncated || cut,
-    canEdit: role !== "guest",
+    canEdit: role !== "guest" && !project.archived,
   };
 }
 
@@ -634,7 +634,7 @@ async function projectItems(
     total: Number(total.n),
     page,
     pageSize,
-    canEdit: role !== "guest",
+    canEdit: role !== "guest" && !project.archived,
   };
   const budget = new Budget();
   budget.take(head);
@@ -785,7 +785,7 @@ async function itemDetail(
     type,
     statuses: (statuses.get(item.type) ?? []).map(statusInfo),
     parent: parent ? itemRef(parent, project.key, statuses) : null,
-    canEdit: role !== "guest",
+    canEdit: role !== "guest" && !project.archived,
   };
   // Open decisions first: they are what the page acts on.
   const allDecisions = await decisionRows(
@@ -1176,7 +1176,7 @@ async function itemByConversation(
       agent: await dir.agent(item.responsible_account_id, item.executing_agent_id),
       agentState: item.agent_state,
       openDecisions,
-      canEdit: role !== "guest",
+      canEdit: role !== "guest" && !project.archived,
     },
   };
 }

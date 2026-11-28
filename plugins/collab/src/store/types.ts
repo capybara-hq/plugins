@@ -108,13 +108,6 @@ export interface ItemsTable {
   updated_at: Generated<Date>;
 }
 
-export interface ItemWatchersTable {
-  org_id: string;
-  item_id: string;
-  account_id: string;
-  created_at: Generated<Date>;
-}
-
 export interface ItemLinksTable {
   org_id: string;
   from_id: string;
@@ -150,8 +143,7 @@ export interface ArtifactsTable {
   kind: string;
   name: string;
   version: Generated<number>;
-  storage_key: string | null;
-  url: string | null;
+  url: string;
   author: Json<Actor>;
   created_at: Generated<Date>;
 }
@@ -209,7 +201,6 @@ export interface CollabDatabase {
   statuses: StatusesTable;
   item_types: ItemTypesTable;
   items: ItemsTable;
-  item_watchers: ItemWatchersTable;
   item_links: ItemLinksTable;
   comments: CommentsTable;
   activity: ActivityTable;

@@ -20,7 +20,6 @@ export interface OutboxExtra {
   projectKey: string;
   statusCategory: StatusCategory;
   changedFields?: string[];
-  mentions?: string[];
   /** Directed types (declared `directed`, and only those): the pair the event is addressed to. */
   audience?: { accountId: string; agentId: string };
   detail?: SummaryDetail;
@@ -77,7 +76,6 @@ export async function outboxFor(
     statusCategory: extra.statusCategory,
     priority: item.priority,
     labels: clipList(item.labels),
-    mentions: clipList(extra.mentions ?? []),
     changedFields: clipList(extra.changedFields ?? []),
   };
   if (item.responsible_account_id) facts.responsibleAccountId = item.responsible_account_id;

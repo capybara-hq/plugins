@@ -5,7 +5,7 @@ import { requireRole } from "../domain/access.js";
 import { assign, assignIn } from "../domain/assignment.js";
 import { type DecisionHooks, readdressOpen } from "../domain/decision-state.js";
 import { answerersOf, GATE_APPROVE, GATE_REJECT } from "../domain/decisions.js";
-import { CollabError, type CollabErrorCode } from "../domain/errors.js";
+import { ARCHIVED_TOAST, CollabError, type CollabErrorCode } from "../domain/errors.js";
 import { comment, createItem, transition, updateItemIn } from "../domain/items.js";
 import { addMember, createProject, removeMember, setFunction } from "../domain/projects.js";
 import type { DefaultAssignmentRule, GateRule } from "../domain/workflow.js";
@@ -58,6 +58,7 @@ const REFUSALS: Readonly<Record<CollabErrorCode, Toast>> = {
     "The responsible person must be an owner or member of the project.",
   ),
   no_longer_assigned: text("你已不再负责这个事项。", "You no longer work on this item."),
+  archived: ARCHIVED_TOAST,
 };
 
 /** Refusals an action words its own way. */
@@ -727,13 +728,19 @@ async function settingsSave(deps: ActionDeps, args: UiOrgActionArgs): Promise<Ui
   if (name !== undefined && !name) {
     return { toast: text("项目名称不能为空。", "The project name must not be empty.") };
   }
+  // An archived project takes only the save that unarchives it (with any other changes).
+  const unarchive = archived === false;
   return refusingProject(async () => {
-    await requireRole(deps.db, args.orgId, args.accountId, projectId, "owner");
+    await requireRole(deps.db, args.orgId, args.accountId, projectId, "owner", {
+      allowArchived: unarchive,
+    });
     const invalidTarget = await invalidRuleTarget(deps, args.orgId, projectId, statuses);
     if (invalidTarget) return { toast: invalidTarget, invalidate: [...PROJECT_QUERIES] };
     await writing(deps, args.orgId, (hooks) =>
       deps.db.transaction().execute(async (tx) => {
-        await requireRole(tx, args.orgId, args.accountId, projectId, "owner");
+        await requireRole(tx, args.orgId, args.accountId, projectId, "owner", {
+          allowArchived: unarchive,
+        });
         const set = {
           ...(name !== undefined ? { name } : {}),
           ...(description !== undefined ? { description } : {}),

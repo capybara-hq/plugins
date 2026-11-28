@@ -11,7 +11,6 @@ const TABLES = [
   "statuses",
   "item_types",
   "items",
-  "item_watchers",
   "item_links",
   "comments",
   "activity",

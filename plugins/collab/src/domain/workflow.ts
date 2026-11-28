@@ -28,7 +28,7 @@ export interface DefaultAssignmentRule {
 
 /** The status categories that close an item. */
 // capybara:allow-module-state read-only constant
-export const CLOSED_CATEGORIES: readonly StatusCategory[] = ["done", "canceled"];
+const CLOSED_CATEGORIES: readonly StatusCategory[] = ["done", "canceled"];
 
 export function isClosed(category: StatusCategory): boolean {
   return CLOSED_CATEGORIES.includes(category);
@@ -43,7 +43,7 @@ export function defaultAssignmentOf(status: Status): DefaultAssignmentRule | nul
 }
 
 /** The workflow id of an item type in a project. */
-export async function workflowIdOf(
+async function workflowIdOf(
   db: CollabDb,
   orgId: string,
   projectId: string,
@@ -64,11 +64,7 @@ export async function workflowIdOf(
 }
 
 /** The statuses of a workflow in board order. */
-export async function statusesOf(
-  db: CollabDb,
-  orgId: string,
-  workflowId: string,
-): Promise<Status[]> {
+async function statusesOf(db: CollabDb, orgId: string, workflowId: string): Promise<Status[]> {
   return db
     .selectFrom("statuses")
     .selectAll()

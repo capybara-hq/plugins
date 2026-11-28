@@ -102,7 +102,7 @@ export const COPY = {
   canceled: { zh: "已取消", en: "Canceled" },
   expired: { zh: "已过期", en: "Expired" },
   open: { zh: "待回答", en: "Open" },
-  gate: { zh: "关卡", en: "Gate" },
+  gate: { zh: "确认请求", en: "Confirmation" },
   question: { zh: "问题", en: "Question" },
 
   agentWorking: { zh: "工作中", en: "Working" },
@@ -113,7 +113,7 @@ export const COPY = {
 
   members: { zh: "成员与职能", en: "Members & functions" },
   typesWorkflows: { zh: "类型与工作流", en: "Types & workflows" },
-  gates: { zh: "关卡", en: "Gates" },
+  gates: { zh: "需确认的状态", en: "Confirmation rules" },
   defaultAssignments: { zh: "默认指派", en: "Default assignments" },
   settingsNav: { zh: "设置", en: "Settings" },
   functionLabel: { zh: "职能", en: "Function" },
@@ -123,10 +123,10 @@ export const COPY = {
   confirmer: { zh: "确认人", en: "Confirmer" },
   assignee: { zh: "指派给", en: "Assign to" },
   workflow: { zh: "工作流", en: "Workflow" },
-  noGates: { zh: "没有关卡", en: "No gates" },
+  noGates: { zh: "没有需确认的状态", en: "No confirmation rules" },
   noDefaults: { zh: "没有默认指派", en: "No default assignments" },
   readOnly: {
-    zh: "只有项目负责人可以修改这些设置。",
+    zh: "只有项目所有者可以修改这些设置。",
     en: "Only the project owner can change these settings.",
   },
   back: { zh: "返回", en: "Back" },
@@ -137,12 +137,12 @@ export const COPY = {
   general: { zh: "常规", en: "General" },
   archived: { zh: "已归档", en: "Archived" },
   archivedHelp: {
-    zh: "归档后项目不再出现在新建事项的选择中，已有事项保留。",
-    en: "An archived project is kept with its items but takes no new work.",
+    zh: "归档后项目只能查看，不能再修改；项目所有者可以取消归档。",
+    en: "An archived project is read-only; a project owner can unarchive it.",
   },
   removeMemberTitle: { zh: "移除成员", en: "Remove member" },
   removeMemberText: {
-    zh: "移除后，此成员负责的未完成事项会交还给项目负责人，并取消其智能体。",
+    zh: "移除后，此成员负责的未完成事项会交还给项目所有者，并取消其智能体。",
     en: "Their open items go back to the project owner, without an agent.",
   },
   pendingGate: { zh: "待确认", en: "Awaiting confirmation" },
@@ -159,7 +159,7 @@ export const COPY = {
 } satisfies Record<string, Copy>;
 
 export const ROLE_LABEL: Record<"owner" | "member" | "guest", Copy> = {
-  owner: { zh: "负责人", en: "Owner" },
+  owner: { zh: "所有者", en: "Owner" },
   member: { zh: "成员", en: "Member" },
   guest: { zh: "访客", en: "Guest" },
 };

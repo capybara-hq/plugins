@@ -140,11 +140,6 @@ function checkArtifactUrl(url: string): void {
   }
 }
 
-/** The object storage prefix of an item's files (inside the plugin's own namespace). */
-export function artifactKeyPrefix(itemId: string): string {
-  return `artifacts/${itemId}/`;
-}
-
 function checkPriority(priority: number): number {
   if (!Number.isInteger(priority) || priority < 0 || priority > 4) {
     throw new CollabError(
@@ -748,28 +743,19 @@ export async function link(
 }
 
 /**
- * Attaches a file or a link to the item; a new one under an existing name is its next version.
- * A file is an object storage key under `artifactKeyPrefix(itemId)`; a link an http(s) URL.
+ * Attaches a link (an http(s) URL) to the item; a new one under an existing name is its next
+ * version.
  */
 export async function attachArtifact(
   db: CollabDb,
   orgId: string,
   actor: Actor,
   itemId: string,
-  input: { kind: string; name: string; storageKey?: string; url?: string },
+  input: { kind: string; name: string; url: string },
   opts: AdditionOptions = {},
 ): Promise<Artifact> {
   if (!input.name.trim()) throw new CollabError("invalid_input", "The artifact needs a name.");
-  if (Boolean(input.storageKey) === Boolean(input.url)) {
-    throw new CollabError("invalid_input", "Attach either a file or a URL, exactly one of them.");
-  }
-  if (input.url) checkArtifactUrl(input.url);
-  if (
-    input.storageKey &&
-    (!input.storageKey.startsWith(artifactKeyPrefix(itemId)) || input.storageKey.includes(".."))
-  ) {
-    throw new CollabError("invalid_input", "The file is not one of this item's uploads.");
-  }
+  checkArtifactUrl(input.url);
   return db.transaction().execute(async (tx) => {
     // The item lock (additionContext) also gives concurrent attachments of one name distinct
     // versions; the item's own version stays.
@@ -789,8 +775,7 @@ export async function attachArtifact(
         kind: input.kind,
         name: input.name,
         version: (latest?.v ?? 0) + 1,
-        storage_key: input.storageKey ?? null,
-        url: input.url ?? null,
+        url: input.url,
         author: actorJson(actor),
       })
       .returningAll()

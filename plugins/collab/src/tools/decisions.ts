@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ToolSpec } from "@capybara-hq/plugin-sdk";
+import { type SqlBool, sql } from "kysely";
 import { decisionHooks, queueDeadline } from "../decisions-queue.js";
 import { askDecision, type DecisionOption } from "../domain/decisions.js";
 import { CollabError } from "../domain/errors.js";
@@ -234,7 +235,10 @@ export function registerDecisionTools(deps: ToolDeps): void {
         q = q.where("d.item_id", "=", (await itemByKey(db, call.orgId, person, key)).item.id);
       const state = optStr(input, "state") ?? "open";
       if (state !== "any") q = q.where("d.state", "=", state as DecisionState);
-      if (input.addressedToMe === true) q = q.where("d.addressee_account_id", "=", person);
+      // Every recipient counts (each confirmer of a gate several members may confirm).
+      if (input.addressedToMe === true) {
+        q = q.where(sql<SqlBool>`${person} = ANY(d.addressees)`);
+      }
       const rows = await q.orderBy("d.created_at", "desc").limit(limit).execute();
       if (rows.length === 0) {
         return result(`No ${state === "any" ? "" : `${state} `}decisions match.`);

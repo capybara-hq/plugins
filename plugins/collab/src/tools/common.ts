@@ -38,7 +38,7 @@ const FOREIGN_RUN =
   "for the conversation's owner. Ask the owner to run it.";
 
 /** The actor a tool write records: the person, and the agent acting for them in this conversation. */
-export function actorOf(call: ToolCallContext): Actor {
+function actorOf(call: ToolCallContext): Actor {
   return { accountId: personOf(call), agentId: call.agentId, conversationId: call.conversationId };
 }
 
@@ -46,7 +46,7 @@ export function actorOf(call: ToolCallContext): Actor {
  * Runs a domain write as the call's actor, then emits the events it owes and posts the inbox
  * notices of the assignments it made (`notifying`). The actor carries the
  * kernel's cause handle of this call, so those events keep the call's chain depth and
- * self-trigger check (also when the `collab-emit` queue emits them later).
+ * self-trigger check (also when the org's `collab-drain` job emits them later).
  */
 export async function writing<T>(
   deps: ToolDeps,

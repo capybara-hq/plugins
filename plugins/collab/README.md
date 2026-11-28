@@ -18,7 +18,8 @@ What the plugin does:
   it reaches the assigned person's agent through that person's acceptance rule (`auto`, `confirm` or
   `off`, set in the person's settings; the org default is `auto`), which opens the item's own
   conversation for the pair and keeps using it.
-- **Inbox items**: assignment notices (with a "Stop agent" button), decisions and gate
+- **Inbox items**: assignment notices (with a "Stop agent" button; reassigning goes through the
+  notice's link to the item page, there is no reassign button), decisions and gate
   confirmations (with answer buttons), reminders and escalations, and "pick who gets it" requests
   to the project owner when a default assignment matches nobody or several people.
 - **Agent run state** on items (working, waiting, idle, declined) from the kernel's `run.lifecycle`
@@ -47,6 +48,9 @@ New projects start with three item types (editable per status afterwards):
   its own and the done gate is asked of its requester at once.
 - **Removing a member** (or making them a guest) hands their open items back to the project owner
   and re-addresses their open decisions.
+- **Archived projects are read-only.** Every write (tools, page actions, inbox answers) is refused
+  with a message saying so; open decisions are canceled when answered. Only the settings save that
+  unarchives the project (a project owner) goes through.
 - Assigning someone else through a tool always asks the conversation's person first; the person
   clicking in the pages is the consent. Taking an item away from an agent tells it to stop
   (writes from its old conversation are refused).
@@ -94,7 +98,7 @@ write takes the `version` the agent last read and returns the new one.
 asking pair while it holds the item), `gate.requested`.
 
 Every event carries the filterable facts `projectKey`, `itemType`, `status`, `statusCategory`,
-`priority`, `labels`, `responsibleAccountId`, `executingAgentId`, `mentions`, `changedFields`.
+`priority`, `labels`, `responsibleAccountId`, `executingAgentId`, `changedFields`.
 Events are written to an outbox in the same transaction as the change and emitted after the
 commit; a per-org drain job (queued before the write) re-emits anything a crash or an outage left
 behind, retrying on a ladder up to an hour. The kernel dedupes on the event's key, so a row emitted
@@ -123,6 +127,13 @@ twice is one event. Only people the project shows the item to see its events.
 - Settings edit gates and default assignments per status, project name, description and archive;
   adding or reordering statuses and types is not available yet.
 - Artifacts are links only (no file upload).
+
+## Not yet (follow-ups)
+
+- **Watchers**: the design's item watchers are not built; people follow items through assignment,
+  decisions and the project's automations.
+- **Mentions**: events carry no `mentions` fact.
+- **Stored artifacts**: attaching files (object storage) instead of links.
 
 ## Development
 

@@ -1,8 +1,8 @@
 import type { UiActionResult } from "@capybara-hq/plugin-sdk";
 import { decisionHooks, INBOX_ANSWER } from "../decisions-queue.js";
 import { type AnswerResult, answerDecision, type DecisionAnswer } from "../domain/decisions.js";
-import { CollabError } from "../domain/errors.js";
-import { notifying } from "../notify.js";
+import { ARCHIVED_TOAST, CollabError } from "../domain/errors.js";
+import { invalidateItems, notifying } from "../notify.js";
 import { agentAllowedFor } from "../tools/common.js";
 import { type ActionDeps, payloadFields, registerAction } from "../ui/actions.js";
 
@@ -24,6 +24,13 @@ const toast = (zh: string, en: string): Toast => ({ toast: { zh, en } });
 /** What a person reads after a click: never the model-facing domain text. */
 function outcomeToast(out: AnswerResult): Toast {
   if (out.outcome === "answered") return toast("已答复。", "Answered.");
+  if (out.outcome === "archived") return { toast: { ...ARCHIVED_TOAST } };
+  if (out.outcome === "disallowed") {
+    return toast(
+      "工作流已更改，这一步已不再允许，确认请求已取消。",
+      "The workflow changed and this move is no longer allowed; the request was canceled.",
+    );
+  }
   if (out.outcome === "superseded" || out.decision.state === "canceled") {
     return toast("事项已进入其他状态。", "The item moved on.");
   }
@@ -62,6 +69,8 @@ async function refusalToast(
         "无法移动事项，请在事项页面处理。",
         "The item could not be moved. Open it on its page.",
       );
+    case "archived":
+      return { toast: { ...ARCHIVED_TOAST } };
     case "invalid_input":
       return toast(
         "请选择一个选项，或写下答复（最多 2000 字）。",
@@ -95,6 +104,7 @@ export async function answerAsPerson(
         }),
       );
       await follow.flush();
+      if (out.outcome !== "closed") await invalidateItems(ctx, call.orgId);
       if (opts.quietSuccess && out.outcome === "answered") return {};
       return outcomeToast(out);
     } catch (error) {
@@ -109,7 +119,7 @@ export async function answerAsPerson(
  * `inbox.answer`: a person answers a decision from an inbox button (the kernel calls it as the
  * person who clicked; at least once, so a repeated click answers nothing new).
  */
-export async function answerFromInbox(deps: ActionDeps, call: AnswerCall): Promise<UiActionResult> {
+async function answerFromInbox(deps: ActionDeps, call: AnswerCall): Promise<UiActionResult> {
   const { decisionId, optionId } = payloadFields(call.payload, {
     decisionId: "uuid",
     optionId: "id",

@@ -16,10 +16,10 @@ import { registerLifecycle } from "./lifecycle.js";
 import "./notify.js";
 // Registers the page actions (before registerUiActions runs).
 import "./page/actions.js";
+import { createTriggerSource } from "./events/source.js";
 import { registerQueries } from "./page/queries.js";
 import { collabDb } from "./store/db.js";
 import { registerTools } from "./tools/index.js";
-import { createTriggerSource } from "./trigger-source.js";
 import { registerUiActions } from "./ui/actions.js";
 
 /**

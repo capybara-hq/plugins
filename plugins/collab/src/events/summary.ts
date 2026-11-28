@@ -1,7 +1,7 @@
 /** The kernel's limit on an event summary, in UTF-8 bytes. */
 export const SUMMARY_MAX_BYTES = 4096;
 /** How much of a description, comment or answer a summary quotes. */
-export const EXCERPT_CHARS = 500;
+const EXCERPT_CHARS = 500;
 /** The most a name takes in a summary, so the first sentence always fits. */
 const NAME_BYTES = 200;
 

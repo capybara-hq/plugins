@@ -31,7 +31,6 @@ describe("collab trigger source", () => {
           "executingAgentId",
           "itemType",
           "labels",
-          "mentions",
           "priority",
           "projectKey",
           "responsibleAccountId",

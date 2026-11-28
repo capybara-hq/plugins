@@ -26,7 +26,6 @@ const FACTS: Record<string, TriggerFactDeclaration> = {
     name: { zh: "执行智能体", en: "Executing agent" },
     filterable: true,
   },
-  mentions: { type: "string[]", name: { zh: "提及", en: "Mentions" }, filterable: true },
   changedFields: {
     type: "string[]",
     name: { zh: "变更字段", en: "Changed fields" },
@@ -40,12 +39,12 @@ const TYPES: Record<EventType, { zh: string; en: string; directed: boolean }> = 
   "item.created": { zh: "事项已创建", en: "Item created", directed: false },
   "item.updated": { zh: "事项已更新", en: "Item updated", directed: false },
   "item.status_changed": { zh: "事项状态已变更", en: "Item status changed", directed: false },
-  "item.assigned": { zh: "事项已分配", en: "Item assigned", directed: true },
-  "item.unassigned": { zh: "事项已取消分配", en: "Item unassigned", directed: true },
+  "item.assigned": { zh: "事项已指派", en: "Item assigned", directed: true },
+  "item.unassigned": { zh: "事项已取消指派", en: "Item unassigned", directed: true },
   "item.commented": { zh: "事项有新评论", en: "Item commented", directed: false },
   "item.closed": { zh: "事项已关闭", en: "Item closed", directed: false },
   "decision.answered": { zh: "决策已答复", en: "Decision answered", directed: true },
-  "gate.requested": { zh: "已请求关卡确认", en: "Gate confirmation requested", directed: false },
+  "gate.requested": { zh: "已请求确认", en: "Confirmation requested", directed: false },
 };
 
 /** The event types of the `trigger-source@1` provider, in `EVENT_TYPES` order. */

@@ -55,7 +55,7 @@ export interface AnswerPayload {
  * A job id per decision and step, the same on every replica (a uuid has no `:`); a re-address
  * notifies under a new id (`-<gen>`), never one a finished job already has.
  */
-export function decisionJobId(step: DecisionStep, decisionId: string, gen = 0): string {
+function decisionJobId(step: DecisionStep, decisionId: string, gen = 0): string {
   return `collab-decision-${step}-${decisionId}${step === "notify" && gen > 0 ? `-${gen}` : ""}`;
 }
 

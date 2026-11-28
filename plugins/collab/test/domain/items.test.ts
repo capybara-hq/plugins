@@ -206,12 +206,10 @@ describe("collab items", () => {
         updateItem(db, org, OWNER, item.id, item.version, { fields: { big: "x".repeat(17_000) } }),
       ),
     ).toBe("invalid_input");
-    const attach = (ref: { url?: string; storageKey?: string }) =>
+    const attach = (ref: { url: string }) =>
       code(attachArtifact(db, org, OWNER, item.id, { kind: "doc", name: "n", ...ref }));
     expect(await attach({ url: "javascript:alert(1)" })).toBe("invalid_input");
     expect(await attach({ url: "/relative" })).toBe("invalid_input");
-    expect(await attach({ storageKey: "artifacts/other-item/f.pdf" })).toBe("invalid_input");
-    expect(await attach({ storageKey: `artifacts/${item.id}/../x` })).toBe("invalid_input");
-    expect(await attach({ storageKey: `artifacts/${item.id}/prd.pdf` })).toBe("ok");
+    expect(await attach({ url: "https://example.com/prd.pdf" })).toBe("ok");
   });
 });
