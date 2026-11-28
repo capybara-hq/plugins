@@ -65,6 +65,7 @@ For a bug: reproduce it first, then fix it with a test that fails without the fi
 request, and move it to verifying.
 
 The requirement's status follows its children: when every child is closed, it moves from in
-progress to acceptance by itself (`item_get` shows it). With the requirement in acceptance,
-comment how the delivered work meets each acceptance criterion and request the done status: it is
-gated on the acceptance of the person who asked for the requirement.
+progress to acceptance by itself, and entering acceptance opens the request to move it to done
+for the person who asked for the requirement (the project owner when that person left): nobody
+requests it, and no tool confirms it. With the requirement in acceptance, a comment on how the
+delivered work meets each acceptance criterion helps that person decide.

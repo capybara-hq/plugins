@@ -67,6 +67,8 @@ What is not on the item is invisible to the people and agents who pick it up nex
   owner's review before a requirement is ready, the requester's acceptance before it is done). A
   transition into a gated status does not move the item. It opens a gate request for the confirming
   person and reports who it waits on; the item stays where it is.
+- A parent whose children are all closed moves from in progress to acceptance by itself, and that
+  move opens the done request to the requester at once; it is not requested again by hand.
 - The confirmation is a person's act on the web or in their inbox; no tool performs it. The
   outcome arrives as an answer to the gate decision while you still hold the item; when the
   confirmed move hands the item to someone else, you receive the unassignment instead. Until then

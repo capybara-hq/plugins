@@ -23,6 +23,9 @@ kernel log lines (`grep reqId=`, `grep context=`) and a screenshot.
       `engineer`, `qa`) and sets it as their default agent in the project. The agents show the
       template's skills (`collab-workflow` plus `prd-writing` / `test-planning`) and tools.
 - [ ] Acceptance rule for Projects is `auto` for Li, Zhang and Chen (the default).
+- [ ] Both the engineer and the QA template carry the sandbox tools (Bash, Read, Write, Edit,
+      Glob, Grep, Deliver, FetchAttachment): the QA agent runs tests in Chen's device (spec §7
+      step 4), not only the engineer in Zhang's.
 - [ ] Zhang and Chen each have a device with a small sample repository (for example a web app with
       a test suite) that the engineer can change and the QA agent can run.
 - [ ] Project `CAP` created by Wang with the default workflows (gate on requirement `ready` by the
@@ -107,9 +110,12 @@ Close the remaining tasks (by the agents or by hand).
 
 - [ ] When the last child closes, CAP-n moves from in progress to acceptance by itself, with an
       activity entry; nobody moved it.
-- [ ] Requesting done (by the engineer agent working on CAP-n, or by Zhang on the board) opens the
-      gate for Li (the requester); Li gets the inbox item. A direct move by Zhang does not pass
-      the gate.
+- [ ] On that automatic entry into acceptance, Li (the requester) gets the done confirmation in
+      the inbox with nobody requesting it; the item shows it waiting on Li. Pass: no agent or
+      person had to request done.
+- [ ] Requesting done by hand afterwards (Zhang on the board, or the engineer agent) opens no
+      second confirmation: one open done decision, one inbox item for Li. A direct move by Zhang
+      does not pass it.
 - [ ] Li accepts; CAP-n is done. Pass: the item's activity shows the whole history with actors
       (person and agent) for each write.
 
