@@ -67,6 +67,11 @@ function fake(
   /** The requests exactly as they went on the socket. */
   const sent: ToolRequest[] = [];
   const reported: { hosts: ServiceBlockedHost[]; url?: string | undefined }[] = [];
+  /** Every report's `service`. */
+  const reportedServices: (string | undefined)[] = [];
+  /** The root's live loopback ports the kernel answers, and the scopes it was asked for. */
+  let livePorts: number[] = [];
+  const portScopes: unknown[] = [];
   let failWith: Error | undefined;
   /** Requests that throw instead of answering (the daemon's socket gone), by request index. */
   const requestFailures = new Map<number, Error>();
@@ -82,7 +87,7 @@ function fake(
         const body = JSON.parse(new TextDecoder().decode(req.body)) as ToolRequest;
         log.push(`request:${req.service}:${body.op}`);
         sent.push(body);
-        const { conversationId: _c, rootConversationId: _r, ...op } = body;
+        const { conversationId: _c, rootConversationId: _r, loopbackPorts: _l, ...op } = body;
         requests.push(op as ToolOp);
         const failure = requestFailures.get(requests.length - 1);
         if (failure) throw failure;
@@ -91,6 +96,16 @@ function fake(
       reportBlockedHosts(_call, hosts, opts) {
         log.push("report");
         reported.push({ hosts, url: opts?.url });
+        reportedServices.push(opts?.service);
+      },
+      async loopbackPorts(scope) {
+        portScopes.push(scope);
+        return livePorts.map((port) => ({
+          port,
+          source: "owner-panel" as const,
+          expiresAt: "2026-11-29T00:00:00Z",
+          database: port === 5432,
+        }));
       },
     },
     serviceSpec: async () => SPEC,
@@ -109,6 +124,11 @@ function fake(
     requests,
     sent,
     reported,
+    reportedServices,
+    portScopes,
+    setLivePorts: (ports: number[]) => {
+      livePorts = ports;
+    },
     tools,
     fail: (e: Error) => {
       failWith = e;
@@ -288,12 +308,56 @@ describe("browser tools", () => {
     expect(f.reported).toEqual([
       {
         hosts: [
-          { host: "cdn.example.net", layer: "device" },
-          { host: "intranet.example.net", layer: "address" },
+          { host: "cdn.example.net", port: 443, layer: "device" },
+          { host: "intranet.example.net", port: 443, layer: "address" },
         ],
         url: PAGE.url,
       },
     ]);
+  });
+
+  it("reports a loopback refusal with port and class to the kernel", async () => {
+    const f = fake(() => ({
+      ok: false,
+      error: "blocked",
+      message:
+        "127.0.0.1:3999 is a local port on the device, which the browser reaches only after the port is approved for this conversation.",
+      blockedHosts: [{ host: "127.0.0.1", port: 3999, layer: "address", class: "loopback" }],
+    }));
+    await expect(
+      f.run("browser_navigate", { url: "http://127.0.0.1:3999/" }),
+    ).rejects.toBeInstanceOf(ToolError);
+    expect(f.reported).toEqual([
+      {
+        hosts: [{ host: "127.0.0.1", port: 3999, layer: "address", class: "loopback" }],
+        url: undefined,
+      },
+    ]);
+    expect(f.reportedServices).toEqual(["browser"]);
+  });
+
+  it("sends the root's live ports with each daemon request", async () => {
+    const f = fake();
+    f.setLivePorts([3999, 5432]);
+    const sub = call({ conversationId: "child", rootConversationId: "root", accountId: "acc" });
+    await f.run("browser_snapshot", {}, sub);
+    expect(f.sent[0]?.loopbackPorts).toEqual([3999, 5432]);
+    expect(f.portScopes).toEqual([
+      { orgId: "org", conversationId: "child", accountId: "acc", service: "browser" },
+    ]);
+    // a grant that ended: the next request carries the narrower set
+    f.setLivePorts([]);
+    await f.run("browser_snapshot", {}, sub);
+    expect(f.sent[1]?.loopbackPorts).toEqual([]);
+  });
+
+  it("closes every port when the live ports cannot be read", async () => {
+    const f = fake();
+    f.deps.deviceAccess.loopbackPorts = async () => {
+      throw new DeviceAccessError("no_device", "No device.");
+    };
+    await f.run("browser_snapshot", {});
+    expect(f.sent[0]?.loopbackPorts).toEqual([]);
   });
 
   it("a malformed blocked host entry is dropped, an unknown layer is the device's", async () => {
@@ -322,7 +386,7 @@ describe("browser tools", () => {
       ToolError,
     );
     expect(f.reported).toEqual([
-      { hosts: [{ host: "a.example", layer: "device" }], url: undefined },
+      { hosts: [{ host: "a.example", port: 443, layer: "device" }], url: undefined },
     ]);
   });
 
@@ -547,9 +611,16 @@ describe("browser tools", () => {
         url: "https://example.com",
         conversationId: "child",
         rootConversationId: "root",
+        loopbackPorts: [],
       },
-      { op: "tabs", action: "list", conversationId: "child", rootConversationId: "root" },
-      { op: "snapshot", conversationId: "conv", rootConversationId: "conv" },
+      {
+        op: "tabs",
+        action: "list",
+        conversationId: "child",
+        rootConversationId: "root",
+        loopbackPorts: [],
+      },
+      { op: "snapshot", conversationId: "conv", rootConversationId: "conv", loopbackPorts: [] },
     ]);
     expect(JSON.stringify(f.sent)).not.toContain("evil");
   });

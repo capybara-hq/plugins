@@ -14,7 +14,7 @@ import { registerBrowserTools } from "./tools.js";
 export default defineExtension({
   name: "browser",
   version: "0.1.0-rc.18",
-  sdk: "^0.1.0-rc.83",
+  sdk: "^0.1.0-rc.90",
   provides: [],
   ui: [
     {
@@ -51,9 +51,12 @@ export default defineExtension({
       { method: "POST", path: "/ui/stream-ticket", access: "embed" },
       { method: "POST", path: "/ui/network-hosts", access: "embed" },
       { method: "POST", path: "/ui/handoff-answer", access: "embed" },
+      { method: "GET", path: "/ui/loopback-ports", access: "embed" },
+      { method: "POST", path: "/ui/loopback-ports", access: "embed" },
+      { method: "DELETE", path: "/ui/loopback-ports", access: "embed" },
     ],
     ui: { embeds: ["browser"] },
-    deviceAccess: { services: ["browser"] },
+    deviceAccess: { services: ["browser"], loopbackPorts: true },
   },
   setup(ctx) {
     // arrow wrappers: never depend on how the kernel binds ctx.deviceAccess's methods
@@ -70,6 +73,12 @@ export default defineExtension({
         ctx.deviceAccess.addNetworkHosts(...a),
       answerHandoff: (...a: Parameters<typeof ctx.deviceAccess.answerHandoff>) =>
         ctx.deviceAccess.answerHandoff(...a),
+      grantLoopbackPort: (...a: Parameters<typeof ctx.deviceAccess.grantLoopbackPort>) =>
+        ctx.deviceAccess.grantLoopbackPort(...a),
+      revokeLoopbackPort: (...a: Parameters<typeof ctx.deviceAccess.revokeLoopbackPort>) =>
+        ctx.deviceAccess.revokeLoopbackPort(...a),
+      loopbackPorts: (...a: Parameters<typeof ctx.deviceAccess.loopbackPorts>) =>
+        ctx.deviceAccess.loopbackPorts(...a),
     };
     const deps = { deviceAccess, serviceSpec: serviceSpecLoader(), log: ctx.log };
     registerBrowserTools(ctx, deps);

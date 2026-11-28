@@ -71,7 +71,7 @@ const state = (over: Partial<Omit<StateMsg, "tabs">> & { tabs?: TabIn[] } = {}):
 
 interface Setup {
   dom: JSDOM;
-  fetchCalls: { url: string; body: unknown }[];
+  fetchCalls: { url: string; method: string; body: unknown }[];
   host: unknown[];
   sock: () => FakeSocket;
   /** Gives the stage a new size and fires the panel's ResizeObserver, as a layout change does. */
@@ -88,6 +88,8 @@ function setup(
     ticket?: () => Response;
     answer?: () => Response | Promise<Response>;
     hosts?: () => Response;
+    /** The loopback-ports route's answer, by method (default: `{}`). */
+    ports?: (method: string) => Response;
     /** Storage throws, as in the opaque-origin sandboxed iframe. */
     noStorage?: boolean;
     /** The iframe's viewport height (the stage is 400 px of it). */
@@ -120,10 +122,17 @@ function setup(
           throw new dom.window.DOMException("The document is sandboxed", "SecurityError");
         },
       });
-  const fetchCalls: { url: string; body: unknown }[] = [];
+  const fetchCalls: { url: string; method: string; body: unknown }[] = [];
   const host: unknown[] = [];
-  const fetchImpl = async (url: string, init?: { body?: string }): Promise<Response> => {
-    fetchCalls.push({ url, body: init?.body === undefined ? undefined : JSON.parse(init.body) });
+  const fetchImpl = async (
+    url: string,
+    init?: { body?: string; method?: string },
+  ): Promise<Response> => {
+    fetchCalls.push({
+      url,
+      method: init?.method ?? "GET",
+      body: init?.body === undefined ? undefined : JSON.parse(init.body),
+    });
     if (url === "stream-ticket") {
       return (
         opts.ticket?.() ??
@@ -132,6 +141,7 @@ function setup(
     }
     if (url === "handoff-answer" && opts.answer) return opts.answer();
     if (url === "network-hosts" && opts.hosts) return opts.hosts();
+    if (url === "loopback-ports" && opts.ports) return opts.ports(init?.method ?? "GET");
     return new Response("{}", { status: 200 });
   };
   const stage = dom.window.document.getElementById("stage") as HTMLElement;
@@ -839,6 +849,120 @@ describe("panel", () => {
     expect($(s, "notice").textContent).toContain(t("en", "allowFailed"));
     expect($(s, "notice").textContent).toContain("Only the owner can allow.");
     expect(($(s, "blocked") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("shows the loopback strip and grants on click", async () => {
+    const s = setup();
+    const sock = await live(s, state({ control: "user" }));
+    sock.push({
+      t: "blocked",
+      host: "127.0.0.1",
+      url: "http://127.0.0.1:3999/",
+      port: 3999,
+      kind: "loopback",
+    });
+    // a local port is not a host the device's list can take: the loopback strip, not the allow one
+    expect(($(s, "blocked") as HTMLElement).hidden).toBe(true);
+    expect(($(s, "loopback") as HTMLElement).hidden).toBe(false);
+    expect($(s, "loopback-text").textContent).toBe("Local port 3999 is closed");
+    expect($(s, "loopback-allow").textContent).toBe("Allow for this conversation");
+    $(s, "loopback-allow").click();
+    await vi.waitFor(() =>
+      expect(sock.sent).toContainEqual({ t: "nav", url: "http://127.0.0.1:3999/" }),
+    );
+    expect(
+      s.fetchCalls.find((c) => c.url === "loopback-ports" && c.method === "POST")?.body,
+    ).toEqual({ port: 3999 });
+    expect(($(s, "loopback") as HTMLElement).hidden).toBe(true);
+    // the grants list is read again after the grant
+    expect(
+      s.fetchCalls.filter((c) => c.url === "loopback-ports" && c.method === "GET").length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it("names a database port and speaks Chinese on the loopback strip", async () => {
+    const s = setup({ locale: "zh" });
+    const sock = await live(s);
+    sock.push({
+      t: "blocked",
+      host: "localhost",
+      url: "http://localhost:5432/",
+      port: 5432,
+      kind: "loopback",
+    });
+    expect($(s, "loopback-text").textContent).toBe("本机端口 5432 未开放（本地数据库端口）");
+    expect($(s, "loopback-allow").textContent).toBe("允许本会话访问");
+  });
+
+  it("shows why a loopback grant was refused and keeps the strip", async () => {
+    const s = setup({
+      ports: (method) =>
+        method === "POST"
+          ? new Response(
+              JSON.stringify({
+                error: { code: "loopback_unavailable", message: "Running outside is off." },
+              }),
+              { status: 409 },
+            )
+          : new Response(JSON.stringify({ ports: [] }), { status: 200 }),
+    });
+    const sock = await live(s, state({ control: "user" }));
+    sock.push({
+      t: "blocked",
+      host: "127.0.0.1",
+      url: "http://127.0.0.1:3999/",
+      port: 3999,
+      kind: "loopback",
+    });
+    $(s, "loopback-allow").click();
+    await vi.waitFor(() => expect(($(s, "notice") as HTMLElement).hidden).toBe(false));
+    expect($(s, "notice").textContent).toContain("Running outside is off.");
+    expect(($(s, "loopback") as HTMLElement).hidden).toBe(false);
+    expect(sock.sent.some((m) => m.t === "nav")).toBe(false);
+  });
+
+  it("lists grants with remove", async () => {
+    let ports = [
+      { port: 3999, source: "owner-panel", expiresAt: "2026-11-29T00:00:00Z", database: false },
+      { port: 5432, source: "human", expiresAt: "2026-11-29T00:00:00Z", database: true },
+    ];
+    const s = setup({
+      ports: (method) => {
+        if (method === "DELETE") ports = ports.filter((p) => p.port !== 3999);
+        return new Response(JSON.stringify(method === "GET" ? { ports } : { ok: true }), {
+          status: 200,
+        });
+      },
+    });
+    await live(s);
+    await vi.waitFor(() => expect(($(s, "ports") as HTMLElement).hidden).toBe(false));
+    expect($(s, "ports-label").textContent).toBe("Local ports open to this conversation");
+    const items = () =>
+      [...$(s, "ports-list").querySelectorAll("[data-port]")].map((el) => el.textContent);
+    expect(items()).toEqual(["3999Remove", "5432 (local database port)Remove"]);
+    ($(s, "ports-list").querySelector('[data-port="3999"] button') as HTMLElement).click();
+    await vi.waitFor(() => expect(items()).toEqual(["5432 (local database port)Remove"]));
+    expect(
+      s.fetchCalls.find((c) => c.url === "loopback-ports" && c.method === "DELETE")?.body,
+    ).toEqual({ port: 3999 });
+  });
+
+  it("hides the grants list when there is none or it cannot be read", async () => {
+    const s = setup({
+      ports: () =>
+        new Response(JSON.stringify({ error: { code: "loopback_not_declared", message: "x" } }), {
+          status: 500,
+        }),
+    });
+    await live(s);
+    await vi.waitFor(() => expect(s.fetchCalls.some((c) => c.url === "loopback-ports")).toBe(true));
+    expect(($(s, "ports") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("keeps the database ports the SDK names", async () => {
+    const { LOOPBACK_DATABASE_PORTS } = await import("@capybara-hq/plugin-sdk");
+    const { DATABASE_PORTS } = await import("../../ui-src/panel/panel.js");
+    expect([...DATABASE_PORTS]).toEqual([...LOOPBACK_DATABASE_PORTS]);
   });
 
   it("panel shows reconnect after device-offline close and fetches a new ticket on click", async () => {

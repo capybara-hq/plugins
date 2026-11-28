@@ -211,6 +211,12 @@ export const PANEL_HTML = `<!doctype html>
   .spin { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* the conversation's open local ports (loopback grants), each with its remove */
+  #ports { gap: 8px; flex-wrap: wrap; min-height: 24px; padding: 0 16px 4px; font-size: var(--cb-type-micro-size, 11px); line-height: var(--cb-type-micro-line, 14px); color: var(--cb-muted, #5E5E5A); }
+  #ports-list { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  #ports-list .port { display: inline-flex; align-items: center; gap: 4px; color: var(--cb-ink, #1A1A18); }
+  #ports-list button { height: 20px; padding: 0 4px; font-size: inherit; color: var(--cb-accent, #CC4609); }
+
   /* needs the person: a warn strip in the status line's place */
   .warn { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px 8px 16px; background: color-mix(in srgb, var(--cb-warn, #8F6500) 8%, transparent); }
   .warn > .ico { display: inline-flex; flex: none; color: var(--cb-warn, #8F6500); }
@@ -249,7 +255,7 @@ export const PANEL_HTML = `<!doctype html>
   #touchbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 12px; }
   #touchbar .grow { flex: 1; }
   @media (max-width: 599px), (pointer: coarse) {
-    #touchbar button, #pdialog button, #pdialog input, #permission button, #phonehint button { min-height: 44px; }
+    #touchbar button, #pdialog button, #pdialog input, #permission button, #phonehint button, #loopback button, #ports-list button { min-height: 44px; }
     #touchbar button, #pdialog button { padding: 0 16px; }
   }
 
@@ -297,6 +303,7 @@ export const PANEL_HTML = `<!doctype html>
     <button type="button" id="handback" class="outline" hidden></button>
   </div>
   <p id="status" class="row" role="status"><span class="ico" id="status-icon"></span><span class="lead" id="status-lead"></span><span class="detail" id="status-detail"></span></p>
+  <div id="ports" class="row" hidden><span id="ports-label"></span><span id="ports-list"></span></div>
   <div id="verify" class="warn" hidden><span class="ico">${ICONS.pause}</span><div class="text"><span class="title" id="verify-title"></span><span class="body" id="verify-body"></span></div><div class="actions"><button type="button" id="verify-go" class="primary"></button></div></div>
   <div id="handoff" class="warn" hidden><span class="ico">${ICONS.pause}</span><div class="text"><span class="title" id="handoff-label"></span><span class="body" id="handoff-message"></span></div><div class="actions"><button type="button" id="handoff-done" class="primary"></button><button type="button" id="handoff-cancel" class="secondary"></button></div></div>
   <div id="touchbar" hidden><button type="button" id="viewport-toggle" class="secondary"></button><button type="button" id="keyboard" class="secondary"></button><span class="grow"></span><button type="button" id="touch-handback" class="outline"></button></div>
@@ -314,6 +321,7 @@ export const PANEL_HTML = `<!doctype html>
       <p class="hint" id="pdialog-hint" hidden></p>
     </div>
     <div id="strips">
+      <div id="loopback" class="strip" hidden><p id="loopback-text"></p><button type="button" id="loopback-allow" class="primary"></button></div>
       <div id="blocked" class="strip" hidden><p><span id="blocked-label" class="label"></span> <span id="blocked-host"></span></p><button type="button" id="allow" class="primary"></button></div>
       <div id="dialog" class="strip" hidden><p><span id="dialog-label" class="label"></span> <span id="dialog-text"></span></p></div>
       <div id="permission" class="strip" hidden><p><span id="permission-origin"></span> <span id="permission-label" class="label"></span> <span id="permission-name"></span></p><button type="button" id="permission-allow" class="primary"></button></div>

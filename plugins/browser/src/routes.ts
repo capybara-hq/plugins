@@ -13,7 +13,15 @@ import { SERVICE } from "./browser.js";
 
 /** What the routes need: the kernel's device access and the built panel script. */
 export interface RouteDeps {
-  deviceAccess: Pick<DeviceAccessCtx, "streamTicket" | "addNetworkHosts" | "answerHandoff">;
+  deviceAccess: Pick<
+    DeviceAccessCtx,
+    | "streamTicket"
+    | "addNetworkHosts"
+    | "answerHandoff"
+    | "grantLoopbackPort"
+    | "revokeLoopbackPort"
+    | "loopbackPorts"
+  >;
   /** The panel's browser bundle (`ui/panel.js`, built by build-ui.ts). */
   panelScript: () => Promise<string | undefined>;
 }
@@ -55,7 +63,8 @@ function scopeOf(
 function statusOf(code: string): number {
   if (code === "not_owner") return 403;
   if (code === "question.not_found") return 404;
-  if (code === "service_not_declared") return 500;
+  if (code === "service_not_declared" || code === "loopback_not_declared") return 500;
+  if (code === "invalid_request") return 400;
   return 409;
 }
 
@@ -102,9 +111,21 @@ function data(
   };
 }
 
+/** The port of a loopback-ports body: an integer from 1 to 65535 (the kernel checks again). */
+async function portOf(req: Request): Promise<number | undefined> {
+  const port = (await readJson(req))?.port;
+  return typeof port === "number" && Number.isInteger(port) && port >= 1 && port <= 65535
+    ? port
+    : undefined;
+}
+
+const BAD_PORT = "the body must be { port: integer from 1 to 65535 }";
+
 /** Registers the panel's routes. */
 export function registerRoutes(
-  ctx: { http: { route(method: "GET" | "POST", path: string, handler: Handler): void } },
+  ctx: {
+    http: { route(method: "GET" | "POST" | "DELETE", path: string, handler: Handler): void };
+  },
   deps: RouteDeps,
 ): void {
   ctx.http.route("GET", "/ui/browser", async () => {
@@ -179,6 +200,39 @@ export function registerRoutes(
         handoffConversationId: raised,
         done,
       });
+      return json(200, { ok: true });
+    }),
+  );
+
+  // the conversation's local ports (loopback port grants): the person's own list, their click on
+  // the loopback strip, and their remove; the kernel checks owner, attendance and ceilings
+  ctx.http.route(
+    "GET",
+    "/ui/loopback-ports",
+    data(async (scope) => {
+      const ports = await deps.deviceAccess.loopbackPorts({ ...scope, service: SERVICE });
+      return json(200, { ports });
+    }),
+  );
+
+  ctx.http.route(
+    "POST",
+    "/ui/loopback-ports",
+    data(async (scope, req) => {
+      const port = await portOf(req);
+      if (port === undefined) return error(400, "invalid_body", BAD_PORT);
+      const grant = await deps.deviceAccess.grantLoopbackPort({ ...scope, service: SERVICE, port });
+      return json(200, { grant });
+    }),
+  );
+
+  ctx.http.route(
+    "DELETE",
+    "/ui/loopback-ports",
+    data(async (scope, req) => {
+      const port = await portOf(req);
+      if (port === undefined) return error(400, "invalid_body", BAD_PORT);
+      await deps.deviceAccess.revokeLoopbackPort({ ...scope, service: SERVICE, port });
       return json(200, { ok: true });
     }),
   );

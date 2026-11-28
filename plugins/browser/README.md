@@ -28,7 +28,12 @@ A real browser in the person's device for agents (browser use spec,
   extension instance), sends one `ToolRequest` and reports the hosts the device refused with
   `reportBlockedHosts` (the kernel raises the network ask and reruns the call once allowed).
   Every request carries the call's `conversationId` and `rootConversationId` from the kernel's
-  tool call context (written after the operation, never from tool input). A result names the
+  tool call context (written after the operation, never from tool input), and `loopbackPorts`:
+  the root's live loopback port grants (`ctx.deviceAccess.loopbackPorts`, read for every request;
+  empty while the tree is unattended or when the read fails). A refused `localhost`, `127.0.0.1`
+  or `[::1]` is reported with its port and `class: "loopback"` (`service: "browser"`), so the
+  kernel asks for the port and reruns the call once it is granted
+  (`permissions.deviceAccess.loopbackPorts`). A result names the
   conversation's active tab, or says "This conversation has no browser tab yet.", and every result
   the daemon answered, ok or error, ends with "Tabs open in this conversation: N of 6.".
 - `browser_handoff` sends the daemon a handoff notice (the panels show a banner with 完成 / 取消),
@@ -53,7 +58,10 @@ A real browser in the person's device for agents (browser use spec,
   not fit in one service message. A refused host's error ends with one next step (the user is
   asked to allow it); a service start that fails has its own text.
 - Panel routes: `GET /ui/browser` (the page) and `GET /ui/panel.js` are public; `POST
-  /ui/stream-ticket`, `/ui/network-hosts` and `/ui/handoff-answer` are `embed` routes that take
+  /ui/stream-ticket`, `/ui/network-hosts`, `/ui/handoff-answer` and `/ui/loopback-ports` (`GET`
+  the conversation's open local ports, `POST { port }` grant one with `grantLoopbackPort`,
+  `DELETE { port }` revoke it; the panel's 允许本会话访问 / Allow for this conversation strip and its
+  list with 移除 / Remove) are `embed` routes that take
   the org, account and conversation from the caller only (a platform-scope token or one without a
   conversation gets 403). `/ui/handoff-answer` takes `{ callId, handoffConversationId, done }`:
   the panel echoes the handoff's conversation from the daemon's `state.handoffs` (a sub-agent's,
@@ -62,6 +70,14 @@ A real browser in the person's device for agents (browser use spec,
   the viewer with 4404 (the panel's "not running" state).
 
 ## The daemon (`daemon/`)
+
+- Loopback ports: behind the device's proxy, loopback goes through it like every other host
+  (Playwright's `<-loopback>`, added to the flag form too). The daemon keeps each root's ports from
+  the last request that carried them, and a context route aborts a loopback request whose page's
+  owner's root does not hold the port (another tree's tab, an unowned page, a service worker),
+  recording it as refused (`layer: "address"`, `class: "loopback"`) and sending the tree's viewers
+  `{ t: "blocked", port, kind: "loopback" }`. The device opens a granted port to the whole device;
+  this check keeps it to the granted tree.
 
 - Long waits (`daemon/watches.ts`): `watch_start` binds a watch to the conversation's active tab
   (refused without one) and latches the first outcome, checked every 500 ms: met, or ended by a
