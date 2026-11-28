@@ -12,6 +12,17 @@ export interface Assignee {
   agentId: string | null;
 }
 
+/**
+ * Whether `accountId` may use `agentId` (the kernel's `ctx.agents.usableBy`, which the domain
+ * cannot call itself). Callers that pass none keep every configured agent.
+ */
+export type AgentAllowed = (accountId: string, agentId: string) => Promise<boolean>;
+
+/** A default assignment; `droppedAgentId` is the configured agent `agentAllowed` refused. */
+export interface DefaultAssignee extends Assignee {
+  droppedAgentId?: string;
+}
+
 /** The responsible person must be a project member who may write (owner or member, not a guest). */
 export async function validateAssignee(
   db: CollabDb,
@@ -37,14 +48,16 @@ export async function validateAssignee(
 /**
  * Who an item entering `status` is handed to: the named member, or the one member carrying the
  * function label, with the rule's agent or (with `memberAgent`) that member's default agent.
- * Null when the status has no rule or the label matches no member or several.
+ * Null when the status has no rule or the label matches no member or several. An agent that
+ * `agentAllowed` refuses is dropped: the member keeps the item without an agent.
  */
 export async function resolveDefaultAssignment(
   db: CollabDb,
   orgId: string,
   projectId: string,
   status: Status,
-): Promise<Assignee | null> {
+  agentAllowed?: AgentAllowed,
+): Promise<DefaultAssignee | null> {
   const rule = defaultAssignmentOf(status);
   if (!rule) return null;
   let query = db
@@ -60,6 +73,9 @@ export async function resolveDefaultAssignment(
   const member = members.length === 1 ? members[0] : undefined;
   if (!member) return null;
   const agentId = rule.agentId ?? (rule.memberAgent ? member.default_agent_id : null);
+  if (agentId && agentAllowed && !(await agentAllowed(member.account_id, agentId))) {
+    return { accountId: member.account_id, agentId: null, droppedAgentId: agentId };
+  }
   return { accountId: member.account_id, agentId };
 }
 

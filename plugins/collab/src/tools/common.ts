@@ -7,7 +7,9 @@ import {
   type ToolResult,
 } from "@capybara-hq/plugin-sdk";
 import { canSee } from "../domain/access.js";
+import type { AgentAllowed } from "../domain/assignment.js";
 import { CollabError } from "../domain/errors.js";
+import type { AdditionGuard } from "../domain/items.js";
 import { emitting } from "../events/emitter.js";
 import type { CollabDb } from "../store/db.js";
 import type { Actor, Item, Project } from "../store/types.js";
@@ -133,7 +135,9 @@ export async function projectByKey(
  * Refuses a write from the item's work conversation once its pair moved on (spec §6.1: the run
  * finishes its turn, its next write fails). The work conversation is one whose subject is the
  * item (`ctx.conversations.bySubject`); a sub-agent counts through its root conversation. Writes
- * from any other conversation are ordinary member writes.
+ * from any other conversation are ordinary member writes. Versioned writes check it before their
+ * transaction (a reassignment bumps the version, so a stale check loses on the version);
+ * additions run it as their guard, under the item lock.
  */
 export async function assertStillAssigned(
   deps: ToolDeps,
@@ -153,6 +157,64 @@ export async function assertStillAssigned(
       "You are no longer assigned to this item: it was reassigned while you were working.",
     );
   }
+}
+
+/** {@link assertStillAssigned} as a domain addition guard (runs on the locked, current row). */
+export function stillAssignedGuard(deps: ToolDeps, call: ToolCallContext): AdditionGuard {
+  return (_tx, item) => assertStillAssigned(deps, call, item);
+}
+
+/**
+ * The domain's `agentAllowed` for one call: `ctx.agents.usableBy`, read once per account. A
+ * failed read refuses the agent (the member keeps the item without one).
+ */
+export function agentAllowedFor(deps: ToolDeps, orgId: string): AgentAllowed {
+  const cache = new Map<string, Promise<Map<string, string>>>();
+  return async (accountId, agentId) => {
+    let usable = cache.get(accountId);
+    if (!usable) {
+      usable = usableAgents(deps.ctx, orgId, accountId);
+      cache.set(accountId, usable);
+    }
+    try {
+      return (await usable).has(agentId);
+    } catch (err) {
+      deps.ctx.log.warn("collab could not read the agents a member may use", { orgId, err });
+      return false;
+    }
+  };
+}
+
+/**
+ * A note for the model when the item's latest write left out a default agent (the
+ * `default_agent_dropped` activity of that write's transaction).
+ */
+export async function droppedAgentNote(
+  deps: ToolDeps,
+  orgId: string,
+  itemId: string,
+): Promise<string> {
+  // Compared in SQL: a JS Date would drop the microseconds of the transaction's now().
+  const dropped = await deps.db
+    .selectFrom("activity")
+    .select("detail")
+    .where("org_id", "=", orgId)
+    .where("item_id", "=", itemId)
+    .where("kind", "=", "default_agent_dropped")
+    .where("created_at", "=", (eb) =>
+      eb
+        .selectFrom("activity")
+        .select((e) => e.fn.max("created_at").as("t"))
+        .where("org_id", "=", orgId)
+        .where("item_id", "=", itemId),
+    )
+    .execute();
+  return dropped
+    .map(
+      (d) =>
+        ` The default agent ${String(d.detail.agentId)} was left out: the member can no longer use it.`,
+    )
+    .join("");
 }
 
 /** The agents `accountId` may use, by id. */

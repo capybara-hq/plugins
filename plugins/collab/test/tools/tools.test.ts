@@ -273,6 +273,61 @@ describe("collab tools", () => {
     ).toMatch(/Guests can read/);
   });
 
+  it("a reassignment landing between the executor's read and its comment refuses the comment", async () => {
+    const org = "org-race-comment";
+    const { key, version } = await newTask(org, "RCC");
+    const mine = text(
+      await tools.run(
+        "item_assign",
+        { key, version, responsible: "me", agent: "agent-pm" },
+        pm(org),
+      ),
+    );
+    const item = await db
+      .selectFrom("items")
+      .selectAll()
+      .where("org_id", "=", org)
+      .executeTakeFirstOrThrow();
+    tools.work.set(item.id, ["conv-work"]);
+    const inWork = { ...pm(org), conversationId: "conv-work", rootConversationId: "conv-work" };
+    // The tool has read the item (still the agent's); the owner reassigns before the insert.
+    tools.beforeNextWrite(async () => {
+      await assign(db, org, OWNER, item.id, versionIn(mine), {
+        responsibleAccountId: ENGINEER.accountId,
+        executingAgentId: "agent-eng",
+      });
+    });
+    expect(await errorOf(tools.run("item_comment", { key, body: "late" }, inWork))).toMatch(
+      /no longer assigned/i,
+    );
+    const comments = await db
+      .selectFrom("comments")
+      .select("body")
+      .where("org_id", "=", org)
+      .execute();
+    expect(comments).toEqual([]);
+  });
+
+  it("a handoff drops a default agent the member can no longer use", async () => {
+    const org = "org-handoff";
+    await teamProject(db, org, "HND");
+    let out = text(
+      await tools.run("item_create", { project: "HND", type: "task", title: "Ship it" }, pm(org)),
+    );
+    for (const to of ["in_progress", "testing"]) {
+      out = text(
+        await tools.run("item_transition", { key: "HND-1", version: versionIn(out), to }, pm(org)),
+      );
+    }
+    // Testing hands the task to QA with their default agent, agent-qa, which QA can no longer use.
+    expect(out).toContain("handed to Chen");
+    expect(out).toMatch(/default agent agent-qa was left out/);
+    const got = text(await tools.run("item_get", { key: "HND-1" }, pm(org)));
+    expect(got).toContain("Responsible: Chen");
+    expect(got).toContain("agent: none");
+    expect(got).toMatch(/default_agent_dropped agent agent-qa for Chen.*can no longer use/);
+  });
+
   it("item_transition into a gate reports waiting", async () => {
     const org = "org-gate";
     await teamProject(db, org, "GAT");

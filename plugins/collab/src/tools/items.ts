@@ -4,7 +4,7 @@ import {
   ToolError,
   type ToolSpec,
 } from "@capybara-hq/plugin-sdk";
-import { assign, resolveDefaultAssignment, validateAssignee } from "../domain/assignment.js";
+import { assign, validateAssignee } from "../domain/assignment.js";
 import { CollabError } from "../domain/errors.js";
 import { loadItem } from "../domain/internal.js";
 import {
@@ -16,10 +16,12 @@ import {
   transition,
   updateItem,
 } from "../domain/items.js";
-import { initialStatus, statusesForType } from "../domain/workflow.js";
+import { statusesForType } from "../domain/workflow.js";
 import type { Item, LinkKind, Project } from "../store/types.js";
 import {
+  agentAllowedFor,
   assertStillAssigned,
+  droppedAgentNote,
   guarded,
   int,
   itemByKey,
@@ -28,6 +30,7 @@ import {
   personOf,
   projectByKey,
   resolvePerson,
+  stillAssignedGuard,
   str,
   type ToolDeps,
   usableAgents,
@@ -635,6 +638,8 @@ function activityDetail(
       return ` "${String(d.name)}" v${String(d.version)}`;
     case "linked":
       return ` ${String(d.kind)}`;
+    case "default_agent_dropped":
+      return ` agent ${String(d.agentId)} for ${personLabel(names, String(d.accountId))}: ${String(d.reason)}`;
     default:
       return "";
   }
@@ -757,46 +762,36 @@ export function registerItemTools(deps: ToolDeps): void {
           "An agent needs a responsible person. Pass responsible too.",
         );
       } else {
-        // The first status's default assignment, applied here so a default agent the member can
-        // no longer use is dropped instead of assigned (the domain cannot ask the kernel). It is
-        // not confirmed, like a transition's handoff: both are configured by the project owner,
-        // and only a responsible the agent chose asks. The recipient's acceptance rule (auto /
-        // confirm / off) and the kernel's loop guards bound the fan-out.
-        const statuses = await statusesForType(db, call.orgId, project.id, type);
-        const handoff = await resolveDefaultAssignment(
-          db,
-          call.orgId,
-          project.id,
-          initialStatus(statuses),
-        );
-        if (handoff) {
-          const usable = handoff.agentId
-            ? await usableAgents(ctx, call.orgId, handoff.accountId)
-            : new Map<string, string>();
-          target =
-            handoff.agentId && !usable.has(handoff.agentId)
-              ? { accountId: handoff.accountId, agentId: null, dropped: handoff.agentId }
-              : handoff;
-        }
+        // Without a responsible, the domain applies the first status's default assignment;
+        // agentAllowed drops a default agent the member can no longer use. It is not confirmed,
+        // like a transition's handoff: both are configured by the project owner, and only a
+        // responsible the agent chose asks. The recipient's acceptance rule (auto / confirm /
+        // off) and the kernel's loop guards bound the fan-out.
       }
 
       const description = optStr(input, "description");
       const item = await writing(deps, call, (actor) =>
-        createItem(db, call.orgId, actor, {
-          projectId: project.id,
-          type,
-          title,
-          ...(description ? { description } : {}),
-          ...(parent ? { parentId: parent.id } : {}),
-          ...(target
-            ? {
-                responsibleAccountId: target.accountId,
-                ...(target.agentId ? { executingAgentId: target.agentId } : {}),
-              }
-            : {}),
-          ...(typeof input.priority === "number" ? { priority: input.priority } : {}),
-          ...(Array.isArray(input.labels) ? { labels: input.labels as string[] } : {}),
-        }),
+        createItem(
+          db,
+          call.orgId,
+          actor,
+          {
+            projectId: project.id,
+            type,
+            title,
+            ...(description ? { description } : {}),
+            ...(parent ? { parentId: parent.id } : {}),
+            ...(target
+              ? {
+                  responsibleAccountId: target.accountId,
+                  ...(target.agentId ? { executingAgentId: target.agentId } : {}),
+                }
+              : {}),
+            ...(typeof input.priority === "number" ? { priority: input.priority } : {}),
+            ...(Array.isArray(input.labels) ? { labels: input.labels as string[] } : {}),
+          },
+          { agentAllowed: agentAllowedFor(deps, call.orgId) },
+        ),
       );
       const key = keyOf(project.key, item);
       const names = await namesOf(deps, call.orgId, [item.responsible_account_id]);
@@ -804,7 +799,7 @@ export function registerItemTools(deps: ToolDeps): void {
         ? ` Responsible: ${personLabel(names, item.responsible_account_id)}; agent: ${item.executing_agent_id ?? "none"}.`
         : " Unassigned.";
       return result(
-        `Created ${key} [${item.type}] "${item.title}" in status ${item.status_key} (version ${item.version}).${who}${target ? droppedNote(target) : ""}`,
+        `Created ${key} [${item.type}] "${item.title}" in status ${item.status_key} (version ${item.version}).${who}${target ? droppedNote(target) : await droppedAgentNote(deps, call.orgId, item.id)}`,
         { zh: `创建了 ${key}`, en: `Created ${key}` },
       );
     }),
@@ -849,7 +844,9 @@ export function registerItemTools(deps: ToolDeps): void {
       await assertStillAssigned(deps, call, item);
       const to = str(input, "to");
       const out = await writing(deps, call, (actor) =>
-        transition(db, call.orgId, actor, item.id, int(input, "version"), to),
+        transition(db, call.orgId, actor, item.id, int(input, "version"), to, {
+          agentAllowed: agentAllowedFor(deps, call.orgId),
+        }),
       );
       const key = keyOf(project.key, item);
       const statuses = await statusesForType(db, call.orgId, project.id, item.type);
@@ -877,6 +874,7 @@ export function registerItemTools(deps: ToolDeps): void {
       if (after.status_key !== to) {
         tail += ` It then moved on to ${statusLabel(statuses, after.status_key)}.`;
       }
+      tail += await droppedAgentNote(deps, call.orgId, item.id);
       return result(
         `${key} moved to ${statusLabel(statuses, to)} (version ${after.version}).${tail}`,
         { zh: `${key} 移至 ${to}`, en: `${key} moved to ${to}` },
@@ -939,9 +937,10 @@ export function registerItemTools(deps: ToolDeps): void {
     guarded(async (input, call) => {
       const person = personOf(call);
       const { item, project } = await itemByKey(db, call.orgId, person, str(input, "key"));
-      await assertStillAssigned(deps, call, item);
       await writing(deps, call, (actor) =>
-        comment(db, call.orgId, actor, item.id, str(input, "body")),
+        comment(db, call.orgId, actor, item.id, str(input, "body"), {
+          guard: stillAssignedGuard(deps, call),
+        }),
       );
       const key = keyOf(project.key, item);
       return result(`Commented on ${key}.`, { zh: `评论了 ${key}`, en: `Commented on ${key}` });
@@ -953,11 +952,16 @@ export function registerItemTools(deps: ToolDeps): void {
     guarded(async (input, call) => {
       const person = personOf(call);
       const from = await itemByKey(db, call.orgId, person, str(input, "key"));
-      await assertStillAssigned(deps, call, from.item);
       const to = await itemByKey(db, call.orgId, person, str(input, "to"));
       const kind = str(input, "kind") as LinkKind;
       await writing(deps, call, (actor) =>
-        link(db, call.orgId, actor, { fromId: from.item.id, toId: to.item.id, kind }),
+        link(
+          db,
+          call.orgId,
+          actor,
+          { fromId: from.item.id, toId: to.item.id, kind },
+          { guard: stillAssignedGuard(deps, call) },
+        ),
       );
       const a = keyOf(from.project.key, from.item);
       const b = keyOf(to.project.key, to.item);
@@ -973,13 +977,15 @@ export function registerItemTools(deps: ToolDeps): void {
     guarded(async (input, call) => {
       const person = personOf(call);
       const { item, project } = await itemByKey(db, call.orgId, person, str(input, "key"));
-      await assertStillAssigned(deps, call, item);
       const artifact = await writing(deps, call, (actor) =>
-        attachArtifact(db, call.orgId, actor, item.id, {
-          kind: str(input, "kind"),
-          name: str(input, "name"),
-          url: str(input, "url"),
-        }),
+        attachArtifact(
+          db,
+          call.orgId,
+          actor,
+          item.id,
+          { kind: str(input, "kind"), name: str(input, "name"), url: str(input, "url") },
+          { guard: stillAssignedGuard(deps, call) },
+        ),
       );
       const key = keyOf(project.key, item);
       return result(`Attached "${artifact.name}" v${artifact.version} to ${key}.`, {

@@ -14,8 +14,9 @@ import type {
 } from "../store/types.js";
 import { canSee, requireRole } from "./access.js";
 import {
-  type Assignee,
+  type AgentAllowed,
   assignmentDiffers,
+  type DefaultAssignee,
   recordAssignment,
   resolveDefaultAssignment,
   validateAssignee,
@@ -173,12 +174,34 @@ async function checkParent(
   }
 }
 
+/** Options of the writes that may apply a status's default assignment. */
+export interface MoveOptions {
+  /** Drops a default agent the member may not use (see {@link AgentAllowed}). */
+  agentAllowed?: AgentAllowed;
+}
+
+/** Records that a default assignment left out an agent the member can no longer use. */
+async function noteDroppedAgent(
+  tx: CollabDb,
+  orgId: string,
+  itemId: string,
+  actor: Actor,
+  assignee: DefaultAssignee,
+): Promise<void> {
+  await addActivity(tx, orgId, itemId, actor, "default_agent_dropped", {
+    accountId: assignee.accountId,
+    agentId: assignee.droppedAgentId,
+    reason: "the member can no longer use this agent",
+  });
+}
+
 /** Creates an item with the project's next key number, in the first status of its type's workflow. */
 export async function createItem(
   db: CollabDb,
   orgId: string,
   actor: Actor,
   input: CreateItemInput,
+  opts: MoveOptions = {},
 ): Promise<Item> {
   return db.transaction().execute(async (tx) => {
     await requireRole(tx, orgId, actor.accountId, input.projectId, "write");
@@ -191,7 +214,7 @@ export async function createItem(
     const status = initialStatus(statuses);
     if (input.parentId) await checkParent(tx, orgId, project.id, input.parentId);
 
-    let assignee: Assignee | null = null;
+    let assignee: DefaultAssignee | null = null;
     if (input.responsibleAccountId) {
       await validateAssignee(tx, orgId, project.id, input.responsibleAccountId);
       assignee = { accountId: input.responsibleAccountId, agentId: input.executingAgentId ?? null };
@@ -202,7 +225,7 @@ export async function createItem(
       );
     } else {
       // Entering the first status applies its default assignment, like any later status.
-      assignee = await resolveDefaultAssignment(tx, orgId, project.id, status);
+      assignee = await resolveDefaultAssignment(tx, orgId, project.id, status, opts.agentAllowed);
     }
 
     // The row lock on the project serializes concurrent creates: each gets its own number.
@@ -234,6 +257,7 @@ export async function createItem(
       .returningAll()
       .executeTakeFirstOrThrow();
     await addActivity(tx, orgId, item.id, actor, "created", { status: status.key });
+    if (assignee?.droppedAgentId) await noteDroppedAgent(tx, orgId, item.id, actor, assignee);
     const base = { actor, projectKey: project.key, statusCategory: status.category };
     await outboxFor(tx, orgId, "item.created", item, {
       ...base,
@@ -376,12 +400,13 @@ async function moveItem(
   statuses: Status[],
   to: Status,
   auto: boolean,
+  opts: MoveOptions,
 ): Promise<Item> {
   const fromCategory = categoryOf(statuses, item.status_key);
   const set: Updateable<ItemsTable> = { status_key: to.key };
   if (isClosed(to.category) && !isClosed(fromCategory)) set.closed_at = new Date();
   if (!isClosed(to.category)) set.closed_at = null;
-  const handoff = await resolveDefaultAssignment(tx, orgId, project.id, to);
+  const handoff = await resolveDefaultAssignment(tx, orgId, project.id, to, opts.agentAllowed);
   if (handoff && assignmentDiffers(item, handoff)) {
     set.responsible_account_id = handoff.accountId;
     set.executing_agent_id = handoff.agentId;
@@ -394,6 +419,7 @@ async function moveItem(
     to: to.key,
     ...(auto ? { auto: true } : {}),
   });
+  if (handoff?.droppedAgentId) await noteDroppedAgent(tx, orgId, item.id, actor, handoff);
   const base = { actor, projectKey: project.key, statusCategory: to.category };
   const fromName = statuses.find((s) => s.key === item.status_key)?.name_en ?? item.status_key;
   await outboxFor(tx, orgId, "item.status_changed", after, {
@@ -406,9 +432,9 @@ async function moveItem(
   }
   await recordAssignment(tx, orgId, actor, item, after, base);
   if (isClosed(to.category) && after.parent_id) {
-    await advanceParent(tx, orgId, actor, after.parent_id);
+    await advanceParent(tx, orgId, actor, after.parent_id, opts);
   }
-  if (to.key === PARENT_WORKING_STATUS && (await advanceParent(tx, orgId, actor, after.id))) {
+  if (to.key === PARENT_WORKING_STATUS && (await advanceParent(tx, orgId, actor, after.id, opts))) {
     // The auto-move changed this item again: hand the caller its current version.
     return loadItem(tx, orgId, after.id);
   }
@@ -427,6 +453,7 @@ async function advanceParent(
   orgId: string,
   actor: Actor,
   parentId: string,
+  opts: MoveOptions,
 ): Promise<boolean> {
   const parent = await tx
     .selectFrom("items")
@@ -464,7 +491,7 @@ async function advanceParent(
     await requestGate(tx, orgId, actor, project, parent, statuses, acceptance, addressee);
     return true;
   }
-  await moveItem(tx, orgId, actor, project, parent, statuses, acceptance, true);
+  await moveItem(tx, orgId, actor, project, parent, statuses, acceptance, true, opts);
   return true;
 }
 
@@ -480,6 +507,7 @@ export async function transition(
   itemId: string,
   version: number,
   toStatus: string,
+  opts: MoveOptions = {},
 ): Promise<{ item: Item } | { gate: Decision }> {
   return db.transaction().execute(async (tx) => {
     const item = await loadItem(tx, orgId, itemId);
@@ -503,7 +531,7 @@ export async function transition(
         );
       }
     }
-    return { item: await moveItem(tx, orgId, actor, project, item, statuses, to, false) };
+    return { item: await moveItem(tx, orgId, actor, project, item, statuses, to, false, opts) };
   });
 }
 
@@ -564,13 +592,39 @@ async function requestGate(
 }
 
 /**
- * The item a comment, link or artifact is added to, with the context its event needs. These
- * additions do not conflict with edits, so they leave the version alone (their events key on
- * their own ids).
+ * A check run inside an addition's transaction after the item row is locked, e.g. that the
+ * writing agent still works on the item. It throws to refuse.
  */
-async function additionContext(tx: CollabDb, orgId: string, actor: Actor, itemId: string) {
-  const item = await loadItem(tx, orgId, itemId);
+export type AdditionGuard = (tx: CollabDb, item: Item) => Promise<void>;
+
+/** Options of comment, link and attachArtifact. */
+export interface AdditionOptions {
+  guard?: AdditionGuard;
+}
+
+/**
+ * The item a comment, link or artifact is added to, with the context its event needs. The item
+ * row is locked `FOR NO KEY UPDATE` (reads go on; an assignment's UPDATE waits, and vice versa),
+ * so the guard and the insert see the assignment that holds while they commit. These additions
+ * do not conflict with edits, so they leave the version alone (their events key on their own ids).
+ */
+async function additionContext(
+  tx: CollabDb,
+  orgId: string,
+  actor: Actor,
+  itemId: string,
+  guard?: AdditionGuard,
+) {
+  const item = await tx
+    .selectFrom("items")
+    .selectAll()
+    .where("org_id", "=", orgId)
+    .where("id", "=", itemId)
+    .forNoKeyUpdate()
+    .executeTakeFirst();
+  if (!item) throw new CollabError("not_found", "Item not found.");
   await requireRole(tx, orgId, actor.accountId, item.project_id, "write");
+  if (guard) await guard(tx, item);
   const project = await loadProject(tx, orgId, item.project_id);
   const statuses = await statusesForType(tx, orgId, item.project_id, item.type);
   return {
@@ -590,6 +644,7 @@ export async function comment(
   actor: Actor,
   itemId: string,
   body: string,
+  opts: AdditionOptions = {},
 ): Promise<Comment> {
   if (!body.trim()) throw new CollabError("invalid_input", "The comment must not be empty.");
   if (body.length > MAX_COMMENT_CHARS) {
@@ -599,7 +654,7 @@ export async function comment(
     );
   }
   return db.transaction().execute(async (tx) => {
-    const { item, base } = await additionContext(tx, orgId, actor, itemId);
+    const { item, base } = await additionContext(tx, orgId, actor, itemId, opts.guard);
     const row = await tx
       .insertInto("comments")
       .values({ org_id: orgId, item_id: item.id, author: actorJson(actor), body })
@@ -621,12 +676,13 @@ export async function link(
   orgId: string,
   actor: Actor,
   input: { fromId: string; toId: string; kind: LinkKind },
+  opts: AdditionOptions = {},
 ): Promise<void> {
   if (input.fromId === input.toId) {
     throw new CollabError("invalid_input", "An item cannot be linked to itself.");
   }
   await db.transaction().execute(async (tx) => {
-    const { item: from, base } = await additionContext(tx, orgId, actor, input.fromId);
+    const { item: from, base } = await additionContext(tx, orgId, actor, input.fromId, opts.guard);
     const to = await loadItem(tx, orgId, input.toId);
     if (!(await canSee(tx, orgId, actor.accountId, to.project_id))) {
       throw new CollabError("not_found", "Item not found.");
@@ -660,6 +716,7 @@ export async function attachArtifact(
   actor: Actor,
   itemId: string,
   input: { kind: string; name: string; storageKey?: string; url?: string },
+  opts: AdditionOptions = {},
 ): Promise<Artifact> {
   if (!input.name.trim()) throw new CollabError("invalid_input", "The artifact needs a name.");
   if (Boolean(input.storageKey) === Boolean(input.url)) {
@@ -673,16 +730,9 @@ export async function attachArtifact(
     throw new CollabError("invalid_input", "The file is not one of this item's uploads.");
   }
   return db.transaction().execute(async (tx) => {
-    const { item, base } = await additionContext(tx, orgId, actor, itemId);
-    // Lock the item (without blocking reads) so concurrent attachments of one name get distinct
+    // The item lock (additionContext) also gives concurrent attachments of one name distinct
     // versions; the item's own version stays.
-    await tx
-      .selectFrom("items")
-      .select("id")
-      .where("org_id", "=", orgId)
-      .where("id", "=", item.id)
-      .forNoKeyUpdate()
-      .execute();
+    const { item, base } = await additionContext(tx, orgId, actor, itemId, opts.guard);
     const latest = await tx
       .selectFrom("artifacts")
       .select((eb) => eb.fn.max("version").as("v"))

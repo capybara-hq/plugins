@@ -23,6 +23,11 @@ export interface Harness {
   emitted: { type: string; cause: unknown }[];
   /** The work conversations `ctx.conversations.bySubject` returns, by item id. */
   work: Map<string, string[]>;
+  /**
+   * Runs once at the next tool write, after the tool read the item and before the domain
+   * transaction starts (the harness's `causeOf`): a concurrent change landing in between.
+   */
+  beforeNextWrite(fn: () => Promise<void>): void;
   /** Calls a tool as `call` (an agent in a conversation of `call.ownerAccountId`). */
   run(
     name: string,
@@ -36,6 +41,7 @@ export function toolHarness(db: CollabDb, agents: UsableAgents, people: People):
   const registered = new Map<string, { spec: ToolSpec; handler: ToolHandler }>();
   const emitted: { type: string; cause: unknown }[] = [];
   const work = new Map<string, string[]>();
+  let pending: (() => Promise<void>) | undefined;
   const ctx = {
     db,
     tools: {
@@ -69,7 +75,12 @@ export function toolHarness(db: CollabDb, agents: UsableAgents, people: People):
         emitted.push({ type: req.type, cause: req.cause });
         return { eventId: "e", duplicate: false };
       },
-      causeOf: async () => "handle",
+      causeOf: async () => {
+        const fn = pending;
+        pending = undefined;
+        if (fn) await fn();
+        return "handle";
+      },
     },
     queue: { define() {}, add: async () => {} },
     log: { info() {}, warn() {}, error() {} },
@@ -80,6 +91,9 @@ export function toolHarness(db: CollabDb, agents: UsableAgents, people: People):
     specs,
     emitted,
     work,
+    beforeNextWrite(fn) {
+      pending = fn;
+    },
     async run(name, input, call) {
       const tool = registered.get(name);
       if (!tool) throw new Error(`no tool ${name}`);
