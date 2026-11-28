@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
 import type { FakeHost } from "@capybara-hq/plugin-client/testing";
-import { act, createElement } from "react";
+import { act, createElement, type ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { ProjectsPage } from "../../src/client/router.js";
+import { AgentName, agentOption } from "../../src/client/shared.js";
 import extension from "../../src/client.js";
 import type { ProjectItemsResult, ProjectSettingsResult } from "../../src/page/contract.js";
 import {
@@ -27,6 +28,12 @@ import {
 import { fireInput } from "./input.js";
 
 const SLOT = "org.page";
+
+const PRESET_AGENT = {
+  id: "agent-eng",
+  name: "[QA] engineer",
+  avatar: { kind: "preset", id: "fox" },
+} as const;
 
 const ITEMS: ProjectItemsResult = {
   project: PROJECT,
@@ -99,6 +106,12 @@ describe("collab client entry", () => {
       "item-properties": "conversation.properties.section",
       "agent-items": "agent.detail.section",
     });
+  });
+});
+
+describe("principal options", () => {
+  it("an agent's preset avatar reaches the picker option", () => {
+    expect(agentOption(PRESET_AGENT).avatar).toEqual({ kind: "preset", id: "fox" });
   });
 });
 
@@ -211,11 +224,66 @@ describe("board", () => {
     expect(h.navigations).toEqual([{ params: { item: "APP-1", project: null, view: null } }]);
   });
 
+  it("the board takes the page's full width: every column, not one card-grid cell", async () => {
+    renderPage({ project: "APP" });
+    await flush();
+    // the "cards" variant puts children in a grid of 280px tracks, so the board would be one cell
+    expect(lastProps.ListPage?.variant).not.toBe("cards");
+    const board = document.querySelector('[data-fake-design="Board"]');
+    expect(
+      [...(board?.querySelectorAll("section[data-column]") ?? [])].map((c) =>
+        c.getAttribute("data-column"),
+      ),
+    ).toEqual(["open", "ready", "doing"]);
+  });
+
+  it("a card's agent with a preset avatar draws the preset, not its initial", async () => {
+    renderPage(
+      { project: "APP" },
+      {
+        queries: {
+          ...QUERIES,
+          "project.board": () => boardResult({ cards: [card({ agent: PRESET_AGENT })] }),
+        },
+      },
+    );
+    await flush();
+    const avatar = document.querySelector(
+      `[data-card="${card().id}"] [data-fake-design="Avatar"][data-name="${PRESET_AGENT.name}"]`,
+    );
+    expect(avatar?.getAttribute("data-drawn")).toBe("preset");
+    expect(avatar?.getAttribute("data-preset")).toBe("fox");
+  });
+
   it("view=list renders the item table in the same frame", async () => {
     const { host: h } = renderPage({ project: "APP", view: "list" });
     await flush();
     expect(document.querySelector('table[aria-label="Items"]')).not.toBeNull();
     expect(h.queryCalls("project.board")).toBe(0);
+  });
+
+  it("the list's agent column draws a preset avatar as the preset", async () => {
+    const items: ProjectItemsResult = {
+      ...ITEMS,
+      rows: [
+        {
+          ...detailResult().item,
+          statusName: { zh: "待处理", en: "Open" },
+          statusCategory: "todo",
+          agent: PRESET_AGENT,
+        },
+      ],
+      total: 1,
+    };
+    renderPage(
+      { project: "APP", view: "list" },
+      { queries: { ...QUERIES, "project.items": () => items } },
+    );
+    await flush();
+    const avatar = document.querySelector(
+      `table [data-fake-design="Avatar"][data-name="${PRESET_AGENT.name}"]`,
+    );
+    expect(avatar?.getAttribute("data-drawn")).toBe("preset");
   });
 });
 
@@ -229,6 +297,29 @@ describe("item page", () => {
     );
     expect(tabs).toEqual(["Overview", "Activity", "Artifacts", "Decisions", "Conversations"]);
     expect(text()).toContain("Login with **OAuth**");
+  });
+
+  it("the executing agent's preset avatar is drawn as the preset", async () => {
+    renderPage(
+      { item: "APP-1" },
+      {
+        queries: {
+          ...QUERIES,
+          "item.detail": () => {
+            const d = detailResult();
+            return { ...d, item: { ...d.item, agent: PRESET_AGENT } };
+          },
+        },
+      },
+    );
+    await flush();
+    // the fake DetailPage draws no facts: read the agent row of the facts' KeyValue
+    const facts = lastProps.DetailPage?.facts as ReactElement<{
+      rows: { k: string; v: ReactElement<{ agent: unknown }> }[];
+    }>;
+    const agentRow = facts.props.rows.find((r) => r.k === "Agent");
+    expect(agentRow?.v.type).toBe(AgentName);
+    expect(agentRow?.v.props.agent).toEqual(PRESET_AGENT);
   });
 
   it("the follow action subscribes to the current item", async () => {

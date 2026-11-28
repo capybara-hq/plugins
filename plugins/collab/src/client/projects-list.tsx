@@ -16,8 +16,8 @@ import { useState } from "react";
 import type { ProjectRow } from "../page/contract.js";
 import { COPY, ROLE_LABEL } from "./i18n.js";
 import {
+  avatarUrl,
   errorText,
-  imageAvatar,
   TruncatedNote,
   useCollabAction,
   useCollabQuery,
@@ -69,11 +69,7 @@ export function ProjectsList() {
             header: t(ROLE_LABEL.owner),
             compact: "meta",
             cell: (r) => (
-              <PersonName
-                name={r.owner.name}
-                avatarUrl={imageAvatar(r.owner.avatar)?.src ?? null}
-                size={16}
-              />
+              <PersonName name={r.owner.name} avatarUrl={avatarUrl(r.owner.avatar)} size={16} />
             ),
           },
           {

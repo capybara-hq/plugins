@@ -23,9 +23,10 @@ import { COPY, type Copy, PRIORITY_LABEL } from "./i18n.js";
 import { ItemForm } from "./item-form.js";
 import {
   AGENT_STATE_LABEL,
+  AgentName,
+  avatarUrl,
   ErrorLine,
   errorText,
-  imageAvatar,
   isNotFound,
   pageHref,
   TruncatedNote,
@@ -120,10 +121,8 @@ function LoadedDetail(props: { data: ItemDetailResult; tab: TabId; onTab(id: Tab
     item.agent === null ? (
       <Text tone="faint">{t(COPY.none)}</Text>
     ) : (
-      <PersonName
-        name={item.agent.name}
-        avatarUrl={imageAvatar(item.agent.avatar)?.src ?? null}
-        size={16}
+      <AgentName
+        agent={item.agent}
         {...(item.agentState !== null && { secondary: t(AGENT_STATE_LABEL[item.agentState]) })}
       />
     );
@@ -163,7 +162,7 @@ function LoadedDetail(props: { data: ItemDetailResult; tab: TabId; onTab(id: Tab
                 ) : (
                   <PersonName
                     name={item.responsible.name}
-                    avatarUrl={imageAvatar(item.responsible.avatar)?.src ?? null}
+                    avatarUrl={avatarUrl(item.responsible.avatar)}
                     size={16}
                   />
                 ),

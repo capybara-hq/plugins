@@ -250,6 +250,18 @@ function installRicherDesign(): void {
       );
     };
   }
+  // what the design Avatar draws: a preset animal on a square, else the image or the initial
+  wrapped.Avatar = (p) => {
+    lastProps.Avatar = p;
+    const value = p.value as { kind: "preset"; id: string } | { kind: "image"; src: string } | null;
+    const preset = value?.kind === "preset" && p.shape !== "circle" ? value.id : undefined;
+    return createElement("span", {
+      "data-fake-design": "Avatar",
+      "data-name": String(p.name),
+      "data-drawn": preset !== undefined ? "preset" : value?.kind === "image" ? "image" : "initial",
+      ...(preset !== undefined && { "data-preset": preset }),
+    });
+  };
   wrapped.Button = (p) => {
     lastProps.Button = p;
     return createElement(

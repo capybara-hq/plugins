@@ -37,9 +37,9 @@ import type {
 import { COPY, type Copy, ROLE_LABEL } from "./i18n.js";
 import {
   agentOption,
+  avatarUrl,
   ErrorLine,
   errorText,
-  imageAvatar,
   isNotFound,
   pageHref,
   personOption,
@@ -255,11 +255,7 @@ function MembersSection({ data }: { data: ProjectSettingsResult }) {
             header: t(COPY.name),
             compact: "title",
             cell: (m) => (
-              <PersonName
-                name={m.person.name}
-                avatarUrl={imageAvatar(m.person.avatar)?.src ?? null}
-                size={16}
-              />
+              <PersonName name={m.person.name} avatarUrl={avatarUrl(m.person.avatar)} size={16} />
             ),
           },
           {
