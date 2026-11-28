@@ -1222,6 +1222,9 @@ export function mountPanel(opts: PanelOptions): void {
    */
   function showLoopback(msg: { port?: number; url: string; origin?: string }): void {
     const port = msg.port as number;
+    // a port the conversation already has open is no refusal to show (the list may be stale, so
+    // the read below settles it)
+    if (grants.some((g) => g.port === port)) return;
     const origin = typeof msg.origin === "string" && msg.origin !== "" ? msg.origin : undefined;
     const fresh = loopback === null || loopback.port !== port || loopback.origin !== origin;
     loopback = {
@@ -1235,6 +1238,9 @@ export function mountPanel(opts: PanelOptions): void {
       loopback = null;
       renderChrome();
     }, LOOPBACK_STRIP_MS);
+    // the grant may have landed after the refusal (Full access grants on its own): read the list
+    // again, which drops the strip once its port is in it
+    void readPorts();
   }
 
   /** A loopback-ports request with the embed token (GET reads, POST grants or revokes). */
@@ -1267,6 +1273,12 @@ export function mountPanel(opts: PanelOptions): void {
       next = [];
     }
     grants = next;
+    if (loopback !== null && grants.some((g) => g.port === loopback?.port)) {
+      loopback = null;
+      if (loopbackTimer !== undefined) clearTimeout(loopbackTimer);
+      renderChrome();
+      return;
+    }
     renderPorts();
   }
 
