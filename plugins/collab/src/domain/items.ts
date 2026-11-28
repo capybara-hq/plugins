@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { sql, type Updateable } from "kysely";
 import { outboxFor } from "../events/outbox.js";
 import type { CollabDb } from "../store/db.js";
@@ -33,6 +34,7 @@ import {
 } from "./internal.js";
 import {
   checkTransition,
+  defaultAssignmentOf,
   type GateRule,
   gateOf,
   initialStatus,
@@ -178,6 +180,11 @@ async function checkParent(
 export interface MoveOptions {
   /** Drops a default agent the member may not use (see {@link AgentAllowed}). */
   agentAllowed?: AgentAllowed;
+  /**
+   * Called inside the write's transaction with the id of a gate decision about to be created,
+   * before it is inserted (intent first: the caller queues the job that notifies the confirmer).
+   */
+  onGateDecision?: (decisionId: string) => Promise<void>;
 }
 
 /** Records that a default assignment left out an agent the member can no longer use. */
@@ -334,7 +341,7 @@ export async function updateItem(
 }
 
 /** Who may confirm a gate, and who the gate request is addressed to. */
-async function gateConfirmers(
+export async function gateConfirmers(
   tx: CollabDb,
   orgId: string,
   project: Project,
@@ -411,9 +418,17 @@ async function moveItem(
     set.responsible_account_id = handoff.accountId;
     set.executing_agent_id = handoff.agentId;
   }
-  // TODO(C6): a default assignment that resolves to no member or several posts an inbox notice
-  // to the project owner to pick; the item keeps its assignment until then.
   const after = await writeItem(tx, orgId, item, set);
+  // A default assignment that matches no member or several: the item keeps its assignment and
+  // the project owner is asked to pick (an inbox notice posted after the commit, see notify.ts).
+  const rule = defaultAssignmentOf(to);
+  if (rule && (rule.functionLabel || rule.accountId) && !handoff) {
+    await addActivity(tx, orgId, item.id, actor, "handoff_unresolved", {
+      status: to.key,
+      ...(rule.functionLabel ? { functionLabel: rule.functionLabel } : {}),
+      ...(rule.accountId ? { accountId: rule.accountId } : {}),
+    });
+  }
   await addActivity(tx, orgId, item.id, actor, "status_changed", {
     from: item.status_key,
     to: to.key,
@@ -488,7 +503,7 @@ async function advanceParent(
   // stays an explicit act.
   if (gate) {
     const { addressee } = await gateConfirmers(tx, orgId, project, parent, gate);
-    await requestGate(tx, orgId, actor, project, parent, statuses, acceptance, addressee);
+    await requestGate(tx, orgId, actor, project, parent, statuses, acceptance, addressee, opts);
     return true;
   }
   await moveItem(tx, orgId, actor, project, parent, statuses, acceptance, true, opts);
@@ -509,30 +524,43 @@ export async function transition(
   toStatus: string,
   opts: MoveOptions = {},
 ): Promise<{ item: Item } | { gate: Decision }> {
-  return db.transaction().execute(async (tx) => {
-    const item = await loadItem(tx, orgId, itemId);
-    await requireRole(tx, orgId, actor.accountId, item.project_id, "write");
-    checkVersion(item, version);
-    const project = await loadProject(tx, orgId, item.project_id);
-    const statuses = await statusesForType(tx, orgId, item.project_id, item.type);
-    const to = checkTransition(statuses, item.status_key, toStatus);
-    const gate = gateOf(to);
-    if (gate) {
-      const { addressee, confirmers } = await gateConfirmers(tx, orgId, project, item, gate);
-      if (isAgent(actor)) {
-        return {
-          gate: await requestGate(tx, orgId, actor, project, item, statuses, to, addressee),
-        };
-      }
-      if (!confirmers.includes(actor.accountId)) {
-        throw new CollabError(
-          "gated",
-          `Moving to "${to.name_en}" needs confirmation by ${confirmers.join(", ")}. Ask them to move it.`,
-        );
-      }
+  return db
+    .transaction()
+    .execute((tx) => transitionIn(tx, orgId, actor, itemId, version, toStatus, opts));
+}
+
+/** {@link transition} inside the caller's transaction (a gate decision's approval uses it). */
+export async function transitionIn(
+  tx: CollabDb,
+  orgId: string,
+  actor: Actor,
+  itemId: string,
+  version: number,
+  toStatus: string,
+  opts: MoveOptions = {},
+): Promise<{ item: Item } | { gate: Decision }> {
+  const item = await loadItem(tx, orgId, itemId);
+  await requireRole(tx, orgId, actor.accountId, item.project_id, "write");
+  checkVersion(item, version);
+  const project = await loadProject(tx, orgId, item.project_id);
+  const statuses = await statusesForType(tx, orgId, item.project_id, item.type);
+  const to = checkTransition(statuses, item.status_key, toStatus);
+  const gate = gateOf(to);
+  if (gate) {
+    const { addressee, confirmers } = await gateConfirmers(tx, orgId, project, item, gate);
+    if (isAgent(actor)) {
+      return {
+        gate: await requestGate(tx, orgId, actor, project, item, statuses, to, addressee, opts),
+      };
     }
-    return { item: await moveItem(tx, orgId, actor, project, item, statuses, to, false, opts) };
-  });
+    if (!confirmers.includes(actor.accountId)) {
+      throw new CollabError(
+        "gated",
+        `Moving to "${to.name_en}" needs confirmation by ${confirmers.join(", ")}. Ask them to move it.`,
+      );
+    }
+  }
+  return { item: await moveItem(tx, orgId, actor, project, item, statuses, to, false, opts) };
 }
 
 /** Creates (or returns the open) gate decision for moving the item into `to`. */
@@ -545,6 +573,7 @@ async function requestGate(
   statuses: Status[],
   to: Status,
   addressee: string,
+  opts: MoveOptions,
 ): Promise<Decision> {
   const open = await tx
     .selectFrom("decisions")
@@ -558,9 +587,12 @@ async function requestGate(
   if (open) return open;
   const after = await writeItem(tx, orgId, item, {});
   const key = `${project.key}-${item.number}`;
+  const id = randomUUID();
+  await opts.onGateDecision?.(id);
   const decision = await tx
     .insertInto("decisions")
     .values({
+      id,
       org_id: orgId,
       item_id: item.id,
       kind: "gate",
@@ -576,7 +608,6 @@ async function requestGate(
     })
     .returningAll()
     .executeTakeFirstOrThrow();
-  // TODO(C7): notify the addressee through the inbox.
   await addActivity(tx, orgId, item.id, actor, "gate_requested", {
     to: to.key,
     decisionId: decision.id,

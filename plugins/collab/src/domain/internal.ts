@@ -71,9 +71,18 @@ export async function writeItem(
   before: Item,
   patch: Updateable<ItemsTable>,
 ): Promise<Item> {
+  // The agent's run state belongs to the executing pair: a new pair starts without one.
+  const pairChanged =
+    (patch.responsible_account_id !== undefined &&
+      patch.responsible_account_id !== before.responsible_account_id) ||
+    (patch.executing_agent_id !== undefined &&
+      patch.executing_agent_id !== before.executing_agent_id);
+  const reset = pairChanged
+    ? { agent_state: null, agent_conversation_id: null, agent_state_at: null }
+    : {};
   const row = await tx
     .updateTable("items")
-    .set({ ...patch, version: sql`version + 1`, updated_at: sql`now()` })
+    .set({ ...patch, ...reset, version: sql`version + 1`, updated_at: sql`now()` })
     .where("org_id", "=", orgId)
     .where("id", "=", before.id)
     .where("version", "=", before.version)

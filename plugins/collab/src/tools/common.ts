@@ -10,7 +10,7 @@ import { canSee } from "../domain/access.js";
 import type { AgentAllowed } from "../domain/assignment.js";
 import { CollabError } from "../domain/errors.js";
 import type { AdditionGuard } from "../domain/items.js";
-import { emitting } from "../events/emitter.js";
+import { notifying } from "../notify.js";
 import type { CollabDb } from "../store/db.js";
 import type { Actor, Item, Project } from "../store/types.js";
 import { toolError } from "./format.js";
@@ -43,7 +43,8 @@ export function actorOf(call: ToolCallContext): Actor {
 }
 
 /**
- * Runs a domain write as the call's actor, then emits the events it owes. The actor carries the
+ * Runs a domain write as the call's actor, then emits the events it owes and posts the inbox
+ * notices of the assignments it made (`notifying`). The actor carries the
  * kernel's cause handle of this call, so those events keep the call's chain depth and
  * self-trigger check (also when the `collab-emit` queue emits them later).
  */
@@ -53,7 +54,7 @@ export async function writing<T>(
   write: (actor: Actor) => Promise<T>,
 ): Promise<T> {
   const actor: Actor = { ...actorOf(call), causeHandle: await deps.ctx.triggers.causeOf(call) };
-  return emitting(deps.ctx, call.orgId, () => write(actor));
+  return notifying(deps.ctx, call.orgId, () => write(actor));
 }
 
 /** Wraps a handler so domain refusals reach the model as actionable `ToolError`s. */

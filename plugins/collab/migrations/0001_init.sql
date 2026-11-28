@@ -83,6 +83,12 @@ CREATE TABLE IF NOT EXISTS items (
   parent_id uuid REFERENCES items (id) ON DELETE SET NULL,
   fields jsonb NOT NULL DEFAULT '{}'::jsonb,
   version integer NOT NULL DEFAULT 1,
+  -- What the executing agent is doing on the item (from the kernel's run.lifecycle hook): null
+  -- until its first run or once the assignment changes. Not an edit: no version bump.
+  agent_state text CHECK (agent_state IN ('working', 'waiting', 'idle', 'declined')),
+  -- The work conversation the state was read from (the pair's subject conversation).
+  agent_conversation_id text,
+  agent_state_at timestamptz,
   closed_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
@@ -132,6 +138,10 @@ CREATE TABLE IF NOT EXISTS activity (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS activity_item ON activity (item_id, created_at);
+-- The request path reads the assignments and unresolved handoffs its own write recorded, to post
+-- inbox notices once the write committed.
+CREATE INDEX IF NOT EXISTS activity_notices ON activity (org_id, created_at)
+  WHERE kind IN ('assigned', 'handoff_unresolved');
 
 CREATE TABLE IF NOT EXISTS artifacts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -162,6 +172,14 @@ CREATE TABLE IF NOT EXISTS decisions (
   answer jsonb,
   deadline_at timestamptz,
   gate_target text,
+  -- The inbox items posted for the decision (the addressee's, the reminder, the escalation), all
+  -- resolved once it is answered.
+  inbox_item_ids text[] NOT NULL DEFAULT '{}',
+  -- When the addressee's inbox item, the deadline reminder and the escalation to the project owner
+  -- were posted: each is posted once (the jobs that post them run at least once).
+  notified_at timestamptz,
+  reminded_at timestamptz,
+  escalated_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   answered_at timestamptz
 );

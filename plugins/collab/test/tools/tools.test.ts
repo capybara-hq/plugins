@@ -45,10 +45,8 @@ async function newTask(orgId: string, key: string, title = "Write the report") {
 }
 
 describe("collab tools", () => {
-  it("registers every declared tool except decision_ask (task C7) with a full description", () => {
-    expect([...tools.specs.keys()].sort()).toEqual(
-      TOOL_KEYS.filter((k) => k !== "decision_ask").sort(),
-    );
+  it("registers every declared tool with a full description", () => {
+    expect([...tools.specs.keys()].sort()).toEqual([...TOOL_KEYS].sort());
     for (const spec of tools.specs.values()) {
       expect(spec.description.split("\n")[0]?.length).toBeGreaterThan(20);
       expect(`plugin__collab__${spec.name}`.length).toBeLessThanOrEqual(64);

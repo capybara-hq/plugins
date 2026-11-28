@@ -4,6 +4,7 @@ import {
   ToolError,
   type ToolSpec,
 } from "@capybara-hq/plugin-sdk";
+import { gateNotifier } from "../decisions-queue.js";
 import { assign, validateAssignee } from "../domain/assignment.js";
 import { CollabError } from "../domain/errors.js";
 import { loadItem } from "../domain/internal.js";
@@ -570,7 +571,7 @@ async function renderItem(
     `${key} [${item.type}] "${item.title}" (version ${item.version})`,
     `Project: ${project.key} "${project.name}"`,
     `Status: ${statusLabel(statuses, item.status_key)}; allowed next: ${nextStatuses(statuses, item.status_key).join(", ") || "none"}`,
-    `Responsible: ${personLabel(names, item.responsible_account_id)}; agent: ${agentLabel(agents, item.executing_agent_id)}`,
+    `Responsible: ${personLabel(names, item.responsible_account_id)}; agent: ${agentLabel(agents, item.executing_agent_id)}${item.executing_agent_id && item.agent_state ? ` (${item.agent_state})` : ""}`,
     `Requested by: ${personLabel(names, item.requester_account_id)}`,
     `Priority: ${item.priority} (${PRIORITY_NAMES[item.priority] ?? "?"}); labels: ${item.labels.join(", ") || "none"}`,
   ];
@@ -843,11 +844,14 @@ export function registerItemTools(deps: ToolDeps): void {
       const { item, project } = await itemByKey(db, call.orgId, person, str(input, "key"));
       await assertStillAssigned(deps, call, item);
       const to = str(input, "to");
+      const gates = gateNotifier(ctx, call.orgId);
       const out = await writing(deps, call, (actor) =>
         transition(db, call.orgId, actor, item.id, int(input, "version"), to, {
           agentAllowed: agentAllowedFor(deps, call.orgId),
+          onGateDecision: gates.onGateDecision,
         }),
       );
+      await gates.flush();
       const key = keyOf(project.key, item);
       const statuses = await statusesForType(db, call.orgId, project.id, item.type);
       if ("gate" in out) {

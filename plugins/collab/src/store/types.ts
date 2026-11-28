@@ -23,6 +23,8 @@ export type ProjectRole = "owner" | "member" | "guest";
 export type StatusCategory = "backlog" | "todo" | "in_progress" | "review" | "done" | "canceled";
 export type LinkKind = "blocks" | "relates" | "duplicates";
 export type DecisionKind = "question" | "gate";
+/** What the executing agent is doing on an item (`run.lifecycle`). */
+export type AgentState = "working" | "waiting" | "idle" | "declined";
 export type DecisionState = "open" | "answered" | "canceled" | "expired";
 
 export interface ProjectsTable {
@@ -98,6 +100,9 @@ export interface ItemsTable {
   parent_id: string | null;
   fields: JsonDefault<Record<string, unknown>>;
   version: Generated<number>;
+  agent_state: Generated<AgentState | null>;
+  agent_conversation_id: Generated<string | null>;
+  agent_state_at: Generated<Date | null>;
   closed_at: Date | null;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
@@ -165,6 +170,10 @@ export interface DecisionsTable {
   answer: Json<unknown> | null;
   deadline_at: Date | null;
   gate_target: string | null;
+  inbox_item_ids: Generated<string[]>;
+  notified_at: Date | null;
+  reminded_at: Date | null;
+  escalated_at: Date | null;
   created_at: Generated<Date>;
   answered_at: Date | null;
 }

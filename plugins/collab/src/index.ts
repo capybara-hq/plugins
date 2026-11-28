@@ -7,10 +7,17 @@ import {
   PROJECTS,
   TOOL_KEYS,
 } from "./constants.js";
+import { registerDecisionQueue } from "./decisions-queue.js";
+// Registers the inbox.answer UI action (before registerUiActions runs).
+import "./decisions/actions.js";
 import { registerDrainQueue } from "./events/emitter.js";
+import { registerLifecycle } from "./lifecycle.js";
+// Registers the inbox.stop-agent UI action (before registerUiActions runs).
+import "./notify.js";
 import { collabDb } from "./store/db.js";
 import { registerTools } from "./tools/index.js";
 import { createTriggerSource } from "./trigger-source.js";
+import { registerUiActions } from "./ui/actions.js";
 
 /**
  * A project tracker for people and agents: projects, items (requirement, task, bug) with
@@ -66,6 +73,9 @@ export default defineExtension({
   setup(ctx) {
     registerTools(ctx);
     registerDrainQueue(ctx);
+    registerDecisionQueue(ctx);
+    registerUiActions(ctx);
+    registerLifecycle(ctx);
     ctx.provide(TRIGGER_SOURCE_EXTENSION_POINT, createTriggerSource(collabDb(ctx.db)));
   },
 });
