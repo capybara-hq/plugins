@@ -89,21 +89,48 @@ async function emitOwn(ctx: EmitterCtx, orgId: string, start: Date): Promise<voi
       .where("created_at", ">=", start)
       .execute();
   } catch (err) {
-    ctx.log.warn("collab outbox read failed; the drain job emits the events", { orgId, err });
+    ctx.log.warn("collab outbox read failed; a drain job emits the events", { orgId, err });
+    await queueRetry(ctx, orgId);
     return;
   }
   const names = new Map<string, Promise<unknown>>();
+  let failed = false;
   for (const row of rows) {
     try {
       await emitRow(ctx, row, names);
     } catch (err) {
-      ctx.log.warn("collab event emit failed; the drain job retries it", {
+      failed = true;
+      ctx.log.warn("collab event emit failed; a drain job retries it", {
         orgId,
         outboxId: row.id,
         type: row.type,
         err,
       });
     }
+  }
+  if (failed) await queueRetry(ctx, orgId);
+}
+
+/**
+ * Best effort after a failed emit on the request path: a drain job a minute from now, so a write
+ * that committed after its bucket job already ran does not wait for the org's next write. Its id
+ * names the bucket it runs in (never one a finished job has), shared with the ladder's.
+ */
+async function queueRetry(ctx: EmitterCtx, orgId: string): Promise<void> {
+  try {
+    await ctx.queue.add<DrainJob>(
+      DRAIN_QUEUE,
+      { orgId, step: 0 },
+      {
+        jobId: drainJobId(orgId, Math.floor((Date.now() + FIRST_RETRY_MS) / BUCKET_MS), true),
+        delayMs: FIRST_RETRY_MS,
+      },
+    );
+  } catch (err) {
+    ctx.log.warn("collab could not queue a drain retry; the next write rescues the events", {
+      orgId,
+      err,
+    });
   }
 }
 
@@ -122,7 +149,9 @@ function pending(db: CollabDb, orgId: string, limit: number) {
  * The `collab-drain` job: prunes settled rows, emits the org's pending rows (oldest first, one
  * batch), gives up rows older than a day, and while rows stay pending queues itself again on a
  * ladder (1 min, doubling, at most 1 h). The ladder is ours, not the queue's attempts, so an
- * outage of any length is bridged.
+ * outage of any length is bridged. When queueing the next step fails, the job throws so the queue
+ * retries it (rows this run emitted stay emitted); should those retries run out too, the org's
+ * next write (its bucket job and its own emit) rescues the rows.
  */
 export async function drainOrg(ctx: EmitterCtx, job: DrainJob): Promise<void> {
   const db = collabDb(ctx.db);

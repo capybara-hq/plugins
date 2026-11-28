@@ -35,9 +35,10 @@ function fakeCtx() {
   const warnings: string[] = [];
   const handlers = new Map<string, (data: DrainJob) => Promise<void>>();
   const state: {
+    queueDown: boolean;
     failing: boolean;
     refuse: (cause: string, e: TriggerEvent) => TriggerError | null;
-  } = { failing: false, refuse: () => null };
+  } = { queueDown: false, failing: false, refuse: () => null };
   const ctx = {
     db,
     log: {
@@ -68,6 +69,7 @@ function fakeCtx() {
         handlers.set(name, handler);
       },
       async add(name: string, data: DrainJob, opts?: { delayMs?: number; jobId?: string }) {
+        if (state.queueDown) throw new Error("queue unavailable");
         jobs.push({ name, data, ...(opts ? { opts } : {}) });
       },
     },
@@ -216,11 +218,14 @@ describe("collab emitter", () => {
       }),
     );
     expect(emitted).toHaveLength(0);
+    // The failed request-path emit queued a retry drain a minute out (its bucket job may be past).
+    expect(jobs[1]).toMatchObject({ data: { orgId: org, step: 0 }, opts: { delayMs: 60_000 } });
+    expect(jobs[1]?.opts?.jobId).toMatch(/^collab-drain-org-emit-3-\d+-retry$/);
     for (let i = 0; i < 6; i++) await runJob(jobs.at(-1));
-    expect(jobs.slice(1).map((j) => j.opts?.delayMs)).toEqual([
+    expect(jobs.slice(2).map((j) => j.opts?.delayMs)).toEqual([
       120_000, 240_000, 480_000, 960_000, 1_920_000, 3_600_000,
     ]);
-    expect(jobs.slice(1).map((j) => j.data.step)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(jobs.slice(2).map((j) => j.data.step)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(new Set(jobs.map((j) => j.opts?.jobId)).size).toBe(jobs.length);
     const [row] = await outboxOf(db, org, item.id);
     expect(row?.attempts).toBeGreaterThanOrEqual(7);
@@ -388,5 +393,42 @@ describe("collab emitter", () => {
       .orderBy("dedupe_key")
       .execute();
     expect(left.map((r) => r.dedupe_key)).toEqual(["emitted-new", "failed-new"]);
+  });
+
+  it("a drain whose next step cannot be queued throws for the queue's retry", async () => {
+    const org = "org-emit-9";
+    const { ctx, emitted, jobs, state, runJob } = fakeCtx();
+    const project = await teamProject(db, org, "QD");
+    state.failing = true;
+    await emitting(ctx, org, () =>
+      createItem(db, org, OWNER, { projectId: project.id, type: "task", title: "queued" }),
+    );
+    state.queueDown = true;
+    await expect(runJob(jobs[0])).rejects.toThrow("queue unavailable");
+    // A failed request-path emit with the queue down still returns the write.
+    const item = await emitting({ ...ctx, queue: { ...ctx.queue, add: async () => {} } }, org, () =>
+      createItem(db, org, OWNER, { projectId: project.id, type: "task", title: "second" }),
+    );
+    expect(item.title).toBe("second");
+    expect(emitted).toHaveLength(0);
+  });
+
+  it("excerpts never split an emoji, so the write and its event go through", async () => {
+    const org = "org-emit-10";
+    const { ctx, emitted } = fakeCtx();
+    const project = await teamProject(db, org, "EJ");
+    // The emoji's two UTF-16 units sit at 499 and 500: a plain slice(0, 500) would split it.
+    const text = `${"a".repeat(499)}😀${"b".repeat(600)}`;
+    const item = await emitting(ctx, org, () =>
+      createItem(db, org, OWNER, {
+        projectId: project.id,
+        type: "task",
+        title: "emoji",
+        description: text,
+      }),
+    );
+    await emitting(ctx, org, () => comment(db, org, OWNER, item.id, text));
+    expect(emitted.map((e) => e.type)).toEqual(["item.created", "item.commented"]);
+    for (const e of emitted) expect(e.summary).toContain(`${"a".repeat(499)}😀`);
   });
 });

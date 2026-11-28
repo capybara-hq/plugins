@@ -45,14 +45,30 @@ export interface StoredDetail extends SummaryDetail {
   title: string;
 }
 
+/**
+ * The first `EXCERPT_CHARS` characters, counted by code points: never half a surrogate pair (a
+ * lone surrogate makes PostgreSQL refuse the jsonb, and with it the whole write).
+ */
+export function excerpt(text: string): string {
+  if (text.length <= EXCERPT_CHARS) return text;
+  let out = "";
+  let n = 0;
+  for (const ch of text) {
+    if (n === EXCERPT_CHARS) break;
+    out += ch;
+    n += 1;
+  }
+  return out;
+}
+
 /** `detail` as the outbox row keeps it: free text cut to its excerpt length at write time. */
 export function storedDetail(key: string, title: string, detail: SummaryDetail): StoredDetail {
   const out: StoredDetail = { ...detail, key, title };
-  if (detail.comment !== undefined) out.comment = detail.comment.slice(0, EXCERPT_CHARS);
+  if (detail.comment !== undefined) out.comment = excerpt(detail.comment);
   if (detail.description !== undefined) {
-    out.description = detail.description.slice(0, EXCERPT_CHARS);
+    out.description = excerpt(detail.description);
   }
-  if (detail.answer !== undefined) out.answer = detail.answer.slice(0, EXCERPT_CHARS);
+  if (detail.answer !== undefined) out.answer = excerpt(detail.answer);
   return out;
 }
 
@@ -109,16 +125,16 @@ export function summarize(type: string, detail: StoredDetail, names: SummaryName
       break;
     case "decision.answered":
       parts.push(
-        `${by} answered a decision on ${subject}${detail.answer ? `: ${detail.answer}` : "."}`,
+        `${by} answered a decision on ${subject}${detail.answer ? `: ${excerpt(detail.answer)}` : "."}`,
       );
       break;
     default:
       parts.push(`${subject} was updated by ${by}.`);
   }
   if (detail.changedFields?.length) parts.push(`Changed: ${detail.changedFields.join(", ")}.`);
-  if (detail.comment) parts.push(`Comment: ${detail.comment.slice(0, EXCERPT_CHARS)}`);
+  if (detail.comment) parts.push(`Comment: ${excerpt(detail.comment)}`);
   if (detail.description) {
-    parts.push(`Description: ${detail.description.slice(0, EXCERPT_CHARS)}`);
+    parts.push(`Description: ${excerpt(detail.description)}`);
   }
   return clipBytes(parts.join(" "), SUMMARY_MAX_BYTES);
 }

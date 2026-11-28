@@ -42,4 +42,19 @@ describe("collab event summaries", () => {
       'Li answered a decision on WR-2 "second": Use Postgres',
     );
   });
+
+  it("cuts excerpts by code points, never inside a surrogate pair", () => {
+    const text = `${"a".repeat(499)}😀${"b".repeat(600)}`;
+    const detail = storedDetail("EJ-1", "emoji", {
+      comment: text,
+      description: text,
+      answer: text,
+    });
+    const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    for (const v of [detail.comment, detail.description, detail.answer]) {
+      expect(v).toBe(`${"a".repeat(499)}😀`);
+      expect(v).not.toMatch(lone);
+    }
+    expect(summarize("item.commented", detail, { actor: "Li" })).not.toMatch(lone);
+  });
 });
