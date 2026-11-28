@@ -1,6 +1,7 @@
+import { outboxFor } from "../events/outbox.js";
 import type { CollabDb } from "../store/db.js";
 import type { Actor, Decision, Item, Project } from "../store/types.js";
-import { addActivity } from "./internal.js";
+import { addActivity, isAgent, loadProject } from "./internal.js";
 import { type GateRule, gateOf, statusesForType } from "./workflow.js";
 
 /**
@@ -301,5 +302,126 @@ export async function readdressOpen(
         to: addressee,
       },
     );
+  }
+}
+
+/**
+ * Tells the asker what became of their decision: a directed `decision.answered` while the asking
+ * pair still holds the item; otherwise (a person asked, or the item moved on to another pair) an
+ * `item.updated`.
+ */
+export async function reportToAsker(
+  tx: CollabDb,
+  orgId: string,
+  actor: Actor,
+  decision: Decision,
+  item: Item,
+  text: string,
+  answered: boolean,
+): Promise<void> {
+  const project = await loadProject(tx, orgId, item.project_id);
+  const statuses = await statusesForType(tx, orgId, item.project_id, item.type);
+  const base = {
+    actor,
+    projectKey: project.key,
+    statusCategory: statuses.find((s) => s.key === item.status_key)?.category ?? "todo",
+  };
+  const asker = decision.asker;
+  const holds =
+    isAgent(asker) &&
+    item.responsible_account_id === asker.accountId &&
+    item.executing_agent_id === asker.agentId;
+  if (answered && holds && isAgent(asker)) {
+    await outboxFor(tx, orgId, "decision.answered", item, {
+      ...base,
+      audience: { accountId: asker.accountId, agentId: asker.agentId },
+      decisionId: decision.id,
+      detail: { answer: text },
+    });
+    return;
+  }
+  // An expiry is told only to an asking pair that still holds the item.
+  if (!answered && !holds) return;
+  await outboxFor(tx, orgId, "item.updated", item, {
+    ...base,
+    changedFields: ["decisions"],
+    dedupeKey: `item.updated-decision-${decision.id}`,
+    detail: { answer: text },
+  });
+}
+
+/** Why an open decision was canceled without an answer (besides a gate the item moved past). */
+export type CancelReason = "disallowed" | "archived" | "closed";
+
+/** What the asker is told when their decision is canceled. */
+async function cancelText(
+  tx: CollabDb,
+  orgId: string,
+  item: Item,
+  decision: Decision,
+  reason: CancelReason,
+): Promise<string> {
+  const project = await loadProject(tx, orgId, item.project_id);
+  const key = `${project.key}-${item.number}`;
+  const why =
+    reason === "archived"
+      ? "the project was archived and is read-only."
+      : reason === "closed"
+        ? `${key} was closed.`
+        : "the workflow no longer allows that move.";
+  if (decision.kind !== "gate") {
+    return `Question: "${decision.question}" was canceled: ${why}`;
+  }
+  const statuses = await statusesForType(tx, orgId, item.project_id, item.type);
+  const target = statuses.find((s) => s.key === decision.gate_target);
+  const name = target ? target.name_en : (decision.gate_target ?? "?");
+  return `The confirmation request to move ${key} to "${name}" was canceled: ${why}${
+    reason === "disallowed" ? " Pick one of the statuses item_get lists as allowed." : ""
+  }`;
+}
+
+/**
+ * Cancels an open decision and tells the asking pair (while it holds the item), like an expiry.
+ * Returns false when it was no longer open.
+ */
+export async function cancelWithReport(
+  tx: CollabDb,
+  orgId: string,
+  actor: Actor,
+  decision: Decision,
+  item: Item,
+  reason: CancelReason,
+  hooks: DecisionHooks | undefined,
+): Promise<boolean> {
+  if (!(await closeDecision(tx, orgId, actor, decision, "canceled", reason, hooks))) return false;
+  const text = await cancelText(tx, orgId, item, decision, reason);
+  await reportToAsker(tx, orgId, actor, decision, item, text, false);
+  return true;
+}
+
+/**
+ * Cancels the open questions of an item that just closed (done or canceled): nobody works on a
+ * closed item, so their answers have nothing to steer. Each one's inbox items are resolved and the
+ * asking pair is told, like any cancel. Open gates are canceled by {@link cancelStaleGates}.
+ */
+export async function cancelQuestionsOfClosedItem(
+  tx: CollabDb,
+  orgId: string,
+  actor: Actor,
+  item: Item,
+  hooks: DecisionHooks | undefined,
+): Promise<void> {
+  const open = await tx
+    .selectFrom("decisions")
+    .selectAll()
+    .where("org_id", "=", orgId)
+    .where("item_id", "=", item.id)
+    .where("kind", "=", "question")
+    .where("state", "=", "open")
+    .orderBy("id")
+    .forUpdate()
+    .execute();
+  for (const decision of open) {
+    await cancelWithReport(tx, orgId, actor, decision, item, "closed", hooks);
   }
 }

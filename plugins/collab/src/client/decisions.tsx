@@ -12,7 +12,8 @@ const STATE_LABEL: Record<DecisionState, Copy> = {
 };
 
 const APPROVE: Copy = { zh: "批准", en: "Approve" };
-const REJECT: Copy = { zh: "拒绝", en: "Reject" };
+const REJECT: Copy = { zh: "驳回", en: "Reject" };
+const GATE_LABELS: Readonly<Record<string, Copy>> = { approve: APPROVE, reject: REJECT };
 
 /**
  * The buttons that answer a decision the viewer may answer: approve / reject for a gate request,
@@ -97,11 +98,13 @@ export function DecisionAnswers({ decision }: { decision: DecisionRow }) {
 /** One decision as a list item: the question, its state, the recommendation and the answers. */
 export function DecisionItem({ decision }: { decision: DecisionRow }) {
   const t = useT();
+  // A gate's two answers are named in the viewer's language; a question's labels are the asker's.
+  const labelOf = (id: string | null | undefined): string | undefined => {
+    const gate = decision.kind === "gate" ? GATE_LABELS[id ?? ""] : undefined;
+    return gate ? t(gate) : decision.options.find((o) => o.id === id)?.label;
+  };
   const answered =
-    decision.answer === null
-      ? null
-      : (decision.options.find((o) => o.id === decision.answer?.optionId)?.label ??
-        decision.answer.text);
+    decision.answer === null ? null : (labelOf(decision.answer.optionId) ?? decision.answer.text);
   const meta = [
     `${t(COPY.waitingOn)} ${decision.addressee.name}`,
     decision.asker.agent === null ? decision.asker.person.name : decision.asker.agent.name,
@@ -128,10 +131,7 @@ export function DecisionItem({ decision }: { decision: DecisionRow }) {
       <Stack gap={8}>
         {decision.recommendation !== null && decision.state === "open" && (
           <Text variant="small" tone="muted">
-            {[
-              decision.options.find((o) => o.id === decision.recommendation?.optionId)?.label,
-              decision.recommendation.why,
-            ]
+            {[labelOf(decision.recommendation.optionId), decision.recommendation.why]
               .filter((x) => x !== undefined && x !== "")
               .reduce((line, x) => `${line} — ${x}`, t(COPY.recommended))}
           </Text>

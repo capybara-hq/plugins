@@ -23,6 +23,7 @@ import {
   validateAssignee,
 } from "./assignment.js";
 import {
+  cancelQuestionsOfClosedItem,
   cancelStaleGates,
   type DecisionHooks,
   gateConfirmers,
@@ -434,6 +435,9 @@ async function moveItem(
   }
   await recordAssignment(tx, orgId, actor, item, after, base);
   await cancelStaleGates(tx, orgId, actor, after, opts.decisions);
+  if (isClosed(to.category) && !isClosed(fromCategory)) {
+    await cancelQuestionsOfClosedItem(tx, orgId, actor, after, opts.decisions);
+  }
   await readdressOpen(tx, orgId, { itemId: after.id }, opts.decisions);
   if (isClosed(to.category) && after.parent_id) {
     await advanceParent(tx, orgId, actor, after.parent_id, opts);

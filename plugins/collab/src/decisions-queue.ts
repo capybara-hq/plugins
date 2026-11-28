@@ -404,6 +404,21 @@ function recipientsOf(decision: Decision): string[] {
   return decision.addressees.length > 0 ? decision.addressees : [decision.addressee_account_id];
 }
 
+/** A gate request's two answers, named in both UI languages (a question's labels are the asker's). */
+// capybara:allow-module-state read-only constant
+const GATE_LABELS: Readonly<Record<string, { zh: string; en: string }>> = {
+  approve: { zh: "批准", en: "Approve" },
+  reject: { zh: "驳回", en: "Reject" },
+};
+
+/** An option's button label: the gate's localized names, or the asker's text in both languages. */
+function optionLabel(decision: Decision, o: DecisionOption): { zh: string; en: string } {
+  const gate = decision.kind === "gate" ? GATE_LABELS[o.id] : undefined;
+  if (gate) return gate;
+  const text = clip(o.label, LABEL_CHARS);
+  return { zh: text, en: text };
+}
+
 /** A recipient's item (the first notice, or the reminder at the deadline). */
 async function addresseeItem(
   db: CollabDb,
@@ -436,7 +451,7 @@ async function addresseeItem(
       ? {
           actions: options.map((o) => ({
             id: o.id,
-            label: { zh: clip(o.label, LABEL_CHARS), en: clip(o.label, LABEL_CHARS) },
+            label: optionLabel(decision, o),
             ...(o.id === "reject" && decision.kind === "gate"
               ? { style: "danger" as const }
               : o.id === rec?.optionId || (decision.kind === "gate" && o.id === "approve")
