@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   type ConversationEvent,
@@ -212,13 +212,15 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
 
   /** 预签名直传一个附件并 finalize，返回 id（建、finalize 分别打在两个副本上）。 */
   async function uploadAttachment(name: string, contentType: string, bytes: Buffer) {
-    const c = await at(0, "POST", `${base}/attachments`, {
+    const c = await at(0, "POST", `${base}/files`, {
       name,
       contentType,
       size: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      purpose: "composer",
     });
     expect(c.status, JSON.stringify(c.json)).toBe(201);
-    const id = c.json.id as string;
+    const id = (c.json.file as { id: string }).id;
     const up = c.json.upload as {
       method: "PUT" | "POST";
       url: string;
@@ -235,7 +237,7 @@ describe.skipIf(!dockerAvailable)("M5 第二段双副本验收（沙箱 + 产物
       res = await fetch(up.url, { method: "POST", headers: up.headers, body: form });
     }
     expect(res.status, await res.clone().text()).toBeLessThan(300);
-    const f = await at(1, "POST", `${base}/attachments/${id}/finalize`);
+    const f = await at(1, "POST", `${base}/files/${id}/finalize`);
     expect(f.status, JSON.stringify(f.json)).toBe(200);
     return id;
   }
