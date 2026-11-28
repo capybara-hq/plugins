@@ -1,9 +1,12 @@
+import type { BrowserContext, Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { browserProcessId, killChromium, launchChromium } from "../../daemon/chromium.js";
 import type { ViewerOut } from "../../daemon/protocol.js";
 import {
   openViewer,
   removeDir,
   request,
+  startFixtureServer,
   startTestDaemon,
   type TestDaemon,
   type ViewerMsg,
@@ -94,5 +97,66 @@ describe("closing the last tabs", () => {
     await back;
     expect(await tabIds()).toHaveLength(0);
     await v.close();
+  });
+});
+
+describe("closing the browser's last page", () => {
+  it("never leaves Chromium without a page: the viewer stays connected and shows the empty tree", async () => {
+    // A desktop Chromium ends when its last window closes (outside macOS), which the daemon then
+    // treats as a crash: every viewer's stream is cut and the panel reconnects (the Windows report:
+    // the skeleton, then the empty tree). The test models that rule on every platform: Chromium is
+    // killed as soon as it has no page left.
+    let emptied = false;
+    let gone = 0;
+    const site = await startFixtureServer({
+      "/a": (_req, res) =>
+        res.writeHead(200, { "content-type": "text/html" }).end("<title>A</title>"),
+    });
+    const w = await startTestDaemon({
+      onBrowserGone: () => gone++,
+      launch: async (plan) => {
+        const ctx: BrowserContext = await launchChromium(plan);
+        const pid = await browserProcessId(ctx);
+        const watch = (p: Page) =>
+          p.on("close", () => {
+            if (ctx.pages().length > 0 || emptied) return;
+            emptied = true;
+            if (pid !== undefined) killChromium(pid);
+          });
+        for (const p of ctx.pages()) watch(p);
+        ctx.on("page", watch);
+        return ctx;
+      },
+    });
+    try {
+      // the conversation's tab is the browser's only page (it claims the start's blank tab)
+      const nav = await request(w.socketPath, { op: "navigate", url: `${site.url}/a` });
+      expect(nav).toMatchObject({ ok: true, tabs: { open: 1 } });
+      const v = await openViewer(w.socketPath, { maxWidth: 480, maxHeight: 300 });
+      const first = await v.next((m): m is State => isState(m) && m.tabs.length === 1);
+      const taken = v.after((m) => isState(m) && m.control === "user");
+      v.send({ t: "takeover" });
+      await taken;
+      const none = v.after((m) => isState(m) && m.tabs.length === 0 && m.shown === undefined);
+      v.send({ t: "tab", action: "close", tabId: first.tabs[0]?.id ?? "" });
+      await none;
+      // the stream still answers: a hand back comes back as a state on the same connection
+      const back = v.after((m) => isState(m) && m.control === "agent");
+      v.send({ t: "handback" });
+      await back;
+      expect(emptied).toBe(false);
+      expect(gone).toBe(0);
+      // the next acting call uses the kept blank page: still one browser, one tab
+      expect(await request(w.socketPath, { op: "snapshot" })).toMatchObject({
+        ok: true,
+        tabs: { open: 1 },
+      });
+      expect(gone).toBe(0);
+      await v.close();
+    } finally {
+      await w.stop();
+      removeDir(w.stateDir);
+      await site.close();
+    }
   });
 });
