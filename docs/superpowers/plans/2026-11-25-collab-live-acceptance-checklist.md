@@ -23,6 +23,8 @@ kernel log lines (`grep reqId=`, `grep context=`) and a screenshot.
       `engineer`, `qa`) and sets it as their default agent in the project. The agents show the
       template's skills (`collab-workflow` plus `prd-writing` / `test-planning`) and tools.
 - [ ] Acceptance rule for Projects is `auto` for Li, Zhang and Chen (the default).
+- [ ] Note the org's `automations.coalesceSeconds` (default 30): assigned work starts up to that
+      long after the assignment, which is batching, not a failure.
 - [ ] Both the engineer and the QA template carry the sandbox tools (Bash, Read, Write, Edit,
       Glob, Grep, Deliver, FetchAttachment): the QA agent runs tests in Chen's device (spec §7
       step 4), not only the engineer in Zhang's.
