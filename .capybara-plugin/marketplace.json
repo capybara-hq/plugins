@@ -1021,7 +1021,7 @@
     },
     {
       "name": "collab",
-      "version": "0.1.0-rc.0",
+      "version": "0.1.0-rc.1",
       "summary": {
         "en": "Project tracker for people and agents: projects, requirements, tasks and bugs with workflows, confirmation steps, decisions and artifacts, assigned to a person and an agent",
         "zh": "人与智能体共用的项目协作：项目、需求、任务和缺陷，带工作流、确认步骤、决策与产物，可同时指派给成员和智能体"
@@ -1105,8 +1105,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-collab",
-          "version": "0.1.0-rc.0",
-          "integrity": "sha512-0Q3gO/cNMdA+RKFsCAFLL4IBEorI9F1mGVfS7+jNfD8ondFqN4wo0CIw5lQyel+z9l5ep1bWxhZCp5rPwGI/Vg=="
+          "version": "0.1.0-rc.1",
+          "integrity": "sha512-jv/GRULJ1dTQGpFvu43aCu7KoRBpznwK4bKr2p4YSc0AQp5wA5Mzp1o+SheN6HAhpYKAym/RHSRaa/d5f/pJZw=="
         }
       }
     }

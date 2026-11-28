@@ -1,6 +1,6 @@
 {
   "name": "@capybara-hq/plugin-collab",
-  "version": "0.1.0-rc.0",
+  "version": "0.1.0-rc.1",
   "description": "Project tracker for people and agents: projects, requirements, tasks and bugs with workflows, confirmation steps, decisions and artifacts, assigned to a person and an agent",
   "license": "Apache-2.0",
   "repository": {
