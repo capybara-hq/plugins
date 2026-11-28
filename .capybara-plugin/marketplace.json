@@ -1018,6 +1018,97 @@
           "integrity": "sha512-ArZEDw0Gm2YZludBIS94hP22wC8tPPBlEovXzCWfcs57EtNcizHSslLKSqBWhRbKwnc0t2BezYaXtA7xpaKBtQ=="
         }
       }
+    },
+    {
+      "name": "collab",
+      "version": "0.1.0-rc.0",
+      "summary": {
+        "en": "Project tracker for people and agents: projects, requirements, tasks and bugs with workflows, confirmation steps, decisions and artifacts, assigned to a person and an agent",
+        "zh": "人与智能体共用的项目协作：项目、需求、任务和缺陷，带工作流、确认步骤、决策与产物，可同时指派给成员和智能体"
+      },
+      "displayName": {
+        "zh": "项目协作",
+        "en": "Projects"
+      },
+      "icon": "./plugins/collab/icon.svg",
+      "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/collab#readme",
+      "permissions": {
+        "keys": [
+          "permissions.agents",
+          "permissions.client",
+          "permissions.conversations",
+          "permissions.hooks:run.lifecycle",
+          "permissions.inbox",
+          "permissions.people",
+          "permissions.tools:artifact_attach",
+          "permissions.tools:decision_ask",
+          "permissions.tools:decision_list",
+          "permissions.tools:item_assign",
+          "permissions.tools:item_comment",
+          "permissions.tools:item_create",
+          "permissions.tools:item_get",
+          "permissions.tools:item_link",
+          "permissions.tools:item_search",
+          "permissions.tools:item_transition",
+          "permissions.tools:item_update",
+          "permissions.tools:project_create",
+          "permissions.tools:project_list",
+          "permissions.triggers:decision.answered",
+          "permissions.triggers:gate.requested",
+          "permissions.triggers:item.assigned",
+          "permissions.triggers:item.closed",
+          "permissions.triggers:item.commented",
+          "permissions.triggers:item.created",
+          "permissions.triggers:item.status_changed",
+          "permissions.triggers:item.unassigned",
+          "permissions.triggers:item.updated",
+          "provides:trigger-source@1",
+          "table:activity",
+          "table:artifacts",
+          "table:comments",
+          "table:decisions",
+          "table:event_outbox",
+          "table:item_links",
+          "table:item_types",
+          "table:items",
+          "table:project_members",
+          "table:projects",
+          "table:statuses",
+          "table:workflows",
+          "ui.component:agent-items",
+          "ui.component:item-panel",
+          "ui.component:item-properties",
+          "ui.component:projects"
+        ],
+        "sensitive": [
+          "permissions.client",
+          "permissions.hooks:run.lifecycle",
+          "permissions.tools:artifact_attach",
+          "permissions.tools:decision_ask",
+          "permissions.tools:decision_list",
+          "permissions.tools:item_assign",
+          "permissions.tools:item_comment",
+          "permissions.tools:item_create",
+          "permissions.tools:item_get",
+          "permissions.tools:item_link",
+          "permissions.tools:item_search",
+          "permissions.tools:item_transition",
+          "permissions.tools:item_update",
+          "permissions.tools:project_create",
+          "permissions.tools:project_list",
+          "ui.component:agent-items",
+          "ui.component:item-panel",
+          "ui.component:item-properties",
+          "ui.component:projects"
+        ]
+      },
+      "source": {
+        "npm": {
+          "package": "@capybara-hq/plugin-collab",
+          "version": "0.1.0-rc.0",
+          "integrity": "sha512-nnNXqAa8WBYrROPK4ns3pDq4CKT6GVD43k37LU2AeAPtVAMWjf1wYf4i6rcgtrO+TLSgMr7yfMn6fjr1ICd2mw=="
+        }
+      }
     }
   ]
 }
