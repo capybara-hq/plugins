@@ -3,10 +3,12 @@ import type { Status, StatusCategory } from "../store/types.js";
 import { CollabError } from "./errors.js";
 
 /**
- * Who confirms a gated status (stored in `statuses.gate`): the item's responsible person, the
- * project owner, a named member, or any member with a function label.
+ * Who confirms a gated status (stored in `statuses.gate`): the person who asked for the item
+ * (its creator, unchanged by assignment), the item's responsible person, the project owner, a
+ * named member, or any member with a function label.
  */
 export type GateRule =
+  | { confirmer: "requester" }
   | { confirmer: "responsible" }
   | { confirmer: "owner" }
   | { confirmer: "member"; accountId: string }

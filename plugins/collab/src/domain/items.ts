@@ -23,7 +23,6 @@ import {
 import { CollabError } from "./errors.js";
 import {
   addActivity,
-  bumpItem,
   checkVersion,
   isAgent,
   loadItem,
@@ -66,10 +65,71 @@ export interface ItemPatch {
   fields?: Record<string, unknown>;
 }
 
+/** Input caps: longer input is refused with `invalid_input`. */
+const MAX_TITLE_CHARS = 200;
+const MAX_DESCRIPTION_CHARS = 50_000;
+const MAX_COMMENT_CHARS = 20_000;
+const MAX_LABELS = 20;
+const MAX_LABEL_CHARS = 50;
+const MAX_FIELDS_BYTES = 16 * 1024;
+
 function checkTitle(title: string): string {
   const trimmed = title.trim();
   if (!trimmed) throw new CollabError("invalid_input", "The title must not be empty.");
+  if (trimmed.length > MAX_TITLE_CHARS) {
+    throw new CollabError(
+      "invalid_input",
+      `The title must be at most ${MAX_TITLE_CHARS} characters.`,
+    );
+  }
   return trimmed;
+}
+
+function checkDescription(description: string): string {
+  if (description.length > MAX_DESCRIPTION_CHARS) {
+    throw new CollabError(
+      "invalid_input",
+      `The description must be at most ${MAX_DESCRIPTION_CHARS} characters; attach longer documents as an artifact.`,
+    );
+  }
+  return description;
+}
+
+function checkLabels(labels: string[]): string[] {
+  const clean = labels.map((l) => l.trim()).filter(Boolean);
+  if (clean.length > MAX_LABELS || clean.some((l) => l.length > MAX_LABEL_CHARS)) {
+    throw new CollabError(
+      "invalid_input",
+      `Use at most ${MAX_LABELS} labels of at most ${MAX_LABEL_CHARS} characters each.`,
+    );
+  }
+  return clean;
+}
+
+function checkFields(fields: Record<string, unknown>): string {
+  const json = JSON.stringify(fields);
+  if (new TextEncoder().encode(json).length > MAX_FIELDS_BYTES) {
+    throw new CollabError("invalid_input", "Custom fields must stay under 16 KB of JSON.");
+  }
+  return json;
+}
+
+/** An artifact URL must be absolute http(s). */
+function checkArtifactUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new CollabError("invalid_input", "The artifact URL must be an absolute http(s) URL.");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new CollabError("invalid_input", "The artifact URL must be an absolute http(s) URL.");
+  }
+}
+
+/** The object storage prefix of an item's files (inside the plugin's own namespace). */
+export function artifactKeyPrefix(itemId: string): string {
+  return `artifacts/${itemId}/`;
 }
 
 function checkPriority(priority: number): number {
@@ -123,6 +183,8 @@ export async function createItem(
     await requireRole(tx, orgId, actor.accountId, input.projectId, "write");
     const project = await loadProject(tx, orgId, input.projectId);
     const title = checkTitle(input.title);
+    const description = checkDescription(input.description ?? "");
+    const labels = checkLabels(input.labels ?? []);
     const priority = input.priority === undefined ? undefined : checkPriority(input.priority);
     const statuses = await statusesForType(tx, orgId, project.id, input.type);
     const status = initialStatus(statuses);
@@ -158,12 +220,13 @@ export async function createItem(
         number: counter.next_item_number - 1,
         type: input.type,
         title,
-        description: input.description ?? "",
+        description,
         status_key: status.key,
+        requester_account_id: actor.accountId,
         responsible_account_id: assignee?.accountId ?? null,
         executing_agent_id: assignee?.agentId ?? null,
         priority,
-        labels: input.labels ?? [],
+        labels,
         parent_id: input.parentId ?? null,
         closed_at: isClosed(status.category) ? new Date() : null,
       })
@@ -209,15 +272,16 @@ export async function updateItem(
       changed.push("title");
     }
     if (patch.description !== undefined && patch.description !== item.description) {
-      set.description = patch.description;
+      set.description = checkDescription(patch.description);
       changed.push("description");
     }
     if (patch.priority !== undefined && checkPriority(patch.priority) !== item.priority) {
       set.priority = patch.priority;
       changed.push("priority");
     }
-    if (patch.labels !== undefined && patch.labels.join("\n") !== item.labels.join("\n")) {
-      set.labels = patch.labels;
+    const labels = patch.labels === undefined ? undefined : checkLabels(patch.labels);
+    if (labels !== undefined && labels.join("\n") !== item.labels.join("\n")) {
+      set.labels = labels;
       changed.push("labels");
     }
     if (patch.parentId !== undefined && patch.parentId !== item.parent_id) {
@@ -226,7 +290,7 @@ export async function updateItem(
       changed.push("parent");
     }
     if (patch.fields !== undefined) {
-      set.fields = JSON.stringify({ ...item.fields, ...patch.fields });
+      set.fields = checkFields({ ...item.fields, ...patch.fields });
       changed.push("fields");
     }
     if (changed.length === 0) return item;
@@ -256,6 +320,8 @@ async function gateConfirmers(
   switch (gate.confirmer) {
     case "owner":
       return { addressee: owner, confirmers: [owner] };
+    case "requester":
+      return { addressee: item.requester_account_id, confirmers: [item.requester_account_id] };
     case "responsible": {
       const who = item.responsible_account_id ?? owner;
       return { addressee: who, confirmers: [who] };
@@ -290,8 +356,8 @@ async function gateConfirmers(
 
 /**
  * Moves the item into `to` (already checked against the workflow and the gate): the status, the
- * close time, the status's default assignment, the activity and the events; then, when the item
- * closed, its parent's auto-move.
+ * close time, the status's default assignment, the activity and the events; then the parent
+ * auto-move: of its parent when the item closed, of itself when it entered the working status.
  */
 async function moveItem(
   tx: CollabDb,
@@ -334,13 +400,15 @@ async function moveItem(
   if (isClosed(to.category) && after.parent_id) {
     await advanceParent(tx, orgId, actor, after.parent_id);
   }
+  if (to.key === PARENT_WORKING_STATUS) await advanceParent(tx, orgId, actor, after.id);
   return after;
 }
 
 /**
  * The parent auto-move: a parent in "in_progress" whose children are all closed (done or
- * canceled) moves to "acceptance". The parent row is locked first, so two children closing at
- * once cannot both miss each other.
+ * canceled) moves to "acceptance", through the workflow like any move: skipped when the workflow
+ * does not allow it, a gate request to the confirmer when "acceptance" is gated. The parent row
+ * is locked first, so two children closing at once cannot both miss each other.
  */
 async function advanceParent(
   tx: CollabDb,
@@ -359,6 +427,8 @@ async function advanceParent(
   const statuses = await statusesForType(tx, orgId, parent.project_id, parent.type);
   const acceptance = statuses.find((s) => s.key === PARENT_ACCEPTANCE_STATUS);
   if (!acceptance) return;
+  const from = statuses.find((s) => s.key === parent.status_key);
+  if (from?.next_keys && !from.next_keys.includes(acceptance.key)) return;
   const children = await tx
     .selectFrom("items as i")
     .leftJoin("item_types as t", (j) =>
@@ -374,6 +444,12 @@ async function advanceParent(
   if (children.length === 0) return;
   if (!children.every((c) => c.category !== null && isClosed(c.category))) return;
   const project = await loadProject(tx, orgId, parent.project_id);
+  const gate = gateOf(acceptance);
+  if (gate) {
+    const { addressee } = await gateConfirmers(tx, orgId, project, parent, gate);
+    await requestGate(tx, orgId, actor, project, parent, statuses, acceptance, addressee);
+    return;
+  }
   await moveItem(tx, orgId, actor, project, parent, statuses, acceptance, true);
 }
 
@@ -472,6 +548,26 @@ async function requestGate(
   return decision;
 }
 
+/**
+ * The item a comment, link or artifact is added to, with the context its event needs. These
+ * additions do not conflict with edits, so they leave the version alone (their events key on
+ * their own ids).
+ */
+async function additionContext(tx: CollabDb, orgId: string, actor: Actor, itemId: string) {
+  const item = await loadItem(tx, orgId, itemId);
+  await requireRole(tx, orgId, actor.accountId, item.project_id, "write");
+  const project = await loadProject(tx, orgId, item.project_id);
+  const statuses = await statusesForType(tx, orgId, item.project_id, item.type);
+  return {
+    item,
+    base: {
+      actor,
+      projectKey: project.key,
+      statusCategory: categoryOf(statuses, item.status_key),
+    },
+  };
+}
+
 /** Adds a comment to the item. */
 export async function comment(
   db: CollabDb,
@@ -481,22 +577,23 @@ export async function comment(
   body: string,
 ): Promise<Comment> {
   if (!body.trim()) throw new CollabError("invalid_input", "The comment must not be empty.");
+  if (body.length > MAX_COMMENT_CHARS) {
+    throw new CollabError(
+      "invalid_input",
+      `A comment must be at most ${MAX_COMMENT_CHARS} characters.`,
+    );
+  }
   return db.transaction().execute(async (tx) => {
-    const item = await loadItem(tx, orgId, itemId);
-    await requireRole(tx, orgId, actor.accountId, item.project_id, "write");
-    const after = await bumpItem(tx, orgId, item.id);
+    const { item, base } = await additionContext(tx, orgId, actor, itemId);
     const row = await tx
       .insertInto("comments")
       .values({ org_id: orgId, item_id: item.id, author: JSON.stringify(actor), body })
       .returningAll()
       .executeTakeFirstOrThrow();
     await addActivity(tx, orgId, item.id, actor, "commented", { commentId: row.id });
-    const project = await loadProject(tx, orgId, item.project_id);
-    const statuses = await statusesForType(tx, orgId, item.project_id, item.type);
-    await outboxFor(tx, orgId, "item.commented", after, {
-      actor,
-      projectKey: project.key,
-      statusCategory: categoryOf(statuses, after.status_key),
+    await outboxFor(tx, orgId, "item.commented", item, {
+      ...base,
+      dedupeKey: `item.commented-${row.id}`,
       detail: { comment: body },
     });
     return row;
@@ -514,8 +611,7 @@ export async function link(
     throw new CollabError("invalid_input", "An item cannot be linked to itself.");
   }
   await db.transaction().execute(async (tx) => {
-    const from = await loadItem(tx, orgId, input.fromId);
-    await requireRole(tx, orgId, actor.accountId, from.project_id, "write");
+    const { item: from, base } = await additionContext(tx, orgId, actor, input.fromId);
     const to = await loadItem(tx, orgId, input.toId);
     if (!(await canSee(tx, orgId, actor.accountId, to.project_id))) {
       throw new CollabError("not_found", "Item not found.");
@@ -527,20 +623,19 @@ export async function link(
       .returning("from_id")
       .executeTakeFirst();
     if (!inserted) return;
-    const after = await bumpItem(tx, orgId, from.id);
     await addActivity(tx, orgId, from.id, actor, "linked", { to: to.id, kind: input.kind });
-    const project = await loadProject(tx, orgId, from.project_id);
-    const statuses = await statusesForType(tx, orgId, from.project_id, from.type);
-    await outboxFor(tx, orgId, "item.updated", after, {
-      actor,
-      projectKey: project.key,
-      statusCategory: categoryOf(statuses, after.status_key),
+    await outboxFor(tx, orgId, "item.updated", from, {
+      ...base,
       changedFields: ["links"],
+      dedupeKey: `item.updated-link-${from.id}-${to.id}-${input.kind}`,
     });
   });
 }
 
-/** Attaches a file (object storage key) or a link to the item; a new one under an existing name is its next version. */
+/**
+ * Attaches a file or a link to the item; a new one under an existing name is its next version.
+ * A file is an object storage key under `artifactKeyPrefix(itemId)`; a link an http(s) URL.
+ */
 export async function attachArtifact(
   db: CollabDb,
   orgId: string,
@@ -552,11 +647,24 @@ export async function attachArtifact(
   if (Boolean(input.storageKey) === Boolean(input.url)) {
     throw new CollabError("invalid_input", "Attach either a file or a URL, exactly one of them.");
   }
+  if (input.url) checkArtifactUrl(input.url);
+  if (
+    input.storageKey &&
+    (!input.storageKey.startsWith(artifactKeyPrefix(itemId)) || input.storageKey.includes(".."))
+  ) {
+    throw new CollabError("invalid_input", "The file is not one of this item's uploads.");
+  }
   return db.transaction().execute(async (tx) => {
-    const item = await loadItem(tx, orgId, itemId);
-    await requireRole(tx, orgId, actor.accountId, item.project_id, "write");
-    // Bumping first locks the item, so concurrent attachments of one name get distinct versions.
-    const after = await bumpItem(tx, orgId, item.id);
+    const { item, base } = await additionContext(tx, orgId, actor, itemId);
+    // Lock the item (without blocking reads) so concurrent attachments of one name get distinct
+    // versions; the item's own version stays.
+    await tx
+      .selectFrom("items")
+      .select("id")
+      .where("org_id", "=", orgId)
+      .where("id", "=", item.id)
+      .forNoKeyUpdate()
+      .execute();
     const latest = await tx
       .selectFrom("artifacts")
       .select((eb) => eb.fn.max("version").as("v"))
@@ -583,13 +691,10 @@ export async function attachArtifact(
       name: row.name,
       version: row.version,
     });
-    const project = await loadProject(tx, orgId, item.project_id);
-    const statuses = await statusesForType(tx, orgId, item.project_id, item.type);
-    await outboxFor(tx, orgId, "item.updated", after, {
-      actor,
-      projectKey: project.key,
-      statusCategory: categoryOf(statuses, after.status_key),
+    await outboxFor(tx, orgId, "item.updated", item, {
+      ...base,
       changedFields: ["artifacts"],
+      dedupeKey: `item.updated-artifact-${row.id}`,
     });
     return row;
   });

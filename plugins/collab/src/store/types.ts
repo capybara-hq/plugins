@@ -80,6 +80,7 @@ export interface ItemsTable {
   title: string;
   description: Generated<string>;
   status_key: string;
+  requester_account_id: string;
   responsible_account_id: string | null;
   executing_agent_id: string | null;
   priority: Generated<number>;

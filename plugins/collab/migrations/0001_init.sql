@@ -74,6 +74,8 @@ CREATE TABLE IF NOT EXISTS items (
   title text NOT NULL,
   description text NOT NULL DEFAULT '',
   status_key text NOT NULL,
+  -- Who asked for the item (its creator); assignment never changes it.
+  requester_account_id text NOT NULL,
   responsible_account_id text,
   executing_agent_id text,
   priority integer NOT NULL DEFAULT 3,

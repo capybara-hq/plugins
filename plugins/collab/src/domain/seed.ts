@@ -23,7 +23,8 @@ interface SeedType {
 /**
  * The item types and workflows a new project starts with (editable afterwards). A gate sits on
  * the status it guards entry into: "ready" waits on the project owner's review, a requirement's
- * "done" on the responsible person's acceptance.
+ * "done" on the acceptance of the person who asked for it (not whoever became responsible, so
+ * nobody accepts their own work by assigning it to themselves).
  */
 // capybara:allow-module-state read-only constant
 export const DEFAULT_TYPES: readonly SeedType[] = [
@@ -83,7 +84,7 @@ export const DEFAULT_TYPES: readonly SeedType[] = [
         en: "Done",
         category: "done",
         next: ["in_progress"],
-        gate: { confirmer: "responsible" },
+        gate: { confirmer: "requester" },
       },
       { key: "canceled", zh: "已取消", en: "Canceled", category: "canceled", next: ["backlog"] },
     ],
@@ -114,7 +115,7 @@ export const DEFAULT_TYPES: readonly SeedType[] = [
         en: "Testing",
         category: "review",
         next: ["done", "in_progress", "canceled"],
-        assign: { functionLabel: "qa" },
+        assign: { functionLabel: "qa", memberAgent: true },
       },
       { key: "done", zh: "已完成", en: "Done", category: "done", next: ["in_progress"] },
       { key: "canceled", zh: "已取消", en: "Canceled", category: "canceled", next: ["todo"] },
@@ -132,7 +133,7 @@ export const DEFAULT_TYPES: readonly SeedType[] = [
         en: "Open",
         category: "todo",
         next: ["fixing", "wont_fix"],
-        assign: { functionLabel: "engineering" },
+        assign: { functionLabel: "engineering", memberAgent: true },
       },
       {
         key: "fixing",
@@ -147,7 +148,7 @@ export const DEFAULT_TYPES: readonly SeedType[] = [
         en: "Verifying",
         category: "review",
         next: ["closed", "fixing"],
-        assign: { functionLabel: "qa" },
+        assign: { functionLabel: "qa", memberAgent: true },
       },
       { key: "closed", zh: "已关闭", en: "Closed", category: "done", next: ["open"] },
       { key: "wont_fix", zh: "不修复", en: "Won't fix", category: "canceled", next: ["open"] },

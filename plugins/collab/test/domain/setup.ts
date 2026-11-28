@@ -29,7 +29,7 @@ export const OWNER_AGENT = {
   conversationId: "conv-1",
 };
 
-/** A project owned by OWNER with an engineer (function engineering, agent agent-eng), a QA and a guest. */
+/** A project owned by OWNER with an engineer (engineering, agent-eng), a QA (qa, agent-qa) and a guest. */
 export async function teamProject(db: CollabDb, orgId: string, key: string): Promise<Project> {
   const project = await createProject(db, orgId, OWNER, { key, name: `Project ${key}` });
   await addMember(db, orgId, OWNER, project.id, ENGINEER.accountId, {
@@ -40,6 +40,7 @@ export async function teamProject(db: CollabDb, orgId: string, key: string): Pro
   await addMember(db, orgId, OWNER, project.id, QA.accountId, {
     role: "member",
     functionLabel: "qa",
+    defaultAgentId: "agent-qa",
   });
   await addMember(db, orgId, OWNER, project.id, GUEST.accountId, { role: "guest" });
   return project;

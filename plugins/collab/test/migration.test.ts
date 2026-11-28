@@ -48,8 +48,8 @@ describe("collab migration", { timeout: 180_000 }, () => {
           RETURNING id`.execute(db);
         const projectId = project.rows[0]?.id;
         const insertItem = () =>
-          sql`INSERT INTO items (org_id, project_id, number, type, title, status_key)
-              VALUES ('o1', ${projectId}, 1, 'task', 't', 'todo')`.execute(db);
+          sql`INSERT INTO items (org_id, project_id, number, type, title, status_key, requester_account_id)
+              VALUES ('o1', ${projectId}, 1, 'task', 't', 'todo', 'a1')`.execute(db);
         await insertItem();
         await expect(insertItem()).rejects.toThrow(/duplicate key/);
         await expect(

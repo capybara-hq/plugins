@@ -9,7 +9,7 @@ import {
   updateItem,
 } from "../../src/domain/items.js";
 import type { CollabDb } from "../../src/store/db.js";
-import { domainDb, GUEST, OWNER, OWNER_AGENT, outboxOf, teamProject } from "./setup.js";
+import { domainDb, ENGINEER, GUEST, OWNER, OWNER_AGENT, outboxOf, teamProject } from "./setup.js";
 
 let db: CollabDb;
 let close: () => Promise<void>;
@@ -82,7 +82,7 @@ describe("collab items", () => {
     ).toBe("not_found");
   });
 
-  it("each write appends activity and an outbox row and bumps the version", async () => {
+  it("each write appends activity and an outbox row; only edits bump the version", async () => {
     const org = "org-writes";
     const project = await teamProject(db, org, "WR");
     const a = await createItem(db, org, OWNER_AGENT, {
@@ -130,10 +130,8 @@ describe("collab items", () => {
     expect(new Set(rows.map((r) => r.dedupe_key)).size).toBe(rows.length);
     expect(rows[0]?.audience).toEqual({ accountId: OWNER.accountId, agentId: "agent-pm" });
     expect(rows[1]?.cause).toEqual(OWNER_AGENT);
-    expect(rows[1]?.subject).toMatchObject({
-      title: "WR-1 first",
-      url: "/p/collab/projects?item=WR-1",
-    });
+    // No relative url in the subject: the kernel takes only absolute http(s) urls.
+    expect(rows[1]?.subject).toEqual({ kind: "item", id: a.id, title: "WR-1 first" });
     expect(rows[1]?.facts).toMatchObject({ projectKey: "WR", itemType: "task", status: "todo" });
 
     const activity = await db
@@ -156,6 +154,58 @@ describe("collab items", () => {
       .select("version")
       .where("id", "=", a.id)
       .executeTakeFirstOrThrow();
-    expect(final.version).toBe(6);
+    // Comments, links and artifacts leave the version alone.
+    expect(final.version).toBe(2);
+    const keys = rows.map((r) => r.dedupe_key);
+    expect(keys).toContain(`item.updated-link-${a.id}-${b.id}-blocks`);
+    expect(keys).toContain(`item.updated-artifact-${v2.id}`);
+  });
+
+  it("an update with the version from before a comment still succeeds", async () => {
+    const org = "org-comment";
+    const project = await teamProject(db, org, "CMT");
+    const item = await createItem(db, org, OWNER, {
+      projectId: project.id,
+      type: "task",
+      title: "t",
+    });
+    const c = await comment(db, org, ENGINEER, item.id, "first!");
+    const updated = await updateItem(db, org, OWNER, item.id, item.version, { title: "renamed" });
+    expect(updated.version).toBe(item.version + 1);
+    const rows = await outboxOf(db, org, item.id);
+    expect(rows.map((r) => r.dedupe_key)).toContain(`item.commented-${c.id}`);
+  });
+
+  it("refuses input over the caps and unsafe artifact references", async () => {
+    const org = "org-caps";
+    const project = await teamProject(db, org, "CAPS");
+    const create = (extra: Record<string, unknown>) =>
+      code(
+        createItem(db, org, OWNER, { projectId: project.id, type: "task", title: "t", ...extra }),
+      );
+    expect(await create({ title: "x".repeat(201) })).toBe("invalid_input");
+    expect(await create({ description: "x".repeat(50_001) })).toBe("invalid_input");
+    expect(await create({ labels: Array.from({ length: 21 }, (_, i) => `l${i}`) })).toBe(
+      "invalid_input",
+    );
+    expect(await create({ labels: ["x".repeat(51)] })).toBe("invalid_input");
+    const item = await createItem(db, org, OWNER, {
+      projectId: project.id,
+      type: "task",
+      title: "t",
+    });
+    expect(await code(comment(db, org, OWNER, item.id, "x".repeat(20_001)))).toBe("invalid_input");
+    expect(
+      await code(
+        updateItem(db, org, OWNER, item.id, item.version, { fields: { big: "x".repeat(17_000) } }),
+      ),
+    ).toBe("invalid_input");
+    const attach = (ref: { url?: string; storageKey?: string }) =>
+      code(attachArtifact(db, org, OWNER, item.id, { kind: "doc", name: "n", ...ref }));
+    expect(await attach({ url: "javascript:alert(1)" })).toBe("invalid_input");
+    expect(await attach({ url: "/relative" })).toBe("invalid_input");
+    expect(await attach({ storageKey: "artifacts/other-item/f.pdf" })).toBe("invalid_input");
+    expect(await attach({ storageKey: `artifacts/${item.id}/../x` })).toBe("invalid_input");
+    expect(await attach({ storageKey: `artifacts/${item.id}/prd.pdf` })).toBe("ok");
   });
 });

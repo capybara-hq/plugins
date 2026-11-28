@@ -75,22 +75,6 @@ export async function writeItem(
   return row;
 }
 
-/**
- * Bumps the item's version without a version check (comments, links, artifacts: additions that
- * do not conflict). The update also locks the row for the rest of the transaction.
- */
-export async function bumpItem(tx: CollabDb, orgId: string, itemId: string): Promise<Item> {
-  const row = await tx
-    .updateTable("items")
-    .set({ version: sql`version + 1`, updated_at: sql`now()` })
-    .where("org_id", "=", orgId)
-    .where("id", "=", itemId)
-    .returningAll()
-    .executeTakeFirst();
-  if (!row) throw new CollabError("not_found", "Item not found.");
-  return row;
-}
-
 /** Appends an entry to the item's activity. */
 export async function addActivity(
   tx: CollabDb,

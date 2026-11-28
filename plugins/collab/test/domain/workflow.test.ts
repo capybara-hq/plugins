@@ -1,9 +1,10 @@
+import type { Updateable } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { assign } from "../../src/domain/assignment.js";
 import { CollabError } from "../../src/domain/errors.js";
 import { createItem, transition } from "../../src/domain/items.js";
 import type { CollabDb } from "../../src/store/db.js";
-import type { Actor, Item } from "../../src/store/types.js";
+import type { Actor, Item, StatusesTable } from "../../src/store/types.js";
 import { domainDb, ENGINEER, OWNER, OWNER_AGENT, outboxOf, QA, teamProject } from "./setup.js";
 
 let db: CollabDb;
@@ -20,6 +21,53 @@ const code = (p: Promise<unknown>) =>
     () => "ok",
     (e: unknown) => (e instanceof CollabError ? e.code : String(e)),
   );
+
+/** Changes one status of a project's workflow for a type (workflows are editable per project). */
+async function editStatus(
+  projectId: string,
+  type: string,
+  key: string,
+  set: Updateable<StatusesTable>,
+): Promise<void> {
+  const wf = await db
+    .selectFrom("workflows")
+    .select("id")
+    .where("project_id", "=", projectId)
+    .where("item_type", "=", type)
+    .executeTakeFirstOrThrow();
+  await db
+    .updateTable("statuses")
+    .set(set)
+    .where("workflow_id", "=", wf.id)
+    .where("key", "=", key)
+    .execute();
+}
+
+const statusOf = async (id: string) =>
+  await db.selectFrom("items").selectAll().where("id", "=", id).executeTakeFirstOrThrow();
+
+/** A requirement in "in_progress" with `n` tasks under it. */
+async function parentWithChildren(org: string, key: string, n: number) {
+  const project = await teamProject(db, org, key);
+  let parent = await createItem(db, org, OWNER, {
+    projectId: project.id,
+    type: "requirement",
+    title: "p",
+  });
+  parent = await walk(org, OWNER, parent, ["drafting", "review", "ready", "in_progress"]);
+  const children: Item[] = [];
+  for (let i = 0; i < n; i++) {
+    children.push(
+      await createItem(db, org, OWNER, {
+        projectId: project.id,
+        type: "task",
+        title: `t${i}`,
+        parentId: parent.id,
+      }),
+    );
+  }
+  return { project, parent, children };
+}
 
 /** Moves the item through `path` as `actor`, returning the item at the end. */
 async function walk(org: string, actor: Actor, item: Item, path: string[]): Promise<Item> {
@@ -144,7 +192,7 @@ describe("collab workflows", () => {
     expect(end.version).toBe(mid.version + 1);
   });
 
-  it("entering testing hands a task to the qa member without an agent", async () => {
+  it("entering testing hands a task to the qa member and their agent", async () => {
     const org = "org-qa";
     const project = await teamProject(db, org, "QAT");
     const task = await createItem(db, org, OWNER, {
@@ -157,7 +205,7 @@ describe("collab workflows", () => {
     const testing = await walk(org, ENGINEER, task, ["in_progress", "testing"]);
     expect([testing.responsible_account_id, testing.executing_agent_id]).toEqual([
       QA.accountId,
-      null,
+      "agent-qa",
     ]);
   });
 
@@ -190,5 +238,108 @@ describe("collab workflows", () => {
         }),
       ),
     ).toBe("version_conflict");
+  });
+
+  it("only the requester accepts a requirement, not the responsible engineer", async () => {
+    const org = "org-accept";
+    const project = await teamProject(db, org, "ACC");
+    const created = await createItem(db, org, OWNER, {
+      projectId: project.id,
+      type: "requirement",
+      title: "r",
+    });
+    expect(created.requester_account_id).toBe(OWNER.accountId);
+    const accepting = await walk(org, OWNER, created, [
+      "drafting",
+      "review",
+      "ready",
+      "in_progress",
+      "acceptance",
+    ]);
+    // "ready" handed it to the engineer; assignment keeps the requester.
+    expect(accepting.responsible_account_id).toBe(ENGINEER.accountId);
+    expect(accepting.requester_account_id).toBe(OWNER.accountId);
+    expect(await code(transition(db, org, ENGINEER, accepting.id, accepting.version, "done"))).toBe(
+      "gated",
+    );
+    // Self-assigning does not open the gate either.
+    const mine = await assign(db, org, ENGINEER, accepting.id, accepting.version, {
+      responsibleAccountId: ENGINEER.accountId,
+      executingAgentId: null,
+    });
+    expect(await code(transition(db, org, ENGINEER, mine.id, mine.version, "done"))).toBe("gated");
+    const agentAsk = await transition(
+      db,
+      org,
+      { ...ENGINEER, agentId: "agent-eng", conversationId: "c" },
+      mine.id,
+      mine.version,
+      "done",
+    );
+    expect("gate" in agentAsk && agentAsk.gate.addressee_account_id).toBe(OWNER.accountId);
+    const fresh = await statusOf(mine.id);
+    expect(await code(transition(db, org, OWNER, fresh.id, fresh.version, "done"))).toBe("ok");
+  });
+
+  it("parent entering in_progress with every child closed moves on to acceptance", async () => {
+    const org = "org-late";
+    const project = await teamProject(db, org, "LATE");
+    let parent = await createItem(db, org, OWNER, {
+      projectId: project.id,
+      type: "requirement",
+      title: "p",
+    });
+    parent = await walk(org, OWNER, parent, ["drafting", "review", "ready"]);
+    const t = await createItem(db, org, OWNER, {
+      projectId: project.id,
+      type: "task",
+      title: "t",
+      parentId: parent.id,
+    });
+    await walk(org, OWNER, t, ["canceled"]);
+    parent = await statusOf(parent.id);
+    await transition(db, org, ENGINEER, parent.id, parent.version, "in_progress");
+    expect((await statusOf(parent.id)).status_key).toBe("acceptance");
+  });
+
+  it("two children closing at once still move the parent", async () => {
+    const org = "org-together";
+    const { parent, children } = await parentWithChildren(org, "TOG", 2);
+    const moved = await Promise.all(
+      children.map((c) => walk(org, OWNER, c, ["in_progress", "testing"])),
+    );
+    await Promise.all(moved.map((c) => transition(db, org, QA, c.id, c.version, "done")));
+    expect((await statusOf(parent.id)).status_key).toBe("acceptance");
+  });
+
+  it("parent auto-move asks the gate when acceptance is gated", async () => {
+    const org = "org-autogate";
+    const { project, parent, children } = await parentWithChildren(org, "AGT", 1);
+    await editStatus(project.id, "requirement", "acceptance", {
+      gate: JSON.stringify({ confirmer: "owner" }),
+    });
+    await walk(org, OWNER, children[0] as Item, ["canceled"]);
+    expect((await statusOf(parent.id)).status_key).toBe("in_progress");
+    const gate = await db
+      .selectFrom("decisions")
+      .selectAll()
+      .where("item_id", "=", parent.id)
+      .where("state", "=", "open")
+      .executeTakeFirstOrThrow();
+    expect(gate).toMatchObject({
+      kind: "gate",
+      gate_target: "acceptance",
+      addressee_account_id: OWNER.accountId,
+    });
+  });
+
+  it("parent auto-move is skipped when the workflow does not allow it", async () => {
+    const org = "org-noauto";
+    const { project, parent, children } = await parentWithChildren(org, "NOA", 1);
+    await editStatus(project.id, "requirement", "in_progress", {
+      next_keys: ["ready", "canceled"],
+    });
+    await walk(org, OWNER, children[0] as Item, ["canceled"]);
+    expect((await statusOf(parent.id)).status_key).toBe("in_progress");
   });
 });
