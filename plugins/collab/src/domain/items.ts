@@ -22,6 +22,7 @@ import {
 } from "./assignment.js";
 import { CollabError } from "./errors.js";
 import {
+  actorJson,
   addActivity,
   checkVersion,
   isAgent,
@@ -535,7 +536,7 @@ async function requestGate(
       org_id: orgId,
       item_id: item.id,
       kind: "gate",
-      asker: JSON.stringify(actor),
+      asker: actorJson(actor),
       addressee_account_id: addressee,
       question: `Move ${key} "${item.title}" to "${to.name_en}"?`,
       options: JSON.stringify([
@@ -601,7 +602,7 @@ export async function comment(
     const { item, base } = await additionContext(tx, orgId, actor, itemId);
     const row = await tx
       .insertInto("comments")
-      .values({ org_id: orgId, item_id: item.id, author: JSON.stringify(actor), body })
+      .values({ org_id: orgId, item_id: item.id, author: actorJson(actor), body })
       .returningAll()
       .executeTakeFirstOrThrow();
     await addActivity(tx, orgId, item.id, actor, "commented", { commentId: row.id });
@@ -696,7 +697,7 @@ export async function attachArtifact(
         version: (latest?.v ?? 0) + 1,
         storage_key: input.storageKey ?? null,
         url: input.url ?? null,
-        author: JSON.stringify(actor),
+        author: actorJson(actor),
       })
       .returningAll()
       .executeTakeFirstOrThrow();

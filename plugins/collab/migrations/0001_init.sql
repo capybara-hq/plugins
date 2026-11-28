@@ -179,10 +179,14 @@ CREATE TABLE IF NOT EXISTS event_outbox (
   summary text NOT NULL,
   dedupe_key text NOT NULL,
   audience jsonb,
-  cause jsonb,
+  -- Who made the change (Actor JSON); its accountId is the cause of a UI write.
+  actor jsonb NOT NULL,
+  -- The kernel's cause handle of the tool call behind the change (ctx.triggers.causeOf, valid
+  -- 24 h); null for a person's own write.
+  cause_handle text,
   emitted_at timestamptz,
   attempts integer NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS event_outbox_dedupe ON event_outbox (org_id, dedupe_key);
-CREATE INDEX IF NOT EXISTS event_outbox_pending ON event_outbox (created_at) WHERE emitted_at IS NULL;
+CREATE INDEX IF NOT EXISTS event_outbox_pending ON event_outbox (org_id, created_at) WHERE emitted_at IS NULL;

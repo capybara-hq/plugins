@@ -7,8 +7,10 @@ import {
   PROJECTS,
   TOOL_KEYS,
 } from "./constants.js";
+import { registerEmitQueue } from "./events/emitter.js";
+import { collabDb } from "./store/db.js";
 import { registerTools } from "./tools.js";
-import { collabTriggerSource } from "./trigger-source.js";
+import { createTriggerSource } from "./trigger-source.js";
 
 /**
  * A project tracker for people and agents: projects, items (requirement, task, bug) with
@@ -62,8 +64,8 @@ export default defineExtension({
   },
   migrations: "../migrations",
   setup(ctx) {
-    // Placeholders: the real tool handlers and the event declarations arrive with later tasks.
     registerTools(ctx);
-    ctx.provide(TRIGGER_SOURCE_EXTENSION_POINT, collabTriggerSource);
+    registerEmitQueue(ctx);
+    ctx.provide(TRIGGER_SOURCE_EXTENSION_POINT, createTriggerSource(collabDb(ctx.db)));
   },
 });

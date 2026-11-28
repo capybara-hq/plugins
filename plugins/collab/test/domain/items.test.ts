@@ -129,7 +129,7 @@ describe("collab items", () => {
     ]);
     expect(new Set(rows.map((r) => r.dedupe_key)).size).toBe(rows.length);
     expect(rows[0]?.audience).toEqual({ accountId: OWNER.accountId, agentId: "agent-pm" });
-    expect(rows[1]?.cause).toEqual(OWNER_AGENT);
+    expect(rows[1]?.actor).toEqual(OWNER_AGENT);
     // No relative url in the subject: the kernel takes only absolute http(s) urls.
     expect(rows[1]?.subject).toEqual({ kind: "item", id: a.id, title: "WR-1 first" });
     expect(rows[1]?.facts).toMatchObject({ projectKey: "WR", itemType: "task", status: "todo" });

@@ -29,6 +29,8 @@ export interface SummaryDetail {
   responsibleAccountId?: string | null;
   executingAgentId?: string | null;
   description?: string;
+  /** `decision.answered`: the answer as text. */
+  answer?: string;
 }
 
 /**
@@ -63,6 +65,12 @@ export function summarize(type: string, key: string, title: string, detail: Summ
     case "item.commented":
       parts.push(`New comment on ${subject}.`);
       break;
+    case "decision.answered":
+      parts.push(
+        `A decision on ${subject} was answered` +
+          (detail.answer ? `: ${detail.answer.slice(0, DESCRIPTION_CHARS)}` : "."),
+      );
+      break;
     case "gate.requested":
       parts.push(`A move of ${subject} to "${detail.toStatus}" waits for confirmation.`);
       break;
@@ -75,4 +83,12 @@ export function summarize(type: string, key: string, title: string, detail: Summ
     parts.push(`Description: ${detail.description.slice(0, DESCRIPTION_CHARS)}`);
   }
   return clipBytes(parts.join(" "), SUMMARY_MAX_BYTES);
+}
+
+/**
+ * The stored summary with who made the change appended (`By Li.`, `By PM (agent of Li).`), still
+ * within the kernel's byte limit; the actor's name comes last, so a long summary loses it first.
+ */
+export function withActor(summary: string, actorName: string): string {
+  return clipBytes(`${summary} By ${actorName}.`, SUMMARY_MAX_BYTES);
 }

@@ -7,7 +7,17 @@ type JsonDefault<T> = ColumnType<T, string | undefined, string>;
 /** Who did something: a person, or an agent acting for a person in a conversation. */
 export type Actor =
   | { accountId: string }
-  | { accountId: string; agentId: string; conversationId: string };
+  | {
+      accountId: string;
+      agentId: string;
+      conversationId: string;
+      /**
+       * The kernel's cause handle of the tool call behind the write (`ctx.triggers.causeOf`), kept
+       * only on the outbox rows the write owes so their events keep the call's chain depth and
+       * self-trigger check; never stored in the item's history.
+       */
+      causeHandle?: string;
+    };
 
 export type ProjectRole = "owner" | "member" | "guest";
 export type StatusCategory = "backlog" | "todo" | "in_progress" | "review" | "done" | "canceled";
@@ -168,7 +178,8 @@ export interface EventOutboxTable {
   summary: string;
   dedupe_key: string;
   audience: Json<unknown> | null;
-  cause: Json<unknown> | null;
+  actor: Json<Actor>;
+  cause_handle: string | null;
   emitted_at: Date | null;
   attempts: Generated<number>;
   created_at: Generated<Date>;
@@ -199,3 +210,4 @@ export type Comment = Selectable<CommentsTable>;
 export type ItemLink = Selectable<ItemLinksTable>;
 export type Artifact = Selectable<ArtifactsTable>;
 export type Decision = Selectable<DecisionsTable>;
+export type OutboxRow = Selectable<EventOutboxTable>;

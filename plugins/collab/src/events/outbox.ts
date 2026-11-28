@@ -1,3 +1,4 @@
+import { actorJson, isAgent } from "../domain/internal.js";
 import type { CollabDb } from "../store/db.js";
 import type { Actor, Item, StatusCategory } from "../store/types.js";
 import { clipBytes, type SummaryDetail, summarize } from "./summary.js";
@@ -27,6 +28,17 @@ export interface OutboxExtra {
    * the version and key on their own ids). Default `<type>-<item id>-<item version>`.
    */
   dedupeKey?: string;
+  /** `decision.answered`: the decision, whose id keys the event instead of the item version. */
+  decisionId?: string;
+}
+
+function dedupeKeyFor(type: string, item: Item, extra: OutboxExtra): string {
+  if (extra.dedupeKey) return extra.dedupeKey;
+  if (type === "decision.answered") {
+    if (!extra.decisionId) throw new Error("decision.answered needs the decision id");
+    return `${type}-${item.id}-${extra.decisionId}`;
+  }
+  return `${type}-${item.id}-${item.version}`;
 }
 
 function clipList(values: string[]): string[] {
@@ -36,7 +48,8 @@ function clipList(values: string[]): string[] {
 /**
  * Writes the event owed for a change into `event_outbox`, in the transaction of the change. The
  * dedupe key (unique per org) is `<type>-<item id>-<item version>` unless `extra.dedupeKey` names
- * one, so a retried emit never makes a second event; `cause` keeps the actor until the emitter turns it into the kernel's cause.
+ * one, so a retried emit never makes a second event. The row keeps the actor and, for a tool
+ * call, its cause handle: the emitter (`emitter.ts`) turns them into the kernel's cause.
  */
 export async function outboxFor(
   tx: CollabDb,
@@ -58,8 +71,8 @@ export async function outboxFor(
   };
   if (item.responsible_account_id) facts.responsibleAccountId = item.responsible_account_id;
   if (item.executing_agent_id) facts.executingAgentId = item.executing_agent_id;
-  // The kernel accepts only an absolute http(s) subject url, so none is stored here.
-  // TODO(C4): the in-app link comes from TriggerSource.subjectLink.
+  // The kernel accepts only an absolute http(s) subject url, so none is stored here: the in-app
+  // link comes from TriggerSource.subjectLink (source.ts).
   const subject = {
     kind: "item",
     id: item.id,
@@ -76,9 +89,10 @@ export async function outboxFor(
         ...(extra.changedFields ? { changedFields: extra.changedFields } : {}),
         ...extra.detail,
       }),
-      dedupe_key: extra.dedupeKey ?? `${type}-${item.id}-${item.version}`,
+      dedupe_key: dedupeKeyFor(type, item, extra),
       audience: extra.audience ? JSON.stringify(extra.audience) : null,
-      cause: JSON.stringify(extra.actor),
+      actor: actorJson(extra.actor),
+      cause_handle: isAgent(extra.actor) ? (extra.actor.causeHandle ?? null) : null,
     })
     .execute();
 }

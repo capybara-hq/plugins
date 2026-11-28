@@ -6,8 +6,21 @@ import { CollabError } from "./errors.js";
 /** True when an agent acts (in a conversation, for its person); false for a person's own action. */
 export function isAgent(
   actor: Actor,
-): actor is { accountId: string; agentId: string; conversationId: string } {
+): actor is { accountId: string; agentId: string; conversationId: string; causeHandle?: string } {
   return "agentId" in actor;
+}
+
+/**
+ * The actor as the item's history stores it (activity, comments, decisions, artifacts): without
+ * the cause handle, which belongs to the outbox rows only.
+ */
+export function actorJson(actor: Actor): string {
+  if (!isAgent(actor)) return JSON.stringify({ accountId: actor.accountId });
+  return JSON.stringify({
+    accountId: actor.accountId,
+    agentId: actor.agentId,
+    conversationId: actor.conversationId,
+  });
 }
 
 /** The project in the org, or `not_found`. */
@@ -89,7 +102,7 @@ export async function addActivity(
     .values({
       org_id: orgId,
       item_id: itemId,
-      actor: JSON.stringify(actor),
+      actor: actorJson(actor),
       kind,
       detail: JSON.stringify(detail),
     })
