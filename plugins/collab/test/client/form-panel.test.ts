@@ -7,13 +7,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AgentItems } from "../../src/client/agent-items.js";
 import { ItemForm } from "../../src/client/item-form.js";
 import { ItemPanel, ItemProperties } from "../../src/client/panel.js";
-import type { AgentsUsableParams } from "../../src/page/contract.js";
+import type { AgentsUsableParams, ItemDetail } from "../../src/page/contract.js";
 import {
   BEN,
   BEN_AGENT,
   buttonByText,
   click,
   decision,
+  detailResult,
   flush,
   MIA,
   MIA_AGENT,
@@ -24,6 +25,7 @@ import {
   templateCount,
   text,
 } from "./fixtures.js";
+import { fireInput } from "./input.js";
 
 let host: FakeHost | undefined;
 afterEach(() => {
@@ -33,41 +35,42 @@ afterEach(() => {
 
 type Call = { actionId: string; payload: unknown };
 
-describe("item form", () => {
-  function renderForm() {
-    const calls: Call[] = [];
-    const usable: string[] = [];
-    host = render(
-      createElement(ItemForm, {
-        open: true,
-        onOpenChange: () => {},
-        project: { id: PROJECT.id, key: PROJECT.key },
-        types: TYPES,
-        defaultType: "task",
-      }),
-      {
-        slot: "org.page",
-        queries: {
-          "people.search": () => ({ people: [MIA, BEN] }),
-          "agents.usable": (p: JsonValue) => {
-            const { accountId } = p as unknown as AgentsUsableParams;
-            usable.push(accountId);
-            return { agents: accountId === BEN.id ? [BEN_AGENT] : [MIA_AGENT] };
-          },
-        },
-        onAction: async (actionId, input) => {
-          calls.push({ actionId, payload: input?.payload });
-          return {};
+function renderFormFor(item?: ItemDetail) {
+  const calls: Call[] = [];
+  const usable: string[] = [];
+  host = render(
+    createElement(ItemForm, {
+      open: true,
+      onOpenChange: () => {},
+      project: { id: PROJECT.id, key: PROJECT.key },
+      types: TYPES,
+      defaultType: "task",
+      ...(item !== undefined && { item }),
+    }),
+    {
+      slot: "org.page",
+      queries: {
+        "people.search": () => ({ people: [MIA, BEN] }),
+        "agents.usable": (p: JsonValue) => {
+          const { accountId } = p as unknown as AgentsUsableParams;
+          usable.push(accountId);
+          return { agents: accountId === BEN.id ? [BEN_AGENT] : [MIA_AGENT] };
         },
       },
-    );
-    return { calls, usable };
-  }
+      onAction: async (actionId, input) => {
+        calls.push({ actionId, payload: input?.payload });
+        return {};
+      },
+    },
+  );
+  return { calls, usable };
+}
 
+describe("item form", () => {
   const agentGroup = () => document.querySelector('[role="group"][aria-label="Agent"]');
 
   it("agent picker lists only agents usable by the chosen responsible", async () => {
-    const { usable } = renderForm();
+    const { usable } = renderFormFor();
     await flush();
     // no person yet: the agent picker is empty and disabled, nothing asked
     expect(agentGroup()?.querySelectorAll("button")).toHaveLength(0);
@@ -87,11 +90,10 @@ describe("item form", () => {
   });
 
   it("creates the item with the chosen person, agent, priority and labels", async () => {
-    const { calls } = renderForm();
+    const { calls } = renderFormFor();
     await flush();
     const title = document.querySelector<HTMLInputElement>('input[aria-label="Title"]');
     const labels = document.querySelector<HTMLInputElement>('input[aria-label="Labels"]');
-    const { fireInput } = await import("./input.js");
     await fireInput(title, "Fix the crash");
     await fireInput(labels, "web, urgent ,web");
     await click(buttonByText("Ben"));
@@ -114,13 +116,73 @@ describe("item form", () => {
   });
 
   it("refuses to create without a title", async () => {
-    const { calls } = renderForm();
+    const { calls } = renderFormFor();
     await flush();
     await click(buttonByText("Create"));
     expect(calls).toEqual([]);
     expect(document.querySelector('input[aria-label="Title"]')?.getAttribute("aria-invalid")).toBe(
       "true",
     );
+  });
+});
+
+describe("item form, editing", () => {
+  it("changed fields and assignment go in one item.update at the item's version", async () => {
+    const { calls } = renderFormFor(detailResult().item);
+    await flush();
+    await fireInput(
+      document.querySelector<HTMLInputElement>('input[aria-label="Title"]'),
+      "Login page v2",
+    );
+    await click(buttonByText("Ben"));
+    await click(buttonByText("Ben's tester"));
+    await click(buttonByText("Save"));
+    expect(calls).toEqual([
+      {
+        actionId: "item.update",
+        payload: {
+          itemId: detailResult().item.id,
+          version: 4,
+          title: "Login page v2",
+          description: "Login with **OAuth**",
+          priority: 3,
+          labels: ["web"],
+          responsibleAccountId: BEN.id,
+          agentId: BEN_AGENT.id,
+        },
+      },
+    ]);
+  });
+
+  it("changed fields alone send item.update without an assignment", async () => {
+    const { calls } = renderFormFor(detailResult().item);
+    await flush();
+    await fireInput(
+      document.querySelector<HTMLInputElement>('input[aria-label="Title"]'),
+      "Login page v2",
+    );
+    await click(buttonByText("Save"));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.actionId).toBe("item.update");
+    expect(calls[0]?.payload).not.toHaveProperty("responsibleAccountId");
+  });
+
+  it("only the assignment changed: item.assign", async () => {
+    const { calls } = renderFormFor(detailResult().item);
+    await flush();
+    await click(buttonByText("Ben"));
+    await click(buttonByText("Save"));
+    expect(calls).toEqual([
+      {
+        actionId: "item.assign",
+        payload: {
+          itemId: detailResult().item.id,
+          version: 4,
+          responsibleAccountId: BEN.id,
+          agentId: null,
+        },
+      },
+    ]);
   });
 });
 

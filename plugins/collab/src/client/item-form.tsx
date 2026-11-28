@@ -47,8 +47,8 @@ const PRIORITIES: Priority[] = [0, 1, 2, 3, 4];
 /**
  * The item dialog: title, Markdown description with a preview, the responsible person, the
  * executing agent (only agents the chosen person may use), priority and labels. Creating calls
- * `item.create`; editing calls `item.update` for the fields and `item.assign` when the
- * assignment changed.
+ * `item.create`; editing calls one `item.update` (fields, and the assignment when it changed),
+ * or `item.assign` when only the assignment changed.
  */
 export function ItemForm(props: ItemFormProps) {
   // a fresh form per opening: the fields start from the item (or empty) each time
@@ -112,32 +112,35 @@ function ItemFormDialog(props: ItemFormProps) {
       description !== current.description ||
       priority !== current.priority ||
       nextLabels.join("\n") !== current.labels.join("\n");
-    let version = current.version;
-    if (fieldsChanged) {
-      const r = await act("item.update", {
-        itemId: current.id,
-        version,
-        title: title.trim(),
-        description,
-        priority,
-        labels: nextLabels,
-      });
-      if (r.toast !== undefined) return false;
-      version += 1;
-    }
     const assignChanged =
       responsible !== null &&
       (responsible.id !== current.responsible?.id ||
         (agent?.id ?? null) !== (current.agent?.id ?? null));
-    if (assignChanged) {
-      const r = await act("item.assign", {
-        itemId: current.id,
-        version,
-        responsibleAccountId: responsible.id,
-        agentId: agent?.id ?? null,
-      });
-      if (r.toast !== undefined) return false;
-    }
+    if (!fieldsChanged && !assignChanged) return true;
+    // only the assignment changed: item.assign; otherwise one item.update carries the fields and,
+    // when it changed, the assignment (the server assigns at the version its update produced)
+    const r =
+      !fieldsChanged && responsible !== null
+        ? await act("item.assign", {
+            itemId: current.id,
+            version: current.version,
+            responsibleAccountId: responsible.id,
+            agentId: agent?.id ?? null,
+          })
+        : await act("item.update", {
+            itemId: current.id,
+            version: current.version,
+            title: title.trim(),
+            description,
+            priority,
+            labels: nextLabels,
+            ...(assignChanged &&
+              responsible !== null && {
+                responsibleAccountId: responsible.id,
+                agentId: agent?.id ?? null,
+              }),
+          });
+    if (r.toast !== undefined) return false;
     return true;
   };
 
