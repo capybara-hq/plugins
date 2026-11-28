@@ -1,5 +1,13 @@
 # @capybara-hq/plugin-browser
 
+## 0.1.0-rc.19
+
+### Patch Changes
+
+- a7a93b4: The browser panel and the file previewer paint no ground of their own before the host's `init`:
+  it was the light `Canvas` colour whatever the host's theme, so the embed flashed white in the
+  dark theme before its tokens arrived. Transparent, the host's pane shows through until then.
+
 ## 0.1.0-rc.18
 
 ### Patch Changes
