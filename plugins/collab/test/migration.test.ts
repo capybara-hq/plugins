@@ -12,6 +12,7 @@ const TABLES = [
   "item_types",
   "items",
   "item_links",
+  "item_watchers",
   "comments",
   "activity",
   "artifacts",
@@ -66,8 +67,10 @@ describe("collab migration", { timeout: 180_000 }, () => {
         await expect(outbox("o1")).rejects.toThrow(/duplicate key/);
 
         // The kernel applies a migration once; running the same SQL again is a no-op.
-        const text = readFileSync(new URL("../migrations/0001_init.sql", import.meta.url), "utf8");
-        await sql.raw(text).execute(db);
+        for (const name of ["0001_init.sql", "0002_item_watchers.sql"]) {
+          const text = readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8");
+          await sql.raw(text).execute(db);
+        }
         const count = await sql<{ n: string }>`SELECT count(*) AS n FROM items`.execute(db);
         expect(count.rows[0]?.n).toBe("1");
       });

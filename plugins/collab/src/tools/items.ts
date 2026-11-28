@@ -17,6 +17,7 @@ import {
   transition,
   updateItem,
 } from "../domain/items.js";
+import { setItemWatching } from "../domain/watchers.js";
 import { statusesForType } from "../domain/workflow.js";
 import type { Item, LinkKind, Project } from "../store/types.js";
 import {
@@ -77,6 +78,26 @@ const AGENT_PROP = {
   description:
     "The agent that works on the item for the responsible person: an agent id they may use, or null for no agent. Left out: the person's default agent in the project, if any.",
 } as const;
+
+const WATCH_ITEM: ToolSpec = {
+  name: "watch_item",
+  title: "Follow or unfollow item",
+  description:
+    "Follow or unfollow a tracker item for the person who owns this conversation. " +
+    "Following sends them inbox notices for changes to the item's status, comments and decision answers.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      key: KEY_PROP,
+      watching: { type: "boolean", description: "True to follow the item, false to unfollow it." },
+    },
+    required: ["key", "watching"],
+    additionalProperties: false,
+  },
+  keyArgs: ["key"],
+  annotations: { idempotentHint: true },
+  defaultPolicy: "allow",
+};
 
 const ITEM_SEARCH: ToolSpec = {
   name: "item_search",
@@ -649,6 +670,24 @@ function activityDetail(
 /** Registers the item tools. */
 export function registerItemTools(deps: ToolDeps): void {
   const { ctx, db } = deps;
+
+  ctx.tools.register(
+    WATCH_ITEM,
+    guarded(async (input, call) => {
+      if (typeof input.watching !== "boolean")
+        throw new ToolError("Pass true or false for watching.");
+      const accountId = personOf(call);
+      const { item, project } = await itemByKey(db, call.orgId, accountId, str(input, "key"));
+      const watching = await setItemWatching(
+        db,
+        call.orgId,
+        { accountId },
+        item.id,
+        input.watching,
+      );
+      return result(`${watching ? "Following" : "Unfollowed"} ${keyOf(project.key, item)}.`);
+    }),
+  );
 
   ctx.tools.register(
     ITEM_SEARCH,

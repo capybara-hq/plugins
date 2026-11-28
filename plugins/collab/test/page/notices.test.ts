@@ -101,9 +101,9 @@ describe("assignment notices on creation", () => {
       .where("org_id", "=", org)
       .execute();
     const again = pageCtx(db, AGENTS);
-    expect(await sweepNotices(again.ctx, org)).toBe(0);
+    expect(await sweepNotices(again.ctx, org)).toEqual({ failed: 0, full: false });
     expect(again.posts.map((p) => p.accountId)).toEqual([QA.accountId]);
-    expect(await sweepNotices(again.ctx, org)).toBe(0);
+    expect(await sweepNotices(again.ctx, org)).toEqual({ failed: 0, full: false });
     expect(again.posts).toHaveLength(1);
   });
 

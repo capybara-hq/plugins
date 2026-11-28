@@ -27,6 +27,8 @@ function errorText(error: CollabError): string {
       return `${m} Check project_list for the members and retry.`;
     case "no_longer_assigned":
       return `${m} Stop working on it and do not retry; tell the user, or call item_get to see who has it now.`;
+    case "watcher_limit":
+      return `${m} Ask the person whether they want to try again later.`;
     case "archived":
       return `${m} Do not retry; tell the user the project is archived.`;
   }

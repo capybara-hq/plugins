@@ -121,6 +121,12 @@ export async function addMember(
       .executeTakeFirstOrThrow();
     // A guest is responsible for nothing: their open items go back to the owner, as on removal.
     if (before && before.role !== "guest" && input.role === "guest") {
+      await tx
+        .deleteFrom("item_watchers")
+        .where("org_id", "=", orgId)
+        .where("project_id", "=", projectId)
+        .where("account_id", "=", accountId)
+        .execute();
       await handBackItems(tx, orgId, actor, project, accountId);
     }
     // A demotion to guest (or a new label) can change who answers open decisions.

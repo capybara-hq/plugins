@@ -2,6 +2,7 @@ import { TriggerError, type TriggerEvent } from "@capybara-hq/plugin-sdk";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { comment, createItem, link, transition, updateItem } from "../../src/domain/items.js";
+import { setItemWatching } from "../../src/domain/watchers.js";
 import {
   DRAIN_QUEUE,
   type DrainJob,
@@ -109,6 +110,24 @@ const agentActor = (handle: string): Actor => ({
 });
 
 const assignedToOwner = { responsibleAccountId: OWNER.accountId, executingAgentId: "agent-pm" };
+
+it("snapshots the watcher accounts when an item event is recorded", async () => {
+  const org = "watch-event";
+  const project = await teamProject(db, org, "WE");
+  const item = await createItem(db, org, OWNER, {
+    projectId: project.id,
+    type: "task",
+    title: "Watched",
+  });
+  await setItemWatching(db, org, OWNER, item.id, true);
+  await comment(db, org, OWNER, item.id, "New comment");
+  await setItemWatching(db, org, OWNER, item.id, false);
+  const rows = await outboxOf(db, org, item.id);
+  expect(rows.find((row) => row.type === "item.created")?.facts).toMatchObject({ watchers: [] });
+  expect(rows.find((row) => row.type === "item.commented")?.facts).toMatchObject({
+    watchers: [OWNER.accountId],
+  });
+});
 
 describe("collab emitter", () => {
   it("every domain write leaves exactly one outbox row with a stable dedupeKey", async () => {

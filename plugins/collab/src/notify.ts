@@ -32,7 +32,7 @@ async function dbNow(db: CollabDb): Promise<Date> {
 
 /**
  * Runs a domain write the way every write path does: the events it owes go out (`emitting`),
- * then, once it committed, the inbox notices for the assignments it made. A failed notice is
+ * then, once it committed, the inbox notices for the changes it made. A failed notice is
  * logged, never thrown: the write is done.
  */
 export async function notifying<T>(
@@ -45,7 +45,7 @@ export async function notifying<T>(
   try {
     await notifyRecordedSince(ctx, orgId, since);
   } catch (err) {
-    ctx.log.warn("collab could not post an assignment notice", { orgId, err });
+    ctx.log.warn("collab could not post an item notice", { orgId, err });
   }
   return result;
 }

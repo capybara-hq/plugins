@@ -109,6 +109,13 @@ export interface ItemsTable {
   updated_at: Generated<Date>;
 }
 
+export interface ItemWatchersTable {
+  org_id: string;
+  project_id: string;
+  item_id: string;
+  account_id: string;
+}
+
 export interface ItemLinksTable {
   org_id: string;
   from_id: string;
@@ -134,6 +141,7 @@ export interface ActivityTable {
   kind: string;
   detail: JsonDefault<Record<string, unknown>>;
   notified_at: Generated<Date | null>;
+  watcher_recipients: Generated<string[] | null>;
   created_at: Generated<Date>;
 }
 
@@ -203,6 +211,7 @@ export interface CollabDatabase {
   item_types: ItemTypesTable;
   items: ItemsTable;
   item_links: ItemLinksTable;
+  item_watchers: ItemWatchersTable;
   comments: CommentsTable;
   activity: ActivityTable;
   artifacts: ArtifactsTable;

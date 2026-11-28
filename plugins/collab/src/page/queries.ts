@@ -3,6 +3,7 @@ import { type Expression, type ExpressionBuilder, type SqlBool, sql } from "kyse
 import { AGENT_ITEMS, ITEM_PANEL, ITEM_PROPERTIES, PROJECTS } from "../constants.js";
 import { roleIn } from "../domain/access.js";
 import { currentAddressee } from "../domain/decision-state.js";
+import { isWatching } from "../domain/internal.js";
 import { DEFAULT_TYPES } from "../domain/seed.js";
 import type { DefaultAssignmentRule, GateRule } from "../domain/workflow.js";
 import { type CollabDb, collabDb } from "../store/db.js";
@@ -786,6 +787,7 @@ async function itemDetail(
     statuses: (statuses.get(item.type) ?? []).map(statusInfo),
     parent: parent ? itemRef(parent, project.key, statuses) : null,
     canEdit: role !== "guest" && !project.archived,
+    watching: await isWatching(db, call.orgId, item.id, call.accountId),
   };
   // Open decisions first: they are what the page acts on.
   const allDecisions = await decisionRows(

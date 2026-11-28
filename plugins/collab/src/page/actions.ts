@@ -13,6 +13,7 @@ import {
 import { ARCHIVED_TOAST, CollabError, type CollabErrorCode } from "../domain/errors.js";
 import { comment, createItem, transition, updateItemIn } from "../domain/items.js";
 import { addMember, createProject, removeMember, setFunction } from "../domain/projects.js";
+import { setItemWatching } from "../domain/watchers.js";
 import type { DefaultAssignmentRule, GateRule } from "../domain/workflow.js";
 import { invalidateItems, notifying } from "../notify.js";
 import type { ProjectRole } from "../store/types.js";
@@ -64,6 +65,10 @@ const REFUSALS: Readonly<Record<CollabErrorCode, Toast>> = {
   ),
   no_longer_assigned: text("你已不再负责这个事项。", "You no longer work on this item."),
   archived: ARCHIVED_TOAST,
+  watcher_limit: text(
+    "此事项已有 64 位关注者，请等有空位后再试。",
+    "This item already has 64 watchers. Try again when there is a place.",
+  ),
 };
 
 /** Refusals an action words its own way. */
@@ -477,6 +482,22 @@ async function itemAssign(deps: ActionDeps, args: UiOrgActionArgs): Promise<UiAc
     );
     return { invalidate: [...ITEMS] };
   });
+}
+
+/** Changes the viewer's own subscription. */
+async function itemWatch(deps: ActionDeps, args: UiOrgActionArgs): Promise<UiActionResult> {
+  const p = objectOf(args.payload);
+  const { itemId } = payloadFields(p, { itemId: "uuid" });
+  const watching = optBool(p, "watching");
+  if (watching === undefined) throw new ActionPayloadError("watching is missing");
+  return refusing(
+    async () => {
+      await setItemWatching(deps.db, args.orgId, { accountId: args.accountId }, itemId, watching);
+      return { invalidate: ["item.detail"] };
+    },
+    {},
+    ["item.detail"],
+  );
 }
 
 /** `item.comment`. */
@@ -912,6 +933,7 @@ registerAction("item.update", itemUpdate);
 registerAction("item.move", itemMove);
 registerAction("item.assign", itemAssign);
 registerAction("item.comment", itemComment);
+registerAction("item.watch", itemWatch);
 registerAction("gate.confirm", gateConfirm);
 registerAction("decision.answer", decisionAnswer);
 registerAction("settings.save", settingsSave);

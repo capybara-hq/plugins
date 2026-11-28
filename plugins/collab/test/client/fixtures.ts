@@ -168,6 +168,7 @@ export function detailResult(): ItemDetailResult {
     artifacts: [],
     decisions: [decision()],
     canEdit: true,
+    watching: false,
   };
 }
 

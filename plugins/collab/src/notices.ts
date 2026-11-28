@@ -1,6 +1,7 @@
-import type { ExtensionContext } from "@capybara-hq/plugin-sdk";
+import { type ExtensionContext, InboxError } from "@capybara-hq/plugin-sdk";
 import { sql } from "kysely";
 import { PROJECTS } from "./constants.js";
+import { isWatcherActivity, isWatching } from "./domain/internal.js";
 import { itemKey } from "./events/outbox.js";
 import { collabDb } from "./store/db.js";
 import type { Actor } from "./store/types.js";
@@ -17,6 +18,13 @@ export const STOP_AGENT_ACTION = "inbox.stop-agent";
  */
 // capybara:allow-module-state read-only constant
 const OWING_KINDS = ["assigned", "handoff_unresolved", "created"] as const;
+
+// capybara:allow-module-state read-only constant
+const WATCHER_COPY = {
+  status_changed: { zh: "事项状态已变更。", en: "The item status changed." },
+  commented: { zh: "事项有新评论。", en: "The item has a new comment." },
+  decision_answered: { zh: "事项上的决策已答复。", en: "A decision on the item was answered." },
+} as const;
 
 /** Inbox titles are capped at 200 characters (`INBOX_LIMITS.titleChars`). */
 const TITLE_MAX = 200;
@@ -162,10 +170,14 @@ const NOTICE_BATCH = 200;
  * still current is announced, and only when it gave the item to a new person or a new agent
  * (taking the agent off tells nobody). Intent first: the entry is written in the assignment's
  * transaction, so a notice that fails or is cut off by a crash stays owed and the org's drain job
- * (`sweepNotices`) posts it; a notice posted twice is deduped by its key. Returns how many
- * entries stay owed after failures.
+ * (`sweepNotices`) posts it. Inbox dedupe keeps a repeated post to one notice.
  */
-async function postOwed(ctx: NotifyCtx, orgId: string, window: NoticeWindow): Promise<number> {
+interface NoticePass {
+  failed: number;
+  full: boolean;
+}
+
+async function postOwed(ctx: NotifyCtx, orgId: string, window: NoticeWindow): Promise<NoticePass> {
   const db = collabDb(ctx.db);
   let query = db
     .selectFrom("activity as a")
@@ -180,6 +192,7 @@ async function postOwed(ctx: NotifyCtx, orgId: string, window: NoticeWindow): Pr
       "a.kind",
       "a.actor",
       "a.detail",
+      "a.watcher_recipients",
       "i.id as itemId",
       "i.number",
       "i.title",
@@ -189,7 +202,9 @@ async function postOwed(ctx: NotifyCtx, orgId: string, window: NoticeWindow): Pr
       "p.owner_account_id",
     ])
     .where("a.org_id", "=", orgId)
-    .where("a.kind", "in", OWING_KINDS)
+    .where((eb) =>
+      eb.or([eb("a.kind", "in", OWING_KINDS), eb("a.watcher_recipients", "is not", null)]),
+    )
     .where("a.notified_at", "is", null);
   query =
     "since" in window
@@ -218,7 +233,7 @@ async function postOwed(ctx: NotifyCtx, orgId: string, window: NoticeWindow): Pr
       .where("notified_at", "is", null)
       .execute();
   }
-  return failed;
+  return { failed, full: rows.length === NOTICE_BATCH };
 }
 
 interface OwedRow {
@@ -226,6 +241,7 @@ interface OwedRow {
   kind: string;
   actor: unknown;
   detail: unknown;
+  watcher_recipients: string[] | null;
   itemId: string;
   number: number;
   title: string;
@@ -243,6 +259,60 @@ async function postOne(
   announced: Set<string>,
 ): Promise<void> {
   const key = itemKey(row.projectKey, row.number);
+  if (isWatcherActivity(row.kind) && row.watcher_recipients !== null) {
+    const db = collabDb(ctx.db);
+    const failures: unknown[] = [];
+    for (const accountId of row.watcher_recipients) {
+      try {
+        const pending = await db
+          .selectFrom("activity")
+          .select("id")
+          .where("org_id", "=", orgId)
+          .where("id", "=", row.activityId)
+          .where(sql<boolean>`${accountId} = ANY(watcher_recipients)`)
+          .executeTakeFirst();
+        if (!pending) continue;
+        if (await isWatching(db, orgId, row.itemId, accountId)) {
+          try {
+            await ctx.inbox.post({
+              orgId,
+              accountId,
+              kind: "collab.watched",
+              title: both(
+                `关注的事项 ${key}：${row.title}`,
+                `Item you follow ${key}: ${row.title}`,
+                TITLE_MAX,
+              ),
+              body: WATCHER_COPY[row.kind],
+              link: itemLink(key),
+              dedupeKey: `collab.watched-${row.activityId}`,
+            });
+          } catch (err) {
+            // The kernel also checks org membership. An invalid item is a permanent refusal.
+            if (!(err instanceof InboxError) || err.code !== "invalid_item") throw err;
+            ctx.log.warn("collab watcher notice refused", {
+              orgId,
+              activityId: row.activityId,
+              err,
+            });
+          }
+        }
+        // A later retry only visits recipients this pass did not settle.
+        await db
+          .updateTable("activity")
+          .set({
+            watcher_recipients: sql<string[]>`array_remove(watcher_recipients, ${accountId})`,
+          })
+          .where("org_id", "=", orgId)
+          .where("id", "=", row.activityId)
+          .execute();
+      } catch (err) {
+        failures.push(err);
+      }
+    }
+    if (failures.length > 0) throw new AggregateError(failures, "Could not post watcher notices.");
+    return;
+  }
   if (row.kind === "handoff_unresolved") {
     await notifyHandoffUnresolved(
       ctx,
@@ -298,13 +368,14 @@ export async function notifyRecordedSince(
 
 /**
  * The drain job's pass: gives up notices owed for more than a day, then posts the ones still owed
- * after a minute (their request path failed or never ran). Returns how many stay owed.
+ * after a minute (their request path failed or never ran).
  */
-export async function sweepNotices(ctx: NotifyCtx, orgId: string): Promise<number> {
+export async function sweepNotices(ctx: NotifyCtx, orgId: string): Promise<NoticePass> {
   const db = collabDb(ctx.db);
   await db
     .updateTable("activity")
     .set({ notified_at: sql`now()` })
+    .where("org_id", "=", orgId)
     .where(
       "id",
       "in",
@@ -312,7 +383,9 @@ export async function sweepNotices(ctx: NotifyCtx, orgId: string): Promise<numbe
         .selectFrom("activity")
         .select("id")
         .where("org_id", "=", orgId)
-        .where("kind", "in", OWING_KINDS)
+        .where((eb) =>
+          eb.or([eb("kind", "in", OWING_KINDS), eb("watcher_recipients", "is not", null)]),
+        )
         .where("notified_at", "is", null)
         .where("created_at", "<", NOTICE_MAX_AGE)
         .limit(500),

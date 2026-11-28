@@ -231,6 +231,20 @@ describe("item page", () => {
     expect(text()).toContain("Login with **OAuth**");
   });
 
+  it("the follow action subscribes to the current item", async () => {
+    const { calls } = renderPage({ item: "APP-1" });
+    await flush();
+    const header = lastProps.DetailPage?.header as {
+      actions: { label: string; onSelect?: () => void }[];
+    };
+    const follow = header.actions.find((action) => action.label === "Follow");
+    expect(follow).toBeDefined();
+    await act(async () => follow?.onSelect?.());
+    expect(calls).toEqual([
+      { actionId: "item.watch", payload: { itemId: card().id, watching: true } },
+    ]);
+  });
+
   it("the decisions tab answers with the chosen option", async () => {
     const { calls } = renderPage({ item: "APP-1" });
     await flush();

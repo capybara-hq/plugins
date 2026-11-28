@@ -1,4 +1,4 @@
-import { actorJson, isAgent } from "../domain/internal.js";
+import { actorJson, isAgent, watcherIds } from "../domain/internal.js";
 import type { CollabDb } from "../store/db.js";
 import type { Actor, Item, StatusCategory } from "../store/types.js";
 import { EVENT_DECLARATIONS } from "./declarations.js";
@@ -77,6 +77,7 @@ export async function outboxFor(
     priority: item.priority,
     labels: clipList(item.labels),
     changedFields: clipList(extra.changedFields ?? []),
+    watchers: await watcherIds(tx, orgId, item.id),
   };
   if (item.responsible_account_id) facts.responsibleAccountId = item.responsible_account_id;
   if (item.executing_agent_id) facts.executingAgentId = item.executing_agent_id;

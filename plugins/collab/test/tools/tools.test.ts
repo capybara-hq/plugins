@@ -53,6 +53,23 @@ describe("collab tools", () => {
     }
   });
 
+  it("watch_item writes only the conversation owner's subscription", async () => {
+    const org = "watch-tool";
+    const { key } = await newTask(org, "WT");
+    expect(text(await tools.run("watch_item", { key, watching: true }, pm(org)))).toContain(
+      "Following WT-1",
+    );
+    expect(
+      await db.selectFrom("item_watchers").select("account_id").where("org_id", "=", org).execute(),
+    ).toEqual([{ account_id: OWNER.accountId }]);
+    expect(text(await tools.run("watch_item", { key, watching: false }, pm(org)))).toContain(
+      "Unfollowed WT-1",
+    );
+    expect(
+      await db.selectFrom("item_watchers").select("account_id").where("org_id", "=", org).execute(),
+    ).toEqual([]);
+  });
+
   it("item_get on a foreign project returns not found", async () => {
     const org = "org-foreign";
     await createProject(db, org, { accountId: "acct-stranger" }, { key: "SEC", name: "Secret" });
