@@ -131,8 +131,10 @@ export const PANEL_HTML = `<!doctype html>
     font-family: var(--cb-font, ${MONO_STACK});
     font-size: var(--cb-type-body-size, 13px); line-height: var(--cb-type-body-line, 20px);
   }
-  /* nothing before the host's tokens and language (init) */
-  body:not([data-ready]) { visibility: hidden; }
+  /* nothing before the host's tokens and language (init); no ground either: the body's ground
+     becomes the canvas, which a hidden body still paints, and before init it is light (Canvas)
+     whatever the host's theme. Transparent, the host's panel shows through until init. */
+  body:not([data-ready]) { visibility: hidden; background: transparent; }
   [hidden] { display: none !important; }
   button, input { font: inherit; color: inherit; margin: 0; }
   button {
