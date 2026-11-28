@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "kysely";
-import { outboxFor } from "../events/outbox.js";
 import type { CollabDb } from "../store/db.js";
 import type { Actor, Decision, Item } from "../store/types.js";
 import { isArchived, requireRole } from "./access.js";
 import {
+  cancelWithReport,
   closeDecision,
   currentAddressee,
   type DecisionHooks,
+  reportToAsker,
   requireHooks,
 } from "./decision-state.js";
 import { CollabError } from "./errors.js";
@@ -264,51 +265,6 @@ function answerText(decision: Decision, answer: DecisionAnswer): string {
 }
 
 /**
- * Tells the asker what became of their decision: a directed `decision.answered` while the asking
- * pair still holds the item; otherwise (a person asked, or the item moved on to another pair) an
- * `item.updated`.
- */
-async function reportToAsker(
-  tx: CollabDb,
-  orgId: string,
-  actor: Actor,
-  decision: Decision,
-  item: Item,
-  text: string,
-  answered: boolean,
-): Promise<void> {
-  const project = await loadProject(tx, orgId, item.project_id);
-  const statuses = await statusesForType(tx, orgId, item.project_id, item.type);
-  const base = {
-    actor,
-    projectKey: project.key,
-    statusCategory: statuses.find((s) => s.key === item.status_key)?.category ?? "todo",
-  };
-  const asker = decision.asker;
-  const holds =
-    isAgent(asker) &&
-    item.responsible_account_id === asker.accountId &&
-    item.executing_agent_id === asker.agentId;
-  if (answered && holds && isAgent(asker)) {
-    await outboxFor(tx, orgId, "decision.answered", item, {
-      ...base,
-      audience: { accountId: asker.accountId, agentId: asker.agentId },
-      decisionId: decision.id,
-      detail: { answer: text },
-    });
-    return;
-  }
-  // An expiry is told only to an asking pair that still holds the item.
-  if (!answered && !holds) return;
-  await outboxFor(tx, orgId, "item.updated", item, {
-    ...base,
-    changedFields: ["decisions"],
-    dedupeKey: `item.updated-decision-${decision.id}`,
-    detail: { answer: text },
-  });
-}
-
-/**
  * A person answers a decision (the UI action path; there is no answer tool, an agent never
  * answers). Only the addressee (a question; the project owner once the addressee left) or a
  * confirmer (a gate) may. The item is locked first; a gate the item moved past since it was
@@ -453,53 +409,6 @@ export async function answerDecision(
     );
     return { decision, item: after, outcome: "answered" };
   });
-}
-
-/** Why an open decision was canceled without an answer (besides a gate the item moved past). */
-type CancelReason = "disallowed" | "archived";
-
-/** What the asker is told when their decision is canceled. */
-async function cancelText(
-  tx: CollabDb,
-  orgId: string,
-  item: Item,
-  decision: Decision,
-  reason: CancelReason,
-): Promise<string> {
-  const project = await loadProject(tx, orgId, item.project_id);
-  const key = `${project.key}-${item.number}`;
-  const why =
-    reason === "archived"
-      ? "the project was archived and is read-only."
-      : "the workflow no longer allows that move.";
-  if (decision.kind !== "gate") {
-    return `Question: "${decision.question}" was canceled: ${why}`;
-  }
-  const statuses = await statusesForType(tx, orgId, item.project_id, item.type);
-  const target = statuses.find((s) => s.key === decision.gate_target);
-  const name = target ? target.name_en : (decision.gate_target ?? "?");
-  return `The confirmation request to move ${key} to "${name}" was canceled: ${why}${
-    reason === "disallowed" ? " Pick one of the statuses item_get lists as allowed." : ""
-  }`;
-}
-
-/**
- * Cancels an open decision and tells the asking pair (while it holds the item), like an expiry.
- * Returns false when it was no longer open.
- */
-async function cancelWithReport(
-  tx: CollabDb,
-  orgId: string,
-  actor: Actor,
-  decision: Decision,
-  item: Item,
-  reason: CancelReason,
-  hooks: DecisionHooks | undefined,
-): Promise<boolean> {
-  if (!(await closeDecision(tx, orgId, actor, decision, "canceled", reason, hooks))) return false;
-  const text = await cancelText(tx, orgId, item, decision, reason);
-  await reportToAsker(tx, orgId, actor, decision, item, text, false);
-  return true;
 }
 
 /**

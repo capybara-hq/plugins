@@ -100,6 +100,7 @@ describe("collab agent templates and skills", () => {
       "gate",
       "no longer assigned",
       "decision_list",
+      "never arrives as an event",
     ]) {
       expect(body).toContain(word);
     }

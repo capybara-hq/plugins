@@ -338,6 +338,10 @@ describe("decisions and gates", () => {
       const posted = f.inbox.find((i) => i.dedupeKey === id);
       expect(posted).toMatchObject({ accountId: OWNER.accountId, kind: "collab.decision" });
       expect(posted?.actions?.map((a) => a.id)).toEqual(["approve", "reject"]);
+      expect(posted?.actions?.map((a) => a.label)).toEqual([
+        { zh: "批准", en: "Approve" },
+        { zh: "驳回", en: "Reject" },
+      ]);
       // Only the confirmer may answer.
       const payload = { decisionId: id, optionId: choice };
       expect(await f.click(ENGINEER.accountId, payload)).toMatchObject({
@@ -669,6 +673,45 @@ describe("decisions and gates", () => {
     expect(f.inbox.every((i) => i.resolved)).toBe(true);
     expect(await f.click(OWNER.accountId, { decisionId: id, optionId: "yes" })).toMatchObject({
       toast: { en: "This decision expired." },
+    });
+  });
+
+  it("closing an item cancels its open questions and tells the asking pair", async () => {
+    const f = fakeCtx(db);
+    const item = await ownersTask();
+    const out = await f.tool(DEC_ASK, {
+      key: keyOf(item),
+      question: "Keep the legacy endpoint?",
+      options: [
+        { id: "yes", label: "Yes" },
+        { id: "no", label: "No" },
+      ],
+      blocking: true,
+    });
+    const id = decisionIdIn(textOf(out));
+    expect(f.inbox.find((i) => i.dedupeKey === id)?.resolved).toBe(false);
+    const follow = f.follow();
+    await transition(db, ORG, OWNER, item.id, item.version, "canceled", {
+      decisions: follow.hooks,
+    });
+    await follow.flush();
+    expect((await decisionOf(db, id)).state).toBe("canceled");
+    expect(f.inbox.find((i) => i.dedupeKey === id)?.resolved).toBe(true);
+    const activity = await db
+      .selectFrom("activity")
+      .select(["kind", "detail"])
+      .where("item_id", "=", item.id)
+      .where("kind", "=", "decision_canceled")
+      .execute();
+    expect(activity).toHaveLength(1);
+    expect(activity[0]?.detail).toMatchObject({ decisionId: id, reason: "closed" });
+    const rows = (await outboxOf(db, ORG, item.id)).filter(
+      (r) => r.dedupe_key === `item.updated-decision-${id}`,
+    );
+    expect(rows).toHaveLength(1);
+    expect(JSON.stringify(rows[0]?.detail)).toContain(`was canceled: ${keyOf(item)} was closed.`);
+    expect(await f.click(OWNER.accountId, { decisionId: id, optionId: "yes" })).toMatchObject({
+      toast: { en: "The item moved on." },
     });
   });
 
