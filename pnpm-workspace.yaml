@@ -9,14 +9,14 @@ allowBuilds:
   ssh2: true
 overrides:
   # one plugin-sdk instance: connector e2e checks `instanceof ToolError` across packages
-  "@capybara-hq/plugin-sdk": 0.1.0-rc.89
+  "@capybara-hq/plugin-sdk": 0.1.0-rc.90
   # one plugin-client instance: the host global and the hooks' context are shared by every plugin
   "@capybara-hq/plugin-client": 0.1.0-rc.11
   # one kernel and test kit that match it: an older kernel imports SDK exports R3 removed
-  "@capybara-hq/kernel": 0.1.0-rc.112
+  "@capybara-hq/kernel": 0.1.0-rc.114
   "@capybara-hq/plugin-tools": 0.1.0-rc.28
   "@capybara-hq/testing": 0.1.0-rc.49
   # the scripted model built against the same SDK (an older one imports SDK exports since removed)
-  "@capybara-hq/plugin-model-fake": 0.1.0-rc.90
+  "@capybara-hq/plugin-model-fake": 0.1.0-rc.91
 patchedDependencies:
   playwright-core@1.65.1: patches/playwright-core@1.65.1.patch
