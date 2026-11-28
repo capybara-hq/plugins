@@ -1,0 +1,178 @@
+/**
+ * The project pages' copy, zh and en. The zh copy says 智能体 (never the Latin word for agent) and
+ * 平台 (never 企业).
+ */
+
+export interface Copy {
+  zh: string;
+  en: string;
+}
+
+export const COPY = {
+  projects: { zh: "项目", en: "Projects" },
+  projectsLabel: { zh: "项目列表", en: "Projects" },
+  noProjects: { zh: "还没有项目", en: "No projects yet" },
+  noProjectsHint: {
+    zh: "新建一个项目，把需求、任务和缺陷交给成员和他们的智能体。",
+    en: "Create a project to hand requirements, tasks and bugs to members and their agents.",
+  },
+  newProject: { zh: "新建项目", en: "New project" },
+  projectKey: { zh: "项目标识", en: "Project key" },
+  projectKeyHelp: {
+    zh: "2–10 个大写字母或数字，用作事项编号的前缀。",
+    en: "2–10 uppercase letters or digits, the prefix of item keys.",
+  },
+  projectName: { zh: "名称", en: "Name" },
+  description: { zh: "描述", en: "Description" },
+  name: { zh: "名称", en: "Name" },
+  key: { zh: "标识", en: "Key" },
+  role: { zh: "角色", en: "Role" },
+  items: { zh: "事项", en: "Items" },
+  openItems: { zh: "未完成", en: "Open" },
+  create: { zh: "创建", en: "Create" },
+  save: { zh: "保存", en: "Save" },
+  cancel: { zh: "取消", en: "Cancel" },
+  retry: { zh: "重试", en: "Retry" },
+  loadFailed: { zh: "载入失败", en: "Could not load" },
+  notFound: { zh: "没有找到，或者你没有权限查看。", en: "Not found, or you cannot see it." },
+
+  board: { zh: "看板", en: "Board" },
+  list: { zh: "列表", en: "List" },
+  viewSwitch: { zh: "显示方式", en: "View" },
+  newItem: { zh: "新建事项", en: "New item" },
+  settings: { zh: "项目设置", en: "Project settings" },
+  allTypes: { zh: "全部", en: "All" },
+  mine: { zh: "我负责的", en: "Mine" },
+  emptyBoard: { zh: "这个项目还没有事项", en: "This project has no items yet" },
+  itemsTable: { zh: "事项列表", en: "Items" },
+  gateHint: {
+    zh: "进入这一列需要确认：放入后会请确认人批准。",
+    en: "Entering this column needs a confirmation: a drop asks the confirmer.",
+  },
+  truncated: {
+    zh: "看板只显示前 500 个事项，其余请在列表中查看。",
+    en: "The board shows the first 500 items; see the list for the rest.",
+  },
+
+  title: { zh: "标题", en: "Title" },
+  type: { zh: "类型", en: "Type" },
+  status: { zh: "状态", en: "Status" },
+  responsible: { zh: "负责人", en: "Responsible" },
+  agent: { zh: "执行智能体", en: "Agent" },
+  noAgent: { zh: "不指派智能体", en: "No agent" },
+  priority: { zh: "优先级", en: "Priority" },
+  labels: { zh: "标签", en: "Labels" },
+  labelsHelp: { zh: "用逗号分隔", en: "Separated by commas" },
+  parent: { zh: "上级事项", en: "Parent" },
+  updated: { zh: "更新时间", en: "Updated" },
+  none: { zh: "无", en: "None" },
+  write: { zh: "编辑", en: "Write" },
+  preview: { zh: "预览", en: "Preview" },
+  descriptionTabs: { zh: "描述编辑方式", en: "Description mode" },
+  nothingToPreview: { zh: "没有内容", en: "Nothing to preview" },
+  pickResponsible: { zh: "选择负责人", en: "Choose a person" },
+  pickAgent: { zh: "选择智能体", en: "Choose an agent" },
+  pickResponsibleFirst: { zh: "先选择负责人", en: "Choose the responsible person first" },
+  titleRequired: { zh: "请填写标题", en: "Enter a title" },
+
+  overview: { zh: "概览", en: "Overview" },
+  activity: { zh: "活动", en: "Activity" },
+  artifacts: { zh: "产物", en: "Artifacts" },
+  decisions: { zh: "决策", en: "Decisions" },
+  conversations: { zh: "会话", en: "Conversations" },
+  detailTabs: { zh: "事项内容", en: "Item sections" },
+  children: { zh: "子事项", en: "Children" },
+  noChildren: { zh: "没有子事项", en: "No children" },
+  noDescription: { zh: "没有描述", en: "No description" },
+  noActivity: { zh: "还没有活动", en: "No activity yet" },
+  noArtifacts: { zh: "还没有产物", en: "No artifacts yet" },
+  noDecisions: { zh: "没有决策", en: "No decisions" },
+  openConversation: { zh: "打开", en: "Open" },
+  noConversations: { zh: "还没有会话", en: "No conversations yet" },
+  comment: { zh: "评论", en: "Comment" },
+  addComment: { zh: "发表评论", en: "Post comment" },
+  edit: { zh: "编辑", en: "Edit" },
+  editItem: { zh: "编辑事项", en: "Edit item" },
+  moveTo: { zh: "移到", en: "Move to" },
+  loadMore: { zh: "载入更多", en: "Load more" },
+  waitingOn: { zh: "等待", en: "Waiting on" },
+  recommended: { zh: "推荐", en: "Recommended" },
+  blocking: { zh: "阻塞", en: "Blocking" },
+  answered: { zh: "已回答", en: "Answered" },
+  canceled: { zh: "已取消", en: "Canceled" },
+  expired: { zh: "已过期", en: "Expired" },
+  open: { zh: "待回答", en: "Open" },
+  gate: { zh: "确认请求", en: "Confirmation" },
+  question: { zh: "问题", en: "Question" },
+
+  agentWorking: { zh: "工作中", en: "Working" },
+  agentWaiting: { zh: "等待中", en: "Waiting" },
+  agentIdle: { zh: "空闲", en: "Idle" },
+  agentDeclined: { zh: "已拒绝", en: "Declined" },
+  stopAgent: { zh: "停止智能体", en: "Stop the agent" },
+
+  members: { zh: "成员与职能", en: "Members & functions" },
+  typesWorkflows: { zh: "类型与工作流", en: "Types & workflows" },
+  gates: { zh: "需确认的状态", en: "Confirmation rules" },
+  defaultAssignments: { zh: "默认指派", en: "Default assignments" },
+  settingsNav: { zh: "设置", en: "Settings" },
+  functionLabel: { zh: "职能", en: "Function" },
+  defaultAgent: { zh: "默认智能体", en: "Default agent" },
+  addMember: { zh: "添加成员", en: "Add member" },
+  removeMember: { zh: "移除", en: "Remove" },
+  confirmer: { zh: "确认人", en: "Confirmer" },
+  assignee: { zh: "指派给", en: "Assign to" },
+  workflow: { zh: "工作流", en: "Workflow" },
+  noGates: { zh: "没有需确认的状态", en: "No confirmation rules" },
+  noDefaults: { zh: "没有默认指派", en: "No default assignments" },
+  readOnly: {
+    zh: "只有项目所有者可以修改这些设置。",
+    en: "Only the project owner can change these settings.",
+  },
+  back: { zh: "返回", en: "Back" },
+
+  unknownMember: { zh: "未知成员", en: "Unknown member" },
+  unknownAgent: { zh: "未知智能体", en: "Unknown agent" },
+  changedItem: { zh: "修改了事项", en: "changed the item" },
+  general: { zh: "常规", en: "General" },
+  archived: { zh: "已归档", en: "Archived" },
+  archivedBanner: {
+    zh: "项目已归档，只能查看。取消归档后才能修改。",
+    en: "This project is archived and read-only. Unarchive it to make changes.",
+  },
+  archivedHelp: {
+    zh: "归档后项目只能查看，不能再修改；项目所有者可以取消归档。",
+    en: "An archived project is read-only; a project owner can unarchive it.",
+  },
+  removeMemberTitle: { zh: "移除成员", en: "Remove member" },
+  removeMemberText: {
+    zh: "移除后，此成员负责的未完成事项会交还给项目所有者，并取消其智能体。",
+    en: "Their open items go back to the project owner, without an agent.",
+  },
+  pendingGate: { zh: "待确认", en: "Awaiting confirmation" },
+  pendingGateBy: { zh: "待 {name} 确认", en: "Awaiting {name}" },
+  truncatedList: {
+    zh: "内容较多，这里只显示了一部分。",
+    en: "There is more than fits here; only part is shown.",
+  },
+  showAll: { zh: "显示全部", en: "Show all" },
+  openItem: { zh: "打开事项", en: "Open the item" },
+  agentItems: { zh: "执行中的事项", en: "Items in progress" },
+  noAgentItems: { zh: "这个智能体没有正在执行的事项", en: "This agent executes no items" },
+  openDecisions: { zh: "待回答的决策", en: "Open decisions" },
+} satisfies Record<string, Copy>;
+
+export const ROLE_LABEL: Record<"owner" | "member" | "guest", Copy> = {
+  owner: { zh: "所有者", en: "Owner" },
+  member: { zh: "成员", en: "Member" },
+  guest: { zh: "访客", en: "Guest" },
+};
+
+/** Priorities as items store them: 0 none, then 1 (urgent) through 4 (low). */
+export const PRIORITY_LABEL: Copy[] = [
+  { zh: "无", en: "None" },
+  { zh: "紧急", en: "Urgent" },
+  { zh: "高", en: "High" },
+  { zh: "中", en: "Medium" },
+  { zh: "低", en: "Low" },
+];

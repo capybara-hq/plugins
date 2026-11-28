@@ -12,6 +12,7 @@
     "node_modules",
     "**/dist",
     "plugins/browser/test/panel",
+    "plugins/collab/test",
     "plugins/file-preview/test",
     "plugins/memory/test",
     "plugins/theme-cyberpunk/test"

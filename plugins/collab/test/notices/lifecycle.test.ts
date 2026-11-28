@@ -1,0 +1,290 @@
+import type { RunLifecyclePayload, SubjectConversation } from "@capybara-hq/plugin-sdk";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { assign } from "../../src/domain/assignment.js";
+import { createItem } from "../../src/domain/items.js";
+import { onRunLifecycle } from "../../src/lifecycle.js";
+import type { CollabDb } from "../../src/store/db.js";
+import type { Item } from "../../src/store/types.js";
+import { domainDb, ENGINEER, OWNER, outboxOf, teamProject } from "../domain/setup.js";
+import { noticeCtx } from "./fake.js";
+
+let db: CollabDb;
+let close: () => Promise<void>;
+beforeAll(async () => {
+  ({ db, close } = await domainDb());
+});
+afterAll(async () => {
+  await close();
+});
+
+/** A task handed to the engineer and agent-eng. */
+async function assigned(orgId: string, key: string): Promise<Item> {
+  const project = await teamProject(db, orgId, key);
+  const item = await createItem(db, orgId, OWNER, {
+    projectId: project.id,
+    type: "task",
+    title: "Fix login",
+  });
+  return assign(db, orgId, OWNER, item.id, item.version, {
+    responsibleAccountId: ENGINEER.accountId,
+    executingAgentId: "agent-eng",
+  });
+}
+
+function conv(state: SubjectConversation["state"], over: Partial<SubjectConversation> = {}) {
+  return {
+    id: "conv-work",
+    ownerAccountId: ENGINEER.accountId,
+    agentId: "agent-eng",
+    state,
+    lastActivityAt: new Date().toISOString(),
+    ...over,
+  };
+}
+
+function phase(
+  orgId: string,
+  item: Item,
+  p: RunLifecyclePayload["phase"],
+  over: Partial<RunLifecyclePayload> = {},
+): RunLifecyclePayload {
+  return {
+    orgId,
+    accountId: ENGINEER.accountId,
+    agentId: "agent-eng",
+    conversationId: "conv-work",
+    runId: "run-1",
+    phase: p,
+    subject: { kind: "item", id: item.id },
+    ...over,
+  };
+}
+
+/** An `offer_declined` delivery: no run, no conversation. */
+function declined(
+  orgId: string,
+  item: Item,
+  reason: NonNullable<RunLifecyclePayload["reason"]>,
+  agentId = "agent-eng",
+): RunLifecyclePayload {
+  return {
+    orgId,
+    accountId: ENGINEER.accountId,
+    agentId,
+    phase: "offer_declined",
+    subject: { kind: "item", id: item.id },
+    reason,
+  };
+}
+
+async function reload(item: Item): Promise<Item> {
+  return db.selectFrom("items").selectAll().where("id", "=", item.id).executeTakeFirstOrThrow();
+}
+
+describe("run state", () => {
+  it("lifecycle phases update agent_state and invalidate", async () => {
+    const org = "org-life-1";
+    const item = await assigned(org, "LFA");
+    const fake = noticeCtx(db, {});
+
+    fake.conversations.set(item.id, [conv("running")]);
+    await onRunLifecycle(fake.ctx, phase(org, item, "started"));
+    let now = await reload(item);
+    expect(now.agent_state).toBe("working");
+    expect(now.agent_conversation_id).toBe("conv-work");
+    expect(now.version).toBe(item.version);
+    expect(fake.invalidations).toContainEqual({ orgId: org, contribution: "projects" });
+
+    fake.conversations.set(item.id, [conv("waiting")]);
+    await onRunLifecycle(fake.ctx, phase(org, item, "waiting", { waitingOn: "input" }));
+    expect((await reload(item)).agent_state).toBe("waiting");
+
+    fake.conversations.set(item.id, [conv("running")]);
+    await onRunLifecycle(fake.ctx, phase(org, item, "resumed", { waitingOn: "input" }));
+    expect((await reload(item)).agent_state).toBe("working");
+
+    fake.conversations.set(item.id, [conv("idle")]);
+    await onRunLifecycle(fake.ctx, phase(org, item, "finished"));
+    now = await reload(item);
+    expect(now.agent_state).toBe("idle");
+
+    // A repeated delivery changes nothing and refreshes nothing.
+    const before = fake.invalidations.length;
+    await onRunLifecycle(fake.ctx, phase(org, item, "finished"));
+    expect(fake.invalidations.length).toBe(before);
+  });
+
+  it("a stale started after the run finished never turns idle back to working", async () => {
+    const org = "org-life-2";
+    const item = await assigned(org, "LFB");
+    const fake = noticeCtx(db, {});
+    fake.conversations.set(item.id, [conv("idle")]);
+    await onRunLifecycle(fake.ctx, phase(org, item, "finished"));
+    await onRunLifecycle(fake.ctx, phase(org, item, "started"));
+    expect((await reload(item)).agent_state).toBe("idle");
+  });
+
+  it("events of a pair or conversation that no longer executes the item are ignored", async () => {
+    const org = "org-life-3";
+    const item = await assigned(org, "LFC");
+    const fake = noticeCtx(db, {});
+    fake.conversations.set(item.id, [
+      conv("running"),
+      conv("running", { id: "conv-old", agentId: "agent-old" }),
+    ]);
+    await onRunLifecycle(
+      fake.ctx,
+      phase(org, item, "started", { agentId: "agent-old", conversationId: "conv-old" }),
+    );
+    // A conversation of the right agent but another owner (a forwarded chat) does not count.
+    fake.conversations.set(item.id, [conv("running", { ownerAccountId: OWNER.accountId })]);
+    await onRunLifecycle(fake.ctx, phase(org, item, "started"));
+    // Another org, another kind.
+    await onRunLifecycle(fake.ctx, phase("org-other", item, "started"));
+    await onRunLifecycle(
+      fake.ctx,
+      phase(org, item, "started", { subject: { kind: "page", id: item.id } }),
+    );
+    expect((await reload(item)).agent_state).toBeNull();
+    expect(fake.invalidations).toHaveLength(0);
+  });
+
+  it("a new assignment clears the run state", async () => {
+    const org = "org-life-4";
+    const item = await assigned(org, "LFD");
+    const fake = noticeCtx(db, {});
+    fake.conversations.set(item.id, [conv("running")]);
+    await onRunLifecycle(fake.ctx, phase(org, item, "started"));
+    const now = await reload(item);
+    await assign(db, org, OWNER, item.id, now.version, {
+      responsibleAccountId: ENGINEER.accountId,
+      executingAgentId: null,
+    });
+    const after = await reload(item);
+    expect(after.agent_state).toBeNull();
+    expect(after.agent_conversation_id).toBeNull();
+  });
+
+  it("offer_declined marks declined", async () => {
+    const org = "org-life-5";
+    const item = await assigned(org, "LFE");
+    const fake = noticeCtx(db, {});
+    const offer = declined(org, item, "declined");
+    await onRunLifecycle(fake.ctx, offer);
+    await onRunLifecycle(fake.ctx, offer);
+    const now = await reload(item);
+    expect(now.agent_state).toBe("declined");
+    expect(now.executing_agent_id).toBe("agent-eng");
+    const entries = await db
+      .selectFrom("activity")
+      .selectAll()
+      .where("item_id", "=", item.id)
+      .where("kind", "=", "agent_declined")
+      .execute();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.detail).toEqual({
+      accountId: ENGINEER.accountId,
+      agentId: "agent-eng",
+      reason: "declined",
+    });
+    expect(fake.invalidations).toContainEqual({ orgId: org, contribution: "projects" });
+  });
+
+  it("an undelivered offer takes the agent off; the person keeps the item", async () => {
+    const org = "org-life-6";
+    const item = await assigned(org, "LFF");
+    const fake = noticeCtx(db, {});
+    const undelivered = declined(org, item, "undelivered");
+    await onRunLifecycle(fake.ctx, undelivered);
+    await onRunLifecycle(fake.ctx, undelivered);
+    const now = await reload(item);
+    expect(now.responsible_account_id).toBe(ENGINEER.accountId);
+    expect(now.executing_agent_id).toBeNull();
+    expect(now.version).toBe(item.version + 1);
+    const kinds = (
+      await db.selectFrom("activity").select("kind").where("item_id", "=", item.id).execute()
+    ).map((a) => a.kind);
+    expect(kinds.filter((k) => k === "agent_declined")).toHaveLength(1);
+    expect(kinds.filter((k) => k === "assigned")).toHaveLength(2);
+    const types = (await outboxOf(db, org, item.id)).map((r) => r.type);
+    expect(types).toContain("item.unassigned");
+  });
+
+  it("an offer declined for a pair that no longer has the item is ignored", async () => {
+    const org = "org-life-7";
+    const item = await assigned(org, "LFG");
+    const fake = noticeCtx(db, {});
+    await onRunLifecycle(fake.ctx, declined(org, item, "off", "agent-old"));
+    expect((await reload(item)).agent_state).toBeNull();
+  });
+
+  it("a late finished after a decline keeps declined; a new run clears it", async () => {
+    const org = "org-life-8";
+    const item = await assigned(org, "LFH");
+    const fake = noticeCtx(db, {});
+    await onRunLifecycle(fake.ctx, declined(org, item, "declined"));
+    fake.conversations.set(item.id, [conv("idle")]);
+    await onRunLifecycle(fake.ctx, phase(org, item, "finished"));
+    expect((await reload(item)).agent_state).toBe("declined");
+    fake.conversations.set(item.id, [conv("running")]);
+    await onRunLifecycle(fake.ctx, phase(org, item, "started"));
+    expect((await reload(item)).agent_state).toBe("working");
+  });
+
+  it("the state is the pair's newest conversation, whatever conversation the event names", async () => {
+    const org = "org-life-9";
+    const item = await assigned(org, "LFI");
+    const fake = noticeCtx(db, {});
+    // Newest first: the pair works in conv-new; conv-work is an older, idle one.
+    fake.conversations.set(item.id, [conv("running", { id: "conv-new" }), conv("idle")]);
+    await onRunLifecycle(fake.ctx, phase(org, item, "finished", { conversationId: "conv-work" }));
+    const now = await reload(item);
+    expect(now.agent_state).toBe("working");
+    expect(now.agent_conversation_id).toBe("conv-new");
+  });
+
+  it("a stale decline after a re-assignment of the same pair is ignored; the current one applies", async () => {
+    const org = "org-life-10";
+    const first = await assigned(org, "LFJ");
+    const off = await assign(db, org, OWNER, first.id, first.version, {
+      responsibleAccountId: ENGINEER.accountId,
+      executingAgentId: null,
+    });
+    const again = await assign(db, org, OWNER, first.id, off.version, {
+      responsibleAccountId: ENGINEER.accountId,
+      executingAgentId: "agent-eng",
+    });
+    const keys = (await outboxOf(db, org, first.id))
+      .filter((r) => r.type === "item.assigned")
+      .map((r) => r.dedupe_key);
+    expect(keys).toEqual([
+      `item.assigned-${first.id}-${first.version}`,
+      `item.assigned-${first.id}-${again.version}`,
+    ]);
+    expect(again.assigned_version).toBe(again.version);
+    const fake = noticeCtx(db, {});
+    for (const reason of ["declined", "undelivered"] as const) {
+      await onRunLifecycle(fake.ctx, {
+        ...declined(org, first, reason),
+        dedupeKey: keys[0] as string,
+      });
+    }
+    let now = await reload(first);
+    expect(now.agent_state).toBeNull();
+    expect(now.executing_agent_id).toBe("agent-eng");
+    expect(fake.invalidations).toHaveLength(0);
+
+    await onRunLifecycle(fake.ctx, {
+      ...declined(org, first, "declined"),
+      dedupeKey: keys[1] as string,
+    });
+    now = await reload(first);
+    expect(now.agent_state).toBe("declined");
+    // Another kind of key (or none) keeps today's behavior: the decline applies.
+    await onRunLifecycle(fake.ctx, {
+      ...declined(org, first, "undelivered"),
+      dedupeKey: `decision.answered-${first.id}-x`,
+    });
+    expect((await reload(first)).executing_agent_id).toBeNull();
+  });
+});

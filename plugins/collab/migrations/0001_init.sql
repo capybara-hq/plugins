@@ -1,0 +1,240 @@
+-- Runs with search_path "plugin_collab, public": table names carry no schema prefix.
+-- Ids from the kernel (org, account, agent, conversation) are stored as text. Every table has
+-- org_id; every query filters it. Actor JSON: {"accountId"} or {"accountId","agentId","conversationId"}.
+
+CREATE TABLE IF NOT EXISTS projects (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id text NOT NULL,
+  key text NOT NULL,
+  name text NOT NULL,
+  description text NOT NULL DEFAULT '',
+  archived boolean NOT NULL DEFAULT false,
+  next_item_number integer NOT NULL DEFAULT 1,
+  owner_account_id text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS projects_org_key ON projects (org_id, key);
+
+CREATE TABLE IF NOT EXISTS project_members (
+  org_id text NOT NULL,
+  project_id uuid NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+  account_id text NOT NULL,
+  role text NOT NULL CHECK (role IN ('owner', 'member', 'guest')),
+  function_label text,
+  -- The member's agent a default assignment with `memberAgent` hands the item to.
+  default_agent_id text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, account_id)
+);
+CREATE INDEX IF NOT EXISTS project_members_org_account ON project_members (org_id, account_id);
+
+CREATE TABLE IF NOT EXISTS workflows (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id text NOT NULL,
+  project_id uuid NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+  item_type text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS workflows_project_type ON workflows (project_id, item_type);
+
+CREATE TABLE IF NOT EXISTS statuses (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id text NOT NULL,
+  workflow_id uuid NOT NULL REFERENCES workflows (id) ON DELETE CASCADE,
+  key text NOT NULL,
+  name_zh text NOT NULL,
+  name_en text NOT NULL,
+  category text NOT NULL CHECK (category IN ('backlog', 'todo', 'in_progress', 'review', 'done', 'canceled')),
+  position integer NOT NULL DEFAULT 0,
+  next_keys text[],
+  gate jsonb,
+  default_assignment jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS statuses_workflow_key ON statuses (workflow_id, key);
+
+CREATE TABLE IF NOT EXISTS item_types (
+  org_id text NOT NULL,
+  project_id uuid NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+  key text NOT NULL,
+  name_zh text NOT NULL,
+  name_en text NOT NULL,
+  icon text,
+  workflow_id uuid REFERENCES workflows (id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id text NOT NULL,
+  project_id uuid NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+  number integer NOT NULL,
+  type text NOT NULL,
+  title text NOT NULL,
+  description text NOT NULL DEFAULT '',
+  status_key text NOT NULL,
+  -- Who asked for the item (its creator); assignment never changes it.
+  requester_account_id text NOT NULL,
+  responsible_account_id text,
+  executing_agent_id text,
+  -- 0 none, 1 urgent, 2 high, 3 medium, 4 low.
+  priority integer NOT NULL DEFAULT 3 CHECK (priority BETWEEN 0 AND 4),
+  labels text[] NOT NULL DEFAULT '{}',
+  parent_id uuid REFERENCES items (id) ON DELETE SET NULL,
+  fields jsonb NOT NULL DEFAULT '{}'::jsonb,
+  version integer NOT NULL DEFAULT 1,
+  -- What the executing agent is doing on the item (from the kernel's run.lifecycle hook): null
+  -- until its first run or once the assignment changes. Not an edit: no version bump.
+  agent_state text CHECK (agent_state IN ('working', 'waiting', 'idle', 'declined')),
+  -- The work conversation the state was read from (the pair's subject conversation).
+  agent_conversation_id text,
+  agent_state_at timestamptz,
+  -- The item version of the write that last changed the (person, agent) pair: the version in the
+  -- dedupe key of the pair's item.assigned event, so a decline of an older offer is told apart.
+  assigned_version integer NOT NULL DEFAULT 1,
+  closed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS items_project_number ON items (project_id, number);
+CREATE INDEX IF NOT EXISTS items_org_responsible ON items (org_id, responsible_account_id);
+CREATE INDEX IF NOT EXISTS items_org_agent ON items (org_id, executing_agent_id);
+CREATE INDEX IF NOT EXISTS items_parent ON items (parent_id);
+CREATE INDEX IF NOT EXISTS items_org_project_status ON items (org_id, project_id, status_key);
+-- The conversation panels find the item a conversation serves by its last work conversation.
+CREATE INDEX IF NOT EXISTS items_org_agent_conversation ON items (org_id, agent_conversation_id)
+  WHERE agent_conversation_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS item_links (
+  org_id text NOT NULL,
+  from_id uuid NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+  to_id uuid NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+  kind text NOT NULL CHECK (kind IN ('blocks', 'relates', 'duplicates')),
+  CHECK (from_id <> to_id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (from_id, to_id, kind)
+);
+CREATE INDEX IF NOT EXISTS item_links_to ON item_links (to_id);
+
+CREATE TABLE IF NOT EXISTS comments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id text NOT NULL,
+  item_id uuid NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+  author jsonb NOT NULL,
+  body text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS comments_item ON comments (item_id, created_at);
+
+CREATE TABLE IF NOT EXISTS activity (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id text NOT NULL,
+  item_id uuid NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+  actor jsonb NOT NULL,
+  kind text NOT NULL,
+  detail jsonb NOT NULL DEFAULT '{}'::jsonb,
+  -- For entries that owe an inbox notice (assigned, handoff_unresolved, created with a
+  -- responsible person): when it was decided
+  -- (posted, not owed, or given up after a day). Null = still owed.
+  notified_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS activity_item ON activity (item_id, created_at);
+-- Notices still owed: the request path posts its own write's, the org drain job the rest.
+CREATE INDEX IF NOT EXISTS activity_unnotified ON activity (org_id, created_at)
+  WHERE notified_at IS NULL AND kind IN ('assigned', 'handoff_unresolved', 'created');
+-- The item a conversation serves (the conversation panels): agent writes by conversation.
+CREATE INDEX IF NOT EXISTS activity_conversation ON activity (org_id, (actor->>'conversationId'))
+  WHERE actor ? 'conversationId';
+
+CREATE TABLE IF NOT EXISTS artifacts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id text NOT NULL,
+  item_id uuid NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+  kind text NOT NULL,
+  name text NOT NULL,
+  version integer NOT NULL DEFAULT 1,
+  -- An http(s) link (stored files are a follow-up).
+  url text NOT NULL,
+  author jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS artifacts_item ON artifacts (item_id, created_at);
+
+CREATE TABLE IF NOT EXISTS decisions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id text NOT NULL,
+  item_id uuid NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+  kind text NOT NULL CHECK (kind IN ('question', 'gate')),
+  asker jsonb NOT NULL,
+  addressee_account_id text NOT NULL,
+  question text NOT NULL,
+  options jsonb NOT NULL DEFAULT '[]'::jsonb,
+  recommendation jsonb,
+  blocking boolean NOT NULL DEFAULT false,
+  state text NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'answered', 'canceled', 'expired')),
+  answer jsonb,
+  deadline_at timestamptz,
+  gate_target text,
+  -- A gate: the status the item was in when the move was requested. The gate is stale (canceled)
+  -- once the item is neither there nor at gate_target.
+  gate_from text,
+  -- Bumped each time the decision is re-addressed (addressee removed, demoted, confirmer changed):
+  -- its notify job id carries it.
+  address_gen integer NOT NULL DEFAULT 0,
+  -- Inbox items of earlier addressees, resolved by the next notify and when the decision closes.
+  stale_inbox_item_ids text[] NOT NULL DEFAULT '{}',
+  -- The inbox items posted for the decision (the addressee's, the reminder, the escalation), all
+  -- resolved once it is answered.
+  inbox_item_ids text[] NOT NULL DEFAULT '{}',
+  -- Everyone the decision is addressed to now, sorted: the addressee of a question, every
+  -- confirmer of a gate. A re-address compares this set with the computed one.
+  addressees text[] NOT NULL DEFAULT '{}',
+  -- The inbox items of each recipient by step: { "<accountId>": { "notify": id, "remind": id } }.
+  -- A recipient who leaves the set has theirs resolved; a newcomer gets a notice.
+  inbox_by_account jsonb NOT NULL DEFAULT '{}'::jsonb,
+  -- When the addressee's inbox item, the deadline reminder and the escalation to the project owner
+  -- were posted: each is posted once (the jobs that post them run at least once).
+  notified_at timestamptz,
+  reminded_at timestamptz,
+  escalated_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  answered_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS decisions_item ON decisions (item_id, created_at);
+CREATE INDEX IF NOT EXISTS decisions_item_open ON decisions (item_id) WHERE state = 'open';
+CREATE INDEX IF NOT EXISTS decisions_addressee_open ON decisions (org_id, addressee_account_id) WHERE state = 'open';
+
+-- Events owed to ctx.triggers.emit, written in the transaction of the change they describe.
+-- The summary is rendered when the event is emitted (with people's and agents' names) from
+-- `detail`: the item key and title plus what changed (excerpts already cut to 500 characters).
+CREATE TABLE IF NOT EXISTS event_outbox (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id text NOT NULL,
+  type text NOT NULL,
+  subject jsonb NOT NULL,
+  facts jsonb NOT NULL DEFAULT '{}'::jsonb,
+  detail jsonb NOT NULL DEFAULT '{}'::jsonb,
+  dedupe_key text NOT NULL,
+  audience jsonb,
+  -- Who made the change (Actor JSON); its accountId is the cause of a UI write.
+  actor jsonb NOT NULL,
+  -- The kernel's cause handle of the tool call behind the change (ctx.triggers.causeOf, valid
+  -- 24 h); null for a person's own write.
+  cause_handle text,
+  emitted_at timestamptz,
+  -- Set when the event can never be emitted (refused for good, or older than a day): logged, kept
+  -- for 30 days, never retried.
+  failed_at timestamptz,
+  -- Emit attempts that failed (a counter for logs; no cutoff).
+  attempts integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS event_outbox_dedupe ON event_outbox (org_id, dedupe_key);
+CREATE INDEX IF NOT EXISTS event_outbox_pending ON event_outbox (org_id, created_at)
+  WHERE emitted_at IS NULL AND failed_at IS NULL;
+CREATE INDEX IF NOT EXISTS event_outbox_settled ON event_outbox (org_id, emitted_at)
+  WHERE emitted_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS event_outbox_failed ON event_outbox (org_id, failed_at)
+  WHERE failed_at IS NOT NULL;
