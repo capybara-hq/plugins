@@ -893,7 +893,7 @@
     },
     {
       "name": "device-local",
-      "version": "0.1.0-rc.13",
+      "version": "0.1.0-rc.14",
       "summary": {
         "en": "Devices on people's own computers: a machine connected with capybara-device serves the device over the dial-in channel, and its owner limits it there",
         "zh": "在自己的电脑上使用设备：用 capybara-device 连接的电脑通过拨入通道为设备服务，由电脑的所有者在本机限制它"
@@ -916,8 +916,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-device-local",
-          "version": "0.1.0-rc.13",
-          "integrity": "sha512-gZOI8bmP5sfADZkEbB1nuPf+32qVFNJm92RyiFuLhiNNluLWN5ABy4DJehvjFy6bgs+J5Jhu88byfDt0EIrlww=="
+          "version": "0.1.0-rc.14",
+          "integrity": "sha512-xWvt9cpAuSaZdfc/l6m9g8hGqNRV+YUfwzsaAMGMohLbtauTsdgKaYFqGowsjC8/6ggbftBon6h2BnWld6ZoZA=="
         }
       }
     },
@@ -948,7 +948,7 @@
     },
     {
       "name": "browser",
-      "version": "0.1.0-rc.19",
+      "version": "0.1.0-rc.20",
       "summary": {
         "en": "A real browser in the conversation owner's device for agents: navigate, read and act on pages through tools, with a live view in the conversation panel and takeover by the person",
         "zh": "在对话所有者的设备中为智能体运行真实浏览器：通过工具打开、读取和操作网页，在对话面板中实时查看，并可由本人接管"
@@ -961,8 +961,12 @@
       "homepage": "https://github.com/capybara-hq/plugins/tree/main/plugins/browser#readme",
       "permissions": {
         "keys": [
+          "permissions.deviceaccess.loopbackports",
           "permissions.deviceaccess:browser",
+          "permissions.http.embed:GET /ui/loopback-ports",
           "permissions.http.embed:POST /ui/handoff-answer",
+          "permissions.http.embed:POST /ui/loopback-ports",
+          "permissions.http.embed:POST /ui/loopback-ports/revoke",
           "permissions.http.embed:POST /ui/network-hosts",
           "permissions.http.embed:POST /ui/stream-ticket",
           "permissions.http.public:GET /ui/browser",
@@ -986,8 +990,12 @@
           "ui.embed:browser"
         ],
         "sensitive": [
+          "permissions.deviceaccess.loopbackports",
           "permissions.deviceaccess:browser",
+          "permissions.http.embed:GET /ui/loopback-ports",
           "permissions.http.embed:POST /ui/handoff-answer",
+          "permissions.http.embed:POST /ui/loopback-ports",
+          "permissions.http.embed:POST /ui/loopback-ports/revoke",
           "permissions.http.embed:POST /ui/network-hosts",
           "permissions.http.embed:POST /ui/stream-ticket",
           "permissions.http.public:GET /ui/browser",
@@ -1014,14 +1022,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-browser",
-          "version": "0.1.0-rc.19",
-          "integrity": "sha512-04+50nmaTlQjr2WiBARxG9ziDGrZVLIWWvZn8TM9F0BzlryK8HHbBb3j+dEQlyTHweLl7Nft6ueJ1PRYdTa9RA=="
+          "version": "0.1.0-rc.20",
+          "integrity": "sha512-jaDpdeW2+6iXjaApDCaAXEFyCT+fwWsYDjn7z3vXf0gFRTPbQTXDsdHisxiJZPTCFJ+53yKwUd/3wH7qTK9/OA=="
         }
       }
     },
     {
       "name": "collab",
-      "version": "0.1.0-rc.2",
+      "version": "0.1.0-rc.3",
       "summary": {
         "en": "Project tracker for people and agents: projects, requirements, tasks and bugs with workflows, confirmation steps, decisions and artifacts, assigned to a person and an agent",
         "zh": "人与智能体共用的项目协作：项目、需求、任务和缺陷，带工作流、确认步骤、决策与产物，可同时指派给成员和智能体"
@@ -1053,6 +1061,7 @@
           "permissions.tools:item_update",
           "permissions.tools:project_create",
           "permissions.tools:project_list",
+          "permissions.tools:watch_item",
           "permissions.triggers:decision.answered",
           "permissions.triggers:gate.requested",
           "permissions.triggers:item.assigned",
@@ -1070,6 +1079,7 @@
           "table:event_outbox",
           "table:item_links",
           "table:item_types",
+          "table:item_watchers",
           "table:items",
           "table:project_members",
           "table:projects",
@@ -1096,6 +1106,7 @@
           "permissions.tools:item_update",
           "permissions.tools:project_create",
           "permissions.tools:project_list",
+          "permissions.tools:watch_item",
           "ui.component:agent-items",
           "ui.component:item-panel",
           "ui.component:item-properties",
@@ -1105,8 +1116,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-collab",
-          "version": "0.1.0-rc.2",
-          "integrity": "sha512-yVEuDhr3+YF+vWCJ6+IFJjL5zYVbBkEyfi+FR9ZlFPw3FT5GDT1JXXsvkCtHGOASzI5uu/8eTV/dmA+wjHAf3w=="
+          "version": "0.1.0-rc.3",
+          "integrity": "sha512-uQd4vMa5im98pz+w4lJowi3Ol52PCBk23ZgH3SbuRukjylsBoC3+7GGMGDFkVnPQICsnBbAwdUmiVKjFKLxJig=="
         }
       }
     }

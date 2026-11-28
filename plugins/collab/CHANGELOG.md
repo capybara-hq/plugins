@@ -1,5 +1,11 @@
 # @capybara-hq/plugin-collab
 
+## 0.1.0-rc.3
+
+### Patch Changes
+
+- 0a2feb8: Follow and unfollow collab items from the item page or with an agent tool. Watchers receive bilingual inbox notices for status changes, comments, and decision answers. Item events expose a filterable watcher list.
+
 ## 0.1.0-rc.2
 
 ### Patch Changes
