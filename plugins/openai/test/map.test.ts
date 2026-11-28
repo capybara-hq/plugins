@@ -535,7 +535,7 @@ describe("buildRequest: media blocks", () => {
             user({
               type: "document",
               mediaType: "application/pdf",
-              source: { kind: "ref", attachmentId: "3f2b9a52-1c1e-4b7e-9d0a-2f7c1e0b6a11" },
+              source: { kind: "ref", fileId: "3f2b9a52-1c1e-4b7e-9d0a-2f7c1e0b6a11" },
             }),
           ],
         }),
