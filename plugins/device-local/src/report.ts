@@ -366,6 +366,8 @@ export function supportOf(
     return closedSupport("The machine has not said hello yet; connect it with capybara-device");
   const owner = ownerFactsOf(c.ownerReport);
   const { limitedBy: _attested, ...attested } = b.installed.permissionSupport;
+  // loopback ports follow the hello feature only: a machine's own claim is never reported
+  const { loopbackPorts: _claimed, ...attestedNetwork } = attested.network;
   const ownerOpen = owner.state === "report" && owner.network === "open";
   // a crossing the machine could give but the owner's ceiling (or its missing facts) keeps closed
   // names the owner, so the kernel says who changes it
@@ -381,7 +383,7 @@ export function supportOf(
     // never wider than the owner allows now (a ceiling change since the binding narrows it)
     outsideSandbox,
     network: {
-      ...attested.network,
+      ...attestedNetwork,
       // the open public internet only while the owner's sandbox network is open (an allowlist,
       // or blocked or missing facts, narrow every command's egress on the machine)
       openPublic: attested.network.openPublic && ownerOpen,

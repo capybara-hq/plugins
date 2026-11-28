@@ -254,6 +254,31 @@ describe("loopback port support", () => {
     expect(s.limitedBy).toBeUndefined();
   });
 
+  it("never reports a machine's own loopbackPorts claim without the feature", () => {
+    const claims = bindingWith({
+      ...outside,
+      network: { ...outside.network, loopbackPorts: true },
+    });
+    const linux = { ...mac(["networkReport", "projects"]), home: "/home/me" };
+    expect(supportOf(handle, linux, claims).network).toEqual(SUPPORT.network);
+    const old = supportOf(handle, mac(["networkReport", "projects"]), claims);
+    expect(old.network.loopbackPorts).toBeUndefined();
+    expect(old.limitedBy).toEqual({ loopbackPorts: "device-update" });
+  });
+
+  it("moves the report revision when the feature appears or disappears", () => {
+    const without = mac(["networkReport", "projects"]);
+    const withIt = mac(["networkReport", "projects", "loopbackPorts"]);
+    const base = deviceReportOf(without, binding).revision;
+    expect(deviceReportOf(withIt, binding).revision).not.toBe(base);
+    // gone again: back to the revision of a machine that never announced it
+    expect(
+      deviceReportOf({ ...withIt, features: ["networkReport", "projects"] }, binding).revision,
+    ).toBe(base);
+    // another feature leaves it as it was
+    expect(deviceReportOf({ ...without, features: ["projects"] }, binding).revision).toBe(base);
+  });
+
   it("a Linux or Docker machine without the feature reports as before", () => {
     const linux = { ...mac(["networkReport", "projects"]), home: "/home/me" };
     const s = supportOf(handle, linux, binding);
