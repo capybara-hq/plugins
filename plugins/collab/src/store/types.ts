@@ -171,6 +171,9 @@ export interface DecisionsTable {
   answer: Json<unknown> | null;
   deadline_at: Date | null;
   gate_target: string | null;
+  gate_from: string | null;
+  address_gen: Generated<number>;
+  stale_inbox_item_ids: Generated<string[]>;
   inbox_item_ids: Generated<string[]>;
   notified_at: Date | null;
   reminded_at: Date | null;

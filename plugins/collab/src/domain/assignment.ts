@@ -2,6 +2,7 @@ import { outboxFor } from "../events/outbox.js";
 import type { CollabDb } from "../store/db.js";
 import type { Actor, Item, Status } from "../store/types.js";
 import { requireRole } from "./access.js";
+import { type DecisionHooks, readdressOpen } from "./decision-state.js";
 import { CollabError } from "./errors.js";
 import { addActivity, checkVersion, loadItem, loadProject, writeItem } from "./internal.js";
 import { defaultAssignmentOf, statusesForType } from "./workflow.js";
@@ -141,6 +142,8 @@ export async function assign(
   itemId: string,
   version: number,
   target: { responsibleAccountId: string; executingAgentId: string | null },
+  /** Needed when the new responsible person changes a gate's confirmer (see readdressOpen). */
+  decisions?: DecisionHooks,
 ): Promise<Item> {
   return db.transaction().execute(async (tx) => {
     const item = await loadItem(tx, orgId, itemId);
@@ -160,6 +163,7 @@ export async function assign(
       projectKey: project.key,
       statusCategory: category,
     });
+    await readdressOpen(tx, orgId, { itemId: item.id }, decisions);
     return after;
   });
 }

@@ -2,6 +2,7 @@ import type { CollabDb } from "../store/db.js";
 import type { Actor, Project, ProjectMember, ProjectRole } from "../store/types.js";
 import { requireRole } from "./access.js";
 import { recordAssignment } from "./assignment.js";
+import { type DecisionHooks, readdressOpen } from "./decision-state.js";
 import { CollabError } from "./errors.js";
 import { loadProject, writeItem } from "./internal.js";
 import { seedProject } from "./seed.js";
@@ -80,6 +81,8 @@ export async function addMember(
   projectId: string,
   accountId: string,
   input: { role: ProjectRole; functionLabel?: string | null; defaultAgentId?: string | null },
+  /** Needed when a role or label change moves open decisions to another person. */
+  decisions?: DecisionHooks,
 ): Promise<ProjectMember> {
   return db.transaction().execute(async (tx) => {
     await requireRole(tx, orgId, actor.accountId, projectId, "owner");
@@ -93,7 +96,7 @@ export async function addMember(
         : {}),
       ...(input.defaultAgentId !== undefined ? { default_agent_id: input.defaultAgentId } : {}),
     };
-    return tx
+    const member = await tx
       .insertInto("project_members")
       .values({
         org_id: orgId,
@@ -109,6 +112,9 @@ export async function addMember(
       )
       .returningAll()
       .executeTakeFirstOrThrow();
+    // A demotion to guest (or a new label) can change who answers open decisions.
+    await readdressOpen(tx, orgId, { projectId }, decisions);
+    return member;
   });
 }
 
@@ -122,6 +128,8 @@ export async function removeMember(
   actor: Actor,
   projectId: string,
   accountId: string,
+  /** Needed when the person had open decisions to answer (they go to the project owner). */
+  decisions?: DecisionHooks,
 ): Promise<void> {
   await db.transaction().execute(async (tx) => {
     await requireRole(tx, orgId, actor.accountId, projectId, "owner");
@@ -155,6 +163,7 @@ export async function removeMember(
         statusCategory: statuses.find((s) => s.key === item.status_key)?.category ?? "todo",
       });
     }
+    await readdressOpen(tx, orgId, { projectId }, decisions);
   });
 }
 
@@ -170,6 +179,8 @@ export async function setFunction(
   projectId: string,
   accountId: string,
   input: { functionLabel?: string | null; defaultAgentId?: string | null },
+  /** Needed when a label change moves open function-gate decisions to another person. */
+  decisions?: DecisionHooks,
 ): Promise<ProjectMember> {
   return db.transaction().execute(async (tx) => {
     const self = accountId === actor.accountId;
@@ -193,6 +204,9 @@ export async function setFunction(
       .returningAll()
       .executeTakeFirst();
     if (!row) throw new CollabError("not_found", "That person is not a member of the project.");
+    if (input.functionLabel !== undefined) {
+      await readdressOpen(tx, orgId, { projectId }, decisions);
+    }
     return row;
   });
 }

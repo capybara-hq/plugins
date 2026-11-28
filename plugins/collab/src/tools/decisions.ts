@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ToolSpec } from "@capybara-hq/plugin-sdk";
-import { notifyNow, queueDeadline, queueNotify } from "../decisions-queue.js";
+import { decisionHooks, queueDeadline } from "../decisions-queue.js";
 import { askDecision, type DecisionOption } from "../domain/decisions.js";
 import { CollabError } from "../domain/errors.js";
 import type { DecisionState } from "../store/types.js";
@@ -83,7 +83,11 @@ const DECISION_ASK: ToolSpec = {
         items: {
           type: "object",
           properties: {
-            id: { type: "string", description: "A short id: letters, digits, _ or -." },
+            id: {
+              type: "string",
+              description:
+                "A short id: starts with a letter or digit, then letters, digits, _ or - (at most 32).",
+            },
             label: { type: "string", maxLength: 100, description: "What the person picks." },
           },
           required: ["id", "label"],
@@ -164,7 +168,7 @@ export function registerDecisionTools(deps: ToolDeps): void {
       // Intent first: the decision's jobs are queued before it is written (a rolled-back write
       // leaves them nothing to do).
       const id = randomUUID();
-      await queueNotify(ctx, call.orgId, id);
+      const follow = decisionHooks(ctx, call.orgId);
       if (deadlineHours !== undefined && deadlineHours > 0 && deadlineHours <= 720) {
         await queueDeadline(ctx, call.orgId, id, deadlineHours);
       }
@@ -182,16 +186,22 @@ export function registerDecisionTools(deps: ToolDeps): void {
             addressee,
             deadlineHours,
           },
-          { id, guard: stillAssignedGuard(deps, call) },
+          { id, guard: stillAssignedGuard(deps, call), decisions: follow.hooks },
         ),
       );
-      await notifyNow(ctx, call.orgId, decision.id);
+      await follow.flush();
       const names = await namesOf(deps, call.orgId, [decision.addressee_account_id]);
       const who = names.get(decision.addressee_account_id) ?? decision.addressee_account_id;
       const key = keyOf(project.key, item);
       const next = blocking
         ? "Stop work that depends on this answer; the answer will arrive in this conversation."
         : "Proceed with the recommended option; the answer will arrive in this conversation.";
+      if (decision.id !== id) {
+        return result(
+          `You already asked ${who} this on ${key}; it is still open (decision ${decision.id}). ${next}`,
+          { zh: `已询问过 ${who}`, en: `Already asked ${who}` },
+        );
+      }
       return result(`Asked ${who}. ${next} (decision ${decision.id} on ${key})`, {
         zh: `已询问 ${who}`,
         en: `Asked ${who}`,

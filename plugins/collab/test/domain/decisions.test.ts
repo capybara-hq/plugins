@@ -7,22 +7,34 @@ import type {
   ToolSpec,
   UiActionResult,
 } from "@capybara-hq/plugin-sdk";
+import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   DECISIONS_QUEUE,
   type DecisionJob,
+  decisionHooks,
   INBOX_ANSWER,
   registerDecisionQueue,
   runDecisionJob,
 } from "../../src/decisions-queue.js";
 import "../../src/decisions/actions.js";
-import { askDecision } from "../../src/domain/decisions.js";
+import { type AskDecisionInput, askDecision } from "../../src/domain/decisions.js";
 import { createItem, transition } from "../../src/domain/items.js";
+import { addMember, removeMember } from "../../src/domain/projects.js";
 import type { CollabDb } from "../../src/store/db.js";
-import type { Decision, Item, Project } from "../../src/store/types.js";
+import type { Actor, Decision, Item, Project } from "../../src/store/types.js";
 import { registerTools } from "../../src/tools/index.js";
 import { dispatchAction } from "../../src/ui/actions.js";
-import { domainDb, ENGINEER, OWNER, OWNER_AGENT, outboxOf, teamProject } from "./setup.js";
+import {
+  domainDb,
+  ENGINEER,
+  NO_DECISION_JOBS,
+  OWNER,
+  OWNER_AGENT,
+  outboxOf,
+  QA,
+  teamProject,
+} from "./setup.js";
 
 const ORG = "org-decisions";
 const DEC_ASK = "decision_ask";
@@ -40,6 +52,7 @@ function fakeCtx(db: CollabDb) {
   const inbox: Posted[] = [];
   const tools = new Map<string, { spec: ToolSpec; handler: ToolHandler }>();
   let n = 0;
+  const refuse: { code?: string } = {};
   const ctx = {
     db,
     log: { info() {}, warn() {}, error() {} },
@@ -53,6 +66,7 @@ function fakeCtx(db: CollabDb) {
     },
     inbox: {
       post: async (p: InboxPost) => {
+        if (refuse.code) throw Object.assign(new Error("refused"), { code: refuse.code });
         const open = inbox.find(
           (i) => !i.resolved && i.accountId === p.accountId && i.dedupeKey === p.dedupeKey,
         );
@@ -91,7 +105,10 @@ function fakeCtx(db: CollabDb) {
   registerTools(ctx);
   return {
     ctx,
+    refuse,
     jobs,
+    /** The decision hooks of one write, as the tools and actions build them. */
+    follow: () => decisionHooks(ctx, ORG),
     inbox,
     tools,
     /** Runs a queued job's handler, like the queue would (at least once). */
@@ -172,6 +189,9 @@ describe("decisions and gates", () => {
   }
 
   const keyOf = (item: Item) => `DEC-${item.number}`;
+  /** Asks directly in the domain (no inbox jobs: these tests click the answer themselves). */
+  const ask = (actor: Actor, input: AskDecisionInput) =>
+    askDecision(db, ORG, actor, input, { decisions: NO_DECISION_JOBS });
 
   it("answer emits decision.answered directed to the asking agent", async () => {
     const f = fakeCtx(db);
@@ -245,7 +265,7 @@ describe("decisions and gates", () => {
     expect([...f.tools.keys()]).toContain(DEC_ASK);
 
     const item = await ownersTask();
-    const decision = await askDecision(db, ORG, OWNER_AGENT, {
+    const decision = await ask(OWNER_AGENT, {
       itemId: item.id,
       question: "Ship on Friday?",
       options: [
@@ -273,7 +293,7 @@ describe("decisions and gates", () => {
   it("a person's own question is answered as an item update (no asking agent)", async () => {
     const f = fakeCtx(db);
     const item = await ownersTask();
-    const decision = await askDecision(db, ORG, ENGINEER, {
+    const decision = await ask(ENGINEER, {
       itemId: item.id,
       question: "OK?",
       options: [{ id: "ok", label: "OK" }],
@@ -321,7 +341,7 @@ describe("decisions and gates", () => {
       // Only the confirmer may answer.
       const payload = { decisionId: id, optionId: choice };
       expect(await f.click(ENGINEER.accountId, payload)).toMatchObject({
-        toast: { en: "Not answered: Only the gate's confirmer can answer it." },
+        toast: { zh: "只有闸门的确认人可以答复。", en: "Only the gate's confirmer can answer it." },
       });
       expect(await f.click(OWNER.accountId, payload)).toMatchObject({
         toast: { en: "Answered." },
@@ -406,7 +426,7 @@ describe("decisions and gates", () => {
   it("deadline jobs skip an answered decision and one that was never written", async () => {
     const f = fakeCtx(db);
     const item = await ownersTask();
-    const decision = await askDecision(db, ORG, OWNER_AGENT, {
+    const decision = await ask(OWNER_AGENT, {
       itemId: item.id,
       question: "Now?",
       options: [{ id: "y", label: "Y" }],
@@ -423,5 +443,312 @@ describe("decisions and gates", () => {
       step: "notify",
     });
     expect(f.inbox).toHaveLength(0);
+  });
+
+  it("a gate the item moved past is canceled at answer time, nothing moves", async () => {
+    const f = fakeCtx(db);
+    const item = await requirementInReview();
+    const out = await f.tool(DEC_TRANSITION, {
+      key: keyOf(item),
+      to: "ready",
+      version: item.version,
+    });
+    const id = decisionIdIn(textOf(out));
+    // A move that bypassed the domain (the domain itself cancels on every move).
+    await db
+      .updateTable("items")
+      .set({ status_key: "drafting" })
+      .where("id", "=", item.id)
+      .execute();
+    expect(await f.click(OWNER.accountId, { decisionId: id, optionId: "approve" })).toEqual({
+      toast: { zh: "事项已进入其他状态。", en: "The item moved on." },
+    });
+    expect((await decisionOf(db, id)).state).toBe("canceled");
+    const now = await db
+      .selectFrom("items")
+      .selectAll()
+      .where("id", "=", item.id)
+      .executeTakeFirstOrThrow();
+    expect(now.status_key).toBe("drafting");
+    expect(f.inbox.find((i) => i.dedupeKey === id)?.resolved).toBe(true);
+  });
+
+  it("a direct move by the confirmer cancels the open gate", async () => {
+    const f = fakeCtx(db);
+    const item = await requirementInReview();
+    const out = await f.tool(DEC_TRANSITION, {
+      key: keyOf(item),
+      to: "ready",
+      version: item.version,
+    });
+    const id = decisionIdIn(textOf(out));
+    const fresh = await db
+      .selectFrom("items")
+      .selectAll()
+      .where("id", "=", item.id)
+      .executeTakeFirstOrThrow();
+    const follow = f.follow();
+    await transition(db, ORG, OWNER, item.id, fresh.version, "ready", { decisions: follow.hooks });
+    expect(f.jobs.map((j) => j.opts?.jobId)).toContain(`collab-decision-resolve-${id}`);
+    await follow.flush();
+    expect((await decisionOf(db, id)).state).toBe("canceled");
+    expect(f.inbox.find((i) => i.dedupeKey === id)?.resolved).toBe(true);
+    // A move without hooks that would cancel a gate refuses (a programming error).
+    const other = await requirementInReview();
+    await f.tool(DEC_TRANSITION, { key: keyOf(other), to: "ready", version: other.version });
+    const v = (
+      await db
+        .selectFrom("items")
+        .select("version")
+        .where("id", "=", other.id)
+        .executeTakeFirstOrThrow()
+    ).version;
+    await expect(transition(db, ORG, OWNER, other.id, v, "drafting")).rejects.toThrow(
+      /decision hooks/,
+    );
+  });
+
+  for (const how of ["removed", "demoted"] as const) {
+    it(`a ${how} addressee's question goes to the project owner, who answers`, async () => {
+      const f = fakeCtx(db);
+      const team = await teamProject(db, ORG, how === "removed" ? "DRM" : "DDM");
+      const item = await createItem(db, ORG, OWNER, {
+        projectId: team.id,
+        type: "task",
+        title: "Readdress",
+        responsibleAccountId: OWNER.accountId,
+        executingAgentId: OWNER_AGENT.agentId,
+      });
+      const out = await f.tool(DEC_ASK, {
+        key: `${team.key}-${item.number}`,
+        question: "Which database?",
+        options: [{ id: "pg", label: "PostgreSQL" }],
+        blocking: true,
+        addressee: ENGINEER.accountId,
+      });
+      const id = decisionIdIn(textOf(out));
+      const first = f.inbox.find((i) => i.dedupeKey === id);
+      expect(first?.accountId).toBe(ENGINEER.accountId);
+      // The engineer may not answer for the owner, and the owner not for the engineer yet.
+      expect(await f.click(OWNER.accountId, { decisionId: id, optionId: "pg" })).toMatchObject({
+        toast: { en: "Only the person asked can answer this decision." },
+      });
+      const follow = f.follow();
+      if (how === "removed") {
+        await removeMember(db, ORG, OWNER, team.id, ENGINEER.accountId, follow.hooks);
+      } else {
+        await addMember(
+          db,
+          ORG,
+          OWNER,
+          team.id,
+          ENGINEER.accountId,
+          { role: "guest" },
+          follow.hooks,
+        );
+      }
+      expect(f.jobs.map((j) => j.opts?.jobId)).toContain(`collab-decision-notify-${id}-1`);
+      await follow.flush();
+      const d = await decisionOf(db, id);
+      expect(d.addressee_account_id).toBe(OWNER.accountId);
+      expect(d.address_gen).toBe(1);
+      expect(first?.resolved).toBe(true);
+      const second = f.inbox.find((i) => i.dedupeKey === `${id}-1`);
+      expect(second).toMatchObject({ accountId: OWNER.accountId, resolved: false });
+      expect(await f.click(OWNER.accountId, second?.actions?.[0]?.uiAction.payload)).toMatchObject({
+        toast: { en: "Answered." },
+      });
+    });
+  }
+
+  it("a reminder goes to the addressee computed at that moment", async () => {
+    const f = fakeCtx(db);
+    const team = await teamProject(db, ORG, "DRR");
+    const item = await createItem(db, ORG, OWNER, {
+      projectId: team.id,
+      type: "task",
+      title: "Remind fresh",
+    });
+    const decision = await ask(OWNER, {
+      itemId: item.id,
+      question: "Go?",
+      options: [{ id: "go", label: "Go" }],
+      blocking: false,
+      addressee: QA.accountId,
+      deadlineHours: 1,
+    });
+    // Demoted behind the domain's back (no hooks ran): the reminder notices.
+    await db
+      .updateTable("project_members")
+      .set({ role: "guest" })
+      .where("project_id", "=", team.id)
+      .where("account_id", "=", QA.accountId)
+      .execute();
+    await f.run({ orgId: ORG, decisionId: decision.id, step: "remind" });
+    expect(f.inbox.map((i) => `${i.kind}:${i.accountId}`)).toEqual([
+      `collab.decision.reminder:${OWNER.accountId}`,
+    ]);
+    expect((await decisionOf(db, decision.id)).addressee_account_id).toBe(OWNER.accountId);
+  });
+
+  it("an option id the inbox would refuse is refused at ask", async () => {
+    const f = fakeCtx(db);
+    const item = await ownersTask();
+    for (const id of ["-x", "_a", "a.b", "x".repeat(33)]) {
+      await expect(
+        f.tool(DEC_ASK, {
+          key: keyOf(item),
+          question: `Bad id ${id}?`,
+          options: [{ id, label: "Bad" }],
+          blocking: false,
+        }),
+      ).rejects.toThrow(/starts with a letter or digit/);
+    }
+    expect(f.inbox).toHaveLength(0);
+  });
+
+  it("an asker has at most 5 open questions per item; the same question is not asked twice", async () => {
+    const f = fakeCtx(db);
+    const item = await ownersTask();
+    const ids: string[] = [];
+    for (let i = 1; i <= 5; i++) {
+      const out = await f.tool(DEC_ASK, { key: keyOf(item), question: `Q${i}?`, blocking: false });
+      ids.push(decisionIdIn(textOf(out)));
+    }
+    const again = await f.tool(DEC_ASK, { key: keyOf(item), question: "Q2?", blocking: false });
+    expect(textOf(again)).toContain(`You already asked`);
+    expect(decisionIdIn(textOf(again))).toBe(ids[1]);
+    await expect(
+      f.tool(DEC_ASK, { key: keyOf(item), question: "Q6?", blocking: false }),
+    ).rejects.toThrow(/5 open questions/);
+    // Another asker (the person themselves) is counted apart.
+    await ask(OWNER, { itemId: item.id, question: "Mine?", options: [], blocking: false });
+  });
+
+  it("a decision open for 30 days expires once", async () => {
+    const f = fakeCtx(db);
+    const item = await ownersTask();
+    const out = await f.tool(DEC_ASK, {
+      key: keyOf(item),
+      question: "Still needed?",
+      options: [{ id: "yes", label: "Yes" }],
+      blocking: false,
+    });
+    const id = decisionIdIn(textOf(out));
+    const job = f.jobs.find((j) => j.opts?.jobId === `collab-decision-expire-${id}`);
+    expect(job?.opts?.delayMs).toBe(30 * 24 * 3600 * 1000);
+    // Too early: nothing happens.
+    await f.run({ orgId: ORG, decisionId: id, step: "expire" });
+    expect((await decisionOf(db, id)).state).toBe("open");
+    await db
+      .updateTable("decisions")
+      .set({ created_at: sql<Date>`now() - interval '31 days'` })
+      .where("id", "=", id)
+      .execute();
+    await f.run({ orgId: ORG, decisionId: id, step: "expire" });
+    await f.run({ orgId: ORG, decisionId: id, step: "expire" });
+    expect((await decisionOf(db, id)).state).toBe("expired");
+    const activity = await db
+      .selectFrom("activity")
+      .select("kind")
+      .where("item_id", "=", item.id)
+      .where("kind", "=", "decision_expired")
+      .execute();
+    expect(activity).toHaveLength(1);
+    const rows = await outboxOf(db, ORG, item.id);
+    expect(rows.filter((r) => r.dedupe_key === `item.updated-decision-${id}`)).toHaveLength(1);
+    expect(f.inbox.every((i) => i.resolved)).toBe(true);
+    expect(await f.click(OWNER.accountId, { decisionId: id, optionId: "yes" })).toMatchObject({
+      toast: { en: "This decision expired." },
+    });
+  });
+
+  it("closing the last child asks the requester to accept the parent", async () => {
+    const f = fakeCtx(db);
+    seq += 1;
+    // The engineer asked for the requirement: they accept it.
+    let parent = await createItem(db, ORG, ENGINEER, {
+      projectId: project.id,
+      type: "requirement",
+      title: `Parent ${seq}`,
+    });
+    const follow = f.follow();
+    for (const to of ["drafting", "review", "ready", "in_progress"]) {
+      const out = await transition(db, ORG, OWNER, parent.id, parent.version, to, {
+        decisions: follow.hooks,
+      });
+      if (!("item" in out)) throw new Error("expected a move");
+      parent = out.item;
+    }
+    let child = await createItem(db, ORG, OWNER, {
+      projectId: project.id,
+      type: "task",
+      title: `Child ${seq}`,
+      parentId: parent.id,
+    });
+    for (const to of ["in_progress", "testing", "done"]) {
+      const out = await transition(db, ORG, OWNER, child.id, child.version, to, {
+        decisions: follow.hooks,
+      });
+      if (!("item" in out)) throw new Error("expected a move");
+      child = out.item;
+    }
+    await follow.flush();
+    const now = await db
+      .selectFrom("items")
+      .selectAll()
+      .where("id", "=", parent.id)
+      .executeTakeFirstOrThrow();
+    expect(now.status_key).toBe("acceptance");
+    const gate = await db
+      .selectFrom("decisions")
+      .selectAll()
+      .where("item_id", "=", parent.id)
+      .where("state", "=", "open")
+      .executeTakeFirstOrThrow();
+    expect(gate).toMatchObject({
+      kind: "gate",
+      gate_from: "acceptance",
+      gate_target: "done",
+      addressee_account_id: ENGINEER.accountId,
+    });
+    const posted = f.inbox.find((i) => i.dedupeKey === gate.id);
+    expect(posted?.accountId).toBe(ENGINEER.accountId);
+    expect(
+      await f.click(ENGINEER.accountId, { decisionId: gate.id, optionId: "approve" }),
+    ).toMatchObject({
+      toast: { en: "Answered." },
+    });
+    const done = await db
+      .selectFrom("items")
+      .selectAll()
+      .where("id", "=", parent.id)
+      .executeTakeFirstOrThrow();
+    expect(done.status_key).toBe("done");
+  });
+
+  it("a permanent inbox refusal marks the step done instead of retrying", async () => {
+    const f = fakeCtx(db);
+    const item = await ownersTask();
+    const decision = await ask(OWNER_AGENT, {
+      itemId: item.id,
+      question: "Refused?",
+      options: [],
+      blocking: false,
+    });
+    f.refuse.code = "org_disabled";
+    await f.run({ orgId: ORG, decisionId: decision.id, step: "notify", gen: 0 });
+    expect((await decisionOf(db, decision.id)).notified_at).not.toBeNull();
+    f.refuse.code = "unavailable";
+    const other = await ask(OWNER_AGENT, {
+      itemId: item.id,
+      question: "Transient?",
+      options: [],
+      blocking: false,
+    });
+    await expect(
+      f.run({ orgId: ORG, decisionId: other.id, step: "notify", gen: 0 }),
+    ).rejects.toThrow();
+    expect((await decisionOf(db, other.id)).notified_at).toBeNull();
   });
 });

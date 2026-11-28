@@ -1,16 +1,24 @@
 import type { ExtensionContext, InboxAction } from "@capybara-hq/plugin-sdk";
 import { PROJECTS } from "./constants.js";
-import { answerersOf, type DecisionOption } from "./domain/decisions.js";
+import type { DecisionHooks } from "./domain/decision-state.js";
+import { readdressOpen } from "./domain/decision-state.js";
+import {
+  answerersOf,
+  DECISION_EXPIRY_MS,
+  type DecisionOption,
+  expireDecision,
+} from "./domain/decisions.js";
+import { emitting } from "./events/emitter.js";
 import { itemKey } from "./events/outbox.js";
 import { type CollabDb, collabDb } from "./store/db.js";
 import type { Decision, Item, Project } from "./store/types.js";
 
-/** The queue of a decision's jobs: notify the addressee, remind at the deadline, escalate. */
+/** The queue of a decision's jobs (notify, remind, escalate, resolve, expire). */
 export const DECISIONS_QUEUE = "collab-decisions";
 /** The UI action (of the `projects` page) an inbox button calls to answer a decision. */
 export const INBOX_ANSWER = "inbox.answer";
-/** The notify job runs this long after the write: it posts only what the request path missed. */
-const NOTIFY_DELAY_MS = 30_000;
+/** The notify and resolve jobs run this long after the write: they do what the request missed. */
+const FOLLOW_UP_DELAY_MS = 30_000;
 /** The project owner hears of an unanswered decision this long after its deadline. */
 const ESCALATE_AFTER_MS = 24 * 60 * 60 * 1000;
 /** Inbox limits (`INBOX_LIMITS`): title, body and action label lengths in characters. */
@@ -20,16 +28,21 @@ const LABEL_CHARS = 40;
 /** At most this many option buttons; a decision with more is answered on its page. */
 const MAX_BUTTONS = 3;
 
-/** What the decision jobs use of `ctx`. */
-export type DecisionsCtx = Pick<ExtensionContext, "db" | "log" | "queue" | "inbox" | "people">;
+/** What the decision jobs use of `ctx` (the expiry emits its event, hence the emitter's parts). */
+export type DecisionsCtx = Pick<
+  ExtensionContext,
+  "db" | "log" | "queue" | "inbox" | "people" | "triggers" | "agents"
+>;
 
-export type DecisionStep = "notify" | "remind" | "escalate";
+export type DecisionStep = "notify" | "remind" | "escalate" | "resolve" | "expire";
 
 /** The payload of a `collab-decisions` job (`orgId` gives the job its org scope). */
 export interface DecisionJob {
   orgId: string;
   decisionId: string;
   step: DecisionStep;
+  /** notify: the address generation it posts for (a later re-address makes it moot). */
+  gen?: number;
 }
 
 /** The payload of an inbox answer button. */
@@ -38,9 +51,12 @@ export interface AnswerPayload {
   optionId: string;
 }
 
-/** A job id per decision and step, the same on every replica (a uuid has no `:`). */
-export function decisionJobId(step: DecisionStep, decisionId: string): string {
-  return `collab-decision-${step}-${decisionId}`;
+/**
+ * A job id per decision and step, the same on every replica (a uuid has no `:`); a re-address
+ * notifies under a new id (`-<gen>`), never one a finished job already has.
+ */
+export function decisionJobId(step: DecisionStep, decisionId: string, gen = 0): string {
+  return `collab-decision-${step}-${decisionId}${step === "notify" && gen > 0 ? `-${gen}` : ""}`;
 }
 
 /** Defines the `collab-decisions` queue (in `setup`). */
@@ -48,23 +64,14 @@ export function registerDecisionQueue(ctx: DecisionsCtx): void {
   ctx.queue.define<DecisionJob>(DECISIONS_QUEUE, (job) => runDecisionJob(ctx, job));
 }
 
-/**
- * Queues the decision's notify job, before the write that creates the decision (intent first: a
- * crash after the commit still notifies; a rolled-back write leaves the job nothing to do).
- */
-export async function queueNotify(
-  ctx: DecisionsCtx,
-  orgId: string,
-  decisionId: string,
-): Promise<void> {
-  await ctx.queue.add<DecisionJob>(
-    DECISIONS_QUEUE,
-    { orgId, decisionId, step: "notify" },
-    { jobId: decisionJobId("notify", decisionId), delayMs: NOTIFY_DELAY_MS },
-  );
+async function add(ctx: DecisionsCtx, job: DecisionJob, delayMs: number): Promise<void> {
+  await ctx.queue.add<DecisionJob>(DECISIONS_QUEUE, job, {
+    jobId: decisionJobId(job.step, job.decisionId, job.gen),
+    delayMs,
+  });
 }
 
-/** Queues the reminder at the deadline and the escalation a day later (before the write too). */
+/** Queues the reminder at the deadline and the escalation a day later (before the ask's write). */
 export async function queueDeadline(
   ctx: DecisionsCtx,
   orgId: string,
@@ -72,70 +79,52 @@ export async function queueDeadline(
   deadlineHours: number,
 ): Promise<void> {
   const delayMs = Math.round(deadlineHours * 3600 * 1000);
-  await ctx.queue.add<DecisionJob>(
-    DECISIONS_QUEUE,
-    { orgId, decisionId, step: "remind" },
-    { jobId: decisionJobId("remind", decisionId), delayMs },
-  );
-  await ctx.queue.add<DecisionJob>(
-    DECISIONS_QUEUE,
-    { orgId, decisionId, step: "escalate" },
-    { jobId: decisionJobId("escalate", decisionId), delayMs: delayMs + ESCALATE_AFTER_MS },
-  );
+  await add(ctx, { orgId, decisionId, step: "remind" }, delayMs);
+  await add(ctx, { orgId, decisionId, step: "escalate" }, delayMs + ESCALATE_AFTER_MS);
 }
 
 /**
- * The gate hook of a write that may open gate decisions (`MoveOptions.onGateDecision`): queues
- * each decision's notify job inside the write, and `flush()` posts the inbox items once the
- * write committed. State lives in this one request's object only.
+ * The decision hooks of one write (see {@link DecisionHooks}): each hook queues its job inside
+ * the write (intent first) and remembers it; `flush()` runs them at once after the commit (best
+ * effort, the queued jobs retry). State lives in this one request's object only.
  */
-export function gateNotifier(ctx: DecisionsCtx, orgId: string) {
-  const ids: string[] = [];
-  return {
-    onGateDecision: async (decisionId: string) => {
-      await queueNotify(ctx, orgId, decisionId);
-      ids.push(decisionId);
+export function decisionHooks(ctx: DecisionsCtx, orgId: string) {
+  const owed: DecisionJob[] = [];
+  const hooks: DecisionHooks = {
+    created: async (decisionId) => {
+      const notify: DecisionJob = { orgId, decisionId, step: "notify", gen: 0 };
+      await add(ctx, notify, FOLLOW_UP_DELAY_MS);
+      await add(ctx, { orgId, decisionId, step: "expire" }, DECISION_EXPIRY_MS);
+      owed.push(notify);
     },
-    flush: async () => {
-      for (const id of ids) await notifyNow(ctx, orgId, id);
+    readdressed: async (decisionId, gen) => {
+      const notify: DecisionJob = { orgId, decisionId, step: "notify", gen };
+      await add(ctx, notify, FOLLOW_UP_DELAY_MS);
+      owed.push(notify);
+    },
+    closed: async (decisionId) => {
+      const resolve: DecisionJob = { orgId, decisionId, step: "resolve" };
+      await add(ctx, resolve, FOLLOW_UP_DELAY_MS);
+      owed.push(resolve);
     },
   };
-}
-
-/** Posts the addressee's inbox item right after the commit; failures are the notify job's. */
-export async function notifyNow(
-  ctx: DecisionsCtx,
-  orgId: string,
-  decisionId: string,
-): Promise<void> {
-  try {
-    await runDecisionJob(ctx, { orgId, decisionId, step: "notify" });
-  } catch (err) {
-    ctx.log.warn("collab could not post a decision's inbox item; its job retries", {
-      orgId,
-      decisionId,
-      err,
-    });
-  }
-}
-
-/** Resolves the decision's inbox items (after an answer); failures are logged. */
-export async function resolveDecisionInbox(
-  ctx: DecisionsCtx,
-  orgId: string,
-  decision: Pick<Decision, "id" | "inbox_item_ids">,
-): Promise<void> {
-  for (const itemId of decision.inbox_item_ids) {
-    try {
-      await ctx.inbox.resolve({ orgId, itemId });
-    } catch (err) {
-      ctx.log.warn("collab could not resolve a decision's inbox item", {
-        orgId,
-        decisionId: decision.id,
-        err,
-      });
-    }
-  }
+  return {
+    hooks,
+    flush: async () => {
+      for (const job of owed.splice(0)) {
+        try {
+          await runDecisionJob(ctx, job);
+        } catch (err) {
+          ctx.log.warn("collab decision follow-up failed; its job retries", {
+            orgId,
+            decisionId: job.decisionId,
+            step: job.step,
+            err,
+          });
+        }
+      }
+    },
+  };
 }
 
 interface Loaded {
@@ -168,35 +157,93 @@ async function load(db: CollabDb, orgId: string, decisionId: string): Promise<Lo
   return { decision, item, project };
 }
 
+/** A refusal the inbox will repeat on every retry (an invalid item, the plugin off in the org). */
+function permanentInboxRefusal(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === "invalid_item" || code === "org_disabled";
+}
+
+async function resolveAll(ctx: DecisionsCtx, orgId: string, ids: string[], decisionId: string) {
+  for (const itemId of new Set(ids)) {
+    try {
+      await ctx.inbox.resolve({ orgId, itemId });
+    } catch (err) {
+      ctx.log.warn("collab could not resolve a decision's inbox item", { orgId, decisionId, err });
+    }
+  }
+}
+
 const FLAG = { notify: "notified_at", remind: "reminded_at", escalate: "escalated_at" } as const;
 
 /**
- * One step of a decision. Idempotent: a decision that is gone (rolled back), no longer open, or
- * whose step already posted is skipped. The inbox post dedupes on a key per decision and step,
- * so a retry after a lost result gets the same item; the step's flag is set only while the
- * decision is still open, and an item posted while an answer landed is resolved at once.
+ * One step of a decision. Every step is idempotent (the queue runs it at least once):
+ * - notify / remind / escalate post once: skipped for a decision that is gone (rolled back),
+ *   closed, re-addressed since (notify of an older generation) or whose step already posted.
+ *   notify and remind first check the addressee is still right and re-address if not. The post
+ *   dedupes on a key per decision and step; the flag is set only while the decision is open, and
+ *   an item posted while an answer landed is resolved at once. A permanent inbox refusal sets the
+ *   flag too (warned), so it is not retried forever.
+ * - resolve resolves the inbox items of a closed decision (also of earlier addressees).
+ * - expire expires a decision still open after 30 days.
  */
 export async function runDecisionJob(ctx: DecisionsCtx, job: DecisionJob): Promise<void> {
   const db = collabDb(ctx.db);
-  const loaded = await load(db, job.orgId, job.decisionId);
+  if (job.step === "expire") return expire(ctx, job);
+  let loaded = await load(db, job.orgId, job.decisionId);
   if (!loaded) return;
+  if (job.step === "resolve") {
+    const { decision } = loaded;
+    if (decision.state === "open") return;
+    await resolveAll(
+      ctx,
+      job.orgId,
+      [...decision.inbox_item_ids, ...decision.stale_inbox_item_ids],
+      decision.id,
+    );
+    return;
+  }
+  if (loaded.decision.state !== "open") return;
+  // A notify of an older generation is moot: the re-address queued its own.
+  if (job.step === "notify" && job.gen !== undefined && job.gen !== loaded.decision.address_gen) {
+    return;
+  }
+  if (job.step !== "escalate") {
+    loaded = await refreshAddressee(ctx, db, job.orgId, loaded);
+    if (!loaded) return;
+  }
   const { decision, item, project } = loaded;
   const flag = FLAG[job.step];
   if (decision.state !== "open" || decision[flag] !== null) return;
+  if (job.step === "notify" && decision.stale_inbox_item_ids.length > 0) {
+    await resolveAll(ctx, job.orgId, decision.stale_inbox_item_ids, decision.id);
+  }
   const post =
     job.step === "escalate"
       ? await escalation(ctx, loaded)
       : await addresseeItem(db, job.orgId, loaded, job.step === "remind");
   let inboxItemId: string | null = null;
   if (post) {
-    inboxItemId = (
-      await ctx.inbox.post({
+    try {
+      inboxItemId = (
+        await ctx.inbox.post({
+          orgId: job.orgId,
+          link: `/p/collab/${PROJECTS}?item=${itemKey(project.key, item.number)}`,
+          dedupeKey:
+            job.step === "notify"
+              ? `${decision.id}${decision.address_gen > 0 ? `-${decision.address_gen}` : ""}`
+              : `${decision.id}-${job.step}`,
+          ...post,
+        })
+      ).itemId;
+    } catch (err) {
+      if (!permanentInboxRefusal(err)) throw err;
+      ctx.log.warn("collab decision inbox item refused for good; not retried", {
         orgId: job.orgId,
-        link: `/p/collab/${PROJECTS}?item=${itemKey(project.key, item.number)}`,
-        dedupeKey: job.step === "notify" ? decision.id : `${decision.id}-${job.step}`,
-        ...post,
-      })
-    ).itemId;
+        decisionId: decision.id,
+        step: job.step,
+        err,
+      });
+    }
   }
   const marked = await db
     .updateTable("decisions")
@@ -209,16 +256,61 @@ export async function runDecisionJob(ctx: DecisionsCtx, job: DecisionJob): Promi
     .where("org_id", "=", job.orgId)
     .where("id", "=", decision.id)
     .where("state", "=", "open")
+    .where("address_gen", "=", decision.address_gen)
     .where(flag, "is", null)
     .returning("id")
     .executeTakeFirst();
   if (!marked && inboxItemId) {
     const now = await load(db, job.orgId, decision.id);
-    // Answered in the meantime: its resolve may have missed this item.
-    if (now && now.decision.state !== "open") {
-      await ctx.inbox.resolve({ orgId: job.orgId, itemId: inboxItemId });
+    // Answered or re-addressed in the meantime: its resolve may have missed this item.
+    if (
+      now &&
+      (now.decision.state !== "open" || now.decision.address_gen !== decision.address_gen)
+    ) {
+      await resolveAll(ctx, job.orgId, [inboxItemId], decision.id);
     }
   }
+}
+
+/**
+ * Re-addresses the decision's item when its addressee is no longer right (the jobs compute the
+ * addressee fresh), then returns the current state.
+ */
+async function refreshAddressee(
+  ctx: DecisionsCtx,
+  db: CollabDb,
+  orgId: string,
+  loaded: Loaded,
+): Promise<Loaded | null> {
+  const fresh = await db.transaction().execute(async (tx) => {
+    await tx
+      .selectFrom("items")
+      .select("id")
+      .where("org_id", "=", orgId)
+      .where("id", "=", loaded.item.id)
+      .forNoKeyUpdate()
+      .execute();
+    const before = loaded.decision.address_gen;
+    // The new generation's notify job is queued; this job posts for it directly below.
+    await readdressOpen(tx, orgId, { itemId: loaded.item.id }, decisionHooks(ctx, orgId).hooks);
+    const now = await tx
+      .selectFrom("decisions")
+      .select("address_gen")
+      .where("org_id", "=", orgId)
+      .where("id", "=", loaded.decision.id)
+      .executeTakeFirst();
+    return now?.address_gen !== before;
+  });
+  return fresh ? load(db, orgId, loaded.decision.id) : loaded;
+}
+
+async function expire(ctx: DecisionsCtx, job: DecisionJob): Promise<void> {
+  const db = collabDb(ctx.db);
+  const follow = decisionHooks(ctx, job.orgId);
+  const expired = await emitting(ctx, job.orgId, () =>
+    expireDecision(db, job.orgId, job.decisionId, follow.hooks),
+  );
+  if (expired) await follow.flush();
 }
 
 function clip(text: string, max: number): string {

@@ -2,11 +2,24 @@ import type { Updateable } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { assign } from "../../src/domain/assignment.js";
 import { CollabError } from "../../src/domain/errors.js";
-import { createItem, transition, updateItem } from "../../src/domain/items.js";
+import { createItem, transition as moveTo, updateItem } from "../../src/domain/items.js";
 import { removeMember } from "../../src/domain/projects.js";
 import type { CollabDb } from "../../src/store/db.js";
 import type { Actor, Item, StatusesTable } from "../../src/store/types.js";
-import { domainDb, ENGINEER, OWNER, OWNER_AGENT, outboxOf, QA, teamProject } from "./setup.js";
+import {
+  domainDb,
+  ENGINEER,
+  NO_DECISION_JOBS,
+  OWNER,
+  OWNER_AGENT,
+  outboxOf,
+  QA,
+  teamProject,
+} from "./setup.js";
+
+/** `transition` with decision hooks that owe nothing (these tests do not look at inbox items). */
+const transition = (...[d, o, a, i, v, to, opts]: Parameters<typeof moveTo>) =>
+  moveTo(d, o, a, i, v, to, { decisions: NO_DECISION_JOBS, ...opts });
 
 let db: CollabDb;
 let close: () => Promise<void>;
@@ -190,7 +203,8 @@ describe("collab workflows", () => {
       .where("id", "=", parent.id)
       .executeTakeFirstOrThrow();
     expect(end.status_key).toBe("acceptance");
-    expect(end.version).toBe(mid.version + 1);
+    // The move, then the request of the gated move to done (asked of the requester at once).
+    expect(end.version).toBe(mid.version + 2);
   });
 
   it("entering testing hands a task to the qa member and their agent", async () => {
@@ -353,7 +367,7 @@ describe("collab workflows", () => {
       "in_progress",
       "acceptance",
     ]);
-    await removeMember(db, org, OWNER, project.id, QA.accountId);
+    await removeMember(db, org, OWNER, project.id, QA.accountId, NO_DECISION_JOBS);
     const ask = await transition(
       db,
       org,

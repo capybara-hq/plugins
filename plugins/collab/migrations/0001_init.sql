@@ -174,6 +174,14 @@ CREATE TABLE IF NOT EXISTS decisions (
   answer jsonb,
   deadline_at timestamptz,
   gate_target text,
+  -- A gate: the status the item was in when the move was requested. The gate is stale (canceled)
+  -- once the item is neither there nor at gate_target.
+  gate_from text,
+  -- Bumped each time the decision is re-addressed (addressee removed, demoted, confirmer changed):
+  -- its notify job id carries it.
+  address_gen integer NOT NULL DEFAULT 0,
+  -- Inbox items of earlier addressees, resolved by the next notify and when the decision closes.
+  stale_inbox_item_ids text[] NOT NULL DEFAULT '{}',
   -- The inbox items posted for the decision (the addressee's, the reminder, the escalation), all
   -- resolved once it is answered.
   inbox_item_ids text[] NOT NULL DEFAULT '{}',

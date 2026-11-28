@@ -22,6 +22,13 @@ import {
   resolveDefaultAssignment,
   validateAssignee,
 } from "./assignment.js";
+import {
+  cancelStaleGates,
+  type DecisionHooks,
+  gateConfirmers,
+  readdressOpen,
+  requireHooks,
+} from "./decision-state.js";
 import { CollabError } from "./errors.js";
 import {
   actorJson,
@@ -35,7 +42,6 @@ import {
 import {
   checkTransition,
   defaultAssignmentOf,
-  type GateRule,
   gateOf,
   initialStatus,
   isClosed,
@@ -47,6 +53,8 @@ const MAX_PARENT_DEPTH = 100;
 /** The parent auto-move (Global Constraints): a parent here moves on when every child is closed. */
 const PARENT_WORKING_STATUS = "in_progress";
 const PARENT_ACCEPTANCE_STATUS = "acceptance";
+/** After the auto-move into acceptance, the gated move to this status is requested at once. */
+const PARENT_DONE_STATUS = "done";
 
 export interface CreateItemInput {
   projectId: string;
@@ -181,10 +189,11 @@ export interface MoveOptions {
   /** Drops a default agent the member may not use (see {@link AgentAllowed}). */
   agentAllowed?: AgentAllowed;
   /**
-   * Called inside the write's transaction with the id of a gate decision about to be created,
-   * before it is inserted (intent first: the caller queues the job that notifies the confirmer).
+   * The jobs owed for decisions the write opens (a gate request), re-addresses (a reassignment
+   * changed the confirmer) or cancels (a move made a gate stale). Required whenever that happens:
+   * the write refuses without them (`requireHooks`).
    */
-  onGateDecision?: (decisionId: string) => Promise<void>;
+  decisions?: DecisionHooks;
 }
 
 /** Records that a default assignment left out an agent the member can no longer use. */
@@ -363,59 +372,6 @@ export async function updateItem(
   });
 }
 
-/** Who may confirm a gate, and who the gate request is addressed to. */
-export async function gateConfirmers(
-  tx: CollabDb,
-  orgId: string,
-  project: Project,
-  item: Item,
-  gate: GateRule,
-): Promise<{ addressee: string; confirmers: string[] }> {
-  const owner = project.owner_account_id;
-  const isActiveMember = async (accountId: string) =>
-    (await tx
-      .selectFrom("project_members")
-      .select("account_id")
-      .where("org_id", "=", orgId)
-      .where("project_id", "=", project.id)
-      .where("account_id", "=", accountId)
-      .where("role", "!=", "guest")
-      .executeTakeFirst()) !== undefined;
-  switch (gate.confirmer) {
-    case "owner":
-      return { addressee: owner, confirmers: [owner] };
-    case "requester": {
-      // A requester who left the project (or became a guest) hands the gate to the owner.
-      const who = (await isActiveMember(item.requester_account_id))
-        ? item.requester_account_id
-        : owner;
-      return { addressee: who, confirmers: [who] };
-    }
-    case "responsible": {
-      const who = item.responsible_account_id ?? owner;
-      return { addressee: who, confirmers: [who] };
-    }
-    case "member": {
-      const who = (await isActiveMember(gate.accountId)) ? gate.accountId : owner;
-      return { addressee: who, confirmers: [who] };
-    }
-    case "function": {
-      const members = await tx
-        .selectFrom("project_members")
-        .select("account_id")
-        .where("org_id", "=", orgId)
-        .where("project_id", "=", project.id)
-        .where("function_label", "=", gate.functionLabel)
-        .where("role", "!=", "guest")
-        .execute();
-      const ids = members.map((m) => m.account_id);
-      if (ids.length === 0) return { addressee: owner, confirmers: [owner] };
-      // Anyone with the label confirms; several of them: the request goes to the owner to route.
-      return { addressee: ids.length === 1 ? (ids[0] ?? owner) : owner, confirmers: ids };
-    }
-  }
-}
-
 /**
  * Moves the item into `to` (already checked against the workflow and the gate): the status, the
  * close time, the status's default assignment, the activity and the events; then the parent
@@ -460,6 +416,8 @@ async function moveItem(
     await outboxFor(tx, orgId, "item.closed", after, { ...base, detail: { toStatus: to.name_en } });
   }
   await recordAssignment(tx, orgId, actor, item, after, base);
+  await cancelStaleGates(tx, orgId, actor, after, opts.decisions);
+  await readdressOpen(tx, orgId, { itemId: after.id }, opts.decisions);
   if (isClosed(to.category) && after.parent_id) {
     await advanceParent(tx, orgId, actor, after.parent_id, opts);
   }
@@ -520,7 +478,16 @@ async function advanceParent(
     await requestGate(tx, orgId, actor, project, parent, statuses, acceptance, addressee, opts);
     return true;
   }
-  await moveItem(tx, orgId, actor, project, parent, statuses, acceptance, true, opts);
+  const moved = await moveItem(tx, orgId, actor, project, parent, statuses, acceptance, true, opts);
+  // Only directed events reach an item's conversation, so nobody would hear of the auto-move:
+  // the acceptance itself is requested from its confirmer right away (when it is gated).
+  const done = statuses.find((s) => s.key === PARENT_DONE_STATUS);
+  const doneGate = done ? gateOf(done) : null;
+  const allowed = !acceptance.next_keys || acceptance.next_keys.includes(PARENT_DONE_STATUS);
+  if (done && doneGate && allowed && moved.status_key === acceptance.key) {
+    const { addressee } = await gateConfirmers(tx, orgId, project, moved, doneGate);
+    await requestGate(tx, orgId, actor, project, moved, statuses, done, addressee, opts);
+  }
   return true;
 }
 
@@ -597,12 +564,13 @@ async function requestGate(
     .where("kind", "=", "gate")
     .where("state", "=", "open")
     .where("gate_target", "=", to.key)
+    .where("gate_from", "=", item.status_key)
     .executeTakeFirst();
   if (open) return open;
   const after = await writeItem(tx, orgId, item, {});
   const key = `${project.key}-${item.number}`;
   const id = randomUUID();
-  await opts.onGateDecision?.(id);
+  await requireHooks(opts.decisions, "a gate request").created(id);
   const decision = await tx
     .insertInto("decisions")
     .values({
@@ -619,6 +587,7 @@ async function requestGate(
       ]),
       blocking: true,
       gate_target: to.key,
+      gate_from: item.status_key,
     })
     .returningAll()
     .executeTakeFirstOrThrow();

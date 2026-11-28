@@ -1,4 +1,5 @@
 import { startTestPostgres, type TestContainer } from "@capybara-hq/testing";
+import type { DecisionHooks } from "../../src/domain/decision-state.js";
 import { addMember, createProject } from "../../src/domain/projects.js";
 import { type CollabDb, collabDb } from "../../src/store/db.js";
 import type { Project } from "../../src/store/types.js";
@@ -17,6 +18,13 @@ export async function domainDb(): Promise<{ db: CollabDb; close: () => Promise<v
     },
   };
 }
+
+/** Decision hooks that owe nothing: for domain tests that do not look at inbox items. */
+export const NO_DECISION_JOBS: DecisionHooks = {
+  created: async () => {},
+  readdressed: async () => {},
+  closed: async () => {},
+};
 
 export const OWNER = { accountId: "acct-owner" };
 export const ENGINEER = { accountId: "acct-eng" };

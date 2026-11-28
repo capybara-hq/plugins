@@ -4,7 +4,7 @@ import {
   ToolError,
   type ToolSpec,
 } from "@capybara-hq/plugin-sdk";
-import { gateNotifier } from "../decisions-queue.js";
+import { decisionHooks } from "../decisions-queue.js";
 import { assign, validateAssignee } from "../domain/assignment.js";
 import { CollabError } from "../domain/errors.js";
 import { loadItem } from "../domain/internal.js";
@@ -844,14 +844,14 @@ export function registerItemTools(deps: ToolDeps): void {
       const { item, project } = await itemByKey(db, call.orgId, person, str(input, "key"));
       await assertStillAssigned(deps, call, item);
       const to = str(input, "to");
-      const gates = gateNotifier(ctx, call.orgId);
+      const follow = decisionHooks(ctx, call.orgId);
       const out = await writing(deps, call, (actor) =>
         transition(db, call.orgId, actor, item.id, int(input, "version"), to, {
           agentAllowed: agentAllowedFor(deps, call.orgId),
-          onGateDecision: gates.onGateDecision,
+          decisions: follow.hooks,
         }),
       );
-      await gates.flush();
+      await follow.flush();
       const key = keyOf(project.key, item);
       const statuses = await statusesForType(db, call.orgId, project.id, item.type);
       if ("gate" in out) {
@@ -921,12 +921,19 @@ export function registerItemTools(deps: ToolDeps): void {
         }
       }
       const chosen = target;
+      const follow = decisionHooks(ctx, call.orgId);
       const after = await writing(deps, call, (actor) =>
-        assign(db, call.orgId, actor, item.id, version, {
-          responsibleAccountId: chosen.accountId,
-          executingAgentId: chosen.agentId,
-        }),
+        assign(
+          db,
+          call.orgId,
+          actor,
+          item.id,
+          version,
+          { responsibleAccountId: chosen.accountId, executingAgentId: chosen.agentId },
+          follow.hooks,
+        ),
       );
+      await follow.flush();
       const phrase = await targetPhrase(deps, call.orgId, chosen);
       const same = after.version === item.version ? " It already was." : "";
       return result(
