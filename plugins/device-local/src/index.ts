@@ -72,7 +72,7 @@ export {
  */
 const plugin = defineExtension({
   name: "device-local",
-  version: "0.1.0-rc.13",
+  version: "0.1.0-rc.14",
   // ctx.dialIn.capacity and the handlers' connection argument are the rc.56 SDK's
   sdk: "^0.1.0-rc.56",
   provides: [DEVICE_PROVIDER_EXTENSION_POINT],
