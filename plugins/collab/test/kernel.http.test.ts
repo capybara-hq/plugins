@@ -77,7 +77,7 @@ interface InboxEntry {
   item?: {
     id: string;
     kind: string;
-    title: string;
+    title: { zh: string; en: string };
     link?: string;
     actions: { id: string; label: { en: string } }[];
   };
@@ -243,11 +243,13 @@ describe("collab in a kernel", () => {
     const notice = await waitFor(
       async () =>
         (await inbox(owner)).find(
-          (e) => e.item?.kind === "collab.decision" && e.item.title.includes("WEB-1"),
+          (e) => e.item?.kind === "collab.decision" && e.item.title.en.includes("WEB-1"),
         ),
       20_000,
       "the gate decision in the owner's inbox",
     );
+    expect(notice.item?.title.zh).toMatch(/^请确认 WEB-1 /);
+    expect(notice.item?.title.en).toMatch(/^Confirm on WEB-1 /);
     expect(notice.item?.link).toBe("/p/collab/projects?item=WEB-1");
     expect(notice.item?.actions.map((a) => a.id).sort()).toEqual(["approve", "reject"]);
 

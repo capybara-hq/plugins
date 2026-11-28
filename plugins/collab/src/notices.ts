@@ -47,6 +47,11 @@ function clip(text: string, max: number): string {
   return chars.length <= max ? text : `${chars.slice(0, max - 1).join("")}…`;
 }
 
+/** The same text in both UI languages, each clipped to `max`. */
+function both(zh: string, en: string, max: number): { zh: string; en: string } {
+  return { zh: clip(zh, max), en: clip(en, max) };
+}
+
 function itemLink(key: string): string {
   return `/p/collab/projects?item=${key}`;
 }
@@ -79,8 +84,17 @@ export async function notifyAssigned(
     orgId,
     accountId: item.responsibleAccountId,
     kind: "collab.assigned",
-    title: clip(`${item.key} assigned to you: ${item.title}`, TITLE_MAX),
-    body: item.executingAgentId ? `${agentName ?? "Your agent"} is working on it.` : "",
+    title: both(
+      `${item.key} 已指派给你：${item.title}`,
+      `${item.key} assigned to you: ${item.title}`,
+      TITLE_MAX,
+    ),
+    body: item.executingAgentId
+      ? {
+          zh: `${agentName ?? "你的智能体"}正在处理。`,
+          en: `${agentName ?? "Your agent"} is working on it.`,
+        }
+      : "",
     link: itemLink(item.key),
     actions: payload
       ? [
@@ -104,14 +118,25 @@ async function notifyHandoffUnresolved(
   detail: { status?: string; functionLabel?: string },
 ): Promise<void> {
   const who = detail.functionLabel
-    ? `No single project member has the function "${detail.functionLabel}"`
-    : "The configured member is no longer in the project";
+    ? {
+        zh: `项目中没有唯一一位成员具备职能“${detail.functionLabel}”`,
+        en: `No single project member has the function "${detail.functionLabel}"`,
+      }
+    : { zh: "配置的成员已不在项目中", en: "The configured member is no longer in the project" };
+  const status = detail.status ?? "?";
   await ctx.inbox.post({
     orgId,
     accountId: row.ownerAccountId,
     kind: "collab.handoff",
-    title: clip(`Pick who gets ${row.key}: ${row.title}`, TITLE_MAX),
-    body: `${who}, so ${row.key} kept its assignment when it entered "${detail.status ?? "?"}". Assign it on the item page.`,
+    title: both(
+      `请选择 ${row.key} 的负责人：${row.title}`,
+      `Pick who gets ${row.key}: ${row.title}`,
+      TITLE_MAX,
+    ),
+    body: {
+      zh: `${who.zh}，因此 ${row.key} 进入“${status}”时保留了原来的指派。请在事项页面指派。`,
+      en: `${who.en}, so ${row.key} kept its assignment when it entered "${status}". Assign it on the item page.`,
+    },
     link: itemLink(row.key),
     dedupeKey: `collab.handoff-${row.itemId}-${row.activityId}`,
   });

@@ -221,6 +221,19 @@ describe("decisions and gates", () => {
       link: `/p/collab/projects?item=${keyOf(item)}`,
     });
     expect(posted?.actions?.map((a) => a.id)).toEqual(["pdf", "csv"]);
+    // Both languages; the asker's question, options and reason stay as written.
+    expect(posted?.title).toEqual({
+      zh: `请决策 ${keyOf(item)} ${item.title}`,
+      en: `Decide on ${keyOf(item)} ${item.title}`,
+    });
+    expect(posted?.body).toEqual({
+      zh: "Which export format first?\n选项：PDF / CSV\n推荐：PDF（Customers asked for it.）",
+      en: "Which export format first?\nOptions: PDF / CSV\nRecommended: PDF: Customers asked for it.",
+    });
+    expect(posted?.actions?.map((a) => a.label)).toEqual([
+      { zh: "PDF", en: "PDF" },
+      { zh: "CSV", en: "CSV" },
+    ]);
     expect((await decisionOf(db, id)).inbox_item_ids).toEqual([posted?.itemId]);
     // The notify job finds the item already posted: nothing more.
     await f.run({ orgId: ORG, decisionId: id, step: "notify" });
@@ -415,7 +428,14 @@ describe("decisions and gates", () => {
       `collab.decision.reminder:${ENGINEER.accountId}`,
       `collab.decision.escalated:${OWNER.accountId}`,
     ]);
-    expect(f.inbox[2]?.body).toContain("Name of acct-eng has not answered");
+    expect(f.inbox[1]?.title).toEqual({
+      zh: expect.stringMatching(/^提醒：请决策 /),
+      en: expect.stringMatching(/^Reminder: Decide on /),
+    });
+    expect(f.inbox[2]?.body).toMatchObject({
+      zh: expect.stringContaining("Name of acct-eng 在一天前的截止时间过后仍未回答"),
+      en: expect.stringContaining("Name of acct-eng has not answered"),
+    });
     expect(f.inbox[2]?.actions).toBeUndefined();
     const d = await decisionOf(db, id);
     expect(d.reminded_at).not.toBeNull();

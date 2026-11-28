@@ -168,7 +168,10 @@ describe("gate recipients follow the confirmer set", () => {
     const escalated = fake.posts.filter((p) => p.kind === "collab.decision.escalated");
     expect(escalated).toHaveLength(1);
     expect(escalated[0]?.accountId).toBe(OWNER.accountId);
-    expect(escalated[0]?.body).toContain("Zhang, Newcomer have not answered");
+    expect(escalated[0]?.body).toMatchObject({
+      zh: expect.stringContaining("Zhang、Newcomer 在一天前的截止时间过后仍未回答"),
+      en: expect.stringContaining("Zhang, Newcomer have not answered"),
+    });
 
     // The owner as a confirmer: nobody to escalate to.
     await fake.act(org, OWNER.accountId, "member.function", {

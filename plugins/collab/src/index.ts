@@ -30,7 +30,7 @@ import { registerUiActions } from "./ui/actions.js";
 export default defineExtension({
   name: "collab",
   version: "0.1.0-rc.1",
-  sdk: "^0.1.0-rc.87",
+  sdk: "^0.1.0-rc.89",
   provides: [TRIGGER_SOURCE_EXTENSION_POINT],
   ui: [
     {

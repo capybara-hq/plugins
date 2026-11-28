@@ -28,7 +28,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@capybara-hq/plugin-sdk": "^0.1.0-rc.87",
+    "@capybara-hq/plugin-sdk": "^0.1.0-rc.89",
     "kysely": "^0.29.8"
   },
   "devDependencies": {
