@@ -14,6 +14,9 @@ import { registerDrainQueue } from "./events/emitter.js";
 import { registerLifecycle } from "./lifecycle.js";
 // Registers the inbox.stop-agent UI action (before registerUiActions runs).
 import "./notify.js";
+// Registers the page actions (before registerUiActions runs).
+import "./page/actions.js";
+import { registerQueries } from "./page/queries.js";
 import { collabDb } from "./store/db.js";
 import { registerTools } from "./tools/index.js";
 import { createTriggerSource } from "./trigger-source.js";
@@ -75,6 +78,7 @@ export default defineExtension({
     registerDrainQueue(ctx);
     registerDecisionQueue(ctx);
     registerUiActions(ctx);
+    registerQueries(ctx);
     registerLifecycle(ctx);
     ctx.provide(TRIGGER_SOURCE_EXTENSION_POINT, createTriggerSource(collabDb(ctx.db)));
   },

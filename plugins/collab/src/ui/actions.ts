@@ -1,5 +1,5 @@
 import type { ExtensionContext, UiActionResult, UiOrgActionArgs } from "@capybara-hq/plugin-sdk";
-import { PROJECTS } from "../constants.js";
+import { ITEM_PANEL, ITEM_PROPERTIES, PROJECTS } from "../constants.js";
 import { type CollabDb, collabDb } from "../store/db.js";
 
 /** What an action handler needs: the kernel's ctx and the plugin's typed database. */
@@ -80,13 +80,16 @@ export function payloadFields<K extends string>(
 }
 
 /**
- * Registers the one `ctx.ui.action` handler of the `projects` component (in `setup`); it
- * dispatches on `actionId`. The modules that register actions must be imported before it runs.
+ * Registers the `ctx.ui.action` handler of each component that acts (in `setup`): the projects
+ * page and the conversation panels share one dispatch table on `actionId`. The modules that
+ * register actions must be imported before it runs.
  */
 export function registerUiActions(ctx: ExtensionContext): void {
   const deps: ActionDeps = { ctx, db: collabDb(ctx.db) };
-  ctx.ui.action(PROJECTS, async (args) => {
-    if (args.scope === "platform") throw new Error("collab: actions are org-scoped");
-    return dispatchAction(deps, args);
-  });
+  for (const component of [PROJECTS, ITEM_PANEL, ITEM_PROPERTIES]) {
+    ctx.ui.action(component, async (args) => {
+      if (args.scope === "platform") throw new Error("collab: actions are org-scoped");
+      return dispatchAction(deps, args);
+    });
+  }
 }

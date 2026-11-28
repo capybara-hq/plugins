@@ -1,8 +1,8 @@
 import type { UiActionResult } from "@capybara-hq/plugin-sdk";
 import { decisionHooks, INBOX_ANSWER } from "../decisions-queue.js";
-import { type AnswerResult, answerDecision } from "../domain/decisions.js";
+import { type AnswerResult, answerDecision, type DecisionAnswer } from "../domain/decisions.js";
 import { CollabError } from "../domain/errors.js";
-import { emitting } from "../events/emitter.js";
+import { notifying } from "../notify.js";
 import { agentAllowedFor } from "../tools/common.js";
 import { type ActionDeps, payloadFields, registerAction } from "../ui/actions.js";
 
@@ -62,39 +62,35 @@ async function refusalToast(
         "无法移动事项，请在事项页面处理。",
         "The item could not be moved. Open it on its page.",
       );
+    case "invalid_input":
+      return toast(
+        "请选择一个选项，或写下答复（最多 2000 字）。",
+        "Pick one of the options, or write an answer (at most 2000 characters).",
+      );
     default:
       return toast("无法答复，请在事项页面查看。", "Could not answer. Open the item's page.");
   }
 }
 
 /**
- * `inbox.answer`: a person answers a decision from an inbox button (the kernel calls it as the
- * person who clicked; at least once, so a repeated click answers nothing new). Emits the events
- * the answer owes and resolves the decision's inbox items (queued in the write as well). A
- * concurrent change of the item is retried once.
+ * A person answers a decision (inbox buttons and the item pages): emits the events the answer
+ * owes and resolves the decision's inbox items (queued in the write as well). A concurrent change
+ * of the item is retried once; every outcome and refusal is a zh/en toast written for people.
  */
-export async function answerFromInbox(
+export async function answerAsPerson(
   { ctx, db }: ActionDeps,
-  call: AnswerCall,
+  call: { orgId: string; accountId: string },
+  decisionId: string,
+  answer: DecisionAnswer,
 ): Promise<UiActionResult> {
-  const { decisionId, optionId } = payloadFields(call.payload, {
-    decisionId: "uuid",
-    optionId: "id",
-  });
-  if (!OPTION_ID.test(optionId))
-    return toast("这个按钮已失效。", "This button is no longer valid.");
   for (let attempt = 1; ; attempt++) {
     const follow = decisionHooks(ctx, call.orgId);
     try {
-      const out = await emitting(ctx, call.orgId, () =>
-        answerDecision(
-          db,
-          call.orgId,
-          call.accountId,
-          decisionId,
-          { optionId },
-          { agentAllowed: agentAllowedFor({ ctx, db }, call.orgId), decisions: follow.hooks },
-        ),
+      const out = await notifying(ctx, call.orgId, () =>
+        answerDecision(db, call.orgId, call.accountId, decisionId, answer, {
+          agentAllowed: agentAllowedFor({ ctx, db }, call.orgId),
+          decisions: follow.hooks,
+        }),
       );
       await follow.flush();
       return outcomeToast(out);
@@ -104,6 +100,20 @@ export async function answerFromInbox(
       return refusalToast({ ctx, db }, call.orgId, decisionId, error);
     }
   }
+}
+
+/**
+ * `inbox.answer`: a person answers a decision from an inbox button (the kernel calls it as the
+ * person who clicked; at least once, so a repeated click answers nothing new).
+ */
+export async function answerFromInbox(deps: ActionDeps, call: AnswerCall): Promise<UiActionResult> {
+  const { decisionId, optionId } = payloadFields(call.payload, {
+    decisionId: "uuid",
+    optionId: "id",
+  });
+  if (!OPTION_ID.test(optionId))
+    return toast("这个按钮已失效。", "This button is no longer valid.");
+  return answerAsPerson(deps, call, decisionId, { optionId });
 }
 
 registerAction(INBOX_ANSWER, answerFromInbox);

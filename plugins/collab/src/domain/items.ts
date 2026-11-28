@@ -194,6 +194,11 @@ export interface MoveOptions {
    * the write refuses without them (`requireHooks`).
    */
   decisions?: DecisionHooks;
+  /**
+   * A person who is not the gate's confirmer asks the confirmer (a gate decision, as an agent's
+   * move does) instead of being refused with `gated` (the board's drop into a locked column).
+   */
+  requestGate?: boolean;
 }
 
 /** Records that a default assignment left out an agent the member can no longer use. */
@@ -494,7 +499,7 @@ async function advanceParent(
 /**
  * Moves the item to `toStatus` at the caller's version. Into a gated status: an agent gets a gate
  * decision addressed to the confirmer (the item stays); the confirmer, a person, moves it; any
- * other person gets `gated`.
+ * other person gets `gated`, or with `opts.requestGate` a gate decision like an agent.
  */
 export async function transition(
   db: CollabDb,
@@ -529,7 +534,7 @@ export async function transitionIn(
   const gate = gateOf(to);
   if (gate) {
     const { addressee, confirmers } = await gateConfirmers(tx, orgId, project, item, gate);
-    if (isAgent(actor)) {
+    if (isAgent(actor) || (opts.requestGate && !confirmers.includes(actor.accountId))) {
       return {
         gate: await requestGate(tx, orgId, actor, project, item, statuses, to, addressee, opts),
       };
