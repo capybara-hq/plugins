@@ -24,7 +24,7 @@ import {
 } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { basename, extname, join, sep } from "node:path";
-import { isLoopbackGrantHost, sandboxProxyRefusalLayer } from "@capybara-hq/plugin-sdk";
+import { sandboxProxyRefusalLayer } from "@capybara-hq/plugin-sdk";
 import type {
   BrowserContext,
   CDPSession,
@@ -37,6 +37,7 @@ import type {
   Route,
 } from "playwright-core";
 import { fetchIcon, iconForPanel, iconUrlOf } from "./favicon.js";
+import { loopbackGrantHostOf } from "./loopback.js";
 import { PERMISSION_REPORTS_PER_LOAD, permissionInitScript } from "./permissions.js";
 import {
   AUTH_SIGN_IN_TEXT,
@@ -79,7 +80,16 @@ import { parseCondition, Watches, type WatchParks } from "./watches.js";
 export type SessionEvent =
   | { type: "state" }
   | { type: "active"; conversationId: string }
-  | { type: "blocked"; host: string; url: string; root: string; port?: number; kind?: "loopback" }
+  | {
+      type: "blocked";
+      host: string;
+      url: string;
+      root: string;
+      port?: number;
+      kind?: "loopback";
+      /** The host of the page whose subresource requested the local port. */
+      origin?: string;
+    }
   | {
       type: "dialog";
       kind: "alert" | "file";
@@ -109,11 +119,30 @@ function blockedHostsOf(c: Collector): BlockedHost[] {
   return [...c.blocked.values()];
 }
 
-/** A refused host as the reply carries it: `address` refusals of a loopback grant host are `loopback`. */
+/**
+ * A refused host as the reply carries it: an `address` refusal of a host that canonicalizes to a
+ * loopback grant host (`localhost.`, `127.1` included) is `loopback`, named by that grant host.
+ */
 export function blockedHost(host: string, port: number, layer: BlockedHost["layer"]): BlockedHost {
-  return layer === "address" && isLoopbackGrantHost(host)
-    ? { host, port, layer, class: "loopback" }
+  const grant = layer === "address" ? loopbackGrantHostOf(host) : undefined;
+  return grant !== undefined
+    ? { host: grant, port, layer, class: "loopback" }
     : { host, port, layer };
+}
+
+/** The most local ports one probe note names. */
+const PROBE_NOTE_MAX = 10;
+
+/**
+ * The note for local ports that pages not on the device requested as subresources (a port scan,
+ * an embedded widget): they are not offered for approval, the reply says so once.
+ */
+export function probeNote(probes: ReadonlyMap<string, string>): string {
+  const ports = [...probes.keys()];
+  const shown = ports.slice(0, PROBE_NOTE_MAX).join(", ");
+  const more = ports.length > PROBE_NOTE_MAX ? ` and ${ports.length - PROBE_NOTE_MAX} more` : "";
+  const from = [...new Set(probes.values())].slice(0, 3).join(", ");
+  return `${shown}${more}: local ${ports.length === 1 ? "port" : "ports"} on the device requested by the page on ${from}, refused. A local port is offered for approval only when the browser navigates to it or a page on the device itself requests it.`;
 }
 
 /** `host:port` as a URL writes it (an IPv6 literal bracketed). */
@@ -156,6 +185,8 @@ interface Collector {
   conv: string;
   /** The hosts refused for this request's pages, by `host:port` (the proxy's or the loopback check's). */
   blocked: Map<string, BlockedHost>;
+  /** Local ports refused to subresources of pages not on the device (`host:port` → page host). */
+  probes: Map<string, string>;
   notes: string[];
   pending: Promise<unknown>[];
   /** Downloads that began during the request: waited for, at most `downloadWaitMs`. */
@@ -1182,11 +1213,12 @@ export class BrowserSession {
    */
   private async installLoopbackRoute(): Promise<void> {
     if (this.proxy === undefined) return;
-    try {
-      await this.ctx.route((u) => isLoopbackGrantHost(u.hostname), this.onLoopbackRoute);
-    } catch {
-      // a closing browser: nothing to check
-    }
+    // no catch: a session without its per-tab check would open every granted port to every tree,
+    // so a failed install fails the session's start (fail closed)
+    await this.ctx.route(
+      (u) => loopbackGrantHostOf(u.hostname) !== undefined,
+      this.onLoopbackRoute,
+    );
   }
 
   /**
@@ -1762,7 +1794,7 @@ export class BrowserSession {
         this.proxy !== undefined &&
         (PROXY_FAILURE_RE.test(err) || err.includes("ERR_NETWORK_CHANGED"))
       )
-        this.checkBlocked(page, r.url(), this.pageToOpen(page, r));
+        this.checkBlocked(page, r.url(), this.pageToOpen(page, r), r);
     });
     page.on("response", (r) => {
       if (r.request().isNavigationRequest() && r.frame() === page.mainFrame()) {
@@ -1770,7 +1802,7 @@ export class BrowserSession {
         if (r.status() === 401) this.onUnauthorized(page, id, r);
       }
       if (this.proxy !== undefined && r.status() === 403 && r.url().startsWith("http:")) {
-        this.checkBlocked(page, r.url(), this.pageToOpen(page, r.request()));
+        this.checkBlocked(page, r.url(), this.pageToOpen(page, r.request()), r.request());
       }
     });
     page.on("dialog", (d) => this.onDialog(page, d));
@@ -2827,10 +2859,34 @@ export class BrowserSession {
   }
 
   /**
-   * Probes the proxy for the URL's host and reports it when refused; the viewers' `blocked`
-   * message carries `pageUrl` (default: the URL itself), the page to open once allowed.
+   * Whether a refused local port of `page` is offered for approval: a main-frame navigation to it
+   * (`r` absent: the daemon's own navigation), or a request of a page that is itself on the
+   * device's loopback. Anything else (a subresource or frame of a page elsewhere: a port scan, an
+   * embedded widget) is only noted. `origin`: the requesting page's host, for a subresource.
    */
-  private checkBlocked(page: Page, rawUrl: string, pageUrl?: string): Promise<boolean> {
+  private loopbackAsk(page: Page, r?: Request): { ask: boolean; origin?: string } {
+    if (r === undefined || (r.isNavigationRequest() && r.frame() === page.mainFrame()))
+      return { ask: true };
+    let origin = "";
+    try {
+      origin = new URL(page.url()).hostname;
+    } catch {
+      origin = "";
+    }
+    return { ask: origin !== "" && loopbackGrantHostOf(origin) !== undefined, origin };
+  }
+
+  /**
+   * Probes the proxy for the URL's host and reports it when refused; the viewers' `blocked`
+   * message carries `pageUrl` (default: the URL itself), the page to open once allowed. `r`: the
+   * refused request (absent: the daemon's own main-frame navigation).
+   */
+  private checkBlocked(
+    page: Page,
+    rawUrl: string,
+    pageUrl?: string,
+    r?: Request,
+  ): Promise<boolean> {
     const proxy = this.proxy;
     // the page's owner gets the refused host (its reply's blockedHosts, its tree's viewers)
     const owner = this.ownerOfPage(page);
@@ -2849,7 +2905,12 @@ export class BrowserSession {
       probe = proxyRefusal(proxy, host, port).then((layer) => {
         this.probes.delete(key);
         if (layer !== null && owner !== undefined)
-          this.recordBlocked(owner, blockedHost(host, port, layer), pageUrl ?? url.href);
+          this.recordBlocked(
+            owner,
+            blockedHost(host, port, layer),
+            pageUrl ?? url.href,
+            this.loopbackAsk(page, r),
+          );
         return layer !== null;
       });
       this.probes.set(key, probe);
@@ -2864,7 +2925,18 @@ export class BrowserSession {
    * `device` host, the conversation can be granted a `loopback` port; any other closed address
    * stays closed whatever the device's list says.
    */
-  private recordBlocked(owner: TabOwner, b: BlockedHost, pageUrl: string): void {
+  private recordBlocked(
+    owner: TabOwner,
+    b: BlockedHost,
+    pageUrl: string,
+    loopback: { ask: boolean; origin?: string } = { ask: true },
+  ): void {
+    // a local port a page elsewhere requested is never an ask: the reply only notes it
+    if (b.class === "loopback" && !loopback.ask) {
+      for (const c of this.collectors)
+        if (c.conv === owner.owner) c.probes.set(hostPort(b.host, b.port), loopback.origin ?? "");
+      return;
+    }
     for (const c of this.collectors)
       if (c.conv === owner.owner) c.blocked.set(hostPort(b.host, b.port), b);
     if (b.layer === "device")
@@ -2877,14 +2949,23 @@ export class BrowserSession {
         root: owner.root,
         port: b.port,
         kind: "loopback",
+        ...(loopback.origin === undefined || loopback.origin === ""
+          ? {}
+          : { origin: loopback.origin }),
       });
   }
 
   /**
-   * The per-tab loopback check (a route on every request to `localhost`, `127.0.0.1` or `[::1]`):
-   * the device's proxy opens a granted port to every tab of the device, so a request goes on only
-   * when its page's owner's root holds the port; anything else (another tree's tab, an unowned
-   * page, a service worker) is aborted and recorded as a refused loopback port for that owner.
+   * The per-tab loopback check (a route on every request whose host canonicalizes, as the proxy
+   * does, to `localhost`, `127.0.0.1` or `[::1]`): the device's proxy opens a granted port to every
+   * tab of the device, so a request goes on only when its page's owner's root holds the port;
+   * anything else (another tree's tab, an unowned page, a service worker) is aborted and recorded
+   * as a refused loopback port for that owner.
+   *
+   * Soft split, not a boundary: the per-tree check covers what Playwright routes. It does not see
+   * WebSockets, nor a redirect hop (a route sees only a chain's first URL), so a page of another
+   * tree of the same owner can still reach a port the device opened through either. The device
+   * boundary is the proxy's: only ports granted to some conversation of the device's owner open.
    */
   private readonly onLoopbackRoute = async (route: Route): Promise<void> => {
     const r = route.request();
@@ -2917,6 +2998,7 @@ export class BrowserSession {
         owner,
         blockedHost(url.hostname, port, "address"),
         this.pageToOpen(page, r),
+        this.loopbackAsk(page, r),
       );
     await route.abort("blockedbyclient").catch(() => undefined);
   };
@@ -2976,6 +3058,7 @@ export class BrowserSession {
     const c: Collector = {
       conv,
       blocked: new Map(),
+      probes: new Map(),
       notes: [...lateAll, ...lateOwn],
       pending: [],
       downloads: [],
@@ -3028,6 +3111,7 @@ export class BrowserSession {
       const text = [
         ...(verifying ? [VERIFICATION_NOTE] : []),
         ...c.notes,
+        ...(c.probes.size > 0 ? [probeNote(c.probes)] : []),
         ...(out.text === undefined ? [] : [out.text]),
       ].join("\n");
       const dialog = this.dialogFor(conv);

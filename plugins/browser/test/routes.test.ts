@@ -4,7 +4,15 @@ import { type RouteDeps, registerRoutes } from "../src/routes.js";
 
 type Handler = (req: Request, caller: RouteCaller) => Promise<Response>;
 
-function setup(over: Partial<RouteDeps["deviceAccess"]> = {}) {
+/** The panel's refresh request body for conversation `conv`. */
+const refreshBody = (ports: number[]) => ({
+  op: "loopback_ports",
+  conversationId: "conv",
+  rootConversationId: "conv",
+  loopbackPorts: ports,
+});
+
+function setup(over: Partial<RouteDeps["deviceAccess"]> = {}, refreshWaitMs = 0) {
   const calls: { fn: string; arg: unknown }[] = [];
   const routes = new Map<string, Handler>();
   const deps: RouteDeps = {
@@ -34,6 +42,11 @@ function setup(over: Partial<RouteDeps["deviceAccess"]> = {}) {
       async revokeLoopbackPort(arg) {
         calls.push({ fn: "revokeLoopbackPort", arg });
       },
+      async request(_call, req) {
+        const body = JSON.parse(new TextDecoder().decode(req.body)) as Record<string, unknown>;
+        calls.push({ fn: "request", arg: { ...body, ifRunning: req.ifRunning === true } });
+        return new TextEncoder().encode(JSON.stringify({ ok: true, blockedHosts: [] }));
+      },
       async loopbackPorts(arg) {
         calls.push({ fn: "loopbackPorts", arg });
         return [
@@ -43,6 +56,7 @@ function setup(over: Partial<RouteDeps["deviceAccess"]> = {}) {
       ...over,
     },
     panelScript: async () => "/* panel */",
+    loopbackRefreshWaitMs: refreshWaitMs,
   };
   registerRoutes(
     { http: { route: (method, path, h) => void routes.set(`${method} ${path}`, h as Handler) } },
@@ -81,12 +95,23 @@ describe("browser routes", () => {
     const res = await s.hit("POST /ui/stream-ticket", {}, conv);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ url: "wss://k.example/device/stream?ticket=abc" });
+    const scope = { orgId: "org", conversationId: "conv", accountId: "acc", service: "browser" };
+    // a running daemon first gets the tree's live local ports (never started: ifRunning)
     expect(s.calls).toEqual([
-      {
-        fn: "streamTicket",
-        arg: { orgId: "org", conversationId: "conv", accountId: "acc", service: "browser" },
-      },
+      { fn: "loopbackPorts", arg: scope },
+      { fn: "request", arg: { ...refreshBody([3999]), ifRunning: true } },
+      { fn: "streamTicket", arg: scope },
     ]);
+  });
+
+  it("never sends a refresh for a conversation whose ports cannot be read (no device yet)", async () => {
+    const s = setup({
+      async loopbackPorts() {
+        throw new DeviceAccessError("no_device", "The conversation has no device.");
+      },
+    });
+    expect((await s.hit("POST /ui/stream-ticket", {}, conv)).status).toBe(200);
+    expect(s.calls.map((c) => c.fn)).toEqual(["streamTicket"]);
   });
 
   it("routes refuse a platform-scope caller", async () => {
@@ -115,7 +140,7 @@ describe("browser routes", () => {
       "POST /ui/handoff-answer",
       "GET /ui/loopback-ports",
       "POST /ui/loopback-ports",
-      "DELETE /ui/loopback-ports",
+      "POST /ui/loopback-ports/revoke",
     ]) {
       const body = { hosts: ["a.example"], callId: "c", done: true, port: 3999 };
       expect((await s.hit(key, key.startsWith("GET") ? undefined : body, platform)).status).toBe(
@@ -219,6 +244,7 @@ describe("browser routes", () => {
         expiresAt: "2026-11-29T00:00:00Z",
         database: false,
       },
+      applied: true,
     });
     expect(s.calls).toEqual([
       {
@@ -231,13 +257,38 @@ describe("browser routes", () => {
           port: 3999,
         },
       },
+      // then the tree's live set goes to the daemon, so the panel's reload finds the port open
+      {
+        fn: "loopbackPorts",
+        arg: { orgId: "org", conversationId: "conv", accountId: "acc", service: "browser" },
+      },
+      { fn: "request", arg: { ...refreshBody([3999]), ifRunning: true } },
     ]);
+  });
+
+  it("waits for a service the grant restarted, then pushes the set", async () => {
+    let tries = 0;
+    const s = setup(
+      {
+        async request(_call, req) {
+          tries++;
+          if (tries < 3) throw new DeviceAccessError("not_running", "The service is not running.");
+          const body = JSON.parse(new TextDecoder().decode(req.body)) as Record<string, unknown>;
+          s.calls.push({ fn: "request", arg: body });
+          return new TextEncoder().encode(JSON.stringify({ ok: true, blockedHosts: [] }));
+        },
+      },
+      10_000,
+    );
+    const res = await s.hit("POST /ui/loopback-ports", { port: 3999 }, conv);
+    expect(await res.json()).toMatchObject({ applied: true });
+    expect(tries).toBe(3);
   });
 
   it("refuses a non-integer or out-of-range port", async () => {
     const s = setup();
     for (const port of [0, 65536, 39.5, "3999", null, -1])
-      for (const key of ["POST /ui/loopback-ports", "DELETE /ui/loopback-ports"])
+      for (const key of ["POST /ui/loopback-ports", "POST /ui/loopback-ports/revoke"])
         expect((await s.hit(key, { port }, conv)).status, `${key} ${String(port)}`).toBe(400);
     expect((await s.hit("POST /ui/loopback-ports", {}, conv)).status).toBe(400);
     expect(s.calls).toEqual([]);
@@ -252,12 +303,14 @@ describe("browser routes", () => {
         { port: 3999, source: "owner-panel", expiresAt: "2026-11-29T00:00:00Z", database: false },
       ],
     });
-    const del = await s.hit("DELETE /ui/loopback-ports", { port: 3999 }, conv);
+    const del = await s.hit("POST /ui/loopback-ports/revoke", { port: 3999 }, conv);
     expect(del.status).toBe(200);
     const scope = { orgId: "org", conversationId: "conv", accountId: "acc", service: "browser" };
     expect(s.calls).toEqual([
       { fn: "loopbackPorts", arg: scope },
       { fn: "revokeLoopbackPort", arg: { ...scope, port: 3999 } },
+      { fn: "loopbackPorts", arg: scope },
+      { fn: "request", arg: { ...refreshBody([3999]), ifRunning: true } },
     ]);
   });
 
@@ -296,12 +349,14 @@ describe("manifest", () => {
   it("declares deviceAccess.loopbackPorts and the loopback-ports embed routes", async () => {
     const ext = (await import("../src/index.js")).default;
     expect(ext.permissions?.deviceAccess?.loopbackPorts).toBe(true);
-    for (const method of ["GET", "POST", "DELETE"])
-      expect(ext.permissions?.http).toContainEqual({
-        method,
-        path: "/ui/loopback-ports",
-        access: "embed",
-      });
+    for (const [method, path] of [
+      ["GET", "/ui/loopback-ports"],
+      ["POST", "/ui/loopback-ports"],
+      ["POST", "/ui/loopback-ports/revoke"],
+    ])
+      expect(ext.permissions?.http).toContainEqual({ method, path, access: "embed" });
+    // the web's /plugin-ui proxy passes only GET and POST
+    for (const r of ext.permissions?.http ?? []) expect(["GET", "POST"]).toContain(r.method);
   });
 
   it("declares the panel embed with the globe icon and the device service", async () => {

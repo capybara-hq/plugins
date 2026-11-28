@@ -59,9 +59,11 @@ A real browser in the person's device for agents (browser use spec,
   asked to allow it); a service start that fails has its own text.
 - Panel routes: `GET /ui/browser` (the page) and `GET /ui/panel.js` are public; `POST
   /ui/stream-ticket`, `/ui/network-hosts`, `/ui/handoff-answer` and `/ui/loopback-ports` (`GET`
-  the conversation's open local ports, `POST { port }` grant one with `grantLoopbackPort`,
-  `DELETE { port }` revoke it; the panel's 允许本会话访问 / Allow for this conversation strip and its
-  list with 移除 / Remove) are `embed` routes that take
+  the conversation's open local ports, `POST { port }` grant one with `grantLoopbackPort`, `POST
+  /ui/loopback-ports/revoke { port }` revoke it: only GET and POST pass the web's `/plugin-ui`
+  proxy; the panel's 允许本会话访问 / Allow for this conversation strip, which ignores clicks for
+  500 ms after it appears or changes port and names the asking page's host for a subresource, and
+  its list with 移除 / Remove) are `embed` routes that take
   the org, account and conversation from the caller only (a platform-scope token or one without a
   conversation gets 403). `/ui/handoff-answer` takes `{ callId, handoffConversationId, done }`:
   the panel echoes the handoff's conversation from the daemon's `state.handoffs` (a sub-agent's,
@@ -77,7 +79,18 @@ A real browser in the person's device for agents (browser use spec,
   owner's root does not hold the port (another tree's tab, an unowned page, a service worker),
   recording it as refused (`layer: "address"`, `class: "loopback"`) and sending the tree's viewers
   `{ t: "blocked", port, kind: "loopback" }`. The device opens a granted port to the whole device;
-  this check keeps it to the granted tree.
+  this check keeps it to the granted tree. Hosts are matched after the proxy's canonicalization
+  (`localhost.`, `LOCALHOST`, `127.1`, `[::ffff:127.0.0.1]` are checked as the grant host). It is a
+  soft split, not a boundary: WebSockets and redirect hops are not routed by Playwright, so a page
+  of another tree of the same owner can reach a port the device opened through them.
+- A refused local port is an ask only for a main-frame navigation to it or a request of a page that
+  is itself on loopback; a subresource or frame of a page elsewhere (a port scan, a widget) is
+  only noted in the reply, never reported for an ask nor shown on the panel.
+- The ports live in `<state>/loopback-ports.json` (a set older than 24 h is dropped), so the
+  restart a grant causes keeps them. After the person's grant or remove, and when a panel opens,
+  the plugin server sends `loopback_ports` with the tree's live set (`ifRunning`, waiting up to
+  20 s for a restarted service after a grant or remove), so the panel's reload finds the port
+  without the agent's next call; the daemon applies it to the root it knows for the conversation.
 
 - Long waits (`daemon/watches.ts`): `watch_start` binds a watch to the conversation's active tab
   (refused without one) and latches the first outcome, checked every 500 ms: met, or ended by a

@@ -9,7 +9,7 @@
 // ticket answer, should the kernel ever report it at mint time.
 import type { DeviceAccessCtx, RouteCaller } from "@capybara-hq/plugin-sdk";
 import { PANEL_HTML } from "../ui-src/panel/page.js";
-import { SERVICE } from "./browser.js";
+import { LOOPBACK_REFRESH_WAIT_MS, refreshLoopbackPorts, SERVICE } from "./browser.js";
 
 /** What the routes need: the kernel's device access and the built panel script. */
 export interface RouteDeps {
@@ -21,7 +21,12 @@ export interface RouteDeps {
     | "grantLoopbackPort"
     | "revokeLoopbackPort"
     | "loopbackPorts"
+    | "request"
   >;
+  /** Where an undelivered loopback refresh is logged. */
+  log?: { warn(msg: string, meta?: Record<string, unknown>): void };
+  /** How long a grant or remove waits for the service to take the new set (default 20 s). */
+  loopbackRefreshWaitMs?: number;
   /** The panel's browser bundle (`ui/panel.js`, built by build-ui.ts). */
   panelScript: () => Promise<string | undefined>;
 }
@@ -124,7 +129,7 @@ const BAD_PORT = "the body must be { port: integer from 1 to 65535 }";
 /** Registers the panel's routes. */
 export function registerRoutes(
   ctx: {
-    http: { route(method: "GET" | "POST" | "DELETE", path: string, handler: Handler): void };
+    http: { route(method: "GET" | "POST", path: string, handler: Handler): void };
   },
   deps: RouteDeps,
 ): void {
@@ -146,6 +151,9 @@ export function registerRoutes(
     "POST",
     "/ui/stream-ticket",
     data(async (scope) => {
+      // a running daemon gets the tree's live local ports before the viewer connects, so a
+      // takeover's navigation finds them (once, never waiting: nothing may start the service here)
+      await refreshLoopbackPorts(deps, scope, 0);
       const { url } = await deps.deviceAccess.streamTicket({ ...scope, service: SERVICE });
       return json(200, { url });
     }),
@@ -205,7 +213,11 @@ export function registerRoutes(
   );
 
   // the conversation's local ports (loopback port grants): the person's own list, their click on
-  // the loopback strip, and their remove; the kernel checks owner, attendance and ceilings
+  // the loopback strip, and their remove (a POST too: the web's /plugin-ui proxy passes only GET
+  // and POST); the kernel checks owner, attendance and ceilings. A grant or remove then pushes
+  // the tree's live set to the daemon, waiting for a service the change restarted, so the panel's
+  // reload finds the port open (or closed) without waiting for the agent's next call.
+  const refreshWait = deps.loopbackRefreshWaitMs ?? LOOPBACK_REFRESH_WAIT_MS;
   ctx.http.route(
     "GET",
     "/ui/loopback-ports",
@@ -222,18 +234,20 @@ export function registerRoutes(
       const port = await portOf(req);
       if (port === undefined) return error(400, "invalid_body", BAD_PORT);
       const grant = await deps.deviceAccess.grantLoopbackPort({ ...scope, service: SERVICE, port });
-      return json(200, { grant });
+      const applied = await refreshLoopbackPorts(deps, scope, refreshWait);
+      return json(200, { grant, applied });
     }),
   );
 
   ctx.http.route(
-    "DELETE",
-    "/ui/loopback-ports",
+    "POST",
+    "/ui/loopback-ports/revoke",
     data(async (scope, req) => {
       const port = await portOf(req);
       if (port === undefined) return error(400, "invalid_body", BAD_PORT);
       await deps.deviceAccess.revokeLoopbackPort({ ...scope, service: SERVICE, port });
-      return json(200, { ok: true });
+      const applied = await refreshLoopbackPorts(deps, scope, refreshWait);
+      return json(200, { ok: true, applied });
     }),
   );
 }

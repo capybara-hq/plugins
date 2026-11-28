@@ -141,7 +141,7 @@ function setup(
     }
     if (url === "handoff-answer" && opts.answer) return opts.answer();
     if (url === "network-hosts" && opts.hosts) return opts.hosts();
-    if (url === "loopback-ports" && opts.ports) return opts.ports(init?.method ?? "GET");
+    if (url.startsWith("loopback-ports") && opts.ports) return opts.ports(init?.method ?? "GET");
     return new Response("{}", { status: 200 });
   };
   const stage = dom.window.document.getElementById("stage") as HTMLElement;
@@ -206,6 +206,7 @@ const $ = (s: Setup, id: string) => s.dom.window.document.getElementById(id) as 
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   FakeSocket.all = [];
 });
 
@@ -852,6 +853,8 @@ describe("panel", () => {
   });
 
   it("shows the loopback strip and grants on click", async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     const s = setup();
     const sock = await live(s, state({ control: "user" }));
     sock.push({
@@ -866,6 +869,7 @@ describe("panel", () => {
     expect(($(s, "loopback") as HTMLElement).hidden).toBe(false);
     expect($(s, "loopback-text").textContent).toBe("Local port 3999 is closed");
     expect($(s, "loopback-allow").textContent).toBe("Allow for this conversation");
+    now += 600;
     $(s, "loopback-allow").click();
     await vi.waitFor(() =>
       expect(sock.sent).toContainEqual({ t: "nav", url: "http://127.0.0.1:3999/" }),
@@ -878,6 +882,55 @@ describe("panel", () => {
     expect(
       s.fetchCalls.filter((c) => c.url === "loopback-ports" && c.method === "GET").length,
     ).toBeGreaterThanOrEqual(2);
+  });
+
+  it("ignores a click right after the strip appears or changes port, and names the asking page", async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const s = setup();
+    const sock = await live(s, state({ control: "user" }));
+    const ask = (port: number) =>
+      sock.push({
+        t: "blocked",
+        host: "127.0.0.1",
+        url: "http://127.0.0.1:3000/",
+        port,
+        kind: "loopback",
+        origin: "127.0.0.1",
+      });
+    ask(5432);
+    expect($(s, "loopback-text").textContent).toBe(
+      "127.0.0.1 asks to reach local port 5432 (local database port)",
+    );
+    now += 400;
+    $(s, "loopback-allow").click();
+    // a page raised another port under the pointer: the guard starts again
+    now += 300;
+    ask(6379);
+    $(s, "loopback-allow").click();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(s.fetchCalls.some((c) => c.url === "loopback-ports" && c.method === "POST")).toBe(false);
+    now += 500;
+    $(s, "loopback-allow").click();
+    await vi.waitFor(() =>
+      expect(
+        s.fetchCalls.find((c) => c.url === "loopback-ports" && c.method === "POST")?.body,
+      ).toEqual({ port: 6379 }),
+    );
+  });
+
+  it("names the asking page in Chinese", async () => {
+    const s = setup({ locale: "zh" });
+    const sock = await live(s);
+    sock.push({
+      t: "blocked",
+      host: "localhost",
+      url: "http://localhost:3000/",
+      port: 8080,
+      kind: "loopback",
+      origin: "localhost",
+    });
+    expect($(s, "loopback-text").textContent).toBe("localhost 请求访问本机端口 8080");
   });
 
   it("names a database port and speaks Chinese on the loopback strip", async () => {
@@ -895,6 +948,8 @@ describe("panel", () => {
   });
 
   it("shows why a loopback grant was refused and keeps the strip", async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     const s = setup({
       ports: (method) =>
         method === "POST"
@@ -914,6 +969,7 @@ describe("panel", () => {
       port: 3999,
       kind: "loopback",
     });
+    now += 600;
     $(s, "loopback-allow").click();
     await vi.waitFor(() => expect(($(s, "notice") as HTMLElement).hidden).toBe(false));
     expect($(s, "notice").textContent).toContain("Running outside is off.");
@@ -928,7 +984,7 @@ describe("panel", () => {
     ];
     const s = setup({
       ports: (method) => {
-        if (method === "DELETE") ports = ports.filter((p) => p.port !== 3999);
+        if (method === "POST") ports = ports.filter((p) => p.port !== 3999);
         return new Response(JSON.stringify(method === "GET" ? { ports } : { ok: true }), {
           status: 200,
         });
@@ -943,8 +999,10 @@ describe("panel", () => {
     ($(s, "ports-list").querySelector('[data-port="3999"] button') as HTMLElement).click();
     await vi.waitFor(() => expect(items()).toEqual(["5432 (local database port)Remove"]));
     expect(
-      s.fetchCalls.find((c) => c.url === "loopback-ports" && c.method === "DELETE")?.body,
+      s.fetchCalls.find((c) => c.url === "loopback-ports/revoke" && c.method === "POST")?.body,
     ).toEqual({ port: 3999 });
+    // the web's /plugin-ui proxy passes only GET and POST
+    expect(s.fetchCalls.every((c) => c.method === "GET" || c.method === "POST")).toBe(true);
   });
 
   it("hides the grants list when there is none or it cannot be read", async () => {

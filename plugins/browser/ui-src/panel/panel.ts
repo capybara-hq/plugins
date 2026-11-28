@@ -61,6 +61,13 @@ const PENDING_NAV_MS = 30_000;
  * the panel bundle does not load the SDK, a test keeps the two equal).
  */
 export const DATABASE_PORTS: readonly number[] = [5432, 3306, 6379, 27017];
+/**
+ * Clicks on the loopback strip's action are ignored this long after the strip appears or its
+ * port changes: a page can raise the strip at any moment, timed under the person's pointer.
+ */
+export const LOOPBACK_CLICK_GUARD_MS = 500;
+/** How long an unanswered loopback strip stays up. */
+const LOOPBACK_STRIP_MS = 60_000;
 
 export interface Rect {
   x: number;
@@ -189,7 +196,8 @@ export function mountPanel(opts: PanelOptions): void {
   let blockedHost = "";
   let blockedUrl = "";
   /** The newest local port refused to the tree (the loopback strip's) and the page to reopen. */
-  let loopback: { port: number; url: string } | null = null;
+  let loopback: { port: number; url: string; origin?: string; shownAt: number } | null = null;
+  let loopbackTimer: ReturnType<typeof setTimeout> | undefined;
   /** The conversation's open local ports (its root's loopback grants), as last read. */
   let grants: { port: number; database: boolean }[] = [];
   /** The connection whose first state read the grants (read again on every new connection). */
@@ -403,7 +411,10 @@ export function mountPanel(opts: PanelOptions): void {
     $("loopback-text").textContent =
       loopback === null
         ? ""
-        : text("loopbackClosed").replace("{port}", String(loopback.port)) +
+        : (loopback.origin === undefined
+            ? text("loopbackClosed")
+            : text("loopbackAsks").replace("{host}", loopback.origin)
+          ).replace("{port}", String(loopback.port)) +
           (DATABASE_PORTS.includes(loopback.port) ? text("loopbackDatabase") : "");
     renderPorts();
     if (!isLive || control !== "user" || viewport.mobile) $("phonehint").hidden = true;
@@ -1079,8 +1090,7 @@ export function mountPanel(opts: PanelOptions): void {
         break;
       case "blocked":
         // a local port is the conversation's to open, never the device list's
-        if (msg.kind === "loopback" && typeof msg.port === "number")
-          loopback = { port: msg.port, url: msg.url };
+        if (msg.kind === "loopback" && typeof msg.port === "number") showLoopback(msg);
         else {
           blockedHost = msg.host;
           blockedUrl = msg.url;
@@ -1206,9 +1216,30 @@ export function mountPanel(opts: PanelOptions): void {
     send({ t: "nav", url: target });
   }
 
-  /** A loopback-ports request with the embed token. */
-  function portsFetch(method: "GET" | "POST" | "DELETE", port?: number): Promise<Response> {
-    return doFetch("loopback-ports", {
+  /**
+   * Shows a refused local port on the strip (naming the page that asked, for a subresource). A new
+   * port restarts the click guard; the strip hides itself after a while unanswered.
+   */
+  function showLoopback(msg: { port?: number; url: string; origin?: string }): void {
+    const port = msg.port as number;
+    const origin = typeof msg.origin === "string" && msg.origin !== "" ? msg.origin : undefined;
+    const fresh = loopback === null || loopback.port !== port || loopback.origin !== origin;
+    loopback = {
+      port,
+      url: msg.url,
+      ...(origin === undefined ? {} : { origin }),
+      shownAt: fresh || loopback === null ? Date.now() : loopback.shownAt,
+    };
+    if (loopbackTimer !== undefined) clearTimeout(loopbackTimer);
+    loopbackTimer = setTimeout(() => {
+      loopback = null;
+      renderChrome();
+    }, LOOPBACK_STRIP_MS);
+  }
+
+  /** A loopback-ports request with the embed token (GET reads, POST grants or revokes). */
+  function portsFetch(path: string, method: "GET" | "POST", port?: number): Promise<Response> {
+    return doFetch(path, {
       method,
       headers: {
         authorization: `Bearer ${token}`,
@@ -1223,7 +1254,7 @@ export function mountPanel(opts: PanelOptions): void {
   async function readPorts(): Promise<void> {
     let next: { port: number; database: boolean }[] = [];
     try {
-      const res = await portsFetch("GET");
+      const res = await portsFetch("loopback-ports", "GET");
       const body = (await res.json().catch(() => ({}))) as { ports?: unknown };
       if (res.ok && Array.isArray(body.ports))
         next = body.ports.flatMap((g: unknown) => {
@@ -1247,8 +1278,10 @@ export function mountPanel(opts: PanelOptions): void {
   async function allowLoopback(): Promise<void> {
     const refused = loopback;
     if (refused === null) return;
+    // a strip that just appeared (or changed port) is not clicked yet: see LOOPBACK_CLICK_GUARD_MS
+    if (Date.now() - refused.shownAt < LOOPBACK_CLICK_GUARD_MS) return;
     try {
-      const res = await portsFetch("POST", refused.port);
+      const res = await portsFetch("loopback-ports", "POST", refused.port);
       if (!res.ok) {
         notice("loopbackFailed", await refusalOf(res));
         return;
@@ -1257,7 +1290,10 @@ export function mountPanel(opts: PanelOptions): void {
       notice("loopbackFailed", "");
       return;
     }
-    if (loopback?.port === refused.port) loopback = null;
+    if (loopback?.port === refused.port) {
+      loopback = null;
+      if (loopbackTimer !== undefined) clearTimeout(loopbackTimer);
+    }
     renderChrome();
     void readPorts();
     reopen(refused.url);
@@ -1266,7 +1302,7 @@ export function mountPanel(opts: PanelOptions): void {
   /** Closes an open local port of the conversation again. */
   async function revokePort(port: number): Promise<void> {
     try {
-      const res = await portsFetch("DELETE", port);
+      const res = await portsFetch("loopback-ports/revoke", "POST", port);
       if (!res.ok) {
         notice("removeFailed", await refusalOf(res));
         return;

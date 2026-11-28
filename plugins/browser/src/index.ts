@@ -53,7 +53,7 @@ export default defineExtension({
       { method: "POST", path: "/ui/handoff-answer", access: "embed" },
       { method: "GET", path: "/ui/loopback-ports", access: "embed" },
       { method: "POST", path: "/ui/loopback-ports", access: "embed" },
-      { method: "DELETE", path: "/ui/loopback-ports", access: "embed" },
+      { method: "POST", path: "/ui/loopback-ports/revoke", access: "embed" },
     ],
     ui: { embeds: ["browser"] },
     deviceAccess: { services: ["browser"], loopbackPorts: true },
@@ -84,6 +84,6 @@ export default defineExtension({
     registerBrowserTools(ctx, deps);
     registerHandoffTool(ctx, deps);
     registerDialogTool(ctx, deps);
-    registerRoutes(ctx, { deviceAccess, panelScript: panelScriptLoader() });
+    registerRoutes(ctx, { deviceAccess, log: ctx.log, panelScript: panelScriptLoader() });
   },
 });

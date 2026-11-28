@@ -460,7 +460,14 @@ export type ToolOp =
    */
   | { op: "watch_start"; watchId: string; condition: WaitCondition; remainingMs: number }
   | { op: "watch_poll"; watchId: string }
-  | { op: "watch_end"; watchId: string };
+  | { op: "watch_end"; watchId: string }
+  /**
+   * The plugin server's refresh of a conversation tree's loopback ports outside a tool call (after
+   * the person's grant or remove in the panel, and when a panel opens): only its `loopbackPorts`
+   * matter, applied to the root the daemon knows for `conversationId` (the conversation itself
+   * when it knows none). Never starts the browser, opens a tab or marks the conversation in use.
+   */
+  | { op: "loopback_ports" };
 
 /** A request as it travels on the socket: an operation and its conversation. */
 export type ToolRequest = ToolOp & RequestConversation;
@@ -707,7 +714,15 @@ export type ViewerOut =
    * `kind: "loopback"`, a local port (`port`) the tree does not hold: the panel offers to open it
    * for the conversation.
    */
-  | { t: "blocked"; host: string; url: string; port?: number; kind?: "loopback" }
+  | {
+      t: "blocked";
+      host: string;
+      url: string;
+      port?: number;
+      kind?: "loopback";
+      /** For a loopback port a page's subresource requested: that page's host. */
+      origin?: string;
+    }
   /**
    * An informational dialog on a page of the viewer's tree: an alert (already closed) or a file
    * chooser. Decision dialogs are in `state.dialogs`.

@@ -303,6 +303,8 @@ export async function runRequest(
     pauseMs = Math.min(pauseMs * 2, RESTART_PAUSE_MAX_MS);
     return !call.signal.aborted;
   };
+  // the body (with the tree's live loopback ports) is read once per call, reused by its retries
+  let body: Uint8Array | undefined;
   for (let restarts = 0; ; ) {
     let startedAt: string | null;
     try {
@@ -318,7 +320,7 @@ export async function runRequest(
       throw new ToolError(RESTARTING_MESSAGE);
     }
     try {
-      const body = await requestBody(deps, call, req);
+      body ??= await requestBody(deps, call, req);
       reply = parseReply(
         await deps.deviceAccess.request(call, { service: SERVICE, body, timeoutMs }),
       );
@@ -415,6 +417,82 @@ async function requestBody(
   };
   return new TextEncoder().encode(JSON.stringify(sent));
 }
+
+/** How long a panel's refresh waits for the service to answer again (a grant may restart it). */
+export const LOOPBACK_REFRESH_WAIT_MS = 20_000;
+
+/**
+ * Pushes the conversation tree's live loopback ports to the running daemon outside a tool call
+ * (the person's grant or remove in the panel, a panel opening): an `ifRunning` `loopback_ports`
+ * request, so nothing is started or resumed. A grant changes the service's network and may
+ * restart it: the request is asked again with growing pauses for up to `waitMs` (0: once).
+ * Resolves whether the daemon took the set; never throws (the daemon keeps its saved copy, and
+ * the tree's next tool call sends the set anyway).
+ */
+export async function refreshLoopbackPorts(
+  deps: {
+    deviceAccess: Pick<DeviceAccessCtx, "loopbackPorts" | "request">;
+    log?: BrowserDeps["log"] | undefined;
+  },
+  scope: { orgId: string; accountId: string; conversationId: string },
+  waitMs: number,
+): Promise<boolean> {
+  const signal = AbortSignal.timeout(waitMs + REFRESH_REQUEST_MS);
+  // the panel's own scope as a call: the kernel checks the account owns the conversation
+  const call: ToolCallContext = {
+    ...scope,
+    ownerAccountId: scope.accountId,
+    agentId: "",
+    rootConversationId: scope.conversationId,
+    callId: "browser-panel-loopback",
+    signal,
+  };
+  const until = Date.now() + waitMs;
+  let pauseMs = RESTART_PAUSE_FIRST_MS;
+  for (;;) {
+    let ports: number[];
+    try {
+      // read first: a conversation without a device (or not the account's) refuses here, so
+      // the request below never binds a device to it
+      ports = (await deps.deviceAccess.loopbackPorts({ ...scope, service: SERVICE })).map(
+        (g) => g.port,
+      );
+    } catch {
+      return false;
+    }
+    try {
+      const sent: ToolRequest = {
+        op: "loopback_ports",
+        conversationId: scope.conversationId,
+        rootConversationId: scope.conversationId,
+        loopbackPorts: ports,
+      };
+      const body = new TextEncoder().encode(JSON.stringify(sent));
+      const reply = parseReply(
+        await deps.deviceAccess.request(call, {
+          service: SERVICE,
+          body,
+          timeoutMs: REFRESH_REQUEST_MS,
+          ifRunning: true,
+        }),
+      );
+      if (reply.ok) return true;
+    } catch (e) {
+      if (Date.now() + pauseMs > until || signal.aborted) {
+        deps.log?.warn("browser loopback refresh not delivered", {
+          error: e instanceof Error ? e.message : String(e),
+        });
+        return false;
+      }
+    }
+    if (Date.now() + pauseMs > until || signal.aborted) return false;
+    await pause(pauseMs, signal);
+    pauseMs = Math.min(pauseMs * 2, RESTART_PAUSE_MAX_MS);
+  }
+}
+
+/** How long one refresh request may take. */
+const REFRESH_REQUEST_MS = 5_000;
 
 const isPort = (v: unknown): v is number =>
   typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 65535;

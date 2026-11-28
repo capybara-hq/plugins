@@ -621,6 +621,7 @@ export class ViewerSession {
         host: e.host,
         url: e.url,
         ...(e.kind === "loopback" ? { port: e.port, kind: e.kind } : {}),
+        ...(e.kind === "loopback" && e.origin !== undefined ? { origin: e.origin } : {}),
       });
     else if (e.type === "permission")
       this.send({

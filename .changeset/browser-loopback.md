@@ -11,3 +11,8 @@ when the device opened the port for another conversation. The panel shows "本�
 with 允许本会话访问 (the person's own grant, then the page opens again) and lists the conversation's
 open local ports with 移除. Loopback now goes through the device's proxy in the proxy flag form as
 well (Playwright's rule for its proxy option).
+A panel grant or remove takes effect at once: the plugin pushes the tree's live ports to the
+running daemon (waiting for a service the change restarted), and the daemon keeps them in its
+state directory across restarts. Hosts are matched as the device's proxy canonicalizes them
+(`localhost.`, `127.1`), and a local port a page elsewhere requests as a subresource is only noted,
+never asked for.
