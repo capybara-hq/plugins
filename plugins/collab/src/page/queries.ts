@@ -976,7 +976,8 @@ async function itemOfConversation(
     .select("item_id")
     .distinct()
     .where("org_id", "=", orgId)
-    .where(sql<SqlBool>`actor->>'conversationId' = ${conversationId}`)
+    // Matches the partial index activity_conversation (predicate and expression).
+    .where(sql<SqlBool>`actor ? 'conversationId' AND actor->>'conversationId' = ${conversationId}`)
     .limit(CONVERSATION_CANDIDATES)
     .execute();
   const ids = [...new Set([...direct.map((r) => r.id), ...viaActivity.map((r) => r.item_id)])];

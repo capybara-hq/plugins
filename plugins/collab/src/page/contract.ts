@@ -515,7 +515,7 @@ export interface ItemCreatePayload {
   labels?: string[];
 }
 
-/** `item.update`: the item's own fields (not status or assignment). */
+/** `item.update`: the item's own fields, optionally with a reassignment (never the status). */
 export interface ItemUpdatePayload {
   itemId: string;
   version: number;
@@ -525,6 +525,13 @@ export interface ItemUpdatePayload {
   labels?: string[];
   /** Null removes the parent. */
   parentId?: string | null;
+  /**
+   * Also reassign, like `item.assign`, after the field update and at the version it returned
+   * (one action, no version arithmetic on the client). Omitted: the assignment stays.
+   */
+  responsibleAccountId?: string;
+  /** Only with `responsibleAccountId`; null or omitted: no agent. Must be usable by that person. */
+  agentId?: string | null;
 }
 
 /**

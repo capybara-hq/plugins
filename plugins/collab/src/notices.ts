@@ -11,6 +11,13 @@ export type NotifyCtx = Pick<ExtensionContext, "db" | "log" | "inbox" | "agents"
 /** The inbox action that takes the agent off an item (`projects` component). */
 export const STOP_AGENT_ACTION = "inbox.stop-agent";
 
+/**
+ * Activity kinds that may owe a notice: an assignment, an unresolved handoff, and a creation
+ * that gave the item a responsible person (`detail.to`).
+ */
+// capybara:allow-module-state read-only constant
+const OWING_KINDS = ["assigned", "handoff_unresolved", "created"] as const;
+
 /** Inbox titles are capped at 200 characters (`INBOX_LIMITS.titleChars`). */
 const TITLE_MAX = 200;
 
@@ -125,7 +132,7 @@ const SWEEP_AFTER = sql<Date>`now() - interval '1 minute'`;
 const NOTICE_BATCH = 200;
 
 /**
- * Posts the notices owed by unnotified `assigned` / `handoff_unresolved` entries in `window`,
+ * Posts the notices owed by unnotified `assigned` / `handoff_unresolved` / `created` entries in `window`,
  * marking each once it is decided (posted, or not owed). Per item only the assignment that is
  * still current is announced, and only when it gave the item to a new person or a new agent
  * (taking the agent off tells nobody). Intent first: the entry is written in the assignment's
@@ -157,7 +164,7 @@ async function postOwed(ctx: NotifyCtx, orgId: string, window: NoticeWindow): Pr
       "p.owner_account_id",
     ])
     .where("a.org_id", "=", orgId)
-    .where("a.kind", "in", ["assigned", "handoff_unresolved"])
+    .where("a.kind", "in", OWING_KINDS)
     .where("a.notified_at", "is", null);
   query =
     "since" in window
@@ -226,7 +233,14 @@ async function postOne(
     );
     return;
   }
-  const { from, to } = row.detail as { from: Pair; to: Pair };
+  // A creation with an initial responsible person reads as an assignment from nobody.
+  const { from, to } =
+    row.kind === "created"
+      ? {
+          from: { accountId: null, agentId: null },
+          to: (row.detail as { to?: Pair }).to ?? { accountId: null, agentId: null },
+        }
+      : (row.detail as { from: Pair; to: Pair });
   if (announced.has(row.itemId) || !to.accountId) return;
   if (to.accountId !== row.responsible_account_id || to.agentId !== row.executing_agent_id) return;
   const newPerson = from.accountId !== to.accountId;
@@ -273,7 +287,7 @@ export async function sweepNotices(ctx: NotifyCtx, orgId: string): Promise<numbe
         .selectFrom("activity")
         .select("id")
         .where("org_id", "=", orgId)
-        .where("kind", "in", ["assigned", "handoff_unresolved"])
+        .where("kind", "in", OWING_KINDS)
         .where("notified_at", "is", null)
         .where("created_at", "<", NOTICE_MAX_AGE)
         .limit(500),

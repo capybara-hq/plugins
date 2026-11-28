@@ -297,7 +297,13 @@ export async function createItem(
       })
       .returningAll()
       .executeTakeFirstOrThrow();
-    await addActivity(tx, orgId, item.id, actor, "created", { status: status.key });
+    // The initial assignment, if any: its notice is owed like an `assigned` entry's (notices.ts).
+    await addActivity(tx, orgId, item.id, actor, "created", {
+      status: status.key,
+      ...(item.responsible_account_id
+        ? { to: { accountId: item.responsible_account_id, agentId: item.executing_agent_id } }
+        : {}),
+    });
     if (assignee?.droppedAgentId) await noteDroppedAgent(tx, orgId, item.id, actor, assignee);
     if (!input.responsibleAccountId && !assignee) {
       await noteUnresolvedHandoff(tx, orgId, item.id, actor, status);

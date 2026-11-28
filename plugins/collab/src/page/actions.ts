@@ -317,7 +317,10 @@ async function itemCreate(deps: ActionDeps, args: UiOrgActionArgs): Promise<UiAc
   );
 }
 
-/** `item.update`: the item's own fields at the version the person saw. */
+/**
+ * `item.update`: the item's own fields at the version the person saw, then (with
+ * `responsibleAccountId`) the assignment at the version the update returned.
+ */
 async function itemUpdate(deps: ActionDeps, args: UiOrgActionArgs): Promise<UiActionResult> {
   const p = objectOf(args.payload);
   const { itemId } = payloadFields(p, { itemId: "uuid" });
@@ -327,17 +330,43 @@ async function itemUpdate(deps: ActionDeps, args: UiOrgActionArgs): Promise<UiAc
   const priority = optPriority(p);
   const labels = optLabels(p);
   const parentId = p.parentId === null ? null : optUuid(p, "parentId");
+  const responsible = optString(p, "responsibleAccountId", ID_MAX);
+  const agentId = p.agentId === null ? null : optString(p, "agentId", ID_MAX);
+  if (agentId !== undefined && responsible === undefined) {
+    throw new ActionPayloadError("agentId needs responsibleAccountId");
+  }
   return refusing(
     async () => {
-      await writing(deps, args.orgId, () =>
-        updateItem(deps.db, args.orgId, { accountId: args.accountId }, itemId, version, {
-          ...(title !== undefined ? { title } : {}),
-          ...(description !== undefined ? { description } : {}),
-          ...(priority !== undefined ? { priority } : {}),
-          ...(labels !== undefined ? { labels } : {}),
-          ...(parentId !== undefined ? { parentId } : {}),
-        }),
-      );
+      if (responsible && agentId && !(await agentUsable(deps, args.orgId, responsible, agentId))) {
+        return { toast: AGENT_REFUSED };
+      }
+      await writing(deps, args.orgId, async (hooks) => {
+        const updated = await updateItem(
+          deps.db,
+          args.orgId,
+          { accountId: args.accountId },
+          itemId,
+          version,
+          {
+            ...(title !== undefined ? { title } : {}),
+            ...(description !== undefined ? { description } : {}),
+            ...(priority !== undefined ? { priority } : {}),
+            ...(labels !== undefined ? { labels } : {}),
+            ...(parentId !== undefined ? { parentId } : {}),
+          },
+        );
+        if (responsible === undefined) return updated;
+        // The assignment follows at whatever version the update left (no client arithmetic).
+        return assign(
+          deps.db,
+          args.orgId,
+          { accountId: args.accountId },
+          itemId,
+          updated.version,
+          { responsibleAccountId: responsible, executingAgentId: agentId ?? null },
+          hooks,
+        );
+      });
       return { invalidate: [...ITEMS] };
     },
     { invalid_input: ITEM_INPUT },
