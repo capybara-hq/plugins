@@ -1,5 +1,11 @@
 # @capybara-hq/plugin-connector-mcp
 
+## 0.1.0-rc.13
+
+### Patch Changes
+
+- 7ee27d3: Preserve the byte size of listed MCP resources, including zero for empty resources.
+
 ## 0.1.0-rc.12
 
 ### Patch Changes
