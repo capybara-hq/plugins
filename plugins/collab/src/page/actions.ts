@@ -1,10 +1,15 @@
 import type { UiActionResult, UiOrgActionArgs } from "@capybara-hq/plugin-sdk";
 import { answerAsPerson } from "../decisions/actions.js";
 import { decisionHooks } from "../decisions-queue.js";
-import { requireRole } from "../domain/access.js";
+import { isArchived, requireRole } from "../domain/access.js";
 import { assign, assignIn } from "../domain/assignment.js";
 import { type DecisionHooks, readdressOpen } from "../domain/decision-state.js";
-import { answerersOf, GATE_APPROVE, GATE_REJECT } from "../domain/decisions.js";
+import {
+  answerersOf,
+  cancelOpenDecisionsOfProject,
+  GATE_APPROVE,
+  GATE_REJECT,
+} from "../domain/decisions.js";
 import { ARCHIVED_TOAST, CollabError, type CollabErrorCode } from "../domain/errors.js";
 import { comment, createItem, transition, updateItemIn } from "../domain/items.js";
 import { addMember, createProject, removeMember, setFunction } from "../domain/projects.js";
@@ -746,6 +751,7 @@ async function settingsSave(deps: ActionDeps, args: UiOrgActionArgs): Promise<Ui
           ...(description !== undefined ? { description } : {}),
           ...(archived !== undefined ? { archived } : {}),
         };
+        const wasArchived = await isArchived(tx, args.orgId, projectId);
         if (Object.keys(set).length > 0) {
           await tx
             .updateTable("projects")
@@ -753,6 +759,17 @@ async function settingsSave(deps: ActionDeps, args: UiOrgActionArgs): Promise<Ui
             .where("org_id", "=", args.orgId)
             .where("id", "=", projectId)
             .execute();
+        }
+        // Archiving makes the project read-only: its open decisions are canceled (inbox items
+        // resolved, askers told), so no reminder or escalation fires afterwards.
+        if (archived === true && !wasArchived) {
+          await cancelOpenDecisionsOfProject(
+            tx,
+            args.orgId,
+            { accountId: args.accountId },
+            projectId,
+            hooks,
+          );
         }
         let gatesChanged = false;
         for (const s of statuses) {

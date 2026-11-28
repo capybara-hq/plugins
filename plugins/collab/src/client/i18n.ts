@@ -136,6 +136,10 @@ export const COPY = {
   changedItem: { zh: "修改了事项", en: "changed the item" },
   general: { zh: "常规", en: "General" },
   archived: { zh: "已归档", en: "Archived" },
+  archivedBanner: {
+    zh: "项目已归档，只能查看。取消归档后才能修改。",
+    en: "This project is archived and read-only. Unarchive it to make changes.",
+  },
   archivedHelp: {
     zh: "归档后项目只能查看，不能再修改；项目所有者可以取消归档。",
     en: "An archived project is read-only; a project owner can unarchive it.",

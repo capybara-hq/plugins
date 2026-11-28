@@ -1007,6 +1007,7 @@ async function projectSettings(
       functionLabel: m.function_label,
       defaultAgent: await dir.agent(m.account_id, m.default_agent_id),
       canSetAgent:
+        !project.archived &&
         m.role !== "guest" &&
         (role === "owner" || (m.account_id === call.accountId && role === "member")),
     });

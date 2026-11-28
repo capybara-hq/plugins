@@ -9,6 +9,7 @@ import type { ProjectItemsResult, ProjectSettingsResult } from "../../src/page/c
 import {
   BEN,
   boardResult,
+  buttonByText,
   card,
   click,
   detailResult,
@@ -23,6 +24,7 @@ import {
   templateCount,
   text,
 } from "./fixtures.js";
+import { fireInput } from "./input.js";
 
 const SLOT = "org.page";
 
@@ -263,6 +265,43 @@ describe("settings", () => {
     expect(
       document.querySelector('table[aria-label="Members & functions"]')?.textContent,
     ).toContain("Ben");
+  });
+
+  it("saving General sends only what changed (a stale form never sends archived)", async () => {
+    const { calls } = renderPage({ project: "APP", settings: "1", section: "general" });
+    await flush();
+    await fireInput(document.querySelector('input[aria-label="Name"]'), "Renamed");
+    await click(buttonByText("Save"));
+    await flush();
+    expect(calls).toEqual([
+      { actionId: "settings.save", payload: { projectId: PROJECT.id, name: "Renamed" } },
+    ]);
+  });
+
+  it("an archived project shows the banner and leaves only the archive switch usable", async () => {
+    const archived: ProjectSettingsResult = {
+      ...SETTINGS,
+      project: { ...PROJECT, archived: true },
+    };
+    renderPage(
+      { project: "APP", settings: "1", section: "general" },
+      { queries: { ...QUERIES, "project.settings": () => archived } },
+    );
+    await flush();
+    expect(text()).toContain("This project is archived and read-only.");
+    expect(document.querySelector<HTMLInputElement>('input[aria-label="Name"]')?.disabled).toBe(
+      true,
+    );
+    host?.unmount();
+    renderPage(
+      { project: "APP", settings: "1", section: "gates" },
+      { queries: { ...QUERIES, "project.settings": () => archived } },
+    );
+    await flush();
+    expect(
+      document.querySelector<HTMLSelectElement>('select[aria-label="Task Doing Confirmer"]')
+        ?.disabled,
+    ).toBe(true);
   });
 
   it("changing a gate saves the status's gate", async () => {

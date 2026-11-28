@@ -237,7 +237,9 @@ export function registerDecisionTools(deps: ToolDeps): void {
       if (state !== "any") q = q.where("d.state", "=", state as DecisionState);
       // Every recipient counts (each confirmer of a gate several members may confirm).
       if (input.addressedToMe === true) {
-        q = q.where(sql<SqlBool>`${person} = ANY(d.addressees)`);
+        q = q.where(
+          sql<SqlBool>`(d.addressee_account_id = ${person} OR ${person} = ANY(d.addressees))`,
+        );
       }
       const rows = await q.orderBy("d.created_at", "desc").limit(limit).execute();
       if (rows.length === 0) {

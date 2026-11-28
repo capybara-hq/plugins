@@ -369,7 +369,7 @@ export async function answerDecision(
       return { decision: { ...current, state: "canceled" }, item, outcome: "superseded" };
     }
     if (await isArchived(tx, orgId, item.project_id)) {
-      await closeDecision(tx, orgId, actor, current, "canceled", "archived", opts.decisions);
+      await cancelWithReport(tx, orgId, actor, current, item, "archived", opts.decisions);
       return { decision: { ...current, state: "canceled" }, item, outcome: "archived" };
     }
     // The workflow may have changed since the request: a move it no longer allows cancels the
@@ -385,7 +385,7 @@ export async function answerDecision(
         checkTransition(statuses, item.status_key, current.gate_target);
       } catch (error) {
         if (!(error instanceof CollabError) || error.code !== "invalid_transition") throw error;
-        await closeDecision(tx, orgId, actor, current, "canceled", "disallowed", opts.decisions);
+        await cancelWithReport(tx, orgId, actor, current, item, "disallowed", opts.decisions);
         return { decision: { ...current, state: "canceled" }, item, outcome: "disallowed" };
       }
     }
@@ -453,6 +453,85 @@ export async function answerDecision(
     );
     return { decision, item: after, outcome: "answered" };
   });
+}
+
+/** Why an open decision was canceled without an answer (besides a gate the item moved past). */
+type CancelReason = "disallowed" | "archived";
+
+/** What the asker is told when their decision is canceled. */
+async function cancelText(
+  tx: CollabDb,
+  orgId: string,
+  item: Item,
+  decision: Decision,
+  reason: CancelReason,
+): Promise<string> {
+  const project = await loadProject(tx, orgId, item.project_id);
+  const key = `${project.key}-${item.number}`;
+  const why =
+    reason === "archived"
+      ? "the project was archived and is read-only."
+      : "the workflow no longer allows that move.";
+  if (decision.kind !== "gate") {
+    return `Question: "${decision.question}" was canceled: ${why}`;
+  }
+  const statuses = await statusesForType(tx, orgId, item.project_id, item.type);
+  const target = statuses.find((s) => s.key === decision.gate_target);
+  const name = target ? target.name_en : (decision.gate_target ?? "?");
+  return `The confirmation request to move ${key} to "${name}" was canceled: ${why}${
+    reason === "disallowed" ? " Pick one of the statuses item_get lists as allowed." : ""
+  }`;
+}
+
+/**
+ * Cancels an open decision and tells the asking pair (while it holds the item), like an expiry.
+ * Returns false when it was no longer open.
+ */
+async function cancelWithReport(
+  tx: CollabDb,
+  orgId: string,
+  actor: Actor,
+  decision: Decision,
+  item: Item,
+  reason: CancelReason,
+  hooks: DecisionHooks | undefined,
+): Promise<boolean> {
+  if (!(await closeDecision(tx, orgId, actor, decision, "canceled", reason, hooks))) return false;
+  const text = await cancelText(tx, orgId, item, decision, reason);
+  await reportToAsker(tx, orgId, actor, decision, item, text, false);
+  return true;
+}
+
+/**
+ * Cancels every open decision of a project being archived (archived is read-only: no answers,
+ * reminders or escalations), resolving their inbox items and telling the askers. Items are
+ * locked in id order first.
+ */
+export async function cancelOpenDecisionsOfProject(
+  tx: CollabDb,
+  orgId: string,
+  actor: Actor,
+  projectId: string,
+  hooks: DecisionHooks,
+): Promise<number> {
+  const open = await tx
+    .selectFrom("decisions as d")
+    .innerJoin("items as i", (j) =>
+      j.onRef("i.id", "=", "d.item_id").onRef("i.org_id", "=", "d.org_id"),
+    )
+    .selectAll("d")
+    .where("d.org_id", "=", orgId)
+    .where("i.project_id", "=", projectId)
+    .where("d.state", "=", "open")
+    .orderBy("d.item_id")
+    .orderBy("d.id")
+    .execute();
+  let canceled = 0;
+  for (const decision of open) {
+    const item = await lockItem(tx, orgId, decision.item_id);
+    if (await cancelWithReport(tx, orgId, actor, decision, item, "archived", hooks)) canceled++;
+  }
+  return canceled;
 }
 
 /** What the asker is told when a decision expires, by kind. */

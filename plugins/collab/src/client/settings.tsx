@@ -115,23 +115,46 @@ export function Settings({ project }: { project: string }) {
         />
       ) : (
         <>
-          {!data.canEdit && (
+          {data.project.archived ? (
             <Text variant="small" tone="muted">
-              {t(COPY.readOnly)}
+              {t(COPY.archivedBanner)}
             </Text>
+          ) : (
+            !data.canEdit && (
+              <Text variant="small" tone="muted">
+                {t(COPY.readOnly)}
+              </Text>
+            )
           )}
-          {section === "general" && <GeneralSection key={data.project.id} data={data} />}
-          {section === "members" && <MembersSection data={data} />}
-          {section === "types" && <TypesSection data={data} />}
-          {section === "gates" && <GatesSection data={data} />}
-          {section === "defaults" && <DefaultsSection data={data} />}
+          {section === "general" && (
+            <GeneralSection key={`${data.project.id}-${data.project.archived}`} data={data} />
+          )}
+          {/* An archived project is read-only: only its archive switch stays usable. */}
+          {section === "members" && <MembersSection data={readOnlyWhenArchived(data)} />}
+          {section === "types" && <TypesSection data={readOnlyWhenArchived(data)} />}
+          {section === "gates" && <GatesSection data={readOnlyWhenArchived(data)} />}
+          {section === "defaults" && <DefaultsSection data={readOnlyWhenArchived(data)} />}
         </>
       )}
     </SettingsPage>
   );
 }
 
-/** The project's name, description and archive flag (project owners). */
+/** The settings as a read-only view while the project is archived. */
+function readOnlyWhenArchived(data: ProjectSettingsResult): ProjectSettingsResult {
+  if (!data.project.archived) return data;
+  return {
+    ...data,
+    canEdit: false,
+    members: data.members.map((m) => ({ ...m, canSetAgent: false })),
+  };
+}
+
+/**
+ * The project's name, description and archive flag (project owners). Only changed fields are
+ * sent, so a form opened before someone archived the project cannot unarchive it by accident;
+ * while archived, only the archive switch is usable.
+ */
 function GeneralSection({ data }: { data: ProjectSettingsResult }) {
   const t = useT();
   const act = useCollabAction();
@@ -143,13 +166,16 @@ function GeneralSection({ data }: { data: ProjectSettingsResult }) {
     name.trim() !== data.project.name ||
     description.trim() !== data.project.description ||
     archived !== data.project.archived;
+  const locked = data.project.archived;
   const save = () =>
     void runner.run("save", () =>
       act("settings.save", {
         projectId: data.project.id,
-        name: name.trim(),
-        description: description.trim(),
-        archived,
+        ...(name.trim() !== data.project.name && { name: name.trim() }),
+        ...(description.trim() !== data.project.description && {
+          description: description.trim(),
+        }),
+        ...(archived !== data.project.archived && { archived }),
       }),
     );
   return (
@@ -158,6 +184,7 @@ function GeneralSection({ data }: { data: ProjectSettingsResult }) {
         <Input
           aria-label={t(COPY.projectName)}
           value={name}
+          disabled={locked}
           invalid={name.trim() === ""}
           onChange={(e) => setName(e.target.value)}
         />
@@ -166,6 +193,7 @@ function GeneralSection({ data }: { data: ProjectSettingsResult }) {
         <Textarea
           aria-label={t(COPY.description)}
           value={description}
+          disabled={locked}
           rows={3}
           onChange={(e) => setDescription(e.target.value)}
         />

@@ -305,7 +305,7 @@ describe("settings", () => {
     expect(nav[0]?.items.map((i) => i.id)).not.toContain("general");
   });
 
-  it("General saves the name, description and archive flag", async () => {
+  it("General saves the changed name and archive flag (unchanged fields are not sent)", async () => {
     const { calls } = renderPage(
       { project: "APP", settings: "1", section: "general" },
       { "project.settings": () => SETTINGS },
@@ -317,7 +317,7 @@ describe("settings", () => {
     expect(calls).toEqual([
       {
         actionId: "settings.save",
-        payload: { projectId: PROJECT.id, name: "App v2", description: "The app", archived: true },
+        payload: { projectId: PROJECT.id, name: "App v2", archived: true },
       },
     ]);
   });

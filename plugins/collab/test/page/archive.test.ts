@@ -95,6 +95,11 @@ describe("workflow changes and archived projects", () => {
         archived: true,
       }),
     ).not.toHaveProperty("toast");
+    // Archiving cancels the open request at once and resolves its inbox items.
+    const canceled = await decisionRow(item.id);
+    expect(canceled.state).toBe("canceled");
+    for (const id of canceled.inbox_item_ids) expect(fake.resolved).toContain(id);
+    expect(canceled.inbox_item_ids.length).toBeGreaterThan(0);
 
     const refusedEn = "The project is archived and read-only.";
     const writes: [string, string, object][] = [
@@ -121,13 +126,12 @@ describe("workflow changes and archived projects", () => {
       const out = await fake.act(org, who, action, payload);
       expect(out.toast?.en, action).toContain(refusedEn);
     }
-    // An answer cancels the open request (archived is read-only).
+    // A late answer finds it closed; nothing moves.
     const answer = await fake.act(org, OWNER.accountId, "gate.confirm", {
       decisionId: gate.id,
       approve: true,
     });
-    expect(answer.toast?.en).toContain(refusedEn);
-    expect((await decisionRow(item.id)).state).toBe("canceled");
+    expect(answer.toast?.en).toBe("The item moved on.");
     expect((await itemRow(item.id)).status_key).toBe("review");
 
     // Tools are refused with an actionable error.
@@ -155,5 +159,64 @@ describe("workflow changes and archived projects", () => {
     expect(
       await fake.act(org, ENGINEER.accountId, "item.comment", { itemId: item.id, body: "back" }),
     ).not.toHaveProperty("toast");
+  });
+
+  it("a canceled request tells the asking agent pair why (workflow change, archive)", async () => {
+    const org = "org-arch-report";
+    const { project, item } = await inReview(org, "ARP");
+    const fake = pageCtx(db, AGENTS);
+    const pair = { accountId: ENGINEER.accountId, agentId: "agent-eng", conversationId: "conv-e" };
+    // The engineer's agent holds the item and asks for both requests.
+    await fake.act(org, OWNER.accountId, "item.assign", {
+      itemId: item.id,
+      version: item.version,
+      responsibleAccountId: ENGINEER.accountId,
+      agentId: "agent-eng",
+    });
+    let current = await itemRow(item.id);
+    const asked = await transition(db, org, pair, item.id, current.version, "ready", {
+      decisions: NO_DECISION_JOBS,
+    });
+    if (!("gate" in asked)) throw new Error("expected a gate request");
+    await db
+      .updateTable("statuses")
+      .set({ next_keys: ["drafting", "canceled"] })
+      .where("org_id", "=", org)
+      .where("key", "=", "review")
+      .execute();
+    await fake.act(org, OWNER.accountId, "gate.confirm", {
+      decisionId: asked.gate.id,
+      approve: true,
+    });
+    const told = async (decisionId: string) =>
+      db
+        .selectFrom("event_outbox")
+        .select(["type", "detail"])
+        .where("org_id", "=", org)
+        .where("dedupe_key", "=", `item.updated-decision-${decisionId}`)
+        .executeTakeFirst();
+    expect(JSON.stringify((await told(asked.gate.id))?.detail)).toContain(
+      'The confirmation request to move ARP-1 to \\"Ready\\" was canceled: the workflow no longer allows that move.',
+    );
+
+    // A question from the same pair, then the project is archived.
+    await db
+      .updateTable("statuses")
+      .set({ next_keys: ["ready", "drafting", "canceled"] })
+      .where("org_id", "=", org)
+      .where("key", "=", "review")
+      .execute();
+    current = await itemRow(item.id);
+    const again = await transition(db, org, pair, item.id, current.version, "ready", {
+      decisions: NO_DECISION_JOBS,
+    });
+    if (!("gate" in again)) throw new Error("expected a gate request");
+    await fake.act(org, OWNER.accountId, "settings.save", {
+      projectId: project.id,
+      archived: true,
+    });
+    expect(JSON.stringify((await told(again.gate.id))?.detail)).toContain(
+      "was canceled: the project was archived and is read-only.",
+    );
   });
 });
