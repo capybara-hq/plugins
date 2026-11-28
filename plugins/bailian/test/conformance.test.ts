@@ -271,6 +271,37 @@ describe("stream", () => {
     });
   });
 
+  it("toolChoice none: a tool call the model makes anyway is dropped, the text stays, end_turn", async () => {
+    const provider = await withGeneration(() =>
+      sseGeneration({
+        text: "Checking.",
+        toolCalls: [{ id: "call_a", name: "get_weather", args: '{"city": "Paris"}' }],
+        finish: "tool_calls",
+      }),
+    );
+    const weather = {
+      name: "get_weather",
+      description: "Get the weather.",
+      inputSchema: { type: "object", properties: { city: { type: "string" } } },
+    };
+    const { events, done, error } = await run(
+      provider,
+      req({ tools: [weather], toolChoice: "none" }),
+    );
+    expect(error).toBeUndefined();
+    expect(events.some((e) => e.type === "tool_call_start" || e.type === "tool_call_delta")).toBe(
+      false,
+    );
+    if (done?.type !== "message_complete") throw new Error("expected message_complete");
+    expect(done.content).toEqual([{ type: "text", text: "Checking." }]);
+    expect(done.stopReason).toBe("end_turn");
+    // the request kept the tools and sent no tool_choice
+    const sent = server?.requests.at(-1)?.body as { parameters: Record<string, unknown> };
+    const params = sent.parameters;
+    expect(params.tools).toHaveLength(1);
+    expect(params.tool_choice).toBeUndefined();
+  });
+
   it("streams tool call input: a start per call, argument deltas, a synthesized id when absent", async () => {
     const provider = await withGeneration(() =>
       sseGeneration({

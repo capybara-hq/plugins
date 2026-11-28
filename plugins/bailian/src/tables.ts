@@ -232,8 +232,12 @@ export const CACHE_5M: Readonly<ModelCacheInfo> = {
 };
 
 /**
- * Qwen4 models also take the 1 h option on the native endpoint (live 2026-11-28). Whether a hit
- * within the hour renews the 1 h entry is unverified, so `refreshOnHit` is false.
+ * Qwen4 models also take the 1 h option on the native endpoint (live 2026-11-28, qwen4-max). An
+ * untouched 1 h entry is still read 55 minutes after it was written. A hit does not renew every
+ * entry it reads: a request written at 0 with both markers (tools + system 6452 tokens, the whole
+ * request 9940) and read whole at 30 minutes read only the 6452 at 65 minutes, so the hit renewed
+ * the tools + system entry but the history entry still ended an hour after its write. A kernel
+ * that keeps a conversation warm cannot rely on hits renewing it, so `refreshOnHit` stays false.
  */
 export const CACHE_5M_1H: Readonly<ModelCacheInfo> = {
   ...CACHE_5M,

@@ -131,6 +131,24 @@ function mapMessages(messages: ModelMessage[], req: ModelRequest): Message[] {
   return out;
 }
 
+/**
+ * Whether the reply's tool calls are dropped: `toolChoice: "none"` (the in-context summary and the
+ * step-limit wrap-up) keeps the tools declared so the request shares the cache prefix of the turns
+ * before it, but DeepSeek renders a request with `tool_choice: "none"` without the tool
+ * definitions, so the prompt differs from the start of the tools on and only the part before them
+ * is read from the cache (live 2026-11-28, deepseek-flash: after a 5968-token turn a
+ * summary-shaped request with "none" counted 3358 input tokens in all and read 1792; with the
+ * default auto it read 5760). So `tool_choice` stays at its default (auto) and the stream mapping
+ * guarantees the contract instead: no tool_call events or blocks, only the text, stop reason
+ * end_turn. The request tells the model not to call tools; one that does anyway leaves only its
+ * text before the call (often empty or a short lead-in), which the kernel's callers already treat
+ * as a failed or short answer (a summary too short to accept fails the compaction; a wrap-up ends
+ * the run with that text). Remove once DeepSeek keeps the tool definitions under "none".
+ */
+export function toolCallsDropped(req: ModelRequest): boolean {
+  return req.toolChoice === "none";
+}
+
 /** model-provider@2 request → streaming Chat Completions body. Pure. */
 export function buildRequest(req: ModelRequest): ChatBody {
   const system = req.system.map((s) => s.text).join("\n\n");
@@ -150,9 +168,9 @@ export function buildRequest(req: ModelRequest): ChatBody {
       function: { name: tool.name, description: tool.description, parameters: tool.inputSchema },
     }));
     // The contract has "auto" | "none"; a forced choice is refused here the way the API would.
+    // "none" is not sent: see toolCallsDropped
     const choice = req.toolChoice as string | undefined;
-    if (choice === "none") body.tool_choice = "none";
-    else if (choice !== undefined && choice !== "auto") {
+    if (choice !== undefined && choice !== "auto" && choice !== "none") {
       if (thinkingOn(req)) {
         throw new ModelError(
           "invalid_request",

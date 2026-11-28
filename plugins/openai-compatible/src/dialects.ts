@@ -60,6 +60,15 @@ export interface Dialect {
    */
   cacheFields?: "dashscope" | "routing-key";
   /**
+   * How `toolChoice: "none"` reaches the service. `"send"`: as `tool_choice: "none"`. `"omit"`: not
+   * sent (the default auto) and the stream mapping drops any tool call, for a service that renders
+   * a request with `tool_choice: "none"` without the tool definitions, so the prompt loses the
+   * cache prefix the kernel keeps the tools declared for (the in-context summary, the step-limit
+   * wrap-up). The kernel's callers treat a reply whose only text came before a dropped call as a
+   * failed or short answer.
+   */
+  toolChoiceNone: "send" | "omit";
+  /**
    * Chat Completions 是否接受 PDF 的 `file` 内容（`{type: "file", file: {filename, file_data}}`）。
    * 为 false 的方言不能给模型开启 `documents`（配置校验拒绝）。图片一律用 `image_url`（data URL），
    * 是否支持按模型在部署配置里声明 `vision`。
@@ -206,6 +215,8 @@ export const IMPLICIT_CACHE: ModelCacheInfo = {
  */
 const generic: Dialect = {
   name: "generic",
+  // unknown services: the standard field
+  toolChoiceNone: "send",
   // 许多开源模型的 chat template（如 Qwen3）在 system 不在开头时直接报错，默认转成 user 文本；端点可改
   midConversationSystem: false,
   cache: undefined,
@@ -238,6 +249,10 @@ const generic: Dialect = {
  */
 const deepseek: Dialect = {
   name: "deepseek",
+  // Under "none" the tool definitions vanish from the prompt (live 2026-11-28, deepseek-flash:
+  // after a 6805-token turn a summary-shaped request with "none" counted 3870 in all and read
+  // 2048; with auto it read 6528 of 6666). Remove once DeepSeek keeps them under "none".
+  toolChoiceNone: "omit",
   // The API accepts `role: "system"` anywhere in `messages`, but the model does not keep a
   // mid-conversation system message in position: the service gathers them ahead of the
   // conversation, so a live probe on deepseek-v4-pro (2026-11-07) with notices after an assistant
@@ -327,6 +342,10 @@ const deepseek: Dialect = {
  */
 const qwen: Dialect = {
   name: "qwen",
+  // DashScope renders "none" like `tools: []` (live 2026-11-28, qwen-plus on compatible-mode:
+  // after a 7077-token turn a summary-shaped request with "none" read 0 and counted 4179 in all;
+  // with auto it read 7578 of 7648). Remove once DashScope keeps the tools under "none".
+  toolChoiceNone: "omit",
   midConversationSystem: false,
   // Explicit cache markers (map-request.ts): 5 minutes, refreshed on every hit; the one tier is
   // never chosen by a request (no options above 300)
@@ -388,6 +407,8 @@ const qwen: Dialect = {
  */
 const ark: Dialect = {
   name: "ark",
+  // "none" keeps the prefix (live 2026-11-28, native ark doubao-seed-2-1-pro: read 6968 of 7023)
+  toolChoiceNone: "send",
   midConversationSystem: false,
   cache: IMPLICIT_CACHE,
   cacheFields: "routing-key",

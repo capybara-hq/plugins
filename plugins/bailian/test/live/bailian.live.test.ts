@@ -232,6 +232,76 @@ for (const [label, model] of [
 }
 
 /**
+ * A summary-shaped request (the conversation plus a reply and a "summarize, do not call tools"
+ * turn) with `toolChoice: "none"` reads the turn before it from the cache. DashScope renders an
+ * explicit `tool_choice: "none"` without the tool definitions (ahead of the system text), which
+ * missed the cache from token 0 (live 2026-11-28); the plugin leaves it at auto and drops calls.
+ */
+function toolTurn(model: string, nonce: string, reasoning: boolean): ModelRequest {
+  const lines = (tag: string, n: number) =>
+    Array.from(
+      { length: n },
+      (_, i) => `${tag} ${i}: item ${i * 7} has code ${tag}-${i} (${nonce}).`,
+    ).join("\n");
+  return {
+    model,
+    system: [{ text: `You answer in a few words.\n${lines("Rule", 60)}`, cache: true }],
+    messages: [
+      { role: "user", content: [{ type: "text", text: `${lines("Fact", 40)}\nWhat is item 14?` }] },
+    ],
+    tools: ["read_file", "search", "run_command"].map((name, i) => ({
+      name,
+      description: `${name} (${nonce}).\n${lines(`Tool${i}`, 15)}`,
+      inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    })),
+    maxOutputTokens: 200,
+    params: reasoning ? { thinking: "off" } : {},
+  };
+}
+
+function summaryOf(turn: ModelRequest, reply: string): ModelRequest {
+  return {
+    ...turn,
+    messages: [
+      ...turn.messages,
+      { role: "assistant", content: [{ type: "text", text: reply || "Item 14 has code Fact-2." }] },
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Stop the task. Do not call tools. Write a two-sentence summary of the conversation above.",
+          },
+        ],
+      },
+    ],
+    toolChoice: "none",
+  };
+}
+
+describe.skipIf(!provider || !textOnly?.cache?.mechanism)(
+  "live toolChoice none keeps the cache",
+  { timeout: 180_000 },
+  () => {
+    it(`${textOnly?.id}: write, then a summary-shaped request with toolChoice none reads the cache`, async () => {
+      const p = provider as ModelProvider;
+      const turn = toolTurn(
+        textOnly?.id ?? "",
+        Math.random().toString(36).slice(2),
+        textOnly?.capabilities.reasoning ?? false,
+      );
+      const r1 = await usageOf(p, turn);
+      const r2 = await usageOf(p, summaryOf(turn, r1.text));
+      console.info(
+        `[plugin-bailian] live toolChoice none ${textOnly?.id}: turn ${JSON.stringify(r1.usage)}, summary ${JSON.stringify(r2.usage)}`,
+      );
+      expect(r1.usage.cacheWriteTokens).toBeGreaterThan(0);
+      expect(r2.usage.cacheReadTokens).toBeGreaterThanOrEqual(total(r1.usage) * 0.9);
+    });
+  },
+);
+
+/**
  * Qwen4 declares the 1 h option: the conformance suite's per-TTL cases run against it, and a 1 h
  * request writes its tokens to the 1 h tier (`cacheWriteByTtl`).
  */

@@ -10,7 +10,7 @@ import type { Target } from "./config.js";
 import { type ErrorBody, errorFromBody, errorFromResponse, toModelError } from "./errors.js";
 import { headers } from "./http.js";
 import type { Endpoint } from "./list.js";
-import { buildRequest, type ThinkingOpaque } from "./map-request.js";
+import { buildRequest, type ThinkingOpaque, toolCallsDropped } from "./map-request.js";
 import { PROVIDER } from "./tables.js";
 
 /** One server-sent event. */
@@ -190,6 +190,7 @@ export async function* streamGeneration(
 ): AsyncGenerator<ModelStreamEvent> {
   if (signal.aborted) throw aborted();
   const body = buildRequest(req, endpoint);
+  const dropCalls = toolCallsDropped(req);
   // Our own controller also closes the connection when the caller stops iterating early
   const ac = new AbortController();
   const onAbort = () => ac.abort();
@@ -237,7 +238,8 @@ export async function* streamGeneration(
         text += delta;
         yield { type: "text_delta", text: delta };
       }
-      for (const tc of msg?.tool_calls ?? []) {
+      // toolChoice "none" is enforced here, not by the request (toolCallsDropped)
+      for (const tc of dropCalls ? [] : (msg?.tool_calls ?? [])) {
         const index = typeof tc.index === "number" ? tc.index : 0;
         const acc = tools.get(index) ?? { id: "", name: "", args: "", started: false };
         // The id is fixed when the call starts (synthesized if absent); an id that arrives after the
