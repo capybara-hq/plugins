@@ -346,15 +346,6 @@ export async function answerDecision(
     await requireRole(tx, orgId, personAccountId, item.project_id, "read");
     if (current.state !== "open") return { decision: current, item, outcome: "closed" };
     const actor: Actor = { accountId: personAccountId };
-    if (
-      current.kind === "gate" &&
-      current.gate_from !== null &&
-      item.status_key !== current.gate_from &&
-      item.status_key !== current.gate_target
-    ) {
-      await closeDecision(tx, orgId, actor, current, "canceled", "superseded", opts.decisions);
-      return { decision: { ...current, state: "canceled" }, item, outcome: "superseded" };
-    }
     const answerers = await answerersOf(tx, orgId, current, item);
     if (!answerers.includes(personAccountId)) {
       throw new CollabError(
@@ -363,6 +354,16 @@ export async function answerDecision(
           ? "Only the gate's confirmer can answer it."
           : "Only the person the decision is addressed to can answer it.",
       );
+    }
+    // Only a permitted answerer (or a move) closes a gate the item moved past.
+    if (
+      current.kind === "gate" &&
+      current.gate_from !== null &&
+      item.status_key !== current.gate_from &&
+      item.status_key !== current.gate_target
+    ) {
+      await closeDecision(tx, orgId, actor, current, "canceled", "superseded", opts.decisions);
+      return { decision: { ...current, state: "canceled" }, item, outcome: "superseded" };
     }
     const options = current.options as DecisionOption[];
     if (answer.optionId !== undefined && !options.some((o) => o.id === answer.optionId)) {

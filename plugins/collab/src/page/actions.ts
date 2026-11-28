@@ -2,11 +2,11 @@ import type { UiActionResult, UiOrgActionArgs } from "@capybara-hq/plugin-sdk";
 import { answerAsPerson } from "../decisions/actions.js";
 import { decisionHooks } from "../decisions-queue.js";
 import { requireRole } from "../domain/access.js";
-import { assign } from "../domain/assignment.js";
+import { assign, assignIn } from "../domain/assignment.js";
 import { type DecisionHooks, readdressOpen } from "../domain/decision-state.js";
-import { GATE_APPROVE, GATE_REJECT } from "../domain/decisions.js";
+import { answerersOf, GATE_APPROVE, GATE_REJECT } from "../domain/decisions.js";
 import { CollabError, type CollabErrorCode } from "../domain/errors.js";
-import { comment, createItem, transition, updateItem } from "../domain/items.js";
+import { comment, createItem, transition, updateItemIn } from "../domain/items.js";
 import { addMember, createProject, removeMember, setFunction } from "../domain/projects.js";
 import type { DefaultAssignmentRule, GateRule } from "../domain/workflow.js";
 import { invalidateItems, notifying } from "../notify.js";
@@ -65,9 +65,8 @@ type Overrides = Partial<Record<CollabErrorCode, Toast>>;
 
 function refusal(error: CollabError, overrides: Overrides = {}): UiActionResult {
   const toast = overrides[error.code] ?? REFUSALS[error.code];
-  return error.code === "version_conflict" || error.code === "not_found"
-    ? { toast, invalidate: [...ITEMS] }
-    : { toast };
+  // Whatever refused, the page refetches: what it shows may be what made the action fail.
+  return { toast, invalidate: [...ITEMS] };
 }
 
 /** Runs an action body; a domain refusal becomes a toast. */
@@ -76,7 +75,11 @@ async function refusing(
   overrides: Overrides = {},
 ): Promise<UiActionResult> {
   try {
-    return await body();
+    const out = await body();
+    // A toast is a refusal: the page refetches what it shows.
+    return "toast" in out && out.toast && !out.invalidate
+      ? { ...out, invalidate: [...ITEMS] }
+      : out;
   } catch (error) {
     if (error instanceof CollabError) return refusal(error, overrides);
     throw error;
@@ -195,6 +198,34 @@ async function agentUsable(
   return agentAllowedFor(deps, orgId)(accountId, agentId);
 }
 
+/** The viewer's write access to an item's project, checked before any kernel lookup. */
+async function requireItemWrite(
+  deps: ActionDeps,
+  orgId: string,
+  accountId: string,
+  itemId: string,
+) {
+  const item = await deps.db
+    .selectFrom("items")
+    .select("project_id")
+    .where("org_id", "=", orgId)
+    .where("id", "=", itemId)
+    .executeTakeFirst();
+  if (!item) throw new CollabError("not_found", "Item not found.");
+  await requireRole(deps.db, orgId, accountId, item.project_id, "write");
+}
+
+/** Display names of accounts joined for a toast ("、" in zh, ", " in en). */
+async function namesFor(
+  deps: ActionDeps,
+  orgId: string,
+  accountIds: string[],
+): Promise<{ zh: string; en: string }> {
+  const names: string[] = [];
+  for (const id of accountIds) names.push(await personName(deps, orgId, id));
+  return { zh: names.join("、"), en: names.join(", ") };
+}
+
 async function statusName(
   deps: ActionDeps,
   orgId: string,
@@ -235,16 +266,14 @@ async function projectCreate(deps: ActionDeps, args: UiOrgActionArgs): Promise<U
   if (args.role === "guest") return { toast: REFUSALS.forbidden };
   return refusing(
     async () => {
-      const project = await createProject(
+      // Success answers only `invalidate` (a toast means refusal); the client knows the key.
+      await createProject(
         deps.db,
         args.orgId,
         { accountId: args.accountId },
         { key, name, ...(description !== undefined ? { description } : {}) },
       );
-      return {
-        toast: text(`已创建项目 ${project.key}。`, `Project ${project.key} created.`),
-        invalidate: ["projects.list"],
-      };
+      return { invalidate: ["projects.list"] };
     },
     {
       invalid_input: text(
@@ -274,6 +303,7 @@ async function itemCreate(deps: ActionDeps, args: UiOrgActionArgs): Promise<UiAc
   const labels = optLabels(p);
   return refusing(
     async () => {
+      await requireRole(deps.db, args.orgId, args.accountId, projectId, "write");
       if (agentId && !responsible) {
         return {
           toast: text(
@@ -285,7 +315,7 @@ async function itemCreate(deps: ActionDeps, args: UiOrgActionArgs): Promise<UiAc
       if (responsible && agentId && !(await agentUsable(deps, args.orgId, responsible, agentId))) {
         return { toast: AGENT_REFUSED };
       }
-      const item = await writing(deps, args.orgId, (hooks) =>
+      await writing(deps, args.orgId, (hooks) =>
         createItem(
           deps.db,
           args.orgId,
@@ -304,14 +334,7 @@ async function itemCreate(deps: ActionDeps, args: UiOrgActionArgs): Promise<UiAc
           { agentAllowed: agentAllowedFor(deps, args.orgId), decisions: hooks },
         ),
       );
-      const project = await deps.db
-        .selectFrom("projects")
-        .select("key")
-        .where("org_id", "=", args.orgId)
-        .where("id", "=", item.project_id)
-        .executeTakeFirstOrThrow();
-      const key = `${project.key}-${item.number}`;
-      return { toast: text(`已创建 ${key}。`, `${key} created.`), invalidate: [...ITEMS] };
+      return { invalidate: [...ITEMS] };
     },
     { invalid_input: ITEM_INPUT },
   );
@@ -337,36 +360,34 @@ async function itemUpdate(deps: ActionDeps, args: UiOrgActionArgs): Promise<UiAc
   }
   return refusing(
     async () => {
+      await requireItemWrite(deps, args.orgId, args.accountId, itemId);
       if (responsible && agentId && !(await agentUsable(deps, args.orgId, responsible, agentId))) {
-        return { toast: AGENT_REFUSED };
+        return { toast: AGENT_REFUSED, invalidate: [...ITEMS] };
       }
-      await writing(deps, args.orgId, async (hooks) => {
-        const updated = await updateItem(
-          deps.db,
-          args.orgId,
-          { accountId: args.accountId },
-          itemId,
-          version,
-          {
+      // One transaction: a refused assignment leaves the fields unsaved too.
+      await writing(deps, args.orgId, (hooks) =>
+        deps.db.transaction().execute(async (tx) => {
+          const actor = { accountId: args.accountId };
+          const updated = await updateItemIn(tx, args.orgId, actor, itemId, version, {
             ...(title !== undefined ? { title } : {}),
             ...(description !== undefined ? { description } : {}),
             ...(priority !== undefined ? { priority } : {}),
             ...(labels !== undefined ? { labels } : {}),
             ...(parentId !== undefined ? { parentId } : {}),
-          },
-        );
-        if (responsible === undefined) return updated;
-        // The assignment follows at whatever version the update left (no client arithmetic).
-        return assign(
-          deps.db,
-          args.orgId,
-          { accountId: args.accountId },
-          itemId,
-          updated.version,
-          { responsibleAccountId: responsible, executingAgentId: agentId ?? null },
-          hooks,
-        );
-      });
+          });
+          if (responsible === undefined) return updated;
+          // The assignment follows at whatever version the update left (no client arithmetic).
+          return assignIn(
+            tx,
+            args.orgId,
+            actor,
+            itemId,
+            updated.version,
+            { responsibleAccountId: responsible, executingAgentId: agentId ?? null },
+            hooks,
+          );
+        }),
+      );
       return { invalidate: [...ITEMS] };
     },
     { invalid_input: ITEM_INPUT },
@@ -392,11 +413,18 @@ async function itemMove(deps: ActionDeps, args: UiOrgActionArgs): Promise<UiActi
     );
     if ("item" in out) return { invalidate: [...ITEMS] };
     const name = await statusName(deps, args.orgId, itemId, to);
-    const who = await personName(deps, args.orgId, out.gate.addressee_account_id);
+    const item = await deps.db
+      .selectFrom("items")
+      .selectAll()
+      .where("org_id", "=", args.orgId)
+      .where("id", "=", itemId)
+      .executeTakeFirstOrThrow();
+    const confirmers = await answerersOf(deps.db, args.orgId, out.gate, item);
+    const names = await namesFor(deps, args.orgId, confirmers);
     return {
       toast: text(
-        `移到「${name.zh}」需要确认，已请 ${who} 确认。`,
-        `Moving to "${name.en}" needs confirmation; ${who} was asked.`,
+        `移到「${name.zh}」需要确认，已请 ${names.zh} 确认。`,
+        `Moving to "${name.en}" needs confirmation; asked ${names.en}.`,
       ),
       invalidate: [...ITEMS],
     };
@@ -413,6 +441,7 @@ async function itemAssign(deps: ActionDeps, args: UiOrgActionArgs): Promise<UiAc
   const version = reqVersion(p);
   const agentId = p.agentId === null ? null : reqString(p, "agentId", ID_MAX);
   return refusing(async () => {
+    await requireItemWrite(deps, args.orgId, args.accountId, itemId);
     if (agentId && !(await agentUsable(deps, args.orgId, responsibleAccountId, agentId))) {
       return { toast: AGENT_REFUSED };
     }
@@ -466,13 +495,19 @@ async function gateConfirm(deps: ActionDeps, args: UiOrgActionArgs): Promise<UiA
     .executeTakeFirst();
   if (row?.kind !== "gate") {
     return {
-      toast: text("找不到这个确认请求。", "This gate request does not exist."),
+      toast: text("找不到这个确认请求。", "This confirmation request does not exist."),
       invalidate: [...ITEMS],
     };
   }
-  const out = await answerAsPerson(deps, args, decisionId, {
-    optionId: approve ? GATE_APPROVE : GATE_REJECT,
-  });
+  const out = await answerAsPerson(
+    deps,
+    args,
+    decisionId,
+    {
+      optionId: approve ? GATE_APPROVE : GATE_REJECT,
+    },
+    { quietSuccess: true },
+  );
   return { ...out, invalidate: [...ITEMS] };
 }
 
@@ -485,10 +520,16 @@ async function decisionAnswer(deps: ActionDeps, args: UiOrgActionArgs): Promise<
     throw new ActionPayloadError("optionId is malformed");
   }
   const answerText = optString(p, "text", 4000);
-  const out = await answerAsPerson(deps, args, decisionId, {
-    ...(optionId !== undefined ? { optionId } : {}),
-    ...(answerText !== undefined ? { text: answerText } : {}),
-  });
+  const out = await answerAsPerson(
+    deps,
+    args,
+    decisionId,
+    {
+      ...(optionId !== undefined ? { optionId } : {}),
+      ...(answerText !== undefined ? { text: answerText } : {}),
+    },
+    { quietSuccess: true },
+  );
   return { ...out, invalidate: [...ITEMS] };
 }
 
@@ -534,6 +575,61 @@ function assignmentRuleOf(v: unknown): DefaultAssignmentRule | null {
   };
 }
 
+/** The project's active (non-guest) members, by account id, with their function labels. */
+async function activeMembers(deps: ActionDeps, orgId: string, projectId: string) {
+  const rows = await deps.db
+    .selectFrom("project_members")
+    .select(["account_id", "function_label"])
+    .where("org_id", "=", orgId)
+    .where("project_id", "=", projectId)
+    .where("role", "!=", "guest")
+    .execute();
+  return new Map(rows.map((r) => [r.account_id, r.function_label]));
+}
+
+/**
+ * Why a gate or default assignment names a target that cannot work, or null: a named person
+ * must be an active non-guest member; an agent must be one the named member (or every member
+ * with the label) may use.
+ */
+async function invalidRuleTarget(
+  deps: ActionDeps,
+  orgId: string,
+  projectId: string,
+  statuses: { gate?: GateRule | null; defaultAssignment?: DefaultAssignmentRule | null }[],
+): Promise<Toast | null> {
+  if (!statuses.some((s) => s.gate || s.defaultAssignment)) return null;
+  const members = await activeMembers(deps, orgId, projectId);
+  const memberRefused = text(
+    "确认人或默认负责人必须是项目的所有者或成员。",
+    "A confirmer or default assignee must be an owner or member of the project.",
+  );
+  const active = async (accountId: string) => {
+    if (!members.has(accountId)) return false;
+    const [person] = await deps.ctx.people.get({ orgId, accountIds: [accountId] });
+    return person?.active === true;
+  };
+  for (const s of statuses) {
+    if (s.gate?.confirmer === "member" && !(await active(s.gate.accountId))) return memberRefused;
+    const rule = s.defaultAssignment;
+    if (!rule) continue;
+    if (rule.accountId && !(await active(rule.accountId))) return memberRefused;
+    if (!rule.agentId) continue;
+    const who = rule.accountId
+      ? [rule.accountId]
+      : [...members].filter(([, label]) => label === rule.functionLabel).map(([id]) => id);
+    for (const id of who) {
+      if (!(await agentUsable(deps, orgId, id, rule.agentId))) {
+        return text(
+          "默认负责人不能使用这个智能体，请选择他可用的智能体。",
+          "The default assignee cannot use this agent. Pick one of the agents they may use.",
+        );
+      }
+    }
+  }
+  return null;
+}
+
 /** `settings.save` (project owners): name, description, archive flag, gates, handoffs. */
 async function settingsSave(deps: ActionDeps, args: UiOrgActionArgs): Promise<UiActionResult> {
   const p = objectOf(args.payload);
@@ -560,6 +656,9 @@ async function settingsSave(deps: ActionDeps, args: UiOrgActionArgs): Promise<Ui
     return { toast: text("项目名称不能为空。", "The project name must not be empty.") };
   }
   return refusing(async () => {
+    await requireRole(deps.db, args.orgId, args.accountId, projectId, "owner");
+    const invalidTarget = await invalidRuleTarget(deps, args.orgId, projectId, statuses);
+    if (invalidTarget) return { toast: invalidTarget, invalidate: [...PROJECT_QUERIES] };
     await writing(deps, args.orgId, (hooks) =>
       deps.db.transaction().execute(async (tx) => {
         await requireRole(tx, args.orgId, args.accountId, projectId, "owner");
@@ -614,7 +713,7 @@ async function settingsSave(deps: ActionDeps, args: UiOrgActionArgs): Promise<Ui
         if (gatesChanged) await readdressOpen(tx, args.orgId, { projectId }, hooks);
       }),
     );
-    return { toast: text("已保存。", "Saved."), invalidate: [...PROJECT_QUERIES] };
+    return { invalidate: [...PROJECT_QUERIES] };
   });
 }
 
@@ -628,6 +727,7 @@ async function memberAdd(deps: ActionDeps, args: UiOrgActionArgs): Promise<UiAct
   }
   const functionLabel = nullableString(p, "functionLabel", 50);
   return refusing(async () => {
+    await requireRole(deps.db, args.orgId, args.accountId, projectId, "owner");
     const [person] = await deps.ctx.people.get({ orgId: args.orgId, accountIds: [accountId] });
     if (!person?.active) {
       return {
@@ -677,6 +777,9 @@ async function memberFunction(deps: ActionDeps, args: UiOrgActionArgs): Promise<
   const defaultAgentId = nullableString(p, "defaultAgentId", ID_MAX);
   return refusing(
     async () => {
+      const self = accountId === args.accountId;
+      const need = functionLabel !== undefined || !self ? "owner" : "write";
+      await requireRole(deps.db, args.orgId, args.accountId, projectId, need);
       if (defaultAgentId && !(await agentUsable(deps, args.orgId, accountId, defaultAgentId))) {
         return {
           toast: text(

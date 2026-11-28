@@ -288,7 +288,7 @@ describe("assignment notices", () => {
         actionId: "inbox.stop-agent",
         payload,
       } as UiOrgActionArgs);
-      expect(result).toMatchObject({ toast: { en: expect.stringMatching(/input is invalid/) } });
+      expect(result).toMatchObject({ toast: { en: expect.stringMatching(/Reload the page/) } });
     }
   });
 });

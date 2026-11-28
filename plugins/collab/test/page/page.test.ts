@@ -180,7 +180,9 @@ describe("page queries", () => {
       .where("id", "=", item.id)
       .execute();
     const agentSection = { component: "agent-items", agentId: "agent-eng" };
-    expect(await fake.query(org, STRANGER, "agent.items", {}, agentSection)).toEqual({ items: [] });
+    expect(await fake.query(org, STRANGER, "agent.items", {}, agentSection)).toMatchObject({
+      items: [],
+    });
     const own = await fake.query<{ items: { key: string }[] }>(
       org,
       ENGINEER.accountId,
@@ -279,13 +281,14 @@ describe("page actions", () => {
       decisionId: gate.id,
       approve: true,
     });
-    expect(refused.toast?.zh).toBe("只有闸门的确认人可以答复。");
+    expect(refused.toast?.zh).toBe("只有确认人可以处理这个确认请求。");
     // The confirmer approves: the item moves and is handed to engineering with its agent.
     const ok = await fake.act(org, OWNER.accountId, "gate.confirm", {
       decisionId: gate.id,
       approve: true,
     });
-    expect(ok.toast?.en).toBe("Answered.");
+    // Success answers no toast (a toast means refusal).
+    expect(ok.toast).toBeUndefined();
     const moved = await db
       .selectFrom("items")
       .selectAll()
@@ -339,7 +342,7 @@ describe("page actions", () => {
     expect(
       (await fake.act(org, ENGINEER.accountId, "item.move", { itemId: "x", version: 1, to: "a" }))
         .toast?.zh,
-    ).toBe("这个操作的参数无效");
+    ).toBe("无法完成这个操作，请刷新页面后重试。");
   });
 
   it("create and assign check the agent against the responsible person's usable agents", async () => {
@@ -361,7 +364,7 @@ describe("page actions", () => {
       responsibleAccountId: ENGINEER.accountId,
       agentId: "agent-eng",
     });
-    expect(created.toast?.en).toBe("AGT-1 created.");
+    expect(created.toast).toBeUndefined();
     const item = await db
       .selectFrom("items")
       .selectAll()
@@ -446,7 +449,7 @@ describe("page actions", () => {
         { type: "requirement", key: "ready", gate: { confirmer: "member", accountId: "acct-new" } },
       ],
     });
-    expect(saved.toast?.en).toBe("Saved.");
+    expect(saved.toast).toBeUndefined();
     const gate = await db
       .selectFrom("decisions")
       .selectAll()
@@ -480,7 +483,7 @@ describe("page actions", () => {
     expect(
       (await fake.act(org, OWNER.accountId, "gate.confirm", { decisionId: gate.id, approve: true }))
         .toast?.zh,
-    ).toBe("只有闸门的确认人可以答复。");
+    ).toBe("只有确认人可以处理这个确认请求。");
   });
 
   it("project.create makes the clicking person owner; org guests may not", async () => {
@@ -492,10 +495,7 @@ describe("page actions", () => {
     ).toBe("You are not allowed to do this.");
     expect(
       await fake.act(org, ENGINEER.accountId, "project.create", { key: "NEW", name: "New" }),
-    ).toEqual({
-      toast: { zh: "已创建项目 NEW。", en: "Project NEW created." },
-      invalidate: ["projects.list"],
-    });
+    ).toEqual({ invalidate: ["projects.list"] });
     expect(
       (await fake.act(org, OWNER.accountId, "project.create", { key: "NEW", name: "Again" })).toast
         ?.en,

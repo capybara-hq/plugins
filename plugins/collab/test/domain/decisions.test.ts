@@ -341,7 +341,10 @@ describe("decisions and gates", () => {
       // Only the confirmer may answer.
       const payload = { decisionId: id, optionId: choice };
       expect(await f.click(ENGINEER.accountId, payload)).toMatchObject({
-        toast: { zh: "只有闸门的确认人可以答复。", en: "Only the gate's confirmer can answer it." },
+        toast: {
+          zh: "只有确认人可以处理这个确认请求。",
+          en: "Only its confirmer can answer this request.",
+        },
       });
       expect(await f.click(OWNER.accountId, payload)).toMatchObject({
         toast: { en: "Answered." },

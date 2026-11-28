@@ -69,6 +69,12 @@ export class Directory {
     return found;
   }
 
+  /** Reads the usable agents of every distinct person at once (before naming many agents). */
+  async prefetchAgents(accountIds: Iterable<string | null | undefined>): Promise<void> {
+    const ids = [...new Set([...accountIds].filter((id): id is string => Boolean(id)))];
+    await Promise.all(ids.map((id) => this.usable(id)));
+  }
+
   /** The agent working for `accountId` (named through that person's usable agents). */
   async agent(accountId: string | null, agentId: string | null): Promise<AgentRef | null> {
     if (!agentId) return null;

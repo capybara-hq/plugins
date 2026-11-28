@@ -193,7 +193,7 @@ describe("item.update with a reassignment", () => {
           agentId: "agent-qa",
         })
       ).toast?.zh,
-    ).toBe("这个操作的参数无效");
+    ).toBe("无法完成这个操作，请刷新页面后重试。");
   });
 });
 

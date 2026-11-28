@@ -8,8 +8,13 @@
  *   action sends back.
  * - A query for something the viewer cannot see (not a member of its project) answers
  *   {@link NotFound}, the same as for something that does not exist.
- * - Actions answer only `{ toast?, invalidate? }` (the host passes nothing else to the client):
- *   a refusal is a zh/en toast, a success names the queries to refetch.
+ * - Actions answer only `{ toast?, invalidate? }` (the host passes nothing else to the client).
+ *   A toast means the action was refused (keep the dialog open and show it); success answers
+ *   only `invalidate`, never a toast (close the dialog). Refusals invalidate too. The inbox
+ *   actions (`inbox.answer`, `inbox.stop-agent`) are the exception: inbox buttons show a toast
+ *   either way.
+ * - Results stay under ~900 KB of UTF-8 JSON: a list that hit the budget sets `truncated`
+ *   (show "showing the first N" / open the table), the activity page ends early at its cursor.
  */
 
 /** Text in both UI languages. */
@@ -122,6 +127,8 @@ export interface ProjectsListResult {
   projects: ProjectRow[];
   /** The viewer may create projects (org members and up; not org guests). */
   canCreate: boolean;
+  /** Some projects were left out (size budget). */
+  truncated?: boolean;
 }
 export interface ProjectRow {
   id: string;
@@ -212,6 +219,8 @@ export interface ProjectItemsResult {
   page: number;
   pageSize: number;
   canEdit: boolean;
+  /** The page holds fewer rows than `pageSize` because of the size budget. */
+  truncated?: boolean;
 }
 export interface ItemRow {
   id: string;
@@ -246,9 +255,11 @@ export interface ItemDetailResult {
   children: ItemRef[];
   links: ItemLinkRow[];
   artifacts: ArtifactRow[];
-  /** Newest first: open ones, then up to 50 closed ones. */
+  /** Newest first: open ones, then up to 20 closed ones. */
   decisions: DecisionRow[];
   canEdit: boolean;
+  /** Some decisions, children, links or artifacts were left out (size budget). */
+  truncated?: boolean;
 }
 export interface ItemDetail {
   id: string;
@@ -321,8 +332,21 @@ export interface ItemActivityParams {
 }
 export interface ItemActivityResult {
   entries: ActivityEntry[];
-  /** Cursor for older entries; null at the start of the history. */
+  /** Cursor for older entries (a page may end early at the size budget); null at the start. */
   next: string | null;
+}
+
+/** `item.comment`: one comment in full. */
+export interface ItemCommentParams {
+  key: string;
+  commentId: string;
+}
+export interface ItemCommentResult {
+  id: string;
+  /** Markdown. */
+  body: string;
+  author: ActorRef;
+  at: string;
 }
 /** Activity kinds the domain records (others may appear later: render them generically). */
 export type ActivityKind =
@@ -348,8 +372,10 @@ export interface ActivityEntry {
   at: string;
   /** The raw detail the domain stored (status keys, ids, changed fields...). */
   detail: Record<string, unknown>;
-  /** `commented`: the comment's Markdown body. */
+  /** `commented`: the comment's Markdown body (at most 4 000 characters, see `clipped`). */
   comment?: string;
+  /** The body was cut; `item.comment` with `detail.commentId` returns all of it. */
+  clipped?: boolean;
   /**
    * People and agents the detail names (assignment from / to, addressees), resolved for display;
    * keyed by account id / agent id.
@@ -364,6 +390,7 @@ export interface ItemConversationsParams {
 }
 export interface ItemConversationsResult {
   conversations: ItemConversationRow[];
+  truncated?: boolean;
 }
 export interface ItemConversationRow {
   id: string;
@@ -383,6 +410,8 @@ export interface ProjectSettingsResult {
   types: TypeSettings[];
   /** The viewer is a project owner (may change everything). */
   canEdit: boolean;
+  /** Some members were left out (size budget). */
+  truncated?: boolean;
 }
 export interface MemberRow {
   person: PersonRef;
@@ -429,6 +458,8 @@ export type ItemByConversationParams = Record<string, never>;
 export interface ItemByConversationResult {
   /** Null when the conversation serves no collab item, or the viewer cannot see it. */
   item: PanelItem | null;
+  /** Some open decisions were left out (size budget). */
+  truncated?: boolean;
 }
 export interface PanelItem {
   id: string;
@@ -454,6 +485,7 @@ export interface PanelItem {
 export type AgentItemsParams = Record<string, never>;
 export interface AgentItemsResult {
   items: AgentItemRow[];
+  truncated?: boolean;
 }
 export interface AgentItemRow {
   id: string;
@@ -475,6 +507,7 @@ export interface QueryMap {
   "project.items": { params: ProjectItemsParams; result: ProjectItemsResult | NotFound };
   "item.detail": { params: ItemDetailParams; result: ItemDetailResult | NotFound };
   "item.activity": { params: ItemActivityParams; result: ItemActivityResult | NotFound };
+  "item.comment": { params: ItemCommentParams; result: ItemCommentResult | NotFound };
   "item.conversations": {
     params: ItemConversationsParams;
     result: ItemConversationsResult | NotFound;

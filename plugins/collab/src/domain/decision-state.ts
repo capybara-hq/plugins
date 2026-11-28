@@ -76,11 +76,14 @@ export async function gateConfirmers(
         .where("project_id", "=", project.id)
         .where("function_label", "=", gate.functionLabel)
         .where("role", "!=", "guest")
+        .orderBy("account_id")
         .execute();
       const ids = members.map((m) => m.account_id);
-      if (ids.length === 0) return { addressee: owner, confirmers: [owner] };
-      // Anyone with the label confirms; several of them: the request goes to the owner to route.
-      return { addressee: ids.length === 1 ? (ids[0] ?? owner) : owner, confirmers: ids };
+      const first = ids[0];
+      if (!first) return { addressee: owner, confirmers: [owner] };
+      // Anyone with the label confirms: each of them is asked (an inbox item each), the first
+      // answer closes the request. The stored addressee is the first of them.
+      return { addressee: first, confirmers: ids };
     }
   }
 }

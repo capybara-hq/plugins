@@ -38,8 +38,17 @@ export async function dispatchAction(
     return await handler(deps, args);
   } catch (err) {
     if (err instanceof ActionPayloadError) {
+      // The detail is for developers (a client sent a malformed payload), not for the person.
+      deps.ctx.log.warn("collab UI action payload refused", {
+        orgId: args.orgId,
+        actionId: args.actionId,
+        detail: err.message,
+      });
       return {
-        toast: { zh: "这个操作的参数无效", en: `This action's input is invalid: ${err.message}` },
+        toast: {
+          zh: "无法完成这个操作，请刷新页面后重试。",
+          en: "This could not be done. Reload the page and try again.",
+        },
       };
     }
     throw err;

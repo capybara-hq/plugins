@@ -27,6 +27,7 @@ import {
   ITEMS_MAX_PAGE_SIZE,
   type ItemActivityResult,
   type ItemByConversationResult,
+  type ItemCommentResult,
   type ItemConversationsResult,
   type ItemDetailResult,
   type ItemFilter,
@@ -65,11 +66,51 @@ const NOT_FOUND: NotFound = { notFound: true };
 const ITEM_KEY = /^([A-Z][A-Z0-9]{1,9})-([1-9][0-9]{0,8})$/;
 const PROJECT_KEY = /^[A-Z][A-Z0-9]{1,9}$/;
 /** Closed decisions an item page lists besides the open ones. */
-const CLOSED_DECISIONS = 50;
+const CLOSED_DECISIONS = 20;
 /** Open items an agent section lists. */
 const AGENT_ITEMS_MAX = 100;
 /** Candidate items checked when resolving a conversation's item. */
 const CONVERSATION_CANDIDATES = 5;
+
+/**
+ * What a query result may weigh (UTF-8 JSON). The host allows 1 MB; the rest is headroom for the
+ * envelope. Lists stop adding entries when the next one would not fit and say so (`truncated`,
+ * or a cursor).
+ */
+const RESULT_BUDGET_BYTES = 900 * 1024;
+/** Comment bodies in the activity list are cut here (`clipped`; `item.comment` has the rest). */
+const COMMENT_CLIP_CHARS = 4000;
+
+/** The bytes left for one result. */
+export class Budget {
+  private left: number;
+  constructor(bytes = RESULT_BUDGET_BYTES) {
+    this.left = bytes;
+  }
+  /** Charges `value`'s JSON size; false (and nothing charged) when it does not fit. */
+  take(value: unknown): boolean {
+    const bytes = Buffer.byteLength(JSON.stringify(value) ?? "", "utf8") + 1;
+    if (bytes > this.left) return false;
+    this.left -= bytes;
+    return true;
+  }
+}
+
+/** Adds entries while they fit; returns whether any was left out. */
+function fill<T>(budget: Budget, from: T[], into: T[]): boolean {
+  for (const entry of from) {
+    if (!budget.take(entry)) return true;
+    into.push(entry);
+  }
+  return false;
+}
+
+function clipChars(text: string, max: number): { text: string; clipped: boolean } {
+  const cps = [...text];
+  return cps.length <= max
+    ? { text, clipped: false }
+    : { text: cps.slice(0, max).join(""), clipped: true };
+}
 
 /** A malformed query (the host answers it as a failed query). */
 export class QueryParamsError extends Error {}
@@ -411,8 +452,10 @@ async function projectsList(deps: QueryDeps, call: QueryCall): Promise<ProjectsL
     .execute();
   const dir = new Directory(deps.ctx, call.orgId);
   await dir.load(rows.map((r) => r.owner_account_id));
-  return {
-    projects: rows.map((r) => ({
+  const projects: ProjectsListResult["projects"] = [];
+  const truncated = fill(
+    new Budget(),
+    rows.map((r) => ({
       id: r.id,
       key: r.key,
       name: r.name,
@@ -422,8 +465,9 @@ async function projectsList(deps: QueryDeps, call: QueryCall): Promise<ProjectsL
       owner: dir.person(r.owner_account_id),
       openItems: Number(r.open_items ?? 0),
     })),
-    canCreate: call.role !== "guest",
-  };
+    projects,
+  );
+  return { projects, canCreate: call.role !== "guest", truncated };
 }
 
 async function projectBoard(
@@ -472,9 +516,10 @@ async function projectBoard(
   );
   const dir = new Directory(deps.ctx, call.orgId);
   await dir.load([project.owner_account_id, ...items.map((i) => i.responsible_account_id)]);
-  const cards: BoardCard[] = [];
+  await dir.prefetchAgents(items.map((i) => i.responsible_account_id));
+  const all: BoardCard[] = [];
   for (const i of items) {
-    cards.push({
+    all.push({
       id: i.id,
       key: `${project.key}-${i.number}`,
       title: i.title,
@@ -491,13 +536,20 @@ async function projectBoard(
       updatedAt: isoOf(i.updated_at),
     });
   }
-  return {
+  const head = {
     project: header(project, role, dir),
     types,
     type,
     columns: columns.map((s) => ({ ...statusInfo(s), locked: s.gate !== null })),
+  };
+  const budget = new Budget();
+  budget.take(head);
+  const cards: BoardCard[] = [];
+  const cut = fill(budget, all, cards);
+  return {
+    ...head,
     cards,
-    truncated,
+    truncated: truncated || cut,
     canEdit: role !== "guest",
   };
 }
@@ -554,10 +606,11 @@ async function projectItems(
   const { types, statuses } = await workflowsOf(db, call.orgId, project.id);
   const dir = new Directory(deps.ctx, call.orgId);
   await dir.load([project.owner_account_id, ...rows.map((i) => i.responsible_account_id)]);
-  const out: ItemRow[] = [];
+  await dir.prefetchAgents(rows.map((i) => i.responsible_account_id));
+  const all: ItemRow[] = [];
   for (const i of rows) {
     const s = statusOf(statuses, i.type, i.status_key);
-    out.push({
+    all.push({
       id: i.id,
       key: `${project.key}-${i.number}`,
       type: i.type,
@@ -575,15 +628,19 @@ async function projectItems(
       createdAt: isoOf(i.created_at),
     });
   }
-  return {
+  const head = {
     project: header(project, role, dir),
     types,
-    rows: out,
     total: Number(total.n),
     page,
     pageSize,
     canEdit: role !== "guest",
   };
+  const budget = new Budget();
+  budget.take(head);
+  const out: ItemRow[] = [];
+  const truncated = fill(budget, all, out);
+  return { ...head, rows: out, truncated };
 }
 
 async function itemDetail(
@@ -619,10 +676,15 @@ async function itemDetail(
   const others = otherIds.length ? await related.where("id", "in", otherIds).execute() : [];
   // Linked items of other projects show only when the viewer sees that project too.
   const projectKeys = new Map<string, string>([[project.id, project.key]]);
+  // Projects the viewer is not a member of are remembered too (one membership read each).
+  const hidden = new Set<string>();
   for (const o of others) {
-    if (projectKeys.has(o.project_id)) continue;
+    if (projectKeys.has(o.project_id) || hidden.has(o.project_id)) continue;
     const role2 = await roleIn(db, call.orgId, call.accountId, o.project_id);
-    if (!role2) continue;
+    if (!role2) {
+      hidden.add(o.project_id);
+      continue;
+    }
     const pr = await db
       .selectFrom("projects")
       .select("key")
@@ -698,7 +760,7 @@ async function itemDetail(
     name: { zh: item.type, en: item.type },
     icon: null,
   };
-  return {
+  const head = {
     project: header(project, role, dir),
     item: {
       id: item.id,
@@ -723,20 +785,36 @@ async function itemDetail(
     type,
     statuses: (statuses.get(item.type) ?? []).map(statusInfo),
     parent: parent ? itemRef(parent, project.key, statuses) : null,
-    children: children.map((c) => itemRef(c, project.key, statuses)),
-    links,
-    artifacts,
-    decisions: await decisionRows(
-      db,
-      call.orgId,
-      call.accountId,
-      project,
-      item,
-      [...open, ...closed],
-      dir,
-    ),
     canEdit: role !== "guest",
   };
+  // Open decisions first: they are what the page acts on.
+  const allDecisions = await decisionRows(
+    db,
+    call.orgId,
+    call.accountId,
+    project,
+    item,
+    [...open, ...closed],
+    dir,
+  );
+  const budget = new Budget();
+  budget.take(head);
+  const decisions: DecisionRow[] = [];
+  const kept = {
+    children: [] as ItemRef[],
+    links: [] as ItemLinkRow[],
+    artifacts: [] as ArtifactRow[],
+  };
+  let truncated = fill(budget, allDecisions, decisions);
+  truncated =
+    fill(
+      budget,
+      children.map((c) => itemRef(c, project.key, statuses)),
+      kept.children,
+    ) || truncated;
+  truncated = fill(budget, links, kept.links) || truncated;
+  truncated = fill(budget, artifacts, kept.artifacts) || truncated;
+  return { ...head, ...kept, decisions, truncated };
 }
 
 /** Account and agent ids an activity entry's detail names (assignment pairs, addressees). */
@@ -802,7 +880,8 @@ async function itemActivity(
   const comments = commentIds.length
     ? await db
         .selectFrom("comments")
-        .select(["id", "body"])
+        // Only the clipped part leaves the database (bodies can be 20 000 characters).
+        .select(["id", sql<string>`left(body, ${COMMENT_CLIP_CHARS + 1})`.as("body")])
         .where("org_id", "=", call.orgId)
         .where("id", "in", commentIds)
         .execute()
@@ -811,6 +890,8 @@ async function itemActivity(
   const dir = new Directory(deps.ctx, call.orgId);
   await dir.load(page.flatMap((r) => [r.actor.accountId, ...namedIn(r.detail).people]));
   const entries: ActivityEntry[] = [];
+  const budget = new Budget();
+  let cutAt: string | null = null;
   for (const r of page) {
     const named = namedIn(r.detail);
     const people: Record<string, PersonRef> = {};
@@ -820,21 +901,54 @@ async function itemActivity(
       const a = await dir.agent(acc, id);
       if (a) agents[id] = a;
     }
-    const body = r.kind === "commented" ? bodies.get(String(r.detail.commentId)) : undefined;
-    entries.push({
+    const raw = r.kind === "commented" ? bodies.get(String(r.detail.commentId)) : undefined;
+    const body = raw === undefined ? undefined : clipChars(raw, COMMENT_CLIP_CHARS);
+    const entry: ActivityEntry = {
       id: r.id,
       kind: r.kind,
       actor: await dir.actor(r.actor),
       at: isoOf(r.created_at),
       detail: r.detail,
-      ...(body !== undefined ? { comment: body } : {}),
+      ...(body ? { comment: body.text, ...(body.clipped ? { clipped: true } : {}) } : {}),
       people,
       agents,
-    });
+    };
+    if (!budget.take(entry)) {
+      // The page ends here; the next one starts after the last entry that fit.
+      cutAt = entries.at(-1)?.id ?? null;
+      break;
+    }
+    entries.push(entry);
   }
+  const more = cutAt !== null || rows.length > ACTIVITY_PAGE_SIZE;
+  return { entries, next: more ? (entries.at(-1)?.id ?? null) : null };
+}
+
+/** `item.comment`: one comment's full body (the activity list clips long ones). */
+async function itemComment(
+  deps: QueryDeps,
+  call: QueryCall,
+  p: Params,
+): Promise<ItemCommentResult | NotFound> {
+  const found = await viewerItem(deps.db, call.orgId, call.accountId, str(p, "key"));
+  if (!found) return NOT_FOUND;
+  const commentId = str(p, "commentId");
+  if (!/^[0-9a-f-]{36}$/i.test(commentId)) return NOT_FOUND;
+  const row = await deps.db
+    .selectFrom("comments")
+    .selectAll()
+    .where("org_id", "=", call.orgId)
+    .where("item_id", "=", found.item.id)
+    .where("id", "=", commentId)
+    .executeTakeFirst();
+  if (!row) return NOT_FOUND;
+  const dir = new Directory(deps.ctx, call.orgId);
+  await dir.load([row.author.accountId]);
   return {
-    entries,
-    next: rows.length > ACTIVITY_PAGE_SIZE ? (page.at(-1)?.id ?? null) : null,
+    id: row.id,
+    body: row.body,
+    author: await dir.actor(row.author),
+    at: isoOf(row.created_at),
   };
 }
 
@@ -861,7 +975,9 @@ async function itemConversations(
       lastActivityAt: c.lastActivityAt,
     });
   }
-  return { conversations };
+  const kept: ItemConversationsResult["conversations"] = [];
+  const truncated = fill(new Budget(), conversations, kept);
+  return { conversations: kept, truncated };
 }
 
 async function projectSettings(
@@ -882,6 +998,7 @@ async function projectSettings(
     .execute();
   const dir = new Directory(deps.ctx, call.orgId);
   await dir.load([project.owner_account_id, ...memberRows.map((m) => m.account_id)]);
+  await dir.prefetchAgents(memberRows.filter((m) => m.default_agent_id).map((m) => m.account_id));
   const members: MemberRow[] = [];
   for (const m of memberRows) {
     members.push({
@@ -895,12 +1012,16 @@ async function projectSettings(
     });
   }
   const { types, statuses } = await workflowsOf(db, call.orgId, project.id);
-  return {
+  const head = {
     project: header(project, role, dir),
-    members,
     types: types.map((t) => ({ ...t, statuses: (statuses.get(t.key) ?? []).map(statusInfo) })),
     canEdit: role === "owner",
   };
+  const budget = new Budget();
+  budget.take(head);
+  const kept: MemberRow[] = [];
+  const truncated = fill(budget, members, kept);
+  return { ...head, members: kept, truncated };
 }
 
 async function peopleSearch(
@@ -1028,7 +1149,12 @@ async function itemByConversation(
   const dir = new Directory(deps.ctx, call.orgId);
   await dir.load([item.responsible_account_id]);
   const s = statusOf(statuses, item.type, item.status_key);
+  const decisions = await decisionRows(db, call.orgId, call.accountId, project, item, open, dir);
+  const budget = new Budget();
+  const openDecisions: DecisionRow[] = [];
+  const truncated = fill(budget, decisions, openDecisions);
   return {
+    truncated,
     item: {
       id: item.id,
       key: `${project.key}-${item.number}`,
@@ -1049,7 +1175,7 @@ async function itemByConversation(
       responsible: dir.personOrNull(item.responsible_account_id),
       agent: await dir.agent(item.responsible_account_id, item.executing_agent_id),
       agentState: item.agent_state,
-      openDecisions: await decisionRows(db, call.orgId, call.accountId, project, item, open, dir),
+      openDecisions,
       canEdit: role !== "guest",
     },
   };
@@ -1098,7 +1224,9 @@ async function agentItems(deps: QueryDeps, call: QueryCall): Promise<AgentItemsR
       updatedAt: isoOf(r.updated_at),
     });
   }
-  return { items };
+  const kept: AgentItemsResult["items"] = [];
+  const truncated = fill(new Budget(), items, kept);
+  return { items: kept, truncated };
 }
 
 type Handler = (deps: QueryDeps, call: QueryCall, p: Params) => Promise<unknown>;
@@ -1113,6 +1241,7 @@ const QUERIES: Record<string, Record<string, Handler>> = {
     "item.detail": itemDetail,
     "item.activity": itemActivity,
     "item.conversations": itemConversations,
+    "item.comment": itemComment,
     "project.settings": projectSettings,
     "people.search": peopleSearch,
     "agents.usable": agentsUsable,

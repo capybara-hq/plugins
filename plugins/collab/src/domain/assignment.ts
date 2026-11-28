@@ -145,25 +145,38 @@ export async function assign(
   /** Needed when the new responsible person changes a gate's confirmer (see readdressOpen). */
   decisions?: DecisionHooks,
 ): Promise<Item> {
-  return db.transaction().execute(async (tx) => {
-    const item = await loadItem(tx, orgId, itemId);
-    await requireRole(tx, orgId, actor.accountId, item.project_id, "write");
-    checkVersion(item, version);
-    await validateAssignee(tx, orgId, item.project_id, target.responsibleAccountId);
-    const pair = { accountId: target.responsibleAccountId, agentId: target.executingAgentId };
-    if (!assignmentDiffers(item, pair)) return item;
-    const project = await loadProject(tx, orgId, item.project_id);
-    const statuses = await statusesForType(tx, orgId, item.project_id, item.type);
-    const category = statuses.find((s) => s.key === item.status_key)?.category ?? "todo";
-    const after = await writeItem(tx, orgId, item, {
-      responsible_account_id: pair.accountId,
-      executing_agent_id: pair.agentId,
-    });
-    await recordAssignment(tx, orgId, actor, item, after, {
-      projectKey: project.key,
-      statusCategory: category,
-    });
-    await readdressOpen(tx, orgId, { itemId: item.id }, decisions);
-    return after;
+  return db
+    .transaction()
+    .execute((tx) => assignIn(tx, orgId, actor, itemId, version, target, decisions));
+}
+
+/** {@link assign} inside the caller's transaction. */
+export async function assignIn(
+  tx: CollabDb,
+  orgId: string,
+  actor: Actor,
+  itemId: string,
+  version: number,
+  target: { responsibleAccountId: string; executingAgentId: string | null },
+  decisions?: DecisionHooks,
+): Promise<Item> {
+  const item = await loadItem(tx, orgId, itemId);
+  await requireRole(tx, orgId, actor.accountId, item.project_id, "write");
+  checkVersion(item, version);
+  await validateAssignee(tx, orgId, item.project_id, target.responsibleAccountId);
+  const pair = { accountId: target.responsibleAccountId, agentId: target.executingAgentId };
+  if (!assignmentDiffers(item, pair)) return item;
+  const project = await loadProject(tx, orgId, item.project_id);
+  const statuses = await statusesForType(tx, orgId, item.project_id, item.type);
+  const category = statuses.find((s) => s.key === item.status_key)?.category ?? "todo";
+  const after = await writeItem(tx, orgId, item, {
+    responsible_account_id: pair.accountId,
+    executing_agent_id: pair.agentId,
   });
+  await recordAssignment(tx, orgId, actor, item, after, {
+    projectKey: project.key,
+    statusCategory: category,
+  });
+  await readdressOpen(tx, orgId, { itemId: item.id }, decisions);
+  return after;
 }

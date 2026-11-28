@@ -336,51 +336,61 @@ export async function updateItem(
   version: number,
   patch: ItemPatch,
 ): Promise<Item> {
-  return db.transaction().execute(async (tx) => {
-    const item = await loadItem(tx, orgId, itemId);
-    await requireRole(tx, orgId, actor.accountId, item.project_id, "write");
-    checkVersion(item, version);
-    const set: Updateable<ItemsTable> = {};
-    const changed: string[] = [];
-    if (patch.title !== undefined && checkTitle(patch.title) !== item.title) {
-      set.title = checkTitle(patch.title);
-      changed.push("title");
-    }
-    if (patch.description !== undefined && patch.description !== item.description) {
-      set.description = checkDescription(patch.description);
-      changed.push("description");
-    }
-    if (patch.priority !== undefined && checkPriority(patch.priority) !== item.priority) {
-      set.priority = patch.priority;
-      changed.push("priority");
-    }
-    const labels = patch.labels === undefined ? undefined : checkLabels(patch.labels);
-    if (labels !== undefined && labels.join("\n") !== item.labels.join("\n")) {
-      set.labels = labels;
-      changed.push("labels");
-    }
-    if (patch.parentId !== undefined && patch.parentId !== item.parent_id) {
-      if (patch.parentId) await checkParent(tx, orgId, item.project_id, patch.parentId, item.id);
-      set.parent_id = patch.parentId;
-      changed.push("parent");
-    }
-    if (patch.fields !== undefined) {
-      set.fields = checkFields({ ...item.fields, ...patch.fields });
-      changed.push("fields");
-    }
-    if (changed.length === 0) return item;
-    const after = await writeItem(tx, orgId, item, set);
-    await addActivity(tx, orgId, item.id, actor, "updated", { changedFields: changed });
-    const project = await loadProject(tx, orgId, item.project_id);
-    const statuses = await statusesForType(tx, orgId, item.project_id, item.type);
-    await outboxFor(tx, orgId, "item.updated", after, {
-      actor,
-      projectKey: project.key,
-      statusCategory: categoryOf(statuses, after.status_key),
-      changedFields: changed,
-    });
-    return after;
+  return db.transaction().execute((tx) => updateItemIn(tx, orgId, actor, itemId, version, patch));
+}
+
+/** {@link updateItem} inside the caller's transaction. */
+export async function updateItemIn(
+  tx: CollabDb,
+  orgId: string,
+  actor: Actor,
+  itemId: string,
+  version: number,
+  patch: ItemPatch,
+): Promise<Item> {
+  const item = await loadItem(tx, orgId, itemId);
+  await requireRole(tx, orgId, actor.accountId, item.project_id, "write");
+  checkVersion(item, version);
+  const set: Updateable<ItemsTable> = {};
+  const changed: string[] = [];
+  if (patch.title !== undefined && checkTitle(patch.title) !== item.title) {
+    set.title = checkTitle(patch.title);
+    changed.push("title");
+  }
+  if (patch.description !== undefined && patch.description !== item.description) {
+    set.description = checkDescription(patch.description);
+    changed.push("description");
+  }
+  if (patch.priority !== undefined && checkPriority(patch.priority) !== item.priority) {
+    set.priority = patch.priority;
+    changed.push("priority");
+  }
+  const labels = patch.labels === undefined ? undefined : checkLabels(patch.labels);
+  if (labels !== undefined && labels.join("\n") !== item.labels.join("\n")) {
+    set.labels = labels;
+    changed.push("labels");
+  }
+  if (patch.parentId !== undefined && patch.parentId !== item.parent_id) {
+    if (patch.parentId) await checkParent(tx, orgId, item.project_id, patch.parentId, item.id);
+    set.parent_id = patch.parentId;
+    changed.push("parent");
+  }
+  if (patch.fields !== undefined) {
+    set.fields = checkFields({ ...item.fields, ...patch.fields });
+    changed.push("fields");
+  }
+  if (changed.length === 0) return item;
+  const after = await writeItem(tx, orgId, item, set);
+  await addActivity(tx, orgId, item.id, actor, "updated", { changedFields: changed });
+  const project = await loadProject(tx, orgId, item.project_id);
+  const statuses = await statusesForType(tx, orgId, item.project_id, item.type);
+  await outboxFor(tx, orgId, "item.updated", after, {
+    actor,
+    projectKey: project.key,
+    statusCategory: categoryOf(statuses, after.status_key),
+    changedFields: changed,
   });
+  return after;
 }
 
 /**

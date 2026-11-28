@@ -46,7 +46,7 @@ async function refusalToast(
         .where("id", "=", decisionId)
         .executeTakeFirst();
       return row?.kind === "gate"
-        ? toast("只有闸门的确认人可以答复。", "Only the gate's confirmer can answer it.")
+        ? toast("只有确认人可以处理这个确认请求。", "Only its confirmer can answer this request.")
         : toast(
             "只有被询问的人可以答复这个决策。",
             "Only the person asked can answer this decision.",
@@ -82,6 +82,8 @@ export async function answerAsPerson(
   call: { orgId: string; accountId: string },
   decisionId: string,
   answer: DecisionAnswer,
+  /** Page actions answer success with no toast (a toast means refusal); inbox buttons keep it. */
+  opts: { quietSuccess?: boolean } = {},
 ): Promise<UiActionResult> {
   for (let attempt = 1; ; attempt++) {
     const follow = decisionHooks(ctx, call.orgId);
@@ -93,6 +95,7 @@ export async function answerAsPerson(
         }),
       );
       await follow.flush();
+      if (opts.quietSuccess && out.outcome === "answered") return {};
       return outcomeToast(out);
     } catch (error) {
       if (!(error instanceof CollabError)) throw error;

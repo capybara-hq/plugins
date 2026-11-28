@@ -24,8 +24,16 @@ const NAMES: Record<string, string> = {
 /** The notices fake plus org people, and helpers that call the page as a person. */
 export function pageCtx(db: CollabDb, agents: Record<string, { id: string; name: string }[]>) {
   const base = noticeCtx(db, agents);
+  /** Accounts whose usable agents were read, in order. */
+  const agentReads: string[] = [];
   const ctx = {
     ...base.ctx,
+    agents: {
+      usableBy: async (a: { orgId: string; accountId: string }) => {
+        agentReads.push(a.accountId);
+        return base.ctx.agents.usableBy(a);
+      },
+    },
     people: {
       get: async ({ accountIds }: { orgId: string; accountIds: string[] }) =>
         accountIds
@@ -40,6 +48,7 @@ export function pageCtx(db: CollabDb, agents: Record<string, { id: string; name:
   return {
     ...base,
     ctx,
+    agentReads,
     /** Runs a query of a component as `accountId`. */
     query<T = unknown>(
       orgId: string,
