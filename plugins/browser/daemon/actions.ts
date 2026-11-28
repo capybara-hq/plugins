@@ -1813,10 +1813,17 @@ export class BrowserSession {
         this.emit({ type: "state" });
       }
       // a request the device's network change dropped may have been a refused one: the proxy is
-      // asked about its host too (a network change hides the tunnel's answer)
+      // asked about its host too (a network change hides the tunnel's answer); so is any failed
+      // request to a local port (how a refused plain request surfaces differs by Chromium build:
+      // a 403 page, an empty answer), except the per-tab check's own abort, recorded already
       if (
         this.proxy !== undefined &&
-        (PROXY_FAILURE_RE.test(err) || err.includes("ERR_NETWORK_CHANGED"))
+        (PROXY_FAILURE_RE.test(err) ||
+          err.includes("ERR_NETWORK_CHANGED") ||
+          (loopbackGrantHostOf(hostOf(r.url())) !== undefined &&
+            /ERR_[A-Z_]+/.test(err) &&
+            !err.includes("ERR_ABORTED") &&
+            !err.includes("ERR_BLOCKED_BY_CLIENT")))
       )
         this.checkBlocked(page, r.url(), this.pageToOpen(page, r), r);
     });
@@ -3226,14 +3233,19 @@ export class BrowserSession {
       if (!(e instanceof ActionError) && e instanceof Error && e.name === "TimeoutError") {
         code = "timeout";
       }
-      // only noted local ports refused the navigation: the note says why, no ask follows
+      // Only noted local ports were refused: the note says why, and no ask follows, so the reply
+      // is not `blocked` (whose next step is the network note). How the refused hop surfaces
+      // differs by Chromium build (a proxy's 403 page, a net error, the per-tab abort): a refusal
+      // the daemon made itself or a 403 page is replaced by the note, any other failure keeps its
+      // own text before it.
       if (
         c.blocked.size === 0 &&
         c.probes.size > 0 &&
-        (code === "blocked" || message.includes("ERR_BLOCKED_BY_CLIENT"))
+        (code === "blocked" || code === "unreachable")
       ) {
-        code = "blocked";
-        message = probeNote(c.probes);
+        const own = code === "blocked" || message.includes("ERR_BLOCKED_BY_CLIENT");
+        code = "unreachable";
+        message = own ? probeNote(c.probes) : `${message} ${probeNote(c.probes)}`;
       }
       if (c.blocked.size > 0 && code !== "no_such_ref" && code !== "taken_over") {
         code = "blocked";

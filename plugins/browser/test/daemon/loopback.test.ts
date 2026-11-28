@@ -24,6 +24,8 @@ import {
 async function startLoopbackProxy(
   open: Set<number>,
   sites: Map<string, number> = new Map(),
+  /** Closed local ports whose plain requests the proxy drops (a net error, as some builds see). */
+  drop: Set<number> = new Set(),
 ): Promise<{ url: string; server: Server }> {
   const closed = (host: string, port: number) =>
     loopbackGrantHostOf(host) !== undefined && !open.has(port);
@@ -33,6 +35,10 @@ async function startLoopbackProxy(
       return;
     }
     const url = new URL(req.url ?? "");
+    if (closed(url.hostname, Number(url.port || 80)) && drop.has(Number(url.port || 80))) {
+      req.socket.destroy();
+      return;
+    }
     if (closed(url.hostname, Number(url.port || 80))) {
       res.writeHead(403, "address is loopback", { connection: "close" }).end();
       return;
@@ -93,6 +99,9 @@ let app: Awaited<ReturnType<typeof startFixtureServer>>;
 let other: Awaited<ReturnType<typeof startFixtureServer>>;
 let third: Awaited<ReturnType<typeof startFixtureServer>>;
 let site: Awaited<ReturnType<typeof startFixtureServer>>;
+/** A closed local port whose plain requests the proxy drops. */
+let dropped: Awaited<ReturnType<typeof startFixtureServer>>;
+const drop = new Set<number>();
 /** A page on loopback (its port open) that frames a remote page. */
 let framing: Awaited<ReturnType<typeof startFixtureServer>>;
 const sites = new Map<string, number>();
@@ -107,6 +116,7 @@ beforeAll(async () => {
     "/": `<!doctype html><title>Site</title><script src="${other.url}/a.js"></script>`,
     "/popup": `<!doctype html><title>Popup</title><script>window.open(${JSON.stringify(`${other.url}/a.js`)})</script>`,
     "/r": (_req, res) => void res.writeHead(302, { location: `${other.url}/a.js` }).end(),
+    "/r2": (_req, res) => void res.writeHead(302, { location: `${dropped.url}/x` }).end(),
     "/loc": `<!doctype html><title>Loc</title><script>location = ${JSON.stringify(`${other.url}/a.js`)}</script>`,
     "/meta": `<!doctype html><title>Meta</title><meta http-equiv="refresh" content="0;url=${other.url}/a.js">`,
     "/form": `<!doctype html><title>Form</title><form action="${other.url}/a.js" method="get"></form><script>document.forms[0].submit()</script>`,
@@ -120,7 +130,9 @@ beforeAll(async () => {
   });
   open.add(portOf(framing.url));
   sites.set("site.test", portOf(site.url));
-  proxy = await startLoopbackProxy(open, sites);
+  dropped = await startFixtureServer({ "/x": "dropped" });
+  drop.add(portOf(dropped.url));
+  proxy = await startLoopbackProxy(open, sites, drop);
   d = await startTestDaemon({ env: { HTTPS_PROXY: proxy.url, HTTP_PROXY: proxy.url } });
 });
 
@@ -132,6 +144,7 @@ afterAll(async () => {
   await other?.close();
   await third?.close();
   await site?.close();
+  await dropped?.close();
   await framing?.close();
   if (d) removeDir(d.stateDir);
 });
@@ -378,9 +391,25 @@ describe("browser daemon loopback asks: who started the request", () => {
       { op: "navigate", url: "http://site.test/r" },
       holding(A, []),
     );
+    // never an ask: no refused host for the kernel, the port only in the note (the failure's own
+    // text may come first: Chromium builds surface the refused hop differently)
     expect(r.blockedHosts).toEqual([]);
-    expect(r).toMatchObject({ ok: false, error: "blocked" });
+    expect(r).toMatchObject({ ok: false, error: "unreachable" });
     expect(r.ok ? "" : r.message).toContain(note(portOf(other.url)));
+  });
+
+  it("a remote redirect whose refused hop fails with a net error keeps that text before the note", async () => {
+    const A = conv("lb-302-net");
+    const r = await request(
+      d.socketPath,
+      { op: "navigate", url: "http://site.test/r2" },
+      holding(A, []),
+    );
+    expect(r.blockedHosts).toEqual([]);
+    expect(r).toMatchObject({ ok: false, error: "unreachable" });
+    const message = r.ok ? "" : r.message;
+    expect(message).toMatch(/could not be loaded \(net::ERR_[A-Z_]+\)/);
+    expect(message).toContain(note(portOf(dropped.url)));
   });
 
   it("the navigate op to a local port is an ask", async () => {
