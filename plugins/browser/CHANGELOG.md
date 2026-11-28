@@ -1,5 +1,18 @@
 # @capybara-hq/plugin-browser
 
+## 0.1.0-rc.17
+
+### Patch Changes
+
+- ef45d01: Closing the browser's last page no longer drops the live view: a deliberate close (the person's
+  in a takeover, the agent's, an idle or deleted conversation's) that would leave Chromium without a
+  page first opens an unowned blank tab, so Chromium never exits with its last window (which the
+  daemon took for a crash, cutting the panel's stream: the panel showed the connecting skeleton
+  before its empty state).
+- ef45d01: The panel's empty-state heading uses the body text's face, and the panel's font stacks name
+  Windows faces (Segoe UI, Microsoft YaHei UI, Cascadia Mono, Consolas) before their generic family:
+  Chinese text no longer falls back to the Song face on Windows.
+
 ## 0.1.0-rc.16
 
 ### Patch Changes

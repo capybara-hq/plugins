@@ -1,5 +1,17 @@
 # @capybara-hq/plugin-collab
 
+## 0.1.0-rc.2
+
+### Patch Changes
+
+- d2c6358: Collab acceptance fixes: the agent templates and the collab-workflow skill state that work an agent
+  assigns to itself arrives as no event; gate answers are named 批准 / 驳回 in Chinese; closing an
+  item cancels its open questions (inbox resolved, activity recorded, the asking pair told).
+- c5d99b6: Inbox items in both UI languages: assignment and handoff notices, decision and gate items,
+  reminders and escalations carry Chinese and English titles and bodies (the asker's question and
+  option texts as written). Needs plugin-sdk 0.1.0-rc.89 (a kernel that takes localized inbox
+  texts).
+
 ## 0.1.0-rc.1
 
 ### Patch Changes
