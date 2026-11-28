@@ -638,11 +638,14 @@ export async function link(
       .returning("from_id")
       .executeTakeFirst();
     if (!inserted) return;
-    await addActivity(tx, orgId, from.id, actor, "linked", { to: to.id, kind: input.kind });
+    const activityId = await addActivity(tx, orgId, from.id, actor, "linked", {
+      to: to.id,
+      kind: input.kind,
+    });
     await outboxFor(tx, orgId, "item.updated", from, {
       ...base,
       changedFields: ["links"],
-      dedupeKey: `item.updated-link-${from.id}-${to.id}-${input.kind}`,
+      dedupeKey: `item.updated-link-${activityId}`,
     });
   });
 }

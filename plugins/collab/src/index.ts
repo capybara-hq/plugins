@@ -7,7 +7,7 @@ import {
   PROJECTS,
   TOOL_KEYS,
 } from "./constants.js";
-import { registerEmitQueue } from "./events/emitter.js";
+import { registerDrainQueue } from "./events/emitter.js";
 import { collabDb } from "./store/db.js";
 import { registerTools } from "./tools/index.js";
 import { createTriggerSource } from "./trigger-source.js";
@@ -65,7 +65,7 @@ export default defineExtension({
   migrations: "../migrations",
   setup(ctx) {
     registerTools(ctx);
-    registerEmitQueue(ctx);
+    registerDrainQueue(ctx);
     ctx.provide(TRIGGER_SOURCE_EXTENSION_POINT, createTriggerSource(collabDb(ctx.db)));
   },
 });

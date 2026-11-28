@@ -88,7 +88,7 @@ export async function writeItem(
   return row;
 }
 
-/** Appends an entry to the item's activity. */
+/** Appends an entry to the item's activity; returns its id. */
 export async function addActivity(
   tx: CollabDb,
   orgId: string,
@@ -96,8 +96,8 @@ export async function addActivity(
   actor: Actor,
   kind: string,
   detail: Record<string, unknown> = {},
-): Promise<void> {
-  await tx
+): Promise<string> {
+  const row = await tx
     .insertInto("activity")
     .values({
       org_id: orgId,
@@ -106,5 +106,7 @@ export async function addActivity(
       kind,
       detail: JSON.stringify(detail),
     })
-    .execute();
+    .returning("id")
+    .executeTakeFirstOrThrow();
+  return row.id;
 }

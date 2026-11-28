@@ -58,8 +58,8 @@ describe("collab migration", { timeout: 180_000 }, () => {
         ).rejects.toThrow(/duplicate key/);
 
         const outbox = (org: string) =>
-          sql`INSERT INTO event_outbox (org_id, type, subject, summary, dedupe_key, actor)
-              VALUES (${org}, 'item.created', '{}'::jsonb, 's', 'k1', '{"accountId":"a"}'::jsonb)`.execute(
+          sql`INSERT INTO event_outbox (org_id, type, subject, dedupe_key, actor)
+              VALUES (${org}, 'item.created', '{}'::jsonb, 'k1', '{"accountId":"a"}'::jsonb)`.execute(
             db,
           );
         await outbox("o1");

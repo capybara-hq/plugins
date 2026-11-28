@@ -157,7 +157,13 @@ describe("collab items", () => {
     // Comments, links and artifacts leave the version alone.
     expect(final.version).toBe(2);
     const keys = rows.map((r) => r.dedupe_key);
-    expect(keys).toContain(`item.updated-link-${a.id}-${b.id}-blocks`);
+    const linked = await db
+      .selectFrom("activity")
+      .select("id")
+      .where("item_id", "=", a.id)
+      .where("kind", "=", "linked")
+      .executeTakeFirstOrThrow();
+    expect(keys).toContain(`item.updated-link-${linked.id}`);
     expect(keys).toContain(`item.updated-artifact-${v2.id}`);
   });
 

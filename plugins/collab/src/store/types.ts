@@ -175,12 +175,13 @@ export interface EventOutboxTable {
   type: string;
   subject: Json<unknown>;
   facts: JsonDefault<Record<string, unknown>>;
-  summary: string;
+  detail: JsonDefault<Record<string, unknown>>;
   dedupe_key: string;
   audience: Json<unknown> | null;
   actor: Json<Actor>;
   cause_handle: string | null;
   emitted_at: Date | null;
+  failed_at: Date | null;
   attempts: Generated<number>;
   created_at: Generated<Date>;
 }

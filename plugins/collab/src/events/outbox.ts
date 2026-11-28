@@ -1,7 +1,8 @@
 import { actorJson, isAgent } from "../domain/internal.js";
 import type { CollabDb } from "../store/db.js";
 import type { Actor, Item, StatusCategory } from "../store/types.js";
-import { clipBytes, type SummaryDetail, summarize } from "./summary.js";
+import { EVENT_DECLARATIONS } from "./declarations.js";
+import { clipBytes, type SummaryDetail, storedDetail } from "./summary.js";
 
 /** Kernel limits on a fact string and a subject title, in UTF-8 bytes. */
 const FACT_STRING_BYTES = 256;
@@ -20,7 +21,7 @@ export interface OutboxExtra {
   statusCategory: StatusCategory;
   changedFields?: string[];
   mentions?: string[];
-  /** Directed types (`item.assigned`, `item.unassigned`): the pair the event is addressed to. */
+  /** Directed types (declared `directed`, and only those): the pair the event is addressed to. */
   audience?: { accountId: string; agentId: string };
   detail?: SummaryDetail;
   /**
@@ -58,6 +59,16 @@ export async function outboxFor(
   item: Item,
   extra: OutboxExtra,
 ): Promise<void> {
+  const declared = EVENT_DECLARATIONS.find((d) => d.type === type);
+  if (!declared) throw new Error(`Event type ${type} is not declared.`);
+  // A directed event wakes exactly the pair it names; a broadcast one names nobody.
+  if (declared.directed !== (extra.audience !== undefined)) {
+    throw new Error(
+      declared.directed
+        ? `Event type ${type} is directed and needs an audience.`
+        : `Event type ${type} is broadcast and takes no audience.`,
+    );
+  }
   const key = itemKey(extra.projectKey, item.number);
   const facts: Record<string, unknown> = {
     projectKey: clipBytes(extra.projectKey, FACT_STRING_BYTES),
@@ -85,10 +96,12 @@ export async function outboxFor(
       type,
       subject: JSON.stringify(subject),
       facts: JSON.stringify(facts),
-      summary: summarize(type, key, item.title, {
-        ...(extra.changedFields ? { changedFields: extra.changedFields } : {}),
-        ...extra.detail,
-      }),
+      detail: JSON.stringify(
+        storedDetail(key, item.title, {
+          ...(extra.changedFields ? { changedFields: extra.changedFields } : {}),
+          ...extra.detail,
+        }),
+      ),
       dedupe_key: dedupeKeyFor(type, item, extra),
       audience: extra.audience ? JSON.stringify(extra.audience) : null,
       actor: actorJson(extra.actor),

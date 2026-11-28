@@ -170,13 +170,15 @@ CREATE INDEX IF NOT EXISTS decisions_item_open ON decisions (item_id) WHERE stat
 CREATE INDEX IF NOT EXISTS decisions_addressee_open ON decisions (org_id, addressee_account_id) WHERE state = 'open';
 
 -- Events owed to ctx.triggers.emit, written in the transaction of the change they describe.
+-- The summary is rendered when the event is emitted (with people's and agents' names) from
+-- `detail`: the item key and title plus what changed (excerpts already cut to 500 characters).
 CREATE TABLE IF NOT EXISTS event_outbox (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   org_id text NOT NULL,
   type text NOT NULL,
   subject jsonb NOT NULL,
   facts jsonb NOT NULL DEFAULT '{}'::jsonb,
-  summary text NOT NULL,
+  detail jsonb NOT NULL DEFAULT '{}'::jsonb,
   dedupe_key text NOT NULL,
   audience jsonb,
   -- Who made the change (Actor JSON); its accountId is the cause of a UI write.
@@ -185,8 +187,17 @@ CREATE TABLE IF NOT EXISTS event_outbox (
   -- 24 h); null for a person's own write.
   cause_handle text,
   emitted_at timestamptz,
+  -- Set when the event can never be emitted (refused for good, or older than a day): logged, kept
+  -- for 30 days, never retried.
+  failed_at timestamptz,
+  -- Emit attempts that failed (a counter for logs; no cutoff).
   attempts integer NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS event_outbox_dedupe ON event_outbox (org_id, dedupe_key);
-CREATE INDEX IF NOT EXISTS event_outbox_pending ON event_outbox (org_id, created_at) WHERE emitted_at IS NULL;
+CREATE INDEX IF NOT EXISTS event_outbox_pending ON event_outbox (org_id, created_at)
+  WHERE emitted_at IS NULL AND failed_at IS NULL;
+CREATE INDEX IF NOT EXISTS event_outbox_settled ON event_outbox (org_id, emitted_at)
+  WHERE emitted_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS event_outbox_failed ON event_outbox (org_id, failed_at)
+  WHERE failed_at IS NOT NULL;
