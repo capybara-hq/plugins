@@ -135,13 +135,15 @@ CREATE TABLE IF NOT EXISTS activity (
   actor jsonb NOT NULL,
   kind text NOT NULL,
   detail jsonb NOT NULL DEFAULT '{}'::jsonb,
+  -- For entries that owe an inbox notice (assigned, handoff_unresolved): when it was decided
+  -- (posted, not owed, or given up after a day). Null = still owed.
+  notified_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS activity_item ON activity (item_id, created_at);
--- The request path reads the assignments and unresolved handoffs its own write recorded, to post
--- inbox notices once the write committed.
-CREATE INDEX IF NOT EXISTS activity_notices ON activity (org_id, created_at)
-  WHERE kind IN ('assigned', 'handoff_unresolved');
+-- Notices still owed: the request path posts its own write's, the org drain job the rest.
+CREATE INDEX IF NOT EXISTS activity_unnotified ON activity (org_id, created_at)
+  WHERE notified_at IS NULL AND kind IN ('assigned', 'handoff_unresolved');
 
 CREATE TABLE IF NOT EXISTS artifacts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

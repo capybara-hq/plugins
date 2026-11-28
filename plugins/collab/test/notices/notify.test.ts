@@ -1,9 +1,13 @@
+import type { UiOrgActionArgs } from "@capybara-hq/plugin-sdk";
+import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { assign } from "../../src/domain/assignment.js";
 import { createItem, transition } from "../../src/domain/items.js";
 import { addMember } from "../../src/domain/projects.js";
+import { drainOrg } from "../../src/events/emitter.js";
 import { notifying } from "../../src/notify.js";
 import type { CollabDb } from "../../src/store/db.js";
+import { dispatchAction } from "../../src/ui/actions.js";
 import { domainDb, ENGINEER, OWNER, OWNER_AGENT, QA, teamProject } from "../domain/setup.js";
 import { noticeCtx } from "./fake.js";
 
@@ -205,5 +209,86 @@ describe("assignment notices", () => {
       .where("id", "=", item.id)
       .executeTakeFirstOrThrow();
     expect(after.executing_agent_id).toBe("agent-qa");
+  });
+
+  it("the request path marks the notice; a crash after the commit leaves it to the drain job", async () => {
+    const org = "org-notice-7";
+    const { item } = await task(org, "NOG");
+    const fake = noticeCtx(db, AGENTS);
+    const first = await notifying(fake.ctx, org, () =>
+      assign(db, org, OWNER, item.id, item.version, {
+        responsibleAccountId: ENGINEER.accountId,
+        executingAgentId: "agent-eng",
+      }),
+    );
+    const owed = () =>
+      db
+        .selectFrom("activity")
+        .select(["id", "notified_at"])
+        .where("item_id", "=", item.id)
+        .where("kind", "=", "assigned")
+        .orderBy("created_at")
+        .execute();
+    expect((await owed()).every((a) => a.notified_at !== null)).toBe(true);
+
+    // The write commits, then the replica dies before its notice: nothing is posted.
+    await assign(db, org, OWNER, item.id, first.version, {
+      responsibleAccountId: QA.accountId,
+      executingAgentId: "agent-qa",
+    });
+    expect(fake.posts).toHaveLength(1);
+    // The drain job leaves fresh entries to their request path...
+    await drainOrg(fake.ctx, { orgId: org, step: 0 });
+    expect(fake.posts).toHaveLength(1);
+    // ...and posts them once they are a minute old.
+    await sql`UPDATE plugin_collab.activity SET created_at = now() - interval '2 minutes' WHERE item_id = ${item.id}`.execute(
+      db,
+    );
+    await drainOrg(fake.ctx, { orgId: org, step: 0 });
+    expect(fake.posts.map((p) => [p.accountId, p.kind])).toEqual([
+      [ENGINEER.accountId, "collab.assigned"],
+      [QA.accountId, "collab.assigned"],
+    ]);
+    expect((await owed()).every((a) => a.notified_at !== null)).toBe(true);
+    await drainOrg(fake.ctx, { orgId: org, step: 0 });
+    expect(fake.posts).toHaveLength(2);
+  });
+
+  it("creating an item whose first status matches several members asks the owner", async () => {
+    const org = "org-notice-8";
+    const project = await teamProject(db, org, "NOH");
+    await addMember(db, org, OWNER, project.id, "acct-eng2", {
+      role: "member",
+      functionLabel: "engineering",
+    });
+    const fake = noticeCtx(db, AGENTS);
+    const item = await notifying(fake.ctx, org, () =>
+      createItem(db, org, ENGINEER, { projectId: project.id, type: "bug", title: "Crash" }),
+    );
+    expect(item.responsible_account_id).toBeNull();
+    expect(fake.posts.map((p) => [p.accountId, p.kind, p.title])).toEqual([
+      [OWNER.accountId, "collab.handoff", "Pick who gets NOH-1: Crash"],
+    ]);
+  });
+
+  it("a malformed action payload gets a toast, not a failure", async () => {
+    const org = "org-notice-9";
+    const fake = noticeCtx(db, AGENTS);
+    for (const payload of [
+      undefined,
+      "x",
+      { itemId: "not-a-uuid", agentId: "a" },
+      { itemId: "00000000-0000-0000-0000-000000000000" },
+    ]) {
+      const result = await dispatchAction({ ctx: fake.ctx, db }, {
+        scope: "org",
+        orgId: org,
+        accountId: OWNER.accountId,
+        role: "member",
+        actionId: "inbox.stop-agent",
+        payload,
+      } as UiOrgActionArgs);
+      expect(result).toMatchObject({ toast: { en: expect.stringMatching(/input is invalid/) } });
+    }
   });
 });

@@ -34,7 +34,49 @@ export async function dispatchAction(
 ): Promise<UiActionResult> {
   const handler = ACTIONS.get(args.actionId);
   if (!handler) throw new Error(`collab: unknown UI action ${args.actionId}`);
-  return handler(deps, args);
+  try {
+    return await handler(deps, args);
+  } catch (err) {
+    if (err instanceof ActionPayloadError) {
+      return {
+        toast: { zh: "这个操作的参数无效", en: `This action's input is invalid: ${err.message}` },
+      };
+    }
+    throw err;
+  }
+}
+
+/** A malformed action payload: the dispatcher answers it with a toast, not a failed call. */
+export class ActionPayloadError extends Error {}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Kernel ids (accounts, agents, conversations) are opaque strings of bounded length. */
+const KERNEL_ID_MAX = 256;
+
+/**
+ * Reads the named string fields of an action payload: `"uuid"` for the plugin's own row ids,
+ * `"id"` for a kernel id (non-empty, at most 256 characters). Throws {@link ActionPayloadError}
+ * when the payload is not an object or a field is missing or malformed.
+ */
+export function payloadFields<K extends string>(
+  payload: unknown,
+  spec: Record<K, "uuid" | "id">,
+): Record<K, string> {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    throw new ActionPayloadError("the payload must be an object");
+  }
+  const out = {} as Record<K, string>;
+  for (const key of Object.keys(spec) as K[]) {
+    const value = (payload as Record<string, unknown>)[key];
+    const ok =
+      typeof value === "string" &&
+      (spec[key] === "uuid"
+        ? UUID_RE.test(value)
+        : value.length > 0 && value.length <= KERNEL_ID_MAX);
+    if (!ok) throw new ActionPayloadError(`${key} is missing or malformed`);
+    out[key] = value as string;
+  }
+  return out;
 }
 
 /**

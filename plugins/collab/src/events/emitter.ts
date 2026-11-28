@@ -6,6 +6,7 @@ import type {
 } from "@capybara-hq/plugin-sdk";
 import { sql } from "kysely";
 import { isAgent } from "../domain/internal.js";
+import { sweepNotices } from "../notices.js";
 import { type CollabDb, collabDb } from "../store/db.js";
 import type { Actor, OutboxRow } from "../store/types.js";
 import { type StoredDetail, type SummaryNames, summarize } from "./summary.js";
@@ -31,7 +32,7 @@ const PRUNE_LIMIT = 500;
 /** What the emitter uses of `ctx`. */
 export type EmitterCtx = Pick<
   ExtensionContext,
-  "db" | "log" | "triggers" | "queue" | "people" | "agents"
+  "db" | "log" | "triggers" | "queue" | "people" | "agents" | "inbox"
 >;
 
 /** The payload of a `collab-drain` job (`orgId` gives the job its org scope). */
@@ -184,6 +185,14 @@ export async function drainOrg(ctx: EmitterCtx, job: DrainJob): Promise<void> {
   } catch (err) {
     failing = true;
     ctx.log.warn("collab outbox drain failed; it retries later", { orgId, err });
+  }
+  // The inbox notices of the org's writes ride the same job and ladder (intent first: owed in
+  // the activity, see notices.ts).
+  try {
+    if ((await sweepNotices(ctx, orgId)) > 0) failing = true;
+  } catch (err) {
+    failing = true;
+    ctx.log.warn("collab notice sweep failed; it retries later", { orgId, err });
   }
   if (!left && !failing) return;
   const step = failing ? job.step + 1 : 0;

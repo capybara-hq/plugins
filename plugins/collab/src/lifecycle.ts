@@ -37,8 +37,8 @@ async function lockItem(tx: CollabDb, orgId: string, subject: RunLifecyclePayloa
  * and out of order across replicas, so a run phase is only a hint: the state is read from the
  * kernel (`ctx.conversations.bySubject`, the conversation's latest run) while the item row is
  * locked, so whichever delivery writes last writes the newest state, and a stale `started` never
- * turns an idle item back to working. Events of a pair that no longer executes the item, or of
- * another conversation, are ignored. `offer_declined` marks the item declined (with an activity
+ * turns an idle item back to working. The state is the newest conversation of the executing pair
+ * (agent and responsible person); events of another pair are ignored. `offer_declined` marks the item declined (with an activity
  * entry); when the kernel gave up delivering the offer (`undelivered`) the agent is taken off the
  * item as well (the person keeps it).
  */
@@ -55,7 +55,6 @@ function stateOf(conversationState: "idle" | "running" | "waiting"): AgentState 
 }
 
 async function runPhase(ctx: LifecycleCtx, p: RunLifecyclePayload): Promise<boolean> {
-  if (!p.conversationId) return false;
   const db = collabDb(ctx.db);
   return db.transaction().execute(async (tx) => {
     const item = await lockItem(tx, p.orgId, p.subject);
@@ -64,15 +63,16 @@ async function runPhase(ctx: LifecycleCtx, p: RunLifecyclePayload): Promise<bool
       orgId: p.orgId,
       subject: { kind: "item", id: item.id },
     });
-    const conversation = conversations.find((c) => c.id === p.conversationId);
-    if (
-      !conversation ||
-      conversation.agentId !== item.executing_agent_id ||
-      conversation.ownerAccountId !== item.responsible_account_id
-    ) {
-      return false;
-    }
+    // The payload's conversation may be an older one of the pair: the state is the pair's newest
+    // conversation's (bySubject lists newest activity first).
+    const conversation = conversations.find(
+      (c) =>
+        c.agentId === item.executing_agent_id && c.ownerAccountId === item.responsible_account_id,
+    );
+    if (!conversation) return false;
     const state = stateOf(conversation.state);
+    // A decline stands until the agent works again: a late `finished` of an earlier run keeps it.
+    if (item.agent_state === "declined" && state === "idle") return false;
     if (item.agent_state === state && item.agent_conversation_id === conversation.id) return false;
     await setAgentState(tx, item, state, conversation.id);
     return true;
@@ -125,6 +125,8 @@ async function offerDeclined(ctx: LifecycleCtx, p: RunLifecyclePayload): Promise
         });
         return true;
       }
+      // TODO(kernel follow-up): the payload will carry the event's dedupeKey; until then a late
+      // offer_declined of an older offer to the same pair can mark a newer offer declined.
       if (item.agent_state === "declined") return false;
       await addActivity(tx, p.orgId, item.id, actor, "agent_declined", {
         accountId: p.accountId,

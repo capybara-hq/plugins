@@ -217,4 +217,29 @@ describe("run state", () => {
     await onRunLifecycle(fake.ctx, declined(org, item, "off", "agent-old"));
     expect((await reload(item)).agent_state).toBeNull();
   });
+
+  it("a late finished after a decline keeps declined; a new run clears it", async () => {
+    const org = "org-life-8";
+    const item = await assigned(org, "LFH");
+    const fake = noticeCtx(db, {});
+    await onRunLifecycle(fake.ctx, declined(org, item, "declined"));
+    fake.conversations.set(item.id, [conv("idle")]);
+    await onRunLifecycle(fake.ctx, phase(org, item, "finished"));
+    expect((await reload(item)).agent_state).toBe("declined");
+    fake.conversations.set(item.id, [conv("running")]);
+    await onRunLifecycle(fake.ctx, phase(org, item, "started"));
+    expect((await reload(item)).agent_state).toBe("working");
+  });
+
+  it("the state is the pair's newest conversation, whatever conversation the event names", async () => {
+    const org = "org-life-9";
+    const item = await assigned(org, "LFI");
+    const fake = noticeCtx(db, {});
+    // Newest first: the pair works in conv-new; conv-work is an older, idle one.
+    fake.conversations.set(item.id, [conv("running", { id: "conv-new" }), conv("idle")]);
+    await onRunLifecycle(fake.ctx, phase(org, item, "finished", { conversationId: "conv-work" }));
+    const now = await reload(item);
+    expect(now.agent_state).toBe("working");
+    expect(now.agent_conversation_id).toBe("conv-new");
+  });
 });

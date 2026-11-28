@@ -202,6 +202,26 @@ async function noteDroppedAgent(
   });
 }
 
+/**
+ * A default assignment that matches no member or several: the item keeps its assignment and the
+ * project owner is asked to pick (an inbox notice owed by this entry, see notices.ts).
+ */
+async function noteUnresolvedHandoff(
+  tx: CollabDb,
+  orgId: string,
+  itemId: string,
+  actor: Actor,
+  status: Status,
+): Promise<void> {
+  const rule = defaultAssignmentOf(status);
+  if (!rule || !(rule.functionLabel || rule.accountId)) return;
+  await addActivity(tx, orgId, itemId, actor, "handoff_unresolved", {
+    status: status.key,
+    ...(rule.functionLabel ? { functionLabel: rule.functionLabel } : {}),
+    ...(rule.accountId ? { accountId: rule.accountId } : {}),
+  });
+}
+
 /** Creates an item with the project's next key number, in the first status of its type's workflow. */
 export async function createItem(
   db: CollabDb,
@@ -265,6 +285,9 @@ export async function createItem(
       .executeTakeFirstOrThrow();
     await addActivity(tx, orgId, item.id, actor, "created", { status: status.key });
     if (assignee?.droppedAgentId) await noteDroppedAgent(tx, orgId, item.id, actor, assignee);
+    if (!input.responsibleAccountId && !assignee) {
+      await noteUnresolvedHandoff(tx, orgId, item.id, actor, status);
+    }
     const base = { actor, projectKey: project.key, statusCategory: status.category };
     await outboxFor(tx, orgId, "item.created", item, {
       ...base,
@@ -419,16 +442,7 @@ async function moveItem(
     set.executing_agent_id = handoff.agentId;
   }
   const after = await writeItem(tx, orgId, item, set);
-  // A default assignment that matches no member or several: the item keeps its assignment and
-  // the project owner is asked to pick (an inbox notice posted after the commit, see notify.ts).
-  const rule = defaultAssignmentOf(to);
-  if (rule && (rule.functionLabel || rule.accountId) && !handoff) {
-    await addActivity(tx, orgId, item.id, actor, "handoff_unresolved", {
-      status: to.key,
-      ...(rule.functionLabel ? { functionLabel: rule.functionLabel } : {}),
-      ...(rule.accountId ? { accountId: rule.accountId } : {}),
-    });
-  }
+  if (!handoff) await noteUnresolvedHandoff(tx, orgId, item.id, actor, to);
   await addActivity(tx, orgId, item.id, actor, "status_changed", {
     from: item.status_key,
     to: to.key,

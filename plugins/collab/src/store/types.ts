@@ -139,6 +139,7 @@ export interface ActivityTable {
   actor: Json<Actor>;
   kind: string;
   detail: JsonDefault<Record<string, unknown>>;
+  notified_at: Generated<Date | null>;
   created_at: Generated<Date>;
 }
 
