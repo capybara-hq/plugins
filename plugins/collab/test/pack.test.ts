@@ -70,6 +70,7 @@ describe("collab package", () => {
         "package/LICENSE",
         "package/icon.svg",
         "package/migrations/0001_init.sql",
+        "package/migrations/0002_item_watchers.sql",
         "package/agents/product.md",
         "package/agents/engineer.md",
         "package/agents/qa.md",

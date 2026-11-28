@@ -22,6 +22,9 @@ What the plugin does:
   notice's link to the item page, there is no reassign button), decisions and gate
   confirmations (with answer buttons), reminders and escalations, and "pick who gets it" requests
   to the project owner when a default assignment matches nobody or several people.
+- **Follow items** from the item page or through your agent. Project owners and members can follow
+  an item to receive bilingual inbox notices for status changes, new comments, and decision answers.
+  Each item supports up to 64 followers.
 - **Agent run state** on items (working, waiting, idle, declined) from the kernel's `run.lifecycle`
   hook.
 - **Agent templates and skills** (see below).
@@ -59,9 +62,9 @@ New projects start with three item types (editable per status afterwards):
 
 | Permission | Why |
 |---|---|
-| `tools` (13, below) | The agent tools. |
+| `tools` (14, below) | The agent tools. |
 | `triggers.emit` (9 event types) | Emitting item and decision events for automations and acceptance. |
-| `inbox` | Assignment notices, decisions, gate confirmations, reminders and escalations. |
+| `inbox` | Assignment and watcher notices, decisions, gate confirmations, reminders and escalations. |
 | `agents.read` | Checking that an agent is one the responsible person may use (`usableBy`), and agent names. |
 | `conversations.subjects` | Finding the conversations that serve an item (`bySubject`): the item's panel, the old agent's refusal, run state. |
 | `people.read` | Names and avatars, active org membership when adding project members, the people picker. |
@@ -83,13 +86,13 @@ It asks for no storage, network, sandbox, model or secret access, and has no con
 | `item_transition` | Moves the item to another status (a gate asks its confirmer) | allow |
 | `item_assign` | Assigns a person and agent (anyone but the person asks first) | allow |
 | `item_comment` | Comments in Markdown | allow |
+| `watch_item` | Follows or unfollows an item for the conversation owner | allow |
 | `item_link` | Links two items (blocks, relates, duplicates) | allow |
 | `artifact_attach` | Attaches an http(s) link as a versioned artifact | allow |
 | `decision_ask` | Asks a person to decide, with options and a recommendation | allow |
 | `decision_list` | Decisions of an item, by state, or addressed to the person | allow |
 
-The tools act as the **conversation's owner**; a run started by another member is refused. Every
-write takes the `version` the agent last read and returns the new one.
+The tools act as the **conversation's owner**; a run started by another member is refused. Writes that change the item take the `version` the agent last read and return the new one.
 
 ## Events
 
@@ -98,7 +101,7 @@ write takes the `version` the agent last read and returns the new one.
 asking pair while it holds the item), `gate.requested`.
 
 Every event carries the filterable facts `projectKey`, `itemType`, `status`, `statusCategory`,
-`priority`, `labels`, `responsibleAccountId`, `executingAgentId`, `changedFields`.
+`priority`, `labels`, `responsibleAccountId`, `executingAgentId`, `changedFields`, and `watchers` (account IDs when the event was recorded).
 Events are written to an outbox in the same transaction as the change and emitted after the
 commit; a per-org drain job (queued before the write) re-emits anything a crash or an outage left
 behind, retrying on a ladder up to an hour. The kernel dedupes on the event's key, so a row emitted
@@ -130,8 +133,6 @@ twice is one event. Only people the project shows the item to see its events.
 
 ## Not yet (follow-ups)
 
-- **Watchers**: the design's item watchers are not built; people follow items through assignment,
-  decisions and the project's automations.
 - **Mentions**: events carry no `mentions` fact.
 - **Stored artifacts**: attaching files (object storage) instead of links.
 

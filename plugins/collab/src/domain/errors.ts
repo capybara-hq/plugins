@@ -8,7 +8,8 @@ export type CollabErrorCode =
   | "gated"
   | "invalid_assignee"
   | "no_longer_assigned"
-  | "archived";
+  | "archived"
+  | "watcher_limit";
 
 /** What a person reads when a write hits an archived project. */
 // capybara:allow-module-state read-only constant

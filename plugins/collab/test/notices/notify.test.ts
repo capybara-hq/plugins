@@ -2,13 +2,23 @@ import type { UiOrgActionArgs } from "@capybara-hq/plugin-sdk";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { assign } from "../../src/domain/assignment.js";
-import { createItem, transition } from "../../src/domain/items.js";
-import { addMember } from "../../src/domain/projects.js";
+import { answerDecision, askDecision } from "../../src/domain/decisions.js";
+import { comment, createItem, transition } from "../../src/domain/items.js";
+import { addMember, removeMember } from "../../src/domain/projects.js";
+import { setItemWatching } from "../../src/domain/watchers.js";
 import { drainOrg } from "../../src/events/emitter.js";
 import { notifying } from "../../src/notify.js";
 import type { CollabDb } from "../../src/store/db.js";
 import { dispatchAction } from "../../src/ui/actions.js";
-import { domainDb, ENGINEER, OWNER, OWNER_AGENT, QA, teamProject } from "../domain/setup.js";
+import {
+  domainDb,
+  ENGINEER,
+  NO_DECISION_JOBS,
+  OWNER,
+  OWNER_AGENT,
+  QA,
+  teamProject,
+} from "../domain/setup.js";
 import { noticeCtx } from "./fake.js";
 
 let db: CollabDb;
@@ -43,6 +53,133 @@ async function activityOf(itemId: string) {
     .orderBy("created_at")
     .execute();
 }
+
+it("posts bilingual watcher notices for comments, status and an answer without a directed event", async () => {
+  const org = "watch-notices";
+  const { item } = await task(org, "WN");
+  const fake = noticeCtx(db, AGENTS);
+  await setItemWatching(db, org, ENGINEER, item.id, true);
+  await setItemWatching(db, org, OWNER, item.id, true);
+  await notifying(fake.ctx, org, () => comment(db, org, OWNER, item.id, "New comment"));
+  await notifying(fake.ctx, org, () =>
+    transition(db, org, OWNER, item.id, item.version, "in_progress"),
+  );
+  const decision = await askDecision(
+    db,
+    org,
+    OWNER_AGENT,
+    {
+      itemId: item.id,
+      question: "Which option?",
+      options: [],
+      blocking: false,
+    },
+    { decisions: NO_DECISION_JOBS },
+  );
+  await notifying(fake.ctx, org, () =>
+    answerDecision(
+      db,
+      org,
+      OWNER.accountId,
+      decision.id,
+      { text: "private answer" },
+      { decisions: NO_DECISION_JOBS },
+    ),
+  );
+
+  const posts = fake.posts.filter((post) => post.kind === "collab.watched");
+  expect(posts).toHaveLength(3);
+  expect(posts.map((post) => post.body)).toEqual([
+    { zh: "事项有新评论。", en: "The item has a new comment." },
+    { zh: "事项状态已变更。", en: "The item status changed." },
+    { zh: "事项上的决策已答复。", en: "A decision on the item was answered." },
+  ]);
+  for (const post of posts) {
+    expect(post).toMatchObject({
+      accountId: ENGINEER.accountId,
+      link: "/p/collab/projects?item=WN-1",
+    });
+    expect(JSON.stringify(post)).not.toContain("private answer");
+  }
+});
+
+it("checks subscriptions at delivery and dedupes a notice after a partial failure", async () => {
+  const org = "watch-retry";
+  const { project, item } = await task(org, "WR");
+  const fake = noticeCtx(db, AGENTS);
+  await setItemWatching(db, org, ENGINEER, item.id, true);
+  await setItemWatching(db, org, QA, item.id, true);
+  const post = fake.ctx.inbox.post.bind(fake.ctx.inbox);
+  fake.ctx.inbox.post = async (input) => {
+    if (input.accountId === ENGINEER.accountId) throw new Error("temporary inbox failure");
+    return post(input);
+  };
+  await notifying(fake.ctx, org, () => comment(db, org, OWNER, item.id, "New comment"));
+  expect(fake.posts).toHaveLength(1);
+  await removeMember(db, org, OWNER, project.id, ENGINEER.accountId);
+  const retried: string[] = [];
+  fake.ctx.inbox.post = async (input) => {
+    retried.push(input.accountId);
+    return post(input);
+  };
+  await db
+    .updateTable("activity")
+    .set({ created_at: sql`now() - interval '2 minutes'` })
+    .where("org_id", "=", org)
+    .where("kind", "=", "commented")
+    .execute();
+  await drainOrg(fake.ctx, { orgId: org, step: 0 });
+  expect(retried).toEqual([]);
+  expect(fake.posts.map((notice) => notice.accountId)).toEqual([QA.accountId]);
+  expect(
+    (await activityOf(item.id)).find((a) => a.kind === "commented")?.notified_at,
+  ).toBeInstanceOf(Date);
+});
+
+it("rechecks a later recipient after an earlier inbox post changes their subscription", async () => {
+  const org = "watch-unfollow-during-post";
+  const { item } = await task(org, "WUD");
+  const fake = noticeCtx(db, AGENTS);
+  await setItemWatching(db, org, ENGINEER, item.id, true);
+  await setItemWatching(db, org, QA, item.id, true);
+  const post = fake.ctx.inbox.post.bind(fake.ctx.inbox);
+  fake.ctx.inbox.post = async (input) => {
+    if (input.accountId === ENGINEER.accountId) await setItemWatching(db, org, QA, item.id, false);
+    return post(input);
+  };
+  await notifying(fake.ctx, org, () => comment(db, org, OWNER, item.id, "New comment"));
+  expect(fake.posts.map((notice) => notice.accountId)).toEqual([ENGINEER.accountId]);
+});
+
+it("schedules another org drain when a watcher notice pass fills its batch", async () => {
+  const org = "watch-notice-batch";
+  const { item } = await task(org, "WB");
+  const fake = noticeCtx(db, AGENTS);
+  let queued = 0;
+  fake.ctx.queue.add = async () => {
+    queued++;
+  };
+  await setItemWatching(db, org, ENGINEER, item.id, true);
+  await db
+    .insertInto("activity")
+    .values(
+      Array.from({ length: 201 }, () => ({
+        org_id: org,
+        item_id: item.id,
+        actor: JSON.stringify(OWNER),
+        kind: "commented",
+        watcher_recipients: [ENGINEER.accountId],
+        created_at: sql<Date>`now() - interval '2 minutes'`,
+      })),
+    )
+    .execute();
+  await drainOrg(fake.ctx, { orgId: org, step: 0 });
+  expect(fake.posts).toHaveLength(200);
+  expect(queued).toBe(1);
+  await drainOrg(fake.ctx, { orgId: org, step: 0 });
+  expect(fake.posts).toHaveLength(201);
+  expect(queued).toBe(1);
+});
 
 describe("assignment notices", () => {
   it("assignment by someone else posts one inbox item with a stop action", async () => {

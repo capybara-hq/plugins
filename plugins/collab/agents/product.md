@@ -15,6 +15,7 @@ tools:
   - plugin__collab__item_transition
   - plugin__collab__item_assign
   - plugin__collab__item_comment
+  - plugin__collab__watch_item
   - plugin__collab__item_link
   - plugin__collab__artifact_attach
   - plugin__collab__decision_ask

@@ -26,6 +26,7 @@ const FACTS: Record<string, TriggerFactDeclaration> = {
     name: { zh: "执行智能体", en: "Executing agent" },
     filterable: true,
   },
+  watchers: { type: "string[]", name: { zh: "关注者", en: "Watchers" }, filterable: true },
   changedFields: {
     type: "string[]",
     name: { zh: "变更字段", en: "Changed fields" },

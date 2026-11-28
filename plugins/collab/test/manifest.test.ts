@@ -15,9 +15,9 @@ describe("collab manifest", () => {
     expect(plugin.name).toBe(extension.name);
   });
 
-  it("declares 13 tool keys and event types of valid shape", () => {
+  it("declares 14 tool keys and event types of valid shape", () => {
     const perms = extension.permissions;
-    expect(perms?.tools).toHaveLength(13);
+    expect(perms?.tools).toHaveLength(14);
     for (const key of perms?.tools ?? []) expect(key.length).toBeLessThanOrEqual(64);
     for (const type of perms?.triggers?.emit ?? []) {
       expect(type).toMatch(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/);

@@ -19,6 +19,7 @@ export const TOOL_KEYS = [
   "item_transition",
   "item_assign",
   "item_comment",
+  "watch_item",
   "item_link",
   "artifact_attach",
   "decision_ask",

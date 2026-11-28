@@ -36,8 +36,10 @@ describe("collab trigger source", () => {
           "responsibleAccountId",
           "status",
           "statusCategory",
+          "watchers",
         ].sort(),
       );
+      expect(e.facts.watchers?.type).toBe("string[]");
       for (const f of Object.values(e.facts)) expect(f.filterable).toBe(true);
       expect(e.name.zh && e.name.en).toBeTruthy();
     }

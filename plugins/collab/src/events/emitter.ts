@@ -189,7 +189,9 @@ export async function drainOrg(ctx: EmitterCtx, job: DrainJob): Promise<void> {
   // The inbox notices of the org's writes ride the same job and ladder (intent first: owed in
   // the activity, see notices.ts).
   try {
-    if ((await sweepNotices(ctx, orgId)) > 0) failing = true;
+    const notices = await sweepNotices(ctx, orgId);
+    left ||= notices.full;
+    failing ||= notices.failed > 0;
   } catch (err) {
     failing = true;
     ctx.log.warn("collab notice sweep failed; it retries later", { orgId, err });

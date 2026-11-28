@@ -23,6 +23,39 @@ export function actorJson(actor: Actor): string {
   });
 }
 
+export async function watcherIds(db: CollabDb, orgId: string, itemId: string): Promise<string[]> {
+  const rows = await db
+    .selectFrom("item_watchers")
+    .select("account_id")
+    .where("org_id", "=", orgId)
+    .where("item_id", "=", itemId)
+    .orderBy("account_id")
+    .execute();
+  return rows.map((row) => row.account_id);
+}
+
+export async function isWatching(
+  db: CollabDb,
+  orgId: string,
+  itemId: string,
+  accountId: string,
+): Promise<boolean> {
+  const row = await db
+    .selectFrom("item_watchers")
+    .select("account_id")
+    .where("org_id", "=", orgId)
+    .where("item_id", "=", itemId)
+    .where("account_id", "=", accountId)
+    .executeTakeFirst();
+  return row !== undefined;
+}
+
+export function isWatcherActivity(
+  kind: string,
+): kind is "status_changed" | "commented" | "decision_answered" {
+  return kind === "status_changed" || kind === "commented" || kind === "decision_answered";
+}
+
 /** The project in the org, or `not_found`. */
 export async function loadProject(
   db: CollabDb,
@@ -111,6 +144,9 @@ export async function addActivity(
   kind: string,
   detail: Record<string, unknown> = {},
 ): Promise<string> {
+  const recipients = isWatcherActivity(kind)
+    ? (await watcherIds(tx, orgId, itemId)).filter((accountId) => accountId !== actor.accountId)
+    : [];
   const row = await tx
     .insertInto("activity")
     .values({
@@ -119,6 +155,7 @@ export async function addActivity(
       actor: actorJson(actor),
       kind,
       detail: JSON.stringify(detail),
+      ...(recipients.length > 0 && { watcher_recipients: recipients }),
     })
     .returning("id")
     .executeTakeFirstOrThrow();

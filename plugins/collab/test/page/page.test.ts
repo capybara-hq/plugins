@@ -57,6 +57,28 @@ async function inReview(org: string, key: string) {
   return { project, item };
 }
 
+it("watch action changes only the viewer's subscription", async () => {
+  const org = "watch-page";
+  const project = await teamProject(db, org, "WP");
+  const item = await createItem(db, org, OWNER, {
+    projectId: project.id,
+    type: "task",
+    title: "Watch",
+  });
+  const fake = pageCtx(db, AGENTS);
+  const detail = (accountId: string) =>
+    fake.query<ItemDetailResult>(org, accountId, "item.detail", { key: "WP-1" });
+
+  expect((await detail(OWNER.accountId)).watching).toBe(false);
+  expect(
+    await fake.act(org, OWNER.accountId, "item.watch", { itemId: item.id, watching: true }),
+  ).toMatchObject({ invalidate: ["item.detail"] });
+  expect((await detail(OWNER.accountId)).watching).toBe(true);
+  expect((await detail(ENGINEER.accountId)).watching).toBe(false);
+  await fake.act(org, OWNER.accountId, "item.watch", { itemId: item.id, watching: false });
+  expect((await detail(OWNER.accountId)).watching).toBe(false);
+});
+
 describe("page queries", () => {
   it("board query returns locked gate columns and ≤ 500 cards", async () => {
     const org = "org-page-board";

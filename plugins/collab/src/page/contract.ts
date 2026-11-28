@@ -258,6 +258,7 @@ export interface ItemDetailResult {
   /** Newest first: open ones, then up to 20 closed ones. */
   decisions: DecisionRow[];
   canEdit: boolean;
+  watching: boolean;
   /** Some decisions, children, links or artifacts were left out (size budget). */
   truncated?: boolean;
 }
@@ -670,6 +671,7 @@ export interface ActionMap {
   "item.move": ItemMovePayload;
   "item.assign": ItemAssignPayload;
   "item.comment": ItemCommentPayload;
+  "item.watch": { itemId: string; watching: boolean };
   "gate.confirm": GateConfirmPayload;
   "decision.answer": DecisionAnswerPayload;
   "inbox.answer": InboxAnswerPayload;

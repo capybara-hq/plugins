@@ -92,6 +92,8 @@ export const COPY = {
   comment: { zh: "评论", en: "Comment" },
   addComment: { zh: "发表评论", en: "Post comment" },
   edit: { zh: "编辑", en: "Edit" },
+  follow: { zh: "关注", en: "Follow" },
+  unfollow: { zh: "取消关注", en: "Unfollow" },
   editItem: { zh: "编辑事项", en: "Edit item" },
   moveTo: { zh: "移到", en: "Move to" },
   loadMore: { zh: "载入更多", en: "Load more" },

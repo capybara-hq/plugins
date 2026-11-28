@@ -86,6 +86,7 @@ function LoadedDetail(props: { data: ItemDetailResult; tab: TabId; onTab(id: Tab
   const openDecisions = data.decisions.filter((d) => d.state === "open").length;
 
   const mover = useActionRunner();
+  const watcher = useActionRunner();
   const move = (to: StatusInfo) => () =>
     void mover.run("move", () =>
       act("item.move", { itemId: item.id, version: item.version, to: to.key }),
@@ -102,6 +103,16 @@ function LoadedDetail(props: { data: ItemDetailResult; tab: TabId; onTab(id: Tab
   const actions: PageAction[] = [];
   if (data.canEdit) {
     actions.push({ label: t(COPY.edit), variant: "default", onSelect: () => setEditing(true) });
+    actions.push({
+      label: t(data.watching ? COPY.unfollow : COPY.follow),
+      variant: "default",
+      loading: watcher.busy !== null,
+      disabled: watcher.busy !== null,
+      onSelect: () =>
+        void watcher.run("watch", () =>
+          act("item.watch", { itemId: item.id, watching: !data.watching }),
+        ),
+    });
     if (moveItems.length > 0) actions.push({ label: t(COPY.moveTo), menu: moveItems });
   }
 
@@ -174,7 +185,7 @@ function LoadedDetail(props: { data: ItemDetailResult; tab: TabId; onTab(id: Tab
         />
       }
     >
-      <ErrorLine error={mover.error} />
+      <ErrorLine error={mover.error ?? watcher.error} />
       <TruncatedNote truncated={data.truncated} />
       {tab === "overview" && <OverviewTab data={data} />}
       {tab === "activity" && (
