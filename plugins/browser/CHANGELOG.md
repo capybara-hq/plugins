@@ -1,5 +1,11 @@
 # @capybara-hq/plugin-browser
 
+## 0.1.0-rc.21
+
+### Patch Changes
+
+- 7c0d502: The panel's local port strip hides as soon as its port is in the conversation's granted list, and never shows for a port already granted.
+
 ## 0.1.0-rc.20
 
 ### Minor Changes
