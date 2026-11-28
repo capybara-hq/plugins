@@ -374,7 +374,7 @@ export async function answerDecision(
         options.length > 0 ? "Pick one of the decision's options." : "Write an answer.",
       );
     }
-    await requireHooks(opts.decisions, "answering a decision").closed(decisionId);
+    const hooks = requireHooks(opts.decisions, "answering a decision");
     const decision = await tx
       .updateTable("decisions")
       .set({
@@ -411,6 +411,8 @@ export async function answerDecision(
       );
       after = "item" in moved ? moved.item : item;
     }
+    // Queued once every step that can refuse has passed, so a rolled-back answer owes nothing.
+    await hooks.closed(decisionId);
     await addActivity(tx, orgId, item.id, actor, "decision_answered", {
       decisionId,
       ...(answer.optionId !== undefined ? { optionId: answer.optionId } : {}),

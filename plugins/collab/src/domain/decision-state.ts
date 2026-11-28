@@ -57,7 +57,11 @@ export async function gateConfirmers(
       return { addressee: who, confirmers: [who] };
     }
     case "responsible": {
-      const who = item.responsible_account_id ?? owner;
+      // A responsible person who left the project (or became a guest) hands the gate to the owner.
+      const who =
+        item.responsible_account_id && (await isActiveMember(item.responsible_account_id))
+          ? item.responsible_account_id
+          : owner;
       return { addressee: who, confirmers: [who] };
     }
     case "member": {
@@ -211,7 +215,9 @@ export async function readdressOpen(
       "=",
       "itemId" in scope ? scope.itemId : scope.projectId,
     )
-    .forUpdate()
+    .orderBy("d.id")
+    // The decisions only: the items are the caller's to lock (in id order where it locks several).
+    .forUpdate("d")
     .execute();
   const projects = new Map<string, Project>();
   for (const decision of open) {

@@ -64,10 +64,28 @@ export function registerDecisionQueue(ctx: DecisionsCtx): void {
   ctx.queue.define<DecisionJob>(DECISIONS_QUEUE, (job) => runDecisionJob(ctx, job));
 }
 
+/** Minute buckets of the jobs a decision may owe more than once (see {@link add}). */
+const BUCKET_MS = 60_000;
+
+/**
+ * Queues a decision's job. A decision is created once, but it may be re-addressed or closed by a
+ * write that later rolls back and then again by another: those jobs (resolve, a re-address's
+ * notify) carry the minute bucket in their id and run two minutes after the bucket starts, so
+ * every write of that minute has committed or rolled back before the job runs, and a later
+ * write's job never shares the id of a finished one.
+ */
 async function add(ctx: DecisionsCtx, job: DecisionJob, delayMs: number): Promise<void> {
+  const id = decisionJobId(job.step, job.decisionId, job.gen);
+  const repeatable = job.step === "resolve" || (job.step === "notify" && (job.gen ?? 0) > 0);
+  if (!repeatable) {
+    await ctx.queue.add<DecisionJob>(DECISIONS_QUEUE, job, { jobId: id, delayMs });
+    return;
+  }
+  const now = Date.now();
+  const bucket = Math.floor(now / BUCKET_MS);
   await ctx.queue.add<DecisionJob>(DECISIONS_QUEUE, job, {
-    jobId: decisionJobId(job.step, job.decisionId, job.gen),
-    delayMs,
+    jobId: `${id}-b${bucket}`,
+    delayMs: (bucket + 2) * BUCKET_MS - now,
   });
 }
 
@@ -163,11 +181,28 @@ function permanentInboxRefusal(err: unknown): boolean {
   return code === "invalid_item" || code === "org_disabled";
 }
 
-async function resolveAll(ctx: DecisionsCtx, orgId: string, ids: string[], decisionId: string) {
+/** An item the inbox cannot resolve, now or ever (gone, invalid, the plugin off in the org). */
+function permanentResolveRefusal(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === "not_found" || permanentInboxRefusal(err);
+}
+
+/**
+ * Resolves inbox items. `strict` (the resolve step): a transient failure is rethrown so the job
+ * retries, a permanent one only logged; otherwise every failure is only logged.
+ */
+async function resolveAll(
+  ctx: DecisionsCtx,
+  orgId: string,
+  ids: string[],
+  decisionId: string,
+  strict = false,
+) {
   for (const itemId of new Set(ids)) {
     try {
       await ctx.inbox.resolve({ orgId, itemId });
     } catch (err) {
+      if (strict && !permanentResolveRefusal(err)) throw err;
       ctx.log.warn("collab could not resolve a decision's inbox item", { orgId, decisionId, err });
     }
   }
@@ -199,6 +234,7 @@ export async function runDecisionJob(ctx: DecisionsCtx, job: DecisionJob): Promi
       job.orgId,
       [...decision.inbox_item_ids, ...decision.stale_inbox_item_ids],
       decision.id,
+      true,
     );
     return;
   }

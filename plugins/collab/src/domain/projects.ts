@@ -96,6 +96,13 @@ export async function addMember(
         : {}),
       ...(input.defaultAgentId !== undefined ? { default_agent_id: input.defaultAgentId } : {}),
     };
+    const before = await tx
+      .selectFrom("project_members")
+      .select("role")
+      .where("org_id", "=", orgId)
+      .where("project_id", "=", projectId)
+      .where("account_id", "=", accountId)
+      .executeTakeFirst();
     const member = await tx
       .insertInto("project_members")
       .values({
@@ -112,10 +119,48 @@ export async function addMember(
       )
       .returningAll()
       .executeTakeFirstOrThrow();
+    // A guest is responsible for nothing: their open items go back to the owner, as on removal.
+    if (before && before.role !== "guest" && input.role === "guest") {
+      await handBackItems(tx, orgId, actor, project, accountId);
+    }
     // A demotion to guest (or a new label) can change who answers open decisions.
     await readdressOpen(tx, orgId, { projectId }, decisions);
     return member;
   });
+}
+
+/**
+ * Hands the person's open responsible items back to the project owner without an agent, recorded
+ * like any reassignment (they left the project or became a guest). Rows locked in id order.
+ */
+async function handBackItems(
+  tx: CollabDb,
+  orgId: string,
+  actor: Actor,
+  project: Project,
+  accountId: string,
+): Promise<void> {
+  const open = await tx
+    .selectFrom("items")
+    .selectAll()
+    .where("org_id", "=", orgId)
+    .where("project_id", "=", project.id)
+    .where("responsible_account_id", "=", accountId)
+    .where("closed_at", "is", null)
+    .orderBy("id")
+    .forUpdate()
+    .execute();
+  for (const item of open) {
+    const after = await writeItem(tx, orgId, item, {
+      responsible_account_id: project.owner_account_id,
+      executing_agent_id: null,
+    });
+    const statuses = await statusesForType(tx, orgId, project.id, item.type);
+    await recordAssignment(tx, orgId, actor, item, after, {
+      projectKey: project.key,
+      statusCategory: statuses.find((s) => s.key === item.status_key)?.category ?? "todo",
+    });
+  }
 }
 
 /**
@@ -143,26 +188,7 @@ export async function removeMember(
       .where("project_id", "=", projectId)
       .where("account_id", "=", accountId)
       .execute();
-    const open = await tx
-      .selectFrom("items")
-      .selectAll()
-      .where("org_id", "=", orgId)
-      .where("project_id", "=", projectId)
-      .where("responsible_account_id", "=", accountId)
-      .where("closed_at", "is", null)
-      .forUpdate()
-      .execute();
-    for (const item of open) {
-      const after = await writeItem(tx, orgId, item, {
-        responsible_account_id: project.owner_account_id,
-        executing_agent_id: null,
-      });
-      const statuses = await statusesForType(tx, orgId, projectId, item.type);
-      await recordAssignment(tx, orgId, actor, item, after, {
-        projectKey: project.key,
-        statusCategory: statuses.find((s) => s.key === item.status_key)?.category ?? "todo",
-      });
-    }
+    await handBackItems(tx, orgId, actor, project, accountId);
     await readdressOpen(tx, orgId, { projectId }, decisions);
   });
 }

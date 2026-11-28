@@ -489,7 +489,11 @@ describe("decisions and gates", () => {
       .executeTakeFirstOrThrow();
     const follow = f.follow();
     await transition(db, ORG, OWNER, item.id, fresh.version, "ready", { decisions: follow.hooks });
-    expect(f.jobs.map((j) => j.opts?.jobId)).toContain(`collab-decision-resolve-${id}`);
+    // A repeatable job: its id carries the minute bucket, and it runs after that minute's writes.
+    const resolveJob = f.jobs.find((j) =>
+      j.opts?.jobId?.startsWith(`collab-decision-resolve-${id}-b`),
+    );
+    expect(resolveJob?.opts?.delayMs).toBeGreaterThanOrEqual(60_000);
     await follow.flush();
     expect((await decisionOf(db, id)).state).toBe("canceled");
     expect(f.inbox.find((i) => i.dedupeKey === id)?.resolved).toBe(true);
@@ -547,7 +551,9 @@ describe("decisions and gates", () => {
           follow.hooks,
         );
       }
-      expect(f.jobs.map((j) => j.opts?.jobId)).toContain(`collab-decision-notify-${id}-1`);
+      expect(
+        f.jobs.some((j) => j.opts?.jobId?.startsWith(`collab-decision-notify-${id}-1-b`)),
+      ).toBe(true);
       await follow.flush();
       const d = await decisionOf(db, id);
       expect(d.addressee_account_id).toBe(OWNER.accountId);
@@ -750,5 +756,126 @@ describe("decisions and gates", () => {
       f.run({ orgId: ORG, decisionId: other.id, step: "notify", gen: 0 }),
     ).rejects.toThrow();
     expect((await decisionOf(db, other.id)).notified_at).toBeNull();
+  });
+
+  /** A team project whose task workflow gates in_progress on the responsible person. */
+  async function responsibleGated(key: string) {
+    const team = await teamProject(db, ORG, key);
+    const wf = await db
+      .selectFrom("workflows")
+      .select("id")
+      .where("project_id", "=", team.id)
+      .where("item_type", "=", "task")
+      .executeTakeFirstOrThrow();
+    await db
+      .updateTable("statuses")
+      .set({ gate: JSON.stringify({ confirmer: "responsible" }) })
+      .where("workflow_id", "=", wf.id)
+      .where("key", "=", "in_progress")
+      .execute();
+    const item = await createItem(db, ORG, OWNER, {
+      projectId: team.id,
+      type: "task",
+      title: "Gated on the responsible person",
+      responsibleAccountId: ENGINEER.accountId,
+      executingAgentId: "agent-eng",
+    });
+    const out = await transition(
+      db,
+      ORG,
+      { ...ENGINEER, agentId: "agent-eng", conversationId: "c-eng" },
+      item.id,
+      item.version,
+      "in_progress",
+      { decisions: NO_DECISION_JOBS },
+    );
+    if (!("gate" in out)) throw new Error("expected a gate");
+    expect(out.gate.addressee_account_id).toBe(ENGINEER.accountId);
+    return { team, item, gate: out.gate };
+  }
+
+  it("a responsible gate falls back to the owner when the responsible person is a guest", async () => {
+    const f = fakeCtx(db);
+    const { team, item, gate } = await responsibleGated("DRG");
+    // Demoted behind the domain's back: the confirmer is computed as the owner.
+    await db
+      .updateTable("project_members")
+      .set({ role: "guest" })
+      .where("project_id", "=", team.id)
+      .where("account_id", "=", ENGINEER.accountId)
+      .execute();
+    expect(
+      await f.click(OWNER.accountId, { decisionId: gate.id, optionId: "approve" }),
+    ).toMatchObject({
+      toast: { en: "Answered." },
+    });
+    const now = await db
+      .selectFrom("items")
+      .selectAll()
+      .where("id", "=", item.id)
+      .executeTakeFirstOrThrow();
+    expect(now.status_key).toBe("in_progress");
+  });
+
+  it("demoting a member to guest hands their items to the owner and re-addresses their gates", async () => {
+    const f = fakeCtx(db);
+    const { team, item, gate } = await responsibleGated("DRH");
+    const follow = f.follow();
+    await addMember(db, ORG, OWNER, team.id, ENGINEER.accountId, { role: "guest" }, follow.hooks);
+    await follow.flush();
+    const now = await db
+      .selectFrom("items")
+      .selectAll()
+      .where("id", "=", item.id)
+      .executeTakeFirstOrThrow();
+    expect(now.responsible_account_id).toBe(OWNER.accountId);
+    expect(now.executing_agent_id).toBeNull();
+    const rows = await outboxOf(db, ORG, item.id);
+    expect(rows.some((r) => r.type === "item.unassigned")).toBe(true);
+    const activity = await db
+      .selectFrom("activity")
+      .select("kind")
+      .where("item_id", "=", item.id)
+      .where("kind", "=", "assigned")
+      .execute();
+    expect(activity.length).toBeGreaterThan(0);
+    expect((await decisionOf(db, gate.id)).addressee_account_id).toBe(OWNER.accountId);
+    expect(f.inbox.find((i) => i.accountId === OWNER.accountId)?.actions?.map((a) => a.id)).toEqual(
+      ["approve", "reject"],
+    );
+    expect(
+      await f.click(OWNER.accountId, { decisionId: gate.id, optionId: "approve" }),
+    ).toMatchObject({
+      toast: { en: "Answered." },
+    });
+  });
+
+  it("the resolve step retries a transient inbox failure and drops a permanent one", async () => {
+    const f = fakeCtx(db);
+    const item = await ownersTask();
+    const decision = await ask(OWNER_AGENT, {
+      itemId: item.id,
+      question: "Resolve?",
+      options: [{ id: "y", label: "Y" }],
+      blocking: false,
+    });
+    await f.run({ orgId: ORG, decisionId: decision.id, step: "notify", gen: 0 });
+    await db
+      .updateTable("decisions")
+      .set({ state: "canceled" })
+      .where("id", "=", decision.id)
+      .execute();
+    const resolve = f.ctx.inbox.resolve;
+    f.ctx.inbox.resolve = async () => {
+      throw Object.assign(new Error("down"), { code: "unavailable" });
+    };
+    await expect(f.run({ orgId: ORG, decisionId: decision.id, step: "resolve" })).rejects.toThrow(
+      "down",
+    );
+    f.ctx.inbox.resolve = async () => {
+      throw Object.assign(new Error("gone"), { code: "not_found" });
+    };
+    await f.run({ orgId: ORG, decisionId: decision.id, step: "resolve" });
+    f.ctx.inbox.resolve = resolve;
   });
 });
