@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS project_members (
   account_id text NOT NULL,
   role text NOT NULL CHECK (role IN ('owner', 'member', 'guest')),
   function_label text,
+  -- The member's agent a default assignment with `memberAgent` hands the item to.
+  default_agent_id text,
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (project_id, account_id)
 );

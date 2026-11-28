@@ -1,6 +1,8 @@
-import type { ColumnType, Generated } from "kysely";
+import type { ColumnType, Generated, Selectable } from "kysely";
 
 type Json<T> = ColumnType<T, string, string>;
+/** A jsonb column with a database default: written as a JSON string, optional on insert. */
+type JsonDefault<T> = ColumnType<T, string | undefined, string>;
 
 /** Who did something: a person, or an agent acting for a person in a conversation. */
 export type Actor =
@@ -31,6 +33,7 @@ export interface ProjectMembersTable {
   account_id: string;
   role: ProjectRole;
   function_label: string | null;
+  default_agent_id: string | null;
   created_at: Generated<Date>;
 }
 
@@ -82,7 +85,7 @@ export interface ItemsTable {
   priority: Generated<number>;
   labels: Generated<string[]>;
   parent_id: string | null;
-  fields: Generated<Record<string, unknown>>;
+  fields: JsonDefault<Record<string, unknown>>;
   version: Generated<number>;
   closed_at: Date | null;
   created_at: Generated<Date>;
@@ -119,7 +122,7 @@ export interface ActivityTable {
   item_id: string;
   actor: Json<Actor>;
   kind: string;
-  detail: Generated<Record<string, unknown>>;
+  detail: JsonDefault<Record<string, unknown>>;
   created_at: Generated<Date>;
 }
 
@@ -144,7 +147,7 @@ export interface DecisionsTable {
   asker: Json<Actor>;
   addressee_account_id: string;
   question: string;
-  options: Generated<unknown[]>;
+  options: JsonDefault<unknown[]>;
   recommendation: Json<unknown> | null;
   blocking: Generated<boolean>;
   state: Generated<DecisionState>;
@@ -160,7 +163,7 @@ export interface EventOutboxTable {
   org_id: string;
   type: string;
   subject: Json<unknown>;
-  facts: Generated<Record<string, unknown>>;
+  facts: JsonDefault<Record<string, unknown>>;
   summary: string;
   dedupe_key: string;
   audience: Json<unknown> | null;
@@ -186,3 +189,12 @@ export interface CollabDatabase {
   decisions: DecisionsTable;
   event_outbox: EventOutboxTable;
 }
+
+export type Project = Selectable<ProjectsTable>;
+export type ProjectMember = Selectable<ProjectMembersTable>;
+export type Status = Selectable<StatusesTable>;
+export type Item = Selectable<ItemsTable>;
+export type Comment = Selectable<CommentsTable>;
+export type ItemLink = Selectable<ItemLinksTable>;
+export type Artifact = Selectable<ArtifactsTable>;
+export type Decision = Selectable<DecisionsTable>;
