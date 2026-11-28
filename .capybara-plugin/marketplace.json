@@ -625,7 +625,7 @@
     },
     {
       "name": "file-preview",
-      "version": "0.1.0-rc.4",
+      "version": "0.1.0-rc.5",
       "summary": {
         "en": "Previews code, archives, spreadsheets, documents, PDFs and SVG files in the conversation; entries inside archives are previewed regardless of per-previewer settings",
         "zh": "在对话中预览代码、压缩包、表格、文档、PDF 和 SVG 文件；压缩包内的条目不受各预览器开关影响，一律可预览"
@@ -672,8 +672,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-file-preview",
-          "version": "0.1.0-rc.4",
-          "integrity": "sha512-TBIUsqB2ZNpKPc8ddBh9e2KdT9SV/+ZNSBYqrDRv8SazVmN3q7lgbVk5QaiLioI2EPt5Kfs4DSY+YIrKlzwCcA=="
+          "version": "0.1.0-rc.5",
+          "integrity": "sha512-/GSQeVc2AlO3q69pLm4EKFo8Q85nQG3PXbKPdL2UV+PeTBvXgqEL2bWO1upSVhD+SQaq3OTU85GZ097QjzDkrA=="
         }
       }
     },
@@ -948,7 +948,7 @@
     },
     {
       "name": "browser",
-      "version": "0.1.0-rc.18",
+      "version": "0.1.0-rc.19",
       "summary": {
         "en": "A real browser in the conversation owner's device for agents: navigate, read and act on pages through tools, with a live view in the conversation panel and takeover by the person",
         "zh": "在对话所有者的设备中为智能体运行真实浏览器：通过工具打开、读取和操作网页，在对话面板中实时查看，并可由本人接管"
@@ -1014,8 +1014,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-browser",
-          "version": "0.1.0-rc.18",
-          "integrity": "sha512-aQfEIomAP/X7WhULNU54xmQ84J93+LN/LXKAKXBFJ5uqFt0ZeriqvRDx0C9aNS3GrmnL0Rm2VphRfRD/pVM+Gw=="
+          "version": "0.1.0-rc.19",
+          "integrity": "sha512-04+50nmaTlQjr2WiBARxG9ziDGrZVLIWWvZn8TM9F0BzlryK8HHbBb3j+dEQlyTHweLl7Nft6ueJ1PRYdTa9RA=="
         }
       }
     },
