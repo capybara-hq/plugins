@@ -8,7 +8,7 @@ import {
   type ViewerTab,
 } from "../../daemon/protocol.js";
 import { STRINGS, t } from "../../ui-src/panel/i18n.js";
-import { PANEL_HTML } from "../../ui-src/panel/page.js";
+import { PANEL_HTML, withSystemFaces } from "../../ui-src/panel/page.js";
 import { letterbox, mapPoint, mountPanel } from "../../ui-src/panel/panel.js";
 
 class FakeSocket {
@@ -1527,11 +1527,110 @@ describe("tab ownership", () => {
     expect($(s, "app").hasAttribute("data-idle")).toBe(false);
   });
 
+  it("closing the last tab in control goes straight to the tree's empty state, no skeleton", async () => {
+    const s = setup({ locale: "zh" });
+    const sock = await live(s);
+    sock.pushFrame(1);
+    await vi.waitFor(() => expect(($(s, "skeleton") as HTMLElement).hidden).toBe(true));
+    $(s, "takeover").click();
+    hostMode(s, true);
+    sock.push(state({ control: "user" }));
+    sock.pushFrame(2);
+    await vi.waitFor(() => expect(sock.sent.filter((m) => m.t === "frame-ack")).toHaveLength(2));
+    ($(s, "tablist").querySelector(".x") as HTMLButtonElement).click();
+    expect(sock.sent).toContainEqual({ t: "tab", action: "close", tabId: "t1" });
+    sock.push(state({ tabs: [], control: "user" }));
+    expect(($(s, "skeleton") as HTMLElement).hidden).toBe(true);
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+    expect($(s, "empty-title").textContent).toBe("智能体尚未在此对话中打开网页");
+  });
+
   it("the tree's empty state without other conversations offers no menu (zh)", async () => {
     const s = setup({ locale: "zh" });
     await live(s, state({ tabs: [] }));
     expect($(s, "empty-title").textContent).toBe("智能体尚未在此对话中打开网页");
     expect(($(s, "empty-others") as HTMLElement).hidden).toBe(true);
+  });
+});
+
+describe("fonts", () => {
+  /** The family list of a stack, unquoted and lower case. */
+  const families = (stack: string) =>
+    stack.split(",").map((f) =>
+      f
+        .trim()
+        .replace(/^["']|["']$/g, "")
+        .toLowerCase(),
+    );
+  /** Whether every face of `faces` comes before the stack's first generic family. */
+  const before = (stack: string, faces: string[], generic: string) => {
+    const list = families(stack);
+    const at = list.indexOf(generic);
+    return (
+      at > 0 &&
+      faces.every((f) => list.indexOf(f.toLowerCase()) >= 0 && list.indexOf(f.toLowerCase()) < at)
+    );
+  };
+
+  it("names Windows faces before a stack's generic family (the iframe has none of the host's web fonts)", () => {
+    // the host's tokens: a web font the sandboxed iframe cannot load, then generic families,
+    // where Windows maps CJK in monospace to the Song face NSimSun
+    const mono = withSystemFaces('"Sarasa Mono SC", ui-monospace, monospace');
+    expect(families(mono)[0]).toBe("sarasa mono sc");
+    expect(before(mono, ["Cascadia Mono", "Consolas", "Microsoft YaHei UI"], "monospace")).toBe(
+      true,
+    );
+    // macOS keeps its own monospace face first
+    expect(families(mono).indexOf("ui-monospace")).toBe(1);
+    const sans = withSystemFaces('"Inter", "Source Han Sans SC", system-ui, sans-serif');
+    expect(before(sans, ["Segoe UI", "Microsoft YaHei UI"], "system-ui")).toBe(true);
+    // a stack that names them already is left as it is
+    expect(withSystemFaces(sans)).toBe(sans);
+  });
+
+  it("the empty state's heading uses the body text's face, and the fallbacks name Windows faces", () => {
+    const css = /<style>([\s\S]*)<\/style>/.exec(PANEL_HTML)?.[1] ?? "";
+    const rule = (selector: string) =>
+      new RegExp(`(?:^|\\n)\\s*${selector.replace(/[.#]/g, "\\$&")} \\{([^}]*)\\}`).exec(
+        css,
+      )?.[1] ?? "";
+    const font = (decl: string) => /font-family:\s*([^;]*);/.exec(decl)?.[1] ?? "";
+    expect(font(rule(".center h2"))).toBe(font(rule(".center p")));
+    expect(font(rule(".center h2"))).toMatch(/^var\(--cb-font-prose, /);
+    expect(font(rule(".center h2"))).toContain('"Microsoft YaHei UI"');
+    expect(font(rule("body"))).toMatch(/^var\(--cb-font, /);
+    expect(font(rule("body"))).toContain('"Cascadia Mono", Consolas');
+  });
+
+  it("the host's font tokens get the Windows faces when applied", async () => {
+    const s = setup({ locale: "zh" });
+    s.dom.window.dispatchEvent(
+      new s.dom.window.MessageEvent("message", {
+        source: s.dom.window,
+        data: {
+          protocol: "capybara-embed/1",
+          type: "theme",
+          theme: "light",
+          tokens: {
+            "--cb-font": '"Sarasa Mono SC", ui-monospace, monospace',
+            "--cb-font-prose": '"Inter", "Source Han Sans SC", system-ui, sans-serif',
+            "--cb-ink": "#111",
+          },
+        },
+      }),
+    );
+    const root = s.dom.window.document.documentElement.style;
+    expect(
+      before(root.getPropertyValue("--cb-font"), ["Consolas", "Microsoft YaHei UI"], "monospace"),
+    ).toBe(true);
+    expect(
+      before(
+        root.getPropertyValue("--cb-font-prose"),
+        ["Segoe UI", "Microsoft YaHei UI"],
+        "system-ui",
+      ),
+    ).toBe(true);
+    expect(root.getPropertyValue("--cb-ink")).toBe("#111");
   });
 });
 

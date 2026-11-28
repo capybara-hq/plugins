@@ -29,7 +29,7 @@ import type {
 import { decodeFrame, isIconDataUrl, VIEWPORT } from "../../daemon/protocol.js";
 import { type Locale, type StringKey, t } from "./i18n.js";
 import { mountInput } from "./input.js";
-import { ICONS } from "./page.js";
+import { ICONS, withSystemFaces } from "./page.js";
 
 const PROTOCOL = "capybara-embed/1";
 const ASPECT = VIEWPORT.width / VIEWPORT.height;
@@ -1294,13 +1294,17 @@ export function mountPanel(opts: PanelOptions): void {
     }
   });
 
+  /** The host's font stacks (see {@link withSystemFaces}). */
+  const FONT_TOKENS = new Set(["--cb-font", "--cb-font-prose", "--cb-font-code"]);
+
   function applyTheme(tokens: unknown, theme: unknown): void {
     const root = doc.documentElement;
     if (theme === "dark" || theme === "light") root.setAttribute("data-theme", theme);
     if (tokens === null || typeof tokens !== "object") return;
     for (const [name, value] of Object.entries(tokens)) {
       if (name.startsWith("--cb-") && typeof value === "string" && value.length <= 200) {
-        root.style.setProperty(name, value);
+        // the host's web fonts do not reach this frame: its stacks get the system faces
+        root.style.setProperty(name, FONT_TOKENS.has(name) ? withSystemFaces(value) : value);
       }
     }
   }
