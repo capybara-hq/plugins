@@ -317,24 +317,31 @@ async function gateConfirmers(
   gate: GateRule,
 ): Promise<{ addressee: string; confirmers: string[] }> {
   const owner = project.owner_account_id;
+  const isActiveMember = async (accountId: string) =>
+    (await tx
+      .selectFrom("project_members")
+      .select("account_id")
+      .where("org_id", "=", orgId)
+      .where("project_id", "=", project.id)
+      .where("account_id", "=", accountId)
+      .where("role", "!=", "guest")
+      .executeTakeFirst()) !== undefined;
   switch (gate.confirmer) {
     case "owner":
       return { addressee: owner, confirmers: [owner] };
-    case "requester":
-      return { addressee: item.requester_account_id, confirmers: [item.requester_account_id] };
+    case "requester": {
+      // A requester who left the project (or became a guest) hands the gate to the owner.
+      const who = (await isActiveMember(item.requester_account_id))
+        ? item.requester_account_id
+        : owner;
+      return { addressee: who, confirmers: [who] };
+    }
     case "responsible": {
       const who = item.responsible_account_id ?? owner;
       return { addressee: who, confirmers: [who] };
     }
     case "member": {
-      const member = await tx
-        .selectFrom("project_members")
-        .select("account_id")
-        .where("org_id", "=", orgId)
-        .where("project_id", "=", project.id)
-        .where("account_id", "=", gate.accountId)
-        .executeTakeFirst();
-      const who = member?.account_id ?? owner;
+      const who = (await isActiveMember(gate.accountId)) ? gate.accountId : owner;
       return { addressee: who, confirmers: [who] };
     }
     case "function": {
@@ -400,7 +407,10 @@ async function moveItem(
   if (isClosed(to.category) && after.parent_id) {
     await advanceParent(tx, orgId, actor, after.parent_id);
   }
-  if (to.key === PARENT_WORKING_STATUS) await advanceParent(tx, orgId, actor, after.id);
+  if (to.key === PARENT_WORKING_STATUS && (await advanceParent(tx, orgId, actor, after.id))) {
+    // The auto-move changed this item again: hand the caller its current version.
+    return loadItem(tx, orgId, after.id);
+  }
   return after;
 }
 
@@ -408,14 +418,15 @@ async function moveItem(
  * The parent auto-move: a parent in "in_progress" whose children are all closed (done or
  * canceled) moves to "acceptance", through the workflow like any move: skipped when the workflow
  * does not allow it, a gate request to the confirmer when "acceptance" is gated. The parent row
- * is locked first, so two children closing at once cannot both miss each other.
+ * is locked first, so two children closing at once cannot both miss each other. Returns whether
+ * the parent was written (moved, or a gate requested).
  */
 async function advanceParent(
   tx: CollabDb,
   orgId: string,
   actor: Actor,
   parentId: string,
-): Promise<void> {
+): Promise<boolean> {
   const parent = await tx
     .selectFrom("items")
     .selectAll()
@@ -423,12 +434,12 @@ async function advanceParent(
     .where("id", "=", parentId)
     .forUpdate()
     .executeTakeFirst();
-  if (!parent || parent.status_key !== PARENT_WORKING_STATUS) return;
+  if (!parent || parent.status_key !== PARENT_WORKING_STATUS) return false;
   const statuses = await statusesForType(tx, orgId, parent.project_id, parent.type);
   const acceptance = statuses.find((s) => s.key === PARENT_ACCEPTANCE_STATUS);
-  if (!acceptance) return;
+  if (!acceptance) return false;
   const from = statuses.find((s) => s.key === parent.status_key);
-  if (from?.next_keys && !from.next_keys.includes(acceptance.key)) return;
+  if (from?.next_keys && !from.next_keys.includes(acceptance.key)) return false;
   const children = await tx
     .selectFrom("items as i")
     .leftJoin("item_types as t", (j) =>
@@ -441,16 +452,19 @@ async function advanceParent(
     .where("i.org_id", "=", orgId)
     .where("i.parent_id", "=", parentId)
     .execute();
-  if (children.length === 0) return;
-  if (!children.every((c) => c.category !== null && isClosed(c.category))) return;
+  if (children.length === 0) return false;
+  if (!children.every((c) => c.category !== null && isClosed(c.category))) return false;
   const project = await loadProject(tx, orgId, parent.project_id);
   const gate = gateOf(acceptance);
+  // A gated auto-move always opens a decision, even when the actor is the confirmer: acceptance
+  // stays an explicit act.
   if (gate) {
     const { addressee } = await gateConfirmers(tx, orgId, project, parent, gate);
     await requestGate(tx, orgId, actor, project, parent, statuses, acceptance, addressee);
-    return;
+    return true;
   }
   await moveItem(tx, orgId, actor, project, parent, statuses, acceptance, true);
+  return true;
 }
 
 /**

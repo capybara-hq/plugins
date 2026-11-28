@@ -2,7 +2,8 @@ import type { Updateable } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { assign } from "../../src/domain/assignment.js";
 import { CollabError } from "../../src/domain/errors.js";
-import { createItem, transition } from "../../src/domain/items.js";
+import { createItem, transition, updateItem } from "../../src/domain/items.js";
+import { removeMember } from "../../src/domain/projects.js";
 import type { CollabDb } from "../../src/store/db.js";
 import type { Actor, Item, StatusesTable } from "../../src/store/types.js";
 import { domainDb, ENGINEER, OWNER, OWNER_AGENT, outboxOf, QA, teamProject } from "./setup.js";
@@ -298,8 +299,72 @@ describe("collab workflows", () => {
     });
     await walk(org, OWNER, t, ["canceled"]);
     parent = await statusOf(parent.id);
-    await transition(db, org, ENGINEER, parent.id, parent.version, "in_progress");
-    expect((await statusOf(parent.id)).status_key).toBe("acceptance");
+    const moved = await transition(db, org, ENGINEER, parent.id, parent.version, "in_progress");
+    const stored = await statusOf(parent.id);
+    expect(stored.status_key).toBe("acceptance");
+    // The returned row is the auto-moved one, so the caller's next write does not conflict.
+    if (!("item" in moved)) throw new Error("expected a move");
+    expect([moved.item.status_key, moved.item.version]).toEqual(["acceptance", stored.version]);
+    await updateItem(db, org, ENGINEER, moved.item.id, moved.item.version, { title: "p2" });
+  });
+
+  it("a gate request opened by entering in_progress returns the fresh version", async () => {
+    const org = "org-lategate";
+    const project = await teamProject(db, org, "LGT");
+    await editStatus(project.id, "requirement", "acceptance", {
+      gate: JSON.stringify({ confirmer: "owner" }),
+    });
+    let parent = await createItem(db, org, OWNER, {
+      projectId: project.id,
+      type: "requirement",
+      title: "p",
+    });
+    parent = await walk(org, OWNER, parent, ["drafting", "review", "ready"]);
+    const t = await createItem(db, org, OWNER, {
+      projectId: project.id,
+      type: "task",
+      title: "t",
+      parentId: parent.id,
+    });
+    await walk(org, OWNER, t, ["canceled"]);
+    parent = await statusOf(parent.id);
+    // Even the confirmer moving it gets a decision: acceptance stays an explicit act.
+    const moved = await transition(db, org, OWNER, parent.id, parent.version, "in_progress");
+    if (!("item" in moved)) throw new Error("expected a move");
+    expect([moved.item.status_key, moved.item.version]).toEqual([
+      "in_progress",
+      (await statusOf(parent.id)).version,
+    ]);
+    await updateItem(db, org, OWNER, moved.item.id, moved.item.version, { title: "p2" });
+  });
+
+  it("a requester who left the project hands the acceptance gate to the owner", async () => {
+    const org = "org-gone";
+    const project = await teamProject(db, org, "GONE");
+    const created = await createItem(db, org, QA, {
+      projectId: project.id,
+      type: "requirement",
+      title: "r",
+    });
+    const accepting = await walk(org, OWNER, created, [
+      "drafting",
+      "review",
+      "ready",
+      "in_progress",
+      "acceptance",
+    ]);
+    await removeMember(db, org, OWNER, project.id, QA.accountId);
+    const ask = await transition(
+      db,
+      org,
+      { ...ENGINEER, agentId: "agent-eng", conversationId: "c" },
+      accepting.id,
+      accepting.version,
+      "done",
+    );
+    expect("gate" in ask && ask.gate.addressee_account_id).toBe(OWNER.accountId);
+    const fresh = await statusOf(accepting.id);
+    expect(await code(transition(db, org, OWNER, fresh.id, fresh.version, "done"))).toBe("ok");
   });
 
   it("two children closing at once still move the parent", async () => {
