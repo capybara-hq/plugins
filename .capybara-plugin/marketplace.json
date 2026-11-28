@@ -41,7 +41,7 @@
     },
     {
       "name": "connector-mcp",
-      "version": "0.1.0-rc.12",
+      "version": "0.1.0-rc.13",
       "summary": {
         "en": "MCP connector (connector@1): tools and resources of remote MCP servers over Streamable HTTP"
       },
@@ -58,8 +58,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-connector-mcp",
-          "version": "0.1.0-rc.12",
-          "integrity": "sha512-AMUljGAoaFN8NZo5A6vkAz+PYF0QooqBPCz+OThLHjFZhej1qhYkwNqDkQU8DQKpVLhQ/Z0dUg8OprSnGMtGsw=="
+          "version": "0.1.0-rc.13",
+          "integrity": "sha512-buU17l5BhnfEnoe5m4uYIOTb25SodN1YrejLBZrWm/dgFCz4LowFSiE18gsTgInoUt02+Noo6E13mdzFURQRsg=="
         }
       }
     },

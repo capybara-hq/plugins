@@ -10,7 +10,7 @@ import { createMcpConnector } from "./session.js";
  */
 export default defineExtension({
   name: "connector-mcp",
-  version: "0.1.0-rc.12",
+  version: "0.1.0-rc.13",
   sdk: "^0.1.0-rc.29",
   provides: [CONNECTOR_EXTENSION_POINT],
   setup(ctx) {
