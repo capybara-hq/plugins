@@ -9,7 +9,7 @@ import {
 } from "./constants.js";
 import { registerEmitQueue } from "./events/emitter.js";
 import { collabDb } from "./store/db.js";
-import { registerTools } from "./tools.js";
+import { registerTools } from "./tools/index.js";
 import { createTriggerSource } from "./trigger-source.js";
 
 /**
