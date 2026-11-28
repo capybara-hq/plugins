@@ -50,8 +50,8 @@ describe("assignment notices on creation", () => {
     expect(fake.posts[0]).toMatchObject({
       accountId: ENGINEER.accountId,
       kind: "collab.assigned",
-      title: "NCU-1 assigned to you: Export PDF",
-      body: "Engineer agent is working on it.",
+      title: { zh: "NCU-1 已指派给你：Export PDF", en: "NCU-1 assigned to you: Export PDF" },
+      body: { zh: "Engineer agent正在处理。", en: "Engineer agent is working on it." },
     });
     const created = await db
       .selectFrom("activity")
@@ -135,7 +135,10 @@ describe("assignment notices on creation", () => {
       resume: { state: asked.state, answer: { confirm: true }, outcome: "answered" },
     } as unknown as ToolCallContext);
     expect(fake.posts.map((p) => [p.accountId, p.title])).toEqual([
-      [ENGINEER.accountId, "NCT-1 assigned to you: Fix login"],
+      [
+        ENGINEER.accountId,
+        { zh: "NCT-1 已指派给你：Fix login", en: "NCT-1 assigned to you: Fix login" },
+      ],
     ]);
   });
 });

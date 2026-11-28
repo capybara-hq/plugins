@@ -391,11 +391,18 @@ function clip(text: string, max: number): string {
   return cps.length <= max ? text : `${cps.slice(0, max - 1).join("")}…`;
 }
 
+type Bilingual = { zh: string; en: string };
+
+/** The same text in both UI languages, each clipped to `max`. */
+function both(zh: string, en: string, max: number): Bilingual {
+  return { zh: clip(zh, max), en: clip(en, max) };
+}
+
 type Post = {
   accountId: string;
   kind: string;
-  title: string;
-  body: string;
+  title: Bilingual;
+  body: Bilingual;
   actions?: InboxAction[];
 };
 
@@ -411,12 +418,16 @@ const GATE_LABELS: Readonly<Record<string, { zh: string; en: string }>> = {
   reject: { zh: "驳回", en: "Reject" },
 };
 
-/** An option's button label: the gate's localized names, or the asker's text in both languages. */
-function optionLabel(decision: Decision, o: DecisionOption): { zh: string; en: string } {
+/** An option's name: the gate's localized names, or the asker's text in both languages. */
+function optionName(decision: Decision, o: DecisionOption): Bilingual {
   const gate = decision.kind === "gate" ? GATE_LABELS[o.id] : undefined;
-  if (gate) return gate;
-  const text = clip(o.label, LABEL_CHARS);
-  return { zh: text, en: text };
+  return gate ?? { zh: o.label, en: o.label };
+}
+
+/** An option's button label (clipped to the inbox's label length). */
+function optionLabel(decision: Decision, o: DecisionOption): Bilingual {
+  const name = optionName(decision, o);
+  return { zh: clip(name.zh, LABEL_CHARS), en: clip(name.en, LABEL_CHARS) };
 }
 
 /** A recipient's item (the first notice, or the reminder at the deadline). */
@@ -434,19 +445,35 @@ async function addresseeItem(
   // none), and only when every option fits; otherwise the item links to the decision's page.
   const canAnswer = (await answerersOf(db, orgId, decision, item)).includes(recipient);
   const buttons = canAnswer && options.length > 0 && options.length <= MAX_BUTTONS;
-  const lines = [decision.question];
-  if (options.length > 0) lines.push(`Options: ${options.map((o) => o.label).join(" / ")}`);
-  if (rec) {
-    const label = options.find((o) => o.id === rec.optionId)?.label ?? rec.optionId;
-    lines.push(`Recommended: ${label}${rec.why ? `: ${rec.why}` : ""}`);
+  // The question, option texts and the recommendation's reason are the asker's: both languages
+  // carry them as written.
+  const zh = [decision.question];
+  const en = [decision.question];
+  if (options.length > 0) {
+    const names = options.map((o) => optionName(decision, o));
+    zh.push(`选项：${names.map((n) => n.zh).join(" / ")}`);
+    en.push(`Options: ${names.map((n) => n.en).join(" / ")}`);
   }
-  if (!buttons) lines.push("Answer it on the item's page.");
-  const what = decision.kind === "gate" ? "Confirm" : "Decide";
+  if (rec) {
+    const o = options.find((x) => x.id === rec.optionId);
+    const name = o ? optionName(decision, o) : { zh: rec.optionId, en: rec.optionId };
+    zh.push(`推荐：${name.zh}${rec.why ? `（${rec.why}）` : ""}`);
+    en.push(`Recommended: ${name.en}${rec.why ? `: ${rec.why}` : ""}`);
+  }
+  if (!buttons) {
+    zh.push("请在事项页面回答。");
+    en.push("Answer it on the item's page.");
+  }
+  const gate = decision.kind === "gate";
   return {
     accountId: recipient,
     kind: reminder ? "collab.decision.reminder" : "collab.decision",
-    title: clip(`${reminder ? "Reminder: " : ""}${what} on ${key} ${item.title}`, TITLE_CHARS),
-    body: clip(lines.join("\n"), BODY_CHARS),
+    title: both(
+      `${reminder ? "提醒：" : ""}${gate ? "请确认" : "请决策"} ${key} ${item.title}`,
+      `${reminder ? "Reminder: " : ""}${gate ? "Confirm" : "Decide"} on ${key} ${item.title}`,
+      TITLE_CHARS,
+    ),
+    body: both(zh.join("\n"), en.join("\n"), BODY_CHARS),
     ...(buttons
       ? {
           actions: options.map((o) => ({
@@ -482,13 +509,18 @@ async function escalation(ctx: DecisionsCtx, { decision, item, project }: Loaded
   } catch {
     // The ids stand in for the names.
   }
-  const who = [...names.values()].join(", ");
+  const who = [...names.values()];
   return {
     accountId: project.owner_account_id,
     kind: "collab.decision.escalated",
-    title: clip(`Unanswered decision on ${key} ${item.title}`, TITLE_CHARS),
-    body: clip(
-      `${who} ${waitingOn.length > 1 ? "have" : "has"} not answered since the deadline a day ago: ${decision.question}`,
+    title: both(
+      `${key} ${item.title} 有未回答的决策`,
+      `Unanswered decision on ${key} ${item.title}`,
+      TITLE_CHARS,
+    ),
+    body: both(
+      `${who.join("、")} 在一天前的截止时间过后仍未回答：${decision.question}`,
+      `${who.join(", ")} ${waitingOn.length > 1 ? "have" : "has"} not answered since the deadline a day ago: ${decision.question}`,
       BODY_CHARS,
     ),
   };

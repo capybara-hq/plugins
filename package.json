@@ -35,8 +35,8 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
-    "@capybara-hq/plugin-model-fake": "0.1.0-rc.89",
-    "@capybara-hq/plugin-sdk": "0.1.0-rc.88",
+    "@capybara-hq/plugin-model-fake": "0.1.0-rc.90",
+    "@capybara-hq/plugin-sdk": "0.1.0-rc.89",
     "@capybara-hq/plugin-tools": "0.1.0-rc.28",
     "@capybara-hq/testing": "0.1.0-rc.49",
     "@changesets/cli": "^3.0.3",

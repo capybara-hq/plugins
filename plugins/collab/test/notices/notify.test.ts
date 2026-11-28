@@ -61,8 +61,8 @@ describe("assignment notices", () => {
       orgId: org,
       accountId: ENGINEER.accountId,
       kind: "collab.assigned",
-      title: "NOA-1 assigned to you: Fix login",
-      body: "Engineer agent is working on it.",
+      title: { zh: "NOA-1 已指派给你：Fix login", en: "NOA-1 assigned to you: Fix login" },
+      body: { zh: "Engineer agent正在处理。", en: "Engineer agent is working on it." },
       link: "/p/collab/projects?item=NOA-1",
     });
     expect(post?.actions).toEqual([
@@ -111,7 +111,11 @@ describe("assignment notices", () => {
       transition(db, org, OWNER, item.id, moved.item.version, "testing"),
     );
     expect(fake.posts.map((p) => [p.accountId, p.kind, p.body])).toEqual([
-      [QA.accountId, "collab.assigned", "QA agent is working on it."],
+      [
+        QA.accountId,
+        "collab.assigned",
+        { zh: "QA agent正在处理。", en: "QA agent is working on it." },
+      ],
     ]);
   });
 
@@ -134,10 +138,13 @@ describe("assignment notices", () => {
     expect(fake.posts[0]).toMatchObject({
       accountId: OWNER.accountId,
       kind: "collab.handoff",
-      title: "Pick who gets NOD-1: Fix login",
+      title: { zh: "请选择 NOD-1 的负责人：Fix login", en: "Pick who gets NOD-1: Fix login" },
       link: "/p/collab/projects?item=NOD-1",
     });
-    expect(fake.posts[0]?.body).toContain('function "qa"');
+    expect(fake.posts[0]?.body).toMatchObject({
+      zh: expect.stringContaining("具备职能“qa”"),
+      en: expect.stringContaining('function "qa"'),
+    });
     expect((await activityOf(item.id)).map((a) => a.kind)).toContain("handoff_unresolved");
   });
 
@@ -267,7 +274,11 @@ describe("assignment notices", () => {
     );
     expect(item.responsible_account_id).toBeNull();
     expect(fake.posts.map((p) => [p.accountId, p.kind, p.title])).toEqual([
-      [OWNER.accountId, "collab.handoff", "Pick who gets NOH-1: Crash"],
+      [
+        OWNER.accountId,
+        "collab.handoff",
+        { zh: "请选择 NOH-1 的负责人：Crash", en: "Pick who gets NOH-1: Crash" },
+      ],
     ]);
   });
 
