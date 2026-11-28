@@ -94,6 +94,17 @@ async function setAgentState(
     .execute();
 }
 
+/**
+ * The item version in an `item.assigned` dedupe key of this item (`item.assigned-<id>-<version>`,
+ * see events/outbox.ts); null for another key or none (the decline then applies).
+ */
+function assignedVersionOf(dedupeKey: string | undefined, itemId: string): number | null {
+  const prefix = `item.assigned-${itemId}-`;
+  if (!dedupeKey?.startsWith(prefix)) return null;
+  const version = dedupeKey.slice(prefix.length);
+  return /^[1-9][0-9]{0,9}$/.test(version) ? Number(version) : null;
+}
+
 async function offerDeclined(ctx: LifecycleCtx, p: RunLifecyclePayload): Promise<boolean> {
   const db = collabDb(ctx.db);
   const reason = p.reason ?? "declined";
@@ -107,6 +118,9 @@ async function offerDeclined(ctx: LifecycleCtx, p: RunLifecyclePayload): Promise
       ) {
         return false;
       }
+      // A decline of an older offer to the same pair (reassigned since) is stale.
+      const offered = assignedVersionOf(p.dedupeKey, item.id);
+      if (offered !== null && offered < item.assigned_version) return false;
       // The person's rule speaks for them: the decline is recorded as theirs.
       const actor = { accountId: p.accountId };
       if (reason === "undelivered") {
@@ -125,8 +139,6 @@ async function offerDeclined(ctx: LifecycleCtx, p: RunLifecyclePayload): Promise
         });
         return true;
       }
-      // TODO(kernel follow-up): the payload will carry the event's dedupeKey; until then a late
-      // offer_declined of an older offer to the same pair can mark a newer offer declined.
       if (item.agent_state === "declined") return false;
       await addActivity(tx, p.orgId, item.id, actor, "agent_declined", {
         accountId: p.accountId,

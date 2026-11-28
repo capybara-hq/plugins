@@ -1106,7 +1106,7 @@
         "npm": {
           "package": "@capybara-hq/plugin-collab",
           "version": "0.1.0-rc.0",
-          "integrity": "sha512-fS2nABAmVcWXwAgVwyNdPjuSqcoQJUIiTwuZniP/TJzCsk0U02N+c5XxGCvkgZ768kSak9E4t00uDJWwtQ9Gqw=="
+          "integrity": "sha512-0Q3gO/cNMdA+RKFsCAFLL4IBEorI9F1mGVfS7+jNfD8ondFqN4wo0CIw5lQyel+z9l5ep1bWxhZCp5rPwGI/Vg=="
         }
       }
     }

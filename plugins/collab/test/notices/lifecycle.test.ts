@@ -242,4 +242,49 @@ describe("run state", () => {
     expect(now.agent_state).toBe("working");
     expect(now.agent_conversation_id).toBe("conv-new");
   });
+
+  it("a stale decline after a re-assignment of the same pair is ignored; the current one applies", async () => {
+    const org = "org-life-10";
+    const first = await assigned(org, "LFJ");
+    const off = await assign(db, org, OWNER, first.id, first.version, {
+      responsibleAccountId: ENGINEER.accountId,
+      executingAgentId: null,
+    });
+    const again = await assign(db, org, OWNER, first.id, off.version, {
+      responsibleAccountId: ENGINEER.accountId,
+      executingAgentId: "agent-eng",
+    });
+    const keys = (await outboxOf(db, org, first.id))
+      .filter((r) => r.type === "item.assigned")
+      .map((r) => r.dedupe_key);
+    expect(keys).toEqual([
+      `item.assigned-${first.id}-${first.version}`,
+      `item.assigned-${first.id}-${again.version}`,
+    ]);
+    expect(again.assigned_version).toBe(again.version);
+    const fake = noticeCtx(db, {});
+    for (const reason of ["declined", "undelivered"] as const) {
+      await onRunLifecycle(fake.ctx, {
+        ...declined(org, first, reason),
+        dedupeKey: keys[0] as string,
+      });
+    }
+    let now = await reload(first);
+    expect(now.agent_state).toBeNull();
+    expect(now.executing_agent_id).toBe("agent-eng");
+    expect(fake.invalidations).toHaveLength(0);
+
+    await onRunLifecycle(fake.ctx, {
+      ...declined(org, first, "declined"),
+      dedupeKey: keys[1] as string,
+    });
+    now = await reload(first);
+    expect(now.agent_state).toBe("declined");
+    // Another kind of key (or none) keeps today's behavior: the decline applies.
+    await onRunLifecycle(fake.ctx, {
+      ...declined(org, first, "undelivered"),
+      dedupeKey: `decision.answered-${first.id}-x`,
+    });
+    expect((await reload(first)).executing_agent_id).toBeNull();
+  });
 });

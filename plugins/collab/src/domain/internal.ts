@@ -78,7 +78,12 @@ export async function writeItem(
     (patch.executing_agent_id !== undefined &&
       patch.executing_agent_id !== before.executing_agent_id);
   const reset = pairChanged
-    ? { agent_state: null, agent_conversation_id: null, agent_state_at: null }
+    ? {
+        agent_state: null,
+        agent_conversation_id: null,
+        agent_state_at: null,
+        assigned_version: before.version + 1,
+      }
     : {};
   const row = await tx
     .updateTable("items")

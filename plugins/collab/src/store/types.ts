@@ -103,6 +103,7 @@ export interface ItemsTable {
   agent_state: Generated<AgentState | null>;
   agent_conversation_id: Generated<string | null>;
   agent_state_at: Generated<Date | null>;
+  assigned_version: Generated<number>;
   closed_at: Date | null;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;

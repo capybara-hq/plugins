@@ -90,6 +90,9 @@ CREATE TABLE IF NOT EXISTS items (
   -- The work conversation the state was read from (the pair's subject conversation).
   agent_conversation_id text,
   agent_state_at timestamptz,
+  -- The item version of the write that last changed the (person, agent) pair: the version in the
+  -- dedupe key of the pair's item.assigned event, so a decline of an older offer is told apart.
+  assigned_version integer NOT NULL DEFAULT 1,
   closed_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
