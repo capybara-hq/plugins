@@ -93,6 +93,8 @@ let app: Awaited<ReturnType<typeof startFixtureServer>>;
 let other: Awaited<ReturnType<typeof startFixtureServer>>;
 let third: Awaited<ReturnType<typeof startFixtureServer>>;
 let site: Awaited<ReturnType<typeof startFixtureServer>>;
+/** A page on loopback (its port open) that frames a remote page. */
+let framing: Awaited<ReturnType<typeof startFixtureServer>>;
 const sites = new Map<string, number>();
 let d: TestDaemon;
 
@@ -105,7 +107,16 @@ beforeAll(async () => {
     "/": `<!doctype html><title>Site</title><script src="${other.url}/a.js"></script>`,
     "/popup": `<!doctype html><title>Popup</title><script>window.open(${JSON.stringify(`${other.url}/a.js`)})</script>`,
     "/r": (_req, res) => void res.writeHead(302, { location: `${other.url}/a.js` }).end(),
+    "/loc": `<!doctype html><title>Loc</title><script>location = ${JSON.stringify(`${other.url}/a.js`)}</script>`,
+    "/meta": `<!doctype html><title>Meta</title><meta http-equiv="refresh" content="0;url=${other.url}/a.js">`,
+    "/form": `<!doctype html><title>Form</title><form action="${other.url}/a.js" method="get"></form><script>document.forms[0].submit()</script>`,
+    "/subframe": `<!doctype html><title>Sub</title><iframe src="${other.url}/a.js"></iframe>`,
+    "/inner": `<!doctype html><title>Inner</title><script src="${third.url}/b.js"></script>`,
   });
+  framing = await startFixtureServer({
+    "/": `<!doctype html><title>Framing</title><iframe src="http://site.test/inner"></iframe>`,
+  });
+  open.add(portOf(framing.url));
   sites.set("site.test", portOf(site.url));
   proxy = await startLoopbackProxy(open, sites);
   d = await startTestDaemon({ env: { HTTPS_PROXY: proxy.url, HTTP_PROXY: proxy.url } });
@@ -119,6 +130,7 @@ afterAll(async () => {
   await other?.close();
   await third?.close();
   await site?.close();
+  await framing?.close();
   if (d) removeDir(d.stateDir);
 });
 
@@ -378,6 +390,94 @@ describe("browser daemon loopback asks: who started the request", () => {
       holding(A, []),
     );
     expect(r).toMatchObject({
+      ok: false,
+      error: "blocked",
+      blockedHosts: [{ host: "127.0.0.1", port, layer: "address", class: "loopback" }],
+    });
+  });
+});
+
+describe("browser daemon loopback asks: page-started navigations and frames", () => {
+  // its own daemon: the file's other tests fill the shared one's tabs
+  let d: TestDaemon;
+  const A = conv("lb-vec");
+  beforeAll(async () => {
+    d = await startTestDaemon({ env: { HTTPS_PROXY: proxy.url, HTTP_PROXY: proxy.url } });
+  });
+  afterAll(async () => {
+    await d?.stop();
+    if (d) removeDir(d.stateDir);
+  });
+
+  /** The page at `url` sends its tab to a closed local port by itself: refused, never an ask. */
+  async function noAskAfter(url: string): Promise<void> {
+    const r = await request(d.socketPath, { op: "navigate", url }, holding(A, []));
+    expect(r.blockedHosts, url).toEqual([]);
+    await vi.waitFor(async () => {
+      const t = await request(d.socketPath, { op: "tabs", action: "list" }, A);
+      expect(t.blockedHosts, url).toEqual([]);
+      expect(t.ok ? t.text : "", url).toContain("chrome-error://");
+    });
+  }
+
+  it("a location assignment of a remote page is never an ask", async () => {
+    await noAskAfter("http://site.test/loc");
+  });
+
+  it("a meta refresh of a remote page is never an ask", async () => {
+    await noAskAfter("http://site.test/meta");
+  });
+
+  it("a form a remote page submits is never an ask", async () => {
+    await noAskAfter("http://site.test/form");
+  });
+
+  it("a remote page's subframe to a local port is only noted", async () => {
+    const r = await request(
+      d.socketPath,
+      { op: "navigate", url: "http://site.test/subframe" },
+      holding(A, []),
+    );
+    expect(r).toMatchObject({ ok: true, page: { title: "Sub" }, blockedHosts: [] });
+    expect(r.ok ? r.text : "").toContain(
+      `127.0.0.1:${portOf(other.url)}: local port on the device requested by the page on site.test, refused.`,
+    );
+  });
+
+  it("a remote iframe inside a local page is never an ask", async () => {
+    const r = await request(
+      d.socketPath,
+      { op: "navigate", url: `${framing.url}/` },
+      holding(A, [portOf(framing.url)]),
+    );
+    expect(r).toMatchObject({ ok: true, page: { title: "Framing" }, blockedHosts: [] });
+    expect(r.ok ? r.text : "").toContain(
+      `127.0.0.1:${portOf(third.url)}: local port on the device requested by the page on site.test, refused.`,
+    );
+  });
+
+  it("back and forward to a local port are never an ask; a reload of a local page is", async () => {
+    const port = portOf(app.url);
+    expect(
+      await request(d.socketPath, { op: "navigate", url: `${app.url}/` }, holding(A, [port])),
+    ).toMatchObject({ ok: true, page: { title: "App" } });
+    expect(
+      await request(d.socketPath, { op: "navigate", url: "http://site.test/" }, holding(A, [port])),
+    ).toMatchObject({ ok: true, page: { title: "Site" } });
+    // the grant ended: going back to the local page is refused, only noted
+    const back = await request(d.socketPath, { op: "navigate", action: "back" }, holding(A, []));
+    expect(back.blockedHosts).toEqual([]);
+    expect(back.ok).toBe(false);
+    // on the local page again (while granted), a reload after the grant ended asks for its port
+    expect(
+      await request(d.socketPath, { op: "navigate", url: `${app.url}/` }, holding(A, [port])),
+    ).toMatchObject({ ok: true, page: { title: "App" } });
+    const reload = await request(
+      d.socketPath,
+      { op: "navigate", action: "reload" },
+      holding(A, []),
+    );
+    expect(reload).toMatchObject({
       ok: false,
       error: "blocked",
       blockedHosts: [{ host: "127.0.0.1", port, layer: "address", class: "loopback" }],
