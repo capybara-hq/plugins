@@ -10,7 +10,14 @@ import { useState } from "react";
 import type { ItemFilter, ItemRow, ItemSortField } from "../page/contract.js";
 import { ProjectFrame } from "./board.js";
 import { COPY, PRIORITY_LABEL } from "./i18n.js";
-import { AGENT_STATE_LABEL, imageAvatar, isNotFound, useCollabQuery, useT } from "./shared.js";
+import {
+  AGENT_STATE_LABEL,
+  imageAvatar,
+  isNotFound,
+  TruncatedNote,
+  useCollabQuery,
+  useT,
+} from "./shared.js";
 
 const PAGE_SIZE = 50;
 const SORTABLE: Record<string, ItemSortField> = {
@@ -32,7 +39,11 @@ export function ItemsTable(props: {
 }) {
   const t = useT();
   const navigate = useNavigate();
-  const [page, setPage] = useState(1);
+  // the page belongs to one filter: a new filter starts on page 1
+  const filterKey = JSON.stringify([props.type ?? null, props.filter]);
+  const [paging, setPaging] = useState({ filterKey, page: 1 });
+  const page = paging.filterKey === filterKey ? paging.page : 1;
+  const setPage = (p: number) => setPaging({ filterKey, page: p });
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" }>({
     key: "updated",
     dir: "desc",
@@ -55,6 +66,7 @@ export function ItemsTable(props: {
       notFound={q.data !== undefined && isNotFound(q.data)}
       loading={q.status === "loading"}
     >
+      <TruncatedNote truncated={data?.truncated} />
       <DataTable<ItemRow>
         label={t(COPY.itemsTable)}
         state={q.status === "error" ? "error" : q.status === "loading" ? "loading" : "ready"}

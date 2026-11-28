@@ -128,10 +128,12 @@ export function DecisionItem({ decision }: { decision: DecisionRow }) {
       <Stack gap={8}>
         {decision.recommendation !== null && decision.state === "open" && (
           <Text variant="small" tone="muted">
-            {`${t(COPY.recommended)}: ${
-              decision.options.find((o) => o.id === decision.recommendation?.optionId)?.label ??
-              decision.recommendation.optionId
-            } — ${decision.recommendation.why}`}
+            {[
+              decision.options.find((o) => o.id === decision.recommendation?.optionId)?.label,
+              decision.recommendation.why,
+            ]
+              .filter((x) => x !== undefined && x !== "")
+              .reduce((line, x) => `${line} — ${x}`, t(COPY.recommended))}
           </Text>
         )}
         {answered !== null && answered !== undefined && (

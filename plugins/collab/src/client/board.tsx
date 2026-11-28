@@ -3,6 +3,7 @@ import {
   Badge,
   Board,
   type BoardCard as BoardCardShape,
+  EmptyState,
   FilterChip,
   ListPage,
   type PageAction,
@@ -20,7 +21,7 @@ import type {
   ItemTypeInfo,
   ProjectHeader,
 } from "../page/contract.js";
-import { COPY, PRIORITY_LABEL } from "./i18n.js";
+import { COPY, type Copy, PRIORITY_LABEL } from "./i18n.js";
 import { ItemForm } from "./item-form.js";
 import {
   AGENT_STATE_LABEL,
@@ -54,6 +55,8 @@ export function ProjectFrame(props: {
   canEdit: boolean;
   notFound: boolean;
   loading: boolean;
+  /** The view's query failed: an error state with a retry replaces the content. */
+  failed?: { error: string | undefined; retry(): void } | undefined;
   children?: ReactNode;
 }) {
   const t = useT();
@@ -135,7 +138,16 @@ export function ProjectFrame(props: {
         </Stack>
       }
     >
-      {props.children}
+      {props.failed === undefined ? (
+        props.children
+      ) : (
+        <EmptyState
+          text={t(COPY.loadFailed)}
+          {...(props.failed.error !== undefined && { hint: props.failed.error })}
+          action={{ label: t(COPY.retry), variant: "default", onSelect: props.failed.retry }}
+          size="page"
+        />
+      )}
       {props.project !== undefined && (
         <ItemForm
           open={creating}
@@ -188,6 +200,7 @@ export function ProjectBoard({ project }: { project: string }) {
       canEdit={data?.canEdit ?? false}
       notFound={q.data !== undefined && isNotFound(q.data)}
       loading={q.status === "loading"}
+      failed={q.status === "error" ? { error: q.error, retry: q.refetch } : undefined}
     >
       {data?.truncated === true && (
         <Text variant="small" tone="muted">
@@ -216,14 +229,28 @@ export function ProjectBoard({ project }: { project: string }) {
             navigate({ params: { item: card.key, project: null, view: null } });
         }}
         empty={<Text tone="muted">{t(COPY.emptyBoard)}</Text>}
-        renderCard={(card) => <CardBody card={card} />}
+        renderCard={(card) => <CardBody card={card} gateTarget={gateTargetName(card, byKey, t)} />}
       />
     </ProjectFrame>
   );
 }
 
-/** A card's content: key, title, priority, labels, open decisions and who works on it. */
-function CardBody({ card }: { card: Card }) {
+/** The status an open gate request of the card waits to move it to, by name. */
+function gateTargetName(
+  card: Card,
+  byKey: Map<string, BoardColumn>,
+  t: (c: Copy) => string,
+): string | null {
+  if (card.pendingGate === null) return null;
+  const column = byKey.get(card.pendingGate);
+  return column === undefined ? card.pendingGate : t(column.name);
+}
+
+/**
+ * A card's content: key, title, priority, a pending gate request ("待确认 → 状态"), labels, open
+ * decisions and who works on it.
+ */
+function CardBody({ card, gateTarget }: { card: Card; gateTarget: string | null }) {
   const t = useT();
   return (
     <Stack gap={4}>
@@ -238,6 +265,11 @@ function CardBody({ card }: { card: Card }) {
         )}
       </Stack>
       <Text>{card.title}</Text>
+      {gateTarget !== null && (
+        <Text variant="small" tone="warn">
+          {`${t(COPY.pendingGate)} → ${gateTarget}`}
+        </Text>
+      )}
       <Stack direction="row" gap={4} wrap align="center">
         {card.openDecisions > 0 && <Badge tone="count">{card.openDecisions}</Badge>}
         {card.labels.map((l) => (

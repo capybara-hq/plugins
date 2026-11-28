@@ -1,6 +1,7 @@
 import {
   Badge,
   Button,
+  DangerConfirm,
   DataTable,
   Dialog,
   EmptyState,
@@ -17,6 +18,7 @@ import {
   Stack,
   Switch,
   Text,
+  Textarea,
   usePageParams,
 } from "@capybara-hq/plugin-client";
 import { useState } from "react";
@@ -35,18 +37,22 @@ import type {
 import { COPY, type Copy, ROLE_LABEL } from "./i18n.js";
 import {
   agentOption,
+  ErrorLine,
   errorText,
   imageAvatar,
   isNotFound,
   pageHref,
   personOption,
+  TruncatedNote,
+  useActionRunner,
   useCollabAction,
   useCollabQuery,
   useT,
 } from "./shared.js";
 
-type Section = "members" | "types" | "gates" | "defaults";
-const SECTIONS: { id: Section; label: Copy }[] = [
+type Section = "general" | "members" | "types" | "gates" | "defaults";
+const SECTIONS: { id: Section; label: Copy; ownersOnly?: boolean }[] = [
+  { id: "general", label: COPY.general, ownersOnly: true },
   { id: "members", label: COPY.members },
   { id: "types", label: COPY.typesWorkflows },
   { id: "gates", label: COPY.gates },
@@ -66,14 +72,16 @@ const CATEGORY_LABEL: Record<string, Copy> = {
 export function Settings({ project }: { project: string }) {
   const t = useT();
   const params = usePageParams();
-  const section: Section = SECTIONS.find((s) => s.id === params.section)?.id ?? "members";
   const q = useCollabQuery("project.settings", { project });
   const data = q.data !== undefined && !isNotFound(q.data) ? q.data : undefined;
+  // General is for project owners; the others open on members
+  const visible = SECTIONS.filter((s) => s.ownersOnly !== true || data?.canEdit === true);
+  const section: Section = visible.find((s) => s.id === params.section)?.id ?? "members";
 
   const nav = [
     {
       group: t(COPY.settingsNav),
-      items: SECTIONS.map((s) => ({
+      items: visible.map((s) => ({
         id: s.id,
         label: t(s.label),
         href: pageHref({ project, settings: "1", section: s.id }),
@@ -112,6 +120,7 @@ export function Settings({ project }: { project: string }) {
               {t(COPY.readOnly)}
             </Text>
           )}
+          {section === "general" && <GeneralSection key={data.project.id} data={data} />}
           {section === "members" && <MembersSection data={data} />}
           {section === "types" && <TypesSection data={data} />}
           {section === "gates" && <GatesSection data={data} />}
@@ -122,11 +131,71 @@ export function Settings({ project }: { project: string }) {
   );
 }
 
+/** The project's name, description and archive flag (project owners). */
+function GeneralSection({ data }: { data: ProjectSettingsResult }) {
+  const t = useT();
+  const act = useCollabAction();
+  const runner = useActionRunner();
+  const [name, setName] = useState(data.project.name);
+  const [description, setDescription] = useState(data.project.description);
+  const [archived, setArchived] = useState(data.project.archived);
+  const dirty =
+    name.trim() !== data.project.name ||
+    description.trim() !== data.project.description ||
+    archived !== data.project.archived;
+  const save = () =>
+    void runner.run("save", () =>
+      act("settings.save", {
+        projectId: data.project.id,
+        name: name.trim(),
+        description: description.trim(),
+        archived,
+      }),
+    );
+  return (
+    <FormSection id="general" title={t(COPY.general)}>
+      <Field label={t(COPY.projectName)} required>
+        <Input
+          aria-label={t(COPY.projectName)}
+          value={name}
+          invalid={name.trim() === ""}
+          onChange={(e) => setName(e.target.value)}
+        />
+      </Field>
+      <Field label={t(COPY.description)} optional>
+        <Textarea
+          aria-label={t(COPY.description)}
+          value={description}
+          rows={3}
+          onChange={(e) => setDescription(e.target.value)}
+        />
+      </Field>
+      <Field label={t(COPY.archived)} help={t(COPY.archivedHelp)}>
+        <Switch label={t(COPY.archived)} checked={archived} onChange={setArchived} />
+      </Field>
+      <ErrorLine error={runner.error} />
+      <Stack direction="row" justify="end">
+        <Button
+          variant="primary"
+          disabled={!dirty || name.trim() === ""}
+          loading={runner.busy !== null}
+          onClick={save}
+        >
+          {t(COPY.save)}
+        </Button>
+      </Stack>
+    </FormSection>
+  );
+}
+
 function MembersSection({ data }: { data: ProjectSettingsResult }) {
   const t = useT();
   const act = useCollabAction();
+  const remover = useActionRunner();
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<MemberRow | null>(null);
+  const [removing, setRemoving] = useState<MemberRow | null>(null);
+  const isOwnerRow = (m: MemberRow) => m.person.id === data.project.owner.id;
   return (
     <FormSection
       id="members"
@@ -136,32 +205,22 @@ function MembersSection({ data }: { data: ProjectSettingsResult }) {
         marks: <Button onClick={() => setAdding(true)}>{t(COPY.addMember)}</Button>,
       })}
     >
+      <ErrorLine error={remover.error} />
+      <TruncatedNote truncated={data.truncated} />
       <DataTable<MemberRow>
         label={t(COPY.members)}
         rows={data.members}
         rowKey={(m) => m.person.id}
-        {...((data.canEdit || data.members.some((m) => m.canSetAgent)) && {
-          onOpen: (m: MemberRow) => {
-            if (data.canEdit || m.canSetAgent) setEditing(m);
-          },
-        })}
-        {...(data.canEdit && {
-          rowMenu: (m: MemberRow) =>
-            m.person.id === data.project.owner.id
-              ? []
-              : [
-                  { label: t(COPY.edit), onSelect: () => setEditing(m) },
-                  {
-                    label: t(COPY.removeMember),
-                    danger: true,
-                    onSelect: () =>
-                      void act("member.remove", {
-                        projectId: data.project.id,
-                        accountId: m.person.id,
-                      }).catch(() => {}),
-                  },
-                ],
-        })}
+        // an owner edits every row; anyone else only reaches their own default agent (row menu)
+        {...(data.canEdit && { onOpen: (m: MemberRow) => setEditing(m) })}
+        rowMenu={(m: MemberRow) => [
+          ...(data.canEdit || m.canSetAgent
+            ? [{ label: t(COPY.edit), onSelect: () => setEditing(m) }]
+            : []),
+          ...(data.canEdit && !isOwnerRow(m)
+            ? [{ label: t(COPY.removeMember), danger: true, onSelect: () => setRemoving(m) }]
+            : []),
+        ]}
         columns={[
           {
             key: "person",
@@ -196,6 +255,24 @@ function MembersSection({ data }: { data: ProjectSettingsResult }) {
         ]}
       />
       {adding && <AddMemberDialog data={data} onClose={() => setAdding(false)} />}
+      {removing !== null && (
+        <DangerConfirm
+          open
+          onOpenChange={(open) => !open && setRemoving(null)}
+          title={t(COPY.removeMemberTitle)}
+          description={t(COPY.removeMemberText)}
+          confirmName={removing.person.name}
+          confirmLabel={t(COPY.removeMember)}
+          confirmDisabled={remover.busy !== null}
+          onConfirm={async () => {
+            const member = removing;
+            setRemoving(null);
+            await remover.run("remove", () =>
+              act("member.remove", { projectId: data.project.id, accountId: member.person.id }),
+            );
+          }}
+        />
+      )}
       {editing !== null && (
         <MemberDialog data={data} member={editing} onClose={() => setEditing(null)} />
       )}
@@ -469,16 +546,25 @@ function decodeGate(v: string): GateRule | null {
   return null;
 }
 
-/** Saves one status's patch; refusals are the host's toast. */
-function useSaveStatus(data: ProjectSettingsResult) {
+/** Saves one status's patch; refusals are the host's toast, failures show in `error`. */
+function useSaveStatus(data: ProjectSettingsResult): {
+  save(patch: StatusSettingsPatch): void;
+  error: string | null;
+} {
   const act = useCollabAction();
-  return (patch: StatusSettingsPatch) =>
-    void act("settings.save", { projectId: data.project.id, statuses: [patch] }).catch(() => {});
+  const runner = useActionRunner();
+  return {
+    save: (patch) =>
+      void runner.run("save", () =>
+        act("settings.save", { projectId: data.project.id, statuses: [patch] }),
+      ),
+    error: runner.error,
+  };
 }
 
 function GatesSection({ data }: { data: ProjectSettingsResult }) {
   const t = useT();
-  const save = useSaveStatus(data);
+  const { save, error } = useSaveStatus(data);
   const options: SelectOption[] = [
     { value: "none", label: t(COPY.noGates) },
     { value: "requester", label: t({ zh: "提出人", en: "Requester" }) },
@@ -494,6 +580,7 @@ function GatesSection({ data }: { data: ProjectSettingsResult }) {
   ];
   return (
     <>
+      <ErrorLine error={error} />
       {data.types.map((ty) => (
         <FormSection key={ty.key} id={`gates-${ty.key}`} title={t(ty.name)}>
           {ty.statuses.map((s) => (
@@ -501,7 +588,7 @@ function GatesSection({ data }: { data: ProjectSettingsResult }) {
               <Select
                 aria-label={`${t(ty.name)} ${t(s.name)} ${t(COPY.confirmer)}`}
                 value={encodeGate(s.gate)}
-                options={withCurrent(options, encodeGate(s.gate))}
+                options={withCurrent(options, encodeGate(s.gate), t(COPY.unknownMember))}
                 disabled={!data.canEdit}
                 onChange={(e) =>
                   save({ type: ty.key, key: s.key, gate: decodeGate(e.target.value) })
@@ -515,9 +602,9 @@ function GatesSection({ data }: { data: ProjectSettingsResult }) {
   );
 }
 
-/** Keeps a stored value that matches no option (a member who left) selectable. */
-function withCurrent(options: SelectOption[], value: string): SelectOption[] {
-  return options.some((o) => o.value === value) ? options : [...options, { value, label: value }];
+/** Keeps a stored value that matches no option (a member who left) selectable, unnamed. */
+function withCurrent(options: SelectOption[], value: string, unknown: string): SelectOption[] {
+  return options.some((o) => o.value === value) ? options : [...options, { value, label: unknown }];
 }
 
 function encodeAssignee(d: DefaultAssignmentRule | null): string {
@@ -529,7 +616,7 @@ function encodeAssignee(d: DefaultAssignmentRule | null): string {
 
 function DefaultsSection({ data }: { data: ProjectSettingsResult }) {
   const t = useT();
-  const save = useSaveStatus(data);
+  const { save, error } = useSaveStatus(data);
   const options: SelectOption[] = [
     { value: "none", label: t(COPY.noDefaults) },
     ...functionLabels(data).map((f) => ({
@@ -556,6 +643,7 @@ function DefaultsSection({ data }: { data: ProjectSettingsResult }) {
   };
   return (
     <>
+      <ErrorLine error={error} />
       {data.types.map((ty) => (
         <FormSection key={ty.key} id={`defaults-${ty.key}`} title={t(ty.name)}>
           {ty.statuses.map((s) => {
@@ -567,7 +655,7 @@ function DefaultsSection({ data }: { data: ProjectSettingsResult }) {
                   <Select
                     aria-label={`${t(ty.name)} ${t(s.name)} ${t(COPY.assignee)}`}
                     value={value}
-                    options={withCurrent(options, value)}
+                    options={withCurrent(options, value, t(COPY.unknownMember))}
                     disabled={!data.canEdit}
                     onChange={(e) => patch(ty, s, e.target.value, memberAgent)}
                   />

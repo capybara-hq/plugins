@@ -16,17 +16,20 @@ import {
   Textarea,
   useNavigate,
 } from "@capybara-hq/plugin-client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ActivityEntry, ItemDetailResult, ItemRef, StatusInfo } from "../page/contract.js";
 import { DecisionItem } from "./decisions.js";
 import { COPY, type Copy, PRIORITY_LABEL } from "./i18n.js";
 import { ItemForm } from "./item-form.js";
 import {
   AGENT_STATE_LABEL,
+  ErrorLine,
   errorText,
   imageAvatar,
   isNotFound,
   pageHref,
+  TruncatedNote,
+  useActionRunner,
   useCollabAction,
   useCollabQuery,
   useT,
@@ -82,8 +85,11 @@ function LoadedDetail(props: { data: ItemDetailResult; tab: TabId; onTab(id: Tab
   const status = data.statuses.find((s) => s.key === item.statusKey);
   const openDecisions = data.decisions.filter((d) => d.state === "open").length;
 
+  const mover = useActionRunner();
   const move = (to: StatusInfo) => () =>
-    void act("item.move", { itemId: item.id, version: item.version, to: to.key }).catch(() => {});
+    void mover.run("move", () =>
+      act("item.move", { itemId: item.id, version: item.version, to: to.key }),
+    );
   const allowed = (s: StatusInfo) =>
     s.key !== item.statusKey &&
     (status === undefined || status.next.length === 0 || status.next.includes(s.key));
@@ -168,6 +174,8 @@ function LoadedDetail(props: { data: ItemDetailResult; tab: TabId; onTab(id: Tab
         />
       }
     >
+      <ErrorLine error={mover.error} />
+      <TruncatedNote truncated={data.truncated} />
       {tab === "overview" && <OverviewTab data={data} />}
       {tab === "activity" && (
         <ActivityTab itemKey={item.key} itemId={item.id} canEdit={data.canEdit} />
@@ -271,6 +279,14 @@ function ActivityTab(props: { itemKey: string; itemId: string; canEdit: boolean 
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
   const [next, setNext] = useState<string | null>(null);
   const [empty, setEmpty] = useState(false);
+  // A refetch of the newest page (an invalidation) moves the page boundaries: start again from
+  // the top so no entry falls between an old cursor and the new first page.
+  const firstLoads = useRef(0);
+  const onFirst = useCallback((isEmpty: boolean) => {
+    setEmpty(isEmpty);
+    firstLoads.current += 1;
+    if (firstLoads.current > 1) setCursors((c) => (c.length > 1 ? [undefined] : c));
+  }, []);
   return (
     <Stack gap={16}>
       {props.canEdit && <CommentBox itemId={props.itemId} />}
@@ -290,7 +306,7 @@ function ActivityTab(props: { itemKey: string; itemId: string; canEdit: boolean 
               itemKey={props.itemKey}
               before={before}
               {...(i === cursors.length - 1 && { onNext: setNext })}
-              {...(i === 0 && { onEmpty: setEmpty })}
+              {...(i === 0 && { onEmpty: onFirst })}
             />
           ))}
         </ItemList>
@@ -313,12 +329,16 @@ function ActivityPage(props: {
   });
   const data = q.data !== undefined && !isNotFound(q.data) ? q.data : undefined;
   const { onNext, onEmpty } = props;
+  // two effects: a page that stops being the last one must not count as a new first-page read
   useEffect(() => {
-    if (data === undefined) return;
-    onNext?.(data.next);
-    onEmpty?.(data.entries.length === 0);
-  }, [data, onNext, onEmpty]);
-  return data === undefined ? null : data.entries.map((e) => <ActivityItem key={e.id} entry={e} />);
+    if (data !== undefined) onNext?.(data.next);
+  }, [data, onNext]);
+  useEffect(() => {
+    if (data !== undefined) onEmpty?.(data.entries.length === 0);
+  }, [data, onEmpty]);
+  return data === undefined
+    ? null
+    : data.entries.map((e) => <ActivityItem key={e.id} entry={e} itemKey={props.itemKey} />);
 }
 
 const ACTIVITY_LABEL: Record<string, Copy> = {
@@ -329,7 +349,7 @@ const ACTIVITY_LABEL: Record<string, Copy> = {
   commented: { zh: "发表了评论", en: "commented" },
   linked: { zh: "关联了事项", en: "linked an item" },
   artifact_attached: { zh: "添加了产物", en: "attached an artifact" },
-  gate_requested: { zh: "请求通过关卡", en: "requested a gate" },
+  gate_requested: { zh: "请求确认", en: "asked for a confirmation" },
   decision_asked: { zh: "提出了决策", en: "asked a decision" },
   decision_answered: { zh: "回答了决策", en: "answered a decision" },
   decision_canceled: { zh: "取消了决策", en: "canceled a decision" },
@@ -342,21 +362,43 @@ const ACTIVITY_LABEL: Record<string, Copy> = {
   agent_declined: { zh: "智能体拒绝了工作", en: "the agent declined the work" },
 };
 
-function ActivityItem({ entry }: { entry: ActivityEntry }) {
+function ActivityItem({ entry, itemKey }: { entry: ActivityEntry; itemKey: string }) {
   const t = useT();
+  const [full, setFull] = useState(false);
   const who =
     entry.actor.agent === null
       ? entry.actor.person.name
       : `${entry.actor.agent.name} (${entry.actor.person.name})`;
   const what = ACTIVITY_LABEL[entry.kind];
+  const commentId = typeof entry.detail.commentId === "string" ? entry.detail.commentId : null;
   return (
     <ItemListItem
-      title={`${who} ${what === undefined ? entry.kind : t(what)}`}
+      title={`${who} ${t(what ?? COPY.changedItem)}`}
       meta={new Date(entry.at).toLocaleString()}
+      {...(entry.clipped === true &&
+        commentId !== null &&
+        !full && {
+          actions: (
+            <Button variant="ghost" onClick={() => setFull(true)}>
+              {t(COPY.showAll)}
+            </Button>
+          ),
+        })}
     >
-      {entry.comment !== undefined && <Markdown text={entry.comment} />}
+      {full && commentId !== null ? (
+        <FullComment itemKey={itemKey} commentId={commentId} fallback={entry.comment ?? ""} />
+      ) : (
+        entry.comment !== undefined && <Markdown text={entry.comment} />
+      )}
     </ItemListItem>
   );
+}
+
+/** A clipped comment in full (`item.comment`); the clipped text while it loads. */
+function FullComment(props: { itemKey: string; commentId: string; fallback: string }) {
+  const q = useCollabQuery("item.comment", { key: props.itemKey, commentId: props.commentId });
+  const body = q.data !== undefined && !isNotFound(q.data) ? q.data.body : props.fallback;
+  return <Markdown text={body} />;
 }
 
 function CommentBox({ itemId }: { itemId: string }) {
@@ -409,24 +451,28 @@ function ConversationsTab({ itemKey }: { itemKey: string }) {
   const t = useT();
   const navigate = useNavigate();
   const q = useCollabQuery("item.conversations", { key: itemKey });
-  const rows = q.data !== undefined && !isNotFound(q.data) ? q.data.conversations : [];
+  const result = q.data !== undefined && !isNotFound(q.data) ? q.data : undefined;
+  const rows = result?.conversations ?? [];
   if (q.status === "error") return <Text tone="fail">{t(COPY.loadFailed)}</Text>;
   return (
-    <ItemList label={t(COPY.conversations)} empty={t(COPY.noConversations)}>
-      {rows.length === 0
-        ? null
-        : rows.map((c) => (
-            <ItemListItem
-              key={c.id}
-              title={`${c.agent.name} · ${c.owner.name}`}
-              meta={new Date(c.lastActivityAt).toLocaleString()}
-              actions={
-                <Button variant="ghost" onClick={() => navigate({ conversation: c.id })}>
-                  {t(COPY.openConversation)}
-                </Button>
-              }
-            />
-          ))}
-    </ItemList>
+    <>
+      <TruncatedNote truncated={result?.truncated} />
+      <ItemList label={t(COPY.conversations)} empty={t(COPY.noConversations)}>
+        {rows.length === 0
+          ? null
+          : rows.map((c) => (
+              <ItemListItem
+                key={c.id}
+                title={`${c.agent.name} · ${c.owner.name}`}
+                meta={new Date(c.lastActivityAt).toLocaleString()}
+                actions={
+                  <Button variant="ghost" onClick={() => navigate({ conversation: c.id })}>
+                    {t(COPY.openConversation)}
+                  </Button>
+                }
+              />
+            ))}
+      </ItemList>
+    </>
   );
 }

@@ -244,6 +244,8 @@ function installRicherDesign(): void {
         { "data-fake-design": name },
         String(p[prop] ?? ""),
         p.children as ReactNode,
+        // an item's trailing actions (buttons), as a person would see them
+        (p.actions ?? null) as ReactNode,
       );
     };
   }

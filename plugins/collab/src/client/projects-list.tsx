@@ -15,7 +15,14 @@ import {
 import { useState } from "react";
 import type { ProjectRow } from "../page/contract.js";
 import { COPY, ROLE_LABEL } from "./i18n.js";
-import { errorText, imageAvatar, useCollabAction, useCollabQuery, useT } from "./shared.js";
+import {
+  errorText,
+  imageAvatar,
+  TruncatedNote,
+  useCollabAction,
+  useCollabQuery,
+  useT,
+} from "./shared.js";
 
 const KEY_RE = /^[A-Z][A-Z0-9]{1,9}$/;
 
@@ -41,6 +48,7 @@ export function ProjectsList() {
       listLabel={t(COPY.projectsLabel)}
       loading={q.status === "loading"}
     >
+      <TruncatedNote truncated={data?.truncated} />
       <DataTable<ProjectRow>
         label={t(COPY.projectsLabel)}
         state={q.status === "error" ? "error" : q.status === "loading" ? "loading" : "ready"}

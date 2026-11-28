@@ -249,11 +249,17 @@ describe("item page", () => {
 });
 
 describe("settings", () => {
-  it("project with settings=1 renders the settings page with its four sections", async () => {
+  it("project with settings=1 renders the settings page with its sections (General for owners)", async () => {
     renderPage({ project: "APP", settings: "1" });
     await flush();
     const nav = lastProps.SettingsPage?.nav as { items: { id: string }[] }[];
-    expect(nav[0]?.items.map((i) => i.id)).toEqual(["members", "types", "gates", "defaults"]);
+    expect(nav[0]?.items.map((i) => i.id)).toEqual([
+      "general",
+      "members",
+      "types",
+      "gates",
+      "defaults",
+    ]);
     expect(
       document.querySelector('table[aria-label="Members & functions"]')?.textContent,
     ).toContain("Ben");
