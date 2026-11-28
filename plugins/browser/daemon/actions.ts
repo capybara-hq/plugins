@@ -2901,7 +2901,8 @@ export class BrowserSession {
    *   the navigate op or the person's address bar (the goto's target), a reload (the page's own
    *   address when the reload began). Back and forward never ask;
    * - a subresource or subframe request whose frames are all on the device's loopback, from the
-   *   requesting frame up to the main frame (an empty or `about:blank` frame takes its parent's).
+   *   requesting frame up to the main frame (an empty, `about:blank` or `about:srcdoc` frame takes
+   *   its parent's; any other address without a host, such as data: or blob:, is not loopback).
    *   `origin`: the requesting frame's host.
    *
    * Everything else is only noted, with the page's host: popups, `location`, form and meta-refresh
@@ -2936,8 +2937,15 @@ export class BrowserSession {
     let origin = "";
     let local = true;
     for (let f: typeof frame | null = frame; f !== null; f = f.parentFrame()) {
-      const host = hostOf(f.url());
-      if (host === "") continue;
+      const url = f.url();
+      // only a frame with no document of its own takes its parent's; a data:, blob: or other
+      // address without a host is not on loopback
+      if (url === "" || url === "about:blank" || url === "about:srcdoc") continue;
+      const host = hostOf(url);
+      if (host === "") {
+        local = false;
+        break;
+      }
       if (origin === "") origin = host;
       if (loopbackGrantHostOf(host) === undefined) {
         local = false;

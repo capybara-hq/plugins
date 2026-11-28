@@ -112,9 +112,11 @@ beforeAll(async () => {
     "/form": `<!doctype html><title>Form</title><form action="${other.url}/a.js" method="get"></form><script>document.forms[0].submit()</script>`,
     "/subframe": `<!doctype html><title>Sub</title><iframe src="${other.url}/a.js"></iframe>`,
     "/inner": `<!doctype html><title>Inner</title><script src="${third.url}/b.js"></script>`,
+    "/todata": `<!doctype html><title>ToData</title><script>location = "data:text/html,<script src='${third.url}/b.js'></scr" + "ipt>"</script>`,
   });
   framing = await startFixtureServer({
     "/": `<!doctype html><title>Framing</title><iframe src="http://site.test/inner"></iframe>`,
+    "/data": `<!doctype html><title>FramingData</title><iframe src="http://site.test/todata"></iframe>`,
   });
   open.add(portOf(framing.url));
   sites.set("site.test", portOf(site.url));
@@ -454,6 +456,26 @@ describe("browser daemon loopback asks: page-started navigations and frames", ()
     expect(r.ok ? r.text : "").toContain(
       `127.0.0.1:${portOf(third.url)}: local port on the device requested by the page on site.test, refused.`,
     );
+  });
+
+  it("a remote iframe that turns itself into a data: page inside a local page is never an ask", async () => {
+    const port = portOf(third.url);
+    const r = await request(
+      d.socketPath,
+      { op: "navigate", url: `${framing.url}/data` },
+      holding(A, [portOf(framing.url)]),
+    );
+    expect(r).toMatchObject({ ok: true, page: { title: "FramingData" }, blockedHosts: [] });
+    // the data: frame's request lands with this reply or a later one: only ever as a note
+    let text = r.ok ? (r.text ?? "") : "";
+    await vi.waitFor(async () => {
+      if (!text.includes(`127.0.0.1:${port}:`)) {
+        const t = await request(d.socketPath, { op: "tabs", action: "list" }, A);
+        expect(t.blockedHosts).toEqual([]);
+        text += t.ok ? (t.text ?? "") : "";
+      }
+      expect(text).toContain(`127.0.0.1:${port}: local port on the device requested by a page`);
+    });
   });
 
   it("back and forward to a local port are never an ask; a reload of a local page is", async () => {
