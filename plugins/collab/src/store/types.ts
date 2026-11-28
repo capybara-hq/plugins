@@ -175,6 +175,8 @@ export interface DecisionsTable {
   address_gen: Generated<number>;
   stale_inbox_item_ids: Generated<string[]>;
   inbox_item_ids: Generated<string[]>;
+  addressees: Generated<string[]>;
+  inbox_by_account: JsonDefault<Record<string, Partial<Record<"notify" | "remind", string>>>>;
   notified_at: Date | null;
   reminded_at: Date | null;
   escalated_at: Date | null;

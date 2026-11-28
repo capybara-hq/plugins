@@ -1,4 +1,3 @@
-import { sql } from "kysely";
 import type { CollabDb } from "../store/db.js";
 import type { Actor, Decision, Item, Project } from "../store/types.js";
 import { addActivity } from "./internal.js";
@@ -103,6 +102,22 @@ async function isActiveMember(
     .where("role", "!=", "guest")
     .executeTakeFirst();
   return row !== undefined;
+}
+
+/**
+ * Everyone a decision with this addressing is sent to, sorted: every answerer when the addressee
+ * is one of them (all confirmers of a function gate), else the addressee alone (a question; a
+ * gate routed to the owner).
+ */
+export function recipientsOf(current: { addressee: string; answerers: string[] }): string[] {
+  const set = current.answerers.includes(current.addressee)
+    ? new Set(current.answerers)
+    : new Set([current.addressee]);
+  return [...set].sort();
+}
+
+function sameSet(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
 }
 
 /**
@@ -240,17 +255,34 @@ export async function readdressOpen(
         .executeTakeFirstOrThrow();
       projects.set(project.id, project);
     }
-    const { addressee } = await currentAddressee(tx, orgId, project, item, decision);
-    if (addressee === decision.addressee_account_id) continue;
+    const current = await currentAddressee(tx, orgId, project, item, decision);
+    const { addressee } = current;
+    const recipients = recipientsOf(current);
+    const known =
+      decision.addressees.length > 0 ? decision.addressees : [decision.addressee_account_id];
+    if (addressee === decision.addressee_account_id && sameSet(recipients, [...known].sort())) {
+      continue;
+    }
+    // Recipients who left have their items resolved (stale); those who stay keep theirs; the
+    // new generation's notify job posts to the newcomers.
+    const byAccount = { ...decision.inbox_by_account };
+    const leaving: string[] = [];
+    for (const [account, items] of Object.entries(byAccount)) {
+      if (recipients.includes(account)) continue;
+      leaving.push(...Object.values(items).filter((id): id is string => Boolean(id)));
+      delete byAccount[account];
+    }
     const gen = decision.address_gen + 1;
     await requireHooks(hooks, "re-addressing a decision").readdressed(decision.id, gen);
     await tx
       .updateTable("decisions")
       .set({
         addressee_account_id: addressee,
+        addressees: recipients,
+        inbox_by_account: JSON.stringify(byAccount),
         address_gen: gen,
-        stale_inbox_item_ids: sql`stale_inbox_item_ids || inbox_item_ids`,
-        inbox_item_ids: sql`'{}'::text[]`,
+        stale_inbox_item_ids: [...decision.stale_inbox_item_ids, ...leaving],
+        inbox_item_ids: decision.inbox_item_ids.filter((id) => !leaving.includes(id)),
         notified_at: null,
         reminded_at: null,
       })

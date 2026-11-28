@@ -27,6 +27,7 @@ import {
   type DecisionHooks,
   gateConfirmers,
   readdressOpen,
+  recipientsOf,
   requireHooks,
 } from "./decision-state.js";
 import { CollabError } from "./errors.js";
@@ -495,8 +496,8 @@ async function advanceParent(
   // A gated auto-move always opens a decision, even when the actor is the confirmer: acceptance
   // stays an explicit act.
   if (gate) {
-    const { addressee } = await gateConfirmers(tx, orgId, project, parent, gate);
-    await requestGate(tx, orgId, actor, project, parent, statuses, acceptance, addressee, opts);
+    const addressing = await gateConfirmers(tx, orgId, project, parent, gate);
+    await requestGate(tx, orgId, actor, project, parent, statuses, acceptance, addressing, opts);
     return true;
   }
   const moved = await moveItem(tx, orgId, actor, project, parent, statuses, acceptance, true, opts);
@@ -506,8 +507,8 @@ async function advanceParent(
   const doneGate = done ? gateOf(done) : null;
   const allowed = !acceptance.next_keys || acceptance.next_keys.includes(PARENT_DONE_STATUS);
   if (done && doneGate && allowed && moved.status_key === acceptance.key) {
-    const { addressee } = await gateConfirmers(tx, orgId, project, moved, doneGate);
-    await requestGate(tx, orgId, actor, project, moved, statuses, done, addressee, opts);
+    const addressing = await gateConfirmers(tx, orgId, project, moved, doneGate);
+    await requestGate(tx, orgId, actor, project, moved, statuses, done, addressing, opts);
   }
   return true;
 }
@@ -549,10 +550,11 @@ export async function transitionIn(
   const to = checkTransition(statuses, item.status_key, toStatus);
   const gate = gateOf(to);
   if (gate) {
-    const { addressee, confirmers } = await gateConfirmers(tx, orgId, project, item, gate);
+    const addressing = await gateConfirmers(tx, orgId, project, item, gate);
+    const { confirmers } = addressing;
     if (isAgent(actor) || (opts.requestGate && !confirmers.includes(actor.accountId))) {
       return {
-        gate: await requestGate(tx, orgId, actor, project, item, statuses, to, addressee, opts),
+        gate: await requestGate(tx, orgId, actor, project, item, statuses, to, addressing, opts),
       };
     }
     if (!confirmers.includes(actor.accountId)) {
@@ -574,7 +576,7 @@ async function requestGate(
   item: Item,
   statuses: Status[],
   to: Status,
-  addressee: string,
+  addressing: { addressee: string; confirmers: string[] },
   opts: MoveOptions,
 ): Promise<Decision> {
   const open = await tx
@@ -600,7 +602,11 @@ async function requestGate(
       item_id: item.id,
       kind: "gate",
       asker: actorJson(actor),
-      addressee_account_id: addressee,
+      addressee_account_id: addressing.addressee,
+      addressees: recipientsOf({
+        addressee: addressing.addressee,
+        answerers: addressing.confirmers,
+      }),
       question: `Move ${key} "${item.title}" to "${to.name_en}"?`,
       options: JSON.stringify([
         { id: "approve", label: "Approve" },
@@ -615,7 +621,7 @@ async function requestGate(
   await addActivity(tx, orgId, item.id, actor, "gate_requested", {
     to: to.key,
     decisionId: decision.id,
-    addressee,
+    addressee: addressing.addressee,
   });
   await outboxFor(tx, orgId, "gate.requested", after, {
     actor,

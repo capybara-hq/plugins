@@ -4,6 +4,8 @@ import type { ActorRef, AgentRef, PersonRef } from "./contract.js";
 
 /** `ctx.people.get` takes at most this many ids per call. */
 const PEOPLE_BATCH = 200;
+/** Usable-agent reads in flight at once when prefetching. */
+const PREFETCH_CONCURRENCY = 8;
 
 /**
  * Display names and avatars for one query: people through `ctx.people.get`, agents through the
@@ -72,7 +74,10 @@ export class Directory {
   /** Reads the usable agents of every distinct person at once (before naming many agents). */
   async prefetchAgents(accountIds: Iterable<string | null | undefined>): Promise<void> {
     const ids = [...new Set([...accountIds].filter((id): id is string => Boolean(id)))];
-    await Promise.all(ids.map((id) => this.usable(id)));
+    // A few reads at a time: a board can name dozens of people.
+    for (let i = 0; i < ids.length; i += PREFETCH_CONCURRENCY) {
+      await Promise.all(ids.slice(i, i + PREFETCH_CONCURRENCY).map((id) => this.usable(id)));
+    }
   }
 
   /** The agent working for `accountId` (named through that person's usable agents). */

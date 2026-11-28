@@ -26,8 +26,21 @@ export function pageCtx(db: CollabDb, agents: Record<string, { id: string; name:
   const base = noticeCtx(db, agents);
   /** Accounts whose usable agents were read, in order. */
   const agentReads: string[] = [];
+  /** Inbox items resolved, in order. */
+  const resolved: string[] = [];
+  /** Kernel failures to inject: one inbox post per listed account fails once; people reads fail. */
+  const failures = { postsTo: new Set<string>(), people: false };
   const ctx = {
     ...base.ctx,
+    inbox: {
+      post: async (p: Parameters<ExtensionContext["inbox"]["post"]>[0]) => {
+        if (failures.postsTo.delete(p.accountId)) throw new Error("inbox unavailable");
+        return base.ctx.inbox.post(p);
+      },
+      resolve: async (r: { orgId: string; itemId: string }) => {
+        resolved.push(r.itemId);
+      },
+    },
     agents: {
       usableBy: async (a: { orgId: string; accountId: string }) => {
         agentReads.push(a.accountId);
@@ -35,10 +48,12 @@ export function pageCtx(db: CollabDb, agents: Record<string, { id: string; name:
       },
     },
     people: {
-      get: async ({ accountIds }: { orgId: string; accountIds: string[] }) =>
-        accountIds
+      get: async ({ accountIds }: { orgId: string; accountIds: string[] }) => {
+        if (failures.people) throw new Error("people unavailable");
+        return accountIds
           .filter((id) => NAMES[id])
-          .map((id) => ({ id, name: NAMES[id] as string, avatar: null, active: true })),
+          .map((id) => ({ id, name: NAMES[id] as string, avatar: null, active: true }));
+      },
       search: async ({ query }: { orgId: string; query: string }) =>
         Object.entries(NAMES)
           .filter(([, n]) => n.toLowerCase().includes(query.toLowerCase()))
@@ -49,6 +64,8 @@ export function pageCtx(db: CollabDb, agents: Record<string, { id: string; name:
     ...base,
     ctx,
     agentReads,
+    resolved,
+    failures,
     /** Runs a query of a component as `accountId`. */
     query<T = unknown>(
       orgId: string,

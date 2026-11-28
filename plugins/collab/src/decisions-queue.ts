@@ -253,37 +253,45 @@ export async function runDecisionJob(ctx: DecisionsCtx, job: DecisionJob): Promi
   if (job.step === "notify" && decision.stale_inbox_item_ids.length > 0) {
     await resolveAll(ctx, job.orgId, decision.stale_inbox_item_ids, decision.id);
   }
-  // A gate with several confirmers (a function label several members carry) asks each of them;
-  // the first answer closes the decision and its resolve step resolves every item.
-  const posts: Post[] = [];
+  // Every recipient (each confirmer of a gate several members may confirm) gets their own item;
+  // one already posted for this step (an earlier, interrupted run) is not posted again. The first
+  // answer closes the decision and its resolve step resolves every item.
+  const posts: { account: string | null; post: Post }[] = [];
   if (job.step === "escalate") {
     const post = await escalation(ctx, loaded);
-    if (post) posts.push(post);
+    if (post) posts.push({ account: null, post });
   } else {
-    for (const to of await recipientsOf(db, job.orgId, loaded)) {
-      posts.push(await addresseeItem(db, job.orgId, loaded, job.step === "remind", to));
+    const step = job.step;
+    for (const to of recipientsOf(decision)) {
+      if (decision.inbox_by_account[to]?.[step]) continue;
+      posts.push({
+        account: to,
+        post: await addresseeItem(db, job.orgId, loaded, step === "remind", to),
+      });
     }
   }
-  const inboxItemIds: string[] = [];
-  for (const [i, post] of posts.entries()) {
-    const base =
-      job.step === "notify"
-        ? `${decision.id}${decision.address_gen > 0 ? `-${decision.address_gen}` : ""}`
-        : `${decision.id}-${job.step}`;
+  // The SDK dedupes per account, so each recipient's item carries the step's plain key.
+  const dedupeKey =
+    job.step === "notify"
+      ? `${decision.id}${decision.address_gen > 0 ? `-${decision.address_gen}` : ""}`
+      : `${decision.id}-${job.step}`;
+  const posted: { account: string | null; id: string }[] = [];
+  let failure: unknown;
+  for (const { account, post } of posts) {
     try {
-      inboxItemIds.push(
-        (
-          await ctx.inbox.post({
-            orgId: job.orgId,
-            link: `/p/collab/${PROJECTS}?item=${itemKey(project.key, item.number)}`,
-            // The first recipient keeps the plain key; further confirmers get their own.
-            dedupeKey: i === 0 ? base : `${base}-r${i}`,
-            ...post,
-          })
-        ).itemId,
-      );
+      const { itemId } = await ctx.inbox.post({
+        orgId: job.orgId,
+        link: `/p/collab/${PROJECTS}?item=${itemKey(project.key, item.number)}`,
+        dedupeKey,
+        ...post,
+      });
+      posted.push({ account, id: itemId });
     } catch (err) {
-      if (!permanentInboxRefusal(err)) throw err;
+      if (!permanentInboxRefusal(err)) {
+        // Keep what was posted (the retry skips those recipients), then let the job retry.
+        failure = err;
+        break;
+      }
       ctx.log.warn("collab decision inbox item refused for good; not retried", {
         orgId: job.orgId,
         decisionId: decision.id,
@@ -292,33 +300,49 @@ export async function runDecisionJob(ctx: DecisionsCtx, job: DecisionJob): Promi
       });
     }
   }
-  const marked = await db
-    .updateTable("decisions")
-    .set({
-      [flag]: new Date(),
-      ...(inboxItemIds.length > 0
-        ? {
-            inbox_item_ids: (eb) => eb.fn("array_cat", ["inbox_item_ids", eb.val(inboxItemIds)]),
-          }
-        : {}),
-    })
-    .where("org_id", "=", job.orgId)
-    .where("id", "=", decision.id)
-    .where("state", "=", "open")
-    .where("address_gen", "=", decision.address_gen)
-    .where(flag, "is", null)
-    .returning("id")
-    .executeTakeFirst();
-  if (!marked && inboxItemIds.length > 0) {
+  const step = job.step;
+  const kept = await db.transaction().execute(async (tx) => {
+    const now = await tx
+      .selectFrom("decisions")
+      .selectAll()
+      .where("org_id", "=", job.orgId)
+      .where("id", "=", decision.id)
+      .forUpdate()
+      .executeTakeFirst();
+    if (now?.state !== "open" || now.address_gen !== decision.address_gen || now[flag] !== null) {
+      return false;
+    }
+    const byAccount = { ...now.inbox_by_account };
+    for (const p of posted) {
+      if (p.account && step !== "escalate") {
+        byAccount[p.account] = { ...byAccount[p.account], [step]: p.id };
+      }
+    }
+    await tx
+      .updateTable("decisions")
+      .set({
+        ...(failure === undefined ? { [flag]: new Date() } : {}),
+        inbox_item_ids: [...now.inbox_item_ids, ...posted.map((p) => p.id)],
+        inbox_by_account: JSON.stringify(byAccount),
+      })
+      .where("org_id", "=", job.orgId)
+      .where("id", "=", decision.id)
+      .execute();
+    return true;
+  });
+  // Answered or re-addressed in the meantime: its resolve may have missed these items.
+  if (!kept && posted.length > 0) {
     const now = await load(db, job.orgId, decision.id);
-    // Answered or re-addressed in the meantime: its resolve may have missed this item.
-    if (
-      now &&
-      (now.decision.state !== "open" || now.decision.address_gen !== decision.address_gen)
-    ) {
-      await resolveAll(ctx, job.orgId, inboxItemIds, decision.id);
+    if (now?.decision.state !== "open" || now.decision.address_gen !== decision.address_gen) {
+      await resolveAll(
+        ctx,
+        job.orgId,
+        posted.map((p) => p.id),
+        decision.id,
+      );
     }
   }
+  if (failure !== undefined) throw failure;
 }
 
 /**
@@ -375,21 +399,9 @@ type Post = {
   actions?: InboxAction[];
 };
 
-/**
- * Who a notice or reminder goes to: every confirmer of a gate several members may confirm,
- * otherwise the addressee.
- */
-async function recipientsOf(db: CollabDb, orgId: string, loaded: Loaded): Promise<string[]> {
-  const { decision, item } = loaded;
-  if (decision.kind !== "gate") return [decision.addressee_account_id];
-  const answerers = await answerersOf(db, orgId, decision, item);
-  if (answerers.length <= 1 || !answerers.includes(decision.addressee_account_id)) {
-    return [decision.addressee_account_id];
-  }
-  return [
-    decision.addressee_account_id,
-    ...answerers.filter((a) => a !== decision.addressee_account_id),
-  ];
+/** Who a notice or reminder goes to: the decision's stored recipients (see `readdressOpen`). */
+function recipientsOf(decision: Decision): string[] {
+  return decision.addressees.length > 0 ? decision.addressees : [decision.addressee_account_id];
 }
 
 /** A recipient's item (the first notice, or the reminder at the deadline). */
@@ -443,21 +455,25 @@ async function addresseeItem(
 
 /** The project owner's item a day after the deadline (none when the owner is the addressee). */
 async function escalation(ctx: DecisionsCtx, { decision, item, project }: Loaded) {
-  if (project.owner_account_id === decision.addressee_account_id) return null;
+  const waitingOn = recipientsOf(decision);
+  // The owner asked to answer it is not told twice.
+  if (waitingOn.includes(project.owner_account_id)) return null;
   const key = itemKey(project.key, item.number);
-  let who = decision.addressee_account_id;
+  const names = new Map(waitingOn.map((id) => [id, id]));
   try {
-    const [person] = await ctx.people.get({ orgId: decision.org_id, accountIds: [who] });
-    if (person) who = person.name;
+    for (const person of await ctx.people.get({ orgId: decision.org_id, accountIds: waitingOn })) {
+      names.set(person.id, person.name);
+    }
   } catch {
-    // The id stands in for the name.
+    // The ids stand in for the names.
   }
+  const who = [...names.values()].join(", ");
   return {
     accountId: project.owner_account_id,
     kind: "collab.decision.escalated",
     title: clip(`Unanswered decision on ${key} ${item.title}`, TITLE_CHARS),
     body: clip(
-      `${who} has not answered since the deadline a day ago: ${decision.question}`,
+      `${who} ${waitingOn.length > 1 ? "have" : "has"} not answered since the deadline a day ago: ${decision.question}`,
       BODY_CHARS,
     ),
   };

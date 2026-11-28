@@ -189,6 +189,12 @@ CREATE TABLE IF NOT EXISTS decisions (
   -- The inbox items posted for the decision (the addressee's, the reminder, the escalation), all
   -- resolved once it is answered.
   inbox_item_ids text[] NOT NULL DEFAULT '{}',
+  -- Everyone the decision is addressed to now, sorted: the addressee of a question, every
+  -- confirmer of a gate. A re-address compares this set with the computed one.
+  addressees text[] NOT NULL DEFAULT '{}',
+  -- The inbox items of each recipient by step: { "<accountId>": { "notify": id, "remind": id } }.
+  -- A recipient who leaves the set has theirs resolved; a newcomer gets a notice.
+  inbox_by_account jsonb NOT NULL DEFAULT '{}'::jsonb,
   -- When the addressee's inbox item, the deadline reminder and the escalation to the project owner
   -- were posted: each is posted once (the jobs that post them run at least once).
   notified_at timestamptz,

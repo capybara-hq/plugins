@@ -221,6 +221,7 @@ export async function askDecision(
         kind: "question",
         asker: actorJson(actor),
         addressee_account_id: addressee,
+        addressees: [addressee],
         question,
         options: JSON.stringify(options),
         recommendation: rec ? JSON.stringify({ optionId: rec.optionId, why: rec.why }) : null,

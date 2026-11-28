@@ -63,27 +63,40 @@ const REFUSALS: Readonly<Record<CollabErrorCode, Toast>> = {
 /** Refusals an action words its own way. */
 type Overrides = Partial<Record<CollabErrorCode, Toast>>;
 
-function refusal(error: CollabError, overrides: Overrides = {}): UiActionResult {
+function refusal(
+  error: CollabError,
+  overrides: Overrides = {},
+  invalidate: readonly QueryName[] = ITEMS,
+): UiActionResult {
   const toast = overrides[error.code] ?? REFUSALS[error.code];
   // Whatever refused, the page refetches: what it shows may be what made the action fail.
-  return { toast, invalidate: [...ITEMS] };
+  return { toast, invalidate: [...invalidate] };
 }
 
 /** Runs an action body; a domain refusal becomes a toast. */
 async function refusing(
   body: () => Promise<UiActionResult>,
   overrides: Overrides = {},
+  invalidate: readonly QueryName[] = ITEMS,
 ): Promise<UiActionResult> {
   try {
     const out = await body();
     // A toast is a refusal: the page refetches what it shows.
     return "toast" in out && out.toast && !out.invalidate
-      ? { ...out, invalidate: [...ITEMS] }
+      ? { ...out, invalidate: [...invalidate] }
       : out;
   } catch (error) {
-    if (error instanceof CollabError) return refusal(error, overrides);
+    if (error instanceof CollabError) return refusal(error, overrides, invalidate);
     throw error;
   }
+}
+
+/** {@link refusing} for the project settings and member actions (their queries refetch). */
+function refusingProject(
+  body: () => Promise<UiActionResult>,
+  overrides: Overrides = {},
+): Promise<UiActionResult> {
+  return refusing(body, overrides, PROJECT_QUERIES);
 }
 
 /**
@@ -587,39 +600,98 @@ async function activeMembers(deps: ActionDeps, orgId: string, projectId: string)
   return new Map(rows.map((r) => [r.account_id, r.function_label]));
 }
 
+/** A rule's JSON with sorted keys (jsonb reorders keys, the action builds them its own way). */
+function ruleKey(rule: unknown): string {
+  if (rule === null || rule === undefined) return "null";
+  const o = rule as Record<string, unknown>;
+  return JSON.stringify(
+    Object.keys(o)
+      .sort()
+      .map((k) => [k, o[k]]),
+  );
+}
+const sameRule = (a: unknown, b: unknown) => ruleKey(a) === ruleKey(b);
+
+const KERNEL_UNAVAILABLE = text(
+  "暂时无法核对成员或智能体，请稍后再试。",
+  "Members or agents could not be checked right now. Try again shortly.",
+);
+
 /**
- * Why a gate or default assignment names a target that cannot work, or null: a named person
- * must be an active non-guest member; an agent must be one the named member (or every member
- * with the label) may use.
+ * Why a gate or default assignment that changed names a target that cannot work, or null: a
+ * named person must be an active non-guest member; an agent must be one the named member (or
+ * every member with the label) may use. Unchanged rules are not checked again; people are read
+ * in one call; a failed kernel read refuses the save.
  */
 async function invalidRuleTarget(
   deps: ActionDeps,
   orgId: string,
   projectId: string,
-  statuses: { gate?: GateRule | null; defaultAssignment?: DefaultAssignmentRule | null }[],
+  statuses: {
+    type: string;
+    key: string;
+    gate?: GateRule | null;
+    defaultAssignment?: DefaultAssignmentRule | null;
+  }[],
 ): Promise<Toast | null> {
-  if (!statuses.some((s) => s.gate || s.defaultAssignment)) return null;
+  const stored = await deps.db
+    .selectFrom("statuses as s")
+    .innerJoin("item_types as t", (j) =>
+      j.onRef("t.workflow_id", "=", "s.workflow_id").onRef("t.org_id", "=", "s.org_id"),
+    )
+    .select(["t.key as type", "s.key", "s.gate", "s.default_assignment"])
+    .where("s.org_id", "=", orgId)
+    .where("t.project_id", "=", projectId)
+    .execute();
+  const before = new Map(stored.map((r) => [`${r.type}/${r.key}`, r]));
+  const gates: GateRule[] = [];
+  const rules: DefaultAssignmentRule[] = [];
+  for (const s of statuses) {
+    const old = before.get(`${s.type}/${s.key}`);
+    if (s.gate && !sameRule(s.gate, old?.gate)) gates.push(s.gate);
+    if (s.defaultAssignment && !sameRule(s.defaultAssignment, old?.default_assignment)) {
+      rules.push(s.defaultAssignment);
+    }
+  }
+  if (gates.length === 0 && rules.length === 0) return null;
   const members = await activeMembers(deps, orgId, projectId);
+  const named = [
+    ...gates.flatMap((g) => (g.confirmer === "member" ? [g.accountId] : [])),
+    ...rules.flatMap((r) => (r.accountId ? [r.accountId] : [])),
+  ];
   const memberRefused = text(
     "确认人或默认负责人必须是项目的所有者或成员。",
     "A confirmer or default assignee must be an owner or member of the project.",
   );
-  const active = async (accountId: string) => {
-    if (!members.has(accountId)) return false;
-    const [person] = await deps.ctx.people.get({ orgId, accountIds: [accountId] });
-    return person?.active === true;
-  };
-  for (const s of statuses) {
-    if (s.gate?.confirmer === "member" && !(await active(s.gate.accountId))) return memberRefused;
-    const rule = s.defaultAssignment;
-    if (!rule) continue;
-    if (rule.accountId && !(await active(rule.accountId))) return memberRefused;
+  if (named.some((id) => !members.has(id))) return memberRefused;
+  if (named.length > 0) {
+    let people: { id: string; active: boolean }[];
+    try {
+      people = await deps.ctx.people.get({ orgId, accountIds: [...new Set(named)] });
+    } catch (err) {
+      deps.ctx.log.warn("collab could not read people for project settings", { orgId, err });
+      return KERNEL_UNAVAILABLE;
+    }
+    const active = new Set(people.filter((p) => p.active).map((p) => p.id));
+    if (named.some((id) => !active.has(id))) return memberRefused;
+  }
+  for (const rule of rules) {
     if (!rule.agentId) continue;
     const who = rule.accountId
       ? [rule.accountId]
       : [...members].filter(([, label]) => label === rule.functionLabel).map(([id]) => id);
     for (const id of who) {
-      if (!(await agentUsable(deps, orgId, id, rule.agentId))) {
+      let usable: { id: string }[];
+      try {
+        usable = await deps.ctx.agents.usableBy({ orgId, accountId: id });
+      } catch (err) {
+        deps.ctx.log.warn("collab could not read usable agents for project settings", {
+          orgId,
+          err,
+        });
+        return KERNEL_UNAVAILABLE;
+      }
+      if (!usable.some((a) => a.id === rule.agentId)) {
         return text(
           "默认负责人不能使用这个智能体，请选择他可用的智能体。",
           "The default assignee cannot use this agent. Pick one of the agents they may use.",
@@ -655,7 +727,7 @@ async function settingsSave(deps: ActionDeps, args: UiOrgActionArgs): Promise<Ui
   if (name !== undefined && !name) {
     return { toast: text("项目名称不能为空。", "The project name must not be empty.") };
   }
-  return refusing(async () => {
+  return refusingProject(async () => {
     await requireRole(deps.db, args.orgId, args.accountId, projectId, "owner");
     const invalidTarget = await invalidRuleTarget(deps, args.orgId, projectId, statuses);
     if (invalidTarget) return { toast: invalidTarget, invalidate: [...PROJECT_QUERIES] };
@@ -726,7 +798,7 @@ async function memberAdd(deps: ActionDeps, args: UiOrgActionArgs): Promise<UiAct
     throw new ActionPayloadError("role must be owner, member or guest");
   }
   const functionLabel = nullableString(p, "functionLabel", 50);
-  return refusing(async () => {
+  return refusingProject(async () => {
     await requireRole(deps.db, args.orgId, args.accountId, projectId, "owner");
     const [person] = await deps.ctx.people.get({ orgId: args.orgId, accountIds: [accountId] });
     if (!person?.active) {
@@ -758,7 +830,7 @@ async function memberRemove(deps: ActionDeps, args: UiOrgActionArgs): Promise<Ui
     projectId: "uuid",
     accountId: "id",
   });
-  return refusing(async () => {
+  return refusingProject(async () => {
     await writing(deps, args.orgId, (hooks) =>
       removeMember(deps.db, args.orgId, { accountId: args.accountId }, projectId, accountId, hooks),
     );
@@ -775,7 +847,7 @@ async function memberFunction(deps: ActionDeps, args: UiOrgActionArgs): Promise<
   const { projectId, accountId } = payloadFields(p, { projectId: "uuid", accountId: "id" });
   const functionLabel = nullableString(p, "functionLabel", 50);
   const defaultAgentId = nullableString(p, "defaultAgentId", ID_MAX);
-  return refusing(
+  return refusingProject(
     async () => {
       const self = accountId === args.accountId;
       const need = functionLabel !== undefined || !self ? "owner" : "write";
