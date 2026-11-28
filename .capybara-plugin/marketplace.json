@@ -948,7 +948,7 @@
     },
     {
       "name": "browser",
-      "version": "0.1.0-rc.16",
+      "version": "0.1.0-rc.17",
       "summary": {
         "en": "A real browser in the conversation owner's device for agents: navigate, read and act on pages through tools, with a live view in the conversation panel and takeover by the person",
         "zh": "在对话所有者的设备中为智能体运行真实浏览器：通过工具打开、读取和操作网页，在对话面板中实时查看，并可由本人接管"
@@ -1014,14 +1014,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-browser",
-          "version": "0.1.0-rc.16",
-          "integrity": "sha512-ArZEDw0Gm2YZludBIS94hP22wC8tPPBlEovXzCWfcs57EtNcizHSslLKSqBWhRbKwnc0t2BezYaXtA7xpaKBtQ=="
+          "version": "0.1.0-rc.17",
+          "integrity": "sha512-tiRSjGkTUh0oF5O1owi433fNl3QQ/YZWD4kyC6eUp61NN4h69nSiKAdmpc0KPfle6FjJp0EJs5l6rwQ8YkcESw=="
         }
       }
     },
     {
       "name": "collab",
-      "version": "0.1.0-rc.1",
+      "version": "0.1.0-rc.2",
       "summary": {
         "en": "Project tracker for people and agents: projects, requirements, tasks and bugs with workflows, confirmation steps, decisions and artifacts, assigned to a person and an agent",
         "zh": "人与智能体共用的项目协作：项目、需求、任务和缺陷，带工作流、确认步骤、决策与产物，可同时指派给成员和智能体"
@@ -1105,8 +1105,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-collab",
-          "version": "0.1.0-rc.1",
-          "integrity": "sha512-jv/GRULJ1dTQGpFvu43aCu7KoRBpznwK4bKr2p4YSc0AQp5wA5Mzp1o+SheN6HAhpYKAym/RHSRaa/d5f/pJZw=="
+          "version": "0.1.0-rc.2",
+          "integrity": "sha512-yVEuDhr3+YF+vWCJ6+IFJjL5zYVbBkEyfi+FR9ZlFPw3FT5GDT1JXXsvkCtHGOASzI5uu/8eTV/dmA+wjHAf3w=="
         }
       }
     }
