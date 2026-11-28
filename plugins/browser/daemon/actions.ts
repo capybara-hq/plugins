@@ -1273,7 +1273,25 @@ export class BrowserSession {
   /** Closes a tab on purpose (the agent's or a viewer's close). */
   async closeTab(page: Page): Promise<void> {
     this.closedOnPurpose.add(page);
+    await this.keepAPage();
     await page.close();
+  }
+
+  /**
+   * Opens an unowned blank tab when every page is closing on purpose: Chromium is never left
+   * without a window. A desktop Chromium exits when its last window closes (outside macOS), and
+   * closing a window is where upstream crashes were seen (plugins#307); the daemon can only take
+   * such an exit for a crash: a relaunch, and every viewer's stream cut, so the panel reconnects
+   * instead of showing its empty tree. The blank tab is the start's kind ({@link isStartBlank}):
+   * no list shows it, and the next tab a conversation needs claims it.
+   */
+  private async keepAPage(): Promise<void> {
+    if (this.live().some(([, p]) => !this.closedOnPurpose.has(p))) return;
+    try {
+      this.track(await this.ctx.newPage());
+    } catch {
+      // the browser is going away anyway (a stop, a crash): its close handling takes over
+    }
   }
 
   /** Makes a tab the conversation's active tab (it must own it). */
@@ -1595,6 +1613,7 @@ export class BrowserSession {
       this.claiming.delete(c);
       this.actedSeq.delete(c);
     }
+    if (ids.length > 0) await this.keepAPage();
     await Promise.all(
       ids.map((id) =>
         this.pages

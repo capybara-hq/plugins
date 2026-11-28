@@ -32,6 +32,76 @@ export const ICONS = {
     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>',
 } as const;
 
+/**
+ * The faces named before a font stack's generic family. The host's `--cb-font*` tokens start with
+ * its web fonts, which the sandboxed iframe cannot load, and end on generic families: Chromium on
+ * Windows maps CJK text in `monospace` to the Song face NSimSun (and in `serif` to SimSun). So the
+ * panel names the system faces first: Windows' (Segoe UI, Cascadia Mono, Consolas, Microsoft
+ * YaHei UI) and the CJK faces of macOS and Linux; macOS keeps its own UI faces first.
+ */
+// capybara:allow-module-state read-only constant (the panel page in the browser, not the server)
+const SANS_FACES: readonly string[] = [
+  "-apple-system",
+  "BlinkMacSystemFont",
+  '"Segoe UI"',
+  '"Microsoft YaHei UI"',
+  '"Microsoft YaHei"',
+  '"PingFang SC"',
+  '"Noto Sans CJK SC"',
+  '"Noto Sans SC"',
+];
+// capybara:allow-module-state read-only constant (the panel page in the browser, not the server)
+const MONO_FACES: readonly string[] = [
+  '"SF Mono"',
+  "Menlo",
+  '"Cascadia Mono"',
+  "Consolas",
+  '"Microsoft YaHei UI"',
+  '"Microsoft YaHei"',
+  '"PingFang SC"',
+  '"Noto Sans Mono CJK SC"',
+];
+/** Generic families that always resolve (`ui-*` resolve on macOS only, so faces go after them). */
+// capybara:allow-module-state read-only constant (the panel page in the browser, not the server)
+const GENERIC: ReadonlySet<string> = new Set([
+  "serif",
+  "sans-serif",
+  "monospace",
+  "cursive",
+  "fantasy",
+  "system-ui",
+  "math",
+  "fangsong",
+]);
+
+const familyKey = (f: string) =>
+  f
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .toLowerCase();
+
+/**
+ * A font stack with the system faces ({@link SANS_FACES}, or {@link MONO_FACES} for a monospace
+ * stack) inserted before its first generic family, leaving out the faces it names already.
+ */
+export function withSystemFaces(stack: string): string {
+  const list = stack
+    .split(",")
+    .map((f) => f.trim())
+    .filter((f) => f !== "");
+  const keys = list.map(familyKey);
+  const mono = keys.includes("monospace") || keys.includes("ui-monospace");
+  const faces = (mono ? MONO_FACES : SANS_FACES).filter((f) => !keys.includes(familyKey(f)));
+  if (faces.length === 0) return stack;
+  let at = keys.findIndex((k) => GENERIC.has(k));
+  if (at < 0) at = list.length;
+  return [...list.slice(0, at), ...faces, ...list.slice(at)].join(", ");
+}
+
+/** The panel's stacks before the host's tokens arrive (and where a token is missing). */
+const MONO_STACK = withSystemFaces("ui-monospace, monospace");
+const PROSE_STACK = withSystemFaces("system-ui, sans-serif");
+
 const bone = (style: string) => `<span class="bone" style="${style}"></span>`;
 
 export const PANEL_HTML = `<!doctype html>
@@ -58,7 +128,7 @@ export const PANEL_HTML = `<!doctype html>
   body {
     margin: 0; position: relative; overflow: hidden;
     background: var(--cb-panel-2, Canvas); color: var(--cb-ink, CanvasText);
-    font-family: var(--cb-font, ui-monospace, "SF Mono", Menlo, monospace);
+    font-family: var(--cb-font, ${MONO_STACK});
     font-size: var(--cb-type-body-size, 13px); line-height: var(--cb-type-body-line, 20px);
   }
   /* nothing before the host's tokens and language (init) */
@@ -146,7 +216,7 @@ export const PANEL_HTML = `<!doctype html>
   .warn > .ico { display: inline-flex; flex: none; color: var(--cb-warn, #8F6500); }
   .warn .text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   .warn .title { color: var(--cb-warn, #8F6500); font-weight: 500; overflow-wrap: anywhere; }
-  .warn .body { font-family: var(--cb-font-prose, system-ui, sans-serif); color: var(--cb-muted, #5E5E5A); overflow-wrap: anywhere; }
+  .warn .body { font-family: var(--cb-font-prose, ${PROSE_STACK}); color: var(--cb-muted, #5E5E5A); overflow-wrap: anywhere; }
   .warn .actions { display: flex; gap: 6px; flex: none; }
 
   /* the picture, contained and centred on a neutral ground */
@@ -156,8 +226,8 @@ export const PANEL_HTML = `<!doctype html>
   #view:focus-visible { box-shadow: 0 0 0 2px var(--cb-focus-ring, Highlight), var(--frame-shadow); }
   #flash { position: absolute; width: 24px; height: 24px; margin: -12px 0 0 -12px; border: 2px solid var(--cb-accent, #CC4609); border-radius: 50%; pointer-events: none; }
   .center { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 6px; align-items: center; justify-content: center; padding: 16px; text-align: center; background: var(--ground); }
-  .center h2 { margin: 0; font-size: inherit; font-weight: 600; }
-  .center p { margin: 0; font-family: var(--cb-font-prose, system-ui, sans-serif); color: var(--cb-muted, #5E5E5A); }
+  .center h2 { margin: 0; font-family: var(--cb-font-prose, ${PROSE_STACK}); font-size: inherit; font-weight: 600; }
+  .center p { margin: 0; font-family: var(--cb-font-prose, ${PROSE_STACK}); color: var(--cb-muted, #5E5E5A); }
   .center button { margin-top: 6px; }
   /* short-lived notices float over the picture's bottom edge: they never move it */
   #strips { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
@@ -169,7 +239,7 @@ export const PANEL_HTML = `<!doctype html>
   /* a held page dialog: a box over the picture until it is answered */
   #pdialog { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(360px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: var(--cb-radius-md, 8px); background: var(--cb-raised, #fff); box-shadow: var(--cb-shadow-float, 0 8px 24px rgba(26,26,24,.12)), 0 0 0 1px var(--cb-line-soft, #E8E7E2); }
   #pdialog .kind { margin: 0; color: var(--cb-muted, #5E5E5A); font-size: var(--cb-type-micro-size, 11px); line-height: var(--cb-type-micro-line, 14px); }
-  #pdialog .msg { margin: 0; font-family: var(--cb-font-prose, system-ui, sans-serif); overflow-wrap: anywhere; white-space: pre-wrap; max-height: 9em; overflow: auto; }
+  #pdialog .msg { margin: 0; font-family: var(--cb-font-prose, ${PROSE_STACK}); overflow-wrap: anywhere; white-space: pre-wrap; max-height: 9em; overflow: auto; }
   #pdialog .realm { margin: 0; color: var(--cb-muted, #5E5E5A); overflow-wrap: anywhere; }
   #pdialog input { height: 32px; padding: 0 10px; border: 0; border-radius: var(--radius); box-shadow: inset 0 0 0 1px var(--cb-line, #D9D8D2); background: var(--cb-panel, #fff); }
   #pdialog .actions { display: flex; justify-content: flex-end; gap: 6px; }
