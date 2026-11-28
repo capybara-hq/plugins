@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { blockedMessage, probeProxy, proxyRefusal } from "../../daemon/actions.js";
+import { blockedHost, blockedMessage, probeProxy, proxyRefusal } from "../../daemon/actions.js";
 
 // The device's sandbox proxy answers a refused CONNECT with 403 and its reason as the status
 // phrase (patched @anthropic-ai/sandbox-runtime 0.0.81: `rawDenied`); a proxy without reasons
@@ -51,11 +51,48 @@ describe("the proxy's refusal layer", () => {
   it("names the device's settings and the private addresses apart", () => {
     expect(
       blockedMessage([
-        { host: "a.example", layer: "device" },
-        { host: "intranet.example", layer: "address" },
+        { host: "a.example", port: 443, layer: "device" },
+        { host: "a.example", port: 8443, layer: "device" },
+        { host: "intranet.example", port: 443, layer: "address" },
       ]),
     ).toBe(
       "The device's network settings block a.example. intranet.example resolves to a private or local address on the device, which the browser never reaches from the sandbox.",
+    );
+  });
+
+  it("marks a refused loopback grant host as the loopback class, with its port", () => {
+    expect(blockedHost("127.0.0.1", 3999, "address")).toEqual({
+      host: "127.0.0.1",
+      port: 3999,
+      layer: "address",
+      class: "loopback",
+    });
+    expect(blockedHost("[::1]", 5432, "address")).toMatchObject({ class: "loopback" });
+    expect(blockedHost("localhost", 80, "device")).toEqual({
+      host: "localhost",
+      port: 80,
+      layer: "device",
+    });
+    expect(blockedHost("127.0.0.2", 80, "address")).toEqual({
+      host: "127.0.0.2",
+      port: 80,
+      layer: "address",
+    });
+  });
+
+  it("says a loopback port opens only once approved for the conversation", () => {
+    expect(
+      blockedMessage([{ host: "127.0.0.1", port: 3999, layer: "address", class: "loopback" }]),
+    ).toBe(
+      "127.0.0.1:3999 is a local port on the device, which the browser reaches only after the port is approved for this conversation.",
+    );
+    expect(
+      blockedMessage([
+        { host: "localhost", port: 3000, layer: "address", class: "loopback" },
+        { host: "[::1]", port: 5432, layer: "address", class: "loopback" },
+      ]),
+    ).toBe(
+      "localhost:3000, [::1]:5432 are local ports on the device, which the browser reaches only after the port is approved for this conversation.",
     );
   });
 });

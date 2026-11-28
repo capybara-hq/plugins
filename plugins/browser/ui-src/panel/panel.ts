@@ -1,9 +1,9 @@
 // The browser panel (browser use spec §8): the live view of the agent's browser in the
 // conversation's right panel. It runs in the sandboxed embed iframe, so it talks to the host only
 // through the embed bridge and to the plugin only through relative routes (`stream-ticket`,
-// `network-hosts`, `handoff-answer`) plus the ticket's WebSocket. Every (re)connect rebuilds the
-// whole UI from the daemon's first `state` message; nothing else survives an iframe remount (the
-// opaque-origin sandbox has no usable storage). The host keeps the frame mounted across its full
+// `network-hosts`, `handoff-answer`, `loopback-ports`) plus the ticket's WebSocket. Every
+// (re)connect rebuilds the whole UI from the daemon's first `state` message; nothing else
+// survives an iframe remount (the opaque-origin sandbox has no usable storage). The host keeps the frame mounted across its full
 // mode and tells the panel the mode it draws (`panel-mode` after `init` and on every change).
 // Every viewer is the conversation owner's, so any panel is interactive while the person holds
 // control, whichever panel took it (a compact one takes over inside its drawer, with a takeover
@@ -56,6 +56,18 @@ const EMPTY_POLL_FOR_MS = 30 * 60_000;
 const STRIP_MS = 10_000;
 /** How long an allowed page is opened again on a new connection (a restarted daemon). */
 const PENDING_NAV_MS = 30_000;
+/**
+ * Well-known database ports, named on the loopback strip (the SDK's `LOOPBACK_DATABASE_PORTS`;
+ * the panel bundle does not load the SDK, a test keeps the two equal).
+ */
+export const DATABASE_PORTS: readonly number[] = [5432, 3306, 6379, 27017];
+/**
+ * Clicks on the loopback strip's action are ignored this long after the strip appears or its
+ * port changes: a page can raise the strip at any moment, timed under the person's pointer.
+ */
+export const LOOPBACK_CLICK_GUARD_MS = 500;
+/** How long an unanswered loopback strip stays up. */
+const LOOPBACK_STRIP_MS = 60_000;
 
 export interface Rect {
   x: number;
@@ -183,6 +195,13 @@ export function mountPanel(opts: PanelOptions): void {
   let pausedForHidden = false;
   let blockedHost = "";
   let blockedUrl = "";
+  /** The newest local port refused to the tree (the loopback strip's) and the page to reopen. */
+  let loopback: { port: number; url: string; origin?: string; shownAt: number } | null = null;
+  let loopbackTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The conversation's open local ports (its root's loopback grants), as last read. */
+  let grants: { port: number; database: boolean }[] = [];
+  /** The connection whose first state read the grants (read again on every new connection). */
+  let portsReadOn: Socket | null = null;
   /** The newest pending handoff of the tree (the banner's; its answer echoes its conversation). */
   let pendingHandoff: ViewerHandoff | null = null;
   let sentSize = "";
@@ -265,6 +284,8 @@ export function mountPanel(opts: PanelOptions): void {
     set("allow", "allow");
     set("reconnect", "reconnect");
     set("blocked-label", "blocked");
+    set("loopback-allow", "loopbackAllow");
+    set("ports-label", "portsTitle");
     set("dialog-label", "dialog");
     set("handoff-label", "handoff");
     set("handoff-done", "handoffDone");
@@ -386,11 +407,45 @@ export function mountPanel(opts: PanelOptions): void {
     }
     $("blocked").hidden = blockedHost === "";
     $("blocked-host").textContent = blockedHost;
+    $("loopback").hidden = loopback === null;
+    $("loopback-text").textContent =
+      loopback === null
+        ? ""
+        : (loopback.origin === undefined
+            ? text("loopbackClosed")
+            : text("loopbackAsks").replace("{host}", loopback.origin)
+          ).replace("{port}", String(loopback.port)) +
+          (DATABASE_PORTS.includes(loopback.port) ? text("loopbackDatabase") : "");
+    renderPorts();
     if (!isLive || control !== "user" || viewport.mobile) $("phonehint").hidden = true;
     renderDialogBox();
     renderPermission();
     renderStatus();
     renderLoading();
+  }
+
+  /** A local port as the panel names it (a database port says so). */
+  function portLabel(port: number, database: boolean): string {
+    return `${port}${database ? text("loopbackDatabase") : ""}`;
+  }
+
+  /** The conversation's open local ports, each with its remove; hidden when there is none. */
+  function renderPorts(): void {
+    $("ports").hidden = grants.length === 0;
+    const list = $("ports-list");
+    list.textContent = "";
+    for (const g of grants) {
+      const item = doc.createElement("span");
+      item.className = "port";
+      item.setAttribute("data-port", String(g.port));
+      item.appendChild(doc.createTextNode(portLabel(g.port, g.database)));
+      const remove = doc.createElement("button");
+      remove.type = "button";
+      remove.textContent = text("portsRemove");
+      remove.addEventListener("click", () => void revokePort(g.port));
+      item.appendChild(remove);
+      list.appendChild(item);
+    }
   }
 
   /**
@@ -1026,10 +1081,20 @@ export function mountPanel(opts: PanelOptions): void {
         quiet = false;
         emptySince = undefined;
         applyState(msg);
+        // each connection reads the conversation's open local ports once (a grant elsewhere, an
+        // expiry, a restarted daemon)
+        if (portsReadOn !== sock) {
+          portsReadOn = sock;
+          void readPorts();
+        }
         break;
       case "blocked":
-        blockedHost = msg.host;
-        blockedUrl = msg.url;
+        // a local port is the conversation's to open, never the device list's
+        if (msg.kind === "loopback" && typeof msg.port === "number") showLoopback(msg);
+        else {
+          blockedHost = msg.host;
+          blockedUrl = msg.url;
+        }
         renderChrome();
         break;
       case "dialog":
@@ -1109,9 +1174,7 @@ export function mountPanel(opts: PanelOptions): void {
   }
 
   /**
-   * Allows the blocked host, then opens the blocked page (not a reload: a device that restarts the
-   * browser for the new network comes back with a blank tab, so the page is opened again on the
-   * new connection too).
+   * Allows the blocked host, then opens the blocked page again ({@link reopen}).
    */
   async function allowHost(): Promise<void> {
     const host = blockedHost;
@@ -1135,7 +1198,15 @@ export function mountPanel(opts: PanelOptions): void {
     blockedHost = "";
     blockedUrl = "";
     renderChrome();
-    // the watch state is read-only: the agent opens the page again itself
+    reopen(target);
+  }
+
+  /**
+   * Opens the refused page again after an allow (not a reload: a device that restarts the browser
+   * for the new network comes back with a blank tab, so it is opened again on the new connection
+   * too). The watch state is read-only: the agent opens the page again itself.
+   */
+  function reopen(target: string): void {
     if (!interactive()) return;
     if (target === "") {
       send({ t: "nav", action: "reload" });
@@ -1143,6 +1214,104 @@ export function mountPanel(opts: PanelOptions): void {
     }
     pendingNav = { url: target, sentOn: sock, until: Date.now() + PENDING_NAV_MS };
     send({ t: "nav", url: target });
+  }
+
+  /**
+   * Shows a refused local port on the strip (naming the page that asked, for a subresource). A new
+   * port restarts the click guard; the strip hides itself after a while unanswered.
+   */
+  function showLoopback(msg: { port?: number; url: string; origin?: string }): void {
+    const port = msg.port as number;
+    const origin = typeof msg.origin === "string" && msg.origin !== "" ? msg.origin : undefined;
+    const fresh = loopback === null || loopback.port !== port || loopback.origin !== origin;
+    loopback = {
+      port,
+      url: msg.url,
+      ...(origin === undefined ? {} : { origin }),
+      shownAt: fresh || loopback === null ? Date.now() : loopback.shownAt,
+    };
+    if (loopbackTimer !== undefined) clearTimeout(loopbackTimer);
+    loopbackTimer = setTimeout(() => {
+      loopback = null;
+      renderChrome();
+    }, LOOPBACK_STRIP_MS);
+  }
+
+  /** A loopback-ports request with the embed token (GET reads, POST grants or revokes). */
+  function portsFetch(path: string, method: "GET" | "POST", port?: number): Promise<Response> {
+    return doFetch(path, {
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(port === undefined ? {} : { "content-type": "application/json" }),
+      },
+      ...(port === undefined ? {} : { body: JSON.stringify({ port }) }),
+      credentials: "omit",
+    });
+  }
+
+  /** Reads the conversation's open local ports; a failed read shows none. */
+  async function readPorts(): Promise<void> {
+    let next: { port: number; database: boolean }[] = [];
+    try {
+      const res = await portsFetch("loopback-ports", "GET");
+      const body = (await res.json().catch(() => ({}))) as { ports?: unknown };
+      if (res.ok && Array.isArray(body.ports))
+        next = body.ports.flatMap((g: unknown) => {
+          const v = g as { port?: unknown; database?: unknown } | null;
+          return typeof v?.port === "number" && Number.isInteger(v.port)
+            ? [{ port: v.port, database: v.database === true }]
+            : [];
+        });
+    } catch {
+      next = [];
+    }
+    grants = next;
+    renderPorts();
+  }
+
+  /**
+   * Opens the refused local port for this conversation (the person's click: the kernel grants it
+   * to the conversation's tree, and a pending ask of the agent for it is settled), then opens the
+   * refused page again as after an allow.
+   */
+  async function allowLoopback(): Promise<void> {
+    const refused = loopback;
+    if (refused === null) return;
+    // a strip that just appeared (or changed port) is not clicked yet: see LOOPBACK_CLICK_GUARD_MS
+    if (Date.now() - refused.shownAt < LOOPBACK_CLICK_GUARD_MS) return;
+    try {
+      const res = await portsFetch("loopback-ports", "POST", refused.port);
+      if (!res.ok) {
+        notice("loopbackFailed", await refusalOf(res));
+        return;
+      }
+    } catch {
+      notice("loopbackFailed", "");
+      return;
+    }
+    if (loopback?.port === refused.port) {
+      loopback = null;
+      if (loopbackTimer !== undefined) clearTimeout(loopbackTimer);
+    }
+    renderChrome();
+    void readPorts();
+    reopen(refused.url);
+  }
+
+  /** Closes an open local port of the conversation again. */
+  async function revokePort(port: number): Promise<void> {
+    try {
+      const res = await portsFetch("loopback-ports/revoke", "POST", port);
+      if (!res.ok) {
+        notice("removeFailed", await refusalOf(res));
+        return;
+      }
+    } catch {
+      notice("removeFailed", "");
+      return;
+    }
+    await readPorts();
   }
 
   async function answerHandoff(done: boolean): Promise<void> {
@@ -1249,6 +1418,7 @@ export function mountPanel(opts: PanelOptions): void {
   $("handoff-done").addEventListener("click", () => void answerHandoff(true));
   $("handoff-cancel").addEventListener("click", () => void answerHandoff(false));
   $("allow").addEventListener("click", () => void allowHost());
+  $("loopback-allow").addEventListener("click", () => void allowLoopback());
   $("reconnect").addEventListener("click", () => {
     retried401 = false;
     attempts = 0;

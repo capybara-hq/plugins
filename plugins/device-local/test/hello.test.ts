@@ -251,6 +251,13 @@ describe("hello validation", () => {
     });
   });
 
+  it("keeps loopbackPorts in the stored hello features", async () => {
+    const s = setup();
+    const features = ["networkReport", "projects", "loopbackPorts"];
+    expect(await s.say(hello(null, { features }))).toEqual({ ok: true });
+    expect(s.connections.get(DEVICE)?.features).toEqual(features);
+  });
+
   it("the same hello twice does not call reportChanged the second time", async () => {
     const s = setup();
     await s.install("100");

@@ -39,7 +39,10 @@ export const SERVICE = "browser";
 
 /** What a tool handler needs: the kernel's device access and the daemon's service spec. */
 export interface BrowserDeps {
-  deviceAccess: Pick<DeviceAccessCtx, "ensureService" | "request" | "reportBlockedHosts">;
+  deviceAccess: Pick<
+    DeviceAccessCtx,
+    "ensureService" | "request" | "reportBlockedHosts" | "loopbackPorts"
+  >;
   /** The daemon's service spec (its files are read once per extension instance). */
   serviceSpec: () => Promise<DeviceServiceSpec>;
   /** Where the cause of an unrecognised failure goes (never to the model). */
@@ -300,6 +303,9 @@ export async function runRequest(
     pauseMs = Math.min(pauseMs * 2, RESTART_PAUSE_MAX_MS);
     return !call.signal.aborted;
   };
+  // the body (with the tree's live loopback ports) is reused by the install retries and read
+  // again after a restart
+  let body: Uint8Array | undefined;
   for (let restarts = 0; ; ) {
     let startedAt: string | null;
     try {
@@ -315,12 +321,7 @@ export async function runRequest(
       throw new ToolError(RESTARTING_MESSAGE);
     }
     try {
-      const sent: ToolRequest = {
-        ...req,
-        conversationId: call.conversationId,
-        rootConversationId: call.rootConversationId,
-      };
-      const body = new TextEncoder().encode(JSON.stringify(sent));
+      body ??= await requestBody(deps, call, req);
       reply = parseReply(
         await deps.deviceAccess.request(call, { service: SERVICE, body, timeoutMs }),
       );
@@ -345,6 +346,8 @@ export async function runRequest(
     if (reply.ok || reply.error !== "restart") break;
     if (restarts >= RESTART_ATTEMPTS) throw new ToolError(RESTARTING_MESSAGE);
     restarts++;
+    // a restart may follow a revoke (it changes the service's network): read the set again
+    body = undefined;
     exiting = { startedAt };
     waitUntil = Date.now() + RESTART_WAIT_MS;
     pauseMs = RESTART_PAUSE_FIRST_MS;
@@ -365,12 +368,7 @@ export async function requestIfRunning(
   timeoutMs: number,
 ): Promise<OkReply> {
   assertOwner(call);
-  const sent: ToolRequest = {
-    ...req,
-    conversationId: call.conversationId,
-    rootConversationId: call.rootConversationId,
-  };
-  const body = new TextEncoder().encode(JSON.stringify(sent));
+  const body = await requestBody(deps, call, req);
   let reply: ToolReply;
   try {
     reply = parseReply(
@@ -383,24 +381,151 @@ export async function requestIfRunning(
   return finishReply(deps, call, reply);
 }
 
+/**
+ * The live loopback ports of the call's conversation tree (the kernel's grants held by its root;
+ * none while the tree is unattended). A read that fails closes every port: the daemon's per-tab
+ * check then refuses the tree's loopback requests, which report the port again.
+ */
+async function liveLoopbackPorts(deps: BrowserDeps, call: ToolCallContext): Promise<number[]> {
+  try {
+    const grants = await deps.deviceAccess.loopbackPorts({
+      orgId: call.orgId,
+      conversationId: call.conversationId,
+      accountId: call.accountId,
+      service: SERVICE,
+    });
+    return grants.map((g) => g.port);
+  } catch (e) {
+    deps.log?.warn("browser loopback ports unreadable", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return [];
+  }
+}
+
+/**
+ * A daemon request's body: the operation with the call's conversation, its root and the root's
+ * live loopback ports (read again for every request, so an ended grant closes the port at once).
+ */
+async function requestBody(
+  deps: BrowserDeps,
+  call: ToolCallContext,
+  req: ToolOp,
+): Promise<Uint8Array> {
+  const sent: ToolRequest = {
+    ...req,
+    conversationId: call.conversationId,
+    rootConversationId: call.rootConversationId,
+    loopbackPorts: await liveLoopbackPorts(deps, call),
+  };
+  return new TextEncoder().encode(JSON.stringify(sent));
+}
+
+/** How long a panel's refresh waits for the service to answer again (a grant may restart it). */
+export const LOOPBACK_REFRESH_WAIT_MS = 20_000;
+
+/**
+ * Pushes the conversation tree's live loopback ports to the running daemon outside a tool call
+ * (the person's grant or remove in the panel, a panel opening): an `ifRunning` `loopback_ports`
+ * request, so nothing is started or resumed. A grant changes the service's network and may
+ * restart it: the request is asked again with growing pauses for up to `waitMs` (0: once).
+ * Resolves whether the daemon took the set; never throws (the daemon keeps its saved copy, and
+ * the tree's next tool call sends the set anyway).
+ */
+export async function refreshLoopbackPorts(
+  deps: {
+    deviceAccess: Pick<DeviceAccessCtx, "loopbackPorts" | "request">;
+    log?: BrowserDeps["log"] | undefined;
+  },
+  scope: { orgId: string; accountId: string; conversationId: string },
+  waitMs: number,
+): Promise<boolean> {
+  const signal = AbortSignal.timeout(waitMs + REFRESH_REQUEST_MS);
+  // the panel's own scope as a call: the kernel checks the account owns the conversation
+  const call: ToolCallContext = {
+    ...scope,
+    ownerAccountId: scope.accountId,
+    agentId: "",
+    rootConversationId: scope.conversationId,
+    callId: "browser-panel-loopback",
+    signal,
+  };
+  const until = Date.now() + waitMs;
+  let pauseMs = RESTART_PAUSE_FIRST_MS;
+  for (;;) {
+    let ports: number[];
+    try {
+      // read first: a conversation without a device (or not the account's) refuses here, so
+      // the request below never binds a device to it
+      ports = (await deps.deviceAccess.loopbackPorts({ ...scope, service: SERVICE })).map(
+        (g) => g.port,
+      );
+    } catch {
+      return false;
+    }
+    try {
+      const sent: ToolRequest = {
+        op: "loopback_ports",
+        conversationId: scope.conversationId,
+        rootConversationId: scope.conversationId,
+        loopbackPorts: ports,
+      };
+      const body = new TextEncoder().encode(JSON.stringify(sent));
+      const reply = parseReply(
+        await deps.deviceAccess.request(call, {
+          service: SERVICE,
+          body,
+          timeoutMs: REFRESH_REQUEST_MS,
+          ifRunning: true,
+        }),
+      );
+      if (reply.ok) return true;
+    } catch (e) {
+      if (Date.now() + pauseMs > until || signal.aborted) {
+        deps.log?.warn("browser loopback refresh not delivered", {
+          error: e instanceof Error ? e.message : String(e),
+        });
+        return false;
+      }
+    }
+    if (Date.now() + pauseMs > until || signal.aborted) return false;
+    await pause(pauseMs, signal);
+    pauseMs = Math.min(pauseMs * 2, RESTART_PAUSE_MAX_MS);
+  }
+}
+
+/** How long one refresh request may take. */
+const REFRESH_REQUEST_MS = 5_000;
+
+const isPort = (v: unknown): v is number =>
+  typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 65535;
+
 /** The refused hosts reported, then the ok reply, or the failure reply as an actionable ToolError. */
 function finishReply(deps: BrowserDeps, call: ToolCallContext, reply: ToolReply): OkReply {
-  // each host with the layer the daemon read from the device's proxy: the kernel asks about a
-  // `device` host it can offer and writes the private-address note for an `address` one
+  // each host with its port and the layer the daemon read from the device's proxy: the kernel
+  // asks about a `device` host it can offer, asks for a `loopback` port, and writes the
+  // private-address note for any other `address` one
   const hosts: ServiceBlockedHost[] = Array.isArray(reply.blockedHosts)
     ? reply.blockedHosts.flatMap((h: unknown) => {
         const b = h as Partial<BlockedHost> | null;
         if (typeof b !== "object" || b === null || typeof b.host !== "string" || b.host === "")
           return [];
-        return [{ host: b.host, layer: b.layer === "address" ? "address" : "device" } as const];
+        const layer = b.layer === "address" ? "address" : "device";
+        return [
+          {
+            host: b.host,
+            ...(isPort(b.port) ? { port: b.port } : {}),
+            layer,
+            ...(layer === "address" && b.class === "loopback" ? { class: "loopback" } : {}),
+          } as const,
+        ];
       })
     : [];
   if (hosts.length > 0)
-    deps.deviceAccess.reportBlockedHosts(
-      call,
-      hosts,
-      reply.ok && reply.page !== undefined ? { url: reply.page.url } : {},
-    );
+    deps.deviceAccess.reportBlockedHosts(call, hosts, {
+      ...(reply.ok && reply.page !== undefined ? { url: reply.page.url } : {}),
+      service: SERVICE,
+    });
   if (!reply.ok) {
     const tabs = tabCountOf(reply);
     throw daemonToolError(

@@ -8,6 +8,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import {
   encodeServiceMessage,
   parseConversationDeleted,
+  parseLoopbackPorts,
   parseViewerContext,
   ServiceMessageDecoder,
 } from "@capybara-hq/plugin-sdk";
@@ -36,6 +37,7 @@ import {
 } from "./chromium.js";
 import { restoreCookies, saveCookies } from "./cookie-file.js";
 import { downloadedBytes, installingMessage } from "./install-progress.js";
+import { LoopbackFile } from "./loopback.js";
 import {
   BROWSER_CRASHED_MESSAGE,
   BROWSER_RESTARTED_NOTE,
@@ -164,6 +166,7 @@ const REQUEST_OPS = new Set<string>([
   "wait",
   "screenshot",
   "dialog",
+  "loopback_ports",
 ]);
 
 /** The cap on downloads in progress from BROWSER_DOWNLOAD_MAX_BYTES, else the default. */
@@ -251,6 +254,19 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   let saved = sessionFile.read();
   /** The running browser session, once its launch finished (the tab counts read it). */
   let live: BrowserSession | undefined;
+  /**
+   * The local ports each conversation tree holds, by its root: replaced by every request that
+   * carries `loopbackPorts` (the kernel's live grants, resent whole each time), and kept in
+   * `<state>/loopback-ports.json` so a restart (a grant changes the service's network, which
+   * restarts it) keeps them until the next request or the panel's refresh.
+   */
+  const loopbackFile = new LoopbackFile(opts.stateDir);
+  const loopbackByRoot = loopbackFile.load(clock.now());
+  const setLoopback = (root: string, ports: number[] | undefined) => {
+    if (ports === undefined) loopbackByRoot.delete(root);
+    else loopbackByRoot.set(root, { ports: new Set(ports), at: clock.now() });
+    loopbackFile.save(loopbackByRoot);
+  };
   const state = new DaemonState({
     clock,
     ...(opts.idleMs === undefined ? {} : { idleMs: opts.idleMs }),
@@ -404,6 +420,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         // a pending long wait's watch is its conversation's park
         parks: state,
         singleProcess: plan.build === "chromium-headless-shell",
+        loopbackPorts: (root) => loopbackByRoot.get(root)?.ports,
         workspace: workspace === undefined || workspace === "" ? undefined : workspace,
         downloadsTmp: plan.downloadsTmp,
         downloadMaxBytes: downloadMaxBytes(opts.env),
@@ -488,7 +505,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
             await Promise.all(
               playwrightDownloadHosts(opts.env).map(async (host) => {
                 const layer = await proxyRefusal(proxy, host, 443);
-                return layer === null ? undefined : { host, layer };
+                return layer === null ? undefined : { host, port: 443, layer };
               }),
             )
           ).filter((h) => h !== undefined);
@@ -683,9 +700,24 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     // no compatibility with a plugin server that does not name the conversation (pre-0.1.0)
     if (!namesConversation(raw)) return fail(NO_CONVERSATION_MESSAGE);
     const req = raw as ToolRequest;
+    // the panel's refresh names a conversation, not its tree: the root the daemon knows for it
+    const refresh = req.op === "loopback_ports";
+    const root = refresh
+      ? (state.rootOf(req.conversationId) ?? req.conversationId)
+      : req.rootConversationId;
     const conv = req.conversationId;
-    const deletedIn = () => deletedTree(conv) ?? deletedTree(req.rootConversationId);
+    const deletedIn = () =>
+      deletedTree(conv) ?? deletedTree(req.rootConversationId) ?? deletedTree(root);
+    // a deleted tree's set is never saved again (a refresh read before the deletion)
     if (deletedIn() !== undefined) return fail(CONVERSATION_DELETED_MESSAGE);
+    if (req.loopbackPorts !== undefined || refresh) {
+      try {
+        setLoopback(root, parseLoopbackPorts(req.loopbackPorts ?? [], "loopbackPorts"));
+      } catch (e) {
+        return fail(e instanceof Error ? e.message : String(e));
+      }
+    }
+    if (refresh) return { ok: true, blockedHosts: [] };
     // in use from arrival to reply (queued requests and wait included): adopt is refused meanwhile
     state.requestArrived(conv, req.rootConversationId);
     let reply: ToolReply;
@@ -905,6 +937,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   async function forgetDeleted(conversationId: string): Promise<number> {
     if (!deleted.has(conversationId)) deleted.set(conversationId, clock.now());
     const forgotten = state.forgetTree(conversationId);
+    if (loopbackByRoot.has(conversationId)) setLoopback(conversationId, undefined);
     if (saved !== undefined) saved = withoutTree(saved, conversationId);
     sessionFile.dropTree(conversationId);
     const session =

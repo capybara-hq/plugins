@@ -45,6 +45,8 @@ const canonicalSupport = (s: SandboxPermissionSupport) => {
       openPublic: p.network.openPublic,
       allowlist: p.network.allowlist,
       perOperationHosts: p.network.perOperationHosts,
+      // absent on an older machine's attestation: left out so its revision stays the same
+      ...(p.network.loopbackPorts !== undefined && { loopbackPorts: p.network.loopbackPorts }),
     },
     outsideSandbox: p.outsideSandbox,
     background: p.background,
@@ -58,7 +60,7 @@ const canonicalSupport = (s: SandboxPermissionSupport) => {
  * - the owner ceiling (its sequence and revision, and the facts it gives, blocked or not: the
  *   project reach among them);
  * - the machine (its epoch moves when it is revoked or a new login's machine says hello);
- * - the device directory (mode, roots, home);
+ * - the device directory (mode, roots, home) and whether the machine opens loopback ports;
  * - the instance generation, its binding state, the runtime identity it was installed under (the
  *   environment fingerprint among it) and the permission support stored with it.
  * Times and connection ids are left out: a reconnect of the same machine with the same facts keeps
@@ -77,6 +79,9 @@ function revisionFacts(c: Connection | null, b: Binding | null) {
       mode: c.mode,
       roots: [c.roots.workspace, c.roots.skills, c.roots.tmp],
       home: c.home,
+      // the support's loopback ports follow the feature; absent without it, so the revision of a
+      // machine that never announced it stays what it was
+      ...(c.features.includes("loopbackPorts") && { loopbackPorts: true }),
       owner: owner && {
         state: owner.state,
         sequence: owner.sequence,
@@ -361,22 +366,50 @@ export function supportOf(
     return closedSupport("The machine has not said hello yet; connect it with capybara-device");
   const owner = ownerFactsOf(c.ownerReport);
   const { limitedBy: _attested, ...attested } = b.installed.permissionSupport;
+  // loopback ports follow the hello feature only: a machine's own claim is never reported
+  const { loopbackPorts: _claimed, ...attestedNetwork } = attested.network;
   const ownerOpen = owner.state === "report" && owner.network === "open";
   // a crossing the machine could give but the owner's ceiling (or its missing facts) keeps closed
   // names the owner, so the kernel says who changes it
+  const outsideSandbox = attested.outsideSandbox && owner.outsideSandbox;
+  const loopback = loopbackSupportOf(c, outsideSandbox);
   const limitedBy = {
     ...(attested.outsideSandbox && !owner.outsideSandbox && { outsideSandbox: "owner" as const }),
     ...(attested.network.openPublic && !ownerOpen && { openPublic: "owner" as const }),
+    ...(loopback === "device-update" && { loopbackPorts: loopback }),
   };
   return parseSandboxPermissionSupport({
     ...attested,
     // never wider than the owner allows now (a ceiling change since the binding narrows it)
-    outsideSandbox: attested.outsideSandbox && owner.outsideSandbox,
-    // the open public internet only while the owner's sandbox network is open (an allowlist, or
-    // blocked or missing facts, narrow every command's egress on the machine)
-    network: { ...attested.network, openPublic: attested.network.openPublic && ownerOpen },
+    outsideSandbox,
+    network: {
+      ...attestedNetwork,
+      // the open public internet only while the owner's sandbox network is open (an allowlist,
+      // or blocked or missing facts, narrow every command's egress on the machine)
+      openPublic: attested.network.openPublic && ownerOpen,
+      ...(typeof loopback === "boolean" && { loopbackPorts: loopback }),
+    },
     ...(Object.keys(limitedBy).length > 0 && { limitedBy }),
   });
+}
+
+/**
+ * Whether the machine opens granted loopback ports to its device services
+ * (`network.loopbackPorts`), given whether a call may run outside the sandbox there now:
+ * - a machine announcing the `loopbackPorts` hello feature (capybara-device announces it only on
+ *   macOS in OS mode, where its service launcher applies the ports) opens them exactly while a
+ *   call may run outside the sandbox (the owner's ceiling included);
+ * - an OS-mode macOS machine without it runs an older capybara-device (`device-update`). The hello
+ *   names no operating system, so macOS is told by the owner's home under `/Users`;
+ * - any other machine never opens them: undefined, the support stays as it was before the feature.
+ */
+function loopbackSupportOf(
+  c: Connection,
+  outsideSandbox: boolean,
+): boolean | "device-update" | undefined {
+  if (c.features.includes("loopbackPorts")) return outsideSandbox;
+  if (c.mode === "os" && c.home?.startsWith("/Users/")) return "device-update";
+  return undefined;
 }
 
 /**

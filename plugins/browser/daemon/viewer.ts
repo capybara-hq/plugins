@@ -615,7 +615,14 @@ export class ViewerSession {
         this.choice = this.browser.activeTabOf(e.conversationId);
       this.queueState();
     } else if (e.root !== this.root) return;
-    else if (e.type === "blocked") this.send({ t: "blocked", host: e.host, url: e.url });
+    else if (e.type === "blocked")
+      this.send({
+        t: "blocked",
+        host: e.host,
+        url: e.url,
+        ...(e.kind === "loopback" ? { port: e.port, kind: e.kind } : {}),
+        ...(e.kind === "loopback" && e.origin !== undefined ? { origin: e.origin } : {}),
+      });
     else if (e.type === "permission")
       this.send({
         t: "permission",

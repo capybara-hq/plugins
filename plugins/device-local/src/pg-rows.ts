@@ -15,7 +15,11 @@ type Row = Record<string, unknown>;
 
 const HASH = /^[a-f0-9]{64}$/;
 // capybara:allow-module-state a frozen list of the protocol's known features, never written
-const FEATURES: readonly DeviceFeature[] = Object.freeze(["networkReport", "projects"]);
+const FEATURES: readonly DeviceFeature[] = Object.freeze([
+  "networkReport",
+  "projects",
+  "loopbackPorts",
+]);
 
 /** Values a json column gives back: pg parses jsonb itself, a string is parsed here. */
 const json = (v: unknown): unknown => (typeof v === "string" ? JSON.parse(v) : v);

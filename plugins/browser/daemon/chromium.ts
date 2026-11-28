@@ -319,6 +319,15 @@ const PLAYWRIGHT_DISABLED_FEATURES = [
 // capybara:allow-module-state read-only constant (device service process, not the kernel)
 const DISABLED_FEATURES = [...PLAYWRIGHT_DISABLED_FEATURES, "AcceptCHFrame"];
 
+/**
+ * Whether loopback is sent through the proxy (`<-loopback>`, Playwright's own rule for its proxy
+ * option): unless the bypass list names a loopback host itself.
+ */
+function proxiesLoopback(bypass: readonly string[]): boolean {
+  const loopback = ["localhost", "127.0.0.1", "::1", "[::]", "[::1]", "<loopback>", "<-loopback>"];
+  return !bypass.some((h) => loopback.includes(h));
+}
+
 /** The launch for a state directory and environment (pure apart from the browsers cache check). */
 export function chromiumLaunchPlan(
   opts: {
@@ -354,8 +363,11 @@ export function chromiumLaunchPlan(
     if (tmp !== undefined) env = { MAC_CHROMIUM_TMPDIR: tmp };
   }
   const proxy = envValue(opts.env, "HTTPS_PROXY") ?? envValue(opts.env, "HTTP_PROXY");
-  // Chromium sends loopback (localhost, 127.0.0.1, [::1]) direct, never through the proxy; the
-  // provider's network rules keep the device's host services closed.
+  // Loopback (localhost, 127.0.0.1, [::1]) goes through the proxy like every other host, where
+  // the device's network rules keep a port closed until a conversation is granted it (and the
+  // session's per-tab check keeps it to that conversation's tree). Chromium itself would send
+  // loopback direct: Playwright adds `<-loopback>` for its own proxy option (credentials), and the
+  // flag form below adds it too, both unless NO_PROXY names a loopback host.
   let proxyAuth: LaunchPlan["proxyAuth"];
   if (proxy !== undefined) {
     const noProxy = envValue(opts.env, "NO_PROXY");
@@ -378,7 +390,8 @@ export function chromiumLaunchPlan(
       };
     } else {
       args.push(`--proxy-server=${proxy}`);
-      if (bypass.length > 0) args.push(`--proxy-bypass-list=${bypass.join(";")}`);
+      const rules = proxiesLoopback(bypass) ? [...bypass, "<-loopback>"] : bypass;
+      if (rules.length > 0) args.push(`--proxy-bypass-list=${rules.join(";")}`);
     }
   }
   return {

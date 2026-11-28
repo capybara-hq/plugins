@@ -60,7 +60,7 @@ function fake(answer: (req: ToolRequest) => ToolReply | Error) {
       },
       async request(_call, req) {
         const body = JSON.parse(new TextDecoder().decode(req.body)) as ToolRequest;
-        const { conversationId, rootConversationId, ...op } = body;
+        const { conversationId, rootConversationId, loopbackPorts: _l, ...op } = body;
         sent.push({
           op: op as ToolOp,
           conversationId,
@@ -74,6 +74,9 @@ function fake(answer: (req: ToolRequest) => ToolReply | Error) {
         return new TextEncoder().encode(JSON.stringify(a));
       },
       reportBlockedHosts() {},
+      async loopbackPorts() {
+        return [];
+      },
     },
     serviceSpec: async () => SPEC,
   };
