@@ -133,7 +133,7 @@ export function createBailianProvider(
 /** Alibaba Cloud Model Studio (Bailian) model provider plugin. */
 export default defineExtension({
   name: "bailian",
-  version: "0.1.0-rc.14",
+  version: "0.1.0-rc.15",
   sdk: "^0.1.0-rc.64",
   provides: [MODEL_PROVIDER_EXTENSION_POINT_V2],
   permissions: {

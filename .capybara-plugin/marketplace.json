@@ -202,7 +202,7 @@
     },
     {
       "name": "openai-compatible",
-      "version": "0.1.0-rc.15",
+      "version": "0.1.0-rc.16",
       "summary": {
         "en": "Model provider (model-provider@2) for Chat Completions-compatible services (vLLM, DeepSeek, Qwen, ...) using the official openai SDK"
       },
@@ -223,8 +223,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-openai-compatible",
-          "version": "0.1.0-rc.15",
-          "integrity": "sha512-GwDNf+46SwFdDOodWGJokorOWQCvO+0QJx5NhsXChWCnpezmLFiXxgmIuG2V1KNQnRSCvH1SJBUE5EsOTFRvKA=="
+          "version": "0.1.0-rc.16",
+          "integrity": "sha512-a0A0cFcv6gcf8Pa4GxYYrc7algrOxE+VlnzIvZo2z58ckZWwAoLXcj2USAcBrZRLRLN11mTmT7QwWfaKia1G+A=="
         }
       }
     },
@@ -378,7 +378,7 @@
     },
     {
       "name": "bailian",
-      "version": "0.1.0-rc.14",
+      "version": "0.1.0-rc.15",
       "summary": {
         "en": "Model provider (model-provider@2) for Alibaba Cloud Model Studio (Bailian) chat, embedding and image generation models",
         "zh": "阿里云百炼对话、嵌入与图片生成模型（model-provider@2）"
@@ -415,14 +415,14 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-bailian",
-          "version": "0.1.0-rc.14",
-          "integrity": "sha512-m1e6FaD0ouHq/2vJkyQPyj3pz4PH7QpYNRlftOJYBaKve8EqKGz/uH44UGBtI+tROmDhdnZ5xn3FFlyyQIYCkA=="
+          "version": "0.1.0-rc.15",
+          "integrity": "sha512-Khi4XEy5gdyOfWEObqixyMYunF8eGwqewRvay5t/k7cYeCORsrHx7pVqti2/Uubf//oAM7hLLUMygRSiQo0uEw=="
         }
       }
     },
     {
       "name": "deepseek",
-      "version": "0.1.0-rc.13",
+      "version": "0.1.0-rc.14",
       "summary": {
         "en": "Model provider (model-provider@2) for DeepSeek chat models through the Chat Completions API",
         "zh": "DeepSeek 对话模型（model-provider@2），通过 Chat Completions API 调用"
@@ -445,8 +445,8 @@
       "source": {
         "npm": {
           "package": "@capybara-hq/plugin-deepseek",
-          "version": "0.1.0-rc.13",
-          "integrity": "sha512-i6cPL8gTGCvPRdC5UzlKnJdYjrGfPUQHrpdJDp8q8cekMu6GReJQHBFb5dt3U+zlUfOX75IwoIlTPfeJwr/ACg=="
+          "version": "0.1.0-rc.14",
+          "integrity": "sha512-+kWGoKIzTanvC/PyKZGsEg8ZqjoV11W/ynAXekCaFnH4QTZ8FrRZrQdSDtARyyU73EfNNiEV2V8dUVxvemhS/w=="
         }
       }
     },
