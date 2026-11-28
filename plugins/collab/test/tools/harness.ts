@@ -21,6 +21,8 @@ export interface Harness {
   specs: Map<string, ToolSpec>;
   /** What the tools emitted through `ctx.triggers.emit`. */
   emitted: { type: string; cause: unknown }[];
+  /** The work conversations `ctx.conversations.bySubject` returns, by item id. */
+  work: Map<string, string[]>;
   /** Calls a tool as `call` (an agent in a conversation of `call.ownerAccountId`). */
   run(
     name: string,
@@ -33,6 +35,7 @@ export interface Harness {
 export function toolHarness(db: CollabDb, agents: UsableAgents, people: People): Harness {
   const registered = new Map<string, { spec: ToolSpec; handler: ToolHandler }>();
   const emitted: { type: string; cause: unknown }[] = [];
+  const work = new Map<string, string[]>();
   const ctx = {
     db,
     tools: {
@@ -43,6 +46,16 @@ export function toolHarness(db: CollabDb, agents: UsableAgents, people: People):
     agents: {
       usableBy: async ({ accountId }: { orgId: string; accountId: string }) =>
         (agents[accountId] ?? []).map((a) => ({ ...a, avatar: null })),
+    },
+    conversations: {
+      bySubject: async ({ subject }: { orgId: string; subject: { kind: string; id: string } }) =>
+        (subject.kind === "item" ? (work.get(subject.id) ?? []) : []).map((id) => ({
+          id,
+          ownerAccountId: "x",
+          agentId: "x",
+          state: "idle",
+          lastActivityAt: new Date().toISOString(),
+        })),
     },
     people: {
       get: async ({ accountIds }: { orgId: string; accountIds: string[] }) =>
@@ -66,6 +79,7 @@ export function toolHarness(db: CollabDb, agents: UsableAgents, people: People):
   return {
     specs,
     emitted,
+    work,
     async run(name, input, call) {
       const tool = registered.get(name);
       if (!tool) throw new Error(`no tool ${name}`);

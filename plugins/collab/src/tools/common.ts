@@ -1,11 +1,11 @@
-import type {
-  ExtensionContext,
-  InputRequired,
-  ToolCallContext,
-  ToolHandler,
-  ToolResult,
+import {
+  type ExtensionContext,
+  type InputRequired,
+  type ToolCallContext,
+  ToolError,
+  type ToolHandler,
+  type ToolResult,
 } from "@capybara-hq/plugin-sdk";
-import { sql } from "kysely";
 import { canSee } from "../domain/access.js";
 import { CollabError } from "../domain/errors.js";
 import { emitting } from "../events/emitter.js";
@@ -23,12 +23,17 @@ export interface ToolDeps {
 const ITEM_KEY = /^([A-Z][A-Z0-9]{1,9})-([1-9][0-9]{0,8})$/;
 
 /**
- * The person a tool acts as: the conversation's owner (the run's trigger account can differ, e.g.
- * an automation started for someone else). The tool sees only that person's projects.
+ * The person a tool acts as. `guarded` refuses runs whose trigger account is not the
+ * conversation's owner, so the two are one account here; the tool sees only their projects.
  */
 export function personOf(call: ToolCallContext): string {
   return call.ownerAccountId ?? call.accountId;
 }
+
+/** The refusal of a run started by someone other than the conversation's owner. */
+const FOREIGN_RUN =
+  "This run was started by another member than the conversation's owner; collab tools act only " +
+  "for the conversation's owner. Ask the owner to run it.";
 
 /** The actor a tool write records: the person, and the agent acting for them in this conversation. */
 export function actorOf(call: ToolCallContext): Actor {
@@ -57,6 +62,11 @@ export function guarded(
   ) => Promise<ToolResult | InputRequired>,
 ): ToolHandler {
   return async (input, call) => {
+    // Same rule as the kernel's device access: a tool acts for exactly one account, so a run
+    // whose trigger account differs from the conversation's owner gets no collab tool.
+    if (call.ownerAccountId && call.ownerAccountId !== call.accountId) {
+      throw new ToolError(FOREIGN_RUN);
+    }
     try {
       return await handler((input ?? {}) as Record<string, unknown>, call);
     } catch (error) {
@@ -120,35 +130,24 @@ export async function projectByKey(
 }
 
 /**
- * Refuses a write by an agent that executed the item for this person and no longer does (spec
- * §6.1: its run finishes the turn, its next write fails). An agent that never executed the item
- * may still write (a person's helper commenting or filing a link).
+ * Refuses a write from the item's work conversation once its pair moved on (spec §6.1: the run
+ * finishes its turn, its next write fails). The work conversation is one whose subject is the
+ * item (`ctx.conversations.bySubject`); a sub-agent counts through its root conversation. Writes
+ * from any other conversation are ordinary member writes.
  */
 export async function assertStillAssigned(
-  db: CollabDb,
-  orgId: string,
+  deps: ToolDeps,
   call: ToolCallContext,
   item: Item,
 ): Promise<void> {
   const person = personOf(call);
   if (item.responsible_account_id === person && item.executing_agent_id === call.agentId) return;
-  const was = await db
-    .selectFrom("activity")
-    .select("id")
-    .where("org_id", "=", orgId)
-    .where("item_id", "=", item.id)
-    .where("kind", "=", "assigned")
-    .where((eb) =>
-      eb.or(
-        ["from", "to"].map(
-          (side) =>
-            sql<boolean>`(detail -> ${side} ->> 'agentId') = ${call.agentId} and (detail -> ${side} ->> 'accountId') = ${person}`,
-        ),
-      ),
-    )
-    .limit(1)
-    .executeTakeFirst();
-  if (was) {
+  const conversation = call.rootConversationId || call.conversationId;
+  const work = await deps.ctx.conversations.bySubject({
+    orgId: call.orgId,
+    subject: { kind: "item", id: item.id },
+  });
+  if (work.some((c) => c.id === conversation)) {
     throw new CollabError(
       "no_longer_assigned",
       "You are no longer assigned to this item: it was reassigned while you were working.",

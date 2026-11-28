@@ -4,7 +4,7 @@ import { TOOL_KEYS } from "../../src/constants.js";
 import { assign } from "../../src/domain/assignment.js";
 import { createProject } from "../../src/domain/projects.js";
 import type { CollabDb } from "../../src/store/db.js";
-import { domainDb, ENGINEER, OWNER, QA, teamProject } from "../domain/setup.js";
+import { domainDb, ENGINEER, GUEST, OWNER, QA, teamProject } from "../domain/setup.js";
 import { confirmed, errorOf, type Harness, text, toolHarness, versionIn } from "./harness.js";
 
 let db: CollabDb;
@@ -181,30 +181,96 @@ describe("collab tools", () => {
         pm(org),
       ),
     );
-    text(await tools.run("item_comment", { key, body: "on it" }, pm(org)));
-    // The owner, a person, hands it to the engineer while the agent's run continues.
+    // The PM agent works on it in its item conversation (an automation's subject conversation).
     const item = await db
       .selectFrom("items")
       .selectAll()
       .where("org_id", "=", org)
       .executeTakeFirstOrThrow();
+    tools.work.set(item.id, ["conv-work"]);
+    const inWork = { ...pm(org), conversationId: "conv-work", rootConversationId: "conv-work" };
+    text(await tools.run("item_comment", { key, body: "on it" }, inWork));
+    // The owner, a person, hands it to the engineer while the agent's run continues.
     await assign(db, org, OWNER, item.id, versionIn(mine), {
       responsibleAccountId: ENGINEER.accountId,
       executingAgentId: "agent-eng",
     });
-    const err = await errorOf(tools.run("item_comment", { key, body: "done" }, pm(org)));
+    const err = await errorOf(tools.run("item_comment", { key, body: "done" }, inWork));
     expect(err).toMatch(/no longer assigned/i);
     expect(
       await errorOf(
-        tools.run(
-          "item_update",
-          { key, version: item.version + 2, patch: { title: "x" } },
-          pm(org),
-        ),
+        tools.run("item_update", { key, version: item.version + 2, patch: { title: "x" } }, inWork),
       ),
     ).toMatch(/no longer assigned/i);
+    // A sub-agent of that run counts through its root conversation.
+    const sub = { ...inWork, conversationId: "conv-sub" };
+    expect(await errorOf(tools.run("item_comment", { key, body: "sub" }, sub))).toMatch(
+      /no longer assigned/i,
+    );
     // Reading still works.
-    expect(text(await tools.run("item_get", { key }, pm(org)))).toContain("Responsible: Zhang");
+    expect(text(await tools.run("item_get", { key }, inWork))).toContain("Responsible: Zhang");
+    // The same pair in another conversation writes as an ordinary member.
+    const other = { ...pm(org), conversationId: "conv-other", rootConversationId: "conv-other" };
+    expect(text(await tools.run("item_comment", { key, body: "fyi" }, other))).toContain(
+      "Commented",
+    );
+  });
+
+  it("refuses a run started by someone other than the conversation's owner", async () => {
+    const org = "org-foreign-run";
+    await teamProject(db, org, "FRN");
+    const call = { ...pm(org), accountId: ENGINEER.accountId };
+    for (const [name, input] of [
+      ["project_list", {}],
+      ["item_create", { project: "FRN", type: "task", title: "x" }],
+    ] as const) {
+      expect(await errorOf(tools.run(name, input, call))).toMatch(/conversation's owner/);
+    }
+    const count = await db
+      .selectFrom("items")
+      .select((eb) => eb.fn.countAll<string>().as("n"))
+      .where("org_id", "=", org)
+      .executeTakeFirstOrThrow();
+    expect(Number(count.n)).toBe(0);
+  });
+
+  it("item_create with another responsible asks; decline creates nothing, confirm creates", async () => {
+    const org = "org-create-ask";
+    await teamProject(db, org, "CRA");
+    const input = { project: "CRA", type: "task", title: "Fix login", responsible: "Zhang" };
+    const asked = (await tools.run("item_create", input, pm(org))) as InputRequired;
+    expect(asked.kind).toBe("input_required");
+    expect(JSON.stringify(asked.form)).toContain(
+      'Create task \\"Fix login\\" in CRA assigned to Zhang and their agent Engineer agent?',
+    );
+    const declined = await tools.run("item_create", input, {
+      ...pm(org),
+      resume: confirmed(asked.state, false),
+    });
+    expect(text(declined)).toMatch(/not created/i);
+    expect(await errorOf(tools.run("item_get", { key: "CRA-1" }, pm(org)))).toMatch(/not found/i);
+    const asked2 = (await tools.run("item_create", input, pm(org))) as InputRequired;
+    const created = text(
+      await tools.run("item_create", input, { ...pm(org), resume: confirmed(asked2.state, true) }),
+    );
+    expect(created).toContain("Created CRA-1");
+    const got = text(await tools.run("item_get", { key: "CRA-1" }, pm(org)));
+    expect(got).toContain("Responsible: Zhang");
+    expect(got).toContain("Engineer agent");
+  });
+
+  it("a guest's write through a tool is refused", async () => {
+    const org = "org-guest-tool";
+    await teamProject(db, org, "GTL");
+    text(await tools.run("item_create", { project: "GTL", type: "task", title: "t" }, pm(org)));
+    const guest = { orgId: org, ownerAccountId: GUEST.accountId, agentId: "agent-g" };
+    expect(text(await tools.run("item_get", { key: "GTL-1" }, guest))).toContain("GTL-1");
+    expect(await errorOf(tools.run("item_comment", { key: "GTL-1", body: "hi" }, guest))).toMatch(
+      /Guests can read/,
+    );
+    expect(
+      await errorOf(tools.run("item_create", { project: "GTL", type: "task", title: "g" }, guest)),
+    ).toMatch(/Guests can read/);
   });
 
   it("item_transition into a gate reports waiting", async () => {

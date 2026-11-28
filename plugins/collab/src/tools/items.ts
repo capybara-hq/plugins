@@ -758,7 +758,10 @@ export function registerItemTools(deps: ToolDeps): void {
         );
       } else {
         // The first status's default assignment, applied here so a default agent the member can
-        // no longer use is dropped instead of assigned (the domain cannot ask the kernel).
+        // no longer use is dropped instead of assigned (the domain cannot ask the kernel). It is
+        // not confirmed, like a transition's handoff: both are configured by the project owner,
+        // and only a responsible the agent chose asks. The recipient's acceptance rule (auto /
+        // confirm / off) and the kernel's loop guards bound the fan-out.
         const statuses = await statusesForType(db, call.orgId, project.id, type);
         const handoff = await resolveDefaultAssignment(
           db,
@@ -812,7 +815,7 @@ export function registerItemTools(deps: ToolDeps): void {
     guarded(async (input, call) => {
       const person = personOf(call);
       const { item, project } = await itemByKey(db, call.orgId, person, str(input, "key"));
-      await assertStillAssigned(db, call.orgId, call, item);
+      await assertStillAssigned(deps, call, item);
       const raw = (input.patch ?? {}) as Record<string, unknown>;
       const patch: ItemPatch = {};
       if (typeof raw.title === "string") patch.title = raw.title;
@@ -843,7 +846,7 @@ export function registerItemTools(deps: ToolDeps): void {
     guarded(async (input, call) => {
       const person = personOf(call);
       const { item, project } = await itemByKey(db, call.orgId, person, str(input, "key"));
-      await assertStillAssigned(db, call.orgId, call, item);
+      await assertStillAssigned(deps, call, item);
       const to = str(input, "to");
       const out = await writing(deps, call, (actor) =>
         transition(db, call.orgId, actor, item.id, int(input, "version"), to),
@@ -886,7 +889,7 @@ export function registerItemTools(deps: ToolDeps): void {
     guarded(async (input, call) => {
       const person = personOf(call);
       const { item, project } = await itemByKey(db, call.orgId, person, str(input, "key"));
-      await assertStillAssigned(db, call.orgId, call, item);
+      await assertStillAssigned(deps, call, item);
       const key = keyOf(project.key, item);
       const version = int(input, "version");
       let target: Target | null;
@@ -936,7 +939,7 @@ export function registerItemTools(deps: ToolDeps): void {
     guarded(async (input, call) => {
       const person = personOf(call);
       const { item, project } = await itemByKey(db, call.orgId, person, str(input, "key"));
-      await assertStillAssigned(db, call.orgId, call, item);
+      await assertStillAssigned(deps, call, item);
       await writing(deps, call, (actor) =>
         comment(db, call.orgId, actor, item.id, str(input, "body")),
       );
@@ -950,7 +953,7 @@ export function registerItemTools(deps: ToolDeps): void {
     guarded(async (input, call) => {
       const person = personOf(call);
       const from = await itemByKey(db, call.orgId, person, str(input, "key"));
-      await assertStillAssigned(db, call.orgId, call, from.item);
+      await assertStillAssigned(deps, call, from.item);
       const to = await itemByKey(db, call.orgId, person, str(input, "to"));
       const kind = str(input, "kind") as LinkKind;
       await writing(deps, call, (actor) =>
@@ -970,7 +973,7 @@ export function registerItemTools(deps: ToolDeps): void {
     guarded(async (input, call) => {
       const person = personOf(call);
       const { item, project } = await itemByKey(db, call.orgId, person, str(input, "key"));
-      await assertStillAssigned(db, call.orgId, call, item);
+      await assertStillAssigned(deps, call, item);
       const artifact = await writing(deps, call, (actor) =>
         attachArtifact(db, call.orgId, actor, item.id, {
           kind: str(input, "kind"),
