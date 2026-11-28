@@ -1545,6 +1545,35 @@ describe("tab ownership", () => {
     expect($(s, "empty-title").textContent).toBe("智能体尚未在此对话中打开网页");
   });
 
+  it("a stream that ends while the tree's empty state shows reconnects behind it, no skeleton", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const s = setup({ locale: "zh" });
+    const sock = await live(s, state({ tabs: [], control: "user" }));
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+    for (const code of [1006, 1012]) {
+      s.sock().drop(code);
+      await vi.advanceTimersByTimeAsync(0);
+      // reconnecting: the empty state stays, with its text
+      expect(($(s, "skeleton") as HTMLElement).hidden).toBe(true);
+      expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+      expect($(s, "empty-title").textContent).toBe("智能体尚未在此对话中打开网页");
+      await vi.advanceTimersByTimeAsync(16_000);
+      const next = s.sock();
+      expect(next).not.toBe(sock);
+      next.open();
+      next.push(state({ tabs: [], control: "user" }));
+      expect(($(s, "skeleton") as HTMLElement).hidden).toBe(true);
+      expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+    }
+    // a tab after the reconnect: the empty state holds until its first frame, then the live panel
+    s.sock().push(state({ control: "user" }));
+    expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
+    s.sock().pushFrame(1);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(($(s, "empty") as HTMLElement).hidden).toBe(true));
+    expect(($(s, "skeleton") as HTMLElement).hidden).toBe(true);
+  });
+
   it("the tree's empty state without other conversations offers no menu (zh)", async () => {
     const s = setup({ locale: "zh" });
     await live(s, state({ tabs: [] }));

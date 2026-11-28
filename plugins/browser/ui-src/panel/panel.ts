@@ -189,6 +189,8 @@ export function mountPanel(opts: PanelOptions): void {
   let image: CanvasImageSource | null = null;
   /** The layer the panel shows now (see `renderLoading`). */
   let layer: "idle" | "skeleton" | "app" = "skeleton";
+  /** The idle layer shows the tree's empty state (also while a reconnect from it runs). */
+  let treeIdle = false;
   /** The page's viewport (the daemon's `state.viewport`): input and the picture follow it. */
   let viewport: ViewerViewport = { width: VIEWPORT.width, height: VIEWPORT.height, mobile: false };
   /** The held dialog the box shows (its fields keep what the person typed across states). */
@@ -497,7 +499,9 @@ export function mountPanel(opts: PanelOptions): void {
    * - `app`: the live panel, once the browser's state and its first frame are there.
    * A browser that comes up from the idle state (a quiet look found it) keeps the idle state until
    * its first frame and then switches once to the live panel, as from the skeleton; so does a tree
-   * that gets its first tab while its empty state shows (an idle layer too).
+   * that gets its first tab while its empty state shows (an idle layer too). A reconnect from the
+   * tree's empty state (a stream that ended, a hidden tab coming back) keeps that state, not the
+   * skeleton, until the new connection says otherwise.
    */
   function renderLoading(): void {
     const idleMode = mode === "empty" || mode === "offline" || mode === "error" || treeEmpty();
@@ -505,7 +509,10 @@ export function mountPanel(opts: PanelOptions): void {
     if (idleMode) next = "idle";
     else if (mode === "live" && image !== null) next = "app";
     else if (mode === "live" && layer === "idle") next = "idle";
+    // a reconnect from the tree's empty state keeps showing it (there is no page to wait for)
+    else if (mode === "connecting" && layer === "idle" && treeIdle) next = "idle";
     else next = "skeleton";
+    treeIdle = next === "idle" && (treeEmpty() || (treeIdle && !idleMode));
     layer = next;
     $("app").toggleAttribute("data-loading", next === "skeleton");
     $("app").toggleAttribute("data-idle", next === "idle");
