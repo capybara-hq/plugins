@@ -13,6 +13,7 @@ import type { GlyphKey } from "./bitmaps.js";
  *   is no theme/appearance glyph.
  */
 export const PLUGIN_GLYPHS: Readonly<Record<string, GlyphKey>> = {
+  collab: "todo",
   "connector-mcp": "connector",
   "connector-openapi": "connector",
   "file-preview": "storage",

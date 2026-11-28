@@ -17,6 +17,12 @@
       "path": "plugins/browser/test/panel"
     },
     {
+      "path": "plugins/collab"
+    },
+    {
+      "path": "plugins/collab/test"
+    },
+    {
       "path": "plugins/connector-mcp"
     },
     {
