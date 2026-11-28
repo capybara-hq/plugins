@@ -151,9 +151,10 @@ export function registerRoutes(
     "POST",
     "/ui/stream-ticket",
     data(async (scope) => {
-      // a running daemon gets the tree's live local ports before the viewer connects, so a
-      // takeover's navigation finds them (once, never waiting: nothing may start the service here)
-      await refreshLoopbackPorts(deps, scope, 0);
+      // a running daemon gets the tree's live local ports as the viewer connects, so a takeover's
+      // navigation finds them: once, not awaited (the ticket never waits on the device), and
+      // never starting the service (ifRunning); it never throws
+      void refreshLoopbackPorts(deps, scope, 0);
       const { url } = await deps.deviceAccess.streamTicket({ ...scope, service: SERVICE });
       return json(200, { url });
     }),

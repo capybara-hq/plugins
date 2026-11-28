@@ -83,9 +83,14 @@ A real browser in the person's device for agents (browser use spec,
   (`localhost.`, `LOCALHOST`, `127.1`, `[::ffff:127.0.0.1]` are checked as the grant host). It is a
   soft split, not a boundary: WebSockets and redirect hops are not routed by Playwright, so a page
   of another tree of the same owner can reach a port the device opened through them.
-- A refused local port is an ask only for a main-frame navigation to it or a request of a page that
-  is itself on loopback; a subresource or frame of a page elsewhere (a port scan, a widget) is
-  only noted in the reply, never reported for an ask nor shown on the panel.
+- A refused local port is an ask only for a navigation the daemon started itself (the navigate
+  op, the person's address bar, back, forward, reload; not redirected) or for a request whose
+  initiating document is itself on loopback (a subresource's page, a page-started navigation's
+  previous document or a popup's opener, a redirect chain's first URL); the panel then names that
+  page's host. Anything else (a page elsewhere probing ports, opening a popup to one, assigning
+  `location`, a remote redirect into loopback, a link the agent clicks on such a page) is only
+  noted in the reply, never reported for an ask nor shown on the panel. A popup's first navigation
+  whose page Playwright does not have yet is refused with no note.
 - The ports live in `<state>/loopback-ports.json` (a set older than 24 h is dropped), so the
   restart a grant causes keeps them. After the person's grant or remove, and when a panel opens,
   the plugin server sends `loopback_ports` with the tree's live set (`ifRunning`, waiting up to

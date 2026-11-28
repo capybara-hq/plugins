@@ -73,7 +73,10 @@ interface Setup {
   dom: JSDOM;
   fetchCalls: { url: string; method: string; body: unknown }[];
   host: unknown[];
+  /** This panel's newest socket (never another test's panel still reconnecting). */
   sock: () => FakeSocket;
+  /** The sockets this panel opened, oldest first. */
+  sockets: FakeSocket[];
   /** Gives the stage a new size and fires the panel's ResizeObserver, as a layout change does. */
   resizeStage: (width: number, height: number) => void;
 }
@@ -149,10 +152,19 @@ function setup(
   let stageRect = { width: 480, height: 400 };
   stage.getBoundingClientRect = () =>
     ({ left: 0, top: 0, width: stageRect.width + 24, height: stageRect.height + 24 }) as DOMRect;
+  // the panel's own sockets: an earlier test's panel may still reconnect (a retry or backoff
+  // timer) while this test runs, and its socket must not be taken for this panel's
+  const sockets: FakeSocket[] = [];
+  class Mine extends FakeSocket {
+    constructor(url: string) {
+      super(url);
+      sockets.push(this);
+    }
+  }
   mountPanel({
     window: win,
     fetch: fetchImpl as never,
-    WebSocket: FakeSocket as never,
+    WebSocket: Mine as never,
     post: (m) => host.push(m),
     decode: async () => ({ width: 1280, height: 800 }) as never,
   });
@@ -174,7 +186,8 @@ function setup(
     dom,
     fetchCalls,
     host,
-    sock: () => FakeSocket.all[FakeSocket.all.length - 1] as FakeSocket,
+    sock: () => sockets[sockets.length - 1] as FakeSocket,
+    sockets,
     resizeStage: (width, height) => {
       stageRect = { width, height };
       for (const cb of observers) cb();
@@ -195,7 +208,7 @@ const hostMode = (s: Setup, full: boolean) =>
   );
 
 async function live(s: Setup, st: ViewerOut = state()): Promise<FakeSocket> {
-  await vi.waitFor(() => expect(FakeSocket.all.length).toBeGreaterThan(0));
+  await vi.waitFor(() => expect(s.sockets.length).toBeGreaterThan(0));
   const sock = s.sock();
   sock.open();
   sock.push(st);
@@ -318,7 +331,7 @@ describe("panel", () => {
     expect(sock.sent).toContainEqual({ t: "resize", maxWidth: 1000, maxHeight: 625 });
     // a reconnect (new socket, no state yet) does the same
     sock.drop(1012);
-    await vi.waitFor(() => expect(FakeSocket.all.length).toBe(2));
+    await vi.waitFor(() => expect(s.sockets.length).toBe(2));
     const sock2 = s.sock();
     sock2.open();
     sock2.push(state({ control: "user" }));
@@ -561,7 +574,7 @@ describe("panel", () => {
 
   it("offers takeover only in the live view", async () => {
     const s = setup();
-    await vi.waitFor(() => expect(FakeSocket.all.length).toBe(1));
+    await vi.waitFor(() => expect(s.sockets.length).toBe(1));
     expect(($(s, "takeover") as HTMLElement).hidden).toBe(true);
     const sock = s.sock();
     sock.open();
@@ -692,12 +705,12 @@ describe("panel", () => {
     sock.drop(4404);
     expect(($(s, "empty") as HTMLElement).hidden).toBe(true);
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(FakeSocket.all).toHaveLength(2);
+    expect(s.sockets).toHaveLength(2);
     const sock2 = s.sock();
     sock2.drop(4404);
     expect(($(s, "empty") as HTMLElement).hidden).toBe(true);
     await vi.advanceTimersByTimeAsync(3_000);
-    expect(FakeSocket.all).toHaveLength(3);
+    expect(s.sockets).toHaveLength(3);
     const sock3 = s.sock();
     sock3.open();
     // the restarted daemon starts with the agent in control: the panel takes over again first
@@ -717,7 +730,7 @@ describe("panel", () => {
     expect($(s, "empty-title").textContent).toBe("浏览器尚未运行");
     expect($(s, "status").textContent).toBe("");
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(FakeSocket.all).toHaveLength(1);
+    expect(s.sockets).toHaveLength(1);
   });
 
   it("the empty state looks again quietly and shows the browser once it runs", async () => {
@@ -726,14 +739,14 @@ describe("panel", () => {
     await vi.advanceTimersByTimeAsync(0);
     s.sock().drop(4404);
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(FakeSocket.all).toHaveLength(2);
+    expect(s.sockets).toHaveLength(2);
     // the look keeps the empty state up (no "Connecting…" with a blank frame)
     expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
     expect($(s, "status").textContent).toBe("");
     s.sock().drop(4404);
     expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(FakeSocket.all).toHaveLength(3);
+    expect(s.sockets).toHaveLength(3);
     const sock = s.sock();
     sock.open();
     sock.push(state());
@@ -754,7 +767,7 @@ describe("panel", () => {
       [1009, "errorTitle"],
     ] as const) {
       const s = setup();
-      await vi.waitFor(() => expect(FakeSocket.all.length).toBe(1));
+      await vi.waitFor(() => expect(s.sockets.length).toBe(1));
       s.sock().drop(code);
       expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
       expect($(s, "empty-title").textContent).toBe(t("en", title));
@@ -794,11 +807,11 @@ describe("panel", () => {
     await vi.advanceTimersByTimeAsync(0);
     s.sock().drop(4404);
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(FakeSocket.all).toHaveLength(2);
+    expect(s.sockets).toHaveLength(2);
     // the second socket never opens nor closes; the next look replaces it
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(FakeSocket.all).toHaveLength(3);
-    expect((FakeSocket.all[1] as FakeSocket).closed).toBe(true);
+    expect(s.sockets).toHaveLength(3);
+    expect((s.sockets[1] as FakeSocket).closed).toBe(true);
     expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
   });
 
@@ -810,7 +823,7 @@ describe("panel", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     s.sock().drop(4401);
     await vi.advanceTimersByTimeAsync(0);
-    expect(FakeSocket.all).toHaveLength(3);
+    expect(s.sockets).toHaveLength(3);
     expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
     expect($(s, "status").textContent).toBe("");
     s.sock().drop(4409);
@@ -830,7 +843,7 @@ describe("panel", () => {
     vis = "visible";
     doc.dispatchEvent(new s.dom.window.Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(0);
-    expect(FakeSocket.all).toHaveLength(2);
+    expect(s.sockets).toHaveLength(2);
     expect(($(s, "empty") as HTMLElement).hidden).toBe(false);
     expect($(s, "status").textContent).toBe("");
   });
@@ -908,15 +921,13 @@ describe("panel", () => {
     now += 300;
     ask(6379);
     $(s, "loopback-allow").click();
-    await new Promise((r) => setTimeout(r, 10));
-    expect(s.fetchCalls.some((c) => c.url === "loopback-ports" && c.method === "POST")).toBe(false);
     now += 500;
     $(s, "loopback-allow").click();
-    await vi.waitFor(() =>
-      expect(
-        s.fetchCalls.find((c) => c.url === "loopback-ports" && c.method === "POST")?.body,
-      ).toEqual({ port: 6379 }),
-    );
+    // only the click after the guard grants: exactly one POST, for the newest port
+    const grants = () =>
+      s.fetchCalls.filter((c) => c.url === "loopback-ports" && c.method === "POST");
+    await vi.waitFor(() => expect(grants()).toHaveLength(1));
+    expect(grants()[0]?.body).toEqual({ port: 6379 });
   });
 
   it("names the asking page in Chinese", async () => {
@@ -1029,7 +1040,7 @@ describe("panel", () => {
     sock.drop(4409);
     expect(($(s, "reconnect") as HTMLElement).hidden).toBe(false);
     $(s, "reconnect").click();
-    await vi.waitFor(() => expect(FakeSocket.all.length).toBe(2));
+    await vi.waitFor(() => expect(s.sockets.length).toBe(2));
     expect(s.fetchCalls.filter((c) => c.url === "stream-ticket")).toHaveLength(2);
   });
 
@@ -1037,10 +1048,10 @@ describe("panel", () => {
     const s = setup();
     const sock = await live(s);
     sock.drop(4401);
-    await vi.waitFor(() => expect(FakeSocket.all.length).toBe(2));
-    (FakeSocket.all[1] as FakeSocket).drop(4401);
+    await vi.waitFor(() => expect(s.sockets.length).toBe(2));
+    (s.sockets[1] as FakeSocket).drop(4401);
     await new Promise((r) => setTimeout(r, 10));
-    expect(FakeSocket.all.length).toBe(2);
+    expect(s.sockets.length).toBe(2);
     expect(($(s, "reconnect") as HTMLElement).hidden).toBe(false);
   });
 
@@ -1048,7 +1059,7 @@ describe("panel", () => {
     const s = setup();
     const sock = await live(s);
     sock.drop(1012);
-    await vi.waitFor(() => expect(FakeSocket.all.length).toBe(2));
+    await vi.waitFor(() => expect(s.sockets.length).toBe(2));
   });
 
   it("empty state when the ticket route answers service_not_running", async () => {
@@ -1056,7 +1067,7 @@ describe("panel", () => {
       ticket: () => new Response(JSON.stringify({ code: "service_not_running" }), { status: 409 }),
     });
     await vi.waitFor(() => expect(($(s, "empty") as HTMLElement).hidden).toBe(false));
-    expect(FakeSocket.all).toHaveLength(0);
+    expect(s.sockets).toHaveLength(0);
     expect($(s, "empty").textContent).toContain(t("en", "emptyTitle"));
   });
 
@@ -1089,7 +1100,7 @@ describe("panel", () => {
     vis = "visible";
     doc.dispatchEvent(new s.dom.window.Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(0);
-    expect(FakeSocket.all.length).toBe(2);
+    expect(s.sockets.length).toBe(2);
   });
 });
 
@@ -1682,6 +1693,8 @@ describe("tab ownership", () => {
 
   it("the tree's empty state: no page of another tree, its tabs to move here", async () => {
     const s = setup();
+    // an earlier test's panel reconnecting meanwhile (its retry timer fires during this test)
+    setTimeout(() => new FakeSocket("wss://stray"), 5);
     const sock = await live(s, state({ tabs: [], otherTabs: others.slice(0, 1) }));
     sock.pushFrame(1);
     await vi.waitFor(() => expect(sock.sent.some((m) => m.t === "frame-ack")).toBe(true));

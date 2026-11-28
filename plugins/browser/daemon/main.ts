@@ -705,6 +705,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     const root = refresh
       ? (state.rootOf(req.conversationId) ?? req.conversationId)
       : req.rootConversationId;
+    const conv = req.conversationId;
+    const deletedIn = () =>
+      deletedTree(conv) ?? deletedTree(req.rootConversationId) ?? deletedTree(root);
+    // a deleted tree's set is never saved again (a refresh read before the deletion)
+    if (deletedIn() !== undefined) return fail(CONVERSATION_DELETED_MESSAGE);
     if (req.loopbackPorts !== undefined || refresh) {
       try {
         setLoopback(root, parseLoopbackPorts(req.loopbackPorts ?? [], "loopbackPorts"));
@@ -713,9 +718,6 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       }
     }
     if (refresh) return { ok: true, blockedHosts: [] };
-    const conv = req.conversationId;
-    const deletedIn = () => deletedTree(conv) ?? deletedTree(req.rootConversationId);
-    if (deletedIn() !== undefined) return fail(CONVERSATION_DELETED_MESSAGE);
     // in use from arrival to reply (queued requests and wait included): adopt is refused meanwhile
     state.requestArrived(conv, req.rootConversationId);
     let reply: ToolReply;

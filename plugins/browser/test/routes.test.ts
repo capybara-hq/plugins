@@ -1,5 +1,5 @@
 import { DeviceAccessError, type RouteCaller } from "@capybara-hq/plugin-sdk";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { type RouteDeps, registerRoutes } from "../src/routes.js";
 
 type Handler = (req: Request, caller: RouteCaller) => Promise<Response>;
@@ -96,12 +96,17 @@ describe("browser routes", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ url: "wss://k.example/device/stream?ticket=abc" });
     const scope = { orgId: "org", conversationId: "conv", accountId: "acc", service: "browser" };
-    // a running daemon first gets the tree's live local ports (never started: ifRunning)
-    expect(s.calls).toEqual([
-      { fn: "loopbackPorts", arg: scope },
-      { fn: "request", arg: { ...refreshBody([3999]), ifRunning: true } },
-      { fn: "streamTicket", arg: scope },
-    ]);
+    // the ticket does not wait for it: a running daemon gets the tree's live local ports beside
+    // (never started: ifRunning)
+    await vi.waitFor(() =>
+      expect(s.calls).toContainEqual({
+        fn: "request",
+        arg: { ...refreshBody([3999]), ifRunning: true },
+      }),
+    );
+    expect(s.calls).toHaveLength(3);
+    expect(s.calls).toContainEqual({ fn: "loopbackPorts", arg: scope });
+    expect(s.calls).toContainEqual({ fn: "streamTicket", arg: scope });
   });
 
   it("never sends a refresh for a conversation whose ports cannot be read (no device yet)", async () => {
@@ -111,7 +116,10 @@ describe("browser routes", () => {
       },
     });
     expect((await s.hit("POST /ui/stream-ticket", {}, conv)).status).toBe(200);
-    expect(s.calls.map((c) => c.fn)).toEqual(["streamTicket"]);
+    await vi.waitFor(() => expect(s.calls.map((c) => c.fn)).toEqual(["streamTicket"]));
+    // the refresh stopped at its read: nothing reached the device
+    await Promise.resolve();
+    expect(s.calls.some((c) => c.fn === "request")).toBe(false);
   });
 
   it("routes refuse a platform-scope caller", async () => {

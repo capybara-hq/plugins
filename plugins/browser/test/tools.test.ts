@@ -201,6 +201,19 @@ describe("browser tools", () => {
     expect(f.log).toEqual([]);
   });
 
+  it("reads the tree's live ports again after a restart (a revoke may have caused it)", async () => {
+    let n = 0;
+    const f = fake(() => {
+      if (n++ > 0) return { ok: true, page: PAGE, blockedHosts: [] };
+      // the port is revoked while the service restarts
+      f.setLivePorts([]);
+      return { ok: false, error: "restart", message: "installed", blockedHosts: [] };
+    }, ["T1", "T2"]);
+    f.setLivePorts([3999]);
+    await f.run("browser_snapshot", {});
+    expect(f.sent.map((q) => q.loopbackPorts)).toEqual([[3999], []]);
+  });
+
   it("a restart reply waits for the old process to exit, starts the service again and retries", async () => {
     // the daemon installed the browser into the install directory, sealed it and exits; the
     // device reports the old process (its start time) until it is gone, so the next two ensures

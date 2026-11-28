@@ -1,6 +1,6 @@
 import { createServer, request as httpRequest, type Server } from "node:http";
 import { connect } from "node:net";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { canonicalHost, loopbackGrantHostOf } from "../../daemon/loopback.js";
 import type { RequestConversation } from "../../daemon/protocol.js";
 import {
@@ -103,6 +103,8 @@ beforeAll(async () => {
   open.add(portOf(app.url));
   site = await startFixtureServer({
     "/": `<!doctype html><title>Site</title><script src="${other.url}/a.js"></script>`,
+    "/popup": `<!doctype html><title>Popup</title><script>window.open(${JSON.stringify(`${other.url}/a.js`)})</script>`,
+    "/r": (_req, res) => void res.writeHead(302, { location: `${other.url}/a.js` }).end(),
   });
   sites.set("site.test", portOf(site.url));
   proxy = await startLoopbackProxy(open, sites);
@@ -317,6 +319,68 @@ describe("browser daemon loopback ports", () => {
     expect(await request(d.socketPath, { op: "navigate", url: `${app.url}/` }, sub)).toMatchObject({
       ok: true,
       page: { title: "App" },
+    });
+  });
+});
+
+describe("browser daemon loopback asks: who started the request", () => {
+  // its own daemon: the file's other tests fill the shared one's tabs
+  let d: TestDaemon;
+  beforeAll(async () => {
+    d = await startTestDaemon({ env: { HTTPS_PROXY: proxy.url, HTTP_PROXY: proxy.url } });
+  });
+  afterAll(async () => {
+    await d?.stop();
+    if (d) removeDir(d.stateDir);
+  });
+  const note = (port: number) =>
+    `127.0.0.1:${port}: local port on the device requested by the page on site.test, refused.`;
+
+  it("a popup a remote page opens to a local port is never an ask", async () => {
+    const A = conv("lb-popup");
+    const v = await openViewer(d.socketPath, { maxWidth: 480, maxHeight: 300 }, A);
+    await v.next((m) => m.t === "state");
+    const r = await request(
+      d.socketPath,
+      { op: "navigate", url: "http://site.test/popup" },
+      holding(A, []),
+    );
+    expect(r).toMatchObject({ ok: true, blockedHosts: [] });
+    // the popup's navigation was refused (its tab shows the error page); no reply carries it
+    // as a refused host and the panel is not offered it
+    await vi.waitFor(async () => {
+      const t = await request(d.socketPath, { op: "tabs", action: "list" }, A);
+      expect(t.blockedHosts).toEqual([]);
+      expect(t.ok ? t.text : "").toContain("chrome-error://");
+    });
+    expect(v.messages.some((m) => m.t === "blocked" && m.port === portOf(other.url))).toBe(false);
+    await v.close();
+  });
+
+  it("a remote redirect into a local port is only noted", async () => {
+    const A = conv("lb-302");
+    const r = await request(
+      d.socketPath,
+      { op: "navigate", url: "http://site.test/r" },
+      holding(A, []),
+    );
+    expect(r.blockedHosts).toEqual([]);
+    expect(r).toMatchObject({ ok: false, error: "blocked" });
+    expect(r.ok ? "" : r.message).toContain(note(portOf(other.url)));
+  });
+
+  it("the navigate op to a local port is an ask", async () => {
+    const A = conv("lb-own");
+    const port = portOf(other.url);
+    const r = await request(
+      d.socketPath,
+      { op: "navigate", url: `${other.url}/a.js` },
+      holding(A, []),
+    );
+    expect(r).toMatchObject({
+      ok: false,
+      error: "blocked",
+      blockedHosts: [{ host: "127.0.0.1", port, layer: "address", class: "loopback" }],
     });
   });
 });

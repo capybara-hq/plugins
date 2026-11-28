@@ -130,6 +130,24 @@ export function blockedHost(host: string, port: number, layer: BlockedHost["laye
     : { host, port, layer };
 }
 
+/** A URL's host, or "" (about:blank, an unparsable URL). */
+function hostOf(raw: string): string {
+  try {
+    return new URL(raw).hostname;
+  } catch {
+    return "";
+  }
+}
+
+/** A URL as Chromium writes it (for comparing a request with a goto's address). */
+function hrefOf(raw: string): string {
+  try {
+    return new URL(raw).href;
+  } catch {
+    return raw;
+  }
+}
+
 /** The most local ports one probe note names. */
 const PROBE_NOTE_MAX = 10;
 
@@ -1088,6 +1106,8 @@ export class BrowserSession {
   private readonly signed = new WeakSet<Request>();
   /** Navigations the daemon itself runs on a page (goto, history, reload): their roots are trusted. */
   private readonly ownNavs = new WeakMap<Page, number>();
+  /** The addresses of the gotos the daemon runs on a page now (see {@link isOwnNav}). */
+  private readonly ownNavTargets = new WeakMap<Page, string[]>();
   /** The permission binding's per-daemon name (any page can call it: its payload is untrusted). */
   private readonly permissionBinding = `__cbPermission_${randomBytes(8).toString("hex")}`;
   /** Permission reports per page load (capped at PERMISSION_REPORTS_PER_LOAD). */
@@ -2235,13 +2255,24 @@ export class BrowserSession {
     return undefined;
   }
 
-  /** Runs a navigation the daemon starts on a page (its root request is trusted for auth). */
-  private async ownNav<T>(page: Page, fn: () => Promise<T>): Promise<T> {
+  /**
+   * Runs a navigation the daemon starts on a page (its root request is trusted for auth; a
+   * refused local port it goes to is an ask). `target`: a goto's address (none for a history move
+   * or reload).
+   */
+  private async ownNav<T>(page: Page, fn: () => Promise<T>, target?: string): Promise<T> {
     this.ownNavs.set(page, (this.ownNavs.get(page) ?? 0) + 1);
+    if (target !== undefined)
+      this.ownNavTargets.set(page, [...(this.ownNavTargets.get(page) ?? []), target]);
     try {
       return await fn();
     } finally {
       this.ownNavs.set(page, Math.max(0, (this.ownNavs.get(page) ?? 1) - 1));
+      if (target !== undefined) {
+        const left = [...(this.ownNavTargets.get(page) ?? [])];
+        left.splice(left.indexOf(target), 1);
+        this.ownNavTargets.set(page, left);
+      }
     }
   }
 
@@ -2859,21 +2890,58 @@ export class BrowserSession {
   }
 
   /**
-   * Whether a refused local port of `page` is offered for approval: a main-frame navigation to it
-   * (`r` absent: the daemon's own navigation), or a request of a page that is itself on the
-   * device's loopback. Anything else (a subresource or frame of a page elsewhere: a port scan, an
-   * embedded widget) is only noted. `origin`: the requesting page's host, for a subresource.
+   * Whether a refused local port is offered for approval, and the host of the document that asked:
+   *
+   * - a main-frame navigation the daemon started itself (the navigate op, the person's address
+   *   bar, back, forward, reload; not redirected) is an ask with no origin;
+   * - anything else is an ask only when the document it starts from is itself on the device's
+   *   loopback: a subresource's or frame's page, a page-started navigation's previous document
+   *   (a popup's opener), a redirect chain's first URL.
+   *
+   * Everything else (a page elsewhere probing ports, opening a popup to one, assigning
+   * `location`, a remote redirect into loopback) is only noted, with that origin. Reads the page
+   * synchronously first: called when the request is seen, before the page moves on.
    */
-  private loopbackAsk(page: Page, r?: Request): { ask: boolean; origin?: string } {
-    if (r === undefined || (r.isNavigationRequest() && r.frame() === page.mainFrame()))
-      return { ask: true };
-    let origin = "";
-    try {
-      origin = new URL(page.url()).hostname;
-    } catch {
-      origin = "";
-    }
-    return { ask: origin !== "" && loopbackGrantHostOf(origin) !== undefined, origin };
+  private loopbackAsk(
+    page: Page,
+    r: Request | undefined,
+    rawUrl: string,
+  ): Promise<{ ask: boolean; origin?: string }> {
+    // no request: the daemon's own navigation failed (an ask only for its own address)
+    if (r === undefined) return Promise.resolve({ ask: this.isOwnNav(page, rawUrl) });
+    const mainNav = r.isNavigationRequest() && r.frame() === page.mainFrame();
+    let first: Request = r;
+    for (let f = r.redirectedFrom(); f !== null; f = f.redirectedFrom()) first = f;
+    const redirected = first !== r;
+    if (mainNav && !redirected && this.isOwnNav(page, rawUrl))
+      return Promise.resolve({ ask: true });
+    const before = redirected ? first.url() : page.url();
+    const judge = (url: string) => {
+      const origin = hostOf(url);
+      return {
+        ask: origin !== "" && loopbackGrantHostOf(origin) !== undefined,
+        ...(origin === "" ? {} : { origin }),
+      };
+    };
+    // a popup's first navigation starts from nothing: its opener asked for it
+    if (mainNav && hostOf(before) === "")
+      return page.opener().then(
+        (o) => judge(o?.url() ?? ""),
+        () => judge(""),
+      );
+    return Promise.resolve(judge(before));
+  }
+
+  /**
+   * A main-frame navigation the daemon runs on `page` to `rawUrl` now (a goto to that address,
+   * or a history move or reload, whose target the daemon does not name).
+   */
+  private isOwnNav(page: Page, rawUrl: string): boolean {
+    if ((this.ownNavs.get(page) ?? 0) === 0) return false;
+    const targets = this.ownNavTargets.get(page) ?? [];
+    if (targets.length === 0) return true;
+    const href = hrefOf(rawUrl);
+    return targets.some((t) => hrefOf(t) === href);
   }
 
   /**
@@ -2902,15 +2970,12 @@ export class BrowserSession {
     const key = `${owner?.owner ?? ""}\u0000${hostPort(host, port)}`;
     let probe = this.probes.get(key);
     if (probe === undefined) {
-      probe = proxyRefusal(proxy, host, port).then((layer) => {
+      // judged now, while the page still shows the document that asked
+      const ask = this.loopbackAsk(page, r, url.href);
+      probe = Promise.all([proxyRefusal(proxy, host, port), ask]).then(([layer, loopback]) => {
         this.probes.delete(key);
         if (layer !== null && owner !== undefined)
-          this.recordBlocked(
-            owner,
-            blockedHost(host, port, layer),
-            pageUrl ?? url.href,
-            this.loopbackAsk(page, r),
-          );
+          this.recordBlocked(owner, blockedHost(host, port, layer), pageUrl ?? url.href, loopback);
         return layer !== null;
       });
       this.probes.set(key, probe);
@@ -2933,8 +2998,15 @@ export class BrowserSession {
   ): void {
     // a local port a page elsewhere requested is never an ask: the reply only notes it
     if (b.class === "loopback" && !loopback.ask) {
+      const key = hostPort(b.host, b.port);
+      let collected = false;
       for (const c of this.collectors)
-        if (c.conv === owner.owner) c.probes.set(hostPort(b.host, b.port), loopback.origin ?? "");
+        if (c.conv === owner.owner) {
+          c.probes.set(key, loopback.origin ?? "");
+          collected = true;
+        }
+      // none of the owner's requests in flight (a popup opened after its reply): its next reply
+      if (!collected) this.noteTo(owner.owner, probeNote(new Map([[key, loopback.origin ?? ""]])));
       return;
     }
     for (const c of this.collectors)
@@ -2969,12 +3041,16 @@ export class BrowserSession {
    */
   private readonly onLoopbackRoute = async (route: Route): Promise<void> => {
     const r = route.request();
+    // no page: a service worker's request, or a popup's first navigation before Playwright has
+    // its page (frame() throws): no tree to attribute it to, refused without an ask or a note
     let page: Page | undefined;
     try {
       page = r.serviceWorker() === null ? r.frame().page() : undefined;
     } catch {
       page = undefined;
     }
+    // judged first, while the page still shows the document that asked
+    const ask = page === undefined ? undefined : this.loopbackAsk(page, r, r.url());
     let owner = this.ownerOfPage(page);
     // a popup's first request comes before its opener's owner takes it
     if (owner === undefined && page !== undefined)
@@ -2998,7 +3074,7 @@ export class BrowserSession {
         owner,
         blockedHost(url.hostname, port, "address"),
         this.pageToOpen(page, r),
-        this.loopbackAsk(page, r),
+        await (ask ?? Promise.resolve({ ask: false })),
       );
     await route.abort("blockedbyclient").catch(() => undefined);
   };
@@ -3130,6 +3206,15 @@ export class BrowserSession {
       let message = e instanceof ActionError ? e.message : firstLine(e);
       if (!(e instanceof ActionError) && e instanceof Error && e.name === "TimeoutError") {
         code = "timeout";
+      }
+      // only noted local ports refused the navigation: the note says why, no ask follows
+      if (
+        c.blocked.size === 0 &&
+        c.probes.size > 0 &&
+        (code === "blocked" || message.includes("ERR_BLOCKED_BY_CLIENT"))
+      ) {
+        code = "blocked";
+        message = probeNote(c.probes);
       }
       if (c.blocked.size > 0 && code !== "no_such_ref" && code !== "taken_over") {
         code = "blocked";
@@ -3361,7 +3446,11 @@ export class BrowserSession {
     const deadline = Date.now() + this.navigationTimeoutMs;
     const watch = new NavWatch(page, url, () => this.pendingNavs.get(page));
     try {
-      res = await this.ownNav(page, () => this.gotoPastNetworkChange(page, url, watch, deadline));
+      res = await this.ownNav(
+        page,
+        () => this.gotoPastNetworkChange(page, url, watch, deadline),
+        url,
+      );
     } catch (e) {
       const msg = firstLine(e);
       // a sign-in the browser could not answer: the reply names the auth dialog (the full build
@@ -3398,7 +3487,10 @@ export class BrowserSession {
       watch.dispose();
     }
     // a plain-http request the proxy refuses loads its 403 page instead of failing
-    if (res?.status() === 403 && (await this.checkBlocked(page, res.url()))) {
+    if (
+      res?.status() === 403 &&
+      (await this.checkBlocked(page, res.url(), undefined, res.request()))
+    ) {
       throw new ActionError(
         "blocked",
         `The device's network settings block ${new URL(res.url()).hostname}.`,

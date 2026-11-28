@@ -303,7 +303,8 @@ export async function runRequest(
     pauseMs = Math.min(pauseMs * 2, RESTART_PAUSE_MAX_MS);
     return !call.signal.aborted;
   };
-  // the body (with the tree's live loopback ports) is read once per call, reused by its retries
+  // the body (with the tree's live loopback ports) is reused by the install retries and read
+  // again after a restart
   let body: Uint8Array | undefined;
   for (let restarts = 0; ; ) {
     let startedAt: string | null;
@@ -345,6 +346,8 @@ export async function runRequest(
     if (reply.ok || reply.error !== "restart") break;
     if (restarts >= RESTART_ATTEMPTS) throw new ToolError(RESTARTING_MESSAGE);
     restarts++;
+    // a restart may follow a revoke (it changes the service's network): read the set again
+    body = undefined;
     exiting = { startedAt };
     waitUntil = Date.now() + RESTART_WAIT_MS;
     pauseMs = RESTART_PAUSE_FIRST_MS;
