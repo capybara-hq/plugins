@@ -152,7 +152,7 @@ describe("HTTP Basic auth", () => {
     expect(r.text).toContain("The site asks for Digest sign-in, which the browser cannot do");
   });
 
-  it("viewer credentials sign in and reload; the agent's next reply notes it; they never leave the daemon's memory", async () => {
+  it("viewer credentials sign in and reload; the agent receives the outcome; credentials stay in memory", async () => {
     const d = await daemon();
     const r = ok(await request(d.socketPath, { op: "navigate", url: `${site.url}/secret` }));
     const v = await openViewer(d.socketPath, { maxWidth: 640, maxHeight: 400 });
@@ -165,17 +165,33 @@ describe("HTTP Basic auth", () => {
       password: PASSWORD,
     });
     await signIn(d, v, r.dialog as PendingDialogView);
-    const next = ok(
+    let reply = ok(
       await request(d.socketPath, { op: "wait", text: "the secret page", timeoutMs: 30_000 }),
     );
-    expect(next.text).toContain(
-      `HTTP sign-in to ${site.url}: the site accepted the credentials the user entered (status 200).`,
+    const replies = [JSON.stringify(r), JSON.stringify(reply)];
+    const prefix = `HTTP sign-in to ${site.url}:`;
+    // The page can be visible before the outcome is ready to include in a reply.
+    await expect
+      .poll(
+        async () => {
+          if (!reply.text?.includes(prefix)) {
+            reply = ok(await request(d.socketPath, { op: "tabs", action: "list" }));
+            replies.push(JSON.stringify(reply));
+          }
+          return reply.text ?? "";
+        },
+        { timeout: 30_000 },
+      )
+      .toContain(prefix);
+    expect(reply.text).toContain(
+      `${prefix} the site accepted the credentials the user entered (status 200).`,
     );
-    // the page's own subresource and a same-origin navigation are signed
+    // See the signed subresource before leaving the page that requested it.
+    await expect
+      .poll(() => seen.some((s) => s.path === "/own.png" && s.auth === GOOD), { timeout: 30_000 })
+      .toBe(true);
     ok(await request(d.socketPath, { op: "navigate", url: `${site.url}/next` }));
-    expect(seen.some((s) => s.path === "/own.png" && s.auth === GOOD)).toBe(true);
     expect(seen.some((s) => s.path === "/next" && s.auth === GOOD)).toBe(true);
-    const replies = [JSON.stringify(r), JSON.stringify(next)];
     // the password is in no reply, viewer message or file of the daemon's state directory
     for (const text of [...replies, ...v.messages.map((m) => JSON.stringify(m))])
       expect(text).not.toContain(PASSWORD);
