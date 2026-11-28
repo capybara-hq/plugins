@@ -311,7 +311,7 @@ describe("the PG store (the plugin's migrated schema)", () => {
         roots: ROOTS,
         home: "/home/me",
         sessionIsolation: false,
-        features: ["projects"],
+        features: ["projects", "loopbackPorts"],
         permissionSupport: SUPPORT,
         ownerReport: {
           report: { ...OWNER_CEILING, sequence: 2, revision: "owner-2" },
@@ -331,7 +331,8 @@ describe("the PG store (the plugin's migrated schema)", () => {
       connectionId: "connection-1",
       mode: "os",
       roots: ROOTS,
-      features: ["projects"],
+      // the stored hello keeps the loopbackPorts feature
+      features: ["projects", "loopbackPorts"],
       sharedProjectRoots: ["/home/me/a", "/home/me/b"],
     });
     // an answer sent through another machine than the recorded one is never installed

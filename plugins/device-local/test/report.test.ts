@@ -2,11 +2,13 @@ import { DEVICE_REPORT_LIMITS, parseDeviceReport } from "@capybara-hq/plugin-sdk
 import type { DeviceProjectReach } from "@capybara-hq/plugin-sdk/device-protocol";
 import { describe, expect, it } from "vitest";
 import {
+  type Binding,
   type Connection,
   describeLocalDevice,
   deviceReportOf,
   reportMoved,
   sharedRootsValue,
+  supportOf,
 } from "../src/index.js";
 import { OWNER_CEILING, ROOTS, SUPPORT } from "./fakes.js";
 
@@ -184,5 +186,80 @@ describe("the local device report", () => {
     expect(both.zh.length).toBeLessThanOrEqual(max);
     const report = deviceReportOf(connection("paths", "os", many), null);
     expect(parseDeviceReport(report)).toEqual(report);
+  });
+});
+
+describe("loopback port support", () => {
+  const HASH = (c: string) => c.repeat(64);
+  const outside = { ...SUPPORT, outsideSandbox: true };
+  const bindingWith = (permissionSupport: typeof SUPPORT): Binding => ({
+    deviceId: "dev-1",
+    instanceId: "dev-1",
+    generation: "1",
+    bindingId: "b-1",
+    previousGeneration: null,
+    status: "installed",
+    installed: {
+      runtimeIdentity: {
+        runtimeHash: HASH("a"),
+        helperHash: HASH("b"),
+        imageFingerprint: HASH("c"),
+        instanceGeneration: "1",
+      },
+      permissionSupport,
+      ownerCeiling: { ...OWNER_CEILING, outsideSandbox: true },
+    },
+  });
+  const binding = bindingWith(outside);
+  /** A macOS machine (its home under /Users) with the owner ceiling `ownerOutside`. */
+  const mac = (features: Connection["features"], ownerOutside = true): Connection => ({
+    ...connection("machine"),
+    home: "/Users/me",
+    features,
+    ownerReport: {
+      report: { ...OWNER_CEILING, outsideSandbox: ownerOutside },
+      observedAt: "2026-11-23T00:00:00.000Z",
+      via: "hello",
+    },
+  });
+  const handle = { id: "dev-1", generation: "1" };
+
+  it("reports loopbackPorts for a macOS machine with the feature", () => {
+    const s = supportOf(handle, mac(["networkReport", "projects", "loopbackPorts"]), binding);
+    expect(s.network.loopbackPorts).toBe(true);
+    expect(s.limitedBy?.loopbackPorts).toBeUndefined();
+  });
+
+  it("reports device-update for a macOS machine without it", () => {
+    const s = supportOf(handle, mac(["networkReport", "projects"]), binding);
+    expect(s.network.loopbackPorts).toBeUndefined();
+    expect(s.limitedBy).toEqual({ loopbackPorts: "device-update" });
+  });
+
+  it("reports false when the owner forbids running outside the sandbox", () => {
+    const s = supportOf(
+      handle,
+      mac(["networkReport", "projects", "loopbackPorts"], false),
+      binding,
+    );
+    expect(s.outsideSandbox).toBe(false);
+    expect(s.network.loopbackPorts).toBe(false);
+    expect(s.limitedBy).toEqual({ outsideSandbox: "owner" });
+  });
+
+  it("a machine that never runs outside the sandbox reports no loopback ports", () => {
+    const sandboxed = bindingWith(SUPPORT);
+    const s = supportOf(handle, mac(["networkReport", "projects", "loopbackPorts"]), sandboxed);
+    expect(s.network.loopbackPorts).toBe(false);
+    expect(s.limitedBy).toBeUndefined();
+  });
+
+  it("a Linux or Docker machine without the feature reports as before", () => {
+    const linux = { ...mac(["networkReport", "projects"]), home: "/home/me" };
+    const s = supportOf(handle, linux, binding);
+    expect(s.network).toEqual(SUPPORT.network);
+    expect(s.limitedBy).toBeUndefined();
+    const docker = { ...mac(["networkReport", "projects"]), mode: "docker" as const };
+    expect(supportOf(handle, docker, binding).limitedBy).toBeUndefined();
   });
 });

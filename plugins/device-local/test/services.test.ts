@@ -6,8 +6,21 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import { DEVICE_SERVICE_ARGV_PROBE, runDeviceServiceConformance } from "@capybara-hq/testing";
 import { describe, expect, it } from "vitest";
-import { createDeviceLocalProvider, type LocalDeviceHandle } from "../src/index.js";
-import { fakeDialIn, fakeLog, LIMITS, memoryStore, ROOTS, rejection, signal } from "./fakes.js";
+import {
+  type Connection,
+  createDeviceLocalProvider,
+  type LocalDeviceHandle,
+} from "../src/index.js";
+import {
+  fakeDialIn,
+  fakeLog,
+  LIMITS,
+  memoryStore,
+  ROOTS,
+  rejection,
+  SUPPORT,
+  signal,
+} from "./fakes.js";
 
 const DEVICE = "dev-1";
 const HANDLE: LocalDeviceHandle = { id: DEVICE, roots: ROOTS, limits: LIMITS, generation: "1" };
@@ -110,9 +123,30 @@ function serviceMachine(opts: { oldMachine?: boolean; preIds?: boolean; codeDir?
 function setup(opts: { oldMachine?: boolean; preIds?: boolean; codeDir?: unknown } = {}) {
   const m = serviceMachine(opts);
   const dial = fakeDialIn((req) => m.answer(req.body as Body));
-  const { store } = memoryStore();
+  const { store, connections } = memoryStore();
   const provider = createDeviceLocalProvider({ dialIn: dial.channel, log: fakeLog().log }, store);
-  return { m, dial, provider, store };
+  return { m, dial, provider, store, connections };
+}
+
+/** Stores the machine's hello with `features` (what a current capybara-device on macOS says). */
+function helloWith(connections: Map<string, Connection>, features: Connection["features"]) {
+  connections.set(DEVICE, {
+    deviceId: DEVICE,
+    orgId: "org-1",
+    machineId: "machine-1",
+    connectionId: "connection-1",
+    machineEpoch: 0,
+    mode: "os",
+    roots: ROOTS,
+    home: "/Users/me",
+    sessionIsolation: false,
+    features,
+    permissionSupport: { ...SUPPORT, outsideSandbox: true },
+    ownerReport: null,
+    sharedProjectRoots: [],
+    instanceGeneration: HANDLE.generation,
+    runtimeIdentity: null,
+  });
 }
 
 const SPEC = {
@@ -380,6 +414,51 @@ describe("device-local services", () => {
     m.requests.length = 0;
     await provider.ensureService?.(HANDLE, SPEC, signal());
     expect(m.requests[0]).toMatchObject({ network: wider });
+  });
+
+  it("sends network.loopbackPorts with ensure and ifRunning ensure", async () => {
+    const { m, provider, connections } = setup();
+    helloWith(connections, ["networkReport", "projects", "loopbackPorts"]);
+    await provider.ensureService?.(HANDLE, SPEC, signal(), { loopbackPorts: [5173, 3000] });
+    expect(m.requests.map((r) => r.network)).toEqual([
+      { kind: "allowlist", hosts: ["example.com"], loopbackPorts: [5173, 3000] },
+      { kind: "allowlist", hosts: ["example.com"], loopbackPorts: [5173, 3000] },
+    ]);
+    m.requests.length = 0;
+    await provider.ensureService?.(HANDLE, SPEC, signal(), { ifRunning: true, loopbackPorts: [] });
+    expect(m.requests).toEqual([
+      {
+        op: "service.ensure",
+        spec: { name: "tx.echo" },
+        network: { kind: "allowlist", hosts: ["example.com"], loopbackPorts: [] },
+        ifRunning: true,
+      },
+    ]);
+    // no ports named: the whole set is empty, which closes every port again
+    m.requests.length = 0;
+    await provider.ensureService?.(HANDLE, SPEC, signal());
+    expect(m.requests[0]?.network).toEqual({
+      kind: "allowlist",
+      hosts: ["example.com"],
+      loopbackPorts: [],
+    });
+  });
+
+  it("omits loopbackPorts for a machine without the feature", async () => {
+    const { m, provider, connections } = setup();
+    helloWith(connections, ["networkReport", "projects"]);
+    await provider.ensureService?.(HANDLE, SPEC, signal(), { loopbackPorts: [5173] });
+    await provider.ensureService?.(HANDLE, SPEC, signal(), {
+      ifRunning: true,
+      loopbackPorts: [5173],
+    });
+    expect(m.requests.length).toBeGreaterThan(1);
+    for (const r of m.requests) expect(r.network).not.toHaveProperty("loopbackPorts");
+    // no stored hello at all: the same
+    connections.clear();
+    m.requests.length = 0;
+    await provider.ensureService?.(HANDLE, SPEC, signal(), { loopbackPorts: [5173] });
+    expect(m.requests[0]?.network).toEqual({ kind: "allowlist", hosts: ["example.com"] });
   });
 
   it("passes the device service conformance", async () => {

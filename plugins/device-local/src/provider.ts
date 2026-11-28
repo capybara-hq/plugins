@@ -1,6 +1,7 @@
 import {
   DeviceOfflineError,
   type DeviceProvider,
+  type DeviceServiceNetwork,
   type DeviceServiceStatus,
   deviceServiceFilesDigest,
   type ExecResult,
@@ -582,7 +583,14 @@ export function createDeviceLocalProvider(
     async ensureService(h, spec, signal, o) {
       const l = requireLocal(h);
       const inForce = (await limitsInForce(l)).network;
-      const network = { kind: inForce.kind, hosts: [...inForce.hosts] };
+      // the granted loopback ports, the whole set (empty closes them all), only to a machine that
+      // announced it applies them: an older capybara-device answers `invalid` to the unknown key
+      const loopback = (await store.state(l.id)).connection?.features.includes("loopbackPorts");
+      const network: DeviceServiceNetwork = {
+        kind: inForce.kind,
+        hosts: [...inForce.hosts],
+        ...(loopback && { loopbackPorts: [...(o?.loopbackPorts ?? [])] }),
+      };
       const opts = { deadlineMs: SERVICE_OP_DEADLINE_MS, signal };
       // ifRunning finds a running service by its name: nothing to start, so no files and no retry.
       if (o?.ifRunning)

@@ -1,4 +1,5 @@
 import {
+  type DeviceServiceNetwork,
   type DialInChannel,
   FileSystemGoneError,
   SandboxGoneError,
@@ -147,7 +148,7 @@ export type ServiceBody =
       /** `ifRunning`: the name only; the machine starts nothing and needs no files. */
       op: "service.ensure";
       spec: { name: string };
-      network: { kind: "open-public" | "allowlist"; hosts: string[] };
+      network: DeviceServiceNetwork;
       ifRunning: true;
     }
   | {
@@ -161,7 +162,7 @@ export type ServiceBody =
       };
       /** `sha256:` + hex over the files ({@link deviceServiceFilesDigest}); sent with or without `files`. */
       filesDigest?: string;
-      network: { kind: "open-public" | "allowlist"; hosts: string[] };
+      network: DeviceServiceNetwork;
     }
   | { op: "service.stop"; name: string }
   | { op: "service.status"; name: string }
