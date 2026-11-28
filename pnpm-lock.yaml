@@ -5,12 +5,12 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  '@capybara-hq/plugin-sdk': 0.1.0-rc.88
+  '@capybara-hq/plugin-sdk': 0.1.0-rc.89
   '@capybara-hq/plugin-client': 0.1.0-rc.11
-  '@capybara-hq/kernel': 0.1.0-rc.111
+  '@capybara-hq/kernel': 0.1.0-rc.112
   '@capybara-hq/plugin-tools': 0.1.0-rc.28
   '@capybara-hq/testing': 0.1.0-rc.49
-  '@capybara-hq/plugin-model-fake': 0.1.0-rc.89
+  '@capybara-hq/plugin-model-fake': 0.1.0-rc.90
 
 patchedDependencies:
   playwright-core@1.65.1:
@@ -25,17 +25,17 @@ importers:
         specifier: ^2.5.15
         version: 2.5.15
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.89
-        version: 0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)
+        specifier: 0.1.0-rc.90
+        version: 0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       '@capybara-hq/plugin-tools':
         specifier: 0.1.0-rc.28
         version: 0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       '@changesets/cli':
         specifier: ^3.0.3
         version: 3.0.3
@@ -67,21 +67,21 @@ importers:
         specifier: ^0.135.0
         version: 0.135.0(zod@4.6.7)
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/ark:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       openai:
         specifier: ^7.36.0
         version: 7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7)
@@ -91,13 +91,13 @@ importers:
     devDependencies:
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/atlassian:
     devDependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
@@ -105,28 +105,28 @@ importers:
   plugins/bailian:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/browser:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.89
-        version: 0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)
+        specifier: 0.1.0-rc.90
+        version: 0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       esbuild:
         specifier: ^0.28.2
         version: 0.28.2
@@ -140,8 +140,8 @@ importers:
   plugins/collab:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       kysely:
         specifier: ^0.29.8
         version: 0.29.8
@@ -151,7 +151,7 @@ importers:
         version: 0.1.0-rc.11(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       '@types/pg':
         specifier: ^8.23.1
         version: 8.23.1
@@ -174,8 +174,8 @@ importers:
   plugins/connector-mcp:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.1
         version: 1.32.2(@cfworker/json-schema@4.1.6)(zod@4.6.7)
@@ -184,17 +184,17 @@ importers:
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.89
-        version: 0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)
+        specifier: 0.1.0-rc.90
+        version: 0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/connector-openapi:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
@@ -203,11 +203,11 @@ importers:
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.89
-        version: 0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)
+        specifier: 0.1.0-rc.90
+        version: 0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       kysely:
         specifier: ^0.29.8
         version: 0.29.8
@@ -215,8 +215,8 @@ importers:
   plugins/deepseek:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       openai:
         specifier: ^7.36.0
         version: 7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7)
@@ -226,23 +226,23 @@ importers:
     devDependencies:
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/device-docker:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.89
-        version: 0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)
+        specifier: 0.1.0-rc.90
+        version: 0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       bullmq:
         specifier: ^6.3.15
         version: 6.7.2(ioredis@6.0.0)(pg@8.23.1)
@@ -259,44 +259,44 @@ importers:
   plugins/device-e2b:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/device-local:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       kysely:
         specifier: ^0.29.8
         version: 0.29.8
     devDependencies:
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/example-board:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.89
-        version: 0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)
+        specifier: 0.1.0-rc.90
+        version: 0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       ioredis:
         specifier: ^6.0.0
         version: 6.0.0
@@ -304,15 +304,15 @@ importers:
   plugins/example-counter:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       '@types/pg':
         specifier: ^8.23.1
         version: 8.23.1
@@ -326,15 +326,15 @@ importers:
   plugins/file-preview:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.89
-        version: 0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)
+        specifier: 0.1.0-rc.90
+        version: 0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       dompurify:
         specifier: ^3.4.18
         version: 3.4.18
@@ -363,8 +363,8 @@ importers:
   plugins/github:
     devDependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
@@ -372,8 +372,8 @@ importers:
   plugins/google:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       jose:
         specifier: ^6.2.12
         version: 6.2.17
@@ -382,11 +382,11 @@ importers:
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.89
-        version: 0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)
+        specifier: 0.1.0-rc.90
+        version: 0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
@@ -394,24 +394,24 @@ importers:
   plugins/jina:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.89
-        version: 0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)
+        specifier: 0.1.0-rc.90
+        version: 0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/lark:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       '@larksuiteoapi/node-sdk':
         specifier: ^1.76.0
         version: 1.76.0
@@ -420,17 +420,17 @@ importers:
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.89
-        version: 0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)
+        specifier: 0.1.0-rc.90
+        version: 0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/memory:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       kysely:
         specifier: ^0.29.8
         version: 0.29.8
@@ -439,11 +439,11 @@ importers:
         specifier: 0.1.0-rc.11
         version: 0.1.0-rc.11(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.89
-        version: 0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)
+        specifier: 0.1.0-rc.90
+        version: 0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       '@types/pg':
         specifier: ^8.23.1
         version: 8.23.1
@@ -478,21 +478,21 @@ importers:
         specifier: ^3.1154.0
         version: 3.1165.0
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/openai:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       openai:
         specifier: ^7.36.0
         version: 7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7)
@@ -502,13 +502,13 @@ importers:
     devDependencies:
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/openai-compatible:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       openai:
         specifier: ^7.36.0
         version: 7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7)
@@ -518,63 +518,63 @@ importers:
     devDependencies:
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/push-apns:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.89
-        version: 0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)
+        specifier: 0.1.0-rc.90
+        version: 0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/push-fcm:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.89
-        version: 0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)
+        specifier: 0.1.0-rc.90
+        version: 0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/push-jpush:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.89
-        version: 0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)
+        specifier: 0.1.0-rc.90
+        version: 0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/skills-core: {}
 
   plugins/slack:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       '@slack/socket-mode':
         specifier: ^3.1.0
         version: 3.1.0(undici@8.12.4)
@@ -592,11 +592,11 @@ importers:
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.89
-        version: 0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)
+        specifier: 0.1.0-rc.90
+        version: 0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       ioredis:
         specifier: ^6.0.0
         version: 6.0.0
@@ -607,18 +607,18 @@ importers:
   plugins/telegram:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.89
-        version: 0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)
+        specifier: 0.1.0-rc.90
+        version: 0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
 
   plugins/theme-cyberpunk:
     devDependencies:
@@ -626,8 +626,8 @@ importers:
         specifier: 0.1.0-rc.11
         version: 0.1.0-rc.11(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       '@types/react':
         specifier: ^19.3.0
         version: 19.3.0
@@ -644,18 +644,18 @@ importers:
   plugins/todo:
     dependencies:
       '@capybara-hq/plugin-sdk':
-        specifier: 0.1.0-rc.88
-        version: 0.1.0-rc.88
+        specifier: 0.1.0-rc.89
+        version: 0.1.0-rc.89
       zod:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
       '@capybara-hq/plugin-model-fake':
-        specifier: 0.1.0-rc.89
-        version: 0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)
+        specifier: 0.1.0-rc.90
+        version: 0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)
       '@capybara-hq/testing':
         specifier: 0.1.0-rc.49
-        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))
       '@types/pg':
         specifier: ^8.23.1
         version: 8.23.1
@@ -875,8 +875,8 @@ packages:
     resolution: {integrity: sha512-0GEz8qJWokkUVYQYRukmkSHIFNoBH8QTreeHrAFbvz1XFYc3Y+puhMs8PQ5x8GNugiC2l5jvDBXKLbBIByeSBw==}
     hasBin: true
 
-  '@capybara-hq/kernel@0.1.0-rc.111':
-    resolution: {integrity: sha512-FzEBw0Q7QUm7aZXqDpApEG1qMJEVOp5t1zdoNBTkA21VhrMRKgHaVrRK51Txj/s41J6BGYtP/Ejz74aAn+w0kg==}
+  '@capybara-hq/kernel@0.1.0-rc.112':
+    resolution: {integrity: sha512-MPOmpAp6B60Pnn3bIOrz7+v0hPeuQPWuRAUgyloqhGm6lEfSrXF/euwR5eZ7gqSWGCuaz/qhJFjWFA622cdtbw==}
     engines: {node: '>=24'}
 
   '@capybara-hq/plugin-client@0.1.0-rc.11':
@@ -888,14 +888,14 @@ packages:
       react-dom:
         optional: true
 
-  '@capybara-hq/plugin-model-fake@0.1.0-rc.89':
-    resolution: {integrity: sha512-BrIJrPVk+ZddKQ2e9NgoeSzv7jiIbXYMBHcbnOqaQqPjTFjb/+rxWNnNItj8LkcRnkdHT9iPeVKnYGTcpFFjSA==}
+  '@capybara-hq/plugin-model-fake@0.1.0-rc.90':
+    resolution: {integrity: sha512-vhC2vG/IZHbnW6cS64/Q3F/Dgd15RCnzYgYMch3WFp018UyEpwR6Js+oNIK0I3B6fxwn53fzmA+qhzzxLnM4tw==}
     peerDependencies:
-      '@capybara-hq/plugin-sdk': 0.1.0-rc.88
+      '@capybara-hq/plugin-sdk': 0.1.0-rc.89
       zod: ^4.6.7
 
-  '@capybara-hq/plugin-sdk@0.1.0-rc.88':
-    resolution: {integrity: sha512-LzEaK8REYA0FyjmaznJu92aWHRLgKHOECKdt+6sox4VsPudYTrzidph24qs/9SuSudCO+R1v8BBnx9ebNCFO8A==}
+  '@capybara-hq/plugin-sdk@0.1.0-rc.89':
+    resolution: {integrity: sha512-+C5ZdvGO9s54OYOFekCzJD0MfX791GqPezmgB3ywzSRYkWTHKrgRVlKHFkragjOiNZncptiA/3708J54fCBn2Q==}
 
   '@capybara-hq/plugin-tools@0.1.0-rc.28':
     resolution: {integrity: sha512-a8UBYaNkh61B1NPrRmj7Xp2rmp6JT2yvNHlkHzShXUSbI8UsMYYiw/SkFzFRtezWVxoT0Db611n/0G9xe9FBnA==}
@@ -906,7 +906,7 @@ packages:
     resolution: {integrity: sha512-5P0VmK5dm8zdE7cPnS9cnWyJaupY2If0a3FZ4e36nxmikI3bkTNc8RZ1RHLAmsDJh/BhjpgUt7gf7H04NYDB1w==}
     engines: {node: '>=24'}
     peerDependencies:
-      '@capybara-hq/plugin-sdk': 0.1.0-rc.88
+      '@capybara-hq/plugin-sdk': 0.1.0-rc.89
       '@capybara-hq/plugin-tools': 0.1.0-rc.28
       vitest: ^5.0.5
     peerDependenciesMeta:
@@ -5404,9 +5404,9 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@capybara-hq/kernel@0.1.0-rc.111(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)':
+  '@capybara-hq/kernel@0.1.0-rc.112(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)':
     dependencies:
-      '@capybara-hq/plugin-sdk': 0.1.0-rc.88
+      '@capybara-hq/plugin-sdk': 0.1.0-rc.89
       '@fastify/cookie': 11.1.5
       '@fastify/static': 9.3.0
       '@fastify/websocket': 11.3.7
@@ -5488,12 +5488,12 @@ snapshots:
     optionalDependencies:
       react-dom: 19.3.1(react@19.3.1)
 
-  '@capybara-hq/plugin-model-fake@0.1.0-rc.89(@capybara-hq/plugin-sdk@0.1.0-rc.88)(zod@4.6.7)':
+  '@capybara-hq/plugin-model-fake@0.1.0-rc.90(@capybara-hq/plugin-sdk@0.1.0-rc.89)(zod@4.6.7)':
     dependencies:
-      '@capybara-hq/plugin-sdk': 0.1.0-rc.88
+      '@capybara-hq/plugin-sdk': 0.1.0-rc.89
       zod: 4.6.7
 
-  '@capybara-hq/plugin-sdk@0.1.0-rc.88':
+  '@capybara-hq/plugin-sdk@0.1.0-rc.89':
     dependencies:
       '@types/mdast': 4.0.4
       kysely: 0.29.8
@@ -5510,8 +5510,8 @@ snapshots:
 
   '@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)':
     dependencies:
-      '@capybara-hq/kernel': 0.1.0-rc.111(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)
-      '@capybara-hq/plugin-sdk': 0.1.0-rc.88
+      '@capybara-hq/kernel': 0.1.0-rc.112(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)
+      '@capybara-hq/plugin-sdk': 0.1.0-rc.89
       es-module-lexer: 2.3.2
       esbuild: 0.28.2
       oxc-parser: 0.154.0
@@ -5555,13 +5555,13 @@ snapshots:
       - utf-8-validate
       - ws
 
-  '@capybara-hq/testing@0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.88)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))':
+  '@capybara-hq/testing@0.1.0-rc.49(@capybara-hq/plugin-sdk@0.1.0-rc.89)(@capybara-hq/plugin-tools@0.1.0-rc.28(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2))(@cfworker/json-schema@4.1.6)(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(jsdom@30.1.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.15)(yaml@2.9.1)))':
     dependencies:
       '@aws-sdk/client-s3': 3.1165.0
       '@aws-sdk/s3-presigned-post': 3.1165.0
       '@aws-sdk/s3-request-presigner': 3.1165.0
-      '@capybara-hq/kernel': 0.1.0-rc.111(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)
-      '@capybara-hq/plugin-sdk': 0.1.0-rc.88
+      '@capybara-hq/kernel': 0.1.0-rc.112(@grpc/grpc-js@1.14.6)(@grpc/proto-loader@0.8.1)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(openai@7.36.0(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.4)(ws@8.22.2)(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2)(ws@8.22.2)
+      '@capybara-hq/plugin-sdk': 0.1.0-rc.89
       '@modelcontextprotocol/sdk': 1.32.2(@cfworker/json-schema@4.1.6)(zod@4.6.7)
       '@testcontainers/postgresql': 12.2.1
       ioredis: 6.0.0
