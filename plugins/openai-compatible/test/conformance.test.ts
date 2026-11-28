@@ -467,6 +467,38 @@ describe("openai-compatible: stream edge cases and errors", () => {
     expect(checkToolStream(events, done)).toEqual([]);
   });
 
+  it("toolChoice none: dropped calls on deepseek (omitted field), tool_choice none on generic", async () => {
+    const weather = {
+      name: "get_weather",
+      description: "Get the weather.",
+      inputSchema: { type: "object", properties: { city: { type: "string" } } },
+    };
+    next = ds({
+      model: "m",
+      text: "Checking.",
+      toolCalls: [{ id: "call_a", name: "get_weather", args: '{"city": "Paris"}' }],
+      finish: "tool_calls",
+      usage: usageFor("deepseek", { total: 5, output: 1 }),
+    });
+    const events = await drain(provider(), req({ tools: [weather], toolChoice: "none" }));
+    expect(events.some((e) => e.type === "tool_call_start" || e.type === "tool_call_delta")).toBe(
+      false,
+    );
+    const done = complete(events);
+    expect(done.content).toEqual([{ type: "text", text: "Checking." }]);
+    expect(done.stopReason).toBe("end_turn");
+    const body = server.requests.at(-1)?.body as Record<string, unknown>;
+    expect(body.tools).toHaveLength(1);
+    expect("tool_choice" in body).toBe(false);
+    // generic sends the standard field and passes the stream through unchanged
+    await drain(
+      provider(),
+      req({ model: "local/org/model-a", tools: [weather], toolChoice: "none" }),
+    );
+    const generic = server.requests.at(-1)?.body as Record<string, unknown>;
+    expect(generic.tool_choice).toBe("none");
+  });
+
   it("a call without arguments streams one `{}` delta before message_complete", async () => {
     next = ds({
       model: "m",

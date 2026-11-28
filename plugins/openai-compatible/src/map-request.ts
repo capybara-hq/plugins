@@ -170,6 +170,15 @@ function markLastBlock(messages: Message[]): void {
   last.content[i] = { ...part, cache_control: EPHEMERAL };
 }
 
+/**
+ * Whether the reply's tool calls are dropped: `toolChoice: "none"` on a dialect that omits it
+ * (`Dialect.toolChoiceNone`). The request keeps the default (auto) and the stream mapping
+ * guarantees the contract: no tool_call events or blocks, only the text, stop reason end_turn.
+ */
+export function toolCallsDropped(req: ModelRequest, t: ChatTarget): boolean {
+  return req.toolChoice === "none" && t.dialect.toolChoiceNone === "omit";
+}
+
 /** model-provider@2 请求 → Chat Completions 流式请求体。纯函数。 */
 export function buildRequest(req: ModelRequest, t: ChatTarget): ChatBody {
   const system = systemMessage(req, t);
@@ -191,8 +200,9 @@ export function buildRequest(req: ModelRequest, t: ChatTarget): ChatBody {
       type: "function",
       function: { name: tool.name, description: tool.description, parameters: tool.inputSchema },
     }));
-    // none：照常声明工具但不得调用（收尾调用）；auto 即默认值，不设置
-    if (req.toolChoice === "none") body.tool_choice = "none";
+    // none: the tools stay declared but must not be called; auto is the default and not sent.
+    // A dialect whose service drops the tools under "none" omits it: see toolCallsDropped
+    if (req.toolChoice === "none" && t.dialect.toolChoiceNone === "send") body.tool_choice = "none";
   }
   t.dialect.applyParams(body, req.params, t.model);
   return body;

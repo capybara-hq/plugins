@@ -8,7 +8,7 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { DIALECTS, type DialectName, PROVIDER } from "../src/dialects.js";
-import { buildRequest, type ChatTarget } from "../src/map-request.js";
+import { buildRequest, type ChatTarget, toolCallsDropped } from "../src/map-request.js";
 
 const MODEL = "ep/upstream-model";
 
@@ -139,14 +139,26 @@ describe.each(["generic", "deepseek", "qwen", "ark"] as const)("buildRequest (%s
     ]);
   });
 
-  it('toolChoice none -> tool_choice "none" (tools still sent); auto / unset / no tools -> omitted', () => {
+  it('toolChoice none -> tool_choice "none" or, where the service drops the tools under it, omitted with the calls dropped; auto / unset / no tools -> omitted', () => {
     const history = turns[0] ?? [];
-    const none = buildRequest(
-      req(history, { tools: [weather], toolChoice: "none" }),
-      target(dialect),
-    );
-    expect(none.tool_choice).toBe("none");
+    const noneReq = req(history, { tools: [weather], toolChoice: "none" });
+    const none = buildRequest(noneReq, target(dialect));
     expect(none.tools).toHaveLength(1);
+    // deepseek and qwen (DashScope) render "none" without the tool definitions: the cache prefix
+    // is kept by sending the auto request byte for byte
+    const omit = dialect === "deepseek" || dialect === "qwen";
+    expect(DIALECTS[dialect].toolChoiceNone).toBe(omit ? "omit" : "send");
+    expect(toolCallsDropped(noneReq, target(dialect))).toBe(omit);
+    if (omit) {
+      expect(none).toEqual(
+        buildRequest(req(history, { tools: [weather], toolChoice: "auto" }), target(dialect)),
+      );
+    } else {
+      expect(none.tool_choice).toBe("none");
+    }
+    expect(
+      toolCallsDropped(req(history, { tools: [weather], toolChoice: "auto" }), target(dialect)),
+    ).toBe(false);
     const auto = buildRequest(
       req(history, { tools: [weather], toolChoice: "auto" }),
       target(dialect),

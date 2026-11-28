@@ -8,7 +8,7 @@ import {
 } from "@capybara-hq/plugin-sdk";
 import type OpenAI from "openai";
 import { toModelError } from "./errors.js";
-import { buildRequest, PROVIDER, type ThinkingOpaque } from "./map-request.js";
+import { buildRequest, PROVIDER, type ThinkingOpaque, toolCallsDropped } from "./map-request.js";
 
 type ChunkDelta = OpenAI.Chat.ChatCompletionChunk.Choice.Delta & {
   reasoning_content?: string | null;
@@ -86,6 +86,7 @@ export async function* streamChat(
   if (signal.aborted) throw aborted();
   let stream: Awaited<ReturnType<typeof open>> | undefined;
   const body = buildRequest(req);
+  const dropCalls = toolCallsDropped(req);
   const open = () => client.chat.completions.create(body, { signal });
   try {
     stream = await open();
@@ -109,7 +110,8 @@ export async function* streamChat(
           text += delta.content;
           yield { type: "text_delta", text: delta.content };
         }
-        for (const tc of delta.tool_calls ?? []) {
+        // toolChoice "none" is enforced here, not by the request (toolCallsDropped)
+        for (const tc of dropCalls ? [] : (delta.tool_calls ?? [])) {
           const acc = tools.get(tc.index) ?? { id: "", name: "", args: "", started: false };
           // The id is fixed when the call starts (synthesized if absent); an id that arrives after the
           // start is ignored, so message_complete carries the id the start event announced

@@ -200,6 +200,31 @@ describe("deepseek: stream edge cases and errors", () => {
     expect(checkToolStream(events, done)).toEqual([]);
   });
 
+  it("toolChoice none: a tool call the model makes anyway is dropped, the text stays, end_turn", async () => {
+    next = () =>
+      sseChat({
+        text: "Checking.",
+        toolCalls: [{ id: "call_a", name: "get_weather", args: '{"city": "Paris"}' }],
+        finish: "tool_calls",
+        usage,
+      });
+    const weather = {
+      name: "get_weather",
+      description: "Get the weather.",
+      inputSchema: { type: "object", properties: { city: { type: "string" } } },
+    };
+    const events = await drain(provider(), req({ tools: [weather], toolChoice: "none" }));
+    expect(events.some((e) => e.type === "tool_call_start" || e.type === "tool_call_delta")).toBe(
+      false,
+    );
+    const done = complete(events);
+    expect(done.content).toEqual([{ type: "text", text: "Checking." }]);
+    expect(done.stopReason).toBe("end_turn");
+    const body = server.requests.at(-1)?.body as Record<string, unknown>;
+    expect(body.tools).toHaveLength(1);
+    expect("tool_choice" in body).toBe(false);
+  });
+
   it("a call without arguments streams one `{}` delta before message_complete", async () => {
     next = () =>
       sseChat({

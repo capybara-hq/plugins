@@ -1,6 +1,6 @@
 import { isModelError, type ModelMessage, type ModelRequest } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
-import { buildRequest, type NativeMessage } from "../src/map-request.js";
+import { buildRequest, type NativeMessage, toolCallsDropped } from "../src/map-request.js";
 
 const req = (over: Partial<ModelRequest> = {}): ModelRequest => ({
   model: "qwen-flash",
@@ -212,16 +212,15 @@ describe("buildRequest (text-generation)", () => {
     expect(unset.preserve_thinking).toBeUndefined();
   });
 
-  it("tool_choice none only with tools", () => {
-    expect(
-      buildRequest(req({ tools: [weather], toolChoice: "none" }), "text").parameters.tool_choice,
-    ).toBe("none");
-    expect(
-      buildRequest(req({ toolChoice: "none" }), "text").parameters.tool_choice,
-    ).toBeUndefined();
-    expect(
-      buildRequest(req({ tools: [weather], toolChoice: "auto" }), "text").parameters.tool_choice,
-    ).toBeUndefined();
+  it("toolChoice none is never sent and keeps the auto request byte for byte (cache prefix)", () => {
+    const none = buildRequest(req({ tools: [weather], toolChoice: "none" }), "text");
+    const auto = buildRequest(req({ tools: [weather], toolChoice: "auto" }), "text");
+    expect(none.parameters.tool_choice).toBeUndefined();
+    expect(none.parameters.tools).toHaveLength(1);
+    expect(none).toEqual(auto);
+    expect(toolCallsDropped(req({ tools: [weather], toolChoice: "none" }))).toBe(true);
+    expect(toolCallsDropped(req({ tools: [weather], toolChoice: "auto" }))).toBe(false);
+    expect(toolCallsDropped(req({ tools: [weather] }))).toBe(false);
   });
 
   it("refuses an image on the text endpoint and an unresolved ref", () => {

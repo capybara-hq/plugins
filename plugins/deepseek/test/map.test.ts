@@ -5,7 +5,7 @@ import {
   type ModelRequest,
 } from "@capybara-hq/plugin-sdk";
 import { describe, expect, it } from "vitest";
-import { buildRequest } from "../src/map-request.js";
+import { buildRequest, toolCallsDropped } from "../src/map-request.js";
 
 const MODEL = "deepseek-flash";
 
@@ -126,9 +126,14 @@ describe("deepseek buildRequest", () => {
     expect("reasoning_effort" in none).toBe(false);
   });
 
-  it('toolChoice none -> "none"; auto / unset / no tools -> omitted', () => {
+  it("toolChoice none is never sent and keeps the auto request byte for byte (cache prefix); auto / unset / no tools -> omitted", () => {
     const h = turns[0] ?? [];
-    expect(buildRequest(req(h, { tools: [weather], toolChoice: "none" })).tool_choice).toBe("none");
+    const none = buildRequest(req(h, { tools: [weather], toolChoice: "none" }));
+    expect("tool_choice" in none).toBe(false);
+    expect(none.tools).toHaveLength(1);
+    expect(none).toEqual(buildRequest(req(h, { tools: [weather], toolChoice: "auto" })));
+    expect(toolCallsDropped(req(h, { tools: [weather], toolChoice: "none" }))).toBe(true);
+    expect(toolCallsDropped(req(h, { tools: [weather], toolChoice: "auto" }))).toBe(false);
     expect("tool_choice" in buildRequest(req(h, { tools: [weather], toolChoice: "auto" }))).toBe(
       false,
     );

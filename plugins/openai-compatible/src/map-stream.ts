@@ -8,7 +8,7 @@ import {
 import type OpenAI from "openai";
 import { type ChunkDelta, PROVIDER, type RawUsage, type ThinkingOpaque } from "./dialects.js";
 import { toModelError } from "./errors.js";
-import { buildRequest, type ChatTarget } from "./map-request.js";
+import { buildRequest, type ChatTarget, toolCallsDropped } from "./map-request.js";
 
 /** 自己用 JSON.parse 解析工具参数：非对象或解析失败都是 invalid_request。 */
 function parseArguments(raw: string, name: string): Record<string, unknown> {
@@ -65,6 +65,7 @@ export async function* streamChat(
 ): AsyncGenerator<ModelStreamEvent> {
   const { signal, target } = opts;
   const dialect = target.dialect;
+  const dropCalls = toolCallsDropped(req, target);
   if (signal.aborted) throw aborted();
   const open = () => client.chat.completions.create(buildRequest(req, target), { signal });
   let stream: Awaited<ReturnType<typeof open>> | undefined;
@@ -91,7 +92,8 @@ export async function* streamChat(
           text += d.text;
           yield { type: "text_delta", text: d.text };
         }
-        for (const tc of delta.tool_calls ?? []) {
+        // toolChoice "none" on a dialect that omits it is enforced here (toolCallsDropped)
+        for (const tc of dropCalls ? [] : (delta.tool_calls ?? [])) {
           const acc = tools.get(tc.index) ?? { id: "", name: "", args: "", started: false };
           // The id is fixed when the call starts (synthesized if absent); an id that arrives after the
           // start is ignored, so message_complete carries the id the start event announced

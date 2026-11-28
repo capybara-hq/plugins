@@ -220,6 +220,25 @@ function markLastBlock(messages: NativeMessage[], endpoint: Endpoint): void {
   last.content[i] = { ...part, cache_control: EPHEMERAL };
 }
 
+/**
+ * Whether the reply's tool calls are dropped: `toolChoice: "none"` (the in-context summary and the
+ * step-limit wrap-up) keeps the tools declared so the request shares the cache prefix of the turns
+ * before it, but DashScope renders a request with `tool_choice: "none"` as one without tools: the
+ * tool definitions, rendered ahead of the system text, disappear, the prompt differs from token 0
+ * and nothing is read from the cache, the same as `tools: []` (live 2026-11-28, qwen4-max,
+ * qwen-plus, glm-5.1: after a 6745-token turn, a summary-shaped request with "none" read 0 tokens
+ * and counted 3974 in all, the tools gone; with the default auto it read 6741). So
+ * `tool_choice` is left at its default (auto) and the stream mapping guarantees the contract
+ * instead: no tool_call events or blocks, only the text, stop reason end_turn. The model is told
+ * in the request not to call tools; one that does anyway leaves only its text before the call
+ * (often empty or a short lead-in), which the kernel's callers already treat as a failed or short
+ * answer (a summary too short to accept fails the compaction; a wrap-up ends the run with that
+ * text). Remove once DashScope keeps the tool definitions in the prompt under "none".
+ */
+export function toolCallsDropped(req: ModelRequest): boolean {
+  return req.toolChoice === "none";
+}
+
 /** model-provider@2 request → native streaming body. Pure. */
 export function buildRequest(req: ModelRequest, endpoint: Endpoint): NativeBody {
   const system = systemMessage(req, endpoint);
@@ -234,8 +253,7 @@ export function buildRequest(req: ModelRequest, endpoint: Endpoint): NativeBody 
       type: "function",
       function: { name: tool.name, description: tool.description, parameters: tool.inputSchema },
     }));
-    // none: tools stay declared but must not be called (the wrap-up call); auto is the default
-    if (req.toolChoice === "none") parameters.tool_choice = "none";
+    // `toolChoice: "none"` is not sent: see toolCallsDropped
   }
   const thinking = req.params.thinking;
   if (thinking === "on" || thinking === "off") {
